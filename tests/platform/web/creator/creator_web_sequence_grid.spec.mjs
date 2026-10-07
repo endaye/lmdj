@@ -1,3 +1,4 @@
+import {selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
@@ -272,7 +273,7 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   await importProject(page);
   const baseline = await inspectTruth(page);
   await enterSequenceAndPlay(page);
-  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const patternId = await selectedSequencePatternId(page);
   const bars = baseline.patterns[patternId].bars;
   const lengthTicks = bars * 3840;
   expect(baseline.patterns[patternId].events).toHaveLength(0);
@@ -324,8 +325,10 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   // the last velocity the grid set.
   await page.getByRole("button", {name: "Velocity mode"}).click();
   {
+    // Rows are 13 px since the EDIT layer fits all sixteen (T5): press near
+    // the row's foot and drag up to its middle, past the 4 px drag threshold.
     const box = await laneBox(page, 2);
-    await page.mouse.move(tickX(box, 1200, lengthTicks), box.y + 3);
+    await page.mouse.move(tickX(box, 1200, lengthTicks), box.y + box.height - 2);
     await page.mouse.down();
     await page.mouse.move(tickX(box, 1200, lengthTicks),
       box.y + box.height / 2, {steps: 4});

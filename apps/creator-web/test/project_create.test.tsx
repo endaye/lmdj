@@ -481,9 +481,13 @@ test("Sequence authoring in a duplicate uses the copy's revision, not the source
   await bootIntoListedProject(fixture);
   // The source's Sequence authority is loaded at revision 66.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  // Refresh authority lives in the Sequence SETUP layer.
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await duplicateThenCreatePattern(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  await userEvent.click(screen.getByRole("button", {name: "New Pattern"}));
   await userEvent.click(screen.getByRole("button", {name: "Create Pattern"}));
   await waitFor(() => expect(created).toHaveLength(1));
   expect(created).toEqual([0]);
@@ -496,12 +500,16 @@ test("a Sequence refresh that outlives its Project never reaches the next Projec
   await bootIntoListedProject(fixture);
   // A refresh of the source is still in flight when the copy opens.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  // Refresh authority lives in the Sequence SETUP layer.
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await duplicateThenCreatePattern(fixture);
   gate.wait = null;
   release?.();
   await new Promise((resolve) => setTimeout(resolve, 50));
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  await userEvent.click(screen.getByRole("button", {name: "New Pattern"}));
   await userEvent.click(screen.getByRole("button", {name: "Create Pattern"}));
   await waitFor(() => expect(created).toHaveLength(1));
   expect(created).toEqual([0]);

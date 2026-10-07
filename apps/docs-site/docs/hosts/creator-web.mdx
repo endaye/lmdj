@@ -462,11 +462,41 @@ This is approved behaviour awaiting implementation. The current Creator still ro
 
 ### Current grid behaviour
 
-The Sequence touch workspace edits the selected Pattern on a grid. Sixteen
-rows are the active Bank's sixteen Pads, so the grid follows the existing Bank
-keys and the Pattern selector. The horizontal axis is the whole Pattern — one,
-two, four or eight bars — with horizontal scrolling. A snap selector offers
-1/4, 1/8, 1/16, 1/32 and off, defaulting to 1/16. Each note renders as a
+The Sequence touch area follows the 2026-10-04 Sequence hardware UI decision
+(Desktop Final plan T5).
+
+**Header.** `‹ GROOVE / NN ›` with `current / total` replaces the Pattern
+dropdown. It steps to the previous or next Pattern, and is disabled while the
+transport plays, because a Pattern switch waits for Stop. To its right, EDIT
+and SETUP toggle the layer below. EDIT is the default, and a mode change
+returns to it.
+
+**EDIT** holds only the grid:
+
+- one toolbar row: snap 1/4, 1/8, 1/16, 1/32 or off, plus NOTE / VEL;
+- the grid fills the rest of the area. All sixteen rows show at once, and
+  each screen width is one bar, so longer Patterns scroll sideways. The Pad
+  column stays in place while they scroll.
+- after a box selection, Delete and Clear float over the grid's bottom-right
+  corner.
+
+**SETUP** holds the settings that are set once and rarely touched:
+
+- **Tempo and Swing cards.** Each has a fader and −/+ steps, labelled with the
+  encoder that will drive it (ENC 3, ENC 4).
+- **`BARS`.** The current Pattern's length, shown read-only until changing an
+  existing Pattern's length is decided (#1823).
+- **QUANTIZE and METRONOME toggles.**
+- **`+ NEW`.** Opens the new Pattern's length (1, 2, 4 or 8 bars) with CREATE
+  and CANCEL. `COPY` is not shown until #1823.
+- **`TAP` and Refresh authority.**
+
+Every control in the touch area is a 44 px button with an 8 px radius. There
+are no browser-native dropdowns or checkboxes.
+
+Sixteen rows are the active Bank's sixteen Pads, so the grid follows the Bank
+keys. The horizontal axis is the whole Pattern, one, two, four or eight bars,
+with 1/16 as the default snap. Each note renders as a
 rectangle whose position and length are its exact
 `onset_tick`/`duration_tick` from Project Truth; velocity reads as shade.
 

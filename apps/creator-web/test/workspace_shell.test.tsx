@@ -2661,7 +2661,7 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
   expect(padA1()).toBeTruthy();
   expect(within(touch()).getByRole("heading", {name: /GROOVE \//})).toBeTruthy();
-  expect(within(touch()).getByLabelText("Pattern")).toBeTruthy();
+  expect(within(touch()).getByRole("button", {name: "Next Pattern"})).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
 
   await user.click(screen.getByRole("button", {name: "Perform"}));
@@ -3046,6 +3046,8 @@ test("a Project that opens with an interrupted recording asks once whether to ke
   await userEvent.click(within(region).getByRole("button", {name: "Close"}));
   // A revision change within the same open never asks again.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  // Refresh authority lives in the Sequence SETUP layer.
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await flushAsyncTurns();
   expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
@@ -3071,6 +3073,8 @@ test("Decide later leaves the recording in the Sequence recovery list", async ()
   await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
   expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  // Refresh authority lives in the Sequence SETUP layer.
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
   expect(apply).not.toHaveBeenCalled();
@@ -3232,6 +3236,8 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  // Refresh authority lives in the Sequence SETUP layer.
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
   await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)

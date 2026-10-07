@@ -29,6 +29,10 @@ const project = {
 // The Sequence editor is the same component in the hardware touch workspace
 // that the retired workspace shell used to wrap; its recovery semantics are
 // asserted on it directly.
+// Tempo, Swing, Quantize, the metronome, + NEW, TAP and Refresh live in the
+// SETUP layer; EDIT (the grid) is the default.
+const openSetup = () => fireEvent.click(screen.getByRole("button", {name: "SETUP"}));
+
 function renderSurface(recovery = false, options: {
   transport?: PatternTransportState;
   state?: Partial<Parameters<typeof SequenceTouchWorkspace>[0]["state"]>;
@@ -126,7 +130,10 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(within(touch).queryByRole("button", {name: "Stop"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Record"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Record off"})).toBeNull();
-  fireEvent.click(within(touch).getByRole("checkbox", {name: "Quantize"}));
+  openSetup();
+  const quantize = within(touch).getByRole("button", {name: "Quantize"});
+  expect(quantize.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(quantize);
   expect(onSettingsChange).toHaveBeenCalledWith({quantizeEnabled: false});
   // Direct controls: a drag previews locally and commits once on release,
   // step buttons and TAP commit immediately, and no Apply button exists.
@@ -154,6 +161,9 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   fireEvent.click(tapTempo);
   expect(onSettingsChange).toHaveBeenLastCalledWith({bpm: 100});
   now.mockRestore();
+  // + NEW opens the length choice for the new Pattern; BARS above it is the
+  // current Pattern's length and is not a choice.
+  fireEvent.click(within(touch).getByRole("button", {name: "New Pattern"}));
   fireEvent.click(within(touch).getByRole("button", {name: "4 bars"}));
   fireEvent.click(within(touch).getByRole("button", {name: "Create Pattern"}));
   expect(onCreatePattern).toHaveBeenCalledWith(4);
@@ -174,6 +184,7 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
 
 test("a preview never commits and a failed commit restores the committed readout", () => {
   const callbacks = renderSurface();
+  openSetup();
   const bpmSlider = screen.getByRole("slider", {name: "BPM"});
   fireEvent.pointerDown(bpmSlider, {pointerId: 2});
   fireEvent.change(bpmSlider, {target: {value: "132"}});
@@ -203,6 +214,7 @@ test("rapid step clicks accumulate from the last requested value until Truth cat
     onRecover: () => {}, onDiscard: () => {},
   };
   const view = render(<SequenceTouchWorkspace project={project} {...props} />);
+  openSetup();
   // Each click commits through the Host; until the committed prop catches up,
   // the next click must step from the last requested value, not the stale
   // committed one.
@@ -242,6 +254,7 @@ test("a failed settings commit resyncs the step base to the committed truth", ()
   };
   const view = render(<SequenceTouchWorkspace project={project}
     state={{...initialSequenceState, phase: "stopped"}} {...props} />);
+  openSetup();
   fireEvent.click(screen.getByRole("button", {name: "Increase BPM"}));
   expect(onSettingsChange).toHaveBeenNthCalledWith(1, {bpm: 121});
   // The commit failed: the requested value never landed, so the next step
@@ -275,6 +288,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
     onRefresh={() => {}} onSwitch={() => {}}
     onCreatePattern={() => {}} onSettingsChange={() => {}}
     onRecover={() => {}} onDiscard={() => {}} />);
+  openSetup();
   for (const name of [
     "BPM", "Swing",
   ]) {
@@ -296,6 +310,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
 
 test("the metronome toggle reports its state and fires the callback", () => {
   const callbacks = renderSurface();
+  openSetup();
   const metronome = screen.getByRole("button", {name: "Metronome"});
   expect(metronome.getAttribute("aria-pressed")).toBe("false");
   fireEvent.click(metronome);
@@ -372,4 +387,49 @@ test("no gesture starts while the projection re-reads Truth after a commit", () 
   fireEvent.pointerUp(window, {pointerId: 32});
   expect(callbacks.onEdit).not.toHaveBeenCalled();
   expect(callbacks.onSelectionChange).not.toHaveBeenCalled();
+});
+
+test("EDIT is the default layer and SETUP swaps the grid for the settings", () => {
+  renderSurface();
+  const sequence = screen.getByRole("region", {name: "Sequence editor"});
+  expect(within(sequence).getByRole("button", {name: "EDIT"}).getAttribute("aria-pressed"))
+    .toBe("true");
+  expect(within(sequence).getByTestId("sequence-grid")).toBeTruthy();
+  expect(within(sequence).queryByRole("region", {name: "Sequence settings"})).toBeNull();
+  openSetup();
+  expect(within(sequence).queryByTestId("sequence-grid")).toBeNull();
+  expect(within(sequence).getByRole("region", {name: "Sequence settings"})).toBeTruthy();
+  // BARS is the current Pattern's length, not the new-Pattern choice.
+  expect(within(sequence).getByRole("group", {name: "Pattern length"}).textContent)
+    .toBe("BARS1");
+  // No browser-native select or checkbox in either layer.
+  expect(sequence.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
+  fireEvent.click(within(sequence).getByRole("button", {name: "EDIT"}));
+  expect(within(sequence).getByTestId("sequence-grid")).toBeTruthy();
+  expect(sequence.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
+});
+
+test("‹ › step through the Patterns and wait for Stop", () => {
+  const stopped = renderSurface(false, {state: {selectedPatternId: project.patterns[1]!.patternId}});
+  const stepper = screen.getByTestId("sequence-pattern");
+  expect(stepper.getAttribute("data-pattern-id")).toBe(project.patterns[1]!.patternId);
+  expect(stepper.textContent).toContain("GROOVE / 02");
+  expect(stepper.textContent).toContain("2/2");
+  expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", {name: "Previous Pattern"}));
+  expect(stopped.onSwitch).toHaveBeenCalledWith(project.patterns[0]!.patternId);
+});
+
+test("the Pattern stepper is disabled while the transport plays", () => {
+  renderSurface(false, {transport: {
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: 0, commandId: null, publicationPending: false, error: null,
+    } satisfies PatternTransportStatus,
+  }});
+  expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", {name: "Previous Pattern"}).hasAttribute("disabled")).toBe(true);
 });

@@ -1,4 +1,4 @@
-import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
+import {clickCreatorSystemAction, createSequencePattern} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -299,7 +299,7 @@ test("Duplicate copies the open Project under a new identity, keeps edits apart,
 
   // An edit commits to the copy.
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
+  await createSequencePattern(page);
   await expect.poll(async () => (await inspectProject(page)).project_revision,
     {timeout: 60_000}).toBe(1);
   const edited = await inspectProject(page);

@@ -467,7 +467,7 @@ export function SequenceGrid(props: SequenceGridProps) {
       {...(editing.enabled ? {} : {"data-editing-disabled": "true"})}>
       <div className="sequence-grid-toolbar">
         <div className="sequence-segment" role="group" aria-label="Snap">
-          <span>SNAP</span>
+          <span className="visually-hidden">SNAP</span>
           {SEQUENCE_GRID_SNAPS.map((option) => (
             <button
               key={option}
@@ -481,7 +481,7 @@ export function SequenceGrid(props: SequenceGridProps) {
           ))}
         </div>
         <div className="sequence-segment sequence-grid-mode" role="group" aria-label="Edit mode">
-          <span>MODE</span>
+          <span className="visually-hidden">MODE</span>
           <button
             type="button"
             aria-pressed={editMode === "note"}
@@ -505,7 +505,9 @@ export function SequenceGrid(props: SequenceGridProps) {
       )}
       <div className="sequence-grid-scroll" ref={scrollRef}>
         <div className="sequence-grid-body"
-          style={{width: `${model.bars * 24}rem`, minWidth: "100%"}}
+          // One bar fills the visible lane width (2026-10-04 decision, item 7);
+          // the 36 px Pad column (32 px label + 4 px gap) stays outside it.
+          style={{width: `calc(${model.bars} * (100% - 36px) + 36px)`, minWidth: "100%"}}
           onPointerMove={bodyPointerMove}
           onPointerUp={bodyPointerUp}
         >
@@ -517,8 +519,8 @@ export function SequenceGrid(props: SequenceGridProps) {
                 onPointerDown={lanePointerDown(row.pad)}
                 style={{
                   backgroundImage: columnPercent === null
-                    ? `repeating-linear-gradient(to right, transparent 0, transparent calc(${barPercent}% - 1px), #3a4150 calc(${barPercent}% - 1px), #3a4150 ${barPercent}%)`
-                    : `repeating-linear-gradient(to right, transparent 0, transparent calc(${columnPercent}% - 1px), #2c333f calc(${columnPercent}% - 1px), #2c333f ${columnPercent}%), repeating-linear-gradient(to right, transparent 0, transparent calc(${barPercent}% - 1px), #3a4150 calc(${barPercent}% - 1px), #3a4150 ${barPercent}%)`,
+                    ? `repeating-linear-gradient(to right, transparent 0, transparent calc(${barPercent}% - 1px), rgb(173 182 170 / 45%) calc(${barPercent}% - 1px), rgb(173 182 170 / 45%) ${barPercent}%)`
+                    : `repeating-linear-gradient(to right, transparent 0, transparent calc(${columnPercent}% - 1px), rgb(80 88 79 / 70%) calc(${columnPercent}% - 1px), rgb(80 88 79 / 70%) ${columnPercent}%), repeating-linear-gradient(to right, transparent 0, transparent calc(${barPercent}% - 1px), rgb(173 182 170 / 45%) calc(${barPercent}% - 1px), rgb(173 182 170 / 45%) ${barPercent}%)`,
                 }}
               >
                 {row.notes.map((note, index) => (

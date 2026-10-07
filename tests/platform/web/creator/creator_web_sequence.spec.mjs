@@ -1,3 +1,9 @@
+import {
+  selectedSequencePatternId,
+  selectSequencePattern,
+  sequencePattern,
+  showSequenceLayer,
+} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
@@ -248,8 +254,7 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   await importProject(page);
   const baseline = await inspectTruth(page);
   await enterSequenceAndPlay(page);
-  const pattern = page.getByRole("combobox", {name: "Pattern"});
-  const patternId = await pattern.inputValue();
+  const patternId = await selectedSequencePatternId(page);
   expect(baseline.patterns[patternId].events).toHaveLength(0);
 
   // stopped → Play: playback only, no journal.
@@ -331,7 +336,7 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
   await importProject(page);
   const baseline = await inspectTruth(page);
   await enterSequenceAndPlay(page);
-  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const patternId = await selectedSequencePatternId(page);
   expect(baseline.patterns[patternId].events).toHaveLength(0);
 
   // Before anything is recorded, both projections are empty and the overview
@@ -415,26 +420,27 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   const imported = await inspectTruth(page);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
-  const pattern = page.getByRole("combobox", {name: "Pattern"});
-  const patternId = await pattern.inputValue();
+  const patternId = await selectedSequencePatternId(page);
 
   // Author a second Pattern and reselect the first BEFORE audio starts: a
   // quiescent Engine applies each publication immediately, so the later
   // transport commands never race a scheduled publication.
-  // U2 turned Bars into a segmented control shared by both layouts, so the
-  // bar count is chosen by pressing its segment rather than selecting an
-  // option. The pressed state is the same committed choice selectOption made.
+  // + NEW (SETUP layer) opens the new Pattern's length; pressing a segment
+  // chooses it and CREATE commits.
+  await showSequenceLayer(page, "SETUP");
+  await page.getByRole("button", {name: "New Pattern", exact: true}).click();
   const bars = page.getByRole("group", {name: "Bars"})
     .getByRole("button", {name: "2 bars"});
   await bars.click();
   await expect(bars).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", {name: "Create Pattern"}).click();
-  await expect(pattern.locator("option")).toHaveCount(2, {timeout: 30_000});
-  const alternatePattern = await pattern.locator("option").nth(1)
-    .getAttribute("value");
-  expect(alternatePattern).not.toBeNull();
-  await pattern.selectOption(patternId);
-  await expect(pattern).toHaveValue(patternId);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-count", "2", {timeout: 30_000});
+  const alternatePattern = Object.keys((await inspectTruth(page)).patterns)
+    .find((id) => id !== patternId);
+  expect(alternatePattern).toBeDefined();
+  await selectSequencePattern(page, patternId);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", patternId);
   const authored = await inspectTruth(page);
   expect(authored.revision).toBe(imported.revision + 1);
 
@@ -481,18 +487,13 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await page.evaluate(() => {
     window.__snapshotReloadProof = [];
   });
-  await pattern.selectOption(alternatePattern);
-  // The refused selection is retried verbatim (same Pattern, never
-  // substituted) and then surfaced as an honest error; the UI selection
-  // remains the playing Pattern.
-  await expect(page.getByRole("alert")).toBeVisible({timeout: 30_000});
-  await expect(pattern).toHaveValue(patternId);
-  const refusedReloads = await page.evaluate(() =>
-    window.__snapshotReloadProof ?? []);
-  expect(refusedReloads.length).toBeGreaterThanOrEqual(1);
-  expect(new Set(refusedReloads.map((entry) => entry.patternId)))
-    .toEqual(new Set([alternatePattern]));
-  expect(refusedReloads.every((entry) => entry.ok === false)).toBe(true);
+  // Switching Pattern waits for Stop (2026-10-04 decision, item 7): while
+  // playing, ‹ › are disabled, no Pattern reload is attempted and the playing
+  // Pattern stays selected.
+  await expect(page.getByRole("button", {name: "Next Pattern", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Previous Pattern", exact: true})).toBeDisabled();
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", patternId);
+  expect(await page.evaluate(() => window.__snapshotReloadProof ?? [])).toEqual([]);
   await transportStatus(page, "playing");
 
   // Stop first; the stopped engagement is retired by the reload, so the
@@ -502,8 +503,8 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await page.evaluate(() => {
     window.__snapshotReloadProof = [];
   });
-  await pattern.selectOption(alternatePattern);
-  await expect(pattern).toHaveValue(alternatePattern);
+  await selectSequencePattern(page, alternatePattern);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", alternatePattern);
   await expect.poll(() => page.evaluate(() =>
     (window.__snapshotReloadProof ?? []).at(-1) ?? null), {timeout: 30_000})
     .toEqual({patternId: alternatePattern, ok: true});
@@ -594,7 +595,7 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   await importProject(page);
   const imported = await inspectTruth(page);
   await enterSequenceAndPlay(page);
-  const patternId = await page.getByRole("combobox", {name: "Pattern"}).inputValue();
+  const patternId = await selectedSequencePatternId(page);
   await recordKey(page).click();
   await transportStatus(page, "recording");
   // Keep the press open through owner loss. A completed press/release has
@@ -643,8 +644,7 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   await importProject(page);
   const imported = await inspectTruth(page);
   await enterSequenceAndPlay(page);
-  const pattern = page.getByRole("combobox", {name: "Pattern"});
-  const patternId = await pattern.inputValue();
+  const patternId = await selectedSequencePatternId(page);
 
   await recordKey(page).click();
   await transportStatus(page, "recording");
@@ -719,6 +719,7 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   await importProject(page);
   const baseline = await inspectTruth(page);
   await enterSequenceAndPlay(page);
+  await showSequenceLayer(page, "SETUP");
   const bpmFader = page.getByRole("slider", {name: "BPM"});
   const swingFader = page.getByRole("slider", {name: "Swing"});
   await expect(bpmFader).toBeVisible();

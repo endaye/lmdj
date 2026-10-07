@@ -1048,31 +1048,85 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .hardware-workspace .stage-note { display: none; }
 
+/* Touch kit (2026-10-04 decision, item 6): 44 px controls, 8 px radius,
+   raised fill, selected solid accent; cards 10 px; spacing 8 or 12 only. */
+.touch-control {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--creator-raised);
+  color: var(--creator-text);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: .06em;
+}
+.touch-control[aria-pressed="true"],
+.touch-control.is-primary {
+  background: var(--creator-lime);
+  color: var(--creator-base);
+}
+.touch-control:disabled { color: var(--creator-muted); opacity: .55; }
+.touch-segment {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+/* The Sequence touch area: a header, then one layer filling the rest. */
 .sequence-editor-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
-.sequence-editor-header h1 {
+.pattern-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pattern-stepper .touch-control { width: 32px; padding: 0; font-size: 16px; }
+.pattern-stepper h1 {
   margin: 0;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 400;
   letter-spacing: .04em;
+  white-space: nowrap;
 }
-.sequence-editor-mode {
-  margin: 0;
-  color: var(--creator-lime);
+.pattern-stepper-count {
+  color: var(--creator-muted);
   font-size: 10px;
-  letter-spacing: .08em;
+  font-variant-numeric: tabular-nums;
+}
+.sequence-layer { grid-auto-columns: 56px; }
+.sequence-layer .touch-control { padding: 0; font-size: 10px; }
+.sequence-param-encoder {
+  align-self: center;
+  justify-self: center;
+  color: var(--creator-muted);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.sequence-setup-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.sequence-setup-row > span {
+  color: var(--creator-muted);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.sequence-bars-value {
+  color: var(--creator-text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
 }
 .sequence-settings {
   display: grid;
   gap: 12px;
-}
-.sequence-pattern-select {
-  display: grid;
-  gap: 0.25rem;
 }
 .sequence-param-row {
   display: grid;
@@ -1150,15 +1204,8 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   background: var(--creator-lime);
   color: var(--creator-base);
 }
-.sequence-quantize {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--creator-muted);
-  font-size: 10px;
-  letter-spacing: .04em;
-}
 .sequence-grid {
+  position: relative;
   display: grid;
   gap: 8px;
 }
@@ -1171,40 +1218,50 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .sequence-grid-toolbar .sequence-segment:first-child { flex: 1 1 280px; }
 /* Five snap choices share the 336 px content box: the tracks may shrink below
    a button's text width, so the row never widens the touch workspace. */
-.sequence-grid .sequence-segment { grid-template-columns: 40px repeat(5, minmax(0, 1fr)); gap: 4px; }
-.sequence-grid .sequence-grid-mode { grid-template-columns: 48px repeat(2, 64px); }
+/* One toolbar row: five snap choices then NOTE / VEL, labels visually hidden. */
+.sequence-grid-toolbar { flex-wrap: nowrap; gap: 4px; }
+.sequence-grid-toolbar .sequence-segment:first-child { flex: 5 1 0; }
+.sequence-grid .sequence-segment { display: flex; gap: 4px; min-width: 0; }
+.sequence-grid .sequence-segment button { flex: 1 1 0; min-width: 0; padding: 0; font-size: 11px; }
+.sequence-grid .sequence-grid-mode { flex: 2 1 0; }
 .sequence-grid-reason {
   margin: 0;
   color: #ffc0c0;
   font-size: 11px;
 }
 .sequence-grid-scroll { overflow-x: auto; min-width: 0; }
+/* All sixteen rows fit the EDIT layer: 16 × 13 px lanes with 1 px gaps. */
 .sequence-grid-body {
   position: relative;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 .sequence-grid-row {
   display: grid;
-  grid-template-columns: 40px 1fr;
-  gap: 8px;
+  grid-template-columns: 32px 1fr;
+  gap: 4px;
   align-items: stretch;
 }
 .sequence-grid-pad {
+  position: sticky;
+  left: 0;
+  z-index: 1;
   align-self: center;
+  background: var(--creator-touch);
   color: var(--creator-muted);
-  font-size: 10px;
+  font-size: 9px;
+  line-height: 13px;
 }
 .sequence-grid-lane {
   position: relative;
-  height: 20px;
-  border-radius: 4px;
-  background-color: #171b21;
+  height: 13px;
+  border-radius: 2px;
+  background-color: var(--creator-base);
 }
 .sequence-grid-note {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 1px;
+  bottom: 1px;
   border-radius: 3px;
   background: var(--creator-lime);
 }
@@ -1229,11 +1286,18 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   background: rgba(158, 201, 245, .18);
   pointer-events: none;
 }
+/* Box-selection Delete / Clear float over the grid's bottom-right corner. */
 .sequence-grid-batch {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--creator-base);
   color: var(--creator-muted);
   font-size: 11px;
 }

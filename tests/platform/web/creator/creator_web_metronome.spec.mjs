@@ -1,3 +1,4 @@
+import {selectedSequencePatternId, showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
@@ -56,6 +57,8 @@ async function enterSequenceAndActivate(page) {
   await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
+  // Tempo, Swing and the metronome switch live in the SETUP layer.
+  await showSequenceLayer(page, "SETUP");
 }
 
 // Play/Stop and Record are the console's physical keys. Their accessible
@@ -163,8 +166,7 @@ test("metronome keeps clicking while recording and leaves Pattern truth untouche
   await page.goto("/index.html");
   await importProject(page);
   await enterSequenceAndActivate(page);
-  const pattern = page.getByRole("combobox", {name: "Pattern"});
-  const patternId = await pattern.inputValue();
+  const patternId = await selectedSequencePatternId(page);
 
   await metronomeToggle(page).click();
   await playStopKey(page).click();
@@ -204,6 +206,7 @@ test("metronome never enters the Perform capture; the witness sample proves the 
   // anything the metronome would leak into the tap.
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await showSequenceLayer(page, "SETUP");
   await metronomeToggle(page).click();
   await playStopKey(page).click();
   await transportStatus(page, "playing");
@@ -305,6 +308,7 @@ test("the metronome preference survives a reload and defaults off on a fresh dev
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await showSequenceLayer(page, "SETUP");
   await expect(metronomeToggle(page)).toHaveAttribute("aria-pressed", "true");
   expect(await readStoredMetronomePreference(page)).toBe(true);
 });
