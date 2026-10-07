@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import batch_github_journal as github
 from incremental_batch_journal import IssueBodyAnchor, Journal, JournalBlocked
+from self_test_report import GitHubApiError
 
 # Read-only observation 2026-09-08: #782/comment5573637240. Bot GraphQL
 # login github-actions differs from REST github-actions[bot]; stable node ID
@@ -107,6 +108,69 @@ class FakeApi:
 
 
 class GitHubJournalTest(unittest.TestCase):
+    def test_http_refusal_retains_numeric_observation_without_private_text(self):
+        error = GitHubApiError(
+            403, "SECRET response body", remaining=17, reset=123456, retry_after=7)
+        with patch.object(self.api, "_request", side_effect=error) as request:
+            with self.assertRaises(JournalBlocked) as caught:
+                self.transport._call("GET", "/repos/endaye/lmdj/actions/runs/17/attempts/1/jobs?per_page=100&page=2")
+        message = str(caught.exception)
+        for observation in ("endpoint=writer-jobs", "writer_run=17", "page=2",
+                            "status=403", "remaining=17", "reset=123456", "retry_after=7"):
+            self.assertIn(observation, message)
+        self.assertNotIn("SECRET", message)
+        self.assertNotIn("/repos/", message)
+        request.assert_called_once()
+
+    def test_uncertain_write_stays_single_attempt_and_diagnostic_is_closed(self):
+        error = GitHubApiError(503, "SECRET response", remaining=True, reset=-1, retry_after=10**13)
+        with patch.object(self.api, "_request", side_effect=error) as request:
+            with self.assertRaises(JournalBlocked) as caught:
+                self.transport._call("POST", "/repos/endaye/lmdj/issues/782/comments",
+                                     {"body": "SECRET journal payload"})
+        message = str(caught.exception)
+        self.assertIn("endpoint=journal-comments", message)
+        self.assertIn("status=503", message)
+        self.assertIn("write outcome unknown", message)
+        for forbidden in ("SECRET", "remaining=", "reset=", "retry_after="):
+            self.assertNotIn(forbidden, message)
+        request.assert_called_once()
+
+    def test_unknown_endpoint_and_exception_never_enter_diagnostic(self):
+        with patch.object(self.api, "_request", side_effect=RuntimeError("SECRET exception")):
+            with self.assertRaises(JournalBlocked) as caught:
+                self.transport._call("GET", "/SECRET/private?token=SECRET")
+        self.assertIn("endpoint=unknown", str(caught.exception))
+        self.assertNotIn("SECRET", str(caught.exception))
+
+    def test_malformed_jobs_names_writer_page_and_shapes_without_authenticating(self):
+        original = self.api._request
+        def request(method, path, **kwargs):
+            if "/jobs?" in path:
+                return {"total_count": True, "jobs": {"SECRET": "response body"}}
+            return original(method, path, **kwargs)
+        self.api._request = request
+        with self.assertRaises(JournalBlocked) as caught:
+            self.transport._writer(WRITER)
+        message = str(caught.exception)
+        for observation in ("jobs pagination malformed", "writer_run=17", "page=1",
+                            "response=dict", "total_count=bool", "jobs=dict"):
+            self.assertIn(observation, message)
+        self.assertNotIn("SECRET", message)
+        self.assertFalse(self.transport._checked_writers)
+        self.assertTrue(all(method == "GET" for method, _, _ in self.api.calls))
+
+    def test_missing_writer_retains_inventory_counts_without_job_names(self):
+        self.api.job_changes["name"] = "SECRET unrelated job"
+        with self.assertRaises(JournalBlocked) as caught:
+            self.transport._writer(WRITER)
+        message = str(caught.exception)
+        for observation in ("writer job is missing or ambiguous", "writer_run=17",
+                            "matches=0", "observed_jobs=1"):
+            self.assertIn(observation, message)
+        self.assertNotIn("SECRET", message)
+        self.assertFalse(self.transport._checked_writers)
+
     def setUp(self):
         self.api = FakeApi()
         self.lock = True

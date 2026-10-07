@@ -17,7 +17,7 @@ import re
 from threading import Lock
 
 from incremental_batch_journal import JournalBlocked
-from self_test_report import UrllibGitHubApi
+from self_test_report import GitHubApiError, UrllibGitHubApi
 from self_test_report import RetryBudget, with_retry
 import time
 
@@ -49,6 +49,12 @@ class JournalRecordOversized(JournalBlocked):
 
 def positive(value):
     return type(value) is int and value > 0
+
+
+def json_shape(value):
+    """Closed JSON type names; never response values or dynamic class names."""
+    return {dict: "dict", list: "list", str: "str", int: "int", float: "float",
+            bool: "bool", type(None): "null"}.get(type(value), "unknown")
 
 
 def _pairs(pairs):
@@ -149,7 +155,42 @@ class GitHubJournalTransport:
                                   budget=self.retry_budget, secondary=not self.lock_held())
             return call()
         except Exception as error:
-            raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from error
+            detail = self._diagnostic_endpoint(path)
+            # Only the concrete client's bounded numeric observations survive.
+            # Its message, response, URL, headers and request body stay private.
+            if type(error) is GitHubApiError:
+                if type(error.status) is int and (error.status == 0 or 100 <= error.status <= 599):
+                    detail += f", status={error.status}"
+                for name in ("remaining", "reset", "retry_after"):
+                    value = getattr(error, name, None)
+                    if type(value) is int and 0 <= value <= 10**12:
+                        detail += f", {name}={value}"
+            raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown "
+                                 f"({detail}); remedy: reconcile existing intent without repeating a write") from error
+
+    def _diagnostic_endpoint(self, path):
+        """Classify known API routes without ever returning a supplied URL."""
+        if type(path) is not str:
+            return "endpoint=unknown"
+        if path == "/graphql":
+            return "endpoint=graphql"
+        prefix = re.escape(self._repo(""))
+        jobs = re.fullmatch(prefix + r"/actions/runs/([1-9][0-9]{0,19})/attempts/1/jobs\?per_page=100&page=([1-9][0-9]{0,2})", path)
+        if jobs:
+            return f"endpoint=writer-jobs, writer_run={jobs[1]}, page={jobs[2]}"
+        routes = (
+            (r"/actions/runs/[1-9][0-9]{0,19}/attempts/1", "writer-run"),
+            (r"/actions/workflows/[1-9][0-9]{0,19}", "writer-workflow"),
+            (r"/git/ref/heads/main", "main-ref"),
+            (r"/compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}\?per_page=1&page=2", "writer-ancestry"),
+            (r"/contents/\.github/workflows/[a-zA-Z0-9_-]+\.ya?ml\?ref=[0-9a-f]{40}", "writer-source"),
+            (r"/issues/[1-9][0-9]{0,19}/comments", "journal-comments"),
+            (r"/issues/[1-9][0-9]{0,19}", "journal-anchor"),
+        )
+        for pattern, label in routes:
+            if re.fullmatch(prefix + pattern, path):
+                return "endpoint=" + label
+        return "endpoint=unknown"
 
     def _repo(self, suffix):
         return f"/repos/{self.repository}{suffix}"
@@ -269,7 +310,11 @@ class GitHubJournalTransport:
         for page in range(1, 101):
             document = self._call("GET", self._repo(f"/actions/runs/{writer['run_id']}/attempts/1/jobs?per_page=100&page={page}"))
             require(isinstance(document, dict) and type(document.get("total_count")) is int
-                    and document["total_count"] >= 0 and isinstance(document.get("jobs"), list), "jobs pagination malformed")
+                    and document["total_count"] >= 0 and isinstance(document.get("jobs"), list),
+                    f"jobs pagination malformed (writer_run={writer['run_id']}, page={page}, "
+                    f"response={json_shape(document)}, "
+                    f"total_count={json_shape(document.get('total_count') if isinstance(document, dict) else None)}, "
+                    f"jobs={json_shape(document.get('jobs') if isinstance(document, dict) else None)})")
             require(total in (None, document["total_count"]), "jobs changed during pagination")
             total = document["total_count"]
             require(len(document["jobs"]) <= 100, "job page exceeds requested size")
@@ -286,7 +331,9 @@ class GitHubJournalTransport:
         require(len(matches) == 1 and type(matches[0].get("run_id")) is int
                 and matches[0]["run_id"] == writer["run_id"]
                 and type(matches[0].get("run_attempt")) is int and matches[0]["run_attempt"] == 1
-                and matches[0].get("status") in ("in_progress", "completed"), "writer job is missing or ambiguous")
+                and matches[0].get("status") in ("in_progress", "completed"),
+                f"writer job is missing or ambiguous (writer_run={writer['run_id']}, "
+                f"matches={len(matches)}, observed_jobs={len(jobs)})")
         if run["status"] in WAITING_RUN_STATUSES:
             # Aggregate status can return to waiting while product siblings wait.
             # It never proves this writer ran: authenticate its own start too.

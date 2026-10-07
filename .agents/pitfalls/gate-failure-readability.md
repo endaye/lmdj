@@ -45,6 +45,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/988
     observed_by: Claude Code (Opus 5)
+  - date: 2026-10-07
+    occurrence: https://github.com/endaye/lmdj/issues/1864
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -133,6 +136,17 @@ is actionable — so it exits to guidance at the point where a gate is authored
 rather than to a gate of its own.
 
 ## How to apply
+
+Build 87 recovery repeated the information loss at an HTTP boundary. Manual
+controller runs reported missing writer jobs, malformed jobs pages and a
+request-unavailable wrapper without the failing writer/page or numeric HTTP
+observations. A separate complete local replay passed; that did not explain
+the original Actions failures. The transport now retains closed endpoint
+classes, validated writer/page identities, response type names and bounded
+numeric status/rate-limit metadata. It still refuses the same inputs and
+never prints response bodies, URLs, exception messages or journal payloads;
+uncertain writes remain single-attempt. The actual transport cause and complete
+candidate/release acceptance remain separate from this diagnostic repair.
 
 Before adding or changing any fail-closed check, write its failure message to
 contain both parts required by
