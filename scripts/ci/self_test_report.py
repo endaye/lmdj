@@ -489,17 +489,21 @@ class UrllibGitHubApi:
 def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
                delays: Sequence[float] = RETRY_DELAYS, clock: Callable[[], float] = time.time,
                deadline: float | None = None, budget: RetryBudget | None = None,
-               secondary: bool = True) -> object:
+               secondary: bool = True, transient: bool | None = None) -> object:
     """Retry idempotent reads on secondary throttling or exhausted primary quota.
 
     Primary remaining=0 waits until PRIMARY_RESET_MARGIN_SECONDS past
     X-RateLimit-Reset inside PRIMARY_WAIT_CAP_SECONDS
     and does not consume the short secondary budget. A reset beyond the cap stays
     an unknown/deferred read for the next health tick. Secondary 429/5xx/transport
-    retries stay on delays plus RetryBudget. Callers must never use this for writes.
+    retries stay on delays plus RetryBudget. An explicit transient flag can
+    recover short-lived read failures while secondary throttling must yield;
+    omission preserves the caller's existing secondary policy. Callers must
+    never use this for writes.
     """
     attempt = 0
     primary_retries = 0
+    transient = secondary if transient is None else transient
     budget = RetryBudget(sum(delays)) if budget is None else budget
     started = clock()
     if deadline is None:
@@ -519,7 +523,8 @@ def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
                 # the reset second, including a reset that has already elapsed.
                 sleep(delay + PRIMARY_RESET_MARGIN_SECONDS)
                 continue
-            retryable = secondary and (error.status == 429 or error.status >= 500 or error.status == 0)
+            retryable = ((secondary and error.status == 429)
+                         or (transient and (error.status >= 500 or error.status == 0)))
             if not retryable or attempt >= len(delays):
                 raise
             delay = error.retry_after if error.status == 429 and error.retry_after is not None else delays[attempt]
