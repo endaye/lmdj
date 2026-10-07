@@ -30,6 +30,10 @@ CSP = (
     "child-src 'self' blob:; connect-src 'self'; style-src 'self'; "
     "img-src 'self'; media-src 'self' blob:; manifest-src 'self'"
 )
+# Creator embeds its IBM Plex Mono face in its stylesheet as a data: URL
+# (Desktop Final plan T1b), so its distribution admits data: fonts and
+# nothing else more; the Web Runtime Host keeps CSP.
+CREATOR_CSP = CSP.replace("style-src 'self'; ", "style-src 'self'; font-src data:; ")
 SECURITY_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
@@ -424,8 +428,10 @@ class ProofHandler(BaseHTTPRequestHandler):
         catalog_upstream: str | None = None,
         catalog_upstream_file: Path | None = None,
         verbose: bool = False,
+        csp: str = CSP,
         **kwargs,
     ) -> None:
+        self.csp = csp
         self.root = root
         self.expected_hashes = expected_hashes
         self.catalog_upstream = catalog_upstream
@@ -439,7 +445,7 @@ class ProofHandler(BaseHTTPRequestHandler):
 
     def end_headers(self) -> None:
         for name, value in SECURITY_HEADERS.items():
-            self.send_header(name, value)
+            self.send_header(name, self.csp if name == "Content-Security-Policy" else value)
         if re.fullmatch(r"/assets/offline-worker\.[0-9a-f]{64}\.js", urlsplit(self.path).path):
             self.send_header("Service-Worker-Allowed", "/")
         super().end_headers()
@@ -637,6 +643,7 @@ def make_server(
             catalog_upstream=catalog_base,
             catalog_upstream_file=catalog_upstream_file,
             verbose=verbose,
+            csp=CREATOR_CSP if manifest.get("host_id") == "creator-web" else CSP,
         ),
     )
 

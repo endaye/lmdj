@@ -24,6 +24,7 @@ sys.path.insert(0, str(TOOLS_ROOT))
 
 from deployment_smoke import (  # noqa: E402
     ASSET_ROLES as ROLES,
+    CREATOR_FONT_CSP,
     CSP,
     REQUIRED_SECURITY_HEADERS,
     RedirectGuard,
@@ -387,6 +388,20 @@ class DeploymentSmokeTest(unittest.TestCase):
                 with self.assertRaisesRegex(SmokeError, re.escape(header)):
                     self.smoke()
                 self.fixture.omit_header = None
+
+    def test_accepts_the_creator_font_policy_and_the_prior_policy(self) -> None:
+        # Creator deployments from plan T1b add `font-src data:`; earlier
+        # deployments, validated as rollback anchors, keep the prior policy.
+        for value in (CREATOR_FONT_CSP, CSP):
+            with self.subTest(value=value):
+                self.fixture.header_overrides["content-security-policy"] = value
+                self.smoke()
+                self.fixture.header_overrides.clear()
+        self.fixture.header_overrides["content-security-policy"] = CSP.replace(
+            "style-src 'self'; ", "style-src 'self'; font-src *; ")
+        with self.assertRaisesRegex(SmokeError, "content-security-policy"):
+            self.smoke()
+        self.fixture.header_overrides.clear()
 
     def test_rejects_wrong_or_missing_csp(self) -> None:
         for value in ("default-src 'self'", None):

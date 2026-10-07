@@ -10,6 +10,11 @@ const webRuntimePlatform = fileURLToPath(new URL(
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // The console font ships inside the one stylesheet the packager admits
+    // (no separate font asset role); the Creator CSP allows data: fonts.
+    assetsInlineLimit: (file) => file.endsWith(".woff2") ? true : undefined,
+  },
   resolve: {
     alias: {
       "@lmdj/web-runtime-platform": webRuntimePlatform,

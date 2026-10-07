@@ -273,3 +273,22 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
   expect(await committedBpm(page)).toBe(committed + 12);
   expect((await inspectTruth(page)).bpm).toBe(committed + 12);
 });
+
+// Desktop Final plan T1b: the console face ships inside the stylesheet as a
+// data: URL, so it needs the distribution CSP's `font-src data:` and no
+// network. A blocked or missing face reports "error" or nothing here.
+test("the console renders in the bundled IBM Plex Mono that the CSP admits", async ({page}) => {
+  const violations = [];
+  page.on("console", (message) => {
+    if (/Content Security Policy|font-src/i.test(message.text())) violations.push(message.text());
+  });
+  await page.goto("/");
+  await waitForBootProject(page);
+  const loaded = await page.evaluate(async () =>
+    (await document.fonts.load('12px "IBM Plex Mono"')).map((face) => face.status));
+  expect(loaded).toEqual(["loaded"]);
+  const family = await page.getByTestId("hardware-console")
+    .evaluate((element) => getComputedStyle(element).fontFamily);
+  expect(family).toMatch(/^"IBM Plex Mono"/);
+  expect(violations).toEqual([]);
+});
