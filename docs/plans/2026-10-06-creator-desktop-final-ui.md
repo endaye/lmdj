@@ -13,6 +13,7 @@ This plan revises a layout that already exists. It does not migrate from an olde
 Authority, in precedence order:
 
 1. **Product decisions**, which win over the drawing where they differ:
+   - [`2026-10-07-pad-colour-source.md`](../prd/decisions/2026-10-07-pad-colour-source.md) (category defaults, five-colour user override and persistence; T7 addendum below);
    - [`2026-10-04-sequence-hardware-ui-revision.md`](../prd/decisions/2026-10-04-sequence-hardware-ui-revision.md) (D02 Sequence);
    - [`2026-10-02-sequence-grid-editing.md`](../prd/decisions/2026-10-02-sequence-grid-editing.md) and its [live-edit erratum](../prd/decisions/2026-10-02-sequence-grid-live-edit.md);
    - [`2026-10-02-creator-tempo-metronome.md`](../prd/decisions/2026-10-02-creator-tempo-metronome.md);
@@ -62,7 +63,7 @@ Checked on `43c7f136f`.
 
 | Item | Tracking | Effect on this plan |
 |---|---|---|
-| Where Pad colour comes from (stem category, user choice, or both; palette; whether it is stored in Truth) | #1821 | T7 waits. Until then Pads, overview rows and grid notes keep their current colours. |
+| Pad colour Contract/Core and Host projection implementation | [#1821 decision](../prd/decisions/2026-10-07-pad-colour-source.md) | The product choice is settled: category default plus a persistent user override from five colours. T7 waits for its independent Contract/Core plan and implementation; current colours remain until then. |
 | ENC1, `↑`/`↓`, and the encoders and keys on Project, Sample and Perform | #1822 | T6 wires only the decided Sequence controls. Everything else stays disabled. |
 | Semantics of changing an existing Pattern's length (`BARS`) and of `COPY` | #1823 | T8 (Core and Host operations) waits. Until then T5 shows `BARS` as read-only and does not render `COPY`. |
 | D01 Save / Save As / unsaved-changes confirmation | new question | Not rendered, because there is no Host action. Needs a product decision before any Task adds them. |
@@ -78,7 +79,7 @@ Amended when T1 started. The distribution CSP (`apps/creator-web/deploy/_headers
 
 - **Tokens.** `:root` declares the Desktop Final colours as `--creator-*` custom properties. Only the ones in use are declared: base, screen, touch, raised, line, text, muted, lime, blue, purple, blue tint and purple tint.
   - Every stylesheet literal equal to one of those values now reads the token.
-  - Accents are named by hue, not page, because #1821 and the Figma colour-clash note leave that meaning open.
+  - Accents are named by hue, not page. These shared UI accents are separate from the five Pad category colours decided on 10-07; T7 owns that mapping and its selected-state distinction.
   - Radius and spacing tokens arrive with their first consumer, the T5 kit.
 - **Shared surfaces.** The console and the upper screen take the Desktop Final surfaces: `#202321` (was `#22241f`) and `#292d29` (was `#141613`).
 - **Font.** The console body uses a stack that starts with IBM Plex Mono and falls back to the system monospace font.
@@ -240,9 +241,15 @@ With them there, T5's EDIT layer cannot show all 16 grid rows. The owner chose t
   3. `→` switches Pattern while stopped and is refused while playing;
   4. SHIFT+`←` still undoes.
 
-## T7 — one Pad colour across matrix, overview and grid (blocked on #1821)
+## T7 — one Pad colour across matrix, overview and grid (Contract/Core prerequisite)
 
-A plan addendum is written once #1821 is decided. If the colour is stored in Truth, it is a Contract change with its own Core Tasks, and this plan does not cover it.
+**2026-10-07 addendum.** [The Pad colour decision](../prd/decisions/2026-10-07-pad-colour-source.md) settles #1821: category provides the default, a user override selects one of D02's five colours and persists in Project Truth, re-separation preserves the override, and restore-default removes it. The Pad matrix border, overview lane and touch notes use one effective colour. Selected Pads use a white border plus a lime dot so that BASS does not masquerade as selected state.
+
+**Prerequisite.** A separate Contract/Core plan and its implementation must provide the category, stable palette-index override, authoring commands, migration and Facade/Host projection. It must explicitly settle unclassified/empty Pad defaults, stem-label mapping and Pad matching/retention during re-separation and assign/replace/clear/move. This plan does not invent those Contract details or implement persistence in Host preferences. T7 remains unimplemented until that prerequisite lands.
+
+**Behaviour after the prerequisite.** Offer five-colour selection and restore-category-default, and use one effective-colour resolver for all three surfaces. The detailed control placement and exact declared files belong in the implementation addendum once the projection is designed.
+
+**Lowest-tier verification to declare in that addendum.** Core tests cover category default versus explicit override, restore-default, preservation and migration. Creator component tests assert all three surfaces resolve the same colour and distinguish selected BASS. The packaged journey follows category default → manual override → re-separation → save/reopen → restore-default, with far-side Truth and display assertions at every transition and corresponding Undo/Redo checks. The defect caught is loss of the user's colour choice or drift between Truth and the three surfaces. These future checks have not run in this decision Task; no new gate is added here.
 
 ## T8 — `BARS` change and `COPY` (blocked on #1823)
 
@@ -315,7 +322,7 @@ T1 ─┬─ T3 ─┬─ T4 ─ T5a ─ T5 ─ T6
     │      └─ T11
     ├─ T1b (font bundling + CSP; independent)
     └─ T2 (only after owner confirmation; independent)
-T7 ← #1821      T8 ← #1823
+T7 ← Pad colour Contract/Core + Host projection      T8 ← #1823
 ```
 
 T3 goes before the visual Tasks so that their selector churn lands once.
@@ -339,14 +346,15 @@ The implementation Tasks owe bumps at the next coordinated version settlement. N
 
 - **`creator-web` MINOR** for T4, T5, T6, T9, T10 and T11, all user-visible capability or layout. T1, T1b, T2 and T3 owe at least a PATCH and fold into the same settlement. T1b's CSP change is part of the Creator deploy surface, not a Product Build change.
 - **T8** (later plan) also owes MINOR bumps for `authoring-domain`, `application-facade` and `web-runtime-platform`.
-- **T7**, if Pad colour enters Truth, owes a Contract SemVer change.
+- **T7's prerequisite** persists Pad colour in Truth and owes a Contract compatibility review and SemVer change; affected Core/Host version impacts are declared in its separate plan. T7 owes a Creator MINOR for the user-visible colour controls and unified rendering.
 - No Product Build or Assembly change happens in these Tasks.
 
 ## Documentation Impact
 
-Documentation impact: none
+Documentation impact: required
+Affected portal pages: /hosts/creator-web/
 
-Reason: this plan Pull Request only adds a plan under `docs/plans/`, and no portal page describes planned, unimplemented UI.
+Reason: the 2026-10-07 decision addendum records approved Pad colour behaviour in the portal as designed, with Contract/Core and T7 implementation still outstanding.
 
 Each implementation Task is `required`:
 
