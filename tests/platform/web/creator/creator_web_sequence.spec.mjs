@@ -964,6 +964,9 @@ test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns wh
   const first = await selectedSequencePatternId(page);
   await createSequencePattern(page);
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2", {timeout: 30_000});
+  // Creation lists the Pattern before it selects it; wait for the selection
+  // so it cannot land after the step back to the first Pattern.
+  await expect(sequencePattern(page)).not.toHaveAttribute("data-pattern-id", first);
   await selectSequencePattern(page, first);
   const forward = physicalKey(page, "Pattern forward — →");
   await expect(forward).toBeEnabled();
