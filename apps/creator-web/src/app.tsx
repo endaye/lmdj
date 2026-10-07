@@ -2326,6 +2326,11 @@ function Workspace({
   const applyMode = (mode: CreatorMode) => {
     setActiveMode(mode);
   };
+  const openSystem = () => {
+    inputController.current?.clearPressed();
+    void padCapture.current?.cancel();
+    setSystemOpen(true);
+  };
   const selectMode = (mode: CreatorMode) => {
     setSystemOpen(false);
     inputController.current?.clearPressed();
@@ -2464,6 +2469,9 @@ function Workspace({
               }}
               playEnabled={transportReady && !transportBusy}
               playing={playing}
+              onOpenSystem={openSystem}
+              systemOpen={systemOpen}
+              systemEntryRef={systemEntry}
               history={{
                 shifted: railShift,
                 onToggleShift: () => setRailShift((value) => !value),
@@ -2498,20 +2506,12 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
-      {padCaptureState !== null && (
+      {/* The touch area belongs to the page; Pad recording appears only while
+          a take is in progress, awaits review or reports a message. Its
+          source is chosen in System. */}
+      {padCaptureState !== null &&
+        (padCaptureState.phase !== "idle" || padCaptureState.message !== null) && (
         <section aria-label="Pad recording">
-          <label>Pad recording source
-            <select aria-label="Pad recording source" value={padCaptureState.source}
-              disabled={padCaptureState.phase !== "idle"}
-              onChange={event => {
-                const source = event.currentTarget.value as PadCaptureSource;
-                padCapture.current?.setSource(source);
-                try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
-              }}>
-              <option value="microphone">Microphone</option>
-              <option value="master">Internal playback</option>
-            </select>
-          </label>
           <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
             ` · Pad ${slotAddress(padCaptureState.target.slot)}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
           {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
@@ -2536,13 +2536,8 @@ function Workspace({
               error => reportFailure("Prepare default sounds", error));
           }}>Prepare default sounds</button></div>}
 
+              {["project", "sample", "soundset", "slice"].includes(activeMode) &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
-                <button type="button" ref={systemEntry} aria-expanded={systemOpen}
-                  onClick={() => {
-                    inputController.current?.clearPressed();
-                    void padCapture.current?.cancel();
-                    setSystemOpen(true);
-                  }}>System</button>
                 {activeMode === "project" && <button type="button" disabled={!soundSetEnabled}
                   onClick={() => selectMode("soundset")}>Sound Sets</button>}
                 {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
@@ -2551,7 +2546,7 @@ function Workspace({
                   <button type="button" onClick={() => selectMode(activeMode === "slice" ? "sample" : "project")}>
                     Back to {activeMode === "slice" ? "Sample" : "Project"}
                   </button>}
-              </nav>
+              </nav>}
               {systemOpen && <SystemSurface onBack={() => {
                 setSystemOpen(false);
                 // The entry stays mounted. Restore focus in this gesture so
@@ -2586,6 +2581,22 @@ function Workspace({
                   Export report
                 </button>
               </section>
+              {padCaptureState !== null && (
+                <section className="touch-system" aria-label="Pad recording settings">
+                  <label>Pad recording source
+                    <select aria-label="Pad recording source" value={padCaptureState.source}
+                      disabled={padCaptureState.phase !== "idle"}
+                      onChange={event => {
+                        const source = event.currentTarget.value as PadCaptureSource;
+                        padCapture.current?.setSource(source);
+                        try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
+                      }}>
+                      <option value="microphone">Microphone</option>
+                      <option value="master">Internal playback</option>
+                    </select>
+                  </label>
+                </section>
+              )}
                 {isCandidateSession(session) && <ProviderSettings session={session} />}
                 <DiagnosticsLog records={diagnostics} />
               </SystemSurface>}

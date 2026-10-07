@@ -1081,7 +1081,10 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(replayStatus).toContainText(
     new RegExp(`resolved revision\\s*[:·]\\s*${revision}`, "i"),
   );
+  // The Pad recording source is a System setting (brand mark entry).
+  await page.getByRole("button", {name: "System", exact: true}).click();
   await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
   await page.getByRole("button", {name: "Stop Replay"}).click();
   await expect(replayStatus).toContainText("stopped", {timeout: 30_000});
   // The shared Native proof fixture fills all64 Pads. Create the empty target
