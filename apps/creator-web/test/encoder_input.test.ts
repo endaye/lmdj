@@ -65,3 +65,27 @@ test("a new turn starts from the committed value it is given", () => {
   rest();
   expect(commits).toEqual([121, 122]);
 });
+
+test("a turn begun before the previous commit lands continues from that commit", () => {
+  const {turn, commits, rest} = harness();
+  turn.turn(3, 120);
+  rest();
+  // Truth still reads 120 while the 123 commit is in flight.
+  turn.turn(1, 120);
+  rest();
+  expect(commits).toEqual([123, 124]);
+  // Once Truth catches up, turns start from it again.
+  turn.turn(1, 124);
+  rest();
+  expect(commits).toEqual([123, 124, 125]);
+});
+
+test("a forgotten request lets the next turn start from Truth", () => {
+  const {turn, commits, rest} = harness();
+  turn.turn(3, 120);
+  rest();
+  turn.forget();
+  turn.turn(1, 120);
+  rest();
+  expect(commits).toEqual([123, 121]);
+});

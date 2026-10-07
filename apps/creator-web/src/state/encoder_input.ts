@@ -16,15 +16,22 @@ export interface EncoderTurnOptions {
 }
 
 export interface EncoderTurn {
-  // Adds detents to the turn; `committed` is the value a new turn starts from.
+  // Adds detents to the turn. A new turn starts from the last value this
+  // encoder asked to commit until `committed` (Truth) catches up with it, so
+  // a turn begun while the previous commit is still in flight continues from
+  // that commit instead of the stale committed value.
   turn(detents: number, committed: number): void;
   // Drops the turn without committing, as when recording locks the value.
   cancel(): void;
+  // Forgets the in-flight request after a failed commit, so the next turn
+  // starts from the committed value again.
+  forget(): void;
 }
 
 export function createEncoderTurn(options: EncoderTurnOptions): EncoderTurn {
   const idleMs = options.idleMs ?? ENCODER_IDLE_COMMIT_MS;
   let current: {base: number; value: number} | null = null;
+  let requested: number | null = null;
   let timer: unknown = null;
   const clearTimer = () => {
     if (timer !== null) options.clear(timer);
@@ -33,7 +40,11 @@ export function createEncoderTurn(options: EncoderTurnOptions): EncoderTurn {
   return {
     turn(detents, committed) {
       if (!Number.isFinite(detents) || detents === 0) return;
-      current ??= {base: committed, value: committed};
+      if (requested !== null && requested === committed) requested = null;
+      if (current === null) {
+        const start = requested ?? committed;
+        current = {base: start, value: start};
+      }
       current.value = Math.min(options.max, Math.max(options.min, current.value + Math.trunc(detents)));
       options.onPreview(current.value);
       clearTimer();
@@ -42,8 +53,14 @@ export function createEncoderTurn(options: EncoderTurnOptions): EncoderTurn {
         const settled = current;
         current = null;
         options.onPreview(null);
-        if (settled !== null && settled.value !== settled.base) options.onCommit(settled.value);
+        if (settled !== null && settled.value !== settled.base) {
+          requested = settled.value;
+          options.onCommit(settled.value);
+        }
       }, idleMs);
+    },
+    forget() {
+      requested = null;
     },
     cancel() {
       clearTimer();

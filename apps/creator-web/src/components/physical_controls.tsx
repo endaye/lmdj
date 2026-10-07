@@ -74,11 +74,16 @@ interface PhysicalControlsProps {
 
 // Pixels of vertical drag per detent.
 const ENCODER_DRAG_STEP = 8;
+// Pixels of wheel travel per detent. Wheel deltas accumulate, so a trackpad's
+// burst of small events turns a few detents, not one per event; a line or
+// page delta counts as that many pixels.
+const ENCODER_WHEEL_STEP = 50;
 
 // An encoder on a web console: the wheel, a vertical drag or the arrow keys
 // (while focused) each turn it one detent; up and right are clockwise.
 function Encoder({position, binding}: {position: EncoderPosition; binding: EncoderBinding | undefined}) {
   const drag = useRef<{pointerId: number; lastY: number} | null>(null);
+  const wheel = useRef(0);
   if (binding === undefined) {
     return (
       <button type="button" className="physical-encoder" disabled
@@ -102,7 +107,15 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
         event.preventDefault();
         turn(detents);
       }}
-      onWheel={(event) => turn(event.deltaY < 0 ? 1 : event.deltaY > 0 ? -1 : 0)}
+      onWheel={(event) => {
+        const pixels = event.deltaY *
+          (event.deltaMode === 1 ? ENCODER_WHEEL_STEP : event.deltaMode === 2 ? 800 : 1);
+        wheel.current -= pixels;
+        const detents = Math.trunc(wheel.current / ENCODER_WHEEL_STEP);
+        if (detents === 0) return;
+        wheel.current -= detents * ENCODER_WHEEL_STEP;
+        turn(detents);
+      }}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture?.(event.pointerId);
         drag.current = {pointerId: event.pointerId, lastY: event.clientY};

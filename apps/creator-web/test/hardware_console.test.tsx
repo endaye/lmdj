@@ -222,9 +222,14 @@ test("an unbound encoder stays unavailable and a bound one turns by key, wheel a
   const tempo = screen.getByRole("button", {name: "Encoder 3 — Tempo"});
   fireEvent.keyDown(tempo, {key: "ArrowUp"});
   fireEvent.keyDown(tempo, {key: "ArrowLeft"});
-  fireEvent.wheel(tempo, {deltaY: -40});
-  fireEvent.wheel(tempo, {deltaY: 40});
+  fireEvent.wheel(tempo, {deltaY: -60});
+  fireEvent.wheel(tempo, {deltaY: 60});
   expect(onTurn.mock.calls.map(([detents]) => detents)).toEqual([1, -1, 1, -1]);
+  onTurn.mockClear();
+  // A trackpad burst of small deltas accumulates: twenty 5 px events are
+  // 100 px, two detents, not twenty.
+  for (let index = 0; index < 20; index += 1) fireEvent.wheel(tempo, {deltaY: -5});
+  expect(onTurn.mock.calls.map(([detents]) => detents)).toEqual([1, 1]);
   onTurn.mockClear();
   // Sixteen pixels up is two clockwise detents; the remainder carries over.
   fireEvent.pointerDown(tempo, {pointerId: 7, clientY: 100});

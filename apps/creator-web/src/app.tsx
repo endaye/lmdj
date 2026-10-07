@@ -2353,6 +2353,13 @@ function Workspace({
     tempoTurn.current?.cancel();
     swingTurn.current?.cancel();
   }, [sequenceSettingsLocked]);
+  // A failed settings commit leaves Truth where it was; the next turn starts
+  // from Truth rather than from the request that did not land.
+  useEffect(() => {
+    if (sequence.errorCode === null) return;
+    tempoTurn.current?.forget();
+    swingTurn.current?.forget();
+  }, [sequence.errorCode]);
   settingsCommit.current = (changes) => { void updateSequenceSettings(changes); };
   const sequenceProject = state.project.current;
   const sequencePatterns = sequenceProject?.patterns ?? [];
