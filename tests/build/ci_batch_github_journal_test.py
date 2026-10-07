@@ -108,6 +108,65 @@ class FakeApi:
 
 
 class GitHubJournalTest(unittest.TestCase):
+    def test_locked_writer_authentication_recovers_one_transient_get(self):
+        original = self.api._request
+        attempts = []
+        def request(method, path, **kwargs):
+            if '/jobs?' in path:
+                attempts.append((method, path))
+                if len(attempts) == 1:
+                    raise GitHubApiError(502, 'private upstream response', remaining=3771)
+            return original(method, path, **kwargs)
+        with patch.object(self.api, '_request', side_effect=request), patch.object(github.time, 'sleep') as sleep:
+            self.assertEqual(self.transport._writer(WRITER), WRITER)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(all(method == 'GET' for method, _ in attempts))
+        sleep.assert_called_once_with(5.0)
+
+    def test_locked_secondary_throttle_yields_without_waiting(self):
+        with patch.object(self.api, '_request', side_effect=GitHubApiError(429, 'private throttle', retry_after=60)) as request, patch.object(github.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(JournalBlocked, 'status=429'):
+                self.transport._writer(WRITER)
+        request.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_locked_transient_reads_share_the_existing_wait_budget(self):
+        self.transport.retry_budget = github.RetryBudget(5.0)
+        path = '/repos/endaye/lmdj/actions/runs/17/attempts/1'
+        response = {'positive': 'read observation'}
+        with patch.object(self.api, '_request', side_effect=[GitHubApiError(502, 'private'), response, GitHubApiError(502, 'private')]) as request, patch.object(github.time, 'sleep') as sleep:
+            self.assertEqual(self.transport._call('GET', path), response)
+            with self.assertRaisesRegex(JournalBlocked, 'status=502'):
+                self.transport._call('GET', path)
+        self.assertEqual(request.call_count, 3)
+        sleep.assert_called_once_with(5.0)
+        self.assertEqual(self.transport.retry_budget.remaining, 0.0)
+
+    def test_locked_transient_read_keeps_the_existing_deadline(self):
+        self.transport.clock = iter([0.0, 26.0]).__next__
+        with patch.object(self.api, '_request', side_effect=GitHubApiError(502, 'private')) as request, patch.object(github.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(JournalBlocked, 'status=502'):
+                self.transport._call('GET', '/repos/endaye/lmdj/actions/runs/17/attempts/1')
+        request.assert_called_once()
+        sleep.assert_not_called()
+        self.assertEqual(self.transport.retry_budget.remaining, 25.0)
+
+    def test_recovered_get_still_refuses_untrusted_writer(self):
+        original = self.api._request
+        self.api.job_changes['name'] = 'Untrusted writer'
+        attempts = []
+        def request(method, path, **kwargs):
+            if '/jobs?' in path:
+                attempts.append(path)
+                if len(attempts) == 1:
+                    raise GitHubApiError(502, 'private upstream response')
+            return original(method, path, **kwargs)
+        with patch.object(self.api, '_request', side_effect=request), patch.object(github.time, 'sleep'):
+            with self.assertRaisesRegex(JournalBlocked, 'writer job is missing or ambiguous'):
+                self.transport._writer(WRITER)
+        self.assertEqual(len(attempts), 2)
+        self.assertFalse(self.transport._checked_writers)
+
     def test_http_refusal_retains_numeric_observation_without_private_text(self):
         error = GitHubApiError(
             403, "SECRET response body", remaining=17, reset=123456, retry_after=7)

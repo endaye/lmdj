@@ -151,8 +151,11 @@ class GitHubJournalTransport:
             # Journal writes and GraphQL reads are POSTs: never replay an
             # unknown POST. Only an idempotent REST GET may be retried.
             if method == "GET":
+                # A held writer lock yields on secondary throttling, but a
+                # transient GET may recover within the same shared wait budget.
                 return with_retry(call, sleep=time.sleep, clock=self.clock,
-                                  budget=self.retry_budget, secondary=not self.lock_held())
+                                  budget=self.retry_budget, secondary=not self.lock_held(),
+                                  transient=True)
             return call()
         except Exception as error:
             detail = self._diagnostic_endpoint(path)

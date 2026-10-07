@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-22
     occurrence: https://github.com/endaye/lmdj/issues/1486
     observed_by: Codex (GPT-5)
+  - date: 2026-10-07
+    occurrence: https://github.com/endaye/lmdj/actions/runs/37663204596
+    observed_by: Codex
 exit: gate:tests/build/ci_batch_github_journal_test.py
 ---
 
@@ -48,3 +51,13 @@ GitHub transport regression counts actual HTTP fixture calls (eleven writer
 attempt GETs versus seven including the anchor for six writers on three pages).
 Verify each page before fetching the next, retain every chain/ID/digest check,
 and publish the reusable prefix only after the complete read succeeds.
+
+The 2026-10-07 recurrence exposed a second way to repeat a full replay. Two
+Build 87 recovery runs received HTTP 502 from different historical writer-jobs
+GETs, with healthy quota. Disabling secondary retries under the writer lock
+also disabled transient GET recovery, so each error discarded the entire
+read's progress. Separate the two retry classes: preserve immediate locked
+429 refusal and single-attempt POST/PATCH, but allow transient REST GET errors
+within the existing shared retry budget and deadline. A recovered response
+still needs every writer/source/ancestry/job check; exhausted recovery is not
+an authenticated proof and cannot populate the successful read prefix.
