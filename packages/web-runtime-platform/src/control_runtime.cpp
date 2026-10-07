@@ -1723,6 +1723,68 @@ struct ControlRuntime::Impl {
     replay_restore.reset();
   }
 
+  // #1801: commands take over only after the replay's own Stop has settled.
+  // Audio callbacks continue independently of this serialized control turn;
+  // the original request deadline bounds both neutral reset and publication.
+  // Project replacement supplies a new view; transport takes the selected
+  // Pattern's current Truth, never the Pattern a replay happened to launch.
+  std::optional<Json> stop_replay_before_command(bool restore_pattern) {
+    if (active_replay.has_value()) {
+      const auto request = Json{
+          {"operation", "performance.replay.stop"},
+          {"project_path", retained_project_path->generic_string()},
+          {"replay_id", active_replay->replay_id},
+          {"request_id", generated_uuid()},
+      };
+      while (active_replay.has_value()) {
+        if (request_cancelled()) {
+          return timeout_error();
+        }
+        const auto response = application.command(request);
+        if (!response.value("ok", false)) {
+          return normalized_facade_error(response);
+        }
+        track_replay_response("performance.replay.stop", response.at("result"));
+        if (active_replay.has_value()) {
+          std::this_thread::yield();
+        }
+      }
+    }
+    if (!restore_pattern || !replay_restore.has_value()) {
+      return std::nullopt;
+    }
+    if (!session_available() || !pattern_id.has_value() ||
+        project_id != replay_restore->project_id) {
+      return state_error("replay Project is unavailable for transport handoff");
+    }
+    while (engine.pattern_telemetry().pending_generation != 0) {
+      if (request_cancelled()) {
+        return timeout_error();
+      }
+      std::this_thread::yield();
+    }
+    if (request_cancelled()) {
+      return timeout_error();
+    }
+    const auto published = publish_edited_pattern(
+        foundation::PatternId{*pattern_id}, false);
+    if (published.error.has_value()) {
+      return Json{{"ok", false}, {"error", *published.error}};
+    }
+    if (!published.publication.has_value()) {
+      return state_error("runtime Pattern publication is unavailable");
+    }
+    const auto generation = published.publication->generation;
+    while (engine.pattern_telemetry().current_generation != generation) {
+      if (request_cancelled()) {
+        return timeout_error();
+      }
+      std::this_thread::yield();
+    }
+    replay_restore.reset();
+    return std::nullopt;
+  }
+
   std::filesystem::path project_path(std::string_view project_id) const {
     return workspace_root / "projects" /
            (std::string(project_id) + ".lmdj");
@@ -3575,6 +3637,15 @@ Json ControlRuntime::dispatch(
           !impl_->sample_import_tokens.empty()) {
         return state_error();
       }
+      const auto project_id = uuid_field(payload, "project_id");
+      const auto bpm = unsigned_field(payload, "bpm", 240);
+      require(bpm >= 40);
+      auto initial_pattern = pattern_value(payload.at("initial_pattern"));
+      const bool transport_opted_in = payload.contains("pattern_transport") &&
+          bool_field(payload, "pattern_transport");
+      if (const auto stopped = impl_->stop_replay_before_command(false)) {
+        return *stopped;
+      }
       // Project replacement enters the shutdown barrier: an unknown
       // transport closure prevents a clean replacement claim.
       const auto create_barrier = impl_->transport_shutdown_barrier();
@@ -3584,16 +3655,10 @@ Json ControlRuntime::dispatch(
       impl_->transport.reset();
       // Pattern transport stays disabled — and Pattern event scheduling
       // untouched — until a session opts in at this quiescent point.
-      impl_->transport_opted_in =
-          payload.contains("pattern_transport") &&
-          bool_field(payload, "pattern_transport");
+      impl_->transport_opted_in = transport_opted_in;
       if (impl_->transport_opted_in) {
         impl_->enable_pattern_transport_quiescent();
       }
-      const auto project_id = uuid_field(payload, "project_id");
-      const auto bpm = unsigned_field(payload, "bpm", 240);
-      require(bpm >= 40);
-      auto initial_pattern = pattern_value(payload.at("initial_pattern"));
       const auto initial_pattern_id = initial_pattern.id.value();
       const auto path = impl_->project_path(project_id);
       auto lease = impl_->application.acquire_project_writer(path);
@@ -3686,6 +3751,13 @@ Json ControlRuntime::dispatch(
           !impl_->sample_import_tokens.empty()) {
         return state_error();
       }
+      const auto selected_id = uuid_field(payload, "project_id");
+      const auto selected_pattern = uuid_field(payload, "pattern_id");
+      const bool transport_opted_in = payload.contains("pattern_transport") &&
+          bool_field(payload, "pattern_transport");
+      if (const auto stopped = impl_->stop_replay_before_command(false)) {
+        return *stopped;
+      }
       // Project replacement enters the shutdown barrier: an unknown
       // transport closure prevents a clean replacement claim.
       const auto open_barrier = impl_->transport_shutdown_barrier();
@@ -3695,14 +3767,10 @@ Json ControlRuntime::dispatch(
       impl_->transport.reset();
       // Pattern transport stays disabled — and Pattern event scheduling
       // untouched — until a session opts in at this quiescent point.
-      impl_->transport_opted_in =
-          payload.contains("pattern_transport") &&
-          bool_field(payload, "pattern_transport");
+      impl_->transport_opted_in = transport_opted_in;
       if (impl_->transport_opted_in) {
         impl_->enable_pattern_transport_quiescent();
       }
-      const auto selected_id = uuid_field(payload, "project_id");
-      const auto selected_pattern = uuid_field(payload, "pattern_id");
       const auto path = impl_->project_path(selected_id);
       auto lease = impl_->application.acquire_project_writer(path);
       if (!lease.has_value()) {
@@ -4773,6 +4841,9 @@ Json ControlRuntime::dispatch(
         return normalized_error(Error{
             ErrorCode::revision_conflict,
             "Pattern transport request belongs to another Project"});
+      }
+      if (const auto stopped = impl_->stop_replay_before_command(true)) {
+        return *stopped;
       }
       auto* engagement =
           impl_->ensure_transport_engaged(

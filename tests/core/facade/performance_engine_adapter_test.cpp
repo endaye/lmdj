@@ -940,6 +940,24 @@ void test_explicit_stop_waits_for_neutral_reset_confirmation() {
                  .state == ReplayState::stopped);
 }
 
+void test_replay_stop_after_quiescent_engine_stop_stays_stopped() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  LMDJ_CHECK(adapter.replay_controller
+      ->begin(ReplayId{kReplay}, pad_only_replay_projection(120)).has_value());
+  engine.stop();
+  const auto stopped = adapter.replay_controller->stop(ReplayId{kReplay});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(stopped.value().state == ReplayState::stopped);
+  LMDJ_CHECK(engine.start().has_value());
+  render(engine, 128);
+  adapter.service();
+  LMDJ_CHECK(adapter.replay_controller->status(ReplayId{kReplay})
+      .value().state == ReplayState::stopped);
+}
+
 }  // namespace
 
 // The live gesture sink is the audible half of P10-D7: the same FxGesture the
@@ -1004,6 +1022,7 @@ int main() {
     test_replay_progresses_from_rendering_and_periodic_service_only();
     test_reset_queue_pressure_continues_without_duplicate_gestures();
     test_explicit_stop_waits_for_neutral_reset_confirmation();
+    test_replay_stop_after_quiescent_engine_stop_stays_stopped();
     test_live_gesture_sink_reaches_the_running_master_bus();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -115,6 +115,8 @@ Pattern launch strip 呈现 16 个 Pattern Slot（Project 的可发射地址空�
 
 回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记。回放期间可以照常编辑（网格、Pad、BPM）：编辑写入 Truth，回放仍按开始时的 revision 播放、不被打断，回放结束后选中的 Pattern 按 Truth 恢复（#1789）。内部回放内录通过选择 Internal playback 并按住空 Pad 完成：松手后将实际采集的 master 输出保存到该 Pad；中断或达到时长上限的素材由用户显式 Save 或 Discard。回放面板保留 Performance recovery 候选的 Apply recovery / Discard recovery。
 
+Pattern transport 的 Play/Stop、Record，以及创建或打开 Project，都会先通过回放自身的 Stop 停止正在播放的 Performance，再照常执行（[#1801 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-performance-replay-command-handoff.md)）。transport 接手选中 Pattern 的当前 Truth，包括回放期间提交的编辑；回到原 Project 不会复活已停止的回放。用户正在听的回放会被打断；真实停止失败或超时会阻止后续操作。
+
 Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged launch、replay 状态与 recovery 候选都来自 Core 查询结果。演奏输入本身不改写 Project Truth；只有显式的 Save、Discard 与 WAV bind 会带 `expected_revision` 经 Facade 提交 Project mutation，Creator 随后重读 Project truth，不自行推断 revision。
 
 `1.0.40.0` 的 macOS Chrome M2 实体听感 8 个检查组全部通过：非零裁剪、One Shot、Gate release、Loop Gate、Loop Toggle、Volume/Mute、16 Pads 与 Replace/reload 均无可闻异常。约 40 ms 选区的快速重复纹理一度被描述为接缝咔哒；同一候选复听后，操作者明确修正为短片段高速循环的正常声音、没有明显独立接缝爆音。该 `PASS` 只适用于已记录的 Chrome 实体听感行，不表示其他浏览器或设备通过。
