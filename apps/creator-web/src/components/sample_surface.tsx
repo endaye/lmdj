@@ -49,7 +49,7 @@ import {
   type CreatorAction,
   type CreatorState,
 } from "../state/creator_state";
-import {padAddress} from "../state/view_model";
+import {padAddress, slotAddress} from "../state/view_model";
 
 interface SampleSurfaceProps {
   state: CreatorState;
@@ -160,7 +160,7 @@ function quotaErrorCopy(
       const pad = (entry as Record<string, unknown>).pad;
       const frames = (entry as Record<string, unknown>).prepared_frames;
       return typeof pad === "number" && typeof frames === "number"
-        ? `${String.fromCharCode(65 + bank)}${pad + 1}: ${(frames / 48_000).toFixed(2)} s`
+        ? `${slotAddress(bank * 16 + pad)}: ${(frames / 48_000).toFixed(2)} s`
         : null;
     }).filter((entry): entry is string => entry !== null);
     return `Bank ${String.fromCharCode(65 + bank)} remaining ${(remaining / 48_000).toFixed(2)} s; Pad usage ${usage.length === 0 ? "none" : usage.join(", ")}.`;

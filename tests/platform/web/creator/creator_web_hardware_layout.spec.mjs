@@ -60,7 +60,7 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
     height: 368,
   });
 
-  const pad = rounded(await page.getByRole("button", {name: /Pad A1 /}).boundingBox());
+  const pad = rounded(await page.getByRole("button", {name: /Pad A01 /}).boundingBox());
   expect(pad).toMatchObject({width: 80, height: 80});
   const encoders = rounded(await page.getByTestId("physical-encoders").boundingBox());
   expect(encoders).toMatchObject({

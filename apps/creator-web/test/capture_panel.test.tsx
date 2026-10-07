@@ -72,7 +72,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof CapturePanel
   const onClose = vi.fn();
   const view = render(
     <CapturePanel
-      padLabel="Pad A1"
+      padLabel="Pad A01"
       maxCommitFrames={240_000}
       onCommit={onCommit}
       onClose={onClose}
@@ -84,7 +84,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof CapturePanel
 
 async function startRecording(instances: ControllerInstance[]) {
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", {name: "Record into Pad A1"}));
+  await user.click(screen.getByRole("button", {name: "Record into Pad A01"}));
   await waitFor(() => expect(instances).toHaveLength(1));
   await screen.findByRole("button", {name: "Stop"});
   return instances[0]!;
@@ -115,7 +115,7 @@ function captureGrip(container: HTMLElement, kind: "start" | "end") {
 
 test("renders the idle Record button without ever building the real browser controller", () => {
   renderPanel();
-  expect(screen.getByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Record into Pad A01"})).toBeTruthy();
 });
 
 test("a Sequence Pad stop request preserves the take in the trimming overlay", async () => {
@@ -129,13 +129,13 @@ test("a Sequence Pad stop request preserves the take in the trimming overlay", a
   const {listener} = await startRecording(instances);
   act(() => listener.onBatch([new Float32Array(240_001).fill(0.25)], 0.25));
   view.rerender(
-    <CapturePanel padLabel="Pad A1" onCommit={async () => ({kind: "committed"})}
+    <CapturePanel padLabel="Pad A01" onCommit={async () => ({kind: "committed"})}
       onClose={() => {}} makeController={makeController} stopRequest={1}
       maxCommitFrames={240_000}
       onPhaseChange={(phase) => phases.push(phase)} />,
   );
   await screen.findByRole("button", {name: "Commit"});
-  expect(screen.getByRole("slider", {name: /Pad A1 End/})
+  expect(screen.getByRole("slider", {name: /Pad A01 End/})
     .getAttribute("max")).toBe("240000");
   expect(phases).toContain("trimming");
 });
@@ -147,13 +147,13 @@ test("a full-buffer selection exposes independently operable Start and End value
   act(() => listener.onBatch([new Float32Array(96_000).fill(0.25)], 0.25));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
 
-  const start = await screen.findByRole("slider", {name: "Pad A1 Start — 0.000 s"});
-  const end = screen.getByRole("slider", {name: "Pad A1 End — 2.000 s"});
+  const start = await screen.findByRole("slider", {name: "Pad A01 Start — 0.000 s"});
+  const end = screen.getByRole("slider", {name: "Pad A01 End — 2.000 s"});
   expect((start as HTMLInputElement).value).toBe("0");
   expect(start.getAttribute("max")).toBe("95999");
   expect((end as HTMLInputElement).value).toBe("96000");
   expect(end.getAttribute("min")).toBe("1");
-  expect(screen.getByLabelText("Pad A1 Duration").textContent).toBe("2.000 s");
+  expect(screen.getByLabelText("Pad A01 Duration").textContent).toBe("2.000 s");
 });
 
 test("Start and End grips shrink an initial full selection and commit exact frame values", async () => {
@@ -173,18 +173,18 @@ test("Start and End grips shrink an initial full selection and commit exact fram
   fireEvent.pointerDown(startGrip, {pointerId: 1, clientX: 0, button: 0});
   fireEvent.pointerMove(startGrip, {pointerId: 1, clientX: 100});
   fireEvent.pointerUp(startGrip, {pointerId: 1});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("8");
 
   const endGrip = captureGrip(container, "end");
   fireEvent.pointerDown(endGrip, {pointerId: 2, clientX: 400, button: 0});
   fireEvent.pointerMove(endGrip, {pointerId: 2, clientX: 300});
   fireEvent.pointerUp(endGrip, {pointerId: 2});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("6");
 
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
@@ -204,12 +204,12 @@ test("releasing outside a Capture grip ends the pointer drag", async () => {
   const startGrip = captureGrip(container, "start");
   fireEvent.pointerDown(startGrip, {pointerId: 3, clientX: 0, button: 0});
   fireEvent.pointerMove(startGrip, {pointerId: 3, clientX: 100});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
 
   fireEvent.pointerUp(window, {pointerId: 3});
   fireEvent.pointerMove(startGrip, {pointerId: 3, clientX: 200});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
 });
 
@@ -225,13 +225,13 @@ test("pointer cancellation restores the Capture selection from before the drag",
   const startGrip = captureGrip(container, "start");
   fireEvent.pointerDown(startGrip, {pointerId: 4, clientX: 0, button: 0});
   fireEvent.pointerMove(startGrip, {pointerId: 4, clientX: 100});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
 
   fireEvent.pointerCancel(window, {pointerId: 4});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("0");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("8");
 });
 
@@ -242,33 +242,33 @@ test("keyboard Start and End move by one frame or 10 ms, cancel, and never cross
   act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
 
-  let start = await screen.findByRole("slider", {name: /Pad A1 Start/});
+  let start = await screen.findByRole("slider", {name: /Pad A01 Start/});
   fireEvent.keyDown(start, {key: "ArrowRight"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("1");
-  start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  start = screen.getByRole("slider", {name: /Pad A01 Start/});
   fireEvent.keyDown(start, {key: "Escape"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("0");
   expect(onClose).not.toHaveBeenCalled();
 
-  const end = screen.getByRole("slider", {name: /Pad A1 End/});
+  const end = screen.getByRole("slider", {name: /Pad A01 End/});
   fireEvent.keyDown(end, {key: "ArrowLeft", shiftKey: true});
-  fireEvent.keyUp(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "ArrowLeft"});
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  fireEvent.keyUp(screen.getByRole("slider", {name: /Pad A01 End/}), {key: "ArrowLeft"});
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("47520");
-  expect(screen.getByLabelText("Pad A1 Duration").textContent).toBe("0.990 s");
+  expect(screen.getByLabelText("Pad A01 Duration").textContent).toBe("0.990 s");
 
-  start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  start = screen.getByRole("slider", {name: /Pad A01 Start/});
   fireEvent.change(start, {target: {value: "47519"}});
-  start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  start = screen.getByRole("slider", {name: /Pad A01 Start/});
   fireEvent.keyDown(start, {key: "ArrowRight"});
   fireEvent.keyUp(start, {key: "ArrowRight"});
-  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "ArrowLeft"});
-  fireEvent.keyUp(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "ArrowLeft"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A01 End/}), {key: "ArrowLeft"});
+  fireEvent.keyUp(screen.getByRole("slider", {name: /Pad A01 End/}), {key: "ArrowLeft"});
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("47519");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("47520");
 });
 
@@ -284,13 +284,13 @@ test("Escape cancels an active pointer trim without closing the Capture panel", 
   const startGrip = captureGrip(container, "start");
   fireEvent.pointerDown(startGrip, {pointerId: 9, clientX: 0, button: 0});
   fireEvent.pointerMove(startGrip, {pointerId: 9, clientX: 100});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
 
   fireEvent.keyDown(screen.getByRole("button", {name: "Commit"}), {key: "Escape"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("0");
-  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeTruthy();
+  expect(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeTruthy();
   expect(onClose).not.toHaveBeenCalled();
 });
 
@@ -303,12 +303,12 @@ test("Escape on a focused trim handle with no gesture still closes the Capture p
 
   // A focused handle owns Escape only while a trim gesture is in flight; with
   // nothing to abort it must reach ModalDialog and dismiss the session.
-  fireEvent.keyDown(await screen.findByRole("slider", {name: /Pad A1 Start/}), {
+  fireEvent.keyDown(await screen.findByRole("slider", {name: /Pad A01 Start/}), {
     key: "Escape",
   });
   expect(onClose).toHaveBeenCalledTimes(1);
 
-  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "Escape"});
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A01 End/}), {key: "Escape"});
   expect(onClose).toHaveBeenCalledTimes(2);
 });
 
@@ -322,18 +322,18 @@ test("focus leaving a trim handle ends the keyboard gesture that Escape would ab
   // An arrow nudge whose keyup never reaches the handle: the browser sends it
   // to whatever took focus, so a window switch mid-nudge leaves the gesture
   // base behind unless focus loss also ends the gesture.
-  const start = await screen.findByRole("slider", {name: /Pad A1 Start/});
+  const start = await screen.findByRole("slider", {name: /Pad A01 Start/});
   start.focus();
   fireEvent.keyDown(start, {key: "ArrowRight"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("1");
 
   screen.getByRole("button", {name: "Commit"}).focus();
-  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"}), {
+  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"}), {
     key: "Escape",
   });
   // A stale base would both revert the nudge and swallow the dismissal.
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("1");
   expect(onClose).toHaveBeenCalledTimes(1);
 });
@@ -347,11 +347,11 @@ test("a stale keyboard base never shadows the abort base of a live grip drag", a
   await screen.findByRole("button", {name: "Commit"});
   mockTrimRect(container);
 
-  const start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const start = screen.getByRole("slider", {name: /Pad A01 Start/});
   start.focus();
   fireEvent.keyDown(start, {key: "ArrowRight"});
   fireEvent.keyDown(start, {key: "ArrowRight"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
 
   // Focus deliberately stays on the handle: handleGripPointerDown calls
@@ -362,15 +362,15 @@ test("a stale keyboard base never shadows the abort base of a live grip drag", a
   const endGrip = captureGrip(container, "end");
   fireEvent.pointerDown(endGrip, {pointerId: 21, clientX: 400, button: 0});
   fireEvent.pointerMove(endGrip, {pointerId: 21, clientX: 300});
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("36000");
 
   // Escape must abort the drag back to its own base, not to whatever the
   // earlier keyboard nudge recorded.
   fireEvent.keyDown(window, {key: "Escape"});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("48000");
 });
 
@@ -383,27 +383,27 @@ test("keyboard Start moves clamp to the remaining Bank quota instead of dead-zon
 
   // Walk the 2 400-frame window off zero so the quota, not frame 0, is what
   // bounds Start from below: start 1 200, end 3 000, 1 800 frames selected.
-  fireEvent.change(await screen.findByRole("slider", {name: /Pad A1 Start/}),
+  fireEvent.change(await screen.findByRole("slider", {name: /Pad A01 Start/}),
     {target: {value: "1200"}});
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}),
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}),
     {target: {value: "3000"}});
-  expect(screen.getByRole("slider", {name: /Pad A1 Start/}).getAttribute("min"))
+  expect(screen.getByRole("slider", {name: /Pad A01 Start/}).getAttribute("min"))
     .toBe("600");
 
-  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 Start/}),
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A01 Start/}),
     {key: "ArrowLeft", shiftKey: true});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("720");
 
   // 720 - 480 = 240 would ask for 2 760 frames, over the 2 400 quota. The
   // handle must land on the quota bound rather than refuse to move at all.
-  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 Start/}),
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A01 Start/}),
     {key: "ArrowLeft", shiftKey: true});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("600");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("3000");
-  expect(screen.getByLabelText("Pad A1 Duration").textContent).toBe("0.050 s");
+  expect(screen.getByLabelText("Pad A01 Duration").textContent).toBe("0.050 s");
 });
 
 test("dragging the Start grip past the Bank quota clamps to the quota bound", async () => {
@@ -415,9 +415,9 @@ test("dragging the Start grip past the Bank quota clamps to the quota bound", as
   await screen.findByRole("button", {name: "Commit"});
   mockTrimRect(container);
 
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}),
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 Start/}),
     {target: {value: "1200"}});
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}),
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}),
     {target: {value: "3000"}});
 
   // 400 px over 48 000 frames: Start sits at 1 200 frames, i.e. clientX 10.
@@ -425,9 +425,9 @@ test("dragging the Start grip past the Bank quota clamps to the quota bound", as
   fireEvent.pointerDown(startGrip, {pointerId: 11, clientX: 10, button: 0});
   fireEvent.pointerMove(startGrip, {pointerId: 11, clientX: 0});
   fireEvent.pointerUp(startGrip, {pointerId: 11});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("600");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("3000");
 });
 
@@ -442,20 +442,20 @@ test("Capture grip presses preserve grab offset and the waveform middle stays in
 
   const startGrip = captureGrip(container, "start");
   fireEvent.pointerDown(startGrip, {pointerId: 5, clientX: 12, button: 0});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("0");
   fireEvent.pointerMove(startGrip, {pointerId: 5, clientX: 175});
   fireEvent.pointerUp(startGrip, {pointerId: 5});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("3");
 
-  const waveform = screen.getByRole("img", {name: "Pad A1 capture waveform"});
+  const waveform = screen.getByRole("img", {name: "Pad A01 capture waveform"});
   fireEvent.pointerDown(waveform, {pointerId: 6, clientX: 250, button: 0});
   fireEvent.pointerMove(waveform, {pointerId: 6, clientX: 300});
   fireEvent.pointerUp(window, {pointerId: 6});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("3");
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("8");
 });
 
@@ -467,10 +467,10 @@ test("adjacent Capture endpoints partition grip zones at their midpoint", async 
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
   await screen.findByRole("button", {name: "Commit"});
   mockTrimRect(container);
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}), {
     target: {value: "4"},
   });
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 Start/}), {
     target: {value: "3"},
   });
 
@@ -482,13 +482,13 @@ test("adjacent Capture endpoints partition grip zones at their midpoint", async 
   fireEvent.pointerDown(startGrip, {pointerId: 7, clientX: 155, button: 0});
   fireEvent.pointerMove(startGrip, {pointerId: 7, clientX: 105});
   fireEvent.pointerUp(startGrip, {pointerId: 7});
-  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 Start/}) as HTMLInputElement).value)
     .toBe("2");
 
   fireEvent.pointerDown(endGrip, {pointerId: 8, clientX: 195, button: 0});
   fireEvent.pointerMove(endGrip, {pointerId: 8, clientX: 245});
   fireEvent.pointerUp(endGrip, {pointerId: 8});
-  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+  expect((screen.getByRole("slider", {name: /Pad A01 End/}) as HTMLInputElement).value)
     .toBe("5");
 });
 
@@ -503,7 +503,7 @@ test("Capture trim styles anchor visible grips and keep range inputs out of the 
   const waveform = container.querySelector<HTMLElement>("[data-capture-trim-waveform]")!;
   const mask = container.querySelector<HTMLElement>("[data-capture-selection-mask=before]")!;
   const grip = container.querySelector<HTMLElement>("[data-capture-grip=start]")!;
-  const slider = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const slider = screen.getByRole("slider", {name: /Pad A01 Start/});
   expect(getComputedStyle(waveform).position).toBe("relative");
   expect(getComputedStyle(waveform).overflow).toBe("visible");
   expect(getComputedStyle(mask).position).toBe("absolute");
@@ -534,10 +534,10 @@ test("Capture trim styles anchor visible grips and keep range inputs out of the 
 
 test("opens as a modal dialog and moves focus to the phase's primary action (P2-D1/P2-D2)", () => {
   renderPanel();
-  const dialog = screen.getByRole("dialog", {name: "Pad A1 Pad Capture"});
+  const dialog = screen.getByRole("dialog", {name: "Pad A01 Pad Capture"});
   expect(dialog.getAttribute("aria-modal")).toBe("true");
   expect(document.activeElement).toBe(
-    screen.getByRole("button", {name: "Record into Pad A1"}),
+    screen.getByRole("button", {name: "Record into Pad A01"}),
   );
 });
 
@@ -549,20 +549,20 @@ test("releases native modal ownership while capture continues behind Sequence", 
   expect(dialog.open).toBe(true);
 
   view.rerender(
-    <CapturePanel padLabel="Pad A1"
+    <CapturePanel padLabel="Pad A01"
       onCommit={async () => ({kind: "committed"})}
       onClose={() => {}} backgrounded />,
   );
-  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeNull();
   expect(view.container.querySelector(".capture-panel-background")?.hasAttribute("hidden"))
     .toBe(true);
 
   view.rerender(
-    <CapturePanel padLabel="Pad A1"
+    <CapturePanel padLabel="Pad A01"
       onCommit={async () => ({kind: "committed"})}
       onClose={() => {}} backgrounded={false} />,
   );
-  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})
+  expect(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"})
     .getAttribute("aria-modal")).toBe("true");
 });
 
@@ -594,7 +594,7 @@ test("focus returns to the invoking button on close, restored by the dialog alon
         </button>
         {open ? (
           <CapturePanel
-            padLabel="Pad A1"
+            padLabel="Pad A01"
             onCommit={async () => ({kind: "committed"}) as const}
             onClose={() => setOpen(false)}
             returnFocus={invokeRef.current}
@@ -606,10 +606,10 @@ test("focus returns to the invoking button on close, restored by the dialog alon
   render(<Harness />);
   const invoke = screen.getByRole("button", {name: "Invoke capture"});
   await user.click(invoke);
-  expect(await screen.findByRole("button", {name: "Record into Pad A1"}))
+  expect(await screen.findByRole("button", {name: "Record into Pad A01"}))
     .toBeTruthy();
   expect(document.activeElement).toBe(
-    screen.getByRole("button", {name: "Record into Pad A1"}),
+    screen.getByRole("button", {name: "Record into Pad A01"}),
   );
 
   await user.click(screen.getByRole("button", {name: "Close"}));
@@ -618,7 +618,7 @@ test("focus returns to the invoking button on close, restored by the dialog alon
 
 test("Escape closes the panel from idle (P2-D2)", () => {
   const {onClose} = renderPanel();
-  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"}), {
+  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"}), {
     key: "Escape",
   });
   expect(onClose).toHaveBeenCalledTimes(1);
@@ -629,7 +629,7 @@ test("Escape during recording stops the capture before closing (P2-D2)", async (
   const {onClose} = renderPanel({makeController});
   const {controller} = await startRecording(instances);
 
-  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"}), {
+  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"}), {
     key: "Escape",
   });
 
@@ -639,10 +639,10 @@ test("Escape during recording stops the capture before closing (P2-D2)", async (
 
 test("pointer-down on the backdrop does not close the panel (P2-D1)", () => {
   const {onClose} = renderPanel();
-  const dialog = screen.getByRole("dialog", {name: "Pad A1 Pad Capture"});
+  const dialog = screen.getByRole("dialog", {name: "Pad A01 Pad Capture"});
   fireEvent.pointerDown(dialog.parentElement!);
   expect(onClose).not.toHaveBeenCalled();
-  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeTruthy();
+  expect(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeTruthy();
 });
 
 test.each([
@@ -656,7 +656,7 @@ test.each([
     startImpl: async () => { throw new CapturePermissionError(name); },
   });
   renderPanel({makeController});
-  await user.click(screen.getByRole("button", {name: "Record into Pad A1"}));
+  await user.click(screen.getByRole("button", {name: "Record into Pad A01"}));
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain(copy);
   expect(alert.textContent).not.toContain(name);
@@ -671,12 +671,12 @@ test("Record drives record then granted, and denial renders a retryable alert (b
   });
   renderPanel({makeController});
 
-  await user.click(screen.getByRole("button", {name: "Record into Pad A1"}));
+  await user.click(screen.getByRole("button", {name: "Record into Pad A01"}));
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain(
     "Creator is not allowed to use the microphone. Allow microphone access for this site, then record again.");
   expect(alert.textContent).not.toContain("NotAllowedError");
-  const retry = screen.getByRole("button", {name: "Record into Pad A1"});
+  const retry = screen.getByRole("button", {name: "Record into Pad A01"});
   expect(retry).toBeTruthy();
 
   await user.click(retry);
@@ -689,13 +689,13 @@ test("recording shows elapsed time, a level meter, and a growing waveform canvas
   renderPanel({makeController});
   const {listener} = await startRecording(instances);
 
-  const canvas = screen.getByRole("img", {name: "Pad A1 capture waveform"});
+  const canvas = screen.getByRole("img", {name: "Pad A01 capture waveform"});
   expect(canvas.getAttribute("data-frame-count")).toBe("0");
 
   act(() => listener.onBatch([new Float32Array(4_800).fill(0.5)], 0.5));
   await waitFor(() => expect(canvas.getAttribute("data-frame-count")).toBe("4800"));
   expect(screen.getByText("0.1 s recorded")).toBeTruthy();
-  const meter = screen.getByRole("meter", {name: "Pad A1 input level"}) as HTMLMeterElement;
+  const meter = screen.getByRole("meter", {name: "Pad A01 input level"}) as HTMLMeterElement;
   expect(meter.value).toBeCloseTo(0.5);
 
   act(() => listener.onBatch([new Float32Array(4_800).fill(0.25)], 0.25));
@@ -707,7 +707,7 @@ test("a stereo batch sizes the buffer from the batch itself and the frame count 
   renderPanel({makeController});
   const {listener} = await startRecording(instances);
 
-  const canvas = screen.getByRole("img", {name: "Pad A1 capture waveform"});
+  const canvas = screen.getByRole("img", {name: "Pad A01 capture waveform"});
   expect(canvas.getAttribute("data-frame-count")).toBe("0");
 
   // The worklet is the single authority on channel width now (Finding 1): the
@@ -817,7 +817,7 @@ test("trimming clamps the End handle to the queried effective quota", async () =
   act(() => listener.onBatch([new Float32Array(480_000).fill(0.2)], 0.2));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
 
-  const end = await screen.findByRole("slider", {name: /Pad A1 End/});
+  const end = await screen.findByRole("slider", {name: /Pad A01 End/});
   expect((end as HTMLInputElement).value).toBe("240000");
   expect(end.getAttribute("max")).toBe("240000");
 
@@ -841,10 +841,10 @@ test("trimming keeps the complete waveform visible and dims outside the selectio
   expect(before.style.width).toBe("0%");
   expect(after.style.left).toBe("50%");
 
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 Start/}), {
     target: {value: "120000"},
   });
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}), {
     target: {value: "192000"},
   });
   await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 480_000));
@@ -871,9 +871,9 @@ test("Crop to selection mutates the same buffer, rebases PCM, and resets the vie
 
     const cropButton = await screen.findByRole("button", {name: "Crop to selection"});
     expect((cropButton as HTMLButtonElement).disabled).toBe(true);
-    const startSlider = screen.getByRole("slider", {name: /Pad A1 Start/});
+    const startSlider = screen.getByRole("slider", {name: /Pad A01 Start/});
     fireEvent.change(startSlider, {target: {value: "2"}});
-    const endSlider = screen.getByRole("slider", {name: /Pad A1 End/});
+    const endSlider = screen.getByRole("slider", {name: /Pad A01 End/});
     fireEvent.change(endSlider, {target: {value: "6"}});
     expect((cropButton as HTMLButtonElement).disabled).toBe(false);
 
@@ -914,16 +914,16 @@ test("Crop clears a commit error and remains available for another edit", async 
   await userEvent.setup().click(await screen.findByRole("button", {name: "Commit"}));
   expect((await screen.findByRole("alert")).textContent).toBe("Pad slot changed");
 
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 Start/}), {
     target: {value: "2"},
   });
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}), {
     target: {value: "6"},
   });
   await userEvent.setup().click(screen.getByRole("button", {name: "Crop to selection"}));
 
   expect(screen.queryByRole("alert")).toBeNull();
-  const endSlider = screen.getByRole("slider", {name: /Pad A1 End/});
+  const endSlider = screen.getByRole("slider", {name: /Pad A01 End/});
   fireEvent.change(endSlider, {target: {value: "2"}});
   const secondCrop = screen.getByRole("button", {name: "Crop to selection"});
   expect((secondCrop as HTMLButtonElement).disabled).toBe(false);
@@ -966,7 +966,7 @@ test("Commit calls onCommit with the buffer and selection, then resets to idle (
   const [buffer, selection] = onCommit.mock.calls[0]!;
   expect(buffer).toBeInstanceOf(CaptureBuffer);
   expect(selection).toEqual({startFrame: 0, frameCount: 96_000});
-  await screen.findByRole("button", {name: "Record into Pad A1"});
+  await screen.findByRole("button", {name: "Record into Pad A01"});
 });
 
 test("a conflict result renders a retry affordance with the buffer intact (behavior 5, S8B-D6)", async () => {
@@ -984,7 +984,7 @@ test("a conflict result renders a retry affordance with the buffer intact (behav
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toBe("Pad slot changed");
   expect(screen.getByRole("button", {name: "Commit"})).toBeTruthy();
-  expect(screen.getByRole("slider", {name: /Pad A1 End/})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: /Pad A01 End/})).toBeTruthy();
 
   // Retry keeps the same buffer instance — nothing was discarded.
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
@@ -1016,9 +1016,9 @@ test("a digitally silent take is refused at Commit with an explanation, and the 
   // Discard still clears the take so the operator can re-record.
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
   expect(onCommit).not.toHaveBeenCalled();
-  expect(screen.getByRole("slider", {name: /Pad A1 End/})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: /Pad A01 End/})).toBeTruthy();
   await userEvent.setup().click(screen.getByRole("button", {name: "Discard"}));
-  expect(await screen.findByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
+  expect(await screen.findByRole("button", {name: "Record into Pad A01"})).toBeTruthy();
 });
 
 test("a quiet-but-nonzero take commits — the gate is strict zero only (F4)", async () => {
@@ -1053,10 +1053,10 @@ test("the silence gate reads the whole take, not the current selection (F4)", as
   act(() => listener.onBatch([new Float32Array(48_000)], 0));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
 
-  fireEvent.change(await screen.findByRole("slider", {name: /Pad A1 Start/}), {
+  fireEvent.change(await screen.findByRole("slider", {name: /Pad A01 Start/}), {
     target: {value: "48000"},
   });
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}), {
     target: {value: "96000"},
   });
 
@@ -1129,10 +1129,10 @@ test("the waveform canvas repaints after remounting from committing into commit-
   act(() => listener.onBatch([new Float32Array(96_000).fill(0.4)], 0.4));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
   await screen.findByRole("button", {name: "Commit"});
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 Start/}), {
     target: {value: "24000"},
   });
-  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A01 End/}), {
     target: {value: "72000"},
   });
 
@@ -1164,7 +1164,7 @@ test("Discard resets to idle and clears the buffer", async () => {
   act(() => listener.onBatch([new Float32Array(48_000).fill(0.2)], 0.2));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
   await userEvent.setup().click(await screen.findByRole("button", {name: "Discard"}));
-  expect(await screen.findByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
+  expect(await screen.findByRole("button", {name: "Record into Pad A01"})).toBeTruthy();
 });
 
 test("unmounting while recording stops the controller exactly once (behavior 6)", async () => {

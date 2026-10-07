@@ -102,7 +102,7 @@ export async function installPerformWitnessSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/});
+  const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   const chooser = page.waitForEvent("filechooser");
@@ -112,7 +112,7 @@ export async function installPerformWitnessSample(page) {
     mimeType: "audio/wav",
     buffer: pcm16Wav({channels: 2}),
   });
-  await expect(page.getByRole("dialog", {name: "Replace Pad A1?"})).toBeVisible();
+  await expect(page.getByRole("dialog", {name: "Replace Pad A01?"})).toBeVisible();
   await page.getByRole("button", {name: "Confirm replace"}).click();
   await expect(page.getByRole("button", {name: "Replace Sample"}))
     .toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});

@@ -896,7 +896,7 @@ async function replacePadSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
-  const pad = page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/});
+  const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   const chooser = page.waitForEvent("filechooser");
@@ -906,9 +906,9 @@ async function replacePadSample(page) {
     mimeType: "audio/wav",
     buffer: pcm16Wav({frames: 4_801}),
   });
-  await expect(page.getByRole("dialog", {name: "Replace Pad A1?"})).toBeVisible();
+  await expect(page.getByRole("dialog", {name: "Replace Pad A01?"})).toBeVisible();
   await page.getByRole("button", {name: "Confirm replace"}).click();
-  const longSource = page.getByRole("dialog", {name: "Pad A1 Long Source"});
+  const longSource = page.getByRole("dialog", {name: "Pad A01 Long Source"});
   await expect(longSource).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await longSource.getByRole("button", {name: "Commit selection"}).click();
   await expect(page.getByRole("button", {name: "Replace Sample"}))
@@ -920,7 +920,7 @@ async function recordShortPerformance(
   {name = "Night Set", withFx = false, tailMs = 0} = {},
 ) {
   await beginRecording(page);
-  const pad = page.getByRole("button", {name: /^Pad A1\b/});
+  const pad = page.getByRole("button", {name: /^Pad A01\b/});
   await pad.dispatchEvent("pointerdown", {
     button: 0,
     isPrimary: true,
@@ -972,7 +972,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   const recordingStatus = await beginRecording(page);
   revision = await expectRevisionAfter(page, revision);
 
-  const pad = page.getByRole("button", {name: /^Pad A1\b/});
+  const pad = page.getByRole("button", {name: /^Pad A01\b/});
   await pad.dispatchEvent("pointerdown", {
     button: 0,
     isPrimary: true,
@@ -1091,8 +1091,8 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(beforeDelete.project.banks[1].pads[0].asset_id).not.toBeNull();
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
-  await page.getByRole("button", {name: /^Pad B1 — assigned/}).focus();
-  await page.getByRole("button", {name: "Delete Pad B1", exact: true}).click();
+  await page.getByRole("button", {name: /^Pad B01 — assigned/}).focus();
+  await page.getByRole("button", {name: "Delete Pad B01", exact: true}).click();
   revision = await expectRevisionAfter(page, revision);
   const afterDelete = await inspectProjectTruth(page);
   expect(afterDelete.project.banks[1].pads[0].asset_id).toBeNull();
@@ -1100,7 +1100,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(afterDelete.project.patterns).toEqual(beforeDelete.project.patterns);
   await openPerform(page);
   await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
-  const empty = page.getByRole("button", {name: /^Pad B1 — empty/});
+  const empty = page.getByRole("button", {name: /^Pad B01 — empty/});
   await empty.focus();
   const beforeCaptureBatches = await page.evaluate(() =>
     window.__performMasterBatchProof.length);
@@ -1120,7 +1120,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   }).toBe(true);
   await page.keyboard.up("KeyQ");
   await expectRevisionAfter(page, revision);
-  await expect(page.getByRole("button", {name: /^Pad B1 — assigned/})).toBeVisible();
+  await expect(page.getByRole("button", {name: /^Pad B01 — assigned/})).toBeVisible();
   const captured = await inspectProjectTruth(page);
   const capturedId = captured.project.banks[1].pads[0].asset_id;
   expect(captured.project.assets[capturedId].artifact).toMatchObject({
@@ -1146,7 +1146,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     const baselineWavs = await opfsWavFiles(ownerPage);
 
     await beginRecording(ownerPage);
-    await ownerPage.getByRole("button", {name: /^Pad A1\b/}).click();
+    await ownerPage.getByRole("button", {name: /^Pad A01\b/}).click();
     await stopRecording(ownerPage);
     expect((await opfsWavFiles(ownerPage)).length).toBeGreaterThan(baselineWavs.length);
     await ownerPage.getByRole("button", {name: "Discard Performance"}).click();
@@ -1155,7 +1155,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     await expect.poll(() => opfsWavFiles(ownerPage)).toEqual(baselineWavs);
 
     await beginRecording(ownerPage);
-    await ownerPage.getByRole("button", {name: /^Pad A1\b/}).dispatchEvent("pointerdown", {
+    await ownerPage.getByRole("button", {name: /^Pad A01\b/}).dispatchEvent("pointerdown", {
       button: 0,
       isPrimary: true,
       pointerId: 31,
@@ -1193,7 +1193,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     const discardOwnerPage = owner.page;
     const candidateUrl = owner.url;
     await beginRecording(discardOwnerPage);
-    await discardOwnerPage.getByRole("button", {name: /^Pad A2\b/}).dispatchEvent(
+    await discardOwnerPage.getByRole("button", {name: /^Pad A02\b/}).dispatchEvent(
       "pointerdown",
       {button: 0, isPrimary: true, pointerId: 32},
     );
@@ -1373,7 +1373,7 @@ test("owner process loss leaves one recoverable recording and no second capture 
     const ownerPage = owner.page;
     const candidateUrl = owner.url;
     await beginRecording(ownerPage);
-    await ownerPage.getByRole("button", {name: /^Pad A1\b/}).dispatchEvent(
+    await ownerPage.getByRole("button", {name: /^Pad A01\b/}).dispatchEvent(
       "pointerdown",
       {button: 0, isPrimary: true, pointerId: 51},
     );
@@ -1446,10 +1446,10 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
   await installPerformWitnessSample(page);
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByRole("button", {name: /^Pad A1 — assigned — Key Q$/})
+  await page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/})
     .evaluate((element) => element.click());
   expect(await inspectedPadA1Pan(page)).toBe(0);
-  const pan = page.getByRole("slider", {name: "Pad A1 Pan"});
+  const pan = page.getByRole("slider", {name: "Pad A01 Pan"});
   await pan.dispatchEvent("pointerdown", {pointerId: 81, isPrimary: true, button: 0});
   await pan.fill("-100");
   await pan.dispatchEvent("pointerup", {pointerId: 81, isPrimary: true, button: 0});
@@ -1460,7 +1460,7 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
   await openPerform(page);
 
   await beginRecording(page);
-  const pad = page.getByRole("button", {name: /^Pad A1\b/});
+  const pad = page.getByRole("button", {name: /^Pad A01\b/});
   await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId: 82});
   await page.waitForTimeout(120);
   await pad.dispatchEvent("pointerup", {button: 0, isPrimary: true, pointerId: 82});
@@ -1477,7 +1477,7 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
 
 // lmdj.project.v5 5.2.0. Replaces an assigned Pad's sample with the stereo
 // 4 800-frame witness sawtooth (a ~495 Hz fundamental with every harmonic),
-// exactly as installPerformWitnessSample does for Pad A1.
+// exactly as installPerformWitnessSample does for Pad A01.
 async function installWitnessOn(page, padName, key) {
   const pad = page.getByRole("button", {name: new RegExp(`^${padName} — assigned — Key ${key}$`)});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
@@ -1513,9 +1513,9 @@ test("a tone -100 Pad attenuates a bright source in the recorded master output",
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
   // The same witness on two Pads: A1 untouched, A2 low-passed at 100 Hz.
-  await installWitnessOn(page, "Pad A1", "Q");
-  await installWitnessOn(page, "Pad A2", "W");
-  const tone = page.getByRole("slider", {name: "Pad A2 Tone"});
+  await installWitnessOn(page, "Pad A01", "Q");
+  await installWitnessOn(page, "Pad A02", "W");
+  const tone = page.getByRole("slider", {name: "Pad A02 Tone"});
   await tone.dispatchEvent("pointerdown", {pointerId: 91, isPrimary: true, button: 0});
   await tone.fill("-100");
   await tone.dispatchEvent("pointerup", {pointerId: 91, isPrimary: true, button: 0});
@@ -1532,7 +1532,7 @@ test("a tone -100 Pad attenuates a bright source in the recorded master output",
   await openPerform(page);
 
   await beginRecording(page);
-  for (const [name, pointerId] of [["Pad A1", 92], ["Pad A2", 93]]) {
+  for (const [name, pointerId] of [["Pad A01", 92], ["Pad A02", 93]]) {
     const pad = page.getByRole("button", {name: new RegExp(`^${name}\\b`)});
     await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId});
     await page.waitForTimeout(150);

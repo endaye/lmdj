@@ -197,7 +197,7 @@ for (const viewport of [
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
       "SHIFT — engage the Undo/Redo layer",
-      "Record", "Play/Stop", "Pad A1 — assigned — Key Q",
+      "Record", "Play/Stop", "Pad A01 — assigned — Key Q",
     ];
     const focusOrder = [];
     for (let index = 0; index < expectedFocusOrder.length; index += 1) {

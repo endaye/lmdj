@@ -439,7 +439,7 @@ test("recovery keeps the Project playable for the required probe Trigger", async
 
   value.emit({state: "interrupted", errorCode: null});
   await screen.findByText("Audio suspended");
-  const pad = screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"});
+  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
   expect(pad.hasAttribute("disabled")).toBe(false);
 
   value.emit({state: "recovering", errorCode: null});
@@ -485,7 +485,7 @@ test("an admitted recovery probe stays owned after readiness is consumed", async
   await screen.findByText("Audio recovering");
 
   const pad = screen.getByRole("button", {
-    name: "Pad A1 — assigned — Key Q",
+    name: "Pad A01 — assigned — Key Q",
   });
   fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
   await waitFor(() => expect(value.calls).toContain(
@@ -657,7 +657,7 @@ test("hardware layout offers Pads without a separate audio activation button", a
   await user.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
   await screen.findByRole("heading", {name: "Project 11111111"});
   expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
-  expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"})
+  expect(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"})
     .hasAttribute("disabled")).toBe(false);
 });
 
@@ -704,7 +704,7 @@ test("MIDI permission remains reachable when audio wake is refused", async () =>
     await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
     await waitFor(() => expect(permissionRequests).toBe(1));
     await waitFor(() => expect(screen.getByTestId("audio-state").textContent).toBe("Audio inactive"));
-    expect(screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"}).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"}).hasAttribute("disabled")).toBe(false);
   } finally {
     activationStub.current = null;
     if (original) Object.defineProperty(navigator, "requestMIDIAccess", original);
@@ -741,7 +741,7 @@ test("gives an assigned Project Pad keyboard press semantics", async () => {
   await screen.findByRole("heading", {name: "Project 11111111"});
   await act(async () => value.emit({state: "running", errorCode: null}));
 
-  const pad = screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"});
+  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
   fireEvent.keyDown(pad, {key: "Enter", code: "Enter", repeat: false});
   fireEvent.keyDown(pad, {key: "Enter", code: "Enter", repeat: true});
   await waitFor(() => {
@@ -833,8 +833,8 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
   await act(async () => value.emit({state: "running", errorCode: null}));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
-  const pad = screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"});
-  const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+  const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
   fireEvent.change(volume, {target: {value: "-6"}});
   await waitFor(() => expect((volume as HTMLInputElement).value).toBe("-6"));
   await act(async () => value.emit({state: "interrupted", errorCode: null}));

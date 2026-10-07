@@ -4,6 +4,7 @@ import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/defau
 import {createDefaultSeedController} from "./runtime/default_seed_controller";
 import type {CreatorSlotSoundSetRuntimeSession} from "./runtime/runtime_types";
 import {useAuthoringHistory} from "./components/authoring_history";
+import {slotAddress} from "./state/view_model";
 import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {
   useCallback,
@@ -2512,7 +2513,7 @@ function Workspace({
             </select>
           </label>
           <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
-            ` · Pad ${padCaptureState.target.slot + 1}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
+            ` · Pad ${slotAddress(padCaptureState.target.slot)}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
           {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
           {padCaptureState.phase === "review" && <>
             <button type="button" onClick={() => {void padCapture.current?.save();}}>Save Pad recording</button>

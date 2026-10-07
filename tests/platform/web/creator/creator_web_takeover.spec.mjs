@@ -113,9 +113,9 @@ test("a second tab takes over the open Project and the first takes it back", asy
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", {name: "Add Sample to Pad A1"}).click();
+  await page.getByRole("button", {name: "Add Sample to Pad A01"}).click();
   await (await chooser).setFiles({name: "takeover.wav", mimeType: "audio/wav", buffer: pcm16Wav(4_800)});
-  const longSource = page.getByRole("dialog", {name: /Pad A1 Long Source/});
+  const longSource = page.getByRole("dialog", {name: /Pad A01 Long Source/});
   await expect(longSource).toBeVisible({timeout: 30_000});
   await longSource.getByRole("button", {name: "Commit selection"}).click();
   await expectProjectRevision(page, 1);
@@ -162,9 +162,9 @@ test("a second tab takes over the open Project and the first takes it back", asy
 
   // Leg 5: the new holder commits its own write.
   await second.getByRole("button", {name: "Sample", exact: true}).click();
-  await expect(second.getByRole("button", {name: "Delete Pad A1", exact: true}))
+  await expect(second.getByRole("button", {name: "Delete Pad A01", exact: true}))
     .toBeEnabled({timeout: 30_000});
-  await second.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await second.getByRole("button", {name: "Delete Pad A01", exact: true}).click();
   await expectProjectRevision(second, 2);
   const secondWrite = await projectTruth(second);
   expect(secondWrite.banks[0].pads[0].asset_id).toBeNull();

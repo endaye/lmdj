@@ -224,7 +224,7 @@ async function enterSampleEditor(page) {
   await page.getByRole("button", {name: "Sample"}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   // The wake gesture selects its assigned Pad. This journey edits A1 explicitly.
-  await selectPadWithoutPress(page, await page.getByRole("button", {name: /^Pad A1 —/}).getAttribute("aria-label"));
+  await selectPadWithoutPress(page, await page.getByRole("button", {name: /^Pad A01 —/}).getAttribute("aria-label"));
 }
 
 async function waitForControlMutation(page, control, action, expectedRevision) {
@@ -272,10 +272,10 @@ async function expectDefaultPlaybackUi(page) {
     .toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", {name: "Mute"}))
     .toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByRole("slider", {name: "Pad A1 Volume"})).toHaveValue("0");
-  await expect(page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"}))
+  await expect(page.getByRole("slider", {name: "Pad A01 Volume"})).toHaveValue("0");
+  await expect(page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}))
     .toHaveValue("0");
-  await expect(page.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"}))
+  await expect(page.getByRole("spinbutton", {name: "Pad A01 End time (seconds)"}))
     .toHaveValue("2");
 }
 
@@ -359,17 +359,17 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await activateAudio(page);
   await enterSampleEditor(page);
 
-  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A01 — empty — Key Q", exact: true})).toBeVisible();
   await chooseSampleFile(
     page,
-    "Add Sample to Pad A1",
+    "Add Sample to Pad A01",
     "proof-ramp.wav",
     pcm16Wav({}),
   );
   await commitLongSourceSelection(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
+  await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
   await expect(page.getByText("48 kHz · Mono · 96,000 frames")).toBeVisible();
@@ -386,7 +386,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(editor).toHaveAttribute("data-viewport-start", "0");
   await expect(editor).toHaveAttribute("data-viewport-end", "96000");
 
-  const startTime = page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
+  const startTime = page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
   await startTime.focus();
   await startTime.fill("0.01");
   await startTime.blur();
@@ -405,7 +405,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       },
     );
   });
-  const padA1 = page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true});
+  const padA1 = page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true});
   await page.emulateMedia({reducedMotion: "reduce"});
   const playheadOffset = await page.evaluate(() =>
     (window.__sampleVoiceStates ?? []).length);
@@ -456,7 +456,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     window.__sampleVoiceStates.slice(offset).map(({state}) => state), loopToggleOffset)))
     .toEqual(["started", "stopped"]);
 
-  const volume = page.getByRole("slider", {name: "Pad A1 Volume"});
+  const volume = page.getByRole("slider", {name: "Pad A01 Volume"});
   await volume.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(volume).toBeDisabled({timeout: 10_000});
@@ -469,7 +469,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(mute).toHaveAttribute("aria-pressed", "true");
   const reset = page.getByRole("button", {name: "Reset Pad to Defaults"});
   await reset.click();
-  await expect(page.getByRole("dialog", {name: "Reset Pad A1?"})).toBeVisible();
+  await expect(page.getByRole("dialog", {name: "Reset Pad A01?"})).toBeVisible();
   const confirmReset = page.getByRole("button", {name: "Confirm reset"});
   await confirmReset.click();
   await expect(reset).toBeDisabled({timeout: 10_000});
@@ -484,7 +484,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     "replacement-proof.wav",
     replacement,
   );
-  await expect(page.getByRole("dialog", {name: "Replace Pad A1?"})).toBeVisible();
+  await expect(page.getByRole("dialog", {name: "Replace Pad A01?"})).toBeVisible();
   await page.getByRole("button", {name: "Cancel replace"}).click();
   await expectProjectRevision(page, 54);
   await chooseSampleFile(
@@ -547,36 +547,36 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       details: expect.objectContaining({actual_revision: 55, expected_revision: 54}),
     }));
 
-  await selectPadWithoutPress(page, "Pad A2 — assigned — Key W");
+  await selectPadWithoutPress(page, "Pad A02 — assigned — Key W");
   await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
   const a2Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a2Loop, () => a2Loop.click(), 56);
-  const padA2 = page.getByRole("button", {name: "Pad A2 — assigned — Key W", exact: true});
+  const padA2 = page.getByRole("button", {name: "Pad A02 — assigned — Key W", exact: true});
   await heldPadGesture(page, padA2, ["started"]);
 
-  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
   const a1Mute = page.getByRole("button", {name: "Mute"});
   await waitForControlMutation(page, a1Mute, () => a1Mute.click(), 57);
 
-  await selectPadWithoutPress(page, "Pad A3 — assigned — Key E");
+  await selectPadWithoutPress(page, "Pad A03 — assigned — Key E");
   const a3Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a3Loop, () => a3Loop.click(), 58);
   await heldPadGesture(
     page,
-    page.getByRole("button", {name: "Pad A3 — assigned — Key E", exact: true}),
+    page.getByRole("button", {name: "Pad A03 — assigned — Key E", exact: true}),
     ["started"],
   );
 
-  await selectPadWithoutPress(page, "Pad A4 — assigned — Key R");
+  await selectPadWithoutPress(page, "Pad A04 — assigned — Key R");
   const a4Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a4Loop, () => a4Loop.click(), 59);
   await heldPadGesture(
     page,
-    page.getByRole("button", {name: "Pad A4 — assigned — Key R", exact: true}),
+    page.getByRole("button", {name: "Pad A04 — assigned — Key R", exact: true}),
     ["started"],
   );
 
-  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
   await page.evaluate(() => {
     window.__normalizeNextResourceFailureToCook = true;
   });
@@ -617,8 +617,8 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   // A1 Truth is unmuted at 60 while retained Runtime 59 still mutes A1.
   // A5 was not edited: prove the resume gesture against an audible Pad, then
   // return to the failed A1 preparation without admitting another gesture.
-  await wakeAudioWithPad(page, {padAddress: "A5"});
-  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await wakeAudioWithPad(page, {padAddress: "A05"});
+  await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
   await expect(page.getByTestId("audio-state")).toHaveText(
     /Audio (running|recovering)/,
     {timeout: AUDIO_TRANSITION_TIMEOUT_MS},
@@ -640,7 +640,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev60");
   await expect(page.getByText("45 / 64")).toBeVisible();
   await enterSampleEditor(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true})).toBeVisible();
   await expectProjectRevision(page, 60);
   const postReloadOperations = await page.evaluate(() => window.__sampleProofOperations ?? []);
   expect(postReloadOperations.filter((operation) => operation === "sample.import.commit"))
@@ -649,11 +649,11 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   // F5: a pointer drag aimed at a trim grip moves only that trim point. The
   // retired invisible range bands grabbed the wrong handle or jumped the
   // trim point to the pressed track position.
-  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
-  await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
+  await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
+  await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
-  const trimStart = page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
-  const trimEnd = page.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"});
+  const trimStart = page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
+  const trimEnd = page.getByRole("spinbutton", {name: "Pad A01 End time (seconds)"});
   await expect(trimStart).toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
   const dragGrip = async (grip, deltaX) => {
@@ -697,7 +697,7 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
     (window.__sampleProofOperations ?? []).length);
   await chooseSampleFile(
     page,
-    "Add Sample to Pad A1",
+    "Add Sample to Pad A01",
     "bank-quota-plus-one.wav",
     pcm16Wav({frames: 16_777_217}),
   );
@@ -708,7 +708,7 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
   expect(44 + quotaBoundFrames * 2).toBeGreaterThan(1_048_576);
   await commitLongSourceSelection(page);
 
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByText(
     `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
@@ -759,16 +759,16 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   await enterSampleEditor(page);
 
   // F3: diverge the local Project from the imported bundle. Committing a
-  // Sample to Pad A1 advances the local Project to revision 47.
-  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  // Sample to Pad A01 advances the local Project to revision 47.
+  await expect(page.getByRole("button", {name: "Pad A01 — empty — Key Q", exact: true})).toBeVisible();
   await chooseSampleFile(
     page,
-    "Add Sample to Pad A1",
+    "Add Sample to Pad A01",
     "proof-ramp.wav",
     pcm16Wav({}),
   );
   await commitLongSourceSelection(page);
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
 
@@ -818,7 +818,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await expect(undo).not.toHaveClass(RAIL_LIT);
   await expect(redo).not.toHaveClass(RAIL_LIT);
   await activateAudio(page);
-  await chooseSampleFile(page, "Add Sample to Pad A1", "history.wav", pcm16Wav({frames: 4800}));
+  await chooseSampleFile(page, "Add Sample to Pad A01", "history.wav", pcm16Wav({frames: 4800}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
   const imported = (await rawRequest(page, "project.inspect", {})).result.project;
@@ -838,8 +838,8 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   expect(cleared.banks[0].pads[0].asset_id).toBeNull();
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(redo).toHaveClass(RAIL_LIT);
-  await chooseSampleFile(page, "Add Sample to Pad A1", "cancelled.wav", pcm16Wav({frames: 9600}));
-  const draft = page.getByRole("dialog", {name: /Pad A1 Long Source/});
+  await chooseSampleFile(page, "Add Sample to Pad A01", "cancelled.wav", pcm16Wav({frames: 9600}));
+  const draft = page.getByRole("dialog", {name: /Pad A01 Long Source/});
   await expect(draft).toBeVisible();
   await draft.getByRole("button", {name: "Cancel", exact: true}).click();
   const retained = (await rawRequest(page, "history.inspect", {})).result;
@@ -912,7 +912,7 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   await activateAudio(page);
   // 4 800 frames at 48 kHz: 0.1 s, so the loop point and crossfade stay
   // well inside one loop.
-  await chooseSampleFile(page, "Add Sample to Pad A1", "parity.wav", pcm16Wav({frames: 4800}));
+  await chooseSampleFile(page, "Add Sample to Pad A01", "parity.wav", pcm16Wav({frames: 4800}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
   const base = await inspectedPlayback(page);
@@ -922,19 +922,19 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   // normal: every parity control commits one revision.
   await page.getByRole("button", {name: "Reverse", exact: true}).click();
   await expectProjectRevision(page, 2);
-  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Pitch"}), "3.5");
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Pitch"}), "3.5");
   await expectProjectRevision(page, 3);
-  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Pan"}), "-100");
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Pan"}), "-100");
   await expectProjectRevision(page, 4);
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 5);
   // Reverse is on, so the card edits the mirrored boundary: 0.025 s is frame
   // 1 200 from Start, stored as 0 + 4 800 - 1 200 = 3 600.
   await editValueCard(
-    page.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}), "0.025");
+    page.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"}), "0.025");
   await expectProjectRevision(page, 6);
   await editValueCard(
-    page.getByRole("spinbutton", {name: "Pad A1 Loop crossfade (milliseconds)"}), "5");
+    page.getByRole("spinbutton", {name: "Pad A01 Loop crossfade (milliseconds)"}), "5");
   await expectProjectRevision(page, 7);
   expect(await inspectedPlayback(page)).toEqual({
     ...base,
@@ -958,11 +958,11 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
     loop_start_frame: 3_600,
   };
   expect(await inspectedPlayback(page)).toEqual(committed);
-  await expect(page.getByRole("spinbutton", {name: "Pad A1 Loop crossfade (milliseconds)"}))
+  await expect(page.getByRole("spinbutton", {name: "Pad A01 Loop crossfade (milliseconds)"}))
     .toHaveCount(0);
 
   // cancelled: Escape mid-gesture previews, then restores without a commit.
-  const pan = page.getByRole("slider", {name: "Pad A1 Pan"});
+  const pan = page.getByRole("slider", {name: "Pad A01 Pan"});
   const panReadout = page.locator(".pan-control output");
   const cancelOffset = await page.evaluate(() => window.__sampleProofOperations.length);
   const pointerId = ++pointerSequence;
@@ -1023,14 +1023,14 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   await waitForProjectReopen(page, projectId.slice(0, 8));
   expect(await inspectedPlayback(page)).toEqual(committed);
   await page.getByRole("button", {name: "Sample", exact: true}).click();
-  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
   await expect(page.getByRole("button", {name: "Reverse", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".pitch-control output")).toHaveText("+3.5 st");
   await expect(page.locator(".pan-control output")).toHaveText("L100");
   await expect(page.getByRole("button", {name: "Ping-pong", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("spinbutton", {name: "Pad A1 Loop start time (seconds)"}))
+  await expect(page.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"}))
     .toHaveValue("0.025");
   noErrors();
 });
@@ -1051,7 +1051,7 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await page.goto("/index.html");
   await waitForBootProject(page);
   await activateAudio(page);
-  await chooseSampleFile(page, "Add Sample to Pad A1", "tone.wav", pcm16Wav({frames: 4800}));
+  await chooseSampleFile(page, "Add Sample to Pad A01", "tone.wav", pcm16Wav({frames: 4800}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
   const base = await inspectedPlayback(page);
@@ -1060,20 +1060,20 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await expectProjectRevision(page, 2);
 
   // normal: each control commits one revision.
-  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Attack"}), "120");
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Attack"}), "120");
   await expectProjectRevision(page, 3);
-  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Release"}), "900");
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Release"}), "900");
   await expectProjectRevision(page, 4);
-  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Tone"}), "-40");
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Tone"}), "-40");
   await expectProjectRevision(page, 5);
-  await holdKeySteps(page, page.getByRole("slider", {name: "Pad A1 EQ High"}), "ArrowUp", 2);
+  await holdKeySteps(page, page.getByRole("slider", {name: "Pad A01 EQ High"}), "ArrowUp", 2);
   await expectProjectRevision(page, 6);
   // 36 half-dB steps reach the floor; one more makes the low shelf a cut.
-  await holdKeySteps(page, page.getByRole("slider", {name: "Pad A1 EQ Low"}), "ArrowDown", 37);
+  await holdKeySteps(page, page.getByRole("slider", {name: "Pad A01 EQ Low"}), "ArrowDown", 37);
   await expectProjectRevision(page, 7);
   // A real mouse drag up and right turns the mid band on, through the
   // browser's own hit-testing, focus and pointer capture.
-  const mid = page.getByRole("slider", {name: "Pad A1 EQ Mid"});
+  const mid = page.getByRole("slider", {name: "Pad A01 EQ Mid"});
   const poleCentre = async () => {
     await mid.scrollIntoViewIfNeeded();
     const box = await mid.boundingBox();
@@ -1103,7 +1103,7 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
 
   // cancelled: Escape mid-gesture previews, then restores without a commit,
   // on a slider and on the EQ.
-  const tone = page.getByRole("slider", {name: "Pad A1 Tone"});
+  const tone = page.getByRole("slider", {name: "Pad A01 Tone"});
   const toneReadout = page.locator(".tone-control output");
   const cancelOffset = await page.evaluate(() => window.__sampleProofOperations.length);
   const pointerId = ++pointerSequence;
@@ -1113,7 +1113,7 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await tone.press("Escape");
   await expect(toneReadout).toHaveText("LP 40");
   await tone.dispatchEvent("pointerup", {pointerId, isPrimary: true, button: 0});
-  const high = page.getByRole("slider", {name: "Pad A1 EQ High"});
+  const high = page.getByRole("slider", {name: "Pad A01 EQ High"});
   await high.focus();
   await page.keyboard.down("ArrowUp");
   await expect(high).toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.5 dB");
@@ -1174,7 +1174,7 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   // failed: a failed commit reports, and the control keeps committed truth.
   const attackReadout = page.locator(".attack-control output");
   await page.evaluate(() => { window.__failNextSampleUpdate = true; });
-  await slideAndRelease(page.getByRole("slider", {name: "Pad A1 Attack"}), "500");
+  await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Attack"}), "500");
   await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
   await expect(attackReadout).toHaveText("120 ms");
   expect(await page.evaluate(() => window.__failNextSampleUpdate)).toBe(false);
@@ -1187,15 +1187,15 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await waitForProjectReopen(page, projectId.slice(0, 8));
   expect(await inspectedPlayback(page)).toEqual(committed);
   await page.getByRole("button", {name: "Sample", exact: true}).click();
-  await selectPadWithoutPress(page, "Pad A1 — assigned — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
   await expect(attackReadout).toHaveText("120 ms");
   await expect(page.locator(".release-control output")).toHaveText("900 ms");
   await expect(toneReadout).toHaveText("LP 40");
-  await expect(page.getByRole("slider", {name: "Pad A1 EQ Low"}))
+  await expect(page.getByRole("slider", {name: "Pad A01 EQ Low"}))
     .toHaveAttribute("aria-valuetext", "Low cut 100 Hz");
-  await expect(page.getByRole("slider", {name: "Pad A1 EQ High"}))
+  await expect(page.getByRole("slider", {name: "Pad A01 EQ High"}))
     .toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.0 dB");
-  await expect(page.getByRole("slider", {name: "Pad A1 EQ Mid"}))
+  await expect(page.getByRole("slider", {name: "Pad A01 EQ Mid"}))
     .not.toHaveAttribute("aria-valuetext", "Mid off");
   noErrors();
 });
@@ -1249,7 +1249,7 @@ test("Pad Delete commits while audio is inactive after a reopen", async ({page, 
   await page.goto("/index.html");
   await waitForBootProject(page);
   await activateAudio(page);
-  await chooseSampleFile(page, "Add Sample to Pad A1", "inactive-delete.wav", pcm16Wav({frames: 4800}));
+  await chooseSampleFile(page, "Add Sample to Pad A01", "inactive-delete.wav", pcm16Wav({frames: 4800}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
   const before = (await rawRequest(page, "project.inspect", {})).result.project;
@@ -1262,10 +1262,10 @@ test("Pad Delete commits while audio is inactive after a reopen", async ({page, 
   // match a loose name, so the mode key is named exactly.
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await expect(page.getByRole("button", {name: "Delete Pad A1", exact: true})).toBeEnabled();
-  await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Delete Pad A01", exact: true})).toBeEnabled();
+  await page.getByRole("button", {name: "Delete Pad A01", exact: true}).click();
   await expectProjectRevision(page, 2);
-  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A01 — empty — Key Q", exact: true})).toBeVisible();
   await expect(page.getByText("That can't be done right now.")).toHaveCount(0);
   const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(deleted.banks[0].pads[0].asset_id).toBeNull();
@@ -1283,7 +1283,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   await page.goto("/index.html");
   await waitForBootProject(page);
   await activateAudio(page);
-  await chooseSampleFile(page, "Add Sample to Pad A1", "delete-source.wav", pcm16Wav({frames: 4800}));
+  await chooseSampleFile(page, "Add Sample to Pad A01", "delete-source.wav", pcm16Wav({frames: 4800}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
 
@@ -1314,7 +1314,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   await enterSampleEditor(page);
   // The surface remounts with the prior cached inspect while its authoritative
   // refresh is pending. Delete stays unavailable until the new revision lands.
-  await expect(page.getByRole("button", {name: "Delete Pad A1", exact: true})).toBeEnabled();
+  await expect(page.getByRole("button", {name: "Delete Pad A01", exact: true})).toBeEnabled();
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 3);
   const before = (await rawRequest(page, "project.inspect", {})).result.project;
@@ -1324,9 +1324,9 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(oldArtifact.byte_length).toBeGreaterThan(44);
   const {redo} = railHistoryKeys(page);
 
-  await page.getByRole("button", {name: "Delete Pad A1", exact: true}).click();
+  await page.getByRole("button", {name: "Delete Pad A01", exact: true}).click();
   await expectProjectRevision(page, 4);
-  await expect(page.getByRole("button", {name: "Pad A1 — empty — Key Q", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Pad A01 — empty — Key Q", exact: true})).toBeVisible();
   const deleted = (await rawRequest(page, "project.inspect", {})).result.project;
   expect(deleted.patterns).toEqual(before.patterns);
   expect(deleted.assets).toEqual(before.assets);
@@ -1352,7 +1352,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   await pressRailRedo(page);
   await expectProjectRevision(page, 6);
   expect((await rawRequest(page, "project.inspect", {})).result.project.banks).toEqual(deleted.banks);
-  await chooseSampleFile(page, "Add Sample to Pad A1", "new-sound.wav", pcm16Wav({frames: 9600, phase: 7}));
+  await chooseSampleFile(page, "Add Sample to Pad A01", "new-sound.wav", pcm16Wav({frames: 9600, phase: 7}));
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 7);
   const reassigned = (await rawRequest(page, "project.inspect", {})).result.project;
