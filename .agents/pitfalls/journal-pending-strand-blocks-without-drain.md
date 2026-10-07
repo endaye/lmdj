@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/actions/runs/37006698741
     observed_by: Kimi
+  - date: 2026-10-07
+    occurrence: https://github.com/endaye/lmdj/actions/runs/37576127506
+    observed_by: Codex
 exit: gate:tests/build/ci_incremental_batch_journal_test.py
 ---
 
@@ -68,3 +71,18 @@ dispatch must carry the outbox `journal_config` (the default is the
 scheduler role) plus the audited digest; run 37006698741 cleared it and the
 next ordinary tick re-derived and committed the dropped delivery. The entry
 diagnostic now names `outbox-blocked` and walks through the wrapper.
+
+On 2026-10-07 the scheduler (#807) again retained a stranded `advance`, at
+generation 879 with digest `3c73aa461df689f17a83f1d7415f579b26a6e528edfb4dd43897e058159a7876`.
+The original writer, run 37542195612, had been cancelled. The explicit Build 87
+candidate request in run 37575134715 was rejected before any product test
+admission; that failure is not candidate verification evidence. A complete
+read-only authenticated history replay proved the exact pending event absent
+and the committed chain intact. Guarded `reconcile-pending` run 37576127506
+then cleared the pending intent without a manual Issue edit or a replayed
+POST. Its original `result.json` records `action:"reconciled-pending"` and has
+SHA-256 `776ff7ed7fd50241e0632af204a12b9f432ce542dd28af89bfcdbf40fd5ef4e2`.
+Only after observing `pending:null` was the same candidate request ID and
+target redelivered; run 37576667995 durably admitted the full request. The
+recovery proves scheduler progress, not a passing product verdict or release
+eligibility.
