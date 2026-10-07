@@ -1,5 +1,5 @@
 import {userMessage} from "../state/error_messages";
-import {useRef, useState, type ChangeEvent} from "react";
+import {useEffect, useRef, useState, type ChangeEvent} from "react";
 
 import type {
   CreatorState,
@@ -76,6 +76,14 @@ export function ProjectSurface({
   // The selection defaults to the open Project, else the first listed one.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const projects = state.project.projects;
+  // A selection that leaves the inventory is dropped, so a Project listed
+  // again later is not selected without a tap.
+  useEffect(() => {
+    if (selectedId !== null && !projects.some((item) => item.projectId === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [projects, selectedId]);
+  const showSummary = !showChooser && project !== null && !hideSummary;
   const selected = projects.find((item) => item.projectId === selectedId)
     ?? projects.find((item) => item.projectId === project?.projectId)
     ?? projects[0]
@@ -160,7 +168,7 @@ export function ProjectSurface({
           />
         </section>
       ) : null}
-      {!showChooser && project && !hideSummary ? (
+      {showSummary && project !== null ? (
         <dl className="project-summary">
           <div><dt>Project ID</dt><dd>{project.projectId}</dd></div>
           <div><dt>Revision</dt><dd>{project.revision}</dd></div>
@@ -223,7 +231,7 @@ export function ProjectSurface({
           })}
         </ul>
       )}
-      {projects.length === 0 ? null : (
+      {showSummary || projects.length === 0 ? null : (
         <div className="project-open-row">
           <button
             type="button"
