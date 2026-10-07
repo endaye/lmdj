@@ -121,6 +121,33 @@ test("D01 Project cards keep Open, offer New Project and omit Save", () => {
   expect(screen.queryByRole("button", {name: /SAVE AS/i})).toBeNull();
 });
 
+function listed(projectId: string, revision: number) {
+  return {projectId, patternId: project.patternId, revision, bpm: 96, assetCount: 1,
+    assignedPadCount: 1, bundleDigest: "digest"};
+}
+
+test("a selected Project that leaves the list is not selected when it returns", () => {
+  const other = "f".repeat(32);
+  const withList = (projects: CreatorState["project"]["projects"]): CreatorState => ({
+    ...ready, project: {...ready.project, projects}});
+  const current = listed(project.projectId, 7);
+  const both = [current, listed(other, 1)];
+  const {rerender} = render(<ProjectSurface state={withList(both)} canOpen hideSummary />);
+  fireEvent.click(screen.getByRole("button", {name: "Select Project ffffffff"}));
+  expect(screen.getByRole("button", {name: "Open Project ffffffff"})).toBeTruthy();
+  rerender(<ProjectSurface state={withList([current])} canOpen hideSummary />);
+  rerender(<ProjectSurface state={withList(both)} canOpen hideSummary />);
+  expect(screen.getByRole("button", {name: "Open Project 01234567"})).toBeTruthy();
+});
+
+test("the summary view draws no OPEN PROJECT row", () => {
+  const withList: CreatorState = {
+    ...ready, project: {...ready.project, projects: [listed(project.projectId, 7)]}};
+  render(<ProjectSurface state={withList} canOpen />);
+  expect(screen.getByText("Project ID")).toBeTruthy();
+  expect(screen.queryByRole("button", {name: /^Open Project/})).toBeNull();
+});
+
 test("the local Project chooser can return to the open Project", async () => {
   const user = userEvent.setup();
   const withList: CreatorState = {
@@ -200,4 +227,25 @@ test("an unreadable local copy is not reported as an invalid bundle", () => {
   const message = screen.getByRole("alert").textContent ?? "";
   expect(message).toContain("local copy");
   expect(message).not.toContain("Bundle is invalid");
+});
+
+test("D01: a card tap only selects; OPEN PROJECT opens the selection", () => {
+  const onOpen = vi.fn();
+  const summary = (projectId: string) => ({
+    projectId, patternId: project.patternId, revision: 7, bpm: 96,
+    assetCount: 3, assignedPadCount: 5, bundleDigest: "digest",
+  });
+  const withTwo: CreatorState = {
+    ...ready,
+    project: {...ready.project, projects: [summary(project.projectId), summary("89abcdef00000000")]},
+  };
+  render(<ProjectSurface state={withTwo} canOpen hideSummary onOpen={onOpen} />);
+  // The open Project is selected by default.
+  expect(screen.getByRole("button", {name: "Select Project 01234567"}).getAttribute("aria-pressed"))
+    .toBe("true");
+  fireEvent.click(screen.getByRole("button", {name: "Select Project 89abcdef"}));
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", {name: "Open Project 01234567"})).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "Open Project 89abcdef"}));
+  expect(onOpen).toHaveBeenCalledWith(withTwo.project.projects[1]);
 });

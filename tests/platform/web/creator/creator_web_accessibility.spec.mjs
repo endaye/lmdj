@@ -67,13 +67,16 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   await pressProjectAction(page, page.getByTestId("physical-controls")
     .getByRole("button", {name: "Project", exact: true}));
   await pressProjectAction(page, page.getByRole("button", {name: "Open local", exact: true}));
-  const other = page.getByRole("button", {name: /^Open Project (?!00000000$)[0-9a-f]{8}$/});
+  // D01: a card selects the Project and OPEN PROJECT opens the selection.
+  const other = page.getByRole("button", {name: /^Select Project (?!00000000$)[0-9a-f]{8}$/});
   await expect(other).toHaveCount(1);
-  const otherId = (await other.getAttribute("aria-label"))?.replace("Open Project ", "");
+  const otherId = (await other.getAttribute("aria-label"))?.replace("Select Project ", "");
   await pressProjectAction(page, other);
+  await pressProjectAction(page, page.getByRole("button", {name: `Open Project ${otherId}`, exact: true}));
   await expect(page.getByRole("heading", {name: `Project ${otherId}`}))
     .toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});
   await pressProjectAction(page, page.getByRole("button", {name: "Open local", exact: true}));
+  await pressProjectAction(page, page.getByRole("button", {name: "Select Project 00000000", exact: true}));
   await pressProjectAction(page, page.getByRole("button", {name: "Open Project 00000000", exact: true}));
   const heading = page.getByRole("heading", {name: "Project 00000000"});
   await expect(heading).toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});

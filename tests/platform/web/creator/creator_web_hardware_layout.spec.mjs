@@ -159,12 +159,16 @@ async function importAndOpenProject(page) {
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooser).setFiles(bundle);
-  const open = page.getByRole("button", {name: "Open Project 00000000"});
+  // D01: a card selects the Project and OPEN PROJECT opens the selection.
+  const select = page.getByRole("button", {name: "Select Project 00000000"});
   await expect.poll(async () =>
     await projectHeading(page).isVisible() ? "ready"
-      : await open.isVisible() ? "open" : "",
+      : await select.isVisible() ? "open" : "",
   {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).not.toBe("");
-  if (!await projectHeading(page).isVisible()) await open.click();
+  if (!await projectHeading(page).isVisible()) {
+    await select.click();
+    await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  }
   await expect(projectHeading(page))
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
 }

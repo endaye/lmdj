@@ -2315,6 +2315,8 @@ test("Open local switches Projects through one serialized visible selection", as
   }));
   await screen.findByRole("heading", {name: "Project 11111111"});
   await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+  // D01: a card tap selects; OPEN PROJECT opens the selection.
+  await userEvent.click(await screen.findByRole("button", {name: "Select Project 22222222"}));
   const openSecond = await screen.findByRole("button", {
     name: "Open Project 22222222",
   });
