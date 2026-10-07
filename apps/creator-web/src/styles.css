@@ -1238,10 +1238,16 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   display: grid;
   gap: 1px;
 }
+/* The Pad column and its gap; the grid body's one-bar width reads the same
+   two values, so they live here once. */
+.sequence-grid {
+  --sequence-grid-pad-column: 32px;
+  --sequence-grid-pad-gap: 4px;
+}
 .sequence-grid-row {
   display: grid;
-  grid-template-columns: 32px 1fr;
-  gap: 4px;
+  grid-template-columns: var(--sequence-grid-pad-column) 1fr;
+  gap: var(--sequence-grid-pad-gap);
   align-items: stretch;
 }
 .sequence-grid-pad {
