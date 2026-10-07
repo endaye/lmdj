@@ -506,8 +506,13 @@ export function SequenceGrid(props: SequenceGridProps) {
       <div className="sequence-grid-scroll" ref={scrollRef}>
         <div className="sequence-grid-body"
           // One bar fills the visible lane width (2026-10-04 decision, item 7);
-          // the 36 px Pad column (32 px label + 4 px gap) stays outside it.
-          style={{width: `calc(${model.bars} * (100% - 36px) + 36px)`, minWidth: "100%"}}
+          // the Pad column and its gap (styles.css) stay outside it.
+          style={{
+            width: `calc(${model.bars} * (100% - var(--sequence-grid-pad-column) - ` +
+              `var(--sequence-grid-pad-gap)) + var(--sequence-grid-pad-column) + ` +
+              `var(--sequence-grid-pad-gap))`,
+            minWidth: "100%",
+          }}
           onPointerMove={bodyPointerMove}
           onPointerUp={bodyPointerUp}
         >

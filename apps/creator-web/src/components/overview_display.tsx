@@ -24,6 +24,10 @@ interface OverviewDisplayProps {
   snap: SequenceGridSnap;
   viewport: SequenceGridViewport | null;
   selection: readonly SequenceGridEventKey[];
+  // Sequence's eight-row window and the encoder turns' unsettled values.
+  rowOffset?: number;
+  tempoPreview?: number | null;
+  swingPreview?: number | null;
   transport?: PatternTransportState;
   midi?: MidiStatus | null;
   buildIdentity?: CreatorBuildIdentity;
@@ -47,6 +51,9 @@ export function OverviewDisplay({
   snap,
   viewport,
   selection,
+  rowOffset,
+  tempoPreview = null,
+  swingPreview = null,
   transport,
   midi = null,
   buildIdentity,
@@ -72,11 +79,11 @@ export function OverviewDisplay({
           {patternIndex !== null ? ` / ${String(patternIndex).padStart(2, "0")}` : ""}
         </output>
         <output className="overview-bpm">
-          {project ? `${project.bpm} BPM` : "NO PROJECT"}
+          {project ? `${tempoPreview ?? project.bpm} BPM` : "NO PROJECT"}
         </output>
         {sequenceMode && project ? (
           <output className="overview-swing">
-            SWING {project.sequenceSettings.swingPercent}%
+            SWING {swingPreview ?? project.sequenceSettings.swingPercent}%
           </output>
         ) : null}
         <output className={`overview-phase${hiddenInSequence}`}>
@@ -138,6 +145,7 @@ export function OverviewDisplay({
           snap={snap}
           viewport={viewport}
           selection={selection}
+          {...(rowOffset === undefined ? {} : {rowOffset})}
           {...(transport === undefined ? {} : {transport})}
         />
       ) : activeMode === "project" ? (

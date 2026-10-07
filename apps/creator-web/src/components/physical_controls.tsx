@@ -1,4 +1,4 @@
-import type {ReactNode, MouseEvent, Ref} from "react";
+import {useRef, type ReactNode, type MouseEvent, type Ref} from "react";
 
 import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
@@ -31,6 +31,25 @@ export interface RailHistoryChord {
   redoTitle: string;
 }
 
+// A page's binding for one encoder: what it adjusts, and a relative turn in
+// detents (positive is clockwise).
+export interface EncoderBinding {
+  label: string;
+  disabled?: boolean;
+  onTurn(detents: number): void;
+}
+
+// The direction keys' page action without SHIFT (the Sequence page steps
+// Patterns); SHIFT keeps them on Undo / Redo.
+export interface DirectionStep {
+  backLabel: string;
+  forwardLabel: string;
+  backAvailable: boolean;
+  forwardAvailable: boolean;
+  onBack(): void;
+  onForward(): void;
+}
+
 interface PhysicalControlsProps {
   activeMode: CreatorMode;
   activeBank: Bank;
@@ -49,6 +68,72 @@ interface PhysicalControlsProps {
   onOpenSystem?: () => void;
   systemOpen?: boolean;
   systemEntryRef?: Ref<HTMLButtonElement>;
+  encoders?: Readonly<Partial<Record<EncoderPosition, EncoderBinding>>>;
+  directionStep?: DirectionStep;
+}
+
+// Pixels of vertical drag per detent.
+const ENCODER_DRAG_STEP = 8;
+// Pixels of wheel travel per detent. Wheel deltas accumulate, so a trackpad's
+// burst of small events turns a few detents, not one per event; a line or
+// page delta counts as that many pixels.
+const ENCODER_WHEEL_STEP = 50;
+
+// An encoder on a web console: the wheel, a vertical drag or the arrow keys
+// (while focused) each turn it one detent; up and right are clockwise.
+function Encoder({position, binding}: {position: EncoderPosition; binding: EncoderBinding | undefined}) {
+  const drag = useRef<{pointerId: number; lastY: number} | null>(null);
+  const wheel = useRef(0);
+  if (binding === undefined) {
+    return (
+      <button type="button" className="physical-encoder" disabled
+        aria-label={`Encoder ${position} — unassigned until hardware mapping is approved`}>
+        <EncoderIcon position={position} />
+      </button>
+    );
+  }
+  const turn = (detents: number) => {
+    if (!binding.disabled && detents !== 0) binding.onTurn(detents);
+  };
+  return (
+    <button
+      type="button"
+      className="physical-encoder is-bound"
+      aria-label={`Encoder ${position} — ${binding.label}`}
+      disabled={binding.disabled}
+      onKeyDown={(event) => {
+        const detents = {ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1}[event.key];
+        if (detents === undefined) return;
+        event.preventDefault();
+        turn(detents);
+      }}
+      onWheel={(event) => {
+        const pixels = event.deltaY *
+          (event.deltaMode === 1 ? ENCODER_WHEEL_STEP : event.deltaMode === 2 ? 800 : 1);
+        wheel.current -= pixels;
+        const detents = Math.trunc(wheel.current / ENCODER_WHEEL_STEP);
+        if (detents === 0) return;
+        wheel.current -= detents * ENCODER_WHEEL_STEP;
+        turn(detents);
+      }}
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        drag.current = {pointerId: event.pointerId, lastY: event.clientY};
+      }}
+      onPointerMove={(event) => {
+        const active = drag.current;
+        if (active === null || active.pointerId !== event.pointerId) return;
+        const detents = Math.trunc((active.lastY - event.clientY) / ENCODER_DRAG_STEP);
+        if (detents === 0) return;
+        active.lastY -= detents * ENCODER_DRAG_STEP;
+        turn(detents);
+      }}
+      onPointerUp={() => { drag.current = null; }}
+      onPointerCancel={() => { drag.current = null; }}
+    >
+      <EncoderIcon position={position} />
+    </button>
+  );
 }
 
 interface PhysicalKeyProps {
@@ -118,7 +203,12 @@ export function PhysicalControls({
   onOpenSystem,
   systemOpen = false,
   systemEntryRef,
+  encoders,
+  directionStep,
 }: PhysicalControlsProps) {
+  // Without SHIFT the arrows take the page's step; with SHIFT, or on a page
+  // without one, they are Undo / Redo.
+  const stepping = directionStep !== undefined && !(history?.shifted ?? false);
   return (
     <div className="physical-controls">
       {onOpenSystem === undefined ? (
@@ -133,15 +223,7 @@ export function PhysicalControls({
       )}
       <div className="physical-encoders" role="group" aria-label="Encoders" data-testid="physical-encoders">
         {ENCODER_POSITIONS.map((position) => (
-          <button
-            key={position}
-            type="button"
-            className="physical-encoder"
-            disabled
-            aria-label={`Encoder ${position} — unassigned until hardware mapping is approved`}
-          >
-            <EncoderIcon position={position} />
-          </button>
+          <Encoder key={position} position={position} binding={encoders?.[position]} />
         ))}
       </div>
       <div className="physical-keys" data-testid="physical-keys">
@@ -186,20 +268,41 @@ export function PhysicalControls({
         ))}
         <PhysicalKey label="↑" ariaLabel="Up — unassigned until direction mapping is approved" disabled />
         <PhysicalKey label="↓" ariaLabel="Down — unassigned until direction mapping is approved" disabled />
-        <PhysicalKey
-          label="←"
-          ariaLabel="Undo — SHIFT + ←"
-          lit={history?.undoAvailable ?? false}
-          disabled={history === undefined || !(history.shifted && history.undoAvailable)}
-          {...(history === undefined ? {} : {title: history.undoTitle, onClick: history.onUndo})}
-        />
-        <PhysicalKey
-          label="→"
-          ariaLabel="Redo — SHIFT + →"
-          lit={history?.redoAvailable ?? false}
-          disabled={history === undefined || !(history.shifted && history.redoAvailable)}
-          {...(history === undefined ? {} : {title: history.redoTitle, onClick: history.onRedo})}
-        />
+        {stepping ? (
+          <>
+            <PhysicalKey
+              label="←"
+              ariaLabel={directionStep.backLabel}
+              lit={directionStep.backAvailable}
+              disabled={!directionStep.backAvailable}
+              onClick={directionStep.onBack}
+            />
+            <PhysicalKey
+              label="→"
+              ariaLabel={directionStep.forwardLabel}
+              lit={directionStep.forwardAvailable}
+              disabled={!directionStep.forwardAvailable}
+              onClick={directionStep.onForward}
+            />
+          </>
+        ) : (
+          <>
+            <PhysicalKey
+              label="←"
+              ariaLabel="Undo — SHIFT + ←"
+              lit={history?.undoAvailable ?? false}
+              disabled={history === undefined || !(history.shifted && history.undoAvailable)}
+              {...(history === undefined ? {} : {title: history.undoTitle, onClick: history.onUndo})}
+            />
+            <PhysicalKey
+              label="→"
+              ariaLabel="Redo — SHIFT + →"
+              lit={history?.redoAvailable ?? false}
+              disabled={history === undefined || !(history.shifted && history.redoAvailable)}
+              {...(history === undefined ? {} : {title: history.redoTitle, onClick: history.onRedo})}
+            />
+          </>
+        )}
         <PhysicalKey
           label="SHIFT"
           className=" is-shift"

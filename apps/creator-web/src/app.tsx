@@ -142,7 +142,10 @@ import {
   type SequenceGridEventKey,
   type SequenceGridSnap,
   type SequenceGridViewport,
+  clampSequenceOverviewRowOffset,
+  SEQUENCE_BANK_PADS,
 } from "./state/sequence_grid_model";
+import {createEncoderTurn, type EncoderTurn} from "./state/encoder_input";
 import {
   initialPatternTransportState,
   reducePatternTransport,
@@ -350,6 +353,29 @@ function Workspace({
     useState<SequenceGridSnap>(DEFAULT_SEQUENCE_GRID_SNAP);
   const [sequenceGridViewport, setSequenceGridViewport] =
     useState<SequenceGridViewport | null>(null);
+  // The Sequence upper screen's eight-row window: encoder 2 scrolls it a row
+  // at a time and a Bank key moves it to that Bank's first row. View state.
+  const [overviewRowOffset, setOverviewRowOffset] = useState(0);
+  useEffect(() => {
+    setOverviewRowOffset(state.activeBank * SEQUENCE_BANK_PADS);
+  }, [state.activeBank]);
+  // Encoder 3 / 4 turns preview Tempo / Swing and commit once at rest.
+  const [tempoPreview, setTempoPreview] = useState<number | null>(null);
+  const [swingPreview, setSwingPreview] = useState<number | null>(null);
+  const settingsCommit = useRef<(changes: {bpm?: number; swingPercent?: number}) => void>(
+    () => {});
+  const encoderTurn = (min: number, max: number, onPreview: (value: number | null) => void,
+    commit: (value: number) => void): EncoderTurn => createEncoderTurn({
+    min, max, onPreview, onCommit: commit,
+    schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+    clear: (handle) => window.clearTimeout(handle as number),
+  });
+  const tempoTurn = useRef<EncoderTurn | null>(null);
+  tempoTurn.current ??= encoderTurn(40, 240, setTempoPreview,
+    (bpm) => settingsCommit.current({bpm}));
+  const swingTurn = useRef<EncoderTurn | null>(null);
+  swingTurn.current ??= encoderTurn(50, 75, setSwingPreview,
+    (swingPercent) => settingsCommit.current({swingPercent}));
   const [sequenceGridMode, setSequenceGridMode] =
     useState<SequenceGridEditMode>("note");
   const [sequenceGridSelection, setSequenceGridSelection] =
@@ -2319,6 +2345,33 @@ function Workspace({
     );
   const recording = selectTransportRecording(transport);
   const playing = selectTransportPlaying(transport);
+  // Tempo and Swing lock while recording or while a transport command
+  // settles, as the touch controls do; a turn in progress is dropped.
+  const sequenceSettingsLocked = transportBusy || recording;
+  useEffect(() => {
+    if (!sequenceSettingsLocked) return;
+    tempoTurn.current?.cancel();
+    swingTurn.current?.cancel();
+  }, [sequenceSettingsLocked]);
+  // A failed settings commit leaves Truth where it was; the next turn starts
+  // from Truth rather than from the request that did not land.
+  useEffect(() => {
+    if (sequence.errorCode === null) return;
+    tempoTurn.current?.forget();
+    swingTurn.current?.forget();
+  }, [sequence.errorCode]);
+  settingsCommit.current = (changes) => { void updateSequenceSettings(changes); };
+  const sequenceProject = state.project.current;
+  const sequencePatterns = sequenceProject?.patterns ?? [];
+  const sequencePatternIndex = sequencePatterns.findIndex((item) =>
+    item.patternId === (sequence.selectedPatternId ?? sequenceProject?.patternId));
+  // The direction keys switch Pattern only while stopped, like ‹ ›.
+  const patternStepOpen = activeMode === "sequence" && sequenceProject !== null &&
+    !playing && !sequenceSettingsLocked && sequencePatternIndex >= 0;
+  const stepPatternBy = (offset: -1 | 1) => {
+    const next = sequencePatterns[sequencePatternIndex + offset];
+    if (patternStepOpen && next !== undefined) void selectSequencePattern(next.patternId);
+  };
   // The armed-Capture trim overlay over an active recording, whether the
   // recording is a legacy Sequence session or the global Pattern transport.
   const trimOverlayOpen = sequence.phase === "trim-overlay" ||
@@ -2472,6 +2525,38 @@ function Workspace({
               onOpenSystem={openSystem}
               systemOpen={systemOpen}
               systemEntryRef={systemEntry}
+              // Sequence binds encoders 2–4 and the direction keys (2026-10-04
+              // decision, items 4–5); encoder 1, ↑ ↓ and every other page's
+              // controls wait for #1822.
+              {...(activeMode === "sequence" && sequenceProject !== null ? {
+                encoders: {
+                  2: {
+                    label: "scroll track rows",
+                    onTurn: (detents: number) => setOverviewRowOffset((offset) =>
+                      clampSequenceOverviewRowOffset(offset + detents)),
+                  },
+                  3: {
+                    label: "Tempo",
+                    disabled: sequenceSettingsLocked,
+                    onTurn: (detents: number) => tempoTurn.current?.turn(detents, sequenceProject.bpm),
+                  },
+                  4: {
+                    label: "Swing",
+                    disabled: sequenceSettingsLocked,
+                    onTurn: (detents: number) => swingTurn.current?.turn(
+                      detents, sequenceProject.sequenceSettings.swingPercent),
+                  },
+                },
+                directionStep: {
+                  backLabel: "Pattern back — ←",
+                  forwardLabel: "Pattern forward — →",
+                  backAvailable: patternStepOpen && sequencePatternIndex > 0,
+                  forwardAvailable: patternStepOpen &&
+                    sequencePatternIndex < sequencePatterns.length - 1,
+                  onBack: () => stepPatternBy(-1),
+                  onForward: () => stepPatternBy(1),
+                },
+              } : {})}
               history={{
                 shifted: railShift,
                 onToggleShift: () => setRailShift((value) => !value),
@@ -2498,6 +2583,9 @@ function Workspace({
               snap={sequenceGridSnap}
               viewport={sequenceGridViewport}
               selection={sequenceGridSelection}
+              rowOffset={overviewRowOffset}
+              tempoPreview={tempoPreview}
+              swingPreview={swingPreview}
               transport={transport}
               midi={midi}
               {...(buildIdentity ? {buildIdentity} : {})}

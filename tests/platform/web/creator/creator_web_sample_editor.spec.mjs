@@ -832,8 +832,11 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await expectProjectRevision(page, 2);
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(true);
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  // On Sequence, ← without SHIFT steps Patterns (Desktop Final T6); the
+  // history lamp and Undo are on the SHIFT layer, still lit across modes.
+  await railHistoryKeys(page).shift.click();
   await expect(undo).toHaveClass(RAIL_LIT);
-  await pressRailUndo(page);
+  await undo.click();
   await expectProjectRevision(page, 3);
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(false);
   await pressRailUndo(page);

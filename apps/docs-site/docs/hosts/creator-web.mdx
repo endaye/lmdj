@@ -491,6 +491,21 @@ returns to it.
   and CANCEL. `COPY` is not shown until #1823.
 - **`TAP` and Refresh authority.**
 
+The physical column drives the same page (Desktop Final plan T6):
+
+- **Encoder 2** scrolls the upper screen's eight rows one row per detent. A
+  Bank key moves them to that Bank's first row.
+- **Encoder 3 and encoder 4** turn Tempo (±1 BPM) and Swing (±1%). A turn
+  previews on the upper screen at once and commits once, 400 ms after the last
+  detent, so a turn is one undo entry. Recording or a transport command in
+  flight locks both encoders and drops an unsettled turn.
+- **`←` and `→`** without SHIFT step to the previous or next Pattern, only
+  while stopped. With SHIFT they remain Undo and Redo.
+
+An encoder turns by wheel (accumulated, 50 px of travel per detent, so a trackpad burst is not one detent per event), vertical drag (8 px per detent) or the arrow keys while focused. A turn begun before the previous turn's commit lands continues from that commit.
+Encoder 1, `↑` / `↓` and every other page's encoders stay unassigned until
+#1822.
+
 Every control in the touch area is a 44 px button with an 8 px radius. There
 are no browser-native dropdowns or checkboxes.
 
