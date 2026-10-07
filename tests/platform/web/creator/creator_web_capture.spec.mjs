@@ -36,7 +36,8 @@ async function report(page, options = {}) {
     // While the capture dialog is modal the rest of the shell is inert, so a
     // role query cannot see the button; a CSS locator still can, and a
     // programmatic click is exactly what `force` means here.
-    await page.getByTestId("touch-workspace").locator("button").filter({hasText: /^System$/})
+    // System is entered from the brand mark on the physical column.
+    await page.getByTestId("physical-controls").locator("button.physical-brand")
       .evaluate(element => element.click());
     await page.getByTestId("touch-workspace").locator("button")
       .filter({hasText: "Export report"})
