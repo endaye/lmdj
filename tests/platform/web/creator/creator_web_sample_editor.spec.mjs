@@ -805,7 +805,8 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   const diverged = page.locator(".local-projects li")
     .filter({hasText: "Project 00000000"});
   await expect(diverged).toContainText("Revision 47");
-  await diverged.getByRole("button", {name: "Open Project 00000000"}).click();
+  await diverged.getByRole("button", {name: "Select Project 00000000"}).click();
+  await page.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev47");

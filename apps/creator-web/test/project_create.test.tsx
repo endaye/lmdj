@@ -130,7 +130,7 @@ test("New Project creates a Project, lists it and lands on Sample", async () => 
   expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   await userEvent.click(screen.getByRole("button", {name: "Open local"}));
-  expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2);
+  expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2);
 });
 
 test("a create whose read fails keeps the error and lists the stored Project", async () => {
@@ -144,7 +144,7 @@ test("a create whose read fails keeps the error and lists the stored Project", a
   await userEvent.click(screen.getByRole("button", {name: "New Project"}));
   await screen.findByRole("alert");
   await waitFor(() =>
-    expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2));
+    expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2));
   expect(screen.getByRole("alert")).toBeTruthy();
   expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
 });
@@ -220,7 +220,7 @@ test("a first-run create whose read fails keeps the error and lists the stored P
   render(<App runtimeFactory={() => fixture.session} />);
   await screen.findByRole("alert");
   await waitFor(() =>
-    expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(1));
+    expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(1));
   expect(screen.getByRole("alert")).toBeTruthy();
   expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
 });
@@ -305,7 +305,7 @@ test("Duplicate opens a copy under a new identity and lists both Projects", asyn
   expect(fixture.calls).toContain(`duplicateProject:${LISTED.projectId}`);
   await screen.findByRole("heading", {name: `Project ${copyId.slice(0, 8)}`});
   await userEvent.click(screen.getByRole("button", {name: "Open local"}));
-  expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2);
+  expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2);
 });
 
 test("an opened duplicate is remembered for the next boot", async () => {
@@ -354,7 +354,7 @@ test("a stored copy with an invalid summary is reported and still listed", async
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   await waitFor(() =>
-    expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2));
+    expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2));
 });
 
 test("a copy that fails to open reports the error and stays listed", async () => {
@@ -371,7 +371,7 @@ test("a copy that fails to open reports the error and stays listed", async () =>
   await userEvent.click(screen.getByRole("button", {name: "Duplicate Project"}));
   await screen.findByText(/could not be read/);
   await waitFor(() =>
-    expect(screen.getAllByRole("button", {name: /^Open Project /})).toHaveLength(2));
+    expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2));
 });
 
 test("Duplicate is unavailable while audio is running", async () => {

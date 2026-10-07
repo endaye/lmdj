@@ -1,5 +1,5 @@
 import {userMessage} from "../state/error_messages";
-import {useRef, type ChangeEvent} from "react";
+import {useRef, useState, type ChangeEvent} from "react";
 
 import type {
   CreatorState,
@@ -72,6 +72,14 @@ export function ProjectSurface({
   const showChooser = project === null || showLocalProjects;
   const importing = state.transfer.phase === "importing";
   const fileInput = useRef<HTMLInputElement>(null);
+  // D01: tapping a card selects it; only OPEN PROJECT opens the selection.
+  // The selection defaults to the open Project, else the first listed one.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const projects = state.project.projects;
+  const selected = projects.find((item) => item.projectId === selectedId)
+    ?? projects.find((item) => item.projectId === project?.projectId)
+    ?? projects[0]
+    ?? null;
   const onImportFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.item(0);
     event.currentTarget.value = "";
@@ -82,7 +90,12 @@ export function ProjectSurface({
       <div className="surface-heading">
         <div className="project-chooser-header">
           <p className="eyebrow">Project surface</p>
-          <h1>{showChooser ? "Local Projects" : `Project ${shortProjectId(project.projectId)}`}</h1>
+          {/* D01 reads YOUR PROJECTS; the heading still names the open
+              Project for assistive technology. */}
+          {hideSummary ? <span className="project-your" aria-hidden="true">YOUR PROJECTS</span> : null}
+          <h1 className={hideSummary ? "visually-hidden" : undefined}>
+            {showChooser ? "Local Projects" : `Project ${shortProjectId(project.projectId)}`}
+          </h1>
           {hideSummary ? (
             <p className="project-local-count">
               {String(state.project.projects.length).padStart(2, "0")} LOCAL
@@ -95,20 +108,16 @@ export function ProjectSurface({
               Back to Project
             </button>
           ) : null}
-          <button
-            type="button"
-            disabled={!canCreate}
-            onClick={onCreate}
-          >
-            New Project
-          </button>
-          <button
-            type="button"
-            disabled={!canDuplicate}
-            onClick={onDuplicate}
-          >
-            Duplicate Project
-          </button>
+          {hideSummary ? null : (
+            <>
+              <button type="button" disabled={!canCreate} onClick={onCreate}>
+                New Project
+              </button>
+              <button type="button" disabled={!canDuplicate} onClick={onDuplicate}>
+                Duplicate Project
+              </button>
+            </>
+          )}
           <button
             type="button"
             aria-controls="local-projects"
@@ -117,13 +126,12 @@ export function ProjectSurface({
           >
             Open local
           </button>
-          <button
-            type="button"
-            disabled={!canImport}
-            onClick={() => fileInput.current?.click()}
-          >
-            Import .lmdj
-          </button>
+          {hideSummary ? null : (
+            <button type="button" disabled={!canImport}
+              onClick={() => fileInput.current?.click()}>
+              Import .lmdj
+            </button>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -185,35 +193,66 @@ export function ProjectSurface({
             return (
               <li
                 key={summary.projectId}
-                className={isCurrent ? "is-current" : ""}
+                className={`${isCurrent ? "is-current" : ""}${
+                  selected?.projectId === summary.projectId ? " is-selected" : ""}`}
                 aria-current={isCurrent ? "true" : undefined}
               >
-                <span className="project-card-index" aria-hidden="true">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <strong>Project {id}</strong>
-                  {isCurrent ? <span>Open now</span> : null}
-                  <span>Revision {summary.revision}</span>
-                  <span>{summary.bpm} BPM</span>
-                  <span>
-                    {summary.assignedPadCount} assigned {summary.assignedPadCount === 1 ? "Pad" : "Pads"}
-                  </span>
-                  <span>{summary.assetCount} {summary.assetCount === 1 ? "Asset" : "Assets"}</span>
-                </div>
                 <button
                   type="button"
-                  aria-label={`Open Project ${id}`}
-                  disabled={!canOpen}
-                  onClick={() => onOpen?.(summary)}
+                  className="project-card"
+                  aria-label={`Select Project ${id}`}
+                  aria-pressed={selected?.projectId === summary.projectId}
+                  onClick={() => setSelectedId(summary.projectId)}
                 >
-                  Open
+                  <span className="project-card-index" aria-hidden="true">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span className="project-card-text">
+                    <strong>Project {id}</strong>
+                    {isCurrent ? <span>Open now</span> : null}
+                    <span>Revision {summary.revision}</span>
+                    <span>{summary.bpm} BPM</span>
+                    <span>
+                      {summary.assignedPadCount} assigned {summary.assignedPadCount === 1 ? "Pad" : "Pads"}
+                    </span>
+                    <span>{summary.assetCount} {summary.assetCount === 1 ? "Asset" : "Assets"}</span>
+                  </span>
                 </button>
               </li>
             );
           })}
         </ul>
       )}
+      {projects.length === 0 ? null : (
+        <div className="project-open-row">
+          <button
+            type="button"
+            className="project-open"
+            aria-label={selected === null ? "Open Project" : `Open Project ${shortProjectId(selected.projectId)}`}
+            disabled={!canOpen || selected === null}
+            onClick={() => { if (selected !== null) onOpen?.(selected); }}
+          >
+            OPEN PROJECT
+          </button>
+          {hideSummary ? (
+            <button type="button" aria-label="Duplicate Project" disabled={!canDuplicate}
+              onClick={onDuplicate}>
+              DUPLICATE
+            </button>
+          ) : null}
+        </div>
+      )}
+      {hideSummary ? (
+        <div className="project-create-row">
+          <button type="button" aria-label="New Project" disabled={!canCreate} onClick={onCreate}>
+            + NEW PROJECT
+          </button>
+          <button type="button" aria-label="Import .lmdj" disabled={!canImport}
+            onClick={() => fileInput.current?.click()}>
+            IMPORT
+          </button>
+        </div>
+      ) : null}
       <p className="stage-note">
         Perform mode arrives in Stage 10.
       </p>

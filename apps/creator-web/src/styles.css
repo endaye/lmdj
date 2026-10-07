@@ -165,19 +165,27 @@ button:disabled { color: #737b87; }
 .empty-hint { color: #9da6b4; }
 .project-summary dd { margin: .35rem 0 0; overflow-wrap: anywhere; }
 .local-projects { display: grid; gap: .75rem; padding: 0; list-style: none; }
-.local-projects li {
+/* D01 cards: the whole card is the select button; OPEN PROJECT opens it. */
+.local-projects li { border-radius: 10px; }
+.project-card {
   display: grid;
-  grid-template-columns: 40px 1fr auto;
+  grid-template-columns: 40px 1fr;
   align-items: center;
   gap: 12px;
+  width: 100%;
+  min-height: 56px;
   padding: 8px;
-  border: 1px solid #353b45;
+  border: 0;
   border-radius: 10px;
-  background: #171b21;
+  background: var(--creator-base);
+  color: var(--creator-text);
+  text-align: left;
+  font: inherit;
 }
-.local-projects li.is-current { background: var(--creator-blue-tint); border-color: var(--creator-blue-tint); }
-.local-projects li div { display: flex; flex-wrap: wrap; gap: .35rem 1rem; align-items: baseline; }
-.local-projects li span { color: #9da6b4; }
+.local-projects li.is-selected .project-card { background: var(--creator-blue-tint); }
+.project-card-text { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; min-width: 0; }
+.project-card-text strong { width: 100%; font-size: 12px; font-weight: 400; letter-spacing: .04em; }
+.project-card-text span { color: var(--creator-muted); font-size: 9px; letter-spacing: .04em; }
 .project-card-index {
   display: grid;
   place-items: center;
@@ -189,10 +197,32 @@ button:disabled { color: #737b87; }
   font-size: 16px;
   font-variant-numeric: tabular-nums;
 }
-.local-projects li.is-current .project-card-index {
+.local-projects li.is-selected .project-card-index {
   background: var(--creator-blue);
   color: var(--creator-base);
 }
+.project-your { font-size: 14px; letter-spacing: .04em; }
+.project-open-row,
+.project-create-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.project-open-row { grid-template-columns: 1.6fr 1fr; }
+.project-create-row { grid-template-columns: 1fr 1fr; margin-top: 8px; }
+.project-open-row button,
+.project-create-row button {
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--creator-raised);
+  color: var(--creator-text);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: .06em;
+}
+.project-open-row .project-open { background: var(--creator-blue); color: var(--creator-base); }
 .project-actions input[type="file"] { display: none; }
 
 .sample-surface {
@@ -1030,23 +1060,11 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   letter-spacing: .04em;
 }
 .hardware-workspace .local-projects { gap: 12px; }
-.hardware-workspace .local-projects li {
-  min-height: 56px;
-  background: var(--creator-base);
-  border: 0;
-}
-.hardware-workspace .local-projects li.is-current { background: var(--creator-blue-tint); }
-.hardware-workspace .local-projects li button {
-  min-height: 40px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--creator-blue);
-  color: var(--creator-base);
-}
 .hardware-workspace .project-actions button {
-  min-height: 40px;
+  min-height: 32px;
+  padding: 0 10px;
   border-radius: 8px;
+  font-size: 10px;
 }
 .hardware-workspace .stage-note { display: none; }
 
@@ -1336,6 +1354,22 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   font-variant-numeric: tabular-nums;
 }
 .sequence-overview { gap: 6px; }
+/* D01's upper screen: one summary line, then three columns. */
+.overview-display.is-project .overview-primary { justify-content: flex-start; gap: 40px; }
+.project-overview-summary {
+  margin: 0;
+  color: var(--creator-muted);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.project-overview-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.project-overview-columns dl { display: grid; gap: 6px; margin: 0; }
+.project-overview-columns dt { color: var(--creator-blue); font-size: 10px; letter-spacing: .06em; }
+.project-overview-columns dd { margin: 0; color: var(--creator-text); font-size: 12px; }
 .sequence-overview-position {
   position: absolute;
   top: 16px;

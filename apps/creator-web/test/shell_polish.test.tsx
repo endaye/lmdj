@@ -201,3 +201,24 @@ test("an unreadable local copy is not reported as an invalid bundle", () => {
   expect(message).toContain("local copy");
   expect(message).not.toContain("Bundle is invalid");
 });
+
+test("D01: a card tap only selects; OPEN PROJECT opens the selection", () => {
+  const onOpen = vi.fn();
+  const summary = (projectId: string) => ({
+    projectId, patternId: project.patternId, revision: 7, bpm: 96,
+    assetCount: 3, assignedPadCount: 5, bundleDigest: "digest",
+  });
+  const withTwo: CreatorState = {
+    ...ready,
+    project: {...ready.project, projects: [summary(project.projectId), summary("89abcdef00000000")]},
+  };
+  render(<ProjectSurface state={withTwo} canOpen hideSummary onOpen={onOpen} />);
+  // The open Project is selected by default.
+  expect(screen.getByRole("button", {name: "Select Project 01234567"}).getAttribute("aria-pressed"))
+    .toBe("true");
+  fireEvent.click(screen.getByRole("button", {name: "Select Project 89abcdef"}));
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", {name: "Open Project 01234567"})).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "Open Project 89abcdef"}));
+  expect(onOpen).toHaveBeenCalledWith(withTwo.project.projects[1]);
+});

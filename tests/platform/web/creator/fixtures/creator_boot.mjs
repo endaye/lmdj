@@ -70,11 +70,13 @@ export async function waitForProjectReopen(page, shortId, {timeout = PROJECT_OPE
 export async function openProjectFromLibrary(page, shortId, {timeout = PROJECT_OPEN_TIMEOUT_MS} = {}) {
   await waitForBootSettled(page, {timeout});
   await page.getByRole("button", {name: "Project", exact: true}).click();
-  const open = page.getByRole("button", {name: `Open Project ${shortId}`, exact: true});
-  if (!(await open.isVisible())) {
+  // D01: a card tap selects the Project; OPEN PROJECT opens the selection.
+  const select = page.getByRole("button", {name: `Select Project ${shortId}`, exact: true});
+  if (!(await select.isVisible())) {
     await page.getByRole("button", {name: "Open local", exact: true}).click();
   }
-  await open.click({timeout});
+  await select.click({timeout});
+  await page.getByRole("button", {name: `Open Project ${shortId}`, exact: true}).click({timeout});
 }
 
 // Wait for boot to stop acting, whether it opened a Project or refused one

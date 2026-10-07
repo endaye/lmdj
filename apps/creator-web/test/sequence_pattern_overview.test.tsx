@@ -293,7 +293,7 @@ test("Sequence draws only its status and rows; the phase and facts stay readable
     ...initialCreatorState,
     project: {...initialCreatorState.project, phase: "ready", current: project},
   };
-  const display = (activeMode: "sequence" | "project") => (
+  const display = (activeMode: "sequence" | "project" | "sample") => (
     <OverviewDisplay state={state} activeMode={activeMode} sequence={initialSequenceState}
       snap="1/16" viewport={null} selection={[]} />
   );
@@ -306,8 +306,12 @@ test("Sequence draws only its status and rows; the phase and facts stay readable
   expect(screen.getByTestId("audio-state").textContent).toMatch(/^Audio /);
   expect(screen.getByText("Rev").nextElementSibling?.textContent).toBe("7");
 
+  // Project draws its own summary and columns (D01) and hides them too;
+  // Sample still draws the shared phase and facts.
   view.rerender(display("project"));
   expect(view.container.querySelector(".overview-swing")).toBeNull();
+  expect(hidden(".overview-facts")).toBe(true);
+  view.rerender(display("sample"));
   expect(hidden(".overview-phase")).toBe(false);
   expect(hidden(".overview-facts")).toBe(false);
 });

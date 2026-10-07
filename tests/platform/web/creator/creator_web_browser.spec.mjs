@@ -275,7 +275,7 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   expect((await inspectProject(page)).project).toEqual(secondTruth);
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Open local"}).click();
-  await expect(page.getByRole("button", {name: /^Open Project [0-9a-f]{8}$/})).toHaveCount(2);
+  await expect(page.getByRole("button", {name: /^Select Project [0-9a-f]{8}$/})).toHaveCount(2);
 });
 
 test("Duplicate copies the open Project under a new identity, keeps edits apart, and a reload reopens the copy", async ({page}) => {
