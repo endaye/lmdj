@@ -325,8 +325,10 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   // the last velocity the grid set.
   await page.getByRole("button", {name: "Velocity mode"}).click();
   {
+    // Rows are 13 px since the EDIT layer fits all sixteen (T5): press near
+    // the row's foot and drag up to its middle, past the 4 px drag threshold.
     const box = await laneBox(page, 2);
-    await page.mouse.move(tickX(box, 1200, lengthTicks), box.y + 3);
+    await page.mouse.move(tickX(box, 1200, lengthTicks), box.y + box.height - 2);
     await page.mouse.down();
     await page.mouse.move(tickX(box, 1200, lengthTicks),
       box.y + box.height / 2, {steps: 4});

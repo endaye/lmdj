@@ -206,6 +206,7 @@ test("metronome never enters the Perform capture; the witness sample proves the 
   // anything the metronome would leak into the tap.
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await showSequenceLayer(page, "SETUP");
   await metronomeToggle(page).click();
   await playStopKey(page).click();
   await transportStatus(page, "playing");
