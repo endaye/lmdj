@@ -24,6 +24,7 @@ source_paths:
   - docs/quality/2026-08-27-stage9-sequence-recording-review.md
   - docs/prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md
   - docs/prd/decisions/2026-08-24-capture-input-gate-and-identity.md
+  - docs/prd/decisions/2026-10-07-pad-colour-source.md
   - docs/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md
   - scripts/creator-web.sh
   - scripts/creator-web-deploy.sh
@@ -452,6 +453,14 @@ Creator surface shows a Host message, a raw `Error.message` or a code:
 Each of these failures is recorded in Developer diagnostics.
 
 ## Sequence Pattern grid editing
+
+### Pad colour decision — implementation pending
+
+<StatusBadge status="designed" /> The owner confirmed the [Pad colour rule](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-pad-colour-source.md) on 2026-10-07 (#1821): category supplies the default and the user can override it with any of five palette colours — DRUMS `#F3B580`, BASS `#DFF779`, MELODIC `#B49DE8`, VOCAL `#94D2DC`, TEXTURE `#E6ED98`. The override is Pad authoring state in Project Truth, stored as a stable palette index, retained across re-separation and save/reopen, and cleared by restore-category-default. The Pad matrix border, overview lane and touch-grid notes share the effective colour; a white border plus a lime dot distinguishes a selected Pad from the BASS colour.
+
+This is approved behaviour awaiting implementation. The current Creator still rotates colours by Pad Slot; no category or colour override has been added to the Project Contract. A separate Contract/Core plan must define migration, unclassified/empty defaults, stem-category mapping, Pad matching/retention and Facade/Host projection before Desktop Final T7 implements the controls and common rendering. The planned persistence and re-separation journeys have not run.
+
+### Current grid behaviour
 
 The Sequence touch workspace edits the selected Pattern on a grid. Sixteen
 rows are the active Bank's sixteen Pads, so the grid follows the existing Bank
