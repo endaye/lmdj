@@ -1308,8 +1308,8 @@ button:disabled { color: #737b87; }
   width: 100%;
   height: 101px;
 }
-.sequence-overview-cell.is-even { fill: #303530; }
-.sequence-overview-cell.is-odd { fill: #262a26; }
+.sequence-overview-cell.is-even { fill: #3d433d; }
+.sequence-overview-cell.is-odd { fill: #333833; }
 .sequence-overview-onset { fill: var(--creator-lime); }
 .sequence-overview-tail { fill: rgb(221 244 120 / 40%); }
 .sequence-overview-frame {
