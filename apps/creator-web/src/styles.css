@@ -1,3 +1,14 @@
+/* IBM Plex Mono (OFL-1.1, @fontsource/ibm-plex-mono) for the console. The
+   build inlines the woff2 into this stylesheet as a data: URL, which the
+   Creator CSP admits through `font-src data:` (Desktop Final plan T1b). */
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+
 /* Desktop Final (Figma GPFarNiZNsjLQzfG9kR8DO, page 0:1) colour tokens.
    --creator-raised, --creator-line and --creator-text are the file's own
    variables; the rest are its literal fills. Accents are named by hue, not by
@@ -15,8 +26,8 @@
   --creator-purple: #c5a5f4;
   --creator-blue-tint: #314352;
   --creator-purple-tint: #443750;
-  /* IBM Plex Mono is used where installed; bundling it needs a font-src in
-     the distribution CSP and is a separate Task. */
+  /* The bundled IBM Plex Mono above; the system monospace faces remain as
+     the fallback while it loads. */
   --creator-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 

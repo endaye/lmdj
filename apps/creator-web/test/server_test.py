@@ -209,7 +209,11 @@ class CreatorServerTest(unittest.TestCase):
         self.assertEqual(headers["cross-origin-opener-policy"], "same-origin")
         self.assertEqual(headers["cross-origin-embedder-policy"], "require-corp")
         self.assertEqual(headers["cross-origin-resource-policy"], "same-origin")
-        self.assertEqual(headers["content-security-policy"], self.module.CSP)
+        # Creator's embedded console font needs `font-src data:` (plan T1b);
+        # it is the only difference from the shared Web Runtime policy.
+        self.assertEqual(headers["content-security-policy"], self.module.CREATOR_CSP)
+        self.assertEqual(
+            self.module.CREATOR_CSP.replace(" font-src data:;", ""), self.module.CSP)
         self.assertEqual(
             headers["x-robots-tag"], "noindex, nofollow, noarchive"
         )

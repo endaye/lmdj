@@ -36,6 +36,12 @@ CSP = (
     "child-src 'self' blob:; connect-src 'self'; style-src 'self'; "
     "img-src 'self'; media-src 'self' blob:; manifest-src 'self'"
 )
+# Creator from Desktop Final plan T1b embeds its font as a data: URL and
+# serves CSP with `font-src data:`. Earlier Creator deployments, which the
+# deploy validates as rollback anchors, and the Web Runtime Host serve CSP,
+# so both exact policies are accepted.
+CREATOR_FONT_CSP = CSP.replace("style-src 'self'; ", "style-src 'self'; font-src data:; ")
+ACCEPTED_CSPS = frozenset({CSP, CREATOR_FONT_CSP})
 REQUIRED_SECURITY_HEADERS = {
     "cross-origin-opener-policy": "same-origin",
     "cross-origin-embedder-policy": "require-corp",
@@ -218,12 +224,12 @@ def _validate_headers(headers, label: str) -> None:
             _require_robots_directives(headers, label)
             continue
         _require_header(headers, name=name, expected=expected, label=label)
-    _require_header(
-        headers,
-        name="content-security-policy",
-        expected=CSP,
-        label=label,
-    )
+    policies = _header_values(headers, "content-security-policy")
+    if len(policies) != 1 or policies[0] not in ACCEPTED_CSPS:
+        raise SmokeError(
+            f"{label} content-security-policy mismatch: expected one of "
+            f"{sorted(ACCEPTED_CSPS)!r}, got {policies!r}"
+        )
 
 
 def _optional_single_header(headers, name: str, label: str) -> str | None:
