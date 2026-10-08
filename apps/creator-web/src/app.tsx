@@ -2987,7 +2987,10 @@ function Workspace({
                   activeBank={state.activeBank}
                   onInstalled={(revision) => {
                     dispatch({type: "project-revision-updated", revision});
-                    void refreshPerformProject().catch(() => {});
+                    // The re-read's token must name the committed revision
+                    // just dispatched, not the older one the ref still holds,
+                    // or the reducer drops the refreshed view (#1905).
+                    void refreshPerformProject(revision).catch(() => {});
                   }}
                 />
               ) : (
