@@ -173,6 +173,34 @@ spot. Where the banned string is a path the file must also declare, constrain
 the declaration rather than loosening the gate. See
 [`gate-matches-its-own-prose`](../../pitfalls/gate-matches-its-own-prose.md).
 
+### Parity tests need an independent oracle
+
+When a Task adds, changes, or relies on a parity/agreement test between
+inventories or implementations, complete these steps before calling its
+invariant verified:
+
+1. **Name the blind spot** in the test comment: identify the shared omission,
+   code or assumption that could make both sides agree on a wrong result.
+2. **Assert against an independent oracle** alongside the parity check. Bind
+   each consumer to the authoritative producer inventory; for shared behavior,
+   use a closed-form expectation or an absolute output property. Derive the
+   expected result independently of the compared consumers and their shared
+   implementation. Keep the assertions separate so each failure names one
+   defect.
+3. **Prove the oracle catches the shared defect** on the exact pre-fix tree
+   when available, or with a targeted mutation that makes both sides share the
+   named defect. Follow §1's fresh-artifact proof procedure; the independent
+   assertion must fail for that defect even while the parity comparison agrees.
+   Restore and verify the fixed tree, retaining both results.
+
+Record the oracle, named assertion and discriminating proof in the Task's
+verification evidence. An unavailable oracle or unexecuted proof remains an
+explicit verification gap; resolve it within the existing scope or report the
+blocker before declaring that invariant complete. Whether a test needs this
+analysis is review judgment, not a keyword-based CI gate. Worked shared-defect
+cases are in
+[`parity-check-between-agreeing-copies`](../../pitfalls/parity-check-between-agreeing-copies.md).
+
 ### Pitfalls that bite at this step
 
 Read these before shipping; each is a real recurrence, not a hypothetical:
