@@ -65,7 +65,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "5.2.0" if name == "project_v5" else
+        "5.3.0" if name == "project_v5" else
         "2.0.0"
         if name in {"project_bundle", "assembly", "capability_v2"}
         else (
@@ -1211,6 +1211,101 @@ for pointer, key, value, why in [
     (tone_pad0 + ["eq", "low"], "kind", "cut", "a low cut keeps its ignored gain"),
 ]:
     json_schema.check(mutated(tone_project_v5, pointer + [key], value), project_v5, why)
+
+# 5.3.0 (decisions 2026-10-07 and 2026-10-08, #1207): an Asset gains an
+# optional sound category and a Pad an optional colour override, a palette
+# index 0..4. An absent category is unclassified, so there is no "none". An
+# override exists only on an assigned Pad.
+asset_v5 = project_v5["$defs"]["asset"]
+assert asset_v5["required"] == ["asset_id", "artifact", "lineage"], (
+    "why: category became required; remedy: an absent category is unclassified"
+)
+assert list(asset_v5["properties"]) == [
+    "asset_id", "artifact", "lineage", "category",
+], "why: an asset key was added or dropped outside a Contract cut; remedy: pin it here"
+assert asset_v5["properties"]["category"] == {
+    "enum": ["drums", "bass", "melodic", "vocal", "texture"],
+}, "why: the category set or its palette order changed; remedy: the order is the persisted palette index"
+assert asset_v5["additionalProperties"] is False
+assert pad_v5["required"] == ["pad", "asset_id", "playback"], (
+    "why: colour became required; remedy: an absent colour means no override"
+)
+assert list(pad_v5["properties"]) == ["pad", "asset_id", "playback", "colour"], (
+    "why: a pad key was added or dropped outside a Contract cut; remedy: pin it here"
+)
+assert pad_v5["properties"]["colour"] == {
+    "type": "integer", "minimum": 0, "maximum": 4,
+}, "why: the override is no longer one of the five palette indices"
+assert pad_v5["if"] == {"required": ["colour"]}
+assert pad_v5["then"] == {"properties": {"asset_id": {"$ref": "#/$defs/uuid"}}}, (
+    "why: an empty Pad could carry a colour override; remedy: colour requires an asset"
+)
+
+colour_project_v5 = load_json(
+    repo_root / "tests/fixtures/contracts/project-v5-pad-colour-valid.json"
+)
+json_schema.check(colour_project_v5, project_v5, "project-v5-pad-colour-valid")
+# Pad 0: a drums asset and no override. Pad 1: an unclassified asset with
+# override 0. Pad 2: the drums asset with override 4. Pad 3 is empty.
+colour_category_asset = ["assets", 0]
+colour_unclassified_asset = ["assets", 1]
+colour_pad0 = ["banks", 0, "pads", 0]
+colour_pad1 = ["banks", 0, "pads", 1]
+colour_pad2 = ["banks", 0, "pads", 2]
+colour_empty_pad = ["banks", 0, "pads", 3]
+for pointer, key, value, present in [
+    (colour_category_asset, "category", "drums", True),
+    (colour_unclassified_asset, "category", None, False),
+    (colour_pad0, "colour", None, False),
+    (colour_pad1, "colour", 0, True),
+    (colour_pad2, "colour", 4, True),
+    (colour_empty_pad, "asset_id", None, True),
+]:
+    node = colour_project_v5
+    for token in pointer:
+        node = node[token]
+    assert (key in node) == present and node.get(key) == value, (
+        "why: the fixture no longer holds the case its mutations rely on; "
+        f"remedy: restore {pointer} {key}"
+    )
+for pointer, key, bad in [
+    (colour_empty_pad, "colour", 0),
+    (colour_pad1, "asset_id", None),
+    (colour_pad1, "colour", -1),
+    (colour_pad2, "colour", 5),
+    (colour_pad2, "colour", 1.5),
+    (colour_pad2, "colour", "4"),
+    (colour_pad2, "colour", None),
+    (colour_category_asset, "category", "keys"),
+    (colour_category_asset, "category", "none"),
+    (colour_category_asset, "category", "Drums"),
+    (colour_category_asset, "category", None),
+    (colour_pad0, "category", "drums"),
+    (colour_category_asset, "colour", 0),
+]:
+    changed = mutated(colour_project_v5, pointer + [key], bad)
+    assert json_schema.validate(changed, project_v5), (pointer, key, bad)
+for category in asset_v5["properties"]["category"]["enum"]:
+    json_schema.check(
+        mutated(colour_project_v5, colour_unclassified_asset + ["category"], category),
+        project_v5, f"category {category}",
+    )
+for index in range(5):
+    json_schema.check(
+        mutated(colour_project_v5, colour_pad0 + ["colour"], index),
+        project_v5, f"override {index}",
+    )
+json_schema.check(
+    mutated(colour_project_v5, colour_pad1 + ["colour"], _DELETE),
+    project_v5, "an assigned Pad with no override",
+)
+for name, earlier in (
+    ("project-v5-valid", valid_project_v5),
+    ("project-v5-playback-parity-valid", parity_project_v5),
+    ("project-v5-tone-parity-valid", tone_project_v5),
+):
+    json_schema.check(earlier, project_v5, f"{name} stays legal under 5.3.0")
+
 lineage_v5 = valid_project_v5["assets"][0]["lineage"]
 for path in ((), ("source",), ("derivation",), ("derivation", "capability"),
              ("derivation", "provider"), ("derivation", "output_artifact"),

@@ -72,6 +72,25 @@ Application Facade 的 `sample.update_pad`/`sample.inspect`、MCP 的 `lmdj.samp
 `sample.update_pad`/`sample.preview.set` 与 Creator Sample Editor 暴露同一组键：请求可省略任一可选键或任一频段，
 回读只输出非缺省键与出现的频段。
 
+## Pad 颜色（`5.3.0`）
+
+`5.3.0` 同样是向后兼容的追加（#1207）：Asset 与 Pad 各新增一个**可选**键，缺席即旧行为。
+
+| 位置 | 键 | 取值 | 缺席的含义 |
+| --- | --- | --- | --- |
+| Asset | `category` | `drums` \| `bass` \| `melodic` \| `vocal` \| `texture` | 无类别（没有 `"none"` 值） |
+| Pad | `colour` | 整数 0..4，用户覆盖的调色板索引 | 没有覆盖 |
+
+调色板索引是持久化的稳定值，顺序固定：0 DRUMS `#F3B580`、1 BASS `#DFF779`、2 MELODIC `#B49DE8`、
+3 VOCAL `#94D2DC`、4 TEXTURE `#E6ED98`。类别描述声音，所以放在 Asset 上；覆盖描述 Pad，所以放在 Pad 上。
+`colour` 只允许出现在 `asset_id` 非 `null` 的 Pad 上：空 Pad 携带 `colour` 时 Schema 拒绝。
+有效颜色是"覆盖优先，否则所分配 Asset 的类别，否则中性色"。
+`5.2.0` reader 按设计拒绝携带这些键的 Project。取值与语义的权威是 2026-10-07 Pad 颜色来源决策
+（`docs/prd/decisions/2026-10-07-pad-colour-source.md`）与 2026-10-08 缺省与保留决策
+（`docs/prd/decisions/2026-10-08-pad-colour-defaults-and-retention.md`）。
+本 Build 只推进 Contract：读写这些键的 Domain、Project I/O 与 Facade 实现是 #1207 计划的后续 Core Task，
+在它合入之前 Project I/O 仍拒绝这些键。
+
 ## Slice 采纳 Lineage
 
 新增的 `derivation.kind: capability_adoption` 只支持 Slice，必须搭配现有
