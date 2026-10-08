@@ -107,6 +107,8 @@ This Task selects the batch-only `deploy_contract` lane.
 
 ## T2 — scale the whole console to fit the window (needs owner confirmation)
 
+**2026-10-08: confirmed.** The owner confirmed that START HERE supersedes the scrolling short stage: the console scales proportionally to fit and centres, enlarging as well as shrinking.
+
 **Behaviour.**
 
 - START HERE asks for the device to scale proportionally and centre itself, keeping the internal layout and the aspect ratio. The console therefore scales by `min(viewportW / 880, viewportH / 592)`, centred.

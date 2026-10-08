@@ -15,27 +15,57 @@ function rounded(box) {
   };
 }
 
+// Desktop Final T2: the console scales to fit the stage, so its layout is
+// asserted in console units -- every page box mapped back through the scale
+// the console was drawn at -- and its fit in page pixels against the stage.
+async function consoleGeometry(page) {
+  const raw = await page.getByTestId("hardware-console").boundingBox();
+  const scale = raw.width / 880;
+  const box = async (locator) => {
+    const b = await locator.boundingBox();
+    return rounded({x: (b.x - raw.x) / scale, y: (b.y - raw.y) / scale,
+      width: b.width / scale, height: b.height / scale});
+  };
+  return {raw, scale, box};
+}
+
+async function expectConsoleFitsStage(page) {
+  const stage = await page.locator("#root").boundingBox();
+  const {raw, scale} = await consoleGeometry(page);
+  // Proportional: the 880:592 ratio survives the scale.
+  expect(Math.abs(raw.height - 592 * scale)).toBeLessThanOrEqual(1);
+  // Inside the stage on both axes, and centred in it.
+  expect(raw.x).toBeGreaterThanOrEqual(stage.x - 1);
+  expect(raw.y).toBeGreaterThanOrEqual(stage.y - 1);
+  expect(raw.x + raw.width).toBeLessThanOrEqual(stage.x + stage.width + 1);
+  expect(raw.y + raw.height).toBeLessThanOrEqual(stage.y + stage.height + 1);
+  expect(Math.abs((stage.x + stage.width / 2) - (raw.x + raw.width / 2))).toBeLessThanOrEqual(2);
+  expect(Math.abs((stage.y + stage.height / 2) - (raw.y + raw.height / 2))).toBeLessThanOrEqual(2);
+  // Filled: one axis meets the stage (the console's 24px margins included).
+  const fills = Math.min(
+    Math.abs(stage.width - 880 * scale),
+    Math.abs(stage.height - 640 * scale),
+  );
+  expect(fills).toBeLessThanOrEqual(2);
+  return scale;
+}
+
 test("renders the 880×592 hardware shell and keeps the overview read-only", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
   await waitForBootProject(page);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
 
-  const consoleBox = rounded(await page.getByTestId("hardware-console").boundingBox());
-  const physical = rounded(await page.getByTestId("physical-controls").boundingBox());
-  const overview = rounded(await page.getByTestId("overview-display").boundingBox());
-  const pads = rounded(await page.getByTestId("pad-matrix").boundingBox());
-  const touch = rounded(await page.getByTestId("touch-workspace").boundingBox());
+  const {box} = await consoleGeometry(page);
+  const consoleBox = await box(page.getByTestId("hardware-console"));
+  const physical = await box(page.getByTestId("physical-controls"));
+  const overview = await box(page.getByTestId("overview-display"));
+  const pads = await box(page.getByTestId("pad-matrix"));
+  const touch = await box(page.getByTestId("touch-workspace"));
 
-  expect(consoleBox).toMatchObject({width: 880, height: 592});
-  // The device floats in the middle of the stage on both axes. Old shell
-  // code only centred it horizontally (fixed 24px top margin), so the
-  // vertical leg is the one that proves the fix.
-  const stage = rounded(await page.locator(".hardware-workspace").boundingBox());
-  const centreDelta = (outer, inner) =>
-    Math.abs((outer.x + outer.width / 2) - (inner.x + inner.width / 2)) +
-    Math.abs((outer.y + outer.height / 2) - (inner.y + inner.height / 2));
-  expect(centreDelta(stage, consoleBox)).toBeLessThanOrEqual(2);
+  expect(consoleBox).toMatchObject({x: 0, y: 0, width: 880, height: 592});
+  // The device fills the stage proportionally and floats in its middle.
+  expect(await expectConsoleFitsStage(page)).toBeGreaterThan(1);
   expect(physical).toMatchObject({
     x: consoleBox.x + 16,
     y: consoleBox.y + 16,
@@ -61,20 +91,20 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
     height: 368,
   });
 
-  const pad = rounded(await page.getByRole("button", {name: /Pad A01 /}).boundingBox());
+  const pad = await box(page.getByRole("button", {name: /Pad A01 /}));
   expect(pad).toMatchObject({width: 80, height: 80});
-  const encoders = rounded(await page.getByTestId("physical-encoders").boundingBox());
+  const encoders = await box(page.getByTestId("physical-encoders"));
   expect(encoders).toMatchObject({
     x: physical.x,
     y: physical.y + 80 + 16,
     width: 80,
     height: 80,
   });
-  const encoder = rounded(await page.getByRole("button", {
+  const encoder = await box(page.getByRole("button", {
     name: "Encoder 1 — unassigned until hardware mapping is approved",
-  }).boundingBox());
+  }));
   expect(encoder).toMatchObject({width: 32, height: 32});
-  const keyBlock = rounded(await page.getByTestId("physical-keys").boundingBox());
+  const keyBlock = await box(page.getByTestId("physical-keys"));
   expect(keyBlock).toMatchObject({
     x: physical.x,
     y: pads.y,
@@ -83,14 +113,14 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   });
   const keys = page.getByTestId("physical-controls");
   for (const bank of ["Bank A", "Bank B", "Bank C", "Bank D"]) {
-    const box = rounded(await keys.getByRole("button", {name: bank, exact: true}).boundingBox());
-    expect(box).toMatchObject({width: 32, height: 32});
+    const bankBox = await box(keys.getByRole("button", {name: bank, exact: true}));
+    expect(bankBox).toMatchObject({width: 32, height: 32});
   }
   // #1770: the −/+ placeholder row is gone and SHIFT holds its row as one
   // full-width key (both 32px cells plus the 16px gap) directly above the
   // record/play row, keeping the 8-row 368px key block. Rows step 48px
   // (32px key + 16px gap), so SHIFT's row starts 6 steps into the block.
-  const shift = rounded(await keys.getByRole("button", {name: /^SHIFT/}).boundingBox());
+  const shift = await box(keys.getByRole("button", {name: /^SHIFT/}));
   expect(shift).toMatchObject({
     x: physical.x,
     y: keyBlock.y + 6 * 48,
@@ -135,16 +165,20 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(page.getByRole("button", {name: "Existing workspace"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
 
-  await page.setViewportSize({width: 768, height: 600});
-  // Short stage: the auto margins collapse, so the console's top edge sits
-  // at or below the scrollport origin -- a justify-content-centred stage
-  // would clip it above the reachable area instead.
-  const shortStage = rounded(await page.locator(".hardware-workspace").boundingBox());
-  const shortConsole = rounded(await page.getByTestId("hardware-console").boundingBox());
-  expect(shortConsole.y).toBeGreaterThanOrEqual(shortStage.y);
-  await page.getByTestId("touch-workspace").scrollIntoViewIfNeeded();
-  await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
-  await expect(page.getByTestId("overview-display").locator("button")).toHaveCount(0);
+  // A short window shrinks the console instead of scrolling it; a wide one
+  // is limited by its height. Both keep the ratio and stay centred.
+  for (const viewport of [{width: 768, height: 600}, {width: 1280, height: 720}]) {
+    await page.setViewportSize(viewport);
+    await expect.poll(async () => (await consoleGeometry(page)).scale).toBeLessThan(1.2);
+    await expectConsoleFitsStage(page);
+    // A tap on a known Pad still lands on that Pad under the scale.
+    const padA06 = page.getByRole("button", {name: /^Pad A06 /});
+    const target = await padA06.boundingBox();
+    const hit = await page.evaluate(({x, y}) =>
+      document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label") ?? null,
+    {x: target.x + target.width / 2, y: target.y + target.height / 2});
+    expect(hit).toMatch(/^Pad A06 /);
+  }
   await expect(page.getByTestId("creator-phase")).toHaveText("ready");
 });
 
