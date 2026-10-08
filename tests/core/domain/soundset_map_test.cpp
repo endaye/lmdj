@@ -19,6 +19,7 @@
 
 namespace {
 
+using lmdj::domain::AssetCategory;
 using lmdj::domain::PadSlot;
 using lmdj::domain::SoundSetMapping;
 using lmdj::domain::SoundSetProposedPad;
@@ -170,6 +171,19 @@ void test_a_fully_empty_set_proposes_nothing() {
   LMDJ_CHECK(mapping.kept.size() == lmdj::domain::kPatternSlotCount);
 }
 
+
+void test_proposals_carry_the_slot_role_category() {
+  auto manifest = manifest_with_duplicate_roles();
+  manifest.slots.at(2).occupied->role = "other";
+  manifest.slots.at(5).occupied->role = "chord";
+  const auto mapping = map_soundset(manifest, empty_bank());
+  LMDJ_CHECK(mapping.proposed.at(0).category == AssetCategory::drums);
+  LMDJ_CHECK(mapping.proposed.at(1).category == AssetCategory::drums);
+  // `other` has no meaning, so its Asset stays unclassified.
+  LMDJ_CHECK(!mapping.proposed.at(2).category.has_value());
+  LMDJ_CHECK(mapping.proposed.at(3).category == AssetCategory::melodic);
+}
+
 }  // namespace
 
 int main() {
@@ -180,6 +194,7 @@ int main() {
     test_collisions_name_every_occupied_proposed_pad_in_slot_order();
     test_mapping_is_deterministic();
     test_a_fully_empty_set_proposes_nothing();
+    test_proposals_carry_the_slot_role_category();
   } catch (const std::exception& error) {
     std::cerr << "soundset map test failed: " << error.what() << "\n";
     return 1;

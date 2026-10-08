@@ -31,7 +31,7 @@ Project Truth 可演进但不包含 Runtime Snapshot、Provider 选择或 Attemp
 ## 7. 产品使用方
 Project I/O、Project Cooker 和 Application Facade 使用领域模型。
 ## 8. 测试与证据
-`project_test.cpp`、`command_handler_test.cpp`、`model_sequence_test.cpp` 覆盖 playback defaults、四模式、边界、冲突与 revision；`performance_test.cpp` 同时验证 Slice lineage 完整 round-trip、显式 null model、每层缺失/额外字段和无效证据，并覆盖七种 event 的边界与封闭性、Pattern Slot 校验与 Performance 字段约束，`migration_v4_test.cpp` 覆盖 v1/v2/v3 → v4 迁移。
+`project_test.cpp`、`command_handler_test.cpp`、`model_sequence_test.cpp` 覆盖 playback defaults、四模式、边界、冲突与 revision，`command_handler_test.cpp` 另覆盖 Pad 颜色命令、各换素材命令对覆盖色的保留与清除、颜色解析优先级与标签→类别映射；`performance_test.cpp` 同时验证 Slice lineage 完整 round-trip、显式 null model、每层缺失/额外字段和无效证据，并覆盖七种 event 的边界与封闭性、Pattern Slot 校验与 Performance 字段约束，`migration_v4_test.cpp` 覆盖 v1/v2/v3 → v4 迁移。
 ## 9. 限制与下一门禁
 通用 Undo/Redo、协同编辑、Time-stretch 与 Artifact GC 不在当前实现声明内。领域层只定义 Performance 的结构与取值域，不声明任何听感、设备或物理演奏验收。
 ## 10. 版本身份
@@ -116,3 +116,40 @@ changing Truth:
   never becomes a revision;
 - a double-up at 8 bars (`pattern_length_maximum`);
 - a copy id that already exists (`duplicate_id`).
+
+## Pad colour
+
+Each Pad has one effective colour, an index into a fixed five-colour palette
+whose order is persisted and never changes: 0 DRUMS `#F3B580`, 1 BASS `#DFF779`,
+2 MELODIC `#B49DE8`, 3 VOCAL `#94D2DC`, 4 TEXTURE `#E6ED98`.
+
+- `Asset.category` is an optional `drums | bass | melodic | vocal | texture`
+  that describes the sound. Absent means unclassified.
+- `PadSlot.colour` is the user's optional override as a palette index. It
+  exists only while the Pad holds an Asset.
+- `effective_pad_colour` is the one rule: the override, else the index of the
+  Pad's Asset category, else `null` (neutral). Hosts never recompute it.
+
+Sound Set roles map by meaning: `kick`, `snare`, `clap`, `hat_closed`,
+`hat_open`, `perc` and `cymbal` to drums; `bass` to bass; `melody` and `chord`
+to melodic; `vocal` to vocal; `fx` to texture. `other` stays unclassified.
+`map_soundset` carries each slot role's category on its proposal so the
+installed Asset records it. Stem labels map `drums`, `bass` and `vocals` to
+drums, bass and vocal; `other` stays unclassified. Imported, recorded,
+resampled and Slice-adopted Assets are unclassified, and existing Assets are
+never backfilled.
+
+`SetPadColour {slot, colour}` is a checked command with its own `apply`
+overload. A `null` colour removes the override, so the Pad follows its
+category again. It refuses, without changing Truth:
+
+- an empty Pad (`pad_empty`);
+- an index outside the palette (`pad_colour_out_of_range`);
+- the current value (`pad_colour_unchanged`), so a no-op never becomes a
+  revision.
+
+The override follows the Pad across asset changes. `AssignPad` to another
+Asset, `ImportAssignSample`, each Pad an `InstallSoundSet` writes and
+`AdoptCandidates` keep it. `AssignPad` to `null` and `DeletePad` clear it. A
+Sound Set `keep` leaves an occupied Pad untouched, override included. Reading
+and writing both fields in Project files and history belongs to Project I/O.

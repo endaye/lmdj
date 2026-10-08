@@ -366,6 +366,66 @@ std::optional<Asset> resolve_slot_asset(
   return asset->second;
 }
 
+std::uint8_t pad_colour_index(AssetCategory category) noexcept {
+  return static_cast<std::uint8_t>(category);
+}
+
+std::optional<AssetCategory> soundset_role_category(
+    std::string_view role) noexcept {
+  if (role == "kick" || role == "snare" || role == "clap" ||
+      role == "hat_closed" || role == "hat_open" || role == "perc" ||
+      role == "cymbal") {
+    return AssetCategory::drums;
+  }
+  if (role == "bass") {
+    return AssetCategory::bass;
+  }
+  if (role == "melody" || role == "chord") {
+    return AssetCategory::melodic;
+  }
+  if (role == "vocal") {
+    return AssetCategory::vocal;
+  }
+  if (role == "fx") {
+    return AssetCategory::texture;
+  }
+  return std::nullopt;
+}
+
+std::optional<AssetCategory> stem_label_category(
+    std::string_view label) noexcept {
+  if (label == "drums") {
+    return AssetCategory::drums;
+  }
+  if (label == "bass") {
+    return AssetCategory::bass;
+  }
+  if (label == "vocals") {
+    return AssetCategory::vocal;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::uint8_t> effective_pad_colour(
+    const ProjectState& state,
+    PadSlotId slot) {
+  if (!is_valid_slot(slot)) {
+    return std::nullopt;
+  }
+  const auto& pad = state.banks.at(slot.bank).at(slot.pad);
+  if (pad.colour.has_value()) {
+    return pad.colour;
+  }
+  if (!pad.asset_id.has_value()) {
+    return std::nullopt;
+  }
+  const auto asset = state.assets.find(*pad.asset_id);
+  if (asset == state.assets.end() || !asset->second.category.has_value()) {
+    return std::nullopt;
+  }
+  return pad_colour_index(*asset->second.category);
+}
+
 std::uint32_t pattern_length_ticks(std::uint8_t bars) noexcept {
   return static_cast<std::uint32_t>(bars) * kBarTicks4x4;
 }

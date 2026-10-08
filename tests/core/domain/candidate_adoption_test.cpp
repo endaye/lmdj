@@ -58,11 +58,21 @@ void source_freshness() {
   LMDJ_CHECK(!absent.has_value());
   LMDJ_CHECK(absent.error().details.at("reason") == "source_asset_missing");
 }
+void colour_override_survives_adoption() {
+  auto state = project();
+  state.banks[0][0].colour = 4;
+  const auto result = apply(state, command(), {});
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value().state.banks[0][0].colour == std::optional<std::uint8_t>{4});
+  // A Slice adoption is unclassified.
+  LMDJ_CHECK(!result.value().state.assets.at(AssetId{uuid(4)}).category.has_value());
+}
 }
 int main() {
   try {
     atomic_success();
     source_freshness();
+    colour_override_survives_adoption();
     refused([](auto& c) { c.assignments.clear(); });
     refused([](auto& c) { c.assignments.back().slot = c.assignments.front().slot; });
     refused([](auto& c) { c.assignments.back().slot.bank = 4; });

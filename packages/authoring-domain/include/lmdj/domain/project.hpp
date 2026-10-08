@@ -151,10 +151,42 @@ struct PadSlotId {
   auto operator<=>(const PadSlotId&) const = default;
 };
 
+// lmdj.project.v5 5.3.0: what a sound is, recorded on its Asset. An absent
+// category is unclassified; there is no "none" value.
+enum class AssetCategory : std::uint8_t {
+  drums,
+  bass,
+  melodic,
+  vocal,
+  texture,
+};
+
+// The fixed five-colour Pad palette. The index is persisted Project Truth and
+// this order never changes: a category's default colour is the entry whose
+// index equals the category's value.
+inline constexpr std::uint8_t kPadColourCount = 5;
+
+struct PadPaletteEntry {
+  AssetCategory category;
+  std::string_view rgb_hex;
+};
+
+inline constexpr std::array<PadPaletteEntry, kPadColourCount> kPadPalette{{
+    {AssetCategory::drums, "#F3B580"},
+    {AssetCategory::bass, "#DFF779"},
+    {AssetCategory::melodic, "#B49DE8"},
+    {AssetCategory::vocal, "#94D2DC"},
+    {AssetCategory::texture, "#E6ED98"},
+}};
+
 struct PadSlot {
   PadSlotId id;
   std::optional<foundation::AssetId> asset_id;
   PadPlayback playback;
+  // The user's override as a palette index (lmdj.project.v5 5.3.0). It
+  // follows the Pad across asset changes and exists only while the Pad holds
+  // an Asset; absent means the Pad follows its Asset's category.
+  std::optional<std::uint8_t> colour{};
 
   bool operator==(const PadSlot&) const = default;
 };
@@ -264,6 +296,7 @@ struct Asset {
   foundation::AssetId id;
   foundation::ArtifactRef artifact;
   std::optional<AssetLineage> lineage;
+  std::optional<AssetCategory> category{};
 
   bool operator==(const Asset&) const = default;
 };
@@ -430,6 +463,20 @@ bool is_valid_playback_for_source(
     const PadPlayback& playback,
     std::uint64_t source_frames) noexcept;
 std::optional<Asset> resolve_slot_asset(
+    const ProjectState& state,
+    PadSlotId slot);
+
+// The palette index whose default colour is this category's.
+std::uint8_t pad_colour_index(AssetCategory category) noexcept;
+// Sound Set roles and stem labels map by meaning; `other` and any label
+// without a meaning are unclassified (nullopt).
+std::optional<AssetCategory> soundset_role_category(
+    std::string_view role) noexcept;
+std::optional<AssetCategory> stem_label_category(
+    std::string_view label) noexcept;
+// The one Pad colour rule: the user's override, else the palette index of
+// the Pad's Asset category, else nullopt (the neutral, uncoloured Pad).
+std::optional<std::uint8_t> effective_pad_colour(
     const ProjectState& state,
     PadSlotId slot);
 
