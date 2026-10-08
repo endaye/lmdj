@@ -85,6 +85,7 @@ const API = [
   "inspectPatternTransport",
   "resetPad",
   "deletePad",
+  "setPadColour",
   "retryPrepare",
   "setSamplePreview",
   "sampleAudioClock",
@@ -6997,4 +6998,86 @@ test("slot installation never forwards a replacement policy", async () => {
   assert.equal(installs[0].slot_index, 3);
   await assert.rejects(session.installSoundSetSlot({...request, occupiedPadPolicy: "replace"}), error => error.code === "INVALID_ARGUMENT");
   assert.equal(installs.length, 1);
+});
+
+test("a Pad colour sends a flat slot as Bank and Pad, an index or null, and publishes nothing", async () => {
+  const sent = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation !== "pad.colour.set") {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    sent.push(envelope.payload);
+    const revision = envelope.payload.expected_revision + 1;
+    return success(envelope, {
+      committed_revision: revision, project_revision: revision,
+      replayed: false, publication: "none",
+    });
+  }});
+  await session.start();
+  assert.deepEqual(await session.setPadColour({slot: 18, colour: 2, expectedRevision: 4}),
+    {committedRevision: 5, projectRevision: 5, replayed: false});
+  assert.deepEqual(await session.setPadColour({slot: 18, colour: null, expectedRevision: 5}),
+    {committedRevision: 6, projectRevision: 6, replayed: false});
+  assert.equal(sent.length, 2);
+  for (const payload of sent) assert.match(payload.command_id, /^[0-9a-f-]{36}$/);
+  assert.notEqual(sent[0].command_id, sent[1].command_id);
+  assert.deepEqual(sent.map((payload) => ({...payload, command_id: null})), [
+    {command_id: null, expected_revision: 4, slot: {bank: 1, pad: 2}, colour: 2},
+    {command_id: null, expected_revision: 5, slot: {bank: 1, pad: 2}, colour: null},
+  ]);
+  await session.close();
+});
+
+test("a Pad colour refuses an invalid request before sending and a result that publishes", async () => {
+  const results = [];
+  let sends = 0;
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation !== "pad.colour.set") {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    sends += 1;
+    return success(envelope, results.shift());
+  }});
+  await session.start();
+  await assert.rejects(session.setPadColour({slot: 64, colour: 1, expectedRevision: 0}), RangeError);
+  for (const request of [
+    {slot: 0, colour: 1},
+    {slot: 0, colour: -1, expectedRevision: 0},
+    {slot: 0, colour: 256, expectedRevision: 0},
+    {slot: 0, colour: "drums", expectedRevision: 0},
+    {slot: 0, colour: 1, expectedRevision: -1},
+    {slot: 0, colour: 1, expectedRevision: 0, commandId: "00000000-0000-4000-8000-000000000001"},
+  ]) {
+    await assert.rejects(session.setPadColour(request), TypeError);
+  }
+  assert.equal(sends, 0);
+  const base = {committed_revision: 1, project_revision: 1, replayed: false};
+  for (const result of [
+    {...base, publication: "published"},
+    {...base, publication: "none", runtime_published: true},
+    {...base, project_revision: 2, publication: "none"},
+    {committed_revision: 1, project_revision: 1, publication: "none"},
+  ]) {
+    results.push(result);
+    await assert.rejects(session.setPadColour({slot: 0, colour: 1, expectedRevision: 0}),
+      {code: "HOST_PROTOCOL_MISMATCH"});
+  }
+  assert.equal(sends, 4);
+  await session.close();
+});
+
+test("Project inspection hands each Pad's Core-resolved colour through unchanged", async () => {
+  const pads = [
+    {pad: 0, asset_id: "10000000-0000-4000-8000-000000000001", category: "drums", colour_override: null, colour: 0},
+    {pad: 1, asset_id: "10000000-0000-4000-8000-000000000002", category: "bass", colour_override: 3, colour: 3},
+    {pad: 2, asset_id: "10000000-0000-4000-8000-000000000003", category: null, colour_override: null, colour: null},
+    {pad: 3, asset_id: null, category: null, colour_override: null, colour: null},
+  ];
+  const {session} = fixture({send: async (envelope) => envelope.operation === "project.inspect"
+    ? success(envelope, {project_revision: 7, project: {revision: 7, banks: [{bank: 0, pads}]}})
+    : success(envelope, defaultResult(envelope.operation))});
+  await session.start();
+  const inspected = await session.inspectProject();
+  assert.deepEqual(inspected.project.banks[0].pads, pads);
+  await session.close();
 });

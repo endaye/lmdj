@@ -233,6 +233,22 @@ or `"failed"` with `snapshot_error`), so the next Play loops at the new length.
 A copy, or a resize or double-up of another Pattern, publishes nothing
 (`"none"`). None of them changes a Bank, so a current Runtime stays current.
 
+## Pad colour
+
+`RuntimeSession.setPadColour({slot, colour, expectedRevision})` sends a flat
+slot as `pad.colour.set` through the shared Project action queue; `colour` is a
+palette index, or null to restore the category default. Each Pad of
+`inspectProject()` carries the Core-resolved `category`, `colour_override` and
+`colour` unchanged; the Session never derives a colour.
+
+A colour changes no audio. Control admits it while the Pattern transport plays
+and refuses it before commit, with Truth unchanged, while the transport records
+(`sequence_session_active`) or a transport command is in flight
+(`pattern_transport_busy`), as for a grid edit. It prepares and publishes
+nothing: the playing view keeps its origin and generation, and a Runtime that
+was current before the commit stays current after it. The result is
+`{committed_revision, project_revision, replayed, publication: "none"}`.
+
 ## Performance replay authoring
 
 Edits during a Performance replay follow the

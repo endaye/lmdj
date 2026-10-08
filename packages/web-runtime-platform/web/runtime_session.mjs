@@ -4743,6 +4743,50 @@ function createRuntimeSessionController(options = {}) {
     ));
   }
 
+  // Pad colour (#1207): sets a palette index, or restores the category
+  // default with null. It changes no audio, so it neither waits for nor
+  // causes a Runtime publication; the effective colour is read back from
+  // `inspectProject`, never derived here.
+  function setPadColour(request) {
+    if (
+      !exactKeys(request, ["slot", "colour", "expectedRevision"]) ||
+      !(request.colour === null || isUnsignedInteger(request.colour, 255)) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Pad colour request is invalid"));
+    }
+    let slot;
+    try {
+      slot = flatSlotAddress(request.slot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pad.colour.set", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        slot,
+        colour: request.colour,
+      });
+      if (
+        !exactKeys(value, [
+          "committed_revision", "project_revision", "replayed", "publication",
+        ]) ||
+        !isUnsignedInteger(value.committed_revision) ||
+        value.project_revision !== value.committed_revision ||
+        typeof value.replayed !== "boolean" ||
+        value.publication !== "none"
+      ) {
+        throw protocolMismatch("Pad colour result is invalid");
+      }
+      return Object.freeze({
+        committedRevision: value.committed_revision,
+        projectRevision: value.project_revision,
+        replayed: value.replayed,
+      });
+    });
+  }
+
   function importAssignSample(file, importOptions = {}) {
     const controller = new AbortController();
     const externalSignal = importOptions?.signal;
@@ -5911,6 +5955,7 @@ function createRuntimeSessionController(options = {}) {
     updatePad,
     resetPad,
     deletePad,
+    setPadColour,
     setSamplePreview,
     clearSamplePreview,
     reloadSnapshot,
