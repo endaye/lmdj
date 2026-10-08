@@ -6,6 +6,7 @@ import {
   selectVisiblePads,
   type CreatorState,
 } from "../state/creator_state";
+import {padColourAttribute} from "../state/pad_colour";
 import {padAddress} from "../state/view_model";
 import type {createCreatorInputController} from "../runtime/input_controller";
 
@@ -56,7 +57,10 @@ export function PadSurface({
             type="button"
             className={`pad${onSelectSample !== undefined && selected ? " is-selected" : ""}`}
             aria-pressed={onSelectSample === undefined ? undefined : selected}
-            data-identity={String(pad.slot % 5)}
+            // One effective colour from Project Truth (#1207); null is the
+            // neutral EMPTY outline. Selection is drawn separately (white
+            // border + lime dot) so a BASS Pad never reads as selected.
+            data-pad-colour={padColourAttribute(pad.colour)}
             data-assigned={assigned ? "true" : "false"}
             data-outcome={outcome ?? "idle"}
             disabled={blocked || (onSelectSample !== undefined
@@ -112,6 +116,9 @@ export function PadSurface({
             <strong>{address}</strong>
             <span>{status ?? (capturing ? "Capturing" : assigned ? "Assigned" : "Empty")}</span>
             <kbd aria-hidden="true">{keyboardKey}</kbd>
+            {onSelectSample !== undefined && selected ? (
+              <i className="pad-selected-dot" data-testid="pad-selected-dot" aria-hidden="true" />
+            ) : null}
           </button>
         );
       })}

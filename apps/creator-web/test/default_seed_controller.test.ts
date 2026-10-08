@@ -12,7 +12,7 @@ function fixture() {
   let project: ProjectView = {projectId, patternId: projectId, revision: 0, bpm: 120, assetCount: 0, assignedPadCount: 0, bundleDigest: "a".repeat(64), key: "—",
     patterns: [{patternId: projectId, bars: 1, events: []}], patternSlots: Array<string|null>(16).fill(null),
     sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
-    pads: Array.from({length:64},(_,slot) => ({slot,assetId:null}))};
+    pads: Array.from({length:64},(_,slot) => ({slot, assetId: null, category: null, colourOverride: null, colour: null}))};
   let nextId = 0;
   const acquire = vi.fn(async (_request: {slotIndex: number}) => ({}));
   const commit = vi.fn(async (slot: number, _request?: {commandId: string; expectedRevision: number}, admit?: () => boolean) => {

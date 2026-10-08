@@ -42,6 +42,7 @@ const project = {
     assetId: slot < 16
       ? `${String(slot + 1).padStart(8, "0")}-1111-4111-8111-111111111111`
       : null,
+    category: null, colourOverride: null, colour: null,
   })),
   patterns: [
     {patternId: ids.pattern1, bars: 1 as const, events: []},

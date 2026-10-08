@@ -1,6 +1,8 @@
 import type {
   CreatorRuntimeSession,
   LocalProjectSummary,
+  PadCategory,
+  PadColour,
   ProjectPadView,
   ProjectView,
   TransferProgress,
@@ -80,6 +82,15 @@ function integer(value: unknown, minimum = 0): value is number {
   return Number.isSafeInteger(value) && (value as number) >= minimum;
 }
 
+const PAD_CATEGORIES: readonly PadCategory[] =
+  Object.freeze(["drums", "bass", "melodic", "vocal", "texture"]);
+
+// A palette index the Contract defines (0..4), or null. The Creator reads
+// the effective colour Core resolved and never derives one itself.
+function padColourIndex(value: unknown): value is PadColour | null {
+  return value === null || (integer(value) && value <= 4);
+}
+
 function patternSlotsFor(
   project: Record<string, unknown>,
 ): readonly (string | null)[] {
@@ -145,12 +156,19 @@ function projectView(
       if (!record(pad) || pad.pad !== padIndex ||
           !(pad.asset_id === null ||
             (typeof pad.asset_id === "string" &&
-             UUID_PATTERN.test(pad.asset_id)))) {
+             UUID_PATTERN.test(pad.asset_id))) ||
+          !(pad.category === null ||
+            PAD_CATEGORIES.includes(pad.category as PadCategory)) ||
+          !padColourIndex(pad.colour_override) ||
+          !padColourIndex(pad.colour)) {
         throw protocolMismatch("Project Pad inspection is invalid");
       }
       pads.push({
         slot: bankIndex * 16 + padIndex,
         assetId: pad.asset_id,
+        category: pad.category as PadCategory | null,
+        colourOverride: pad.colour_override,
+        colour: pad.colour,
       });
     }
   }

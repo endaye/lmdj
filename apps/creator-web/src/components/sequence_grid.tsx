@@ -1,6 +1,8 @@
 import {useEffect, useRef, useState} from "react";
 
+import type {PadColour} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
+import {padColourAttribute} from "../state/pad_colour";
 import {slotAddress} from "../state/view_model";
 import {
   createSequenceGridModel,
@@ -46,6 +48,9 @@ interface SequenceGridProps {
   onEdit(edit: SequenceGridEdit): void;
   onSelectionChange(selection: readonly SequenceGridEventKey[]): void;
   onVelocityChange(velocity: number): void;
+  // The effective Pad colour from Project Truth for a flat slot (#1207);
+  // absent or null draws the neutral note.
+  padColour?: (slot: number) => PadColour | null;
 }
 
 interface GridRect {
@@ -517,7 +522,9 @@ export function SequenceGrid(props: SequenceGridProps) {
           onPointerUp={bodyPointerUp}
         >
           {displayRows.map((row) => (
-            <div className="sequence-grid-row" data-pad={row.pad} key={row.pad}>
+            // The row carries the Pad colour; its label and notes inherit it.
+            <div className="sequence-grid-row" data-pad={row.pad} key={row.pad}
+              data-pad-colour={padColourAttribute(props.padColour?.(bank * 16 + row.pad) ?? null)}>
               <span className="sequence-grid-pad">{slotAddress(bank * 16 + row.pad)}</span>
               <div
                 className="sequence-grid-lane"

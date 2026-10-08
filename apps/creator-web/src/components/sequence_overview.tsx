@@ -20,6 +20,7 @@ import {
   type SequenceGridViewport,
 } from "../state/sequence_grid_model";
 import type {PatternTransportState} from "../state/pattern_transport_state";
+import {padColourAttribute, padColourOf} from "../state/pad_colour";
 import {bankName, slotAddress} from "../state/view_model";
 import {transportStatusLabel} from "./transport_status";
 import {usePatternPlayheadTick} from "./use_pattern_playhead";
@@ -152,7 +153,12 @@ export function SequenceOverview({
       {overview !== null ? (
         <div className="sequence-overview-rows">
           <ol className="sequence-overview-names" aria-hidden="true">
-            {overview.rows.map((row) => <li key={row}>{slotAddress(row)}</li>)}
+            {overview.rows.map((row) => (
+              <li key={row} data-row={row}
+                data-pad-colour={padColourAttribute(padColourOf(project, row))}>
+                {slotAddress(row)}
+              </li>
+            ))}
           </ol>
           <svg
             className="sequence-overview-steps"
@@ -168,6 +174,7 @@ export function SequenceOverview({
                 className="sequence-overview-note"
                 data-testid="sequence-overview-note"
                 data-row={note.row}
+                data-pad-colour={padColourAttribute(padColourOf(project, note.row))}
                 data-onset-tick={note.onsetTick}
                 data-duration-tick={note.durationTick}
                 data-velocity={note.velocity}

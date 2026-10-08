@@ -744,7 +744,9 @@ export function selectVisiblePads(
   );
   return Object.freeze(Array.from({length: 16}, (_, index) => {
     const slot = firstSlot + index;
-    return source.get(slot) ?? {slot, assetId: null};
+    return source.get(slot) ?? {
+      slot, assetId: null, category: null, colourOverride: null, colour: null,
+    };
   }));
 }
 

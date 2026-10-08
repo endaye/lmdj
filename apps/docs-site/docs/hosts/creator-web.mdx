@@ -25,6 +25,8 @@ source_paths:
   - docs/prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md
   - docs/prd/decisions/2026-08-24-capture-input-gate-and-identity.md
   - docs/prd/decisions/2026-10-07-pad-colour-source.md
+  - docs/prd/decisions/2026-10-08-pad-colour-defaults-and-retention.md
+  - docs/plans/2026-10-08-pad-colour-contract-core.md
   - docs/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md
   - scripts/creator-web.sh
   - scripts/creator-web-deploy.sh
@@ -454,11 +456,14 @@ Each of these failures is recorded in Developer diagnostics.
 
 ## Sequence Pattern grid editing
 
-### Pad colour decision — implementation pending
+### Pad colour
 
-<StatusBadge status="designed" /> The owner confirmed the [Pad colour rule](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-pad-colour-source.md) on 2026-10-07 (#1821): category supplies the default and the user can override it with any of five palette colours — DRUMS `#F3B580`, BASS `#DFF779`, MELODIC `#B49DE8`, VOCAL `#94D2DC`, TEXTURE `#E6ED98`. The override is Pad authoring state in Project Truth, stored as a stable palette index, retained across re-separation and save/reopen, and cleared by restore-category-default. The Pad matrix border, overview lane and touch-grid notes share the effective colour; a white border plus a lime dot distinguishes a selected Pad from the BASS colour.
+<StatusBadge status="implemented" /> Desktop Final T7 implements the owner's [Pad colour rule](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-pad-colour-source.md) (#1821) and its [defaults and retention](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-08-pad-colour-defaults-and-retention.md) on top of the Project 5.3.0 Pad colour fields.
 
-This is approved behaviour awaiting implementation. The current Creator still rotates colours by Pad Slot; no category or colour override has been added to the Project Contract. A separate Contract/Core plan must define migration, unclassified/empty defaults, stem-category mapping, Pad matching/retention and Facade/Host projection before Desktop Final T7 implements the controls and common rendering. The planned persistence and re-separation journeys have not run.
+- **One colour, from Truth.** Each Pad's colour is the `colour` palette index that `project.inspect` returns, which Core resolves as the user's override, else the Asset category's default, else none. The Creator never recomputes it. The Pad matrix outline, the Sequence overview's track name and notes, and the touch grid's row label and notes all draw that one index: DRUMS `#F3B580`, BASS `#DFF779`, MELODIC `#B49DE8`, VOCAL `#94D2DC`, TEXTURE `#E6ED98`. An unclassified or empty Pad is neutral (the EMPTY grey outline, grey notes). The old rotation by Pad Slot is gone.
+- **Selection is not a colour.** The selected Pad on the Sample page has a white border and a lime dot, and keeps `aria-pressed`, so a BASS Pad never reads as selected.
+- **Choosing a colour.** Under the Sample editor, PAD COLOUR offers the five colours and "Restore category default" for the selected Pad. It shows whether the Pad follows its category or carries a custom colour. A colour sends `pad.colour.set` with that index; restore sends `null`. Choosing the override already stored, or restoring a Pad with no override, sends nothing. The controls are disabled for an empty Pad, while recording or while the transport settles, and while another Project change or parameter edit is pending. They stay available while playing, because the change makes no sound. After a commit, the Creator re-reads the Project view from Truth, and Undo/Redo shows "Set Pad colour".
+- **Retention.** The override follows the Pad across asset changes and Sound Set `replace` installs, survives save and reopen, and is cleared when the Pad is deleted or restored. Stem separation does not reach Pads yet, so a Sound Set re-install stands in for re-separation in the packaged browser journey (`creator_web_soundset.spec.mjs`).
 
 ### Current grid behaviour
 

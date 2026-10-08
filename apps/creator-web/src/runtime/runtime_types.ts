@@ -8,9 +8,21 @@ export interface LocalProjectSummary {
   bundleDigest: string;
 }
 
+// lmdj.project.v5 5.3.0 Pad colour (#1207). The palette index order is the
+// Contract's and never changes: 0 DRUMS, 1 BASS, 2 MELODIC, 3 VOCAL,
+// 4 TEXTURE. Core resolves the effective colour; the Creator only draws it.
+export type PadColour = 0 | 1 | 2 | 3 | 4;
+export type PadCategory = "drums" | "bass" | "melodic" | "vocal" | "texture";
+
 export interface ProjectPadView {
   slot: number;
   assetId: string | null;
+  // The Pad's Asset category, or null when unclassified or empty.
+  category: PadCategory | null;
+  // The user's palette override, or null when the Pad follows its category.
+  colourOverride: PadColour | null;
+  // The effective colour `project.inspect` resolved, or null (neutral).
+  colour: PadColour | null;
 }
 
 // The lmdj.project.v5 `pattern_event` shape the Facade emits for every
@@ -347,6 +359,22 @@ export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   stopAll(): Promise<boolean>;
   retryPrepare(patternId: string): Promise<SnapshotPublication>;
   subscribeVoiceState(listener: (event: RuntimeVoiceState) => void): () => void;
+}
+
+// `pad.colour.set` (#1207): a palette index, or null to restore the category
+// default. It changes no audio and publishes nothing.
+export interface PadColourCommit {
+  committedRevision: number;
+  projectRevision: number;
+  replayed: boolean;
+}
+
+export interface CreatorPadColourRuntimeSession extends CreatorRuntimeSession {
+  setPadColour(request: Readonly<{
+    slot: number;
+    colour: PadColour | null;
+    expectedRevision: number;
+  }>): Promise<Readonly<PadColourCommit>>;
 }
 
 export interface CreatorPerformanceRuntimeSession

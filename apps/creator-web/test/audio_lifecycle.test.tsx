@@ -65,6 +65,7 @@ function inspectResult() {
           asset_id: bank === 0 && pad === 0
             ? "33333333-3333-4333-8333-333333333333"
             : null,
+          category: null, colour_override: null, colour: null,
         })),
       })),
       patterns: {[summary.patternId]: {bars: 1, events: []}},

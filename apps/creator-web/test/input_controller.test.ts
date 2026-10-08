@@ -85,6 +85,7 @@ function fixture() {
         pads: Array.from({length: 64}, (_, slot) => ({
           slot,
           assetId: `asset-${slot}`,
+          category: null, colourOverride: null, colour: null,
         })),
         patterns: [{
           patternId: "22222222-2222-4222-8222-222222222222",

@@ -20,7 +20,7 @@ import {
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
 import {DiagnosticsProvider} from "./runtime/diagnostics_context";
-import {PUBLIC_ERROR_CODES, sampleMessage} from "./state/error_messages";
+import {PUBLIC_ERROR_CODES, sampleMessage, userMessage} from "./state/error_messages";
 import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
 import {
   TakenOverPanel,
@@ -33,6 +33,7 @@ import {
 } from "./components/hardware_console";
 import type {CreatorMode} from "./components/creator_mode";
 import {OverviewDisplay} from "./components/overview_display";
+import {PadColourControls} from "./components/pad_colour_controls";
 import {PadSurface} from "./components/pad_surface";
 import {PhysicalControls} from "./components/physical_controls";
 import {PerformSurface} from "./components/perform_surface";
@@ -94,11 +95,13 @@ import {
 import type {PatternTransportIntent} from
   "@lmdj/web-runtime-platform/runtime_types";
 import type {
+  CreatorPadColourRuntimeSession,
   CreatorPatternLengthRuntimeSession,
   CreatorRuntimeSession,
   CreatorPerformanceRuntimeSession,
   CreatorSampleRuntimeSession,
   LocalProjectSummary,
+  PadColour,
   PatternEventsEditMutation,
   RuntimeSessionFactory,
   TypedRuntimeError,
@@ -252,6 +255,13 @@ function isSampleSession(
     typeof candidate.subscribeVoiceState === "function";
 }
 
+function isPadColourSession(
+  session: CreatorRuntimeSession | undefined,
+): session is CreatorPadColourRuntimeSession {
+  return typeof (session as Partial<CreatorPadColourRuntimeSession> | undefined)
+    ?.setPadColour === "function";
+}
+
 function isDefaultSeedSession(session: CreatorRuntimeSession | undefined):
   session is CreatorSlotSoundSetRuntimeSession & CreatorSampleRuntimeSession {
   const candidate = session as Partial<CreatorSlotSoundSetRuntimeSession> | undefined;
@@ -337,6 +347,10 @@ function Workspace({
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [padColourBusy, setPadColourBusy] = useState(false);
+  // A refusal belongs to the Pad it was made on, so it is not shown under
+  // another Pad's controls after the selection moves.
+  const [padColourError, setPadColourError] = useState<{slot: number; message: string} | null>(null);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
   // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
   // history chord or by any other rail action.
@@ -2288,6 +2302,58 @@ function Workspace({
     }),
   );
 
+  // Pad colour (#1207) changes no audio, so it is admitted while playing and
+  // refused while recording. It queues behind grid and settings edits on the
+  // Sequence authoring tail, names the revision of the Project view it was
+  // chosen against, then re-reads the Project view from Truth as a grid edit
+  // does; the colour drawn is the one Core resolved. An unchanged choice
+  // makes no call, because Core would refuse it as unchanged.
+  const setPadColour = (slot: number, colour: PadColour | null): Promise<void> => {
+    const operation = sequenceAuthoringTail.current.then(async () => {
+      const project = stateRef.current.project.current;
+      if (!isPadColourSession(session) || project === null) return;
+      const currentTransport = transportRef.current;
+      if (selectTransportRecording(currentTransport) ||
+          selectTransportBusy(currentTransport)) return;
+      const pad = project.pads.find((candidate) => candidate.slot === slot);
+      if (pad === undefined || pad.assetId === null || pad.colourOverride === colour) return;
+      setPadColourBusy(true);
+      setPadColourError(null);
+      try {
+        // Like every operation on this tail, name the revision the previous
+        // queued commit left, not the rendered view's: a commit just before
+        // this one may not have re-rendered yet.
+        const result = await session.setPadColour({
+          slot,
+          colour,
+          expectedRevision: sequenceAuthoringRevision.current,
+        });
+        sequenceAuthoringRevision.current = result.committedRevision;
+        dispatchTransport({type: "revision", revision: result.committedRevision});
+        try {
+          await refreshPerformProject();
+        } catch {
+          dispatch({
+            type: "project-revision-updated",
+            revision: result.committedRevision,
+          });
+        }
+      } catch (error) {
+        const code = reportFailure("Set Pad colour", error);
+        setPadColourError({slot, message: userMessage(code, errorDetails(error)).message});
+        try {
+          await refreshPerformProject();
+        } catch (refreshError) {
+          reportFailure("Restore Pad colour projection", refreshError);
+        }
+      } finally {
+        setPadColourBusy(false);
+      }
+    });
+    sequenceAuthoringTail.current = operation;
+    return operation;
+  };
+
   const capturePhaseChanged = useCallback((phase: CapturePhase) => {
     setCapturePhase(phase);
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
@@ -2432,6 +2498,19 @@ function Workspace({
   // Tempo and Swing lock while recording or while a transport command
   // settles, as the touch controls do; a turn in progress is dropped.
   const sequenceSettingsLocked = transportBusy || recording;
+  // Core refuses a Pad colour change while recording or while the transport
+  // settles; playing is fine. A pending Project change would leave the
+  // controls naming a stale revision.
+  const padColourDisabledReason = recording
+    ? "Stop recording to change the Pad colour."
+    : transportBusy ? "Wait for the transport to settle."
+    : state.project.phase !== "ready" || state.runtime.phase !== "ready"
+      ? "Open a Project to choose a Pad colour."
+    : padColourBusy || state.projectProjectionRefresh !== null ||
+        state.sample.pendingAction !== null || state.transfer.phase !== "idle"
+      ? "Wait for the current Project change to finish."
+    : state.sample.draft !== null ? "Finish the parameter edit first."
+    : null;
   useEffect(() => {
     if (!sequenceSettingsLocked) return;
     tempoTurn.current?.cancel();
@@ -2908,7 +2987,10 @@ function Workspace({
                   activeBank={state.activeBank}
                   onInstalled={(revision) => {
                     dispatch({type: "project-revision-updated", revision});
-                    void refreshPerformProject().catch(() => {});
+                    // The re-read's token must name the committed revision
+                    // just dispatched, not the older one the ref still holds,
+                    // or the reducer drops the refreshed view (#1905).
+                    void refreshPerformProject(revision).catch(() => {});
                   }}
                 />
               ) : (
@@ -2955,6 +3037,26 @@ function Workspace({
                   {...(isSampleSession(session) ? {session} : {})}
                 />
               </div>
+              ) : null}
+              {/* The selected Pad's colour sits under the Sample editor: Sample
+                  is the page that owns Pad selection (D03 names "A03 / BASS"),
+                  and no Desktop Final frame draws a colour control. */}
+              {activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
+                state.project.current !== null ? (
+                <PadColourControls
+                  pad={state.sample.selectedSlot === null
+                    ? null
+                    : state.project.current.pads.find(
+                      ({slot}) => slot === state.sample.selectedSlot) ?? null}
+                  disabledReason={padColourDisabledReason}
+                  error={padColourError !== null && padColourError.slot === state.sample.selectedSlot
+                    ? padColourError.message
+                    : null}
+                  onChoose={(colour) => {
+                    const slot = state.sample.selectedSlot;
+                    if (slot !== null) void setPadColour(slot, colour);
+                  }}
+                />
               ) : null}
               </div>
               {recoveryOffer !== null &&
