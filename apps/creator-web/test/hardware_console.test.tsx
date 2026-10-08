@@ -5,7 +5,7 @@ import {fireEvent} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
-import {HardwareConsole} from "../src/components/hardware_console";
+import {HardwareConsole, fitConsoleToStage} from "../src/components/hardware_console";
 import {PhysicalControls} from "../src/components/physical_controls";
 
 test("overview contains no action while touch workspace remains actionable", () => {
@@ -272,4 +272,28 @@ test("without SHIFT the arrows take the page's step; with SHIFT they are Undo / 
   expect(history.onUndo).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("button", {name: "Pattern forward — →"})).toBeNull();
   expect(onBack).not.toHaveBeenCalled();
+});
+
+test("the console scales proportionally to fit the stage and centres itself", () => {
+  const console = {width: 880, height: 640};
+  // A tall stage is limited by width, a wide one by height; both centre.
+  expect(fitConsoleToStage({width: 1440, height: 1280}, console, false))
+    .toEqual({scale: 1440 / 880, dx: 0, dy: (1280 - 640 * 1440 / 880) / 2, rotate: false});
+  expect(fitConsoleToStage({width: 1440, height: 800}, console, false))
+    .toEqual({scale: 1.25, dx: (1440 - 1100) / 2, dy: 0, rotate: false});
+  // A short window shrinks the console instead of scrolling it.
+  expect(fitConsoleToStage({width: 768, height: 512}, console, false))
+    .toEqual({scale: 0.8, dx: (768 - 704) / 2, dy: 0, rotate: false});
+});
+
+test("a narrow portrait stage turns the console and never enlarges it", () => {
+  const console = {width: 880, height: 640};
+  expect(fitConsoleToStage({width: 390, height: 700}, console, true))
+    .toEqual({scale: 390 / 640, dx: 0, dy: (700 + 880 * 390 / 640) / 2, rotate: true});
+  expect(fitConsoleToStage({width: 900, height: 2000}, console, true)?.scale).toBe(1);
+});
+
+test("an unmeasured stage or console is not fitted", () => {
+  expect(fitConsoleToStage({width: 0, height: 600}, {width: 880, height: 640}, false)).toBeNull();
+  expect(fitConsoleToStage({width: 800, height: 600}, {width: 0, height: 0}, false)).toBeNull();
 });

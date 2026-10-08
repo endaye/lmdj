@@ -13,6 +13,7 @@ import {CREATOR_SOUND_SET_CATALOG_PATH} from
   "../../../products/lmdj/creator-defaults.mjs";
 
 import {App} from "./app";
+import {fitConsoleToStage} from "./components/hardware_console";
 import {createRetainedAudioContext} from "./runtime/audio_clock";
 import {registerOfflineShell} from "./runtime/offline_shell";
 import {
@@ -140,12 +141,12 @@ if (identitySlot !== null) {
     `v${buildIdentity.productBuild} · creator-web ${buildIdentity.hostVersion}`;
 }
 
-// Narrow-portrait stage fit. styles.css rotates the workspace 90° under
-// (max-width: 959px) and (orientation: portrait); this measures the stage
-// (#root, the flex item between header and footer) and sizes/scales the
-// workspace so the fixed 880×592 console fits -- CSS cannot divide two
-// lengths, so the scale is computed here. Outside the media query every
-// inline value is cleared and the desktop layout is untouched.
+// Stage fit (Desktop Final T2). The console scales proportionally to fill
+// the stage (#root, the flex item between header and footer) and centres
+// itself; under (max-width: 959px) and (orientation: portrait) it is also
+// turned 90° so the device reads as landscape. styles.css pins the workspace
+// to the stage's top-left corner; CSS cannot divide two lengths, so the
+// scale is computed here and applied about that corner.
 const stagePortrait = window.matchMedia(
   "(max-width: 959px) and (orientation: portrait)",
 );
@@ -158,29 +159,21 @@ function fitStage(): void {
   workspace.style.height = "";
   workspace.style.transform = "";
   workspace.style.transformOrigin = "";
-  if (!stagePortrait.matches) return;
   const stage = workspace.parentElement;
   if (stage === null) return;
   const naturalWidth = workspace.scrollWidth;
   const naturalHeight = workspace.scrollHeight;
-  if (naturalWidth === 0 || naturalHeight === 0) return;
-  // rotate(-90deg) swaps the axes: the workspace's height spans the stage's
-  // width and vice versa. CSS cannot divide two lengths, so the fit scale is
-  // computed here. The workspace is pinned to the stage's top-left corner
-  // (place-items: start in the media query) and transformed about that
-  // corner, because grid centering of an overflowing item is unreliable.
-  const scale = Math.min(
-    stage.clientWidth / naturalHeight,
-    stage.clientHeight / naturalWidth,
-    1,
+  const fit = fitConsoleToStage(
+    {width: stage.clientWidth, height: stage.clientHeight},
+    {width: naturalWidth, height: naturalHeight},
+    stagePortrait.matches,
   );
-  const dx = (stage.clientWidth - naturalHeight * scale) / 2;
-  const dy = (stage.clientHeight + naturalWidth * scale) / 2;
+  if (fit === null) return;
   workspace.style.width = `${naturalWidth}px`;
   workspace.style.height = `${naturalHeight}px`;
   workspace.style.transformOrigin = "0 0";
-  workspace.style.transform =
-    `translate(${dx}px, ${dy}px) rotate(-90deg) scale(${scale})`;
+  workspace.style.transform = `translate(${fit.dx}px, ${fit.dy}px)${
+    fit.rotate ? " rotate(-90deg)" : ""} scale(${fit.scale})`;
 }
 stagePortrait.addEventListener("change", fitStage);
 window.addEventListener("resize", fitStage);

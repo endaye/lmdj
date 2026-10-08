@@ -44,9 +44,9 @@ body {
   margin: 0;
   min-width: 768px;
   /* The page is exactly one viewport, always: no document scroll and no
-     rubber-band overscroll, so the shell feels like a native app. Content
-     that cannot fit scrolls inside the stage (.hardware-workspace keeps
-     overflow: auto), which the hardware_layout 768×600 leg exercises. */
+     rubber-band overscroll, so the shell feels like a native app. The
+     console scales to fit the stage instead of scrolling (Desktop Final T2;
+     see the stage fit below and in main.tsx). */
   height: 100dvh;
   overflow: hidden;
   display: flex;
@@ -763,13 +763,10 @@ button:disabled { color: #737b87; }
 .candidate-surface .candidate-classification { display: flex; align-items: center; gap: .6rem; }
 
 .hardware-workspace {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  /* The console frame centres itself with auto margins (see
-     .creator-console-frame). Auto margins, not grid/justify-content
-     centering: on an overflowing stage they collapse to 0, so a short
-     viewport keeps the console's top edge reachable instead of clipping it. */
+  /* Sized to the console and scaled to the stage by the stage fit below;
+     nothing inside it scrolls. */
+  flex: none;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   color: #e8eadf;
@@ -1697,12 +1694,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 
 .creator-console-frame {
   min-width: 0;
-  /* The device floats in the middle of the stage on both axes whenever the
-     stage has spare room. flex: none keeps the frame at console size on a
-     short stage, where the auto margins collapse to 0 and the workspace
-     scrolls from the top (the hardware_layout 768×600 leg). The console's
-     own 24px vertical margins are symmetric, so the device's visual centre
-     stays the frame's centre. */
+  /* flex: none keeps the frame at console size; the stage fit centres the
+     workspace around it. The console's own 24px vertical margins are
+     symmetric, so the device's visual centre stays the frame's centre. */
   flex: none;
   margin: auto;
 }
@@ -1725,26 +1719,22 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 
 
-/* Narrow portrait stage: the console keeps its fixed 880×592 hardware
-   geometry, so a portrait phone shows the stage rotated 90°
-   counter-clockwise -- the device reads as landscape while the header and
-   footer stay upright. The media query only pins the stage; main.tsx
-   measures it and sets the workspace's width/height/transform, because CSS
-   cannot divide two lengths to derive the fit scale. The transform makes
-   the workspace the containing block for the fixed dialogs inside it, so
-   modals stay centred in the rotated stage. Landscape and desktop never
-   match: the hardware_layout journey's 768×600 leg must keep the unrotated,
-   scrollable stage it asserts. */
+/* Stage fit (Desktop Final T2, START HERE): the console keeps its fixed
+   880×592 hardware geometry and scales proportionally to fill the stage,
+   centred, at any window size. These rules pin the workspace to the stage's
+   top-left corner; main.tsx measures the stage and sets the workspace's
+   width/height/transform, because CSS cannot divide two lengths to derive the
+   fit scale. A narrow portrait stage is also turned 90° counter-clockwise so
+   the device reads as landscape while the header and footer stay upright.
+   The transform makes the workspace the containing block for the fixed
+   backdrops inside it; modal dialogs render in the top layer, so they stay
+   viewport-centred. */
+#root:has(.hardware-workspace) {
+  display: grid;
+  place-items: start;
+  overflow: hidden;
+  min-height: 0;
+}
 @media (max-width: 959px) and (orientation: portrait) {
   body { min-width: 0; }
-  #root {
-    display: grid;
-    place-items: start;
-    overflow: hidden;
-    min-height: 0;
-  }
-  .hardware-workspace {
-    flex: none;
-    overflow: hidden;
-  }
 }
