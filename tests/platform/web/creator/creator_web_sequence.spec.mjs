@@ -8,6 +8,7 @@ import {
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
+import {openPerform} from "./fixtures/perform_helpers.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -985,4 +986,206 @@ test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns wh
   await physicalKey(page, /^SHIFT/).click();
   await physicalKey(page, "Undo — SHIFT + ←").click();
   await expect.poll(() => undoCount(page), {timeout: 30_000}).toBe(undoBeforeShift - 1);
+});
+
+// Pattern Truth orders events canonically; compare the set by (bank, pad,
+// onset) so the fact is the events, not their storage order.
+function canonicalEvents(events) {
+  return [...events].sort((left, right) =>
+    left.slot.bank - right.slot.bank || left.slot.pad - right.slot.pad ||
+    left.onset_tick - right.onset_tick);
+}
+
+// Authors notes straight into Truth, then reopens so every view and the
+// app's authoring revision start from that Truth. The SETUP controls under
+// test never author notes, so this only arranges the journey's input.
+async function putPatternEventsAndReopen(page, patternId, put) {
+  const revision = (await inspectTruth(page)).revision;
+  const response = await page.evaluate((request) =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "pattern.events.edit",
+      payload: {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.revision,
+        pattern_id: request.patternId,
+        remove: [],
+        put: request.put,
+      },
+    }), {patternId, put, revision});
+  expect(response.ok, JSON.stringify(response)).toBe(true);
+  await reopenProject(page);
+}
+
+// Sequence page, the given Pattern selected, SETUP layer showing.
+async function showPatternSetup(page, patternId) {
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await selectSequencePattern(page, patternId);
+  await showSequenceLayer(page, "SETUP");
+}
+
+const lengthButton = (page, bars) =>
+  page.getByRole("button", {name: `Length ${bars} bars`, exact: true});
+const historyStatus = (page) => page.getByTestId("authoring-history-status");
+
+async function undoWithShift(page) {
+  await physicalKey(page, /^SHIFT/).click();
+  await physicalKey(page, "Undo — SHIFT + ←").click();
+}
+
+// #1823 (Desktop Final T8): SETUP's BARS, DOUBLE UP and COPY. Each leg is one
+// commit and one Undo entry, asserted on Truth.
+test("SETUP changes, doubles and copies a Pattern, undoes exactly, and reopens with the final Truth", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await page.goto("/index.html");
+  await importProject(page);
+  await enterSequenceAndPlay(page);
+  const first = await selectedSequencePatternId(page);
+  const patternCount = Number(await sequencePattern(page).getAttribute("data-pattern-count"));
+  await createSequencePattern(page, 1);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-count", String(patternCount + 1), {timeout: 30_000});
+  // Creation lists the Pattern before it selects it; wait for the selection.
+  await expect(sequencePattern(page)).not.toHaveAttribute("data-pattern-id", first);
+  const patternId = await selectedSequencePatternId(page);
+  expect((await inspectTruth(page)).patterns[patternId].bars).toBe(1);
+
+  const barOne = [
+    {slot: {bank: 0, pad: 0}, onset_tick: 0, duration_tick: 240, velocity: 100},
+    {slot: {bank: 0, pad: 1}, onset_tick: 1_920, duration_tick: 240, velocity: 90},
+  ];
+  await putPatternEventsAndReopen(page, patternId, barOne);
+  await showPatternSetup(page, patternId);
+  await expect(lengthButton(page, 1)).toHaveAttribute("aria-pressed", "true");
+
+  // Leg 1 — a 1-bar Pattern with notes in bar 1 becomes 2 bars; bar 2 is
+  // empty because every note keeps its onset.
+  let before = await inspectTruth(page);
+  let undoBefore = await undoCount(page);
+  await lengthButton(page, 2).click();
+  await expect.poll(async () => (await inspectTruth(page)).patterns[patternId].bars,
+    {timeout: 30_000}).toBe(2);
+  let truth = await inspectTruth(page);
+  expect(truth.revision).toBe(before.revision + 1);
+  expect(canonicalEvents(truth.patterns[patternId].events)).toEqual(canonicalEvents(barOne));
+  expect(truth.patterns[patternId].events.every(({onset_tick}) => onset_tick < 3_840))
+    .toBe(true);
+  expect(await undoCount(page)).toBe(undoBefore + 1);
+  await expect(historyStatus(page)).toHaveText("Undo: Change Pattern Length");
+  await expect(lengthButton(page, 2)).toHaveAttribute("aria-pressed", "true");
+
+  // A note crossing the 1-bar seam, so shortening later has one to cut.
+  const crossing = {slot: {bank: 0, pad: 2}, onset_tick: 3_600, duration_tick: 480, velocity: 110};
+  await putPatternEventsAndReopen(page, patternId, [crossing]);
+  await showPatternSetup(page, patternId);
+  await expect(lengthButton(page, 2)).toHaveAttribute("aria-pressed", "true");
+  const twoBar = canonicalEvents([...barOne, crossing]);
+  expect(canonicalEvents((await inspectTruth(page)).patterns[patternId].events)).toEqual(twoBar);
+
+  // Leg 2 — DOUBLE UP to 4 bars repeats every note one 2-bar length later,
+  // so bar 1's notes sound again at bar 3.
+  before = await inspectTruth(page);
+  undoBefore = await undoCount(page);
+  await page.getByRole("button", {name: "Double Up Pattern", exact: true}).click();
+  await expect.poll(async () => (await inspectTruth(page)).patterns[patternId].bars,
+    {timeout: 30_000}).toBe(4);
+  truth = await inspectTruth(page);
+  expect(truth.revision).toBe(before.revision + 1);
+  expect(canonicalEvents(truth.patterns[patternId].events)).toEqual(canonicalEvents([
+    ...twoBar,
+    ...twoBar.map((event) => ({...event, onset_tick: event.onset_tick + 7_680})),
+  ]));
+  expect(await undoCount(page)).toBe(undoBefore + 1);
+  await expect(historyStatus(page)).toHaveText("Undo: Double Up Pattern");
+  const fourBarPattern = truth.patterns[patternId];
+
+  // Leg 3 — shortening to 1 bar removes every later note and cuts the
+  // crossing note to the new end.
+  before = truth;
+  undoBefore = await undoCount(page);
+  await lengthButton(page, 1).click();
+  await expect.poll(async () => (await inspectTruth(page)).patterns[patternId].bars,
+    {timeout: 30_000}).toBe(1);
+  truth = await inspectTruth(page);
+  expect(truth.revision).toBe(before.revision + 1);
+  expect(canonicalEvents(truth.patterns[patternId].events)).toEqual(canonicalEvents([
+    ...barOne,
+    {...crossing, duration_tick: 240},
+  ]));
+  expect(await undoCount(page)).toBe(undoBefore + 1);
+  await expect(historyStatus(page)).toHaveText("Undo: Change Pattern Length");
+
+  // Leg 4 — Undo restores the 4-bar Pattern exactly, notes included.
+  undoBefore = await undoCount(page);
+  await undoWithShift(page);
+  await expect.poll(() => undoCount(page), {timeout: 30_000}).toBe(undoBefore - 1);
+  truth = await inspectTruth(page);
+  expect(truth.patterns[patternId]).toEqual(fourBarPattern);
+  await expect(lengthButton(page, 4)).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+
+  // Put the Pattern in an empty Perform slot that has an empty slot after it.
+  const slots = truth.pattern_slots;
+  const sourceSlot = slots.findIndex((value, index) =>
+    value === null && slots.slice(index + 1).includes(null));
+  expect(sourceSlot).toBeGreaterThanOrEqual(0);
+  const copySlot = slots.findIndex((value, index) => index > sourceSlot && value === null);
+  await openPerform(page);
+  before = await inspectTruth(page);
+  await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
+  await page.getByRole("combobox", {name: "Pattern slot", exact: true})
+    .selectOption(String(sourceSlot));
+  await page.getByRole("button", {name: "Assign Pattern"}).click();
+  await expect.poll(async () => (await inspectTruth(page)).pattern_slots[sourceSlot],
+    {timeout: 30_000}).toBe(patternId);
+  await showPatternSetup(page, patternId);
+
+  // Leg 5 — COPY of a slotted Pattern creates a copy with equal length and
+  // notes in the next empty slot, and selects it.
+  before = await inspectTruth(page);
+  undoBefore = await undoCount(page);
+  await page.getByRole("button", {name: "Copy Pattern", exact: true}).click();
+  await expect.poll(async () => Object.keys((await inspectTruth(page)).patterns).length,
+    {timeout: 30_000}).toBe(Object.keys(before.patterns).length + 1);
+  truth = await inspectTruth(page);
+  const copyId = Object.keys(truth.patterns).find((id) => !(id in before.patterns));
+  expect(truth.revision).toBe(before.revision + 1);
+  expect(truth.patterns[copyId].bars).toBe(fourBarPattern.bars);
+  expect(canonicalEvents(truth.patterns[copyId].events))
+    .toEqual(canonicalEvents(fourBarPattern.events));
+  expect(truth.patterns[patternId]).toEqual(fourBarPattern);
+  expect(truth.pattern_slots[sourceSlot]).toBe(patternId);
+  expect(truth.pattern_slots[copySlot]).toBe(copyId);
+  expect(truth.pattern_slots.filter((value) => value === copyId)).toHaveLength(1);
+  expect(await undoCount(page)).toBe(undoBefore + 1);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", copyId,
+    {timeout: 30_000});
+  await expect(historyStatus(page)).toHaveText("Undo: Copy Pattern");
+
+  // Leg 6 — Undo removes the copy and frees its slot; the source keeps its
+  // slot and content.
+  undoBefore = await undoCount(page);
+  await undoWithShift(page);
+  await expect.poll(() => undoCount(page), {timeout: 30_000}).toBe(undoBefore - 1);
+  truth = await inspectTruth(page);
+  expect(truth.patterns[copyId]).toBeUndefined();
+  expect(truth.pattern_slots[copySlot]).toBeNull();
+  expect(truth.pattern_slots[sourceSlot]).toBe(patternId);
+  expect(truth.patterns[patternId]).toEqual(fourBarPattern);
+  expect(truth.pattern_slots).toEqual(before.pattern_slots);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-count", String(Object.keys(truth.patterns).length),
+      {timeout: 30_000});
+
+  // Leg 7 — a reload keeps the final Truth, and SETUP reads its length back.
+  const final = truth;
+  await reopenProject(page);
+  const reopened = await inspectTruth(page);
+  expect(reopened.revision).toBe(final.revision);
+  expect(reopened.patterns).toEqual(final.patterns);
+  expect(reopened.pattern_slots).toEqual(final.pattern_slots);
+  await showPatternSetup(page, patternId);
+  await expect(lengthButton(page, 4)).toHaveAttribute("aria-pressed", "true");
 });

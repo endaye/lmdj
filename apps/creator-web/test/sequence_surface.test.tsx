@@ -41,6 +41,7 @@ function renderSurface(recovery = false, options: {
   const callbacks = {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
+    onResizePattern: vi.fn(), onDoubleUpPattern: vi.fn(), onCopyPattern: vi.fn(),
     onToggleMetronome: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
     onSnapChange: vi.fn(), onViewportChange: vi.fn(),
@@ -399,9 +400,9 @@ test("EDIT is the default layer and SETUP swaps the grid for the settings", () =
   openSetup();
   expect(within(sequence).queryByTestId("sequence-grid")).toBeNull();
   expect(within(sequence).getByRole("region", {name: "Sequence settings"})).toBeTruthy();
-  // BARS is the current Pattern's length, not the new-Pattern choice.
-  expect(within(sequence).getByRole("group", {name: "Pattern length"}).textContent)
-    .toBe("BARS1");
+  // BARS shows the selected Pattern's length, not the new-Pattern choice.
+  expect(within(sequence).getByRole("button", {name: "Length 1 bars"})
+    .getAttribute("aria-pressed")).toBe("true");
   // No browser-native select or checkbox in either layer.
   expect(sequence.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
   fireEvent.click(within(sequence).getByRole("button", {name: "EDIT"}));
@@ -432,4 +433,71 @@ test("the Pattern stepper is disabled while the transport plays", () => {
   }});
   expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("button", {name: "Previous Pattern"}).hasAttribute("disabled")).toBe(true);
+});
+
+// #1823: BARS, DOUBLE UP and COPY act on the selected Pattern in SETUP.
+test("BARS asks to resize the selected Pattern to the chosen length", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  fireEvent.click(screen.getByRole("button", {name: "Length 4 bars"}));
+  expect(callbacks.onResizePattern).toHaveBeenCalledExactlyOnceWith(4);
+});
+
+test("choosing the selected Pattern's current length makes no call", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  fireEvent.click(screen.getByRole("button", {name: "Length 1 bars"}));
+  expect(callbacks.onResizePattern).not.toHaveBeenCalled();
+});
+
+test("DOUBLE UP is disabled at 8 bars", () => {
+  const eightBars = project.patterns[1]!.patternId;
+  render(<SequenceTouchWorkspace
+    project={{...project, patterns: [project.patterns[0]!,
+      {patternId: eightBars, bars: 8 as const, events: []}]}}
+    transport={initialPatternTransportState}
+    state={{...initialSequenceState, phase: "stopped", selectedPatternId: eightBars}}
+    bank={0} snap="1/16" editMode="note" selection={[]} defaultVelocity={100}
+    projectionRefreshing={false}
+    onSnapChange={() => {}} onEditModeChange={() => {}} onViewportChange={() => {}}
+    onEdit={() => {}} onSelectionChange={() => {}} onVelocityChange={() => {}}
+    metronomeOn={false} onToggleMetronome={() => {}}
+    onRefresh={() => {}} onSwitch={() => {}}
+    onCreatePattern={() => {}} onSettingsChange={() => {}}
+    onResizePattern={() => {}} onDoubleUpPattern={() => {}} onCopyPattern={() => {}}
+    onRecover={() => {}} onDiscard={() => {}} />);
+  openSetup();
+  expect(screen.getByRole("button", {name: "Double Up Pattern"}).hasAttribute("disabled"))
+    .toBe(true);
+});
+
+test("DOUBLE UP and COPY ask for the selected Pattern while stopped", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  fireEvent.click(screen.getByRole("button", {name: "Double Up Pattern"}));
+  fireEvent.click(screen.getByRole("button", {name: "Copy Pattern"}));
+  expect(callbacks.onDoubleUpPattern).toHaveBeenCalledTimes(1);
+  expect(callbacks.onCopyPattern).toHaveBeenCalledTimes(1);
+});
+
+test("BARS, DOUBLE UP and COPY are disabled while playing", () => {
+  const callbacks = renderSurface(false, {transport: transportStatus({playing: true})});
+  openSetup();
+  for (const name of ["Length 1 bars", "Length 2 bars", "Length 4 bars", "Length 8 bars",
+    "Double Up Pattern", "Copy Pattern"]) {
+    const control = screen.getByRole("button", {name});
+    expect(control.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(control);
+  }
+  expect(callbacks.onResizePattern).not.toHaveBeenCalled();
+  expect(callbacks.onDoubleUpPattern).not.toHaveBeenCalled();
+  expect(callbacks.onCopyPattern).not.toHaveBeenCalled();
+});
+
+test("BARS, DOUBLE UP and COPY are disabled while recording", () => {
+  renderSurface(false, {transport: transportStatus({playing: true, recording: true})});
+  openSetup();
+  for (const name of ["Length 2 bars", "Double Up Pattern", "Copy Pattern"]) {
+    expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(true);
+  }
 });

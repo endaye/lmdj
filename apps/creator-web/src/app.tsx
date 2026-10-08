@@ -74,6 +74,7 @@ import {createPadCaptureSources} from "./capture/pad_capture_sources";
 import {
   disarmSequenceCaptureJourney,
   editPatternEventsJourney,
+  isPatternLengthSession,
   isSequenceSession,
   reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
@@ -93,6 +94,7 @@ import {
 import type {PatternTransportIntent} from
   "@lmdj/web-runtime-platform/runtime_types";
 import type {
+  CreatorPatternLengthRuntimeSession,
   CreatorRuntimeSession,
   CreatorPerformanceRuntimeSession,
   CreatorSampleRuntimeSession,
@@ -2204,6 +2206,79 @@ function Workspace({
     return operation;
   };
 
+  // SETUP's BARS, DOUBLE UP and COPY (#1823): one commit and one Undo entry
+  // each, admitted only while stopped, as CREATE is, and serialized on the
+  // same authoring tail. Bars, notes and slots are re-read from Truth, since
+  // shortening drops and cuts notes and a copy may take a Pattern slot. The
+  // Host republishes a resized runtime-current Pattern itself, so the next
+  // Play uses the new length; only a failed swap is surfaced. A copy is
+  // selected as a created Pattern is.
+  const commitPatternStructure = (
+    operationName: "Change Pattern Length" | "Double Up Pattern" | "Copy Pattern",
+    commit: (
+      session: CreatorPatternLengthRuntimeSession,
+      patternId: string,
+      expectedRevision: number,
+    ) => Promise<Readonly<{
+      committedRevision: number;
+      patternId: string;
+      snapshotError?: Readonly<{code: string}> | null;
+    }>>,
+  ): Promise<void> => {
+    const operation = sequenceAuthoringTail.current.then(async () => {
+      const project = stateRef.current.project.current;
+      const currentTransport = transportRef.current;
+      const transportActive = currentTransport.sessionId !== null &&
+        (selectTransportBusy(currentTransport) ||
+          selectTransportPlaying(currentTransport) ||
+          selectTransportRecording(currentTransport));
+      if (!isPatternLengthSession(session) || project === null || transportActive ||
+          (currentTransport.sessionId === null &&
+            sequenceRef.current.phase !== "stopped")) return;
+      const patternId = sequenceRef.current.selectedPatternId ?? project.patternId;
+      const result = await commit(session, patternId, sequenceAuthoringRevision.current);
+      sequenceAuthoringRevision.current = result.committedRevision;
+      dispatchTransport({type: "revision", revision: result.committedRevision});
+      try {
+        await refreshPerformProject();
+      } catch {
+        dispatch({type: "project-revision-updated", revision: result.committedRevision});
+      }
+      if (result.patternId !== patternId) {
+        if (currentTransport.sessionId !== null &&
+            isPatternTransportSession(session)) {
+          // Make the copy runtime-current so the next Play starts it.
+          await session.reloadSnapshot(result.patternId);
+        }
+        dispatchSequence({type: "selected", patternId: result.patternId});
+      }
+      if (result.snapshotError != null) {
+        dispatchSequence({type: "failed", errorCode: result.snapshotError.code});
+      }
+    }).catch((error) => sequenceFailure(operationName, error));
+    sequenceAuthoringTail.current = operation;
+    return operation;
+  };
+
+  const resizePattern = (bars: 1 | 2 | 4 | 8) => commitPatternStructure(
+    "Change Pattern Length",
+    (target, patternId, expectedRevision) =>
+      target.resizePattern({patternId, bars, expectedRevision}),
+  );
+  const doubleUpPattern = () => commitPatternStructure(
+    "Double Up Pattern",
+    (target, patternId, expectedRevision) =>
+      target.doubleUpPattern({patternId, expectedRevision}),
+  );
+  const copyPattern = () => commitPatternStructure(
+    "Copy Pattern",
+    (target, sourcePatternId, expectedRevision) => target.copyPattern({
+      sourcePatternId,
+      patternId: crypto.randomUUID(),
+      expectedRevision,
+    }),
+  );
+
   const capturePhaseChanged = useCallback((phase: CapturePhase) => {
     setCapturePhase(phase);
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
@@ -2768,6 +2843,11 @@ function Workspace({
                 }}
                 onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
                   onCreatePattern={(bars) => { void createPattern(bars); }}
+                  {...(isPatternLengthSession(session) ? {
+                    onResizePattern: (bars: 1 | 2 | 4 | 8) => { void resizePattern(bars); },
+                    onDoubleUpPattern: () => { void doubleUpPattern(); },
+                    onCopyPattern: () => { void copyPattern(); },
+                  } : {})}
                   onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
                   onRecover={(candidate, destinationPatternId) => {
                     if (!isSequenceSession(session)) return;
