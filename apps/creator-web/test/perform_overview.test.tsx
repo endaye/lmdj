@@ -2,7 +2,7 @@ import {render, screen} from "@testing-library/react";
 import {expect, test, vi} from "vitest";
 
 import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
-import {PerformOverview} from "../src/components/perform_overview";
+import {PerformOverview, performPosition} from "../src/components/perform_overview";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import {initialPatternTransportState} from "../src/state/pattern_transport_state";
 
@@ -52,4 +52,10 @@ test("playing, the counter and progress follow the transport frames", () => {
     cancelAnimationFrame.mockRestore();
     now.mockRestore();
   }
+});
+
+test("a tick from a longer Pattern is held inside the new length", () => {
+  expect(performPosition(null, 384)).toBe(0);
+  expect(performPosition(200, 384)).toBe(200);
+  expect(performPosition(1_500, 384)).toBe(383);
 });

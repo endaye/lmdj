@@ -18,6 +18,14 @@ const two = (value: number) => String(value).padStart(2, "0");
 // Quantize and assigned-slot facts. The bar and beat come from the transport
 // frames, as on Sequence. The pictured output meters have no projection and
 // are not drawn.
+// The playhead's tick within the playing Pattern. A tick observed before a
+// Pattern length change can outlast it by one render, so it is held inside
+// the new length rather than overrunning the counter and the progress strip.
+export function performPosition(tick: number | null, lengthTicks: number | null): number {
+  if (tick === null || lengthTicks === null) return 0;
+  return Math.min(Math.max(tick, 0), lengthTicks - 1);
+}
+
 export function PerformOverview({state, transport}: PerformOverviewProps) {
   const project = state.project.current;
   const assigned = project === null
@@ -27,7 +35,7 @@ export function PerformOverview({state, transport}: PerformOverviewProps) {
   const bars = pattern?.bars ?? 1;
   const lengthTicks = pattern === undefined ? null : bars * SEQUENCE_TICKS_PER_BAR;
   const tick = usePatternPlayheadTick(transport, project?.bpm ?? null, lengthTicks);
-  const at = tick ?? 0;
+  const at = performPosition(tick, lengthTicks);
   const bar = Math.floor(at / SEQUENCE_TICKS_PER_BAR) + 1;
   const beat = Math.floor((at % SEQUENCE_TICKS_PER_BAR) / SEQUENCE_TICKS_PER_BEAT) + 1;
   const label = transport === undefined ? "stopped" : transportStatusLabel(transport);
