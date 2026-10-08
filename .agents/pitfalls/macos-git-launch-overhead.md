@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-14
     occurrence: https://github.com/endaye/lmdj/commit/66c00a6649b9926b282eb70982b78b4c3b34ece6
     observed_by: Codex
+  - date: 2026-10-08
+    occurrence: https://github.com/endaye/lmdj/pull/1876
+    observed_by: Codex
 exit: none
 ---
 
@@ -62,3 +65,14 @@ absolute-path wrapper restores the original Command Line Tools exec path,
 exclude bytes and all 14 sample hooks. See the source-setup Task's acceptance
 ledger for that probe and the unchanged-suite rerun; do not repair the fixture
 or loosen its assertions to accommodate this accidental relocation.
+
+The second occurrence in [PR #1876](https://github.com/endaye/lmdj/pull/1876)
+hit the unchanged 1,200-second worker deadline: three shards passed 1,398
+cases, but the complete 1,865-case lane did not pass. An unchanged candidate
+journey profile spent 130.895 of 137.648 seconds in Git calls. Both a shell
+wrapper and a native executable wrapper proved slower; equivalence alone did
+not establish a useful environment adjustment. A complete rerun using the
+verified original Git directory remains pending, with all cases and deadlines
+unchanged. [Escalation #1878](https://github.com/endaye/lmdj/issues/1878) tracks
+absorption into the shipping/CI-triage skill; this entry stays open until that
+mechanism lands. No partial, interrupted or timed-out run is passing evidence.
