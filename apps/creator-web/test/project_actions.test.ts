@@ -50,6 +50,9 @@ function inspectV3(projectId = PROJECT_ID): {
           asset_id: bank === 2 && pad === 3
             ? "33333333-3333-4333-8333-333333333333"
             : null,
+          category: null,
+          colour_override: null,
+          colour: null,
         })),
       })),
       patterns: {[PATTERN_ID]: {bars: 1, events: []}},
@@ -392,4 +395,48 @@ test("a duplicate summary for another identity or a later revision is a protocol
     await expect(duplicateProjectJourney(session, PROJECT_ID, () => COPY_ID))
       .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
   }
+});
+
+function padInspection(
+  inspected: ReturnType<typeof inspectV3>,
+  bank: number,
+  pad: number,
+): Record<string, unknown> {
+  const banks = inspected.project.banks as {pads: Record<string, unknown>[]}[];
+  return banks[bank]!.pads[pad]!;
+}
+
+test("projectView maps each Pad's category, override and effective colour from inspection", async () => {
+  const inspected = inspectV3();
+  Object.assign(padInspection(inspected, 2, 3), {
+    category: "bass", colour_override: 2, colour: 2,
+  });
+  const view = await openProjectJourney(sessionFor(inspected), summary);
+  expect(view.pads[35]).toEqual({
+    slot: 35,
+    assetId: "33333333-3333-4333-8333-333333333333",
+    category: "bass",
+    colourOverride: 2,
+    colour: 2,
+  });
+  expect(view.pads[0]).toEqual({
+    slot: 0, assetId: null, category: null, colourOverride: null, colour: null,
+  });
+});
+
+test.each([
+  ["an index outside the palette", {colour: 5}],
+  ["a non-integer index", {colour_override: "1"}],
+  ["an unknown category", {category: "other"}],
+  ["a missing effective colour", {colour: undefined}],
+])("a Pad colour inspection with %s is a protocol mismatch", async (_, fields) => {
+  const inspected = inspectV3();
+  const pad = padInspection(inspected, 2, 3);
+  Object.assign(pad, fields);
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) delete pad[key];
+  }
+  await expect(openProjectJourney(sessionFor(inspected), summary)).rejects.toMatchObject({
+    code: "HOST_PROTOCOL_MISMATCH",
+  });
 });

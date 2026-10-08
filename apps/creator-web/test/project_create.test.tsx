@@ -70,7 +70,7 @@ function projectFixture(
         assets: {},
         banks: Array.from({length: 4}, (_, bank) => ({
           bank,
-          pads: Array.from({length: 16}, (_, pad) => ({pad, asset_id: null})),
+          pads: Array.from({length: 16}, (_, pad) => ({pad, asset_id: null, category: null, colour_override: null, colour: null})),
         })),
         patterns: {[current?.patternId ?? ""]: {bars: 1, events: []}},
         sequence_settings: {quantize_enabled: true, swing_percent: 50},

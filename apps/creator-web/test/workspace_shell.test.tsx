@@ -82,7 +82,7 @@ const ready: CreatorState = {
       assignedPadCount: 0,
       bundleDigest: "a".repeat(64),
       key: "—",
-      pads: Array.from({length: 64}, (_, slot) => ({slot, assetId: null})),
+      pads: Array.from({length: 64}, (_, slot) => ({slot, assetId: null, category: null, colourOverride: null, colour: null})),
       patterns: [{
         patternId: "22222222-2222-4222-8222-222222222222",
         bars: 1,
@@ -555,6 +555,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
               asset_id: bank === 0 && pad === 0
                 ? "33333333-3333-4333-8333-333333333333"
                 : null,
+              category: null, colour_override: null, colour: null,
             })),
           })),
           patterns: {[listedSummary.patternId]: {bars: 1, events: []}},
@@ -908,6 +909,10 @@ function mutableSampleRuntimeFixture() {
       eq: {low: null, mid: null, high: null},
     })],
   ]);
+  // The Pad colour fields `project.inspect` carries, as Core resolved them.
+  const padColours = new Map<number, {
+    category: string | null; colour_override: number | null; colour: number | null;
+  }>();
   let revision = 3;
   const digest = () => "abcdef"[Math.min(5, Math.max(0, revision - 3))]!.repeat(64);
   const summary = (): LocalProjectSummary => ({
@@ -965,6 +970,8 @@ function mutableSampleRuntimeFixture() {
         pads: Array.from({length: 16}, (_, pad) => ({
           pad,
           asset_id: assigned.get(bank * 16 + pad) ?? null,
+          ...(padColours.get(bank * 16 + pad) ??
+            {category: null, colour_override: null, colour: null}),
         })),
       })),
       patterns: {[listedSummary.patternId]: {bars: 1, events: []}},
@@ -1002,6 +1009,7 @@ function mutableSampleRuntimeFixture() {
     ...fixture,
     assigned,
     playbacks,
+    padColours,
     summary,
     inspectSample,
     inspectProject,
@@ -1826,6 +1834,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
             pads: Array.from({length: 16}, (_, pad) => ({
               pad,
               asset_id: assigned.get(bank * 16 + pad) ?? null,
+              category: null, colour_override: null, colour: null,
             })),
           })),
           patterns: {[listedSummary.patternId]: {bars: 1, events: []}},
@@ -2288,6 +2297,7 @@ test("Open local switches Projects through one serialized visible selection", as
           asset_id: bank === 0 && pad === 0
             ? "44444444-4444-4444-8444-444444444444"
             : null,
+          category: null, colour_override: null, colour: null,
         })),
       })),
       patterns: {[opened.patternId]: {bars: 1, events: []}},
@@ -3268,6 +3278,72 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   expect(apply).toHaveBeenCalledTimes(1);
 });
 
+
+test("Sample mode sets and restores the selected Pad's colour through Truth", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  // A01 holds a BASS asset with no override: it draws the BASS default.
+  fixture.padColours.set(0, {category: "bass", colour_override: null, colour: 1});
+  const requests: unknown[] = [];
+  const session = Object.assign(fixture.session, {
+    setPadColour: async (request: {slot: number; colour: number | null;
+      expectedRevision: number}) => {
+      requests.push(request);
+      // The fixture stands in for Core: override first, then category.
+      fixture.padColours.set(request.slot, {
+        category: "bass",
+        colour_override: request.colour,
+        colour: request.colour ?? 1,
+      });
+      fixture.revision += 1;
+      return {committedRevision: fixture.revision, projectRevision: fixture.revision,
+        replayed: false};
+    },
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  const padA01 = () => screen.getByRole("button", {name: /^Pad A01 /});
+  expect(padA01().getAttribute("data-pad-colour")).toBe("1");
+  const controls = within(screen.getByRole("region", {name: "Pad colour"}));
+  expect(controls.getByTestId("pad-colour-source").textContent).toBe("BASS default");
+
+  await userEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
+  await waitFor(() => expect(padA01().getAttribute("data-pad-colour")).toBe("2"));
+  expect(requests).toEqual([{slot: 0, colour: 2, expectedRevision: 3}]);
+  expect(controls.getByTestId("pad-colour-source").textContent).toBe("Custom colour");
+  // The stored override is not sent again.
+  await userEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
+  expect(requests).toHaveLength(1);
+
+  await userEvent.click(controls.getByRole("button", {name: "Restore category default"}));
+  await waitFor(() => expect(padA01().getAttribute("data-pad-colour")).toBe("1"));
+  expect(requests).toEqual([
+    {slot: 0, colour: 2, expectedRevision: 3},
+    {slot: 0, colour: null, expectedRevision: 4},
+  ]);
+  expect(controls.getByTestId("pad-colour-source").textContent).toBe("BASS default");
+});
+
+test("a refused Pad colour is reported and the Pad keeps its Truth colour", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  fixture.padColours.set(0, {category: "bass", colour_override: null, colour: 1});
+  const session = Object.assign(fixture.session, {
+    setPadColour: async () => {
+      throw Object.assign(new Error("refused"), {code: "HOST_STATE_INVALID", details: {}});
+    },
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  const controls = within(screen.getByRole("region", {name: "Pad colour"}));
+  await userEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
+  await controls.findByRole("alert");
+  expect(screen.getByRole("button", {name: /^Pad A01 /}).getAttribute("data-pad-colour"))
+    .toBe("1");
+  expect(fixture.revision).toBe(3);
+});
 
 test("Delete cancels a pending import and ignores its late completion", async () => {
   const fixture = mutableSampleRuntimeFixture();

@@ -12,7 +12,7 @@ export function slotAddress(slot: number): string {
   return `${bankName(bank)}${String((slot % 16) + 1).padStart(2, "0")}`;
 }
 
-export function padAddress(pad: ProjectPadView): string {
+export function padAddress(pad: Pick<ProjectPadView, "slot" | "assetId">): string {
   return slotAddress(pad.slot);
 }
 

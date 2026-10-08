@@ -19,6 +19,7 @@ import {
   selectTransportRecording,
   type PatternTransportState,
 } from "../state/pattern_transport_state";
+import {padColourOf} from "../state/pad_colour";
 import {SequenceGrid} from "./sequence_grid";
 import {PatternStepper, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 
@@ -172,6 +173,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           onEdit={props.onEdit}
           onSelectionChange={props.onSelectionChange}
           onVelocityChange={props.onVelocityChange}
+          padColour={(slot) => padColourOf(project, slot)}
         />
       )) : (
       <section aria-label="Sequence settings" className="sequence-settings">

@@ -31,6 +31,15 @@
   --creator-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* Pad colour palette in the Contract's stable index order (#1207). */
+[data-pad-colour="0"] { --pad-colour: #f3b580; }
+[data-pad-colour="1"] { --pad-colour: #dff779; }
+[data-pad-colour="2"] { --pad-colour: #b49de8; }
+[data-pad-colour="3"] { --pad-colour: #94d2dc; }
+[data-pad-colour="4"] { --pad-colour: #e6ed98; }
+[data-pad-colour="neutral"] { --pad-colour: var(--creator-muted); }
+
+
 :root {
   color: #f4f5f7;
   background: #0a0b09;
@@ -417,7 +426,6 @@ button:disabled { color: #737b87; }
 .eq-readout { font-variant-numeric: tabular-nums; color: #c9d1d9; font-size: .85rem; }
 .empty-sample { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem; }
 .sample-error { margin: 0; padding: .75rem 1rem; border: 1px solid #ff7777; border-radius: .65rem; color: #ffc0c0; background: #2a1719; }
-.hardware-console .pad.is-selected { border-color: #b7ffc5; box-shadow: inset 0 0 0 1px #b7ffc5; }
 .sample-file-input { display: none; }
 .sample-modal-backdrop {
   position: fixed;
@@ -1026,11 +1034,22 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   color: var(--creator-muted);
 }
 .hardware-console .pad[data-assigned="true"] span { color: var(--creator-text); }
-.hardware-console .pad[data-assigned="true"][data-identity="0"] { box-shadow: inset 0 0 0 1px var(--creator-lime); }
-.hardware-console .pad[data-assigned="true"][data-identity="1"] { box-shadow: inset 0 0 0 1px #f0c49a; }
-.hardware-console .pad[data-assigned="true"][data-identity="2"] { box-shadow: inset 0 0 0 1px #c9b4f0; }
-.hardware-console .pad[data-assigned="true"][data-identity="3"] { box-shadow: inset 0 0 0 1px #9ad8e0; }
-.hardware-console .pad[data-assigned="true"][data-identity="4"] { box-shadow: inset 0 0 0 1px #f0b8d0; }
+/* One effective Pad colour (#1207) on the matrix, the Sequence overview rows
+   and the touch grid notes. Core resolves the palette index; neutral is the
+   D02 EMPTY grey outline. */
+.hardware-console .pad:not([data-pad-colour="neutral"]) { box-shadow: inset 0 0 0 1px var(--pad-colour); }
+/* Selection is white plus a lime dot, never a colour alone: BASS #DFF779 is
+   too close to the selection lime #DDF478 (2026-10-07 decision, item 6). */
+.hardware-console .pad.is-selected { border-color: #fff; box-shadow: inset 0 0 0 1px #fff; }
+.hardware-console .pad-selected-dot {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--creator-lime);
+}
 .hardware-console .pad[data-outcome="started"] { box-shadow: inset 0 0 0 2px var(--creator-lime); }
 .touch-system {
   display: grid;
@@ -1303,8 +1322,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   top: 1px;
   bottom: 1px;
   border-radius: 3px;
-  background: var(--creator-lime);
+  background: var(--pad-colour, var(--creator-muted));
 }
+.sequence-grid-row:not([data-pad-colour="neutral"]) .sequence-grid-pad { color: var(--pad-colour); }
 .sequence-grid-note-end {
   position: absolute;
   top: 0;
@@ -1506,8 +1526,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .sequence-overview-cell.is-even { fill: #3d433d; }
 .sequence-overview-cell.is-odd { fill: #333833; }
-.sequence-overview-onset { fill: var(--creator-lime); }
-.sequence-overview-tail { fill: rgb(221 244 120 / 40%); }
+.sequence-overview-onset { fill: var(--pad-colour, var(--creator-muted)); }
+.sequence-overview-tail { fill: color-mix(in srgb, var(--pad-colour, var(--creator-muted)) 40%, transparent); }
+.sequence-overview-names li:not([data-pad-colour="neutral"]) { color: var(--pad-colour); }
 .sequence-overview-frame {
   fill: none;
   stroke: var(--creator-blue);
@@ -1734,3 +1755,37 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 @media (max-width: 959px) and (orientation: portrait) {
   body { min-width: 0; }
 }
+
+/* Pad colour controls (#1207): the selected Pad's five colours and restore,
+   in the Sample touch area. */
+.pad-colour-controls {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 9px;
+  letter-spacing: .04em;
+}
+.pad-colour-controls header {
+  display: flex;
+  justify-content: space-between;
+  color: var(--creator-muted);
+}
+.pad-colour-swatches {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+.pad-colour-swatch {
+  min-height: 28px;
+  padding: 0 2px;
+  border: 1px solid var(--pad-colour);
+  border-radius: 5px;
+  background: var(--creator-base);
+  color: var(--pad-colour);
+  font-size: 8px;
+}
+.pad-colour-swatch[aria-pressed="true"] { background: var(--pad-colour); color: var(--creator-base); }
+.pad-colour-swatch:disabled { opacity: .45; }
+.pad-colour-restore { min-height: 28px; font-size: 9px; }
+.pad-colour-reason { margin: 0; color: var(--creator-muted); }
+.pad-colour-error { margin: 0; color: #ffc0c0; }

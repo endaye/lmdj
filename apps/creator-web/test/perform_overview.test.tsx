@@ -11,7 +11,7 @@ const project = {
   patternId: "22222222-2222-4222-8222-222222222222",
   revision: 7, bpm: 120, assetCount: 0, assignedPadCount: 0,
   bundleDigest: "a".repeat(64), key: "—" as const,
-  pads: Array.from({length: 64}, (_, slot) => ({slot, assetId: null})),
+  pads: Array.from({length: 64}, (_, slot) => ({slot, assetId: null, category: null, colourOverride: null, colour: null})),
   patterns: [{patternId: "22222222-2222-4222-8222-222222222222", bars: 2 as const, events: []}],
   patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},

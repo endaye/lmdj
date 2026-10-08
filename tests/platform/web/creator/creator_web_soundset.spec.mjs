@@ -65,7 +65,11 @@ import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 
 import {expect, test} from "@playwright/test";
-import {openProjectPageAfterBoot, waitForBootProject} from "./fixtures/creator_boot.mjs";
+import {
+  openProjectPageAfterBoot,
+  waitForBootProject,
+  waitForProjectReopen,
+} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -808,4 +812,249 @@ test("Sound Set listing reaches a Catalog through the same-origin forward", asyn
     targets.filter((target) =>
       target === `/object/blob/${ATTRIBUTION_SHARED_ARTIFACT}`),
   ).toHaveLength(1);
+});
+
+// Desktop Final T7 / Pad colour P5 (#1207): the Pad colour journey. A Sound
+// Set install gives A04 the BASS category (Attribution Kit slot 3 is `bass`),
+// the user overrides it, a second `replace` install of the same Set stands in
+// for re-separation (stems do not reach Pads yet), the Project is saved and
+// reopened, and the override is restored to the category default. Every
+// transition reads Project Truth through the Host's own `project.inspect` and
+// the three surfaces that draw one effective colour -- the Pad matrix, the
+// Sequence overview row and note, and the touch grid row and note -- and
+// checks Undo/Redo back to the previous colour and forward again.
+const PAD_A04 = 3;
+
+async function inspectTruth(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "project.inspect",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result.project;
+}
+
+async function inspectHistory(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "history.inspect",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result;
+}
+
+// The Bank A Pad colour fields as Truth holds them now.
+async function padColourTruth(page, pad) {
+  const truth = await inspectTruth(page);
+  const entry = truth.banks[0].pads[pad];
+  return {
+    asset_id: entry.asset_id,
+    category: entry.category,
+    colour_override: entry.colour_override,
+    colour: entry.colour,
+  };
+}
+
+async function expectPadColourTruth(page, pad, expected) {
+  await expect.poll(async () => {
+    const {category, colour_override: override, colour} =
+      await padColourTruth(page, pad);
+    return {category, colour_override: override, colour};
+  }, {timeout: REQUEST_TIMEOUT_MS}).toEqual(expected);
+}
+
+// The far side on screen: all three surfaces draw the same palette index
+// ("neutral" for null). The overview and the touch grid live on the Sequence
+// page, so this switches there; callers switch back for the controls.
+async function expectPadColourSurfaces(page, pad, colour) {
+  const attribute = colour === null ? "neutral" : String(colour);
+  const address = `A${String(pad + 1).padStart(2, "0")}`;
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await expect(page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)}))
+    .toHaveAttribute("data-pad-colour", attribute, {timeout: REQUEST_TIMEOUT_MS});
+  const overview = page.getByTestId("sequence-overview");
+  await expect(overview.locator(`.sequence-overview-names li[data-row='${pad}']`))
+    .toHaveAttribute("data-pad-colour", attribute);
+  await expect(overview.locator(`.sequence-overview-note[data-row='${pad}']`))
+    .toHaveAttribute("data-pad-colour", attribute);
+  const row = page.locator(`.sequence-grid-row[data-pad='${pad}']`);
+  await expect(row).toHaveAttribute("data-pad-colour", attribute);
+  await expect(row.getByTestId("sequence-grid-note")).toHaveCount(1);
+}
+
+async function awaitConsoleInteractive(page) {
+  await page.waitForFunction(() =>
+    document.querySelector(".creator-console-frame")?.inert !== true,
+  {timeout: REQUEST_TIMEOUT_MS});
+}
+
+async function shiftAndPress(page, name) {
+  await page.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"})
+    .click();
+  const key = page.getByRole("button", {name, exact: true});
+  await expect(key).toBeEnabled({timeout: REQUEST_TIMEOUT_MS});
+  await key.click();
+  await awaitConsoleInteractive(page);
+}
+
+const undoAuthoring = (page) => shiftAndPress(page, "Undo — SHIFT + ←");
+const redoAuthoring = (page) => shiftAndPress(page, "Redo — SHIFT + →");
+
+// Undo returns Truth and the three surfaces to `before`, Redo to `after`.
+async function expectUndoRedo(page, pad, before, after) {
+  await undoAuthoring(page);
+  await expectPadColourTruth(page, pad, before);
+  await expectPadColourSurfaces(page, pad, before.colour);
+  await redoAuthoring(page);
+  await expectPadColourTruth(page, pad, after);
+  await expectPadColourSurfaces(page, pad, after.colour);
+}
+
+// Sample owns Pad selection; the colour controls sit under its editor.
+async function padColourControls(page, pad) {
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  const address = `A${String(pad + 1).padStart(2, "0")}`;
+  // Select without a musical press or the empty-Pad file chooser.
+  await page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)})
+    .evaluate((element) =>
+      element.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1})));
+  const controls = page.getByRole("region", {name: "Pad colour"});
+  await expect(controls).toContainText(`PAD COLOUR · ${address}`);
+  return controls;
+}
+
+async function installAttributionReplaceIntoBankA(page) {
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  await openSoundSets(page);
+  await page.getByRole("button", {name: "Refresh Catalog"}).click();
+  const listing = page.getByRole("list", {name: "Catalog Sound Sets"});
+  await expect(listing.getByRole("heading", {name: ATTRIBUTION}))
+    .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await listing.getByRole("button", {name: `Inspect ${ATTRIBUTION}`}).click();
+  await expect(page.getByRole("region", {name: `Sound Set ${ATTRIBUTION}`}))
+    .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await page.getByRole("button", {name: "Preview mapping into Bank A"}).click();
+  await expect(page.locator(".soundset-preview"))
+    .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await page.getByRole("radio", {name: "Replace them with this Set"}).check();
+  const installsBefore = await page.evaluate(() =>
+    window.__soundsetInstalls?.length ?? 0);
+  await page.getByRole("button", {name: /^Install (?:into Bank|[0-9]+ of 16 into Bank)/})
+    .click();
+  await expect(page.locator(".soundset-receipt"))
+    .toContainText("Installed 4 Pads into Bank A", {timeout: REQUEST_TIMEOUT_MS});
+  await expect.poll(() => page.evaluate(() =>
+    window.__soundsetInstalls?.length ?? 0), {timeout: REQUEST_TIMEOUT_MS})
+    .toBe(installsBefore + 1);
+  const committed = await page.evaluate(() => window.__soundsetInstalls.at(-1));
+  expect(committed.ok).toBe(true);
+  expect(committed.payload.occupied_pad_policy).toBe("replace");
+  expect(committed.result.installed.map((entry) => entry.pad)).toEqual([0, 1, 2, 3]);
+}
+
+test("one Pad colour follows its category, a user override, re-install, reopen and restore", async ({page, browserName, baseURL}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(600_000);
+  const origin = new URL(baseURL).origin;
+  const targets = recordCatalogTraffic(page, origin);
+  await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
+  await page.goto("/index.html");
+  await finishUnavailableDefaultSeed(page, targets);
+  await importProject(page);
+  await wakeAudioWithPad(page);
+
+  // Precondition: the imported Bundle predates Pad colours, so A04 holds an
+  // unclassified Asset with no override (no backfill), and is neutral.
+  const neutral = {category: null, colour_override: null, colour: null};
+  await expectPadColourTruth(page, PAD_A04, neutral);
+  // One note on A04 so the overview and the touch grid draw a coloured note.
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  const truth = await inspectTruth(page);
+  const patternId = Object.keys(truth.patterns)[0];
+  const lengthTicks = truth.patterns[patternId].bars * 3840;
+  const lane = page.locator(`.sequence-grid-row[data-pad='${PAD_A04}'] .sequence-grid-lane`);
+  await lane.scrollIntoViewIfNeeded();
+  // Pin any scrolled ancestor to its left origin so tick 0 is on screen.
+  await lane.evaluate((element) => {
+    for (let node = element.parentElement; node !== null; node = node.parentElement) {
+      if (node.scrollLeft > 0) node.scrollLeft = 0;
+    }
+  });
+  const box = await lane.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.click(box.x + 120 / lengthTicks * box.width, box.y + box.height / 2);
+  await expect.poll(async () => (await inspectTruth(page)).patterns[patternId].events
+    .filter((event) => event.slot.bank === 0 && event.slot.pad === PAD_A04).length,
+  {timeout: REQUEST_TIMEOUT_MS}).toBe(1);
+  await expectPadColourSurfaces(page, PAD_A04, null);
+
+  // Leg 1 -- category default. Attribution Kit slot 3 is `bass`, so the
+  // replaced A04 Asset is BASS and A04 draws palette index 1.
+  await installAttributionReplaceIntoBankA(page);
+  const bassDefault = {category: "bass", colour_override: null, colour: 1};
+  await expectPadColourTruth(page, PAD_A04, bassDefault);
+  await expectPadColourSurfaces(page, PAD_A04, 1);
+  await expectUndoRedo(page, PAD_A04, neutral, bassDefault);
+  const firstInstallAsset = (await padColourTruth(page, PAD_A04)).asset_id;
+
+  // Leg 2 -- manual override. MELODIC is index 2; the category stays BASS.
+  let controls = await padColourControls(page, PAD_A04);
+  await expect(controls.getByTestId("pad-colour-source")).toHaveText("BASS default");
+  await controls.getByRole("button", {name: "MELODIC colour"}).click();
+  const melodicOverride = {category: "bass", colour_override: 2, colour: 2};
+  await expectPadColourTruth(page, PAD_A04, melodicOverride);
+  expect((await inspectHistory(page)).undo_label).toBe("Set Pad colour");
+  await expect(page.getByTestId("authoring-history-status"))
+    .toHaveText("Undo: Set Pad colour", {timeout: REQUEST_TIMEOUT_MS});
+  await expectPadColourSurfaces(page, PAD_A04, 2);
+  await expectUndoRedo(page, PAD_A04, bassDefault, melodicOverride);
+
+  // Leg 3 -- re-install `replace`, the stand-in for re-separation. A04 gets
+  // a new Asset from the same `bass` slot and keeps the user's override.
+  await installAttributionReplaceIntoBankA(page);
+  await expect.poll(async () => (await padColourTruth(page, PAD_A04)).asset_id,
+    {timeout: REQUEST_TIMEOUT_MS}).not.toBe(firstInstallAsset);
+  await expectPadColourTruth(page, PAD_A04, melodicOverride);
+  await expectPadColourSurfaces(page, PAD_A04, 2);
+  // Undo returns A04 to the first install's Asset, still overridden.
+  await undoAuthoring(page);
+  await expect.poll(async () => (await padColourTruth(page, PAD_A04)).asset_id,
+    {timeout: REQUEST_TIMEOUT_MS}).toBe(firstInstallAsset);
+  await expectPadColourTruth(page, PAD_A04, melodicOverride);
+  await expectPadColourSurfaces(page, PAD_A04, 2);
+  await redoAuthoring(page);
+  await expect.poll(async () => (await padColourTruth(page, PAD_A04)).asset_id,
+    {timeout: REQUEST_TIMEOUT_MS}).not.toBe(firstInstallAsset);
+  await expectPadColourTruth(page, PAD_A04, melodicOverride);
+  await expectPadColourSurfaces(page, PAD_A04, 2);
+  const saved = await inspectTruth(page);
+
+  // Leg 4 -- save and reopen. Autosave owns persistence; the reload reopens
+  // the remembered Project, whose Truth is exactly what was saved. Session
+  // history does not survive a reopen, so there is nothing to undo.
+  await page.reload();
+  await waitForProjectReopen(page, "00000000", {timeout: IMPORT_TIMEOUT_MS});
+  expect(await inspectTruth(page)).toEqual(saved);
+  await expectPadColourTruth(page, PAD_A04, melodicOverride);
+  await expectPadColourSurfaces(page, PAD_A04, 2);
+  const reopenedHistory = await inspectHistory(page);
+  expect(reopenedHistory.undo_count).toBe(0);
+  expect(reopenedHistory.redo_count).toBe(0);
+
+  // Leg 5 -- restore the category default: the override goes and A04
+  // follows BASS again.
+  controls = await padColourControls(page, PAD_A04);
+  await expect(controls.getByTestId("pad-colour-source")).toHaveText("Custom colour");
+  await controls.getByRole("button", {name: "Restore category default"}).click();
+  await expectPadColourTruth(page, PAD_A04, bassDefault);
+  expect((await inspectHistory(page)).undo_label).toBe("Set Pad colour");
+  await expectPadColourSurfaces(page, PAD_A04, 1);
+  await expectUndoRedo(page, PAD_A04, melodicOverride, bassDefault);
 });

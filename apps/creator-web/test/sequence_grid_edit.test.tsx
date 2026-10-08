@@ -44,7 +44,7 @@ function gridFixture(options: {
       assets: {},
       banks: Array.from({length: 4}, (_, bank) => ({
         bank,
-        pads: Array.from({length: 16}, (_, pad) => ({pad, asset_id: null})),
+        pads: Array.from({length: 16}, (_, pad) => ({pad, asset_id: null, category: null, colour_override: null, colour: null})),
       })),
       patterns: {[PATTERN_ID]: {bars: 1, events: truth.events}},
       pattern_slots: Array<string | null>(16).fill(null),
