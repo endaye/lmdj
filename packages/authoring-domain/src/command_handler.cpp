@@ -1,6 +1,7 @@
 #include <lmdj/domain/command_handler.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <string>
@@ -501,6 +502,142 @@ foundation::Result<AppliedCommand> apply_new_command(
   return applied(std::move(copy), "pattern.events_edited", command.meta);
 }
 
+// Pattern length and copy (#1823). A refusal names its reason so a Host can
+// tell an unknown Pattern from a length that cannot change.
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const ResizePattern& command) {
+  using foundation::ErrorCode;
+  if (!is_valid_uuid(command.pattern_id.value())) {
+    return invalid("pattern id must be a lowercase UUID");
+  }
+  if (!valid_bars(command.bars)) {
+    return invalid("pattern bars must be one of 1, 2, 4, or 8");
+  }
+  const auto found = state.patterns.find(command.pattern_id);
+  if (found == state.patterns.end()) {
+    return edit_refused(
+        ErrorCode::not_found, "pattern does not exist", "pattern_not_found");
+  }
+  if (found->second.bars == command.bars) {
+    // The current length changes nothing, so it is no revision or Undo entry.
+    return edit_refused(ErrorCode::invalid_argument,
+        "pattern already has this length", "pattern_length_unchanged");
+  }
+  // Lengthening keeps every event. Shortening keeps only what is audible
+  // before the new end: later onsets go, and a note crossing it is cut to
+  // the seam. Filtering keeps the canonical order.
+  const auto tick_limit = pattern_length_ticks(command.bars);
+  std::vector<PatternEvent> events;
+  events.reserve(found->second.events.size());
+  for (auto event : found->second.events) {
+    if (event.onset_tick >= tick_limit) {
+      continue;
+    }
+    event.duration_tick =
+        std::min(event.duration_tick, tick_limit - event.onset_tick);
+    events.push_back(event);
+  }
+  auto copy = state;
+  auto& pattern = copy.patterns.at(command.pattern_id);
+  pattern.bars = command.bars;
+  pattern.events = std::move(events);
+  auto result = applied(std::move(copy), "pattern.resized", command.meta);
+  result.value().event["pattern_id"] = command.pattern_id.value();
+  result.value().event["bars"] = command.bars;
+  return result;
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const DoubleUpPattern& command) {
+  using foundation::ErrorCode;
+  if (!is_valid_uuid(command.pattern_id.value())) {
+    return invalid("pattern id must be a lowercase UUID");
+  }
+  const auto found = state.patterns.find(command.pattern_id);
+  if (found == state.patterns.end()) {
+    return edit_refused(
+        ErrorCode::not_found, "pattern does not exist", "pattern_not_found");
+  }
+  if (found->second.bars >= 8) {
+    return edit_refused(ErrorCode::invalid_argument,
+        "pattern is already at the longest length", "pattern_length_maximum");
+  }
+  // Every event repeats one old length later; no repeat can cross the new
+  // seam because no original crosses the old one.
+  const auto length = pattern_length_ticks(found->second.bars);
+  auto repeated = found->second.events;
+  for (auto& event : repeated) {
+    event.onset_tick += length;
+  }
+  const auto bars = static_cast<std::uint8_t>(found->second.bars * 2U);
+  auto copy = state;
+  auto& pattern = copy.patterns.at(command.pattern_id);
+  pattern.bars = bars;
+  pattern.events = merge_pattern_events(found->second.events, repeated);
+  auto result = applied(std::move(copy), "pattern.doubled", command.meta);
+  result.value().event["pattern_id"] = command.pattern_id.value();
+  result.value().event["bars"] = bars;
+  return result;
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const CopyPattern& command) {
+  using foundation::ErrorCode;
+  if (!is_valid_uuid(command.source_pattern_id.value()) ||
+      !is_valid_uuid(command.pattern_id.value())) {
+    return invalid("pattern id must be a lowercase UUID");
+  }
+  const auto source = state.patterns.find(command.source_pattern_id);
+  if (source == state.patterns.end()) {
+    return edit_refused(
+        ErrorCode::not_found, "pattern does not exist", "pattern_not_found");
+  }
+  if (state.patterns.contains(command.pattern_id)) {
+    return foundation::Result<AppliedCommand>::failure(
+        foundation::Error{
+            ErrorCode::duplicate_id,
+            "pattern id already exists",
+        });
+  }
+  const auto current = validate_pattern_slots(state);
+  if (!current.has_value()) {
+    return invalid(current.error().message);
+  }
+  // Only a slotted source places its copy: in the lowest empty slot after
+  // the source's, or nowhere when every later slot is taken.
+  std::optional<std::uint8_t> slot;
+  const auto held = std::ranges::find(
+      state.pattern_slots,
+      std::optional<foundation::PatternId>{command.source_pattern_id});
+  if (held != state.pattern_slots.end()) {
+    const auto empty = std::find_if(
+        std::next(held), state.pattern_slots.end(),
+        [](const auto& value) { return !value.has_value(); });
+    if (empty != state.pattern_slots.end()) {
+      slot = static_cast<std::uint8_t>(
+          std::distance(state.pattern_slots.begin(), empty));
+    }
+  }
+  auto copy = state;
+  auto pattern = source->second;
+  pattern.id = command.pattern_id;
+  copy.patterns.emplace(pattern.id, std::move(pattern));
+  if (slot.has_value()) {
+    copy.pattern_slots.at(*slot) = command.pattern_id;
+  }
+  auto result = applied(
+      std::move(copy), "pattern.copied", command.meta,
+      slot.has_value() ? ProjectContract::v4 : ProjectContract::v3);
+  result.value().event["pattern_id"] = command.pattern_id.value();
+  result.value().event["source_pattern_id"] = command.source_pattern_id.value();
+  result.value().event["pattern_slot"] =
+      slot.has_value() ? nlohmann::json(*slot) : nlohmann::json(nullptr);
+  return result;
+}
+
 foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
     const UpdatePadPlayback& command) {
@@ -731,6 +868,24 @@ foundation::Result<AppliedCommand> apply(
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const EditPatternEvents& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const ResizePattern& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const DoubleUpPattern& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const CopyPattern& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts) {
   return apply_checked(state, command, receipts);
 }

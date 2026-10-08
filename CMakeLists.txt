@@ -244,6 +244,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_facade_candidate_store_tests
     lmdj_facade_pad_delete_tests
     lmdj_facade_pattern_events_edit_tests
+    lmdj_facade_pattern_length_copy_tests
     lmdj_facade_candidate_job_tests
     lmdj_facade_candidate_audition_tests
     lmdj_facade_candidate_adoption_tests

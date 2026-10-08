@@ -3792,6 +3792,149 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  // Pattern length and copy (#1823). Each call is one checked commit with its
+  // own command_id. A resize or double-up of the Runtime's current Pattern is
+  // republished while stopped; the Host refuses all three while playing,
+  // recording or settling a transport command.
+  function patternLengthResult(value, patternId, label) {
+    const base = [
+      "committed_revision", "project_revision", "pattern_id", "bars",
+      "replayed", "publication",
+    ];
+    const publication = value?.publication;
+    const published = publication === "published";
+    const failed = publication === "failed";
+    const keys = publication === "none" ? base : failed
+      ? [...base, "pattern_publication", "snapshot_error"]
+      : [...base, "pattern_publication"];
+    const patternPublication = value?.pattern_publication;
+    if (
+      !exactKeys(value, keys) ||
+      !isUnsignedInteger(value.committed_revision) ||
+      value.project_revision !== value.committed_revision ||
+      value.pattern_id !== patternId ||
+      ![1, 2, 4, 8].includes(value.bars) ||
+      typeof value.replayed !== "boolean" ||
+      !["none", "published", "deferred", "failed"].includes(publication) ||
+      (published
+        ? !(exactKeys(patternPublication, ["generation", "activation_frame"]) &&
+            isUnsignedInteger(patternPublication.generation) &&
+            isUnsignedInteger(patternPublication.activation_frame))
+        : publication !== "none" && patternPublication !== null)
+    ) {
+      throw protocolMismatch(`${label} result is invalid`);
+    }
+    return Object.freeze({
+      committedRevision: value.committed_revision,
+      projectRevision: value.project_revision,
+      patternId: value.pattern_id,
+      bars: value.bars,
+      replayed: value.replayed,
+      publication,
+      patternPublication: published
+        ? Object.freeze({
+            generation: patternPublication.generation,
+            activationFrame: patternPublication.activation_frame,
+          })
+        : null,
+      snapshotError: failed ? normalizeSnapshotError(value.snapshot_error) : null,
+    });
+  }
+
+  function resizePattern(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["patternId", "bars", "expectedRevision"]) ||
+      !UUID_PATTERN.test(request.patternId) ||
+      ![1, 2, 4, 8].includes(request.bars) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Pattern resize request is invalid"));
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.resize", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        pattern_id: request.patternId,
+        bars: request.bars,
+      });
+      const result = patternLengthResult(value, request.patternId, "Pattern resize");
+      if (result.bars !== request.bars) {
+        throw protocolMismatch("Pattern resize result is invalid");
+      }
+      return result;
+    });
+  }
+
+  function doubleUpPattern(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["patternId", "expectedRevision"]) ||
+      !UUID_PATTERN.test(request.patternId) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Pattern double-up request is invalid"));
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.double", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        pattern_id: request.patternId,
+      });
+      const result = patternLengthResult(value, request.patternId, "Pattern double-up");
+      if (result.bars === 1) {
+        throw protocolMismatch("Pattern double-up result is invalid");
+      }
+      return result;
+    });
+  }
+
+  function copyPattern(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sourcePatternId", "patternId", "expectedRevision"]) ||
+      !UUID_PATTERN.test(request.sourcePatternId) ||
+      !UUID_PATTERN.test(request.patternId) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Pattern copy request is invalid"));
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.copy", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        source_pattern_id: request.sourcePatternId,
+        pattern_id: request.patternId,
+      });
+      if (
+        !exactKeys(value, [
+          "committed_revision", "project_revision", "source_pattern_id",
+          "pattern_id", "pattern_slot", "replayed", "publication",
+        ]) ||
+        !isUnsignedInteger(value.committed_revision) ||
+        value.project_revision !== value.committed_revision ||
+        value.source_pattern_id !== request.sourcePatternId ||
+        value.pattern_id !== request.patternId ||
+        !(value.pattern_slot === null || isUnsignedInteger(value.pattern_slot, 15)) ||
+        typeof value.replayed !== "boolean" ||
+        value.publication !== "none"
+      ) {
+        throw protocolMismatch("Pattern copy result is invalid");
+      }
+      return Object.freeze({
+        committedRevision: value.committed_revision,
+        projectRevision: value.project_revision,
+        sourcePatternId: value.source_pattern_id,
+        patternId: value.pattern_id,
+        patternSlot: value.pattern_slot,
+        replayed: value.replayed,
+      });
+    });
+  }
+
   function updateSequenceSettings(request) {
     if (
       request === null ||
@@ -5753,6 +5896,9 @@ function createRuntimeSessionController(options = {}) {
     inspectPatternTransport,
     createPattern,
     editPatternEvents,
+    resizePattern,
+    doubleUpPattern,
+    copyPattern,
     updateSequenceSettings,
     querySequenceStatus,
     listSequenceRecovery,

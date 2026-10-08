@@ -174,6 +174,9 @@ const std::map<std::string, OperationKind>& operations() {
       {"pattern.slot.move", OperationKind::command},
       {"pattern.create", OperationKind::command},
       {"pattern.events.edit", OperationKind::command},
+      {"pattern.resize", OperationKind::command},
+      {"pattern.double", OperationKind::command},
+      {"pattern.copy", OperationKind::command},
       {"performance.delete", OperationKind::command},
       {"performance.discard", OperationKind::command},
       {"performance.fx.gesture", OperationKind::command},
@@ -4098,6 +4101,15 @@ struct Application::Impl {
     if (operation == "pattern.events.edit") {
       return pattern_events_edit(request);
     }
+    if (operation == "pattern.resize") {
+      return pattern_resize(request);
+    }
+    if (operation == "pattern.double") {
+      return pattern_double(request);
+    }
+    if (operation == "pattern.copy") {
+      return pattern_copy(request);
+    }
     if (operation == "pattern.slot.assign") {
       return pattern_slot_assign(request);
     }
@@ -6019,6 +6031,110 @@ struct Application::Impl {
          {"pattern_id", pattern_id},
          {"replayed", edited.value().replayed}},
         edited.value().state.revision);
+  }
+
+  // Pattern length and copy (#1823). Each is one checked commit and one Undo
+  // entry; the Domain refuses an unknown Pattern, an unchanged length, a
+  // double-up past 8 bars and an existing copy id. The receipt's event carries
+  // the resulting length or slot, so a replay reports what was committed.
+  nlohmann::json pattern_resize(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "pattern_id", "bars"}),
+        "pattern.resize request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    const auto bars = unsigned_field(request, "bars", 8);
+    require(bars == 1 || bars == 2 || bars == 4 || bars == 8,
+            "Pattern bars are invalid");
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto resized = projects.execute(
+        path,
+        domain::ResizePattern{
+            domain::CommandMeta{foundation::CommandId{command_id}, revision},
+            foundation::PatternId{pattern_id},
+            static_cast<std::uint8_t>(bars)});
+    if (!resized.has_value()) {
+      return error_envelope(resized.error());
+    }
+    return success_envelope(
+        {{"committed_revision", resized.value().state.revision},
+         {"pattern_id", pattern_id},
+         {"bars", resized.value().event.at("bars")},
+         {"replayed", resized.value().replayed}},
+        resized.value().state.revision);
+  }
+
+  nlohmann::json pattern_double(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "pattern_id"}),
+        "pattern.double request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto doubled = projects.execute(
+        path,
+        domain::DoubleUpPattern{
+            domain::CommandMeta{foundation::CommandId{command_id}, revision},
+            foundation::PatternId{pattern_id}});
+    if (!doubled.has_value()) {
+      return error_envelope(doubled.error());
+    }
+    return success_envelope(
+        {{"committed_revision", doubled.value().state.revision},
+         {"pattern_id", pattern_id},
+         {"bars", doubled.value().event.at("bars")},
+         {"replayed", doubled.value().replayed}},
+        doubled.value().state.revision);
+  }
+
+  nlohmann::json pattern_copy(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "source_pattern_id", "pattern_id"}),
+        "pattern.copy request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto source_pattern_id = uuid_field(request, "source_pattern_id");
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto copied = projects.execute(
+        path,
+        domain::CopyPattern{
+            domain::CommandMeta{foundation::CommandId{command_id}, revision},
+            foundation::PatternId{source_pattern_id},
+            foundation::PatternId{pattern_id}});
+    if (!copied.has_value()) {
+      return error_envelope(copied.error());
+    }
+    return success_envelope(
+        {{"committed_revision", copied.value().state.revision},
+         {"source_pattern_id", source_pattern_id},
+         {"pattern_id", pattern_id},
+         {"pattern_slot", copied.value().event.at("pattern_slot")},
+         {"replayed", copied.value().replayed}},
+        copied.value().state.revision);
   }
 
   nlohmann::json pattern_slot_assign(const nlohmann::json &request) {

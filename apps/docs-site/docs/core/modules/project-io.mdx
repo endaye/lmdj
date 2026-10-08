@@ -246,3 +246,16 @@ stable, so a retry after reopen still replays.
 
 Each edit is one `Edit Pattern` history action, and Undo and Redo restore its
 events exactly.
+
+## Pattern length and copy
+
+`ProjectStore::execute` persists `ResizePattern`, `DoubleUpPattern` and
+`CopyPattern` as internal transactions in the same command log (#1823). Reload
+replays them through the Domain, so a retry after reopen still replays.
+
+Each is one history action, labelled `Change Pattern Length`,
+`Double Up Pattern` or `Copy Pattern`. Undo restores the prior Pattern exactly,
+including events a shortening removed or truncated; for a copy it removes the
+new Pattern and frees the slot it took. Redo reapplies them. A resize to the
+current length is refused by the Domain, so it records no revision and no
+history action.

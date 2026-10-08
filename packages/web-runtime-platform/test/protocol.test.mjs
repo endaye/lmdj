@@ -124,6 +124,9 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "pad.assign",
     "pattern.create",
     "pattern.events.edit",
+    "pattern.resize",
+    "pattern.double",
+    "pattern.copy",
     "pattern.slot.assign",
     "pattern.slot.clear",
     "pattern.slot.move",
@@ -250,6 +253,50 @@ test("accepts only exact Pattern event edit payloads", () => {
     assert.throws(
       () => createRequestEnvelope({
         operation: "pattern.events.edit",
+        payload,
+        crypto: {randomUUID: () => REQUEST_ID},
+      }),
+      expectCode("HOST_PROTOCOL_MISMATCH"),
+    );
+  }
+});
+
+test("accepts only exact Pattern length and copy payloads", () => {
+  const resize = {
+    command_id: requestIdFor(211),
+    expected_revision: 4,
+    pattern_id: requestIdFor(212),
+    bars: 8,
+  };
+  const {bars: _bars, ...double} = resize;
+  const copy = {...double, source_pattern_id: requestIdFor(213)};
+  for (const [operation, payload] of [
+    ["pattern.resize", resize],
+    ["pattern.double", double],
+    ["pattern.copy", copy],
+  ]) {
+    assert.equal(createRequestEnvelope({
+      operation,
+      payload,
+      crypto: {randomUUID: () => REQUEST_ID},
+    }).operation, operation);
+  }
+  const invalid = [
+    ["pattern.resize", {...resize, bars: 3}],
+    ["pattern.resize", {...resize, bars: 16}],
+    ["pattern.resize", double],
+    ["pattern.resize", {...resize, project_path: "/forbidden/project.lmdj"}],
+    ["pattern.double", resize],
+    ["pattern.double", {...double, pattern_id: "not-a-uuid"}],
+    ["pattern.copy", double],
+    ["pattern.copy", {...copy, source_pattern_id: "not-a-uuid"}],
+    ["pattern.copy", {...copy, pattern_id: "0000000A-0000-0000-0000-000000000214"}],
+    ["pattern.copy", {...copy, pattern_slot: 3}],
+  ];
+  for (const [operation, payload] of invalid) {
+    assert.throws(
+      () => createRequestEnvelope({
+        operation,
         payload,
         crypto: {randomUUID: () => REQUEST_ID},
       }),

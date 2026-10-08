@@ -87,3 +87,32 @@ It refuses, without changing Truth:
 - an event outside the Pattern or across its loop seam;
 - an edit whose result equals the current Pattern (`pattern_edit_unchanged`), so
   a no-op never becomes a revision.
+
+## Pattern length and copy
+
+Three checked commands change a Pattern's length or copy it (#1823), as the
+[2026-10-08 decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-08-pattern-length-and-copy.md)
+records. Lengths stay 1, 2, 4 or 8 bars, so `lmdj.project.v5` is unchanged.
+
+- `ResizePattern {pattern_id, bars}` sets the length to `L = bars × 3840`
+  ticks. Lengthening keeps every event, so the added bars are empty.
+  Shortening removes each event with `onset_tick ≥ L` and truncates the rest to
+  `duration_tick ≤ L − onset_tick`, so no note crosses the loop seam.
+- `DoubleUpPattern {pattern_id}` doubles the length and repeats each event at
+  `onset_tick` plus the old length.
+- `CopyPattern {source_pattern_id, pattern_id}` adds `pattern_id` with the
+  source's length and events. When the source holds Pattern slot `s`, the same
+  commit assigns the copy to the lowest empty slot after `s`. When no later
+  slot is empty, or the source holds no slot, the copy holds none.
+
+Each follows `apply_checked`: a replayed `command_id` returns its receipt and a
+stale revision conflicts. The receipt event carries the resulting `bars`, or
+the copy's `pattern_slot` (`null` when it holds none). They refuse, without
+changing Truth:
+
+- an unknown Pattern or source (`not_found`, `pattern_not_found`);
+- a length other than 1, 2, 4 or 8, or an id that is not a lowercase UUID;
+- a resize to the current length (`pattern_length_unchanged`), so a no-op
+  never becomes a revision;
+- a double-up at 8 bars (`pattern_length_maximum`);
+- a copy id that already exists (`duplicate_id`).

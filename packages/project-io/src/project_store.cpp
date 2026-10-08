@@ -107,6 +107,9 @@ using PersistedCommand = std::variant<
     domain::MovePatternSlot,
     domain::MergePatternEvents,
     domain::EditPatternEvents,
+    domain::ResizePattern,
+    domain::DoubleUpPattern,
+    domain::CopyPattern,
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::InstallSoundSet,
@@ -1800,6 +1803,26 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"remove", std::move(remove)},
               {"type", "EditPatternEvents"},
           };
+        } else if constexpr (std::is_same_v<Type, domain::ResizePattern>) {
+          return {
+              {"bars", value.bars},
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"type", "ResizePattern"},
+          };
+        } else if constexpr (std::is_same_v<Type, domain::DoubleUpPattern>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"type", "DoubleUpPattern"},
+          };
+        } else if constexpr (std::is_same_v<Type, domain::CopyPattern>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"source_pattern_id", value.source_pattern_id.value()},
+              {"type", "CopyPattern"},
+          };
         } else if constexpr (
             std::is_same_v<Type, domain::UpdateSequenceSettings>) {
           return {
@@ -2218,6 +2241,55 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(remove),
               std::move(parsed.value().events),
           }});
+    }
+    if (type == "ResizePattern") {
+      if (!exact_object_keys(input, {"bars", "meta", "pattern_id", "type"}) ||
+          !input.at("pattern_id").is_string() ||
+          !nonnegative_integer(input.at("bars"))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("ResizePattern transaction shape is invalid", path));
+      }
+      const auto pattern_id = input.at("pattern_id").get<std::string>();
+      const auto bars = unsigned_integer_value(input.at("bars"));
+      if (!domain::is_valid_uuid(pattern_id) || !bars.has_value() ||
+          (*bars != 1 && *bars != 2 && *bars != 4 && *bars != 8)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("ResizePattern transaction is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::ResizePattern{
+              std::move(meta.value()), foundation::PatternId{pattern_id},
+              static_cast<std::uint8_t>(*bars)}});
+    }
+    if (type == "DoubleUpPattern") {
+      if (!exact_object_keys(input, {"meta", "pattern_id", "type"}) ||
+          !input.at("pattern_id").is_string() ||
+          !domain::is_valid_uuid(input.at("pattern_id").get<std::string>())) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("DoubleUpPattern transaction is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::DoubleUpPattern{
+              std::move(meta.value()),
+              foundation::PatternId{input.at("pattern_id").get<std::string>()}}});
+    }
+    if (type == "CopyPattern") {
+      if (!exact_object_keys(
+              input, {"meta", "pattern_id", "source_pattern_id", "type"}) ||
+          !input.at("pattern_id").is_string() ||
+          !input.at("source_pattern_id").is_string() ||
+          !domain::is_valid_uuid(input.at("pattern_id").get<std::string>()) ||
+          !domain::is_valid_uuid(
+              input.at("source_pattern_id").get<std::string>())) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("CopyPattern transaction is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::CopyPattern{
+              std::move(meta.value()),
+              foundation::PatternId{
+                  input.at("source_pattern_id").get<std::string>()},
+              foundation::PatternId{input.at("pattern_id").get<std::string>()}}});
     }
     if (type == "UpdateSequenceSettings") {
       if (!exact_object_keys(
@@ -2775,7 +2847,10 @@ foundation::Result<domain::AppliedCommand> apply_command(
             std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback> ||
-            std::is_same_v<Type, domain::EditPatternEvents>) {
+            std::is_same_v<Type, domain::EditPatternEvents> ||
+            std::is_same_v<Type, domain::ResizePattern> ||
+            std::is_same_v<Type, domain::DoubleUpPattern> ||
+            std::is_same_v<Type, domain::CopyPattern>) {
           return domain::apply(state, value, receipts);
         } else {
           return domain::apply(state, domain::Command{value}, receipts);
@@ -2815,6 +2890,9 @@ foundation::Result<domain::Command> legacy_command(
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback> ||
             std::is_same_v<Type, domain::EditPatternEvents> ||
+            std::is_same_v<Type, domain::ResizePattern> ||
+            std::is_same_v<Type, domain::DoubleUpPattern> ||
+            std::is_same_v<Type, domain::CopyPattern> ||
             std::is_same_v<Type, PerformanceMutation> ||
             std::is_same_v<Type, CreatePerformance> ||
             std::is_same_v<Type, RenamePerformance> ||
@@ -3684,6 +3762,9 @@ std::pair<std::string, std::string> history_description(
     else if constexpr (std::is_same_v<T, domain::CreatePattern>) return {"Create Pattern", ""};
     else if constexpr (std::is_same_v<T, domain::AssignPatternSlot> || std::is_same_v<T, domain::ClearPatternSlot> || std::is_same_v<T, domain::MovePatternSlot>) return {"Edit Pattern slots", ""};
     else if constexpr (std::is_same_v<T, domain::MergePatternEvents> || std::is_same_v<T, domain::EditPatternEvents>) return {"Edit Pattern", ""};
+    else if constexpr (std::is_same_v<T, domain::ResizePattern>) return {"Change Pattern Length", ""};
+    else if constexpr (std::is_same_v<T, domain::DoubleUpPattern>) return {"Double Up Pattern", ""};
+    else if constexpr (std::is_same_v<T, domain::CopyPattern>) return {"Copy Pattern", ""};
     else if constexpr (std::is_same_v<T, CreatePerformance> || std::is_same_v<T, PerformanceMutation> || std::is_same_v<T, FinalizePerformanceDraft> || std::is_same_v<T, DeletePerformance>) return {"Record or edit Performance", performance_group};
     else if constexpr (std::is_same_v<T, RenamePerformance>) return {"Rename Performance", ""};
     else if constexpr (std::is_same_v<T, BindPerformanceRecording>) return {"Bind Performance recording", ""};
@@ -5015,6 +5096,27 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
   auto history_guard = history_->acquire();
   return execute_persisted(
       platform_, history_, bundle, PersistedCommand{std::move(normalized)});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::ResizePattern& command) {
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::DoubleUpPattern& command) {
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::CopyPattern& command) {
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(

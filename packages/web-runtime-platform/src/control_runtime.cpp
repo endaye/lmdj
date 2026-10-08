@@ -4013,6 +4013,126 @@ Json ControlRuntime::dispatch(
       }
       return success(std::move(result));
     }
+    if (operation == "pattern.resize" || operation == "pattern.double" ||
+        operation == "pattern.copy") {
+      // Pattern length and copy (#1823): one checked commit each.
+      const auto copying = operation == "pattern.copy";
+      if (operation == "pattern.resize") {
+        require(exact_keys(
+            payload, {"command_id", "expected_revision", "pattern_id", "bars"}));
+      } else if (copying) {
+        require(exact_keys(
+            payload,
+            {"command_id", "expected_revision", "source_pattern_id",
+             "pattern_id"}));
+      } else {
+        require(exact_keys(
+            payload, {"command_id", "expected_revision", "pattern_id"}));
+      }
+      require(sidecar.empty());
+      if (!impl_->session_available() || impl_->active_sequence.has_value()) {
+        return state_error();
+      }
+      Json request{
+          {"operation", std::string(operation)},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"pattern_id", uuid_field(payload, "pattern_id")},
+      };
+      if (copying) {
+        request["source_pattern_id"] = uuid_field(payload, "source_pattern_id");
+      } else if (operation == "pattern.resize") {
+        request["bars"] = unsigned_field(payload, "bars", 8);
+      }
+      const auto changed_pattern = request.at("pattern_id").get<std::string>();
+      if (impl_->transport != nullptr) {
+        // The decision makes all three unavailable while playing, as a
+        // playing length change would move the loop point under the
+        // playhead; recording keeps its admission fence and a transport
+        // command in flight owns the next publication. Refuse before commit.
+        const auto transport = impl_->transport->controller->inspect();
+        if (transport.recording) {
+          return host_error("HOST_STATE_INVALID",
+              "Patterns cannot change length or be copied during Pattern transport recording",
+              {{"reason", "sequence_session_active"}});
+        }
+        if (transport.phase != facade::PatternTransportPhase::idle ||
+            transport.error.has_value() || impl_->transport->publish_pending) {
+          return host_error("HOST_STATE_INVALID",
+              "Patterns can change length or be copied once the Pattern transport settles",
+              {{"reason", "pattern_transport_busy"}});
+        }
+        if (transport.playing) {
+          return host_error("HOST_STATE_INVALID",
+              "Patterns can change length or be copied once the Pattern transport stops",
+              {{"reason", "pattern_transport_playing"}});
+        }
+      }
+      // A copy is a new Pattern and leaves its source unchanged.
+      const auto changes_current =
+          !copying && impl_->pattern_id == changed_pattern;
+      // A scheduled view of the changed, not current, Pattern was prepared
+      // before this commit and would apply stale at its boundary, as for a
+      // grid edit. The current Pattern publishes immediately, which
+      // supersedes or follows a scheduled view.
+      const auto pending_pattern = impl_->engine.pending_pattern_id();
+      if (!copying && !changes_current &&
+          impl_->engine.pattern_telemetry().pending_generation != 0 &&
+          pending_pattern.has_value() &&
+          pending_pattern->value() == changed_pattern) {
+        return host_error("HOST_STATE_INVALID",
+            "Patterns can change length once the pending Pattern publication applies",
+            {{"reason", "pattern_publication_pending"}});
+      }
+      // None of them changes a Bank: a Runtime current before the commit
+      // stays current once the changed view, if any, is in place.
+      const auto runtime_was_current = impl_->project_revision.has_value() &&
+          impl_->runtime_revision == impl_->project_revision;
+      if (impl_->cancel_if_expired()) return timeout_error();
+      auto response = impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      // The Runtime holds only its current Pattern; another Pattern, or a
+      // copy, is prepared from Truth whenever it is selected.
+      if (!changes_current) {
+        impl_->keep_runtime_current(runtime_was_current);
+        result["publication"] = "none";
+        return success(std::move(result));
+      }
+      result["pattern_publication"] = nullptr;
+      if (impl_->replay_holds_runtime()) {
+        // The replay holds the Runtime; its end restores this Truth.
+        impl_->keep_runtime_current(runtime_was_current);
+        result["publication"] = "deferred";
+        return success(std::move(result));
+      }
+      // Stopped: the new length applies now, so the next Play loops at it.
+      const auto published = impl_->publish_edited_pattern(
+          foundation::PatternId{changed_pattern}, false);
+      if (published.publication.has_value()) {
+        impl_->keep_runtime_current(runtime_was_current);
+        result["publication"] = "published";
+        result["pattern_publication"] = {
+            {"generation", published.publication->generation},
+            {"activation_frame", published.publication->activation_frame},
+        };
+      } else if (!published.error.has_value()) {
+        // Swaps by itself once a sounding retiring view frees its slot.
+        impl_->keep_runtime_current(runtime_was_current);
+        result["publication"] = "deferred";
+      } else {
+        // The change is committed; only its Runtime view failed to swap.
+        result["publication"] = "failed";
+        result["snapshot_error"] = *published.error;
+      }
+      return success(std::move(result));
+    }
     if (operation == "project.inspect") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());

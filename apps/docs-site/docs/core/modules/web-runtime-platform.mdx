@@ -205,6 +205,34 @@ or deferred swap or an edit of another Pattern. A `sequence.settings.update`
 (BPM, swing or quantize) changes no Bank either, and keeps a current Runtime
 current the same way (#1805).
 
+## Pattern length and copy
+
+`RuntimeSession.resizePattern({patternId, bars, expectedRevision})`,
+`doubleUpPattern({patternId, expectedRevision})` and
+`copyPattern({sourcePatternId, patternId, expectedRevision})` send
+`pattern.resize`, `pattern.double` and `pattern.copy` through the shared
+Project action queue (#1823). Each call mints its own `command_id`.
+
+The decision makes all three unavailable while playing, so Control refuses them
+before commit with `HOST_STATE_INVALID`, with Truth unchanged, while:
+
+- the Pattern transport records (`sequence_session_active`);
+- a Pattern transport command is in flight (`pattern_transport_busy`);
+- the Pattern transport plays (`pattern_transport_playing`). Unlike
+  `pattern.create`, which only Creator disables while playing, the Host itself
+  enforces this boundary.
+
+A resize or double-up of another Pattern is refused while a scheduled view of
+that Pattern has not yet applied (`pattern_publication_pending`), as for a grid
+edit.
+
+Otherwise Control delegates to the Facade. A resize or double-up of the
+Runtime's current Pattern then republishes its Pattern view immediately, as a
+stopped `pattern.events.edit` does (`publication: "published"`, `"deferred"`
+or `"failed"` with `snapshot_error`), so the next Play loops at the new length.
+A copy, or a resize or double-up of another Pattern, publishes nothing
+(`"none"`). None of them changes a Bank, so a current Runtime stays current.
+
 ## Performance replay authoring
 
 Edits during a Performance replay follow the
