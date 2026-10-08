@@ -260,6 +260,8 @@ With them there, T5's EDIT layer cannot show all 16 grid rows. The owner chose t
 
 A separate plan follows once #1823 is decided. It adds Authoring Commands and Host operations, then enables the T5 controls.
 
+**2026-10-08 addendum.** [#1823 is decided](../prd/decisions/2026-10-08-pattern-length-and-copy.md). The separate plan is [`2026-10-08-pattern-length-and-copy.md`](2026-10-08-pattern-length-and-copy.md): its P1 adds the Core commands and Host operations, and its P2 is this T8.
+
 ## T9 — D01 Project to Desktop Final
 
 **Behaviour.**
