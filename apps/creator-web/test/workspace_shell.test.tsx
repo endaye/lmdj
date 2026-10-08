@@ -2652,8 +2652,11 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
 
   await user.click(screen.getByRole("button", {name: "Sample"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
-  expect(screen.getByTestId("sample-overview").textContent ?? "")
-    .toMatch(/Overview waveform is not an editor/);
+  // D03: the upper screen names the Pad and draws the whole waveform, read-only.
+  const sampleOverview = screen.getByTestId("sample-overview");
+  expect(sampleOverview.textContent ?? "").toMatch(/^PAD A01/);
+  expect(within(sampleOverview).getByRole("img", {name: /waveform/})).toBeTruthy();
+  expect(within(sampleOverview).queryAllByRole("button")).toHaveLength(0);
   expect(within(screen.getByRole("region", {name: "Overview display"}))
     .queryByRole("button", {name: "Zoom In"})).toBeNull();
   expect(padA1()).toBeTruthy();
