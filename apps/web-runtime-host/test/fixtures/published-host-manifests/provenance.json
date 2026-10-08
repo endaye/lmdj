@@ -109,6 +109,26 @@
       "manifest_sha256": "5258ce93c5ee0d990ee8aed12dbcbc402628d9d281db6f538e566270fd6ca0c5",
       "product_build": "1.0.42.0",
       "release_tag": "lmdj-v1.0.42.0"
+    },
+    {
+      "archive": "lmdj-creator-web-6.0.0-product-2.0.87.0.zip",
+      "archive_sha256": "a5e882fccebea9e284484dd7ce947fcb8563a5e05bbe126c2b2b3455b1bce865",
+      "fixture": "creator-web-6.0.0-product-2.0.87.0.json",
+      "host_id": "creator-web",
+      "host_version": "6.0.0",
+      "manifest_sha256": "1cd60b4d952f1647eb432f96060c68a6482eb9ce8949ec88c7838b6152877366",
+      "product_build": "2.0.87.0",
+      "release_tag": "lmdj-v2.0.87.0"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-4.3.9-product-2.0.87.0.zip",
+      "archive_sha256": "f7e132cd2d40fca871e7f4dd7fc09dbec5132933e8610577ca4c51aae03234a1",
+      "fixture": "web-runtime-host-4.3.9-product-2.0.87.0.json",
+      "host_id": "web-runtime-host",
+      "host_version": "4.3.9",
+      "manifest_sha256": "287a48181765c957b0b0fcf7fc65ca4da418472f36c25e9834633a420500039f",
+      "product_build": "2.0.87.0",
+      "release_tag": "lmdj-v2.0.87.0"
     }
   ],
   "schema": "lmdj.published-host-manifests.v1",
