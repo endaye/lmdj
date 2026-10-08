@@ -348,7 +348,9 @@ function Workspace({
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [padColourBusy, setPadColourBusy] = useState(false);
-  const [padColourError, setPadColourError] = useState<string | null>(null);
+  // A refusal belongs to the Pad it was made on, so it is not shown under
+  // another Pad's controls after the selection moves.
+  const [padColourError, setPadColourError] = useState<{slot: number; message: string} | null>(null);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
   // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
   // history chord or by any other rail action.
@@ -2318,12 +2320,13 @@ function Workspace({
       setPadColourBusy(true);
       setPadColourError(null);
       try {
-        // The Project view this choice was made against, as Sample-page
-        // commits name their inspected revision; a stale one is a conflict.
+        // Like every operation on this tail, name the revision the previous
+        // queued commit left, not the rendered view's: a commit just before
+        // this one may not have re-rendered yet.
         const result = await session.setPadColour({
           slot,
           colour,
-          expectedRevision: project.revision,
+          expectedRevision: sequenceAuthoringRevision.current,
         });
         sequenceAuthoringRevision.current = result.committedRevision;
         dispatchTransport({type: "revision", revision: result.committedRevision});
@@ -2337,7 +2340,7 @@ function Workspace({
         }
       } catch (error) {
         const code = reportFailure("Set Pad colour", error);
-        setPadColourError(userMessage(code, errorDetails(error)).message);
+        setPadColourError({slot, message: userMessage(code, errorDetails(error)).message});
         try {
           await refreshPerformProject();
         } catch (refreshError) {
@@ -3043,7 +3046,9 @@ function Workspace({
                     : state.project.current.pads.find(
                       ({slot}) => slot === state.sample.selectedSlot) ?? null}
                   disabledReason={padColourDisabledReason}
-                  error={padColourError}
+                  error={padColourError !== null && padColourError.slot === state.sample.selectedSlot
+                    ? padColourError.message
+                    : null}
                   onChoose={(colour) => {
                     const slot = state.sample.selectedSlot;
                     if (slot !== null) void setPadColour(slot, colour);

@@ -3279,6 +3279,13 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
 });
 
 
+// The Pad colour tests start from the revision the mutable fixture holds, so
+// the queued-commit revision and Truth agree from the first render.
+const readyAtFixtureRevision: CreatorState = {
+  ...ready,
+  project: {...ready.project, current: {...ready.project.current!, revision: 3}},
+};
+
 test("Sample mode sets and restores the selected Pad's colour through Truth", async () => {
   const fixture = mutableSampleRuntimeFixture();
   // A01 holds a BASS asset with no override: it draws the BASS default.
@@ -3299,7 +3306,7 @@ test("Sample mode sets and restores the selected Pad's colour through Truth", as
         replayed: false};
     },
   });
-  render(<App initialState={ready} runtimeFactory={() => session} />);
+  render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
@@ -3325,6 +3332,46 @@ test("Sample mode sets and restores the selected Pad's colour through Truth", as
   expect(controls.getByTestId("pad-colour-source").textContent).toBe("BASS default");
 });
 
+test("a Pad colour queued behind another names the revision that commit left", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  fixture.padColours.set(0, {category: "bass", colour_override: null, colour: 1});
+  const requests: Array<{slot: number; colour: number | null; expectedRevision: number}> = [];
+  const session = Object.assign(fixture.session, {
+    setPadColour: async (request: {slot: number; colour: number | null;
+      expectedRevision: number}) => {
+      requests.push(request);
+      if (request.expectedRevision !== fixture.revision) {
+        throw Object.assign(new Error("stale"), {code: "REVISION_CONFLICT", details: {}});
+      }
+      fixture.padColours.set(request.slot, {
+        category: "bass",
+        colour_override: request.colour,
+        colour: request.colour ?? 1,
+      });
+      fixture.revision += 1;
+      return {committedRevision: fixture.revision, projectRevision: fixture.revision,
+        replayed: false};
+    },
+  });
+  render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  const controls = within(screen.getByRole("region", {name: "Pad colour"}));
+  // Two choices before either renders: the second queues behind the first.
+  fireEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
+  fireEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests).toEqual([
+    {slot: 0, colour: 2, expectedRevision: 3},
+    {slot: 0, colour: 3, expectedRevision: 4},
+  ]);
+  // Truth accepted both: the second was not refused as a stale revision.
+  await waitFor(() => expect(fixture.revision).toBe(5));
+  expect(fixture.padColours.get(0)?.colour_override).toBe(3);
+  expect(controls.queryByRole("alert")).toBeNull();
+});
+
 test("a refused Pad colour is reported and the Pad keeps its Truth colour", async () => {
   const fixture = mutableSampleRuntimeFixture();
   fixture.padColours.set(0, {category: "bass", colour_override: null, colour: 1});
@@ -3333,7 +3380,7 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
       throw Object.assign(new Error("refused"), {code: "HOST_STATE_INVALID", details: {}});
     },
   });
-  render(<App initialState={ready} runtimeFactory={() => session} />);
+  render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
@@ -3343,6 +3390,13 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
   expect(screen.getByRole("button", {name: /^Pad A01 /}).getAttribute("data-pad-colour"))
     .toBe("1");
   expect(fixture.revision).toBe(3);
+  // The refusal belongs to A01: it is not shown under another Pad's controls.
+  await userEvent.click(screen.getByRole("button", {name: /^Pad A02 /}));
+  expect(within(screen.getByRole("region", {name: "Pad colour"})).queryByRole("alert"))
+    .toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: /^Pad A01 /}));
+  expect(within(screen.getByRole("region", {name: "Pad colour"})).getByRole("alert"))
+    .toBeTruthy();
 });
 
 test("Delete cancels a pending import and ignores its late completion", async () => {
