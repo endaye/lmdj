@@ -163,6 +163,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "sample.update_pad",
     "sample.reset_pad",
     "pad.delete",
+    "pad.colour.set",
     "sample.preview.set",
     "sample.preview.clear",
     "sample.stop",
@@ -404,6 +405,38 @@ test("accepts only exact privacy-safe Sample operation payloads", () => {
     }),
     expectCode("HOST_PROTOCOL_MISMATCH"),
   );
+});
+
+test("Pad colour payloads carry a palette index or null and nothing else", () => {
+  const set = (payload) => createRequestEnvelope({
+    operation: "pad.colour.set",
+    payload,
+    crypto: {randomUUID: () => REQUEST_ID},
+  });
+  const valid = {
+    command_id: requestIdFor(121),
+    expected_revision: 7,
+    slot: {bank: 0, pad: 3},
+    colour: 4,
+  };
+  assert.equal(set(valid).operation, "pad.colour.set");
+  // Null restores the category default; Core, not the wire, owns the range.
+  assert.deepEqual(set({...valid, colour: null}).payload.colour, null);
+  assert.equal(set({...valid, colour: 5}).payload.colour, 5);
+  const {colour: _omitted, ...missing} = valid;
+  for (const invalid of [
+    missing,
+    {...valid, colour: -1},
+    {...valid, colour: 1.5},
+    {...valid, colour: 256},
+    {...valid, colour: "drums"},
+    {...valid, slot: 3},
+    {...valid, expected_revision: -1},
+    {...valid, command_id: "not-a-uuid"},
+    {...valid, project_path: "/forbidden/project.lmdj"},
+  ]) {
+    assert.throws(() => set(invalid), expectCode("HOST_PROTOCOL_MISMATCH"));
+  }
 });
 
 // lmdj.project.v5 5.1.0: the shared fixture holds every PadPlayback copy to

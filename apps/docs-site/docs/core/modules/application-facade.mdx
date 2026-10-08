@@ -542,6 +542,30 @@ Cancelled staging directories use the same best-effort disposal as ordinary impo
 cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
 the directory has no live token and is reclaimed by the existing aging sweep.
 
+## Pad colour
+
+`project.inspect` projects three Pad colour fields on every Pad (#1207):
+
+- `category`: the Pad's Asset category (`drums`, `bass`, `melodic`, `vocal` or
+  `texture`), or null when the Asset is unclassified or the Pad is empty;
+- `colour_override`: the user's palette index override, or null;
+- `colour`: the effective palette index from the Domain resolver
+  `effective_pad_colour` (the override, else the category's index, else null
+  for the neutral Pad).
+
+Hosts draw `colour` and never recompute it.
+
+`pad.colour.set` takes `project_path`, `command_id`, `expected_revision`,
+`slot` and `colour`, a palette index or null to restore the category default.
+The Facade checks only the index's 8-bit width; the Domain refuses an index
+outside the palette (`pad_colour_out_of_range`), an empty Pad (`pad_empty`) and
+the current value (`pad_colour_unchanged`), so a no-op records no revision. It
+runs `admit_non_sequence_authoring`, so an open Sequence session or transport
+journal refuses it (`sequence_session_active`). The result is
+`{committed_revision, slot, replayed}`: a colour changes no audio, so it
+requires no Runtime projection. Undo/Redo restore it under the history label
+"Set Pad colour".
+
 ## 分 Pad Sound Set 获取
 
 `soundset.catalog.describe` 返回经 Core 解析的 Catalog 身份与总字节，不获取整套素材。`soundset.slot.acquire` 校验并缓存一个已占用槽；`soundset.slot.install` 对同编号目标 Pad 提交一个 InstallSoundSet assignment，保留原 manifest 身份、lineage、配额及 revision/receipt 语义，且不允许 replace policy。

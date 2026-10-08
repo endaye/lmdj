@@ -219,6 +219,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"sample.quota", OperationKind::query},
       {"sample.reset_pad", OperationKind::command},
       {"pad.delete", OperationKind::command},
+      {"pad.colour.set", OperationKind::command},
       {"sample.update_pad", OperationKind::command},
       {"sample.waveform", OperationKind::query},
       {"snapshot.cook", OperationKind::query},
@@ -491,6 +492,11 @@ domain::TriggerMode trigger_mode_value(const nlohmann::json& encoded) {
   }
   invalid("trigger_mode is invalid");
 }
+
+// lmdj.project.v5 5.3.0 Asset category names, in palette order: a category's
+// position here is its palette index (`domain::pad_colour_index`).
+constexpr std::array<std::string_view, domain::kPadColourCount>
+    kAssetCategoryNames{"drums", "bass", "melodic", "vocal", "texture"};
 
 std::string_view trigger_mode_name(domain::TriggerMode mode) {
   switch (mode) {
@@ -810,6 +816,17 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   for (std::size_t bank = 0; bank < state.banks.size(); ++bank) {
     auto pads = nlohmann::json::array();
     for (const auto& pad : state.banks.at(bank)) {
+      // Pad colour (#1207): the category comes from the Pad's Asset, the
+      // override from the Pad, and `colour` is the Domain resolver's one
+      // effective index. Hosts draw `colour` and never recompute it.
+      std::optional<domain::AssetCategory> category;
+      if (pad.asset_id.has_value()) {
+        const auto asset = state.assets.find(*pad.asset_id);
+        if (asset != state.assets.end()) {
+          category = asset->second.category;
+        }
+      }
+      const auto colour = domain::effective_pad_colour(state, pad.id);
       pads.push_back(
           {
               {"pad", pad.id.pad},
@@ -817,6 +834,17 @@ nlohmann::json project_json(const domain::ProjectState& state) {
                pad.asset_id.has_value()
                    ? nlohmann::json(pad.asset_id->value())
                    : nlohmann::json(nullptr)},
+              {"category",
+               category.has_value()
+                   ? nlohmann::json(kAssetCategoryNames.at(
+                         domain::pad_colour_index(*category)))
+                   : nlohmann::json(nullptr)},
+              {"colour_override",
+               pad.colour.has_value() ? nlohmann::json(*pad.colour)
+                                      : nlohmann::json(nullptr)},
+              {"colour",
+               colour.has_value() ? nlohmann::json(*colour)
+                                  : nlohmann::json(nullptr)},
           });
     }
     banks.push_back({{"bank", bank}, {"pads", std::move(pads)}});
@@ -4197,6 +4225,9 @@ struct Application::Impl {
     if (operation == "pad.delete") {
       return sample_delete_pad(request);
     }
+    if (operation == "pad.colour.set") {
+      return pad_colour_set(request);
+    }
     if (operation == "asset.import") {
       return asset_import(request);
     }
@@ -6135,6 +6166,47 @@ struct Application::Impl {
          {"pattern_slot", copied.value().event.at("pattern_slot")},
          {"replayed", copied.value().replayed}},
         copied.value().state.revision);
+  }
+
+  // Pad colour (#1207): sets (an index) or clears (null) the Pad's colour
+  // override. Only the uint8 width is checked here; the Domain owns the
+  // palette range (`pad_colour_out_of_range`), the empty-Pad refusal
+  // (`pad_empty`) and the unchanged no-op (`pad_colour_unchanged`). It
+  // changes no audio, so no Runtime projection is required.
+  nlohmann::json pad_colour_set(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "slot", "colour"}),
+        "pad.colour.set request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto slot = slot_value(request.at("slot"));
+    std::optional<std::uint8_t> colour;
+    if (!request.at("colour").is_null()) {
+      colour = static_cast<std::uint8_t>(unsigned_field(
+          request, "colour", std::numeric_limits<std::uint8_t>::max()));
+    }
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto set = projects.execute(
+        path,
+        domain::SetPadColour{
+            domain::CommandMeta{foundation::CommandId{command_id}, revision},
+            slot,
+            colour});
+    if (!set.has_value()) {
+      return error_envelope(set.error());
+    }
+    return success_envelope(
+        {{"committed_revision", set.value().state.revision},
+         {"slot", slot_json(slot)},
+         {"replayed", set.value().replayed}},
+        set.value().state.revision);
   }
 
   nlohmann::json pattern_slot_assign(const nlohmann::json &request) {

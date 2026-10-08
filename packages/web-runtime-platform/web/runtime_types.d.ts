@@ -705,3 +705,38 @@ export interface AuthoringHistoryRuntimeSession {
   undoAuthoring(request: AuthoringHistoryRequest): Promise<Readonly<AuthoringHistoryMutation>>;
   redoAuthoring(request: AuthoringHistoryRequest): Promise<Readonly<AuthoringHistoryMutation>>;
 }
+
+/** lmdj.project.v5 5.3.0 Asset category, in palette index order. */
+export type PadCategory = "drums" | "bass" | "melodic" | "vocal" | "texture";
+
+/**
+ * The Pad colour fields every `project.inspect` Pad carries (#1207). Core
+ * resolves `colour`: the override, else the category's palette index, else
+ * null (neutral). Hosts draw `colour` and never recompute it.
+ */
+export interface InspectedPadColour {
+  /** The Pad's Asset category, or null when unclassified or empty. */
+  readonly category: PadCategory | null;
+  /** The user's palette index override, or null. */
+  readonly colour_override: number | null;
+  /** The effective palette index 0..4, or null for the neutral Pad. */
+  readonly colour: number | null;
+}
+
+export interface PadColourRuntimeSession {
+  /**
+   * Sets the Pad's palette index override, or with null restores its
+   * category default. Admitted while playing and refused while recording.
+   * It changes no audio and publishes nothing.
+   */
+  setPadColour(request: {
+    /** Flat Pad slot, 0..63. */
+    readonly slot: number;
+    readonly colour: number | null;
+    readonly expectedRevision: number;
+  }): Promise<Readonly<{
+    committedRevision: number;
+    projectRevision: number;
+    replayed: boolean;
+  }>>;
+}

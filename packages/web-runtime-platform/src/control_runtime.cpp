@@ -4133,6 +4133,60 @@ Json ControlRuntime::dispatch(
       }
       return success(std::move(result));
     }
+    if (operation == "pad.colour.set") {
+      require(exact_keys(
+          payload, {"command_id", "expected_revision", "slot", "colour"}));
+      require(sidecar.empty());
+      const auto selected_slot = slot_value(payload.at("slot"));
+      if (!payload.at("colour").is_null()) {
+        (void)unsigned_field(
+            payload, "colour", std::numeric_limits<std::uint8_t>::max());
+      }
+      if (!impl_->session_available() || impl_->active_sequence.has_value()) {
+        return state_error();
+      }
+      if (impl_->transport != nullptr) {
+        // A Pad colour changes no audio, so playback admits it. Recording
+        // keeps the admission fence it retained, and a settling transport
+        // owns the next commit; refuse those before commit, as for every
+        // other non-Sequence authoring edit.
+        const auto transport = impl_->transport->controller->inspect();
+        if (transport.recording) {
+          return host_error("HOST_STATE_INVALID",
+              "Pad colours cannot change during Pattern transport recording",
+              {{"reason", "sequence_session_active"}});
+        }
+        if (transport.phase != facade::PatternTransportPhase::idle ||
+            transport.error.has_value() || impl_->transport->publish_pending) {
+          return host_error("HOST_STATE_INVALID",
+              "Pad colours can change once the Pattern transport settles",
+              {{"reason", "pattern_transport_busy"}});
+        }
+      }
+      // A colour changes no Bank and no Pattern: a Runtime current before it
+      // stays current, and nothing is prepared or published.
+      const auto runtime_was_current = impl_->project_revision.has_value() &&
+          impl_->runtime_revision == impl_->project_revision;
+      if (impl_->cancel_if_expired()) return timeout_error();
+      auto response = impl_->application.command({
+          {"operation", "pad.colour.set"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"slot", {{"bank", selected_slot.bank}, {"pad", selected_slot.pad}}},
+          {"colour", payload.at("colour")},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      impl_->keep_runtime_current(runtime_was_current);
+      return success({{"committed_revision", *impl_->project_revision},
+                      {"project_revision", *impl_->project_revision},
+                      {"replayed", response.at("result").at("replayed")},
+                      {"publication", "none"}});
+    }
     if (operation == "project.inspect") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());

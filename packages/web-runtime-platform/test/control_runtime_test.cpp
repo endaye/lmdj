@@ -7805,6 +7805,87 @@ void test_pattern_events_edit_keeps_a_current_runtime_current() {
       {"accepted"});
 }
 
+Json pad_colour(std::uint32_t command, std::uint64_t revision, Json colour) {
+  return {{"command_id", uuid(command)}, {"expected_revision", revision},
+          {"slot", slot(0, 0)}, {"colour", std::move(colour)}};
+}
+
+// #1207: a Pad colour changes no audio. While the Pattern plays it commits
+// without a Bank or Pattern publication, and the playing view keeps its origin.
+void test_pad_colour_set_while_playing_disturbs_nothing() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  check_success(runtime->dispatch("pattern.events.edit",
+      grid_edit(9720, 2, Json::array(), Json::array({grid_note(0, 0)})), {}));
+  auto& engine = runtime->engine();
+  // The stopped edit's view applies by the next quantum, before Play.
+  static_cast<void>(render_grid_frames(engine, 128));
+  play_grid_transport(*runtime, 9721);
+  static_cast<void>(render_grid_frames(engine, 1'280));
+  const auto origin = engine.current_pattern_origin_frame();
+  const auto generation = engine.pattern_telemetry().current_generation;
+  const auto banks = engine.bank_telemetry().accepted_publications;
+  const auto patterns = engine.pattern_telemetry().accepted_publications;
+  const auto result = check_exact_success(
+      runtime->dispatch("pad.colour.set", pad_colour(9722, 3, 2), {}),
+      {"committed_revision", "project_revision", "replayed", "publication"});
+  LMDJ_CHECK(result.at("publication") == "none");
+  const auto pad = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("banks").at(0).at("pads").at(0);
+  // An imported Asset is unclassified, so the override alone colours the Pad.
+  LMDJ_CHECK(pad.at("category").is_null());
+  LMDJ_CHECK(pad.at("colour_override") == 2);
+  LMDJ_CHECK(pad.at("colour") == 2);
+  LMDJ_CHECK(engine.bank_telemetry().accepted_publications == banks);
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == patterns);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == generation);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == origin);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("playing") == true);
+  // The next downbeat still sounds the A1 note: one bar is 96000 frames.
+  LMDJ_CHECK(render_grid_frames(engine, 96'000));
+}
+
+void test_pad_colour_set_keeps_a_current_runtime_current() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto response = runtime->dispatch("pad.colour.set", pad_colour(9723, 2, 4), {});
+  check_success(response);
+  LMDJ_CHECK(response.at("result") == Json({{"committed_revision", 3},
+      {"project_revision", 3}, {"replayed", false}, {"publication", "none"}}));
+  // The colour changed no Bank, so a Bank-bound preview is still admitted.
+  check_exact_success(runtime->dispatch("sample.preview.set",
+      {{"slot", slot(0, 0)}, {"playback", playback_payload(0, std::nullopt)}}, {}),
+      {"accepted"});
+}
+
+void test_pad_colour_set_refused_while_recording_keeps_truth() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto truth = [&] {
+    return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  };
+  const auto before = truth();
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9724, 1, "record"), {}));
+  std::array<float, 128> left{}, right{};
+  bool recording = false;
+  for (unsigned step = 0; step < 8 && !recording; ++step) {
+    runtime->engine().render(left.data(), right.data(), 128);
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    recording = status.at("recording") == true && status.at("phase") == "idle";
+  }
+  LMDJ_CHECK(recording);
+  const auto refused = check_error(
+      runtime->dispatch("pad.colour.set", pad_colour(9725, 2, 1), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "sequence_session_active");
+  LMDJ_CHECK(truth() == before);
+}
+
 // #1805: a settings commit changes no Bank either, so a BPM change keeps a
 // current Runtime current and a Bank-bound preview is still admitted.
 void test_a_bpm_change_keeps_a_current_runtime_current() {
@@ -9108,6 +9189,9 @@ int main() {
     test_pattern_events_edit_refuses_a_pending_publication();
     test_pattern_events_edit_refuses_a_legacy_sequence_session();
     test_pattern_events_edit_keeps_a_current_runtime_current();
+    test_pad_colour_set_while_playing_disturbs_nothing();
+    test_pad_colour_set_keeps_a_current_runtime_current();
+    test_pad_colour_set_refused_while_recording_keeps_truth();
     test_a_bpm_change_keeps_a_current_runtime_current();
     test_a_swing_change_keeps_a_current_runtime_current();
     test_pattern_events_edit_reports_a_failed_swap();

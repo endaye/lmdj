@@ -66,6 +66,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "sample.update_pad",
   "sample.reset_pad",
   "pad.delete",
+  "pad.colour.set",
   "sample.preview.set",
   "sample.preview.clear",
   "sample.stop",
@@ -819,6 +820,21 @@ function requireSampleOperationPayload(operation, payload) {
         UUID_PATTERN.test(payload.command_id) &&
         isUnsignedInteger(payload.expected_revision) &&
         validSlot(payload.slot);
+      break;
+    case "pad.colour.set":
+      // A palette index or null (restore the category default). Core owns
+      // the palette range; the wire carries only its width.
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "slot",
+          "colour",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        validSlot(payload.slot) &&
+        (payload.colour === null || isUnsignedInteger(payload.colour, 255));
       break;
     case "pattern.create":
       valid =
