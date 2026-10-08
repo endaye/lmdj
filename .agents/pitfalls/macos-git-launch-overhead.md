@@ -1,7 +1,7 @@
 ---
 id: macos-git-launch-overhead
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-14
     occurrence: https://github.com/endaye/lmdj/commit/66c00a6649b9926b282eb70982b78b4c3b34ece6
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-10-08
     occurrence: https://github.com/endaye/lmdj/pull/1876
     observed_by: Codex
-exit: none
+exit: skill:.agents/skills/lmdj-review-ci-triage/SKILL.md
 ---
 
 # Git launch overhead can exhaust a real-Git test budget on macOS
@@ -28,51 +28,17 @@ the original groups also timed out with both Portal rehearsals stopped.
 
 ## How to apply
 
-Profile the unchanged failing group before changing fixtures or budgets. Resolve
-the selected Git with `xcrun --find git`, verify its identity and compare actual
-command output and launch cost against the current PATH entry. Do not assume
-every machine has the same toolchain path or the same performance cause.
+Follow the **macOS real-Git lane timeouts** procedure in
+[`lmdj-review-ci-triage`](../skills/lmdj-review-ci-triage/SKILL.md): profile the
+unchanged failure, prove original-executable equivalence, justify a command-local
+adjustment by measured cost, then require the complete original lane to pass.
+This judgment belongs in a skill, not a universal performance gate.
 
-When justified by that evidence, use a private temporary bin containing only a
-thin executable wrapper that executes the selected Git by its original absolute
-path, preserving its executable prefix. Do not symlink the executable into that
-bin: Git can resolve a different exec path and template directory through the
-symlink. Compare `git --exec-path` and an actual isolated `git init`, including
-stderr, `.git/info/exclude` and sample hooks, against the original launcher.
-Matching version and HEAD output alone does not establish toolchain equivalence.
-If wrapper launch overhead remains material, the already installed original
-Git directory may instead be selected command-locally after comparing resolution
-of every other tool used by that verification. Preserve Node/Python and other
-tool selections; do not silently select an alternate compiler or shell.
-Change PATH only for the verification command. Preserve Git config/filter guards,
-writer FD inheritance, all cases and original timeouts. Run the entire failed
-groups and retain their actual results alongside the original failures; a
-microbenchmark or passing prefix is not acceptance. Record the exact PATH and
-resolved executable. Do not change global PATH, xcode-select, system settings,
-install another toolchain, or silently claim the original environment passed.
-
-This entry remains open because environment-specific launch cost is not a
-deterministic defect suitable for a universal CI gate. The retained diagnostic
-and complete follow-up results are in
-`docs/plans/2026-09-14-release-candidate-transition.md`.
-
-Follow-up correction to this same investigation: the original temporary symlink
-selected an Xcode exec path and emitted a missing-template warning during init;
-the source-setup regression then failed because `.git/info` was absent. The
-original failures and symlink-based passes remain historical evidence, not proof
-under an equivalent Git environment. A four-launcher probe confirmed that a thin
-absolute-path wrapper restores the original Command Line Tools exec path,
-exclude bytes and all 14 sample hooks. See the source-setup Task's acceptance
-ledger for that probe and the unchanged-suite rerun; do not repair the fixture
-or loosen its assertions to accommodate this accidental relocation.
-
-The second occurrence in [PR #1876](https://github.com/endaye/lmdj/pull/1876)
-hit the unchanged 1,200-second worker deadline: three shards passed 1,398
-cases, but the complete 1,865-case lane did not pass. An unchanged candidate
-journey profile spent 130.895 of 137.648 seconds in Git calls. Both a shell
-wrapper and a native executable wrapper proved slower; equivalence alone did
-not establish a useful environment adjustment. A complete rerun using the
-verified original Git directory remains pending, with all cases and deadlines
-unchanged. [Escalation #1878](https://github.com/endaye/lmdj/issues/1878) tracks
-absorption into the shipping/CI-triage skill; this entry stays open until that
-mechanism lands. No partial, interrupted or timed-out run is passing evidence.
+The first investigation's temporary symlink changed the exec path/templates;
+its apparent passes were not equivalent-environment proof. In the second
+occurrence, three passing shards (1,398 cases) preceded a 1,200-second worker
+timeout, and a profile was deliberately interrupted. Slower shell/native
+wrappers also remained negative diagnostics. [PR #1876](https://github.com/endaye/lmdj/pull/1876)
+subsequently records a complete 1,865-case pass using the verified original Git
+directory with unchanged cases and bounds. Preserve all earlier failures;
+that later pass does not turn them into successful runs.
