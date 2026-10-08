@@ -50,14 +50,58 @@ When invoked without cleanup intent, list and triage open tasks:
    - `docs/quality/2026-08-17-manual-verification-todo.md` (Human verification & decision gates)
    - `docs/prd/questions/` and `docs/prd/decisions/` (Architecture decisions)
 
-### 2. Classification & Independence Rules
+### 2. Validate evidence before accepting a report or opening a workstream
+
+Apply this step before treating a report, Issue, ledger entry or investigation
+as a factual premise for classification or staffing. Pin the repository and
+source revision under investigation; distinguish a reported deployed build from
+current `origin/main`. Re-read source at that revision (`git show <sha>:<path>`
+when the working tree differs), and refresh the premise when the tree changes.
+
+1. **Reported presence:** For every Host operation the report names, locate its
+   real dispatch registration and read the selected handler. For Web Runtime,
+   start in `packages/web-runtime-platform/src/control_runtime.cpp`; follow
+   tables, generated registrations and delegated handlers as applicable rather
+   than requiring one particular `if` spelling. Compare the claimed payload
+   with the handler's `exact_keys` validation, including alternative/nested key
+   sets, value and sidecar constraints. Read its session/state prerequisites and
+   response path before accepting a claimed result. For a claimed storage path,
+   trace the writer and Host mount/path mapping to the observed filesystem.
+   Record each operation's dispatch, handler, accepted payload and any mismatch.
+2. **Reported absence:** For every absence asserted by the report or your own
+   investigation, state what the same instrument would output if the thing were
+   present. Demonstrate that positive result on a known-present case at the
+   inspected revision, with the same scope and relevant representation. Then
+   enumerate and inspect the authoritative sites where the claimed thing must
+   exist; retain the bounded scope and negative result. Include generated inputs
+   and consumers, table entries, aliases and positional aggregate initializers.
+   For positional wiring, map each initializer value to declaration order; for
+   manifest wiring, follow generated identity → CMake extraction → compile
+   define → construction site. An empty name search alone cannot close this step.
+   For a harness, corpus or filter, name the class/outcome it cannot express and
+   check a known-present member of the class under investigation.
+3. **Disposition:** Attach the revision, method, positive control, inspected
+   sites and results to each finding. Separate verified facts, contradicted
+   premises and unresolved claims. Correct a contradicted premise in the triage
+   output; mark incomplete coverage or unavailable build evidence unverified
+   and request the concrete missing evidence. Only verified premises support a
+   Ready Machine Task; a bounded investigation of an unverified claim must say
+   what it will establish. Do not silently turn uncertainty into a defect or
+   an absence. Issue edits or workflow dispatch still need their own authority.
+
+Complete when every claimed operation and absence has a disposition and enough
+evidence for another reviewer to reproduce it. This is a triage judgment step,
+not a prose-scanning CI gate. See
+[`blind-search-reads-as-absence`](../../pitfalls/blind-search-reads-as-absence.md).
+
+### 3. Classification & Independence Rules
 Categorize each task into one of four states:
 1. **Ready Machine Tasks**: Concrete engineering tasks with no open design blockers. Can be implemented autonomously in isolated worktrees.
 2. **Architecture / Question Issues**: Decision or Contract questions requiring a decision record under `docs/prd/decisions/` before implementation.
 3. **Physical / Manual Verifications**: Tasks requiring real hardware (macOS Safari, iPadOS touch, physical MIDI, acoustic microphone tests).
 4. **Blocked Tasks**: Blocked on a specific upstream decision gate (e.g. P2, F4, F6, D1-D5).
 
-### 3. Identifying Parallel Workstreams
+### 4. Identifying Parallel Workstreams
 To avoid git merge conflicts and domain coupling, assign parallel tasks to distinct active source boundaries:
 - **Stream A (Tooling, Release & Packaging)**: `scripts/`, `tools/release/`, `packaging/`
 - **Stream B (Core & Provider SDK)**: `packages/authoring-domain/`, `packages/provider-sdk/`, `providers/`
