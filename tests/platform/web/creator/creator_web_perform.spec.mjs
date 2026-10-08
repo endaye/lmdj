@@ -620,7 +620,12 @@ async function removeProfile(userDataDir) {
   await rm(userDataDir, {recursive: true, force: true, maxRetries: 10, retryDelay: 200});
 }
 
-async function launchCrashableCreatorContext(userDataDir) {
+class CrashableLaunchError extends Error {}
+
+// One launch of a separate Chromium the journey can SIGKILL. A launch whose
+// endpoint never answers is killed and reported, never kept: the caller
+// relaunches instead of waiting longer on the same process.
+async function launchCrashableChromium(userDataDir) {
   const activePortPath = join(userDataDir, "DevToolsActivePort");
   await rm(activePortPath, {force: true});
   await discardRestorableSession(userDataDir);
@@ -636,6 +641,14 @@ async function launchCrashableCreatorContext(userDataDir) {
     "--remote-debugging-port=0",
     "about:blank",
   ], {stdio: "ignore", detached: true});
+  const abandon = async (message) => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      killProcessGroup(child);
+      await exited;
+    }
+    throw new CrashableLaunchError(message);
+  };
   let endpoint = null;
   for (let attempt = 0; attempt < 100 && endpoint === null; attempt += 1) {
     try {
@@ -645,10 +658,7 @@ async function launchCrashableCreatorContext(userDataDir) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     }
   }
-  if (endpoint === null) {
-    killProcessGroup(child);
-    throw new Error("Crashable Chromium did not publish its DevTools endpoint");
-  }
+  if (endpoint === null) await abandon("Crashable Chromium did not publish its DevTools endpoint");
   let browser = null;
   for (let attempt = 0; attempt < 20 && browser === null; attempt += 1) {
     try {
@@ -657,10 +667,26 @@ async function launchCrashableCreatorContext(userDataDir) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     }
   }
-  if (browser === null) {
-    killProcessGroup(child);
-    throw new Error("Crashable Chromium DevTools endpoint was unreachable");
+  if (browser === null) await abandon("Crashable Chromium DevTools endpoint was unreachable");
+  return {child, browser};
+}
+
+// #1869: under load a launched Chromium can publish its port before the
+// endpoint answers within the connect budget. Relaunch it -- each attempt keeps
+// the same budget -- rather than widen the wait; the last failure is reported.
+const CRASHABLE_LAUNCH_ATTEMPTS = 3;
+
+async function launchCrashableCreatorContext(userDataDir) {
+  let launched = null;
+  for (let attempt = 1; launched === null; attempt += 1) {
+    try {
+      launched = await launchCrashableChromium(userDataDir);
+    } catch (error) {
+      if (!(error instanceof CrashableLaunchError) || attempt >= CRASHABLE_LAUNCH_ATTEMPTS) throw error;
+      console.warn(`crashable Chromium launch ${attempt}/${CRASHABLE_LAUNCH_ATTEMPTS}: ${error.message}; relaunching`);
+    }
   }
+  const {child, browser} = launched;
   const context = browser.contexts()[0];
   if (context === undefined) {
     killProcessGroup(child);
