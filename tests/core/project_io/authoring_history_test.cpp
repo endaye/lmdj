@@ -189,6 +189,47 @@ void adoption_is_one_action_and_reuses_every_original_artifact() {
   ProjectStore reopened;
   LMDJ_CHECK(reopened.load(f.root).value() == redone.state);
 }
+// Set, restore-default and Delete each undo and redo to the exact Pad, and
+// the persisted history replays the override after a reload.
+void pad_colour_set_restore_and_delete_undo_and_redo() {
+  Fixture f;
+  const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{3}};
+  LMDJ_CHECK(f.store.import_assign_sample_bytes(f.root,
+      {f.meta(), {0, 0}, AssetId{uuid(2)}, "audio/wav", bytes}).has_value());
+  const auto plain = f.state().banks[0][0];
+  LMDJ_CHECK(plain.asset_id.has_value() && !plain.colour.has_value());
+
+  const auto set_colour = [&](std::optional<std::uint8_t> colour) {
+    const auto result = f.store.execute(f.root, SetPadColour{f.meta(), {0, 0}, colour});
+    if (!result.has_value()) throw std::runtime_error(result.error().message);
+    LMDJ_CHECK(f.status().undo_label == "Set Pad colour");
+    return f.state().banks[0][0];
+  };
+  const auto coloured = set_colour(2);
+  LMDJ_CHECK(coloured.colour == 2);
+  LMDJ_CHECK(f.restore().state.banks[0][0] == plain);
+  LMDJ_CHECK(f.restore(true).state.banks[0][0] == coloured);
+
+  const auto restored = set_colour(std::nullopt);
+  LMDJ_CHECK(restored == plain);
+  LMDJ_CHECK(f.restore().state.banks[0][0] == coloured);
+  LMDJ_CHECK(f.restore(true).state.banks[0][0] == plain);
+
+  const auto recoloured = set_colour(4);
+  const auto deleted = f.store.execute(f.root, DeletePad{f.meta(), {0, 0}});
+  LMDJ_CHECK(deleted.has_value());
+  LMDJ_CHECK(f.status().undo_label == "Clear Pad");
+  const auto empty = f.state().banks[0][0];
+  LMDJ_CHECK(!empty.asset_id.has_value() && !empty.colour.has_value());
+  LMDJ_CHECK(f.restore().state.banks[0][0] == recoloured);
+  LMDJ_CHECK(f.restore(true).state.banks[0][0] == empty);
+  LMDJ_CHECK(f.restore().state.banks[0][0] == recoloured);
+
+  ProjectStore reopened;
+  const auto persisted = reopened.load(f.root);
+  LMDJ_CHECK(persisted.has_value() && persisted.value() == f.state());
+  LMDJ_CHECK(persisted.value().banks[0][0] == recoloured);
+}
 Result<void> fail_publish(FaultPoint point, const std::filesystem::path&) {
   return point == FaultPoint::manifest_publish
       ? Result<void>::failure(Error{ErrorCode::io_error, "injected history publication failure"})
@@ -512,6 +553,7 @@ int main() {
     pattern_resize_to_its_length_records_nothing();
     pattern_double_up_is_one_action();
     pattern_copy_and_its_slot_are_one_action();
+    pad_colour_set_restore_and_delete_undo_and_redo();
     return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

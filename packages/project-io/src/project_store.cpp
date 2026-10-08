@@ -110,6 +110,7 @@ using PersistedCommand = std::variant<
     domain::ResizePattern,
     domain::DoubleUpPattern,
     domain::CopyPattern,
+    domain::SetPadColour,
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::InstallSoundSet,
@@ -395,6 +396,57 @@ std::optional<domain::TriggerMode> parse_trigger_mode(std::string_view mode) {
   return std::nullopt;
 }
 
+// lmdj.project.v5 5.3.0 Asset category names, in palette order: a category's
+// position here is its Domain value and its default Pad colour index.
+constexpr std::array<std::string_view, domain::kPadColourCount>
+    kAssetCategoryNames{"drums", "bass", "melodic", "vocal", "texture"};
+
+std::string_view asset_category_name(domain::AssetCategory category) {
+  return kAssetCategoryNames.at(domain::pad_colour_index(category));
+}
+
+std::optional<domain::AssetCategory> parse_asset_category(
+    const nlohmann::json& input) {
+  if (!input.is_string()) {
+    return std::nullopt;
+  }
+  const auto& name = input.get_ref<const std::string&>();
+  for (std::size_t index = 0; index < kAssetCategoryNames.size(); ++index) {
+    if (kAssetCategoryNames.at(index) == name) {
+      return static_cast<domain::AssetCategory>(index);
+    }
+  }
+  return std::nullopt;
+}
+
+// The 5.3.0 optional keys are written only where set, so a Project that has
+// no category and no override keeps its 5.2.0 bytes.
+void put_asset_category(
+    nlohmann::json& encoded, const domain::Asset& asset) {
+  if (asset.category.has_value()) {
+    encoded["category"] = asset_category_name(*asset.category);
+  }
+}
+
+void put_pad_colour(nlohmann::json& encoded, const domain::PadSlot& pad) {
+  if (pad.colour.has_value()) {
+    encoded["colour"] = *pad.colour;
+  }
+}
+
+// The Asset shape every transaction command carries.
+nlohmann::json transaction_asset_json(const domain::Asset& asset) {
+  nlohmann::json encoded{
+      {"artifact", asset.artifact},
+      {"id", asset.id.value()},
+      {"lineage",
+       asset.lineage.has_value() ? domain::asset_lineage_json(*asset.lineage)
+                                 : nlohmann::json(nullptr)},
+  };
+  put_asset_category(encoded, asset);
+  return encoded;
+}
+
 // The five 5.0.0 keys are always written. A 5.1.0 parity key is written only
 // when it differs from its default, so a Project that uses none of them keeps
 // its 5.0.0 bytes and stays readable by a 5.0.0 reader.
@@ -564,6 +616,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
           {"pad", slot.id.pad},
       };
       encoded_pad["playback"] = playback_json(slot.playback);
+      put_pad_colour(encoded_pad, slot);
       pads.push_back(std::move(encoded_pad));
     }
     banks.push_back(
@@ -583,6 +636,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
               ? domain::asset_lineage_json(*asset.lineage)
               : nlohmann::json(nullptr);
     }
+    put_asset_category(encoded_asset, asset);
     assets.push_back(std::move(encoded_asset));
   }
   auto patterns = nlohmann::json::array();
@@ -1302,9 +1356,15 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
       seen_banks.at(*bank) = true;
       std::array<bool, 16> seen_pads{};
       for (const auto& encoded_pad : encoded_bank.at("pads")) {
+        // The 5.3.0 colour override. A v5 checkpoint carries no MINOR, so
+        // every lmdj.project.v5 checkpoint admits it and no older one does.
+        const bool has_colour = is_v5 && encoded_pad.is_object() &&
+                                encoded_pad.contains("colour");
         const bool valid_pad_shape =
-            is_v1
-                ? exact_object_keys(encoded_pad, {"asset_id", "pad"})
+            is_v1 ? exact_object_keys(encoded_pad, {"asset_id", "pad"})
+            : has_colour
+                ? exact_object_keys(
+                      encoded_pad, {"asset_id", "colour", "pad", "playback"})
                 : exact_object_keys(
                       encoded_pad, {"asset_id", "pad", "playback"});
         if (!valid_pad_shape ||
@@ -1336,6 +1396,17 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
           state.banks.at(*bank).at(*pad).asset_id =
               foundation::AssetId{asset_id};
         }
+        if (has_colour) {
+          // An override is a palette index, and an empty Pad has no colour.
+          const auto colour = unsigned_integer_value(encoded_pad.at("colour"));
+          if (!colour.has_value() || *colour >= domain::kPadColourCount ||
+              encoded_pad.at("asset_id").is_null()) {
+            return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
+                invalid_project("project Pad colour is invalid", path));
+          }
+          state.banks.at(*bank).at(*pad).colour =
+              static_cast<std::uint8_t>(*colour);
+        }
         if (!is_v1) {
           auto playback = parse_playback(
               encoded_pad.at("playback"),
@@ -1354,7 +1425,9 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
                                        std::string_view id,
                                        const nlohmann::json& encoded,
                                        std::optional<domain::AssetLineage>
-                                           lineage = std::nullopt)
+                                           lineage = std::nullopt,
+                                       std::optional<domain::AssetCategory>
+                                           category = std::nullopt)
         -> foundation::Result<void> {
       if (!domain::is_valid_uuid(id) ||
           !exact_object_keys(encoded, {"artifact"}) ||
@@ -1385,6 +1458,7 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
                   .get<std::uint64_t>(),
           },
           std::move(lineage),
+          category,
       };
       if (!valid_sha256(asset.artifact.sha256)) {
         return foundation::Result<void>::failure(
@@ -1398,8 +1472,15 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
     };
     if (is_v3 || is_v4) {
       for (const auto& encoded : input.at("assets")) {
+        // The 5.3.0 category, admitted by every v5 checkpoint and no older
+        // one, like the Pad colour override.
+        const bool has_category = is_v5 && encoded.is_object() &&
+                                  encoded.contains("category");
         const bool valid_asset_shape =
-            is_v4
+            has_category
+                ? exact_object_keys(
+                      encoded, {"artifact", "asset_id", "category", "lineage"})
+            : is_v4
                 ? exact_object_keys(
                       encoded, {"artifact", "asset_id", "lineage"})
                 : exact_object_keys(encoded, {"artifact", "asset_id"});
@@ -1407,6 +1488,14 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
             !encoded.at("asset_id").is_string()) {
           return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               invalid_project("project asset entry is invalid", path));
+        }
+        std::optional<domain::AssetCategory> category;
+        if (has_category) {
+          category = parse_asset_category(encoded.at("category"));
+          if (!category.has_value()) {
+            return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
+                invalid_project("project Asset category is invalid", path));
+          }
         }
         std::optional<domain::AssetLineage> lineage;
         if (is_v4 && !encoded.at("lineage").is_null()) {
@@ -1430,7 +1519,8 @@ foundation::Result<std::unique_ptr<domain::ProjectState>> parse_project(
         auto parsed = parse_asset_entry(
             encoded.at("asset_id").get<std::string>(),
             value,
-            std::move(lineage));
+            std::move(lineage),
+            category);
         if (!parsed.has_value()) {
           return foundation::Result<std::unique_ptr<domain::ProjectState>>::failure(
               parsed.error());
@@ -1559,13 +1649,17 @@ nlohmann::json meta_json(const domain::CommandMeta& meta) {
 }
 
 nlohmann::json history_asset_json(const domain::Asset& asset) {
-  return {{"id", asset.id.value()}, {"artifact", asset.artifact},
+  nlohmann::json encoded{{"id", asset.id.value()}, {"artifact", asset.artifact},
           {"lineage", asset.lineage ? domain::asset_lineage_json(*asset.lineage) : nlohmann::json(nullptr)}};
+  put_asset_category(encoded, asset);
+  return encoded;
 }
 nlohmann::json history_pad_json(const domain::PadSlot& pad) {
-  return {{"slot", slot_json(pad.id)},
+  nlohmann::json encoded{{"slot", slot_json(pad.id)},
           {"asset_id", pad.asset_id ? nlohmann::json(pad.asset_id->value()) : nlohmann::json(nullptr)},
           {"playback", playback_json(pad.playback)}};
+  put_pad_colour(encoded, pad);
+  return encoded;
 }
 nlohmann::json history_performance_json(const domain::Performance& performance) {
   auto result = performance_value_json(performance);
@@ -1658,22 +1752,41 @@ domain::AuthoringDelta parse_authoring_delta(const nlohmann::json& input, const 
       history_scalar<bool>(input.at("quantize_enabled")), history_scalar<std::uint8_t>(input.at("swing_percent")), {}, {}, {}, {}, {}};
   for (const auto& encoded : input.at("pads")) {
     result.pads.push_back(history_change<domain::PadSlot>(encoded, [&](const auto& value) {
-      history_require(exact_object_keys(value, {"slot", "asset_id", "playback"}));
+      const bool has_colour = value.is_object() && value.contains("colour");
+      history_require(has_colour
+          ? exact_object_keys(value, {"slot", "asset_id", "playback", "colour"})
+          : exact_object_keys(value, {"slot", "asset_id", "playback"}));
       std::optional<foundation::AssetId> asset;
       if (!value.at("asset_id").is_null()) {
         asset = foundation::AssetId{value.at("asset_id").template get<std::string>()};
         history_require(domain::is_valid_uuid(asset->value()));
       }
+      // Range only: replay's Domain admission refuses a colour on an empty Pad.
+      std::optional<std::uint8_t> colour;
+      if (has_colour) {
+        colour = history_integer<std::uint8_t>(value.at("colour"));
+        history_require(*colour < domain::kPadColourCount);
+      }
       return domain::PadSlot{history_parsed(parse_slot(value.at("slot"), path)), asset,
-                            history_parsed(parse_playback(value.at("playback"), path, PlaybackKeys::with_parity))};
+                            history_parsed(parse_playback(value.at("playback"), path, PlaybackKeys::with_parity)),
+                            colour};
     }));
   }
   result.assets = history_map<foundation::AssetId, domain::Asset>(input.at("assets"), [&](const auto& value) {
-    history_require(exact_object_keys(value, {"id", "artifact", "lineage"}));
+    const bool has_category = value.is_object() && value.contains("category");
+    history_require(has_category
+        ? exact_object_keys(value, {"id", "artifact", "lineage", "category"})
+        : exact_object_keys(value, {"id", "artifact", "lineage"}));
     std::optional<domain::AssetLineage> lineage;
     if (!value.at("lineage").is_null()) lineage = history_parsed(domain::asset_lineage_from_json(value.at("lineage")));
+    std::optional<domain::AssetCategory> category;
+    if (has_category) {
+      category = parse_asset_category(value.at("category"));
+      history_require(category.has_value());
+    }
     return domain::Asset{foundation::AssetId{value.at("id").template get<std::string>()},
-                        value.at("artifact").template get<foundation::ArtifactRef>(), std::move(lineage)};
+                        value.at("artifact").template get<foundation::ArtifactRef>(), std::move(lineage),
+                        category};
   });
   result.patterns = history_map<foundation::PatternId, domain::Pattern>(input.at("patterns"), [&](const auto& value) {
     return history_parsed(parse_pattern(value, path));
@@ -1722,15 +1835,7 @@ nlohmann::json command_json(const PersistedCommand& command) {
                   {"delta", authoring_delta_json(value.delta)}};
         } else if constexpr (std::is_same_v<Type, domain::ImportAsset>) {
           return {
-              {"asset",
-               {
-                   {"artifact", value.asset.artifact},
-                   {"id", value.asset.id.value()},
-                   {"lineage",
-                    value.asset.lineage.has_value()
-                        ? domain::asset_lineage_json(*value.asset.lineage)
-                        : nlohmann::json(nullptr)},
-               }},
+              {"asset", transaction_asset_json(value.asset)},
               {"meta", meta_json(value.meta)},
               {"type", "ImportAsset"},
           };
@@ -1823,6 +1928,15 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"source_pattern_id", value.source_pattern_id.value()},
               {"type", "CopyPattern"},
           };
+        } else if constexpr (std::is_same_v<Type, domain::SetPadColour>) {
+          return {
+              {"colour",
+               value.colour.has_value() ? nlohmann::json(*value.colour)
+                                        : nlohmann::json(nullptr)},
+              {"meta", meta_json(value.meta)},
+              {"slot", slot_json(value.slot)},
+              {"type", "SetPadColour"},
+          };
         } else if constexpr (
             std::is_same_v<Type, domain::UpdateSequenceSettings>) {
           return {
@@ -1843,15 +1957,7 @@ nlohmann::json command_json(const PersistedCommand& command) {
         } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample>) {
           return {
-              {"asset",
-               {
-                   {"artifact", value.asset.artifact},
-                   {"id", value.asset.id.value()},
-                   {"lineage",
-                    value.asset.lineage.has_value()
-                        ? domain::asset_lineage_json(*value.asset.lineage)
-                        : nlohmann::json(nullptr)},
-               }},
+              {"asset", transaction_asset_json(value.asset)},
               {"meta", meta_json(value.meta)},
               {"slot", slot_json(value.slot)},
               {"type", "ImportAssignSample"},
@@ -1862,16 +1968,7 @@ nlohmann::json command_json(const PersistedCommand& command) {
           auto assignments = nlohmann::json::array();
           for (const auto& assignment : value.assignments) {
             assignments.push_back({
-                {"asset",
-                 {
-                     {"artifact", assignment.asset.artifact},
-                     {"id", assignment.asset.id.value()},
-                     {"lineage",
-                      assignment.asset.lineage.has_value()
-                          ? domain::asset_lineage_json(
-                                *assignment.asset.lineage)
-                          : nlohmann::json(nullptr)},
-                 }},
+                {"asset", transaction_asset_json(assignment.asset)},
                 {"slot", slot_json(assignment.slot)},
             });
           }
@@ -2003,12 +2100,23 @@ foundation::Result<PersistedCommand> parse_command(
         -> foundation::Result<domain::Asset> {
       const bool legacy_shape =
           exact_object_keys(encoded, {"artifact", "id"});
-      const bool current_shape =
+      // The 5.3.0 category is written only where set.
+      const bool has_category =
+          exact_object_keys(encoded, {"artifact", "category", "id", "lineage"});
+      const bool current_shape = has_category ||
           exact_object_keys(encoded, {"artifact", "id", "lineage"});
       if ((!legacy_shape && !current_shape) ||
           !encoded.at("id").is_string()) {
         return foundation::Result<domain::Asset>::failure(
             invalid_project("transaction Asset shape is invalid", path));
+      }
+      std::optional<domain::AssetCategory> category;
+      if (has_category) {
+        category = parse_asset_category(encoded.at("category"));
+        if (!category.has_value()) {
+          return foundation::Result<domain::Asset>::failure(
+              invalid_project("transaction Asset category is invalid", path));
+        }
       }
       std::optional<domain::AssetLineage> lineage;
       if (current_shape && !encoded.at("lineage").is_null()) {
@@ -2026,6 +2134,7 @@ foundation::Result<PersistedCommand> parse_command(
           foundation::AssetId{encoded.at("id").get<std::string>()},
           encoded.at("artifact").get<foundation::ArtifactRef>(),
           std::move(lineage),
+          category,
       });
     };
     if (type == "ApplyAuthoringDelta") {
@@ -2290,6 +2399,33 @@ foundation::Result<PersistedCommand> parse_command(
               foundation::PatternId{
                   input.at("source_pattern_id").get<std::string>()},
               foundation::PatternId{input.at("pattern_id").get<std::string>()}}});
+    }
+    if (type == "SetPadColour") {
+      if (!exact_object_keys(input, {"colour", "meta", "slot", "type"}) ||
+          !(input.at("colour").is_null() ||
+            nonnegative_integer(input.at("colour")))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("SetPadColour transaction shape is invalid", path));
+      }
+      auto slot = parse_slot(input.at("slot"), path);
+      if (!slot.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(slot.error());
+      }
+      // The palette range belongs to the Domain, which replay consults; the
+      // shape only has to carry the value losslessly.
+      std::optional<std::uint8_t> colour;
+      if (!input.at("colour").is_null()) {
+        const auto value = unsigned_integer_value(input.at("colour"));
+        if (!value.has_value() ||
+            *value > std::numeric_limits<std::uint8_t>::max()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project("SetPadColour colour is invalid", path));
+        }
+        colour = static_cast<std::uint8_t>(*value);
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::SetPadColour{
+              std::move(meta.value()), slot.value(), colour}});
     }
     if (type == "UpdateSequenceSettings") {
       if (!exact_object_keys(
@@ -2850,7 +2986,8 @@ foundation::Result<domain::AppliedCommand> apply_command(
             std::is_same_v<Type, domain::EditPatternEvents> ||
             std::is_same_v<Type, domain::ResizePattern> ||
             std::is_same_v<Type, domain::DoubleUpPattern> ||
-            std::is_same_v<Type, domain::CopyPattern>) {
+            std::is_same_v<Type, domain::CopyPattern> ||
+            std::is_same_v<Type, domain::SetPadColour>) {
           return domain::apply(state, value, receipts);
         } else {
           return domain::apply(state, domain::Command{value}, receipts);
@@ -2893,6 +3030,7 @@ foundation::Result<domain::Command> legacy_command(
             std::is_same_v<Type, domain::ResizePattern> ||
             std::is_same_v<Type, domain::DoubleUpPattern> ||
             std::is_same_v<Type, domain::CopyPattern> ||
+            std::is_same_v<Type, domain::SetPadColour> ||
             std::is_same_v<Type, PerformanceMutation> ||
             std::is_same_v<Type, CreatePerformance> ||
             std::is_same_v<Type, RenamePerformance> ||
@@ -3756,6 +3894,7 @@ std::pair<std::string, std::string> history_description(
     else if constexpr (std::is_same_v<T, domain::AssignPad>) return {value.asset_id ? "Assign Pad" : "Clear Pad", ""};
     else if constexpr (std::is_same_v<T, domain::UpdatePadPlayback>) return {"Edit Pad", ""};
     else if constexpr (std::is_same_v<T, domain::ResetPadPlayback>) return {"Reset Pad", ""};
+    else if constexpr (std::is_same_v<T, domain::SetPadColour>) return {"Set Pad colour", ""};
     else if constexpr (std::is_same_v<T, domain::InstallSoundSet>) return {"Install Sound Set", ""};
     else if constexpr (std::is_same_v<T, domain::AdoptCandidates>) return {"Adopt results", ""};
     else if constexpr (std::is_same_v<T, domain::UpdateSequenceSettings>) return {"Edit Sequence settings", ""};
@@ -5075,6 +5214,13 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::ResetPadPlayback& command) {
+  auto history_guard = history_->acquire();
+  return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::SetPadColour& command) {
   auto history_guard = history_->acquire();
   return execute_persisted(platform_, history_, bundle, PersistedCommand{command});
 }
@@ -7546,7 +7692,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
     assignments.push_back(
         domain::SoundSetInstallAssignment{
             slot.slot,
-            domain::Asset{slot.asset_id, artifact, slot.lineage},
+            domain::Asset{slot.asset_id, artifact, slot.lineage, slot.category},
         });
     stages.push_back(ArtifactStage{{}, artifact, slot.bytes, true});
   }

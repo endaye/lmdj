@@ -205,6 +205,9 @@ class ProjectStore {
     std::string media_type;
     std::span<const std::byte> bytes;
     domain::AssetLineage lineage;
+    // The Set slot role's meaning (lmdj.project.v5 5.3.0); absent leaves the
+    // installed Asset unclassified.
+    std::optional<domain::AssetCategory> category{};
   };
 
   struct SoundSetInstallRequest {
@@ -253,6 +256,10 @@ class ProjectStore {
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
       const domain::EditPatternEvents& command);
+  // Sets or clears a Pad's colour override; history label "Set Pad colour".
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
+      const domain::SetPadColour& command);
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
       const domain::ResizePattern& command);

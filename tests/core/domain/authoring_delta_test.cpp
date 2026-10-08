@@ -14,6 +14,7 @@ void round_trip() {
   edited.quantize_enabled = !before.quantize_enabled;
   edited.swing_percent = 64;
   edited.banks[0][2].playback.gain_millidb = -6000;
+  edited.banks[0][0].colour = 2;
   const auto delta = authoring_difference(before, edited).value();
   const auto reversed = reverse_authoring_delta(delta);
   const auto undone = apply(edited, ApplyAuthoringDelta{{CommandId{uuid(80)}, edited.revision}, reversed}, {});
@@ -122,6 +123,8 @@ void rejects_invalid_result_content() {
     [](auto& s) { s.banks[0][0].playback.pitch_cents = 2401; },
     [](auto& s) { s.banks[0][0].playback.release_ms = 4001; },
     [](auto& s) { s.banks[0][0].playback.eq.mid = lmdj::domain::PadEqBell{1000, 0, 99}; },
+    [](auto& s) { s.banks[0][0].colour = kPadColourCount; },
+    [](auto& s) { s.banks[0][1].colour = 0; },
     [](auto& s) { auto& p = s.patterns.begin()->second; p.id = PatternId{uuid(99)}; },
     [](auto& s) { s.patterns.begin()->second.bars = 3; },
     [](auto& s) { s.patterns.begin()->second.events.front().slot = {4,0}; },

@@ -104,6 +104,8 @@ bool valid_content(const ProjectState& state) {
       const auto& pad = state.banks[b][p];
       if (pad.id.bank != b || pad.id.pad != p ||
           (pad.asset_id && !state.assets.contains(*pad.asset_id)) ||
+          // A colour override is a palette index on a Pad that holds an Asset.
+          (pad.colour && (!pad.asset_id || *pad.colour >= kPadColourCount)) ||
           !is_valid_playback(pad.playback)) return false;
     }
   }
