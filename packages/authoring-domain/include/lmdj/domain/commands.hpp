@@ -101,6 +101,32 @@ struct EditPatternEvents {
   std::vector<PatternEvent> put;
 };
 
+// Pattern length and copy (#1823). Each is one commit and one Undo entry.
+//
+// Resizing to a longer length keeps every event, so the added bars are empty.
+// Resizing to a shorter one removes events that start at or after the new end
+// and truncates the rest to it, so no note crosses the loop seam.
+struct ResizePattern {
+  CommandMeta meta;
+  foundation::PatternId pattern_id;
+  std::uint8_t bars;
+};
+
+// Doubles the length and repeats every event one old length later.
+struct DoubleUpPattern {
+  CommandMeta meta;
+  foundation::PatternId pattern_id;
+};
+
+// Creates `pattern_id` with the source's length and events. A source that
+// holds Pattern slot s puts the copy in the lowest empty slot after s, in the
+// same commit; otherwise the copy holds no slot.
+struct CopyPattern {
+  CommandMeta meta;
+  foundation::PatternId source_pattern_id;
+  foundation::PatternId pattern_id;
+};
+
 struct UpdateSequenceSettings {
   CommandMeta meta;
   std::optional<std::uint16_t> bpm;
@@ -199,6 +225,18 @@ foundation::Result<AppliedCommand> apply(
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const EditPatternEvents& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const ResizePattern& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const DoubleUpPattern& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const CopyPattern& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts);
 
 foundation::Result<AppliedCommand> apply(

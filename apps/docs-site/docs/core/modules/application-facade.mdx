@@ -521,6 +521,23 @@ or Performance session refuses the edit (`sequence_session_active` or
 `performance_session_active`). The result is
 `{committed_revision, pattern_id, replayed}`.
 
+## Pattern length and copy
+
+Three commands change a Pattern's length or copy it (#1823). Each takes
+`project_path`, `command_id` and `expected_revision`, plus:
+
+- `pattern.resize`: `pattern_id` and `bars`, one of 1, 2, 4 or 8;
+- `pattern.double`: `pattern_id`;
+- `pattern.copy`: `source_pattern_id` and the new `pattern_id`.
+
+They run `admit_non_sequence_authoring`, so an open Sequence session or
+transport journal refuses them (`sequence_session_active`), as it refuses
+`pattern.events.edit`. `pattern.resize` and `pattern.double` return
+`{committed_revision, pattern_id, bars, replayed}`. `pattern.copy` returns
+`{committed_revision, source_pattern_id, pattern_id, pattern_slot, replayed}`,
+where `pattern_slot` is the slot the copy took, or `null`. The values come
+from the command receipt, so a replay reports what was committed.
+
 Cancelled staging directories use the same best-effort disposal as ordinary import
 cleanup. A removal failure cannot turn a committed deletion into an unsaved result;
 the directory has no live token and is reclaimed by the existing aging sweep.

@@ -27,6 +27,9 @@ export const HOST_OPERATIONS = Object.freeze([
   "pad.assign",
   "pattern.create",
   "pattern.events.edit",
+  "pattern.resize",
+  "pattern.double",
+  "pattern.copy",
   "pattern.slot.assign",
   "pattern.slot.clear",
   "pattern.slot.move",
@@ -829,6 +832,45 @@ function requireSampleOperationPayload(operation, payload) {
         isUnsignedInteger(payload.expected_revision) &&
         UUID_PATTERN.test(payload.pattern_id) &&
         [1, 2, 4, 8].includes(payload.bars);
+      break;
+    // Pattern length and copy (#1823); Core refuses an unchanged length, a
+    // double-up past 8 bars and an existing copy id.
+    case "pattern.resize":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "pattern_id",
+          "bars",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        UUID_PATTERN.test(payload.pattern_id) &&
+        [1, 2, 4, 8].includes(payload.bars);
+      break;
+    case "pattern.double":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "pattern_id",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        UUID_PATTERN.test(payload.pattern_id);
+      break;
+    case "pattern.copy":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "source_pattern_id",
+          "pattern_id",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        UUID_PATTERN.test(payload.source_pattern_id) &&
+        UUID_PATTERN.test(payload.pattern_id);
       break;
     case "sample.preview.set":
       valid =

@@ -123,6 +123,17 @@ export interface PatternEventRequest extends PatternEventKeyRequest {
   readonly velocity: number;
 }
 
+export type PatternLengthResult = Readonly<{
+  committedRevision: number;
+  projectRevision: number;
+  patternId: string;
+  bars: 1 | 2 | 4 | 8;
+  replayed: boolean;
+  publication: "none" | "published" | "deferred" | "failed";
+  patternPublication: Readonly<{generation: number; activationFrame: number}> | null;
+  snapshotError: Readonly<{code: string; message: string; details: Readonly<Record<string, unknown>>}> | null;
+}>;
+
 export interface SequenceRuntimeSession {
   /**
    * Atomically removes the keyed events, then puts each event by key.
@@ -157,6 +168,45 @@ export interface SequenceRuntimeSession {
     bars: 1 | 2 | 4 | 8;
     replayed: boolean;
     projectRevision: number;
+  }>>;
+  /**
+   * Changes a Pattern's length (#1823). Lengthening leaves the added bars
+   * empty; shortening removes notes from the new end on and cuts a note
+   * crossing it. The current length is refused and records nothing. Refused
+   * with HOST_STATE_INVALID while the Pattern transport plays
+   * (`pattern_transport_playing`), records (`sequence_session_active`) or
+   * settles a command (`pattern_transport_busy`). `publication` is "none"
+   * when the Pattern is not the Runtime's current one, "published" when its
+   * view was republished at once, "deferred" when it swaps once a Pattern
+   * slot frees or a replay ends, and "failed" (`snapshotError`) when the
+   * committed change's view could not swap.
+   */
+  resizePattern(request: {
+    readonly patternId: string;
+    readonly bars: 1 | 2 | 4 | 8;
+    readonly expectedRevision: number;
+  }): Promise<PatternLengthResult>;
+  /** Doubles a Pattern and repeats its notes; refused at 8 bars. */
+  doubleUpPattern(request: {
+    readonly patternId: string;
+    readonly expectedRevision: number;
+  }): Promise<PatternLengthResult>;
+  /**
+   * Copies a Pattern's length and notes to `patternId`. A source in Pattern
+   * slot s puts the copy in the lowest empty slot after s (`patternSlot`);
+   * otherwise the copy holds no slot. Publishes nothing.
+   */
+  copyPattern(request: {
+    readonly sourcePatternId: string;
+    readonly patternId: string;
+    readonly expectedRevision: number;
+  }): Promise<Readonly<{
+    committedRevision: number;
+    projectRevision: number;
+    sourcePatternId: string;
+    patternId: string;
+    patternSlot: number | null;
+    replayed: boolean;
   }>>;
   updateSequenceSettings(request: {
     readonly expectedRevision: number;

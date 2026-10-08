@@ -1,5 +1,6 @@
 #include <array>
 #include <exception>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -21,7 +22,9 @@ using lmdj::domain::ClearPatternSlot;
 using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CommandReceipt;
+using lmdj::domain::CopyPattern;
 using lmdj::domain::CreatePattern;
+using lmdj::domain::DoubleUpPattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::ImportAssignSample;
 using lmdj::domain::LoopMode;
@@ -34,6 +37,7 @@ using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::PatternEventKey;
 using lmdj::domain::ResetPadPlayback;
+using lmdj::domain::ResizePattern;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
 using lmdj::domain::UpdateSequenceSettings;
@@ -68,10 +72,16 @@ constexpr auto kClearPatternSlotCommand =
     "10000000-0000-4000-8000-00000000000f";
 constexpr auto kEditCommand1 = "10000000-0000-4000-8000-000000000010";
 constexpr auto kEditCommand2 = "10000000-0000-4000-8000-000000000011";
+constexpr auto kLengthCommand1 = "10000000-0000-4000-8000-000000000012";
+constexpr auto kLengthCommand2 = "10000000-0000-4000-8000-000000000013";
+constexpr auto kSlotCommand1 = "10000000-0000-4000-8000-000000000014";
+constexpr auto kSlotCommand2 = "10000000-0000-4000-8000-000000000015";
+constexpr auto kSlotCommand3 = "10000000-0000-4000-8000-000000000016";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
 constexpr auto kPattern2 = "30000000-0000-4000-8000-000000000002";
+constexpr auto kPattern3 = "30000000-0000-4000-8000-000000000003";
 constexpr auto kValidSha256 =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -1048,6 +1058,226 @@ void test_edit_pattern_events_is_revision_checked_and_replays() {
   LMDJ_CHECK(replayed.value().event == first.event);
 }
 
+// Pattern length and copy (#1823).
+
+// The refusal's exact code and reason for any checked command; a refusal
+// must leave the state untouched.
+template <typename CommandType>
+std::optional<std::pair<ErrorCode, std::string>> refusal_of(
+    const lmdj::domain::ProjectState& state, const CommandType& command) {
+  const auto before = state;
+  const auto result = lmdj::domain::apply(state, command, {});
+  if (!(state == before)) {
+    throw std::runtime_error("a refused command changed the state");
+  }
+  if (result.has_value()) {
+    return std::nullopt;
+  }
+  return std::pair{result.error().code,
+                   result.error().details.value("reason", std::string{})};
+}
+
+// A two-bar Pattern (L = 7680) at revision 1: A1 inside bar 1, A2 crossing
+// the one-bar seam at 3840, A3 exactly at it and A4 later in bar 2.
+lmdj::domain::ProjectState project_with_two_bar_pattern() {
+  return apply_or_throw(
+             new_project(),
+             Command{CreatePattern{
+                 meta(kPatternCommand, 0),
+                 {PatternId{kPattern1},
+                  2,
+                  {
+                      {PadSlotId{0, 0}, 0, 240, 100},
+                      {PadSlotId{0, 1}, 3600, 480, 90},
+                      {PadSlotId{0, 2}, 3840, 240, 80},
+                      {PadSlotId{0, 3}, 5000, 100, 70},
+                  }},
+             }})
+      .state;
+}
+
+ResizePattern resize_pattern(std::string command_id, std::uint64_t revision,
+                             std::uint8_t bars,
+                             std::string pattern_id = kPattern1) {
+  return ResizePattern{meta(std::move(command_id), revision),
+                       PatternId{std::move(pattern_id)}, bars};
+}
+
+CopyPattern copy_pattern(std::string command_id, std::uint64_t revision,
+                         std::string pattern_id,
+                         std::string source_pattern_id = kPattern1) {
+  return CopyPattern{meta(std::move(command_id), revision),
+                     PatternId{std::move(source_pattern_id)},
+                     PatternId{std::move(pattern_id)}};
+}
+
+// Puts `pattern_id` in Pattern slot `slot`, creating it (one bar, empty)
+// first unless it exists.
+lmdj::domain::ProjectState with_slotted_pattern(
+    lmdj::domain::ProjectState state, std::string command_id,
+    std::string pattern_id, std::uint8_t slot) {
+  if (!state.patterns.contains(PatternId{pattern_id})) {
+    state = apply_or_throw(
+                state, Command{CreatePattern{
+                           meta(kSlotCommand3, state.revision),
+                           {PatternId{pattern_id}, 1, {}}}})
+                .state;
+  }
+  return apply_or_throw(
+             state, Command{AssignPatternSlot{
+                        meta(std::move(command_id), state.revision), slot,
+                        PatternId{std::move(pattern_id)}}})
+      .state;
+}
+
+void test_resize_pattern_lengthen_keeps_every_event() {
+  const auto state = project_with_grid_pattern();
+  const auto resized = apply_or_throw(state, resize_pattern(kLengthCommand1, 1, 4));
+  LMDJ_CHECK(resized.state.revision == state.revision + 1);
+  LMDJ_CHECK(resized.event.at("type") == "pattern.resized");
+  LMDJ_CHECK(resized.event.at("bars") == 4);
+  const auto& pattern = resized.state.patterns.at(PatternId{kPattern1});
+  LMDJ_CHECK(pattern.bars == 4);
+  // The added bars are empty: every event is exactly as it was.
+  LMDJ_CHECK(pattern.events ==
+             state.patterns.at(PatternId{kPattern1}).events);
+}
+
+void test_resize_pattern_shorten_drops_later_events_and_truncates_at_the_seam() {
+  const auto resized = apply_or_throw(
+      project_with_two_bar_pattern(), resize_pattern(kLengthCommand1, 1, 1));
+  const auto& pattern = resized.state.patterns.at(PatternId{kPattern1});
+  LMDJ_CHECK(pattern.bars == 1);
+  // A3 starts at the new end and A4 after it, so both go; A2 is cut to the
+  // 240 ticks left before the seam.
+  LMDJ_CHECK((pattern.events == std::vector<PatternEvent>{
+      {PadSlotId{0, 0}, 0, 240, 100},
+      {PadSlotId{0, 1}, 3600, 240, 90}}));
+}
+
+void test_resize_pattern_to_its_length_is_a_refused_no_op() {
+  LMDJ_CHECK(refusal_of(project_with_grid_pattern(),
+                        resize_pattern(kLengthCommand1, 1, 1)) ==
+             refused(ErrorCode::invalid_argument, "pattern_length_unchanged"));
+}
+
+void test_resize_pattern_refuses_an_unknown_pattern_and_invalid_bars() {
+  const auto state = project_with_grid_pattern();
+  LMDJ_CHECK(refusal_of(state, resize_pattern(kLengthCommand1, 1, 2, kPattern2)) ==
+             refused(ErrorCode::not_found, "pattern_not_found"));
+  for (const auto bars : std::initializer_list<std::uint8_t>{0, 3, 16}) {
+    LMDJ_CHECK(refusal_of(state, resize_pattern(kLengthCommand1, 1, bars)) ==
+               refused(ErrorCode::invalid_argument, ""));
+  }
+}
+
+void test_double_up_repeats_every_event_one_length_later() {
+  const auto state = project_with_grid_pattern();
+  const auto doubled = apply_or_throw(
+      state, DoubleUpPattern{meta(kLengthCommand1, 1), PatternId{kPattern1}});
+  LMDJ_CHECK(doubled.state.revision == state.revision + 1);
+  LMDJ_CHECK(doubled.event.at("type") == "pattern.doubled");
+  LMDJ_CHECK(doubled.event.at("bars") == 2);
+  const auto& pattern = doubled.state.patterns.at(PatternId{kPattern1});
+  LMDJ_CHECK(pattern.bars == 2);
+  LMDJ_CHECK((pattern.events == std::vector<PatternEvent>{
+      {PadSlotId{0, 0}, 0, 240, 100},
+      {PadSlotId{0, 1}, 240, 240, 100},
+      {PadSlotId{0, 0}, 3840, 240, 100},
+      {PadSlotId{0, 1}, 4080, 240, 100}}));
+}
+
+void test_double_up_is_refused_at_eight_bars_and_for_an_unknown_pattern() {
+  const auto eight = apply_or_throw(
+      project_with_grid_pattern(), resize_pattern(kLengthCommand1, 1, 8));
+  LMDJ_CHECK(refusal_of(eight.state, DoubleUpPattern{meta(kLengthCommand2, 2),
+                                                     PatternId{kPattern1}}) ==
+             refused(ErrorCode::invalid_argument, "pattern_length_maximum"));
+  LMDJ_CHECK(refusal_of(eight.state, DoubleUpPattern{meta(kLengthCommand2, 2),
+                                                     PatternId{kPattern2}}) ==
+             refused(ErrorCode::not_found, "pattern_not_found"));
+}
+
+void test_copy_pattern_has_equal_content_a_new_id_and_no_slot_when_unslotted() {
+  const auto state = project_with_two_bar_pattern();
+  const auto copied = apply_or_throw(state, copy_pattern(kLengthCommand1, 1, kPattern2));
+  LMDJ_CHECK(copied.state.revision == state.revision + 1);
+  LMDJ_CHECK(copied.event.at("type") == "pattern.copied");
+  LMDJ_CHECK(copied.event.at("source_pattern_id") == kPattern1);
+  LMDJ_CHECK(copied.event.at("pattern_slot").is_null());
+  const auto& source = state.patterns.at(PatternId{kPattern1});
+  const auto& copy = copied.state.patterns.at(PatternId{kPattern2});
+  LMDJ_CHECK(copy.id == PatternId{kPattern2});
+  LMDJ_CHECK(copy.bars == source.bars);
+  LMDJ_CHECK(copy.events == source.events);
+  LMDJ_CHECK(copied.state.patterns.at(PatternId{kPattern1}) == source);
+  LMDJ_CHECK(copied.state.pattern_slots == state.pattern_slots);
+}
+
+void test_copy_pattern_takes_the_lowest_empty_slot_after_its_source() {
+  // Source in slot 2, slot 3 taken; slot 0 is empty but before the source.
+  auto state = with_slotted_pattern(project_with_grid_pattern(), kSlotCommand1,
+                                    kPattern1, 2);
+  state = with_slotted_pattern(std::move(state), kSlotCommand2, kPattern3, 3);
+  const auto copied = apply_or_throw(
+      state, copy_pattern(kLengthCommand1, state.revision, kPattern2));
+  LMDJ_CHECK(copied.event.at("pattern_slot") == 4);
+  auto expected = state.pattern_slots;
+  expected.at(4) = PatternId{kPattern2};
+  LMDJ_CHECK(copied.state.pattern_slots == expected);
+}
+
+void test_copy_pattern_takes_no_slot_when_none_is_free_after_its_source() {
+  // Slot 0 is empty, but nothing after slot 15 is: the copy wraps nowhere.
+  const auto state = with_slotted_pattern(project_with_grid_pattern(),
+                                          kSlotCommand1, kPattern1, 15);
+  const auto copied = apply_or_throw(
+      state, copy_pattern(kLengthCommand1, state.revision, kPattern2));
+  LMDJ_CHECK(copied.event.at("pattern_slot").is_null());
+  LMDJ_CHECK(copied.state.pattern_slots == state.pattern_slots);
+  LMDJ_CHECK(copied.state.patterns.contains(PatternId{kPattern2}));
+}
+
+void test_copy_pattern_refuses_an_unknown_source_and_an_existing_or_invalid_id() {
+  const auto state = project_with_grid_pattern();
+  LMDJ_CHECK(refusal_of(state, copy_pattern(kLengthCommand1, 1, kPattern2, kPattern3)) ==
+             refused(ErrorCode::not_found, "pattern_not_found"));
+  LMDJ_CHECK(refusal_of(state, copy_pattern(kLengthCommand1, 1, kPattern1)) ==
+             refused(ErrorCode::duplicate_id, ""));
+  LMDJ_CHECK(refusal_of(state, copy_pattern(kLengthCommand1, 1,
+                                            "30000000-0000-4000-8000-00000000000A")) ==
+             refused(ErrorCode::invalid_argument, ""));
+}
+
+template <typename CommandType>
+void check_revision_checked_and_replays(
+    const lmdj::domain::ProjectState& state, const CommandType& stale,
+    const CommandType& command) {
+  const auto conflicted = lmdj::domain::apply(state, stale, {});
+  LMDJ_CHECK(!conflicted.has_value());
+  LMDJ_CHECK(conflicted.error().code == ErrorCode::revision_conflict);
+  const auto first = apply_or_throw(state, command);
+  const std::map<CommandId, CommandReceipt> receipts{
+      {command.meta.command_id, {first.state.revision, first.event}}};
+  const auto replayed = lmdj::domain::apply(first.state, command, receipts);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state == first.state);
+  LMDJ_CHECK(replayed.value().event == first.event);
+}
+
+void test_pattern_length_and_copy_are_revision_checked_and_replay() {
+  const auto state = project_with_grid_pattern();
+  check_revision_checked_and_replays(state,
+      resize_pattern(kLengthCommand1, 0, 2), resize_pattern(kLengthCommand2, 1, 2));
+  check_revision_checked_and_replays(state,
+      DoubleUpPattern{meta(kLengthCommand1, 0), PatternId{kPattern1}},
+      DoubleUpPattern{meta(kLengthCommand2, 1), PatternId{kPattern1}});
+  check_revision_checked_and_replays(state,
+      copy_pattern(kLengthCommand1, 0, kPattern2),
+      copy_pattern(kLengthCommand2, 1, kPattern2));
+}
+
 void test_tick_pattern_validation_enforces_loop_remainder() {
   const auto initial = new_project();
   for (const PatternEvent invalid : {
@@ -1256,6 +1486,17 @@ int main() {
     test_edit_pattern_events_refuses_a_note_across_the_loop_seam();
     test_edit_pattern_events_refuses_an_unknown_pattern();
     test_edit_pattern_events_is_revision_checked_and_replays();
+    test_resize_pattern_lengthen_keeps_every_event();
+    test_resize_pattern_shorten_drops_later_events_and_truncates_at_the_seam();
+    test_resize_pattern_to_its_length_is_a_refused_no_op();
+    test_resize_pattern_refuses_an_unknown_pattern_and_invalid_bars();
+    test_double_up_repeats_every_event_one_length_later();
+    test_double_up_is_refused_at_eight_bars_and_for_an_unknown_pattern();
+    test_copy_pattern_has_equal_content_a_new_id_and_no_slot_when_unslotted();
+    test_copy_pattern_takes_the_lowest_empty_slot_after_its_source();
+    test_copy_pattern_takes_no_slot_when_none_is_free_after_its_source();
+    test_copy_pattern_refuses_an_unknown_source_and_an_existing_or_invalid_id();
+    test_pattern_length_and_copy_are_revision_checked_and_replay();
     test_tick_pattern_validation_enforces_loop_remainder();
     test_sequence_settings_update_enforces_locked_ranges();
     test_pattern_slot_commands_enforce_ownership_and_receipts();

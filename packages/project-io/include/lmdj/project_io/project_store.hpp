@@ -255,6 +255,15 @@ class ProjectStore {
       const domain::EditPatternEvents& command);
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
+      const domain::ResizePattern& command);
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
+      const domain::DoubleUpPattern& command);
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
+      const domain::CopyPattern& command);
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
       const domain::DeletePad& command);
   foundation::Result<CommandExecution> execute_with_identity(
       const std::filesystem::path& bundle,

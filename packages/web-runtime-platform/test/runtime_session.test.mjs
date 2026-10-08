@@ -32,6 +32,9 @@ const API = [
   "commitPerformanceResample",
   "createPattern",
   "editPatternEvents",
+  "resizePattern",
+  "doubleUpPattern",
+  "copyPattern",
   "deletePerformance",
   "diagnostics",
   "discardPerformance",
@@ -6723,6 +6726,160 @@ test("an invalid Pattern event edit request is refused before it is sent", async
     {patternId, expectedRevision: 0, remove: [], put: [{slot: 0, onsetTick: 0}]},
   ]) {
     await assert.rejects(session.editPatternEvents(request), TypeError);
+  }
+  assert.deepEqual(operations, []);
+});
+
+test("Pattern length changes send exact payloads with a fresh command per call", async () => {
+  const sent = [];
+  const patternId = "30000000-0000-4000-8000-000000000001";
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "pattern.resize") {
+      sent.push(envelope);
+      return success(envelope, {
+        committed_revision: 5, project_revision: 5, pattern_id: patternId, bars: 2,
+        replayed: false, publication: "published",
+        pattern_publication: {generation: 7, activation_frame: 960},
+      });
+    }
+    if (envelope.operation === "pattern.double") {
+      sent.push(envelope);
+      return success(envelope, {
+        committed_revision: 6, project_revision: 6, pattern_id: patternId, bars: 4,
+        replayed: false, publication: "none",
+      });
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const resized = await session.resizePattern({patternId, bars: 2, expectedRevision: 4});
+  const doubled = await session.doubleUpPattern({patternId, expectedRevision: 5});
+  assert.deepEqual(sent.map(({operation}) => operation), ["pattern.resize", "pattern.double"]);
+  assert.deepEqual({...sent[0].payload, command_id: null}, {
+    command_id: null, expected_revision: 4, pattern_id: patternId, bars: 2,
+  });
+  assert.deepEqual({...sent[1].payload, command_id: null}, {
+    command_id: null, expected_revision: 5, pattern_id: patternId,
+  });
+  for (const envelope of sent) {
+    assert.match(envelope.payload.command_id, /^[0-9a-f-]{36}$/);
+  }
+  assert.notEqual(sent[0].payload.command_id, sent[1].payload.command_id);
+  assert.deepEqual(resized, {
+    committedRevision: 5, projectRevision: 5, patternId, bars: 2, replayed: false,
+    publication: "published", patternPublication: {generation: 7, activationFrame: 960},
+    snapshotError: null,
+  });
+  assert.deepEqual(doubled, {
+    committedRevision: 6, projectRevision: 6, patternId, bars: 4, replayed: false,
+    publication: "none", patternPublication: null, snapshotError: null,
+  });
+});
+
+test("a Pattern length result must match its request and publication shape", async () => {
+  const patternId = "30000000-0000-4000-8000-000000000001";
+  const base = {committed_revision: 5, project_revision: 5, pattern_id: patternId,
+    bars: 2, replayed: false};
+  const results = [];
+  const {session} = fixture({send: async (envelope) =>
+    ["pattern.resize", "pattern.double"].includes(envelope.operation)
+      ? success(envelope, results.shift())
+      : success(envelope, defaultResult(envelope.operation))});
+  await session.start();
+  const request = {patternId, bars: 2, expectedRevision: 4};
+  results.push({...base, publication: "deferred", pattern_publication: null});
+  assert.equal((await session.resizePattern(request)).publication, "deferred");
+  results.push({...base, publication: "failed", pattern_publication: null,
+    snapshot_error: {code: "HOST_STATE_INVALID", message: "unavailable",
+      details: {reason: "pattern_publication_unavailable"}}});
+  const failed = await session.resizePattern(request);
+  assert.equal(failed.snapshotError.details.reason, "pattern_publication_unavailable");
+  for (const result of [
+    {...base, bars: 4, publication: "none"},
+    {...base, publication: "live", pattern_publication: {generation: 1, activation_frame: 0}},
+    {...base, publication: "published"},
+    {...base, publication: "none", pattern_publication: null},
+    {...base, publication: "failed", pattern_publication: null},
+    {...base, project_revision: 6, publication: "none"},
+  ]) {
+    results.push(result);
+    await assert.rejects(session.resizePattern(request), {code: "HOST_PROTOCOL_MISMATCH"});
+  }
+  results.push({...base, bars: 1, publication: "none"});
+  await assert.rejects(session.doubleUpPattern({patternId, expectedRevision: 4}),
+    {code: "HOST_PROTOCOL_MISMATCH"});
+});
+
+test("a Pattern copy returns its slot and must match its request", async () => {
+  const sent = [];
+  const sourcePatternId = "30000000-0000-4000-8000-000000000001";
+  const patternId = "30000000-0000-4000-8000-000000000002";
+  const base = {committed_revision: 5, project_revision: 5,
+    source_pattern_id: sourcePatternId, pattern_id: patternId, replayed: false,
+    publication: "none"};
+  const results = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation !== "pattern.copy") {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    sent.push(envelope.payload);
+    return success(envelope, results.shift());
+  }});
+  await session.start();
+  const request = {sourcePatternId, patternId, expectedRevision: 4};
+  results.push({...base, pattern_slot: 4});
+  assert.deepEqual(await session.copyPattern(request), {
+    committedRevision: 5, projectRevision: 5, sourcePatternId, patternId,
+    patternSlot: 4, replayed: false,
+  });
+  assert.deepEqual({...sent[0], command_id: null}, {
+    command_id: null, expected_revision: 4, source_pattern_id: sourcePatternId,
+    pattern_id: patternId,
+  });
+  results.push({...base, pattern_slot: null});
+  assert.equal((await session.copyPattern(request)).patternSlot, null);
+  assert.notEqual(sent[0].command_id, sent[1].command_id);
+  for (const result of [
+    {...base, pattern_slot: 16},
+    {...base, pattern_slot: 4, publication: "published"},
+    {...base, pattern_slot: 4, pattern_id: sourcePatternId},
+    {...base, pattern_slot: 4, project_revision: 6},
+    {...base},
+  ]) {
+    results.push(result);
+    await assert.rejects(session.copyPattern(request), {code: "HOST_PROTOCOL_MISMATCH"});
+  }
+});
+
+test("an invalid Pattern length or copy request is refused before it is sent", async () => {
+  const operations = [];
+  const {session} = fixture({send: async (envelope) => {
+    operations.push(envelope.operation);
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  operations.length = 0;
+  const patternId = "30000000-0000-4000-8000-000000000001";
+  for (const request of [
+    {patternId, bars: 3, expectedRevision: 0},
+    {patternId: "not-a-uuid", bars: 2, expectedRevision: 0},
+    {patternId, bars: 2, expectedRevision: -1},
+    {patternId, bars: 2},
+  ]) {
+    await assert.rejects(session.resizePattern(request), TypeError);
+  }
+  for (const request of [
+    {patternId, expectedRevision: 0, bars: 2},
+    {patternId: "not-a-uuid", expectedRevision: 0},
+  ]) {
+    await assert.rejects(session.doubleUpPattern(request), TypeError);
+  }
+  for (const request of [
+    {sourcePatternId: patternId, patternId: "not-a-uuid", expectedRevision: 0},
+    {sourcePatternId: "not-a-uuid", patternId, expectedRevision: 0},
+    {patternId, expectedRevision: 0},
+  ]) {
+    await assert.rejects(session.copyPattern(request), TypeError);
   }
   assert.deepEqual(operations, []);
 });

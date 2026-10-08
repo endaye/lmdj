@@ -7552,6 +7552,149 @@ void test_pattern_events_edit_of_another_pattern_publishes_nothing() {
   LMDJ_CHECK(runtime->engine().pattern_telemetry().accepted_publications == patterns);
 }
 
+// #1823: Pattern length and copy. Payloads for the current grid Pattern.
+Json pattern_resize(std::uint32_t command, std::uint64_t revision, unsigned bars) {
+  return {{"command_id", uuid(command)}, {"expected_revision", revision},
+          {"pattern_id", kPatternId}, {"bars", bars}};
+}
+
+Json pattern_double(std::uint32_t command, std::uint64_t revision) {
+  return {{"command_id", uuid(command)}, {"expected_revision", revision},
+          {"pattern_id", kPatternId}};
+}
+
+Json pattern_copy(std::uint32_t command, std::uint64_t revision,
+                  std::uint32_t copy) {
+  return {{"command_id", uuid(command)}, {"expected_revision", revision},
+          {"source_pattern_id", kPatternId}, {"pattern_id", uuid(copy)}};
+}
+
+void test_pattern_resize_while_stopped_loops_the_next_play_at_the_new_length() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+  check_success(runtime->dispatch("pattern.events.edit",
+      grid_edit(9730, 2, Json::array(), Json::array({grid_note(0, 0)})), {}));
+  const auto response =
+      runtime->dispatch("pattern.resize", pattern_resize(9731, 3, 2), {});
+  check_success(response);
+  const auto& result = response.at("result");
+  LMDJ_CHECK(result.at("publication") == "published");
+  LMDJ_CHECK(result.at("pattern_publication").is_object());
+  LMDJ_CHECK(result.at("bars") == 2);
+  LMDJ_CHECK(result.at("committed_revision") == 4);
+  // Applied by the next quantum, so nothing pending refuses the next Play.
+  LMDJ_CHECK(!render_grid_frames(engine, 128));
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  play_grid_transport(*runtime, 9732);
+  const auto origin = engine.current_pattern_origin_frame();
+  LMDJ_CHECK(origin.has_value());
+  // One bar at 120 BPM is 96000 frames. The downbeat note sounds, then the
+  // added bar stays silent where a one-bar loop would sound again, and the
+  // loop comes round after two bars.
+  LMDJ_CHECK(render_grid_frames(engine, 4'800));
+  const auto played = engine.telemetry().rendered_frames - *origin;
+  LMDJ_CHECK(!render_grid_frames(engine, 192'000 - played - 256));
+  LMDJ_CHECK(render_grid_frames(engine, 4'800));
+}
+
+void test_pattern_length_and_copy_refuse_while_playing_and_keep_truth() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto truth = [&] {
+    return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  };
+  play_grid_transport(*runtime, 9733);
+  const auto before = truth();
+  const auto patterns = runtime->engine().pattern_telemetry().accepted_publications;
+  for (const auto& [operation, payload] : std::array<std::pair<std::string_view, Json>, 3>{{
+           {"pattern.resize", pattern_resize(9734, 2, 2)},
+           {"pattern.double", pattern_double(9735, 2)},
+           {"pattern.copy", pattern_copy(9736, 2, 9737)}}}) {
+    const auto refused = check_error(runtime->dispatch(operation, payload, {}),
+                                     "HOST_STATE_INVALID");
+    LMDJ_CHECK(refused.at("details").at("reason") == "pattern_transport_playing");
+  }
+  LMDJ_CHECK(truth() == before);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().accepted_publications == patterns);
+}
+
+void test_pattern_length_and_copy_refuse_while_recording_and_keep_truth() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto truth = [&] {
+    return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  };
+  const auto before = truth();
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9738, 1, "record"), {}));
+  std::array<float, 128> left{}, right{};
+  bool recording = false;
+  for (unsigned step = 0; step < 8 && !recording; ++step) {
+    runtime->engine().render(left.data(), right.data(), 128);
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    recording = status.at("recording") == true && status.at("phase") == "idle";
+  }
+  LMDJ_CHECK(recording);
+  for (const auto& [operation, payload] : std::array<std::pair<std::string_view, Json>, 3>{{
+           {"pattern.resize", pattern_resize(9739, 2, 2)},
+           {"pattern.double", pattern_double(9740, 2)},
+           {"pattern.copy", pattern_copy(9741, 2, 9742)}}}) {
+    const auto refused = check_error(runtime->dispatch(operation, payload, {}),
+                                     "HOST_STATE_INVALID");
+    LMDJ_CHECK(refused.at("details").at("reason") == "sequence_session_active");
+  }
+  LMDJ_CHECK(truth() == before);
+}
+
+void test_pattern_length_and_copy_refuse_while_the_transport_settles() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto before =
+      runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9743, 1, "play_stop"), {}));
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("phase") != "idle");
+  const auto refused = check_error(
+      runtime->dispatch("pattern.double", pattern_double(9744, 2), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_transport_busy");
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {})
+                 .at("result").at("project") == before);
+}
+
+void test_pattern_copy_and_a_change_of_another_pattern_publish_nothing() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  const auto banks = runtime->engine().bank_telemetry().accepted_publications;
+  const auto patterns = runtime->engine().pattern_telemetry().accepted_publications;
+  const auto copied = runtime->dispatch("pattern.copy", pattern_copy(9745, 2, 9746), {});
+  check_success(copied);
+  LMDJ_CHECK(copied.at("result").at("publication") == "none");
+  LMDJ_CHECK(copied.at("result").at("pattern_id") == uuid(9746));
+  LMDJ_CHECK(copied.at("result").at("pattern_slot").is_null());
+  LMDJ_CHECK(copied.at("result").at("committed_revision") == 3);
+  // The copy is not the Runtime's current Pattern, so doubling it publishes
+  // nothing either.
+  const auto doubled = runtime->dispatch("pattern.double",
+      {{"command_id", uuid(9747)}, {"expected_revision", 3},
+       {"pattern_id", uuid(9746)}}, {});
+  check_success(doubled);
+  LMDJ_CHECK(doubled.at("result").at("publication") == "none");
+  LMDJ_CHECK(doubled.at("result").at("bars") == 2);
+  LMDJ_CHECK(runtime->engine().bank_telemetry().accepted_publications == banks);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().accepted_publications == patterns);
+  // Neither changed a Bank, so a Bank-bound preview is still admitted.
+  check_exact_success(runtime->dispatch("sample.preview.set",
+      {{"slot", slot(0, 0)}, {"playback", playback_payload(0, std::nullopt)}}, {}),
+      {"accepted"});
+}
+
 void test_pattern_events_edit_refusals_keep_truth() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -8956,6 +9099,11 @@ int main() {
     test_pattern_events_edit_while_playing_swaps_the_pattern_in_place();
     test_pattern_events_edit_of_another_pattern_publishes_nothing();
     test_pattern_events_edit_refusals_keep_truth();
+    test_pattern_resize_while_stopped_loops_the_next_play_at_the_new_length();
+    test_pattern_length_and_copy_refuse_while_playing_and_keep_truth();
+    test_pattern_length_and_copy_refuse_while_recording_and_keep_truth();
+    test_pattern_length_and_copy_refuse_while_the_transport_settles();
+    test_pattern_copy_and_a_change_of_another_pattern_publish_nothing();
     test_pattern_events_edit_refuses_while_the_transport_settles();
     test_pattern_events_edit_refuses_a_pending_publication();
     test_pattern_events_edit_refuses_a_legacy_sequence_session();

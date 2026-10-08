@@ -414,6 +414,88 @@ void pattern_event_edit_is_one_action_and_replays_after_reload() {
   LMDJ_CHECK(f.restore(true).state.patterns == after.patterns);
 }
 
+// #1823: a length change, a double-up and a copy are each one labelled
+// action. Undo restores the Patterns and Pattern slots exactly, Redo reapplies
+// them, and a reopened Store replays the persisted command and keeps its
+// result.
+template <typename CommandType>
+void pattern_change_is_one_labelled_action(
+    Fixture& f, const CommandType& command, const std::string& label) {
+  const auto before = f.state();
+  const auto count = f.status().undo_count;
+  const auto changed = f.store.execute(f.root, command);
+  LMDJ_CHECK(changed.has_value() && !changed.value().replayed);
+  LMDJ_CHECK(f.status().undo_count == count + 1);
+  LMDJ_CHECK(f.status().undo_label == label);
+  const auto after = f.state();
+
+  ProjectStore reopened;
+  const auto retry = reopened.execute(f.root, command);
+  LMDJ_CHECK(retry.has_value() && retry.value().replayed);
+  LMDJ_CHECK(reopened.load(f.root).value() == after);
+
+  const auto undone = f.restore().state;
+  LMDJ_CHECK(undone.patterns == before.patterns);
+  LMDJ_CHECK(undone.pattern_slots == before.pattern_slots);
+  const auto redone = f.restore(true).state;
+  LMDJ_CHECK(redone.patterns == after.patterns);
+  LMDJ_CHECK(redone.pattern_slots == after.pattern_slots);
+}
+
+// Two bars with a note crossing the one-bar seam and one after it.
+PatternId create_two_bar_pattern(Fixture& f) {
+  const auto pattern_id = PatternId{uuid(3)};
+  LMDJ_CHECK(f.store.execute(f.root, CreatePattern{f.meta(), Pattern{pattern_id, 2,
+      {{{0,0},0,240,100}, {{0,1},3600,480,90}, {{0,2},5000,100,70}}}}).has_value());
+  return pattern_id;
+}
+
+void pattern_resize_is_one_action_and_undo_restores_the_cut_notes() {
+  Fixture f;
+  const auto pattern_id = create_two_bar_pattern(f);
+  pattern_change_is_one_labelled_action(
+      f, ResizePattern{f.meta(), pattern_id, 1}, "Change Pattern Length");
+  LMDJ_CHECK((f.state().patterns.at(pattern_id).events == std::vector<PatternEvent>{
+      {{0,0},0,240,100}, {{0,1},3600,240,90}}));
+}
+
+void pattern_resize_to_its_length_records_nothing() {
+  Fixture f;
+  const auto pattern_id = create_two_bar_pattern(f);
+  const auto before = f.state();
+  const auto status = f.status();
+  const auto unchanged = f.store.execute(f.root, ResizePattern{f.meta(), pattern_id, 2});
+  LMDJ_CHECK(!unchanged.has_value());
+  LMDJ_CHECK(unchanged.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(unchanged.error().details.value("reason", "") == "pattern_length_unchanged");
+  LMDJ_CHECK(f.state() == before);
+  LMDJ_CHECK(f.status().undo_count == status.undo_count);
+  LMDJ_CHECK(f.status().undo_label == status.undo_label);
+}
+
+void pattern_double_up_is_one_action() {
+  Fixture f;
+  const auto pattern_id = create_two_bar_pattern(f);
+  pattern_change_is_one_labelled_action(
+      f, DoubleUpPattern{f.meta(), pattern_id}, "Double Up Pattern");
+  const auto state = f.state();
+  const auto& pattern = state.patterns.at(pattern_id);
+  LMDJ_CHECK(pattern.bars == 4);
+  LMDJ_CHECK(pattern.events.size() == 6);
+}
+
+void pattern_copy_and_its_slot_are_one_action() {
+  Fixture f;
+  const auto pattern_id = create_two_bar_pattern(f);
+  LMDJ_CHECK(f.store.execute(f.root, AssignPatternSlot{f.meta(), 5, pattern_id}).has_value());
+  const auto copy_id = PatternId{uuid(4)};
+  pattern_change_is_one_labelled_action(
+      f, CopyPattern{f.meta(), pattern_id, copy_id}, "Copy Pattern");
+  const auto state = f.state();
+  LMDJ_CHECK(state.pattern_slots.at(6) == copy_id);
+  LMDJ_CHECK(state.patterns.at(copy_id).events == state.patterns.at(pattern_id).events);
+}
+
 }
 
 int main() {
@@ -426,6 +508,10 @@ int main() {
     unknown_commit_reconciles_exactly_once(); missing_redo_bytes_refuses_without_moving_history();
     clear_pad_preserves_pattern_events_and_restores_binding(); performance_draft_save_and_cancel_are_single_actions();
     pattern_event_edit_is_one_action_and_replays_after_reload();
+    pattern_resize_is_one_action_and_undo_restores_the_cut_notes();
+    pattern_resize_to_its_length_records_nothing();
+    pattern_double_up_is_one_action();
+    pattern_copy_and_its_slot_are_one_action();
     return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

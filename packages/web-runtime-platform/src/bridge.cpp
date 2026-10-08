@@ -224,7 +224,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 98> operations{
+  static constexpr std::array<std::string_view, 101> operations{
       "host.status",
       "project.create",
       "project.duplicate",
@@ -243,6 +243,9 @@ bool supported_operation(std::string_view operation) {
       "pad.assign",
       "pattern.create",
       "pattern.events.edit",
+      "pattern.resize",
+      "pattern.double",
+      "pattern.copy",
       "snapshot.reload",
       "snapshot.retry",
       "sample.inspect",
