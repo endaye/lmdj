@@ -293,7 +293,7 @@ test("Sequence draws only its status and rows; the phase and facts stay readable
     ...initialCreatorState,
     project: {...initialCreatorState.project, phase: "ready", current: project},
   };
-  const display = (activeMode: "sequence" | "project" | "sample" | "perform") => (
+  const display = (activeMode: "sequence" | "project" | "sample" | "perform" | "slice") => (
     <OverviewDisplay state={state} activeMode={activeMode} sequence={initialSequenceState}
       snap="1/16" viewport={null} selection={[]} />
   );
@@ -306,14 +306,16 @@ test("Sequence draws only its status and rows; the phase and facts stay readable
   expect(screen.getByTestId("audio-state").textContent).toMatch(/^Audio /);
   expect(screen.getByText("Rev").nextElementSibling?.textContent).toBe("7");
 
-  // Project (D01) and Sample (D03) draw their own upper screens and hide
-  // them too; Perform still draws the shared phase and facts.
+  // Project (D01), Sample (D03) and Perform (D04) draw their own upper
+  // screens and hide them too; Slice still draws the shared phase and facts.
   view.rerender(display("project"));
   expect(view.container.querySelector(".overview-swing")).toBeNull();
   expect(hidden(".overview-facts")).toBe(true);
   view.rerender(display("sample"));
   expect(hidden(".overview-facts")).toBe(true);
   view.rerender(display("perform"));
+  expect(hidden(".overview-facts")).toBe(true);
+  view.rerender(display("slice"));
   expect(hidden(".overview-phase")).toBe(false);
   expect(hidden(".overview-facts")).toBe(false);
 });
