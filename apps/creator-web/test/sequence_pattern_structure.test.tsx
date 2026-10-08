@@ -122,6 +122,14 @@ function structureFixture() {
   return {session, truth, resizePattern, copyPattern};
 }
 
+function failingReload(fixture: ReturnType<typeof structureFixture>) {
+  const reloadSnapshot = vi.fn(async () => {
+    throw Object.assign(new Error("publication still retiring"), {code: "HOST_STATE_INVALID"});
+  });
+  (fixture.session as unknown as {reloadSnapshot: unknown}).reloadSnapshot = reloadSnapshot;
+  return reloadSnapshot;
+}
+
 async function openSetup(fixture: ReturnType<typeof structureFixture>) {
   render(<App runtimeFactory={() => fixture.session} />);
   await userEvent.click(await screen.findByRole("button", {name: "Open Project 11111111"}));
@@ -156,4 +164,18 @@ test("COPY copies the selected Pattern under a fresh id and selects the copy", a
   await waitFor(() =>
     expect(stepper.getAttribute("data-pattern-id")).toBe(request.patternId));
   expect(stepper.getAttribute("data-pattern-count")).toBe("2");
+});
+
+test("a committed copy is selected even when making it runtime-current fails", async () => {
+  const fixture = structureFixture();
+  await openSetup(fixture);
+  const reloadSnapshot = failingReload(fixture);
+  await userEvent.click(await screen.findByRole("button", {name: "Copy Pattern"}));
+  await waitFor(() => expect(reloadSnapshot).toHaveBeenCalledTimes(1));
+  const copyId = fixture.copyPattern.mock.calls[0]![0].patternId;
+  const stepper = screen.getByTestId("sequence-pattern");
+  await waitFor(() => expect(stepper.getAttribute("data-pattern-id")).toBe(copyId));
+  expect(stepper.getAttribute("data-pattern-count")).toBe("2");
+  // The reload failure is still reported, not swallowed.
+  expect(await screen.findByRole("alert")).toBeTruthy();
 });

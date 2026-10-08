@@ -2244,17 +2244,26 @@ function Workspace({
       } catch {
         dispatch({type: "project-revision-updated", revision: result.committedRevision});
       }
+      // The copy is durable Truth once committed: it is selected even when
+      // making it runtime-current fails, and that failure is reported on its
+      // own after any failed swap rather than as a failed copy.
+      let reloadFailure: {error: unknown} | null = null;
       if (result.patternId !== patternId) {
         if (currentTransport.sessionId !== null &&
             isPatternTransportSession(session)) {
           // Make the copy runtime-current so the next Play starts it.
-          await session.reloadSnapshot(result.patternId);
+          try {
+            await session.reloadSnapshot(result.patternId);
+          } catch (error) {
+            reloadFailure = {error};
+          }
         }
         dispatchSequence({type: "selected", patternId: result.patternId});
       }
       if (result.snapshotError != null) {
         dispatchSequence({type: "failed", errorCode: result.snapshotError.code});
       }
+      if (reloadFailure !== null) sequenceFailure("Select Pattern", reloadFailure.error);
     }).catch((error) => sequenceFailure(operationName, error));
     sequenceAuthoringTail.current = operation;
     return operation;
