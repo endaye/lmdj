@@ -25,6 +25,7 @@
 namespace {
 
 using lmdj::domain::Asset;
+using lmdj::domain::AssetCategory;
 using lmdj::domain::AssetLineage;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CommandReceipt;
@@ -128,6 +129,7 @@ InstallSoundSet install_command(
             asset_id,
             proposed.artifact,
             soundset_lineage(proposed.slot_index, proposed.artifact.sha256.at(0)),
+            proposed.category,
         },
     });
   }
@@ -341,6 +343,45 @@ void test_install_fails_closed_on_a_lineage_that_contradicts_its_slot() {
   LMDJ_CHECK(conflicted.error().code == ErrorCode::revision_conflict);
 }
 
+
+// Pad 1 of the target Bank is occupied and carries the user's override 3.
+ProjectState project_with_overridden_pad() {
+  auto state = project_with_occupied_pads({1, 5});
+  state.banks.at(kTargetBank).at(1).colour = 3;
+  return state;
+}
+
+void test_replace_keeps_the_override_and_records_the_role_category() {
+  const auto state = project_with_overridden_pad();
+  const auto mapping = map_soundset(test_manifest(), state.banks.at(kTargetBank));
+  const auto resolved =
+      resolve_soundset_write_set(mapping, OccupiedPadPolicy::replace);
+  LMDJ_CHECK(resolved.has_value());
+  const auto applied = lmdj::domain::apply(
+      state, install_command(resolved.value(), state.revision), {});
+  LMDJ_CHECK(applied.has_value());
+  const auto& next = applied.value().state;
+  const auto& pad = next.banks.at(kTargetBank).at(1);
+  LMDJ_CHECK(pad.asset_id == AssetId{uuid(201)});
+  LMDJ_CHECK(pad.colour == std::optional<std::uint8_t>{3});
+  // The new Asset records the slot role `kick` as DRUMS.
+  LMDJ_CHECK(next.assets.at(AssetId{uuid(201)}).category ==
+             AssetCategory::drums);
+}
+
+void test_keep_leaves_an_overridden_pad_untouched() {
+  const auto state = project_with_overridden_pad();
+  const auto mapping = map_soundset(test_manifest(), state.banks.at(kTargetBank));
+  const auto resolved =
+      resolve_soundset_write_set(mapping, OccupiedPadPolicy::keep);
+  LMDJ_CHECK(resolved.has_value());
+  const auto applied = lmdj::domain::apply(
+      state, install_command(resolved.value(), state.revision), {});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(applied.value().state.banks.at(kTargetBank).at(1) ==
+             state.banks.at(kTargetBank).at(1));
+}
+
 }  // namespace
 
 int main() {
@@ -353,6 +394,8 @@ int main() {
     test_install_lands_every_asset_and_pad_in_exactly_one_revision();
     test_replayed_command_id_returns_the_stored_receipt();
     test_install_fails_closed_on_a_lineage_that_contradicts_its_slot();
+    test_replace_keeps_the_override_and_records_the_role_category();
+    test_keep_leaves_an_overridden_pad_untouched();
   } catch (const std::exception& error) {
     std::cerr << "soundset install test failed: " << error.what() << "\n";
     return 1;

@@ -44,6 +44,15 @@ struct ImportAssignSample {
   PadSlotId slot;
 };
 
+// Sets or clears the user's Pad colour override. A nullopt colour removes
+// the override, so the Pad follows its Asset's category default again. It
+// changes no playback.
+struct SetPadColour {
+  CommandMeta meta;
+  PadSlotId slot;
+  std::optional<std::uint8_t> colour;
+};
+
 struct UpdatePadPlayback {
   CommandMeta meta;
   PadSlotId slot;
@@ -144,10 +153,13 @@ enum class OccupiedPadPolicy : std::uint8_t {
   replace,
 };
 
+// `category` is the Set slot role's meaning, which the installed Asset
+// records; a role without one (`other`) leaves the Asset unclassified.
 struct SoundSetProposedPad {
   std::uint8_t slot_index{};
   std::uint8_t pad{};
   foundation::ArtifactRef artifact;
+  std::optional<AssetCategory> category{};
 
   bool operator==(const SoundSetProposedPad&) const = default;
 };
@@ -237,6 +249,10 @@ foundation::Result<AppliedCommand> apply(
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const CopyPattern& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const SetPadColour& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts);
 
 foundation::Result<AppliedCommand> apply(

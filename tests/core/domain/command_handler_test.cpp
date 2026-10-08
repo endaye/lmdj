@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <lmdj/domain/command_handler.hpp>
+#include <lmdj/foundation/soundset_manifest.hpp>
 
 #include "tests/core/support/test.hpp"
 
@@ -36,8 +37,11 @@ using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::PatternEventKey;
+using lmdj::domain::AssetCategory;
+using lmdj::domain::DeletePad;
 using lmdj::domain::ResetPadPlayback;
 using lmdj::domain::ResizePattern;
+using lmdj::domain::SetPadColour;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
 using lmdj::domain::UpdateSequenceSettings;
@@ -77,6 +81,8 @@ constexpr auto kLengthCommand2 = "10000000-0000-4000-8000-000000000013";
 constexpr auto kSlotCommand1 = "10000000-0000-4000-8000-000000000014";
 constexpr auto kSlotCommand2 = "10000000-0000-4000-8000-000000000015";
 constexpr auto kSlotCommand3 = "10000000-0000-4000-8000-000000000016";
+constexpr auto kColourCommand1 = "10000000-0000-4000-8000-000000000017";
+constexpr auto kColourCommand2 = "10000000-0000-4000-8000-000000000018";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
@@ -1444,6 +1450,236 @@ void test_v4_authoring_commands_preserve_pattern_slot_truth() {
   LMDJ_CHECK(updated.state.pattern_slots.at(0) == pattern1);
 }
 
+// Pad 0/0 holds unclassified Asset 1 at revision 1.
+lmdj::domain::ProjectState project_with_assigned_pad() {
+  return apply_or_throw(
+             new_project(),
+             import_assign_sample(
+                 kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+      .state;
+}
+
+SetPadColour set_colour(std::string command_id, std::uint64_t revision,
+                        PadSlotId slot, std::optional<std::uint8_t> colour) {
+  return SetPadColour{meta(std::move(command_id), revision), slot, colour};
+}
+
+// The refusal's exact code and reason, so each caller fails at its own line.
+std::optional<std::pair<ErrorCode, std::string>> colour_refusal(
+    const lmdj::domain::ProjectState& state, const SetPadColour& command) {
+  const auto before = state;
+  const auto result = lmdj::domain::apply(state, command, {});
+  if (!(state == before)) {
+    throw std::runtime_error("a refused colour change changed the state");
+  }
+  if (result.has_value()) {
+    return std::nullopt;
+  }
+  return std::pair{result.error().code,
+                   result.error().details.value("reason", std::string{})};
+}
+
+// Pad 0/0 holds Asset 1 with override 3 (VOCAL) at revision 2.
+lmdj::domain::ProjectState project_with_colour_override() {
+  return apply_or_throw(project_with_assigned_pad(),
+                        set_colour(kColourCommand1, 1, PadSlotId{0, 0}, 3))
+      .state;
+}
+
+void test_set_pad_colour_sets_an_override_in_one_revision() {
+  const auto state = project_with_assigned_pad();
+  const auto set = apply_or_throw(
+      state, set_colour(kColourCommand1, 1, PadSlotId{0, 0}, 2));
+  LMDJ_CHECK(set.state.revision == state.revision + 1);
+  LMDJ_CHECK(set.event.at("type") == "pad.colour_set");
+  LMDJ_CHECK(set.state.banks[0][0].colour == std::optional<std::uint8_t>{2});
+  // Only the override changes: no playback, binding or Asset category.
+  auto expected = state;
+  expected.revision = set.state.revision;
+  expected.banks[0][0].colour = 2;
+  LMDJ_CHECK(set.state == expected);
+}
+
+void test_set_pad_colour_changes_an_existing_override() {
+  const auto changed = apply_or_throw(
+      project_with_colour_override(),
+      set_colour(kColourCommand2, 2, PadSlotId{0, 0}, 4));
+  LMDJ_CHECK(changed.state.banks[0][0].colour ==
+             std::optional<std::uint8_t>{4});
+}
+
+void test_set_pad_colour_restores_the_category_default() {
+  const auto restored = apply_or_throw(
+      project_with_colour_override(),
+      set_colour(kColourCommand2, 2, PadSlotId{0, 0}, std::nullopt));
+  LMDJ_CHECK(restored.state.revision == 3);
+  LMDJ_CHECK(!restored.state.banks[0][0].colour.has_value());
+}
+
+void test_set_pad_colour_refuses_an_empty_pad() {
+  LMDJ_CHECK(colour_refusal(project_with_assigned_pad(),
+                            set_colour(kColourCommand1, 1, PadSlotId{0, 1}, 0)) ==
+             refused(ErrorCode::invalid_argument, "pad_empty"));
+}
+
+void test_set_pad_colour_refuses_an_index_outside_the_palette() {
+  const auto state = project_with_assigned_pad();
+  LMDJ_CHECK(colour_refusal(state,
+                            set_colour(kColourCommand1, 1, PadSlotId{0, 0}, 5)) ==
+             refused(ErrorCode::invalid_argument, "pad_colour_out_of_range"));
+  LMDJ_CHECK(colour_refusal(state,
+                            set_colour(kColourCommand1, 1, PadSlotId{0, 0}, 255)) ==
+             refused(ErrorCode::invalid_argument, "pad_colour_out_of_range"));
+}
+
+void test_set_pad_colour_refuses_an_invalid_slot() {
+  check_invalid_without_state_change(
+      project_with_assigned_pad(),
+      set_colour(kColourCommand1, 1, PadSlotId{4, 0}, 0));
+}
+
+void test_set_pad_colour_refuses_the_current_value_as_a_no_op() {
+  // Setting what is already there must not become a revision or Undo entry.
+  LMDJ_CHECK(colour_refusal(project_with_colour_override(),
+                            set_colour(kColourCommand2, 2, PadSlotId{0, 0}, 3)) ==
+             refused(ErrorCode::invalid_argument, "pad_colour_unchanged"));
+  LMDJ_CHECK(colour_refusal(project_with_assigned_pad(),
+                            set_colour(kColourCommand1, 1, PadSlotId{0, 0},
+                                       std::nullopt)) ==
+             refused(ErrorCode::invalid_argument, "pad_colour_unchanged"));
+}
+
+void test_set_pad_colour_is_revision_checked_and_replays() {
+  const auto state = project_with_assigned_pad();
+  const auto stale = lmdj::domain::apply(
+      state, set_colour(kColourCommand1, 0, PadSlotId{0, 0}, 1), {});
+  LMDJ_CHECK(!stale.has_value());
+  LMDJ_CHECK(stale.error().code == ErrorCode::revision_conflict);
+
+  const auto command = set_colour(kColourCommand1, 1, PadSlotId{0, 0}, 1);
+  const auto first = apply_or_throw(state, command);
+  const std::map<CommandId, CommandReceipt> receipts{
+      {CommandId{kColourCommand1}, {first.state.revision, first.event}}};
+  const auto replayed = lmdj::domain::apply(first.state, command, receipts);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state == first.state);
+  LMDJ_CHECK(replayed.value().event == first.event);
+}
+
+void test_assigning_another_asset_keeps_the_colour_override() {
+  auto state = apply_or_throw(project_with_colour_override(),
+                              Command{import_asset(kImportCommand2, 2, kAsset2)})
+                   .state;
+  state = apply_or_throw(state, Command{assign_pad(kAssignCommand1, 3,
+                                                   PadSlotId{0, 0},
+                                                   AssetId{kAsset2})})
+              .state;
+  LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset2});
+  LMDJ_CHECK(state.banks[0][0].colour == std::optional<std::uint8_t>{3});
+}
+
+void test_unassigning_a_pad_clears_the_colour_override() {
+  const auto state = apply_or_throw(
+      project_with_colour_override(),
+      Command{AssignPad{meta(kAssignCommand1, 2), PadSlotId{0, 0},
+                        std::nullopt}})
+                         .state;
+  LMDJ_CHECK(!state.banks[0][0].colour.has_value());
+}
+
+void test_deleting_a_pad_clears_the_colour_override() {
+  const auto state = apply_or_throw(
+      project_with_colour_override(),
+      DeletePad{meta(kAssignCommand1, 2), PadSlotId{0, 0}})
+                         .state;
+  LMDJ_CHECK(!state.banks[0][0].asset_id.has_value());
+  LMDJ_CHECK(!state.banks[0][0].colour.has_value());
+}
+
+void test_import_assign_sample_keeps_the_colour_override() {
+  const auto state = apply_or_throw(
+      project_with_colour_override(),
+      import_assign_sample(kImportCommand2, 2, PadSlotId{0, 0}, kAsset2))
+                         .state;
+  LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset2});
+  LMDJ_CHECK(state.banks[0][0].colour == std::optional<std::uint8_t>{3});
+  // An imported file is unclassified.
+  LMDJ_CHECK(!state.assets.at(AssetId{kAsset2}).category.has_value());
+}
+
+// Pad 0/0 holds Asset 1 classified as BASS.
+lmdj::domain::ProjectState project_with_bass_pad() {
+  auto state = project_with_assigned_pad();
+  state.assets.at(AssetId{kAsset1}).category = AssetCategory::bass;
+  return state;
+}
+
+void test_effective_colour_prefers_the_override_over_the_category() {
+  auto state = project_with_bass_pad();
+  state.banks[0][0].colour = 2;
+  LMDJ_CHECK(lmdj::domain::effective_pad_colour(state, PadSlotId{0, 0}) ==
+             std::optional<std::uint8_t>{2});
+}
+
+void test_effective_colour_follows_the_asset_category_without_override() {
+  LMDJ_CHECK(lmdj::domain::effective_pad_colour(project_with_bass_pad(),
+                                                PadSlotId{0, 0}) ==
+             std::optional<std::uint8_t>{1});
+}
+
+void test_effective_colour_is_neutral_without_override_or_category() {
+  const auto state = project_with_assigned_pad();
+  // An unclassified Asset, an empty Pad and an invalid slot are all neutral.
+  LMDJ_CHECK(!lmdj::domain::effective_pad_colour(state, PadSlotId{0, 0}));
+  LMDJ_CHECK(!lmdj::domain::effective_pad_colour(state, PadSlotId{0, 1}));
+  LMDJ_CHECK(!lmdj::domain::effective_pad_colour(state, PadSlotId{4, 0}));
+}
+
+void test_palette_order_is_the_persisted_index() {
+  using lmdj::domain::kPadPalette;
+  using lmdj::domain::pad_colour_index;
+  const std::array<std::pair<AssetCategory, std::string_view>, 5> expected{{
+      {AssetCategory::drums, "#F3B580"},
+      {AssetCategory::bass, "#DFF779"},
+      {AssetCategory::melodic, "#B49DE8"},
+      {AssetCategory::vocal, "#94D2DC"},
+      {AssetCategory::texture, "#E6ED98"},
+  }};
+  for (std::uint8_t index = 0; index < expected.size(); ++index) {
+    LMDJ_CHECK(kPadPalette.at(index).category == expected.at(index).first);
+    LMDJ_CHECK(kPadPalette.at(index).rgb_hex == expected.at(index).second);
+    LMDJ_CHECK(pad_colour_index(expected.at(index).first) == index);
+  }
+}
+
+void test_soundset_roles_map_to_categories_by_meaning() {
+  using lmdj::domain::soundset_role_category;
+  const std::map<std::string_view, std::optional<AssetCategory>> expected{
+      {"kick", AssetCategory::drums},     {"snare", AssetCategory::drums},
+      {"clap", AssetCategory::drums},     {"hat_closed", AssetCategory::drums},
+      {"hat_open", AssetCategory::drums}, {"perc", AssetCategory::drums},
+      {"cymbal", AssetCategory::drums},   {"bass", AssetCategory::bass},
+      {"melody", AssetCategory::melodic}, {"chord", AssetCategory::melodic},
+      {"vocal", AssetCategory::vocal},    {"fx", AssetCategory::texture},
+      {"other", std::nullopt},
+  };
+  // Every Contract role has exactly one expected meaning.
+  LMDJ_CHECK(expected.size() == lmdj::foundation::kSoundSetRoles.size());
+  for (const auto role : lmdj::foundation::kSoundSetRoles) {
+    LMDJ_CHECK(expected.contains(role));
+    LMDJ_CHECK(soundset_role_category(role) == expected.at(role));
+  }
+}
+
+void test_stem_labels_map_to_categories_by_meaning() {
+  using lmdj::domain::stem_label_category;
+  LMDJ_CHECK(stem_label_category("drums") == AssetCategory::drums);
+  LMDJ_CHECK(stem_label_category("bass") == AssetCategory::bass);
+  LMDJ_CHECK(stem_label_category("vocals") == AssetCategory::vocal);
+  LMDJ_CHECK(!stem_label_category("other").has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -1501,6 +1737,24 @@ int main() {
     test_sequence_settings_update_enforces_locked_ranges();
     test_pattern_slot_commands_enforce_ownership_and_receipts();
     test_v4_authoring_commands_preserve_pattern_slot_truth();
+    test_set_pad_colour_sets_an_override_in_one_revision();
+    test_set_pad_colour_changes_an_existing_override();
+    test_set_pad_colour_restores_the_category_default();
+    test_set_pad_colour_refuses_an_empty_pad();
+    test_set_pad_colour_refuses_an_index_outside_the_palette();
+    test_set_pad_colour_refuses_an_invalid_slot();
+    test_set_pad_colour_refuses_the_current_value_as_a_no_op();
+    test_set_pad_colour_is_revision_checked_and_replays();
+    test_assigning_another_asset_keeps_the_colour_override();
+    test_unassigning_a_pad_clears_the_colour_override();
+    test_deleting_a_pad_clears_the_colour_override();
+    test_import_assign_sample_keeps_the_colour_override();
+    test_effective_colour_prefers_the_override_over_the_category();
+    test_effective_colour_follows_the_asset_category_without_override();
+    test_effective_colour_is_neutral_without_override_or_category();
+    test_palette_order_is_the_persisted_index();
+    test_soundset_roles_map_to_categories_by_meaning();
+    test_stem_labels_map_to_categories_by_meaning();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

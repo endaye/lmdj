@@ -259,6 +259,11 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (resets_playback) {
     pad.playback = PadPlayback{};
   }
+  // The colour override follows the Pad to another Asset, but an empty Pad
+  // has no sound and so no colour.
+  if (!command.asset_id.has_value()) {
+    pad.colour = std::nullopt;
+  }
   return applied(std::move(copy), "pad.assigned", command.meta);
 }
 
@@ -298,6 +303,7 @@ foundation::Result<AppliedCommand> apply_new_command(
   auto& pad = copy.banks.at(command.slot.bank).at(command.slot.pad);
   pad.asset_id = command.asset.id;
   pad.playback = PadPlayback{};
+  // The Pad keeps its colour override across the asset change.
   return applied(std::move(copy), "sample.imported_assigned", command.meta);
 }
 
@@ -343,6 +349,7 @@ foundation::Result<AppliedCommand> apply_new_command(
     auto& pad = copy.banks.at(assignment.slot.bank).at(assignment.slot.pad);
     pad.asset_id = assignment.asset.id;
     pad.playback = PadPlayback{};
+    // The Pad keeps its colour override across the asset change.
   }
   return applied(std::move(copy), "candidate.adopted", command.meta, ProjectContract::v5);
 }
@@ -426,6 +433,7 @@ foundation::Result<AppliedCommand> apply_new_command(
     auto& pad = copy.banks.at(assignment.slot.bank).at(assignment.slot.pad);
     pad.asset_id = assignment.asset.id;
     pad.playback = PadPlayback{};
+    // The Pad keeps its colour override; the new Asset carries the category.
   }
   return applied(
       std::move(copy),
@@ -640,6 +648,32 @@ foundation::Result<AppliedCommand> apply_new_command(
 
 foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
+    const SetPadColour& command) {
+  using foundation::ErrorCode;
+  if (!is_valid_slot(command.slot)) {
+    return invalid("pad slot is invalid");
+  }
+  if (command.colour.has_value() && *command.colour >= kPadColourCount) {
+    return edit_refused(ErrorCode::invalid_argument,
+        "pad colour is not a palette index", "pad_colour_out_of_range");
+  }
+  const auto& current = state.banks.at(command.slot.bank).at(command.slot.pad);
+  if (!current.asset_id.has_value()) {
+    return edit_refused(ErrorCode::invalid_argument,
+        "an empty Pad has no colour", "pad_empty");
+  }
+  // Setting the current value must not become a revision or an Undo entry.
+  if (current.colour == command.colour) {
+    return edit_refused(ErrorCode::invalid_argument,
+        "pad colour is unchanged", "pad_colour_unchanged");
+  }
+  auto copy = state;
+  copy.banks.at(command.slot.bank).at(command.slot.pad).colour = command.colour;
+  return applied(std::move(copy), "pad.colour_set", command.meta);
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
     const UpdatePadPlayback& command) {
   if (!is_valid_slot(command.slot)) {
     return invalid("pad slot is invalid");
@@ -781,8 +815,9 @@ SoundSetMapping map_soundset(
       mapping.kept.push_back(pad);
       continue;
     }
-    mapping.proposed.push_back(
-        SoundSetProposedPad{pad, pad, slot.occupied->artifact});
+    mapping.proposed.push_back(SoundSetProposedPad{
+        pad, pad, slot.occupied->artifact,
+        soundset_role_category(slot.occupied->role)});
     if (pads.at(index).asset_id.has_value()) {
       mapping.collisions.push_back(pad);
     }
@@ -886,6 +921,12 @@ foundation::Result<AppliedCommand> apply(
 
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state, const CopyPattern& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state, const SetPadColour& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts) {
   return apply_checked(state, command, receipts);
 }
