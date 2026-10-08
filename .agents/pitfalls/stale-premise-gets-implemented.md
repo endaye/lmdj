@@ -1,7 +1,7 @@
 ---
 id: stale-premise-gets-implemented
 area: core
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/pull/978
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/pull/995#discussion_r3960687318
     observed_by: Claude Code (Opus 5)
-exit: none
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
 # A stale coordinate fails loudly; a stale premise gets implemented
@@ -43,9 +43,9 @@ unable to dispatch `soundset.audition`, and its Task 1 was scoped to fix that.
 Both were accurate when written. #999 then merged as `45756035` and closed the
 gap, and the plan went to review still describing it as live, still instructing
 a Task to fix it, and still saying the operation array grows 72 → 74 when it is
-73 today. A Task branching from that plan would have implemented Task 1 as a
-no-op or a duplicate entry. The plan had stated the re-resolution rule one
-section earlier.
+73 at that revision. A Task branching from that plan would have implemented
+Task 1 as a no-op or a duplicate entry. The plan had stated the re-resolution
+rule one section earlier.
 
 The asymmetry that makes this class expensive:
 
@@ -75,28 +75,15 @@ that carries it.
 
 ## How to apply
 
-- **Re-resolve findings, not only line numbers.** When re-checking a document
-  against a moved `main`, re-check every claim of the form "X is missing", "Y
-  is outstanding", "Z is not yet done" — not just the coordinates. Those are
-  the sentences that expire.
-- Before implementing a Task from a plan, verify the Task's *premise* against
-  the tree you are branching from, not only its file list. If the defect it
-  names is already fixed, the Task is delivered; say so in the plan rather than
-  implementing it into a no-op.
-- Write an absence claim with its frame attached — "absent at `<sha>`" — so a
-  later reader can see what would invalidate it. A bare "this is missing" is
-  undated evidence.
-- When a Pull Request merges while your document is in review, re-read your own
-  document against it. Ask specifically: *did that change make anything I wrote
-  false, as opposed to merely moved?*
-- Restate a closed finding as history with the SHA that closed it, and mark the
-  Task delivered with an explicit instruction not to repeat it. Deleting it
-  loses the sequence; leaving it live gets it built twice.
+Run [`issue-done` §0](../skills/issue-done/SKILL.md#0-resolve-task-premises-before-editing)
+before implementing a Task, and repeat its affected dispositions when relevant
+main changes land. Preserve fulfilled findings with their delivering SHA and
+stop duplicate implementation; refreshing coordinates alone is insufficient.
 
-`exit: none` at recurrence 2, with [#1010](https://github.com/endaye/lmdj/issues/1010)
-opened per the ledger contract. No eligible mechanism exists: the check that
-would catch this — "a document's claims about the tree still hold" — is not
-mechanically decidable, because those claims are prose and the tree has no
-representation to compare them against. #1010 records the three shapes worth
-evaluating, of which a re-resolution step in `issue-done` is the likeliest, and
-notes that a skill step nobody performs is the same failure one layer up.
+Recurrence 2 was escalated through
+[#1010](https://github.com/endaye/lmdj/issues/1010). Its exit is now the skill's
+required pre-edit premise resolution and relevant-main refresh. The skill
+description exposes the implementation trigger before its body is loaded.
+This remains a reading of prose against current source and delivery history,
+not a mechanically decidable CI gate. Both original recurrences and their
+citation history above remain evidence; absorbing them adds no new occurrence.

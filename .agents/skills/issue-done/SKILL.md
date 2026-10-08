@@ -1,11 +1,14 @@
 ---
 name: issue-done
-description: Universal skill for shipping a completed local task/issue to main - handles verification, Conventional Commit, push, PR creation with governance declarations, current-head review, authorized merge, and safe local worktree/branch cleanup.
+description: Use before implementing a Task from an Issue, plan or finding to refresh its premises, and when shipping completed work through verification, commit, push, PR, current-head review, authorized merge and safe cleanup.
 ---
 
 # Issue Done (Local Issue/Task → Main & Cleanup)
 
-This skill defines the canonical, universal workflow for taking a locally completed GitHub issue/task in an isolated worktree branch, verifying it, creating a Conventional Commit, pushing, opening a Pull Request, checking current-head review and, when authorized, squash-merging into `main`, and cleaning up the branch and worktree.
+Before implementing a GitHub issue/task, use §0 to establish which work remains
+on the current base. For completed work in an isolated worktree branch, continue
+through verification, Conventional Commit, push, Pull Request, current-head
+review and, when authorized, squash merge and safe cleanup.
 
 The current merge procedure retains PR review/conflict/conversation protection,
 not retired full-CI or strict-update gates. Automatic incremental activation
@@ -15,6 +18,55 @@ This skill grants no new authority: push, PR creation, merge, Issue mutation and
 cleanup require the user's applicable authorization; stop at its boundary.
 
 Compatible with: **Antigravity (AGY)**, **Codex / OpenAI**, **Claude Code**, **Kimi**, **Cursor**, **GitHub Copilot**, and human contributors.
+
+---
+
+## 0. Resolve Task premises before editing
+
+Perform this step before the first implementation edit, including when starting
+from an older plan or resuming a Task. Refresh the intended integration base
+(`git fetch origin main` for the normal `main` target) and record its full SHA.
+Read the live Issue and comments, the plan's Task and acceptance requirements,
+and the relevant source and tests at that exact revision. Keep the task
+worktree's base SHA explicit too; an older checkout cannot establish what
+remains on current `main`. Preserve unrelated work while refreshing evidence.
+
+1. **Re-resolve the reasons for the Task.** Identify each actionable claim such
+   as "operation missing", "assertion absent" or "Task outstanding". Check
+   current behavior and its owning code/tests, then inspect successor Pull
+   Requests and relevant merge history since the finding's recorded revision.
+   Verify a successor's actual merged SHA and scope; a closed Issue, matching
+   title or updated line number does not establish that the gap was delivered.
+   When reporting an absence, state the revision and how the inspection would
+   distinguish presence from absence.
+2. **Give every premise an evidence-backed disposition** in the existing Task
+   plan or work report, before editing:
+   - Still outstanding: name the remaining behavior and acceptance work at the
+     refreshed base. Implement only that authorized scope.
+   - Already delivered: retain the original finding as history, identify the
+     delivering PR/merge SHA and current source/test evidence, and state that
+     this work must not be repeated. If every premise is delivered, stop the
+     duplicate implementation and report that result; create no empty or
+     cosmetic implementation commit. For partial delivery, update the Task's
+     remaining scope and declared files before continuing.
+   - Uncertain: name the missing evidence and investigate or report the blocker
+     before implementing the affected work. An empty search or unavailable
+     remote is not proof that a gap remains.
+
+3. **Recheck when relevant main changes land.** Before committing, and again
+   in the final premerge pass (§5.1), refresh the integration base and compare
+   intervening changes and successor history with the Task's premises. If they
+   touch the claimed behavior, its producer/consumer wiring or acceptance
+   evidence, repeat the affected dispositions and adjust remaining work before
+   proceeding. Apply the same check when a relevant merge becomes known during
+   implementation or review. Record the refreshed SHA and outcome. Unrelated
+   main movement requires no reimplementation, mandatory rebase, strict-update
+   check or full-CI gate.
+
+This step is complete only when every actionable premise has a disposition
+bound to the refreshed base SHA and supporting evidence. File-coordinate
+refresh alone does not complete it. See
+[`stale-premise-gets-implemented`](../../pitfalls/stale-premise-gets-implemented.md).
 
 ---
 
