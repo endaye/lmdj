@@ -1,0 +1,45 @@
+---
+title: Stem SDK Proof Provider
+area: providers
+status: implemented
+owners: [providers, core]
+providers: [local.proof.stem]
+contracts: [lmdj.audio.stem-pcm16-wav.v1, lmdj.stem-parameters.v1]
+source_paths: [providers/local-proof-stem, contracts/capability/stem.split.v1.json, contracts/artifact-audio/lmdj.audio.stem-pcm16-wav.v1.md, contracts/stem/lmdj.stem-parameters.v1.schema.json, tests/core/provider/stem_split_test.cpp]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="providers" id="local.proof.stem" />
+<BuildIdentity kind="contracts" id="lmdj.audio.stem-pcm16-wav.v1" />
+<BuildIdentity kind="contracts" id="lmdj.stem-parameters.v1" />
+
+## 四角色与输入
+
+`stem.split.v1` 接收一个 required `source_audio` PCM16 WAV，返回一个 Candidate，包含
+required `drums`、`bass`、`vocals`、`other` 四个端口，各最多一个。参数只允许空对象。
+Capability 声明 nondeterministic；Proof 的字节重放不能承诺将来模型的确定性。
+
+每一路是 canonical PCM16 WAV，采样率、声道数和帧数与输入完全一致，从输入第一帧开始。
+浮点采用共享单位增益，乘 32768、round-to-nearest ties-to-even，拒绝非有限数和越界结果。
+不削波、不归一化、不移位；首版没有模型、增益、种子或角色子集参数。
+
+## 实现与消费边界
+
+这个纯代码 Proof 将输入 PCM 重放到四个角色，不进行乐器分离。它复用 Slice 的 PCM16
+inspector，依赖由 Provider manifest 明确记录。model_identity 为 null；source-package
+摘要覆盖实现、校验器、公开头文件和清单，Assembly Lock 认证其版本与源字节。
+
+SDK 在终态发布前逐角色调用独立 validator。校验角色、完整 Ref、WAV 字节结构和源形状；
+缺失、重复、未知角色或任一路错误都会使整个 Attempt 失败，不发布部分 Candidate。
+相同 bytes 可以共用一个物理 blob，四个角色、逻辑输出计费和逐端口校验仍全部保留。
+
+## 已验证与后续边界
+
+真实 Registry、AttemptStore.execute、落盘和独立重开读取覆盖四路静音、非静音、错误角色、
+错误采样率/声道/帧数、坏 WAV、量化边界、有限数和失败清理。Proof 输入和每个输出最多 16 MiB，超大源返回 UNSUPPORTED_AUDIO；SDK
+字节预算不构成 RSS 或强制超时保证，资源数字仍是建议值。
+
+Assembly 只注册 test 平台，不默认选择，不授予 stem.split.execute。它未接入 Stem Facade
+或 Creator 界面。WAV 形状校验不能证明声学对齐或分离质量；真实模型、权重身份、Linux
+进程隔离、取消、硬超时、资源测量与生产平台验收属于后续 E1/P1 工作。
