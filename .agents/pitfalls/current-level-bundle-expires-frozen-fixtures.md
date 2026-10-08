@@ -6,7 +6,11 @@ recurrences:
   - date: 2026-09-22
     occurrence: https://github.com/endaye/lmdj/pull/1596
     observed_by: Kimi Code (k3)
+  - date: 2026-10-08
+    occurrence: https://github.com/endaye/lmdj/actions/runs/37721222350
+    observed_by: Codex
 exit: none
+escalation: https://github.com/endaye/lmdj/issues/1883
 ---
 
 # A frozen Project Bundle fixture dies at every Contract level bump.
@@ -24,6 +28,13 @@ not a fixture test). The batch proofs never caught it because they regenerate
 their fixtures at proof time; only the frozen deployment fixture went stale.
 UI renames have the same shape: the spec's `heading "Sequence"` assertion
 outlived the D01-D04 rename to `GROOVE / NN` while the surface rendered fine.
+Build 87 repeated this with `Activate audio`: the released Host already used
+musical gesture activation, but its deployment smoke still waited for the
+removed button. Report export had also moved into System. The immutable
+Preview browser check failed before production promotion; signed input and
+HTTP verification had passed. [Issue #1883](https://github.com/endaye/lmdj/issues/1883)
+tracks the second recurrence and
+the missing freshness mechanism; correcting this journey does not absorb it.
 
 ## How to apply
 

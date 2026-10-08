@@ -3,6 +3,8 @@ import {readFile} from "node:fs/promises";
 import {expect, test} from "@playwright/test";
 
 import {creatorProjectBundle} from "./creator_project_fixture.mjs";
+import {wakeAudioWithPad} from "../creator/fixtures/creator_audio.mjs";
+import {clickCreatorSystemAction} from "../creator/fixtures/creator_navigation.mjs";
 import {
   PROJECT_OPEN_TIMEOUT_MS,
   openProjectPageAfterBoot,
@@ -99,7 +101,9 @@ async function importProject(page, mode) {
 
 async function report(page) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  const exportReport = page.getByRole("button", {name: "Export report", exact: true});
+  if (await exportReport.isVisible()) await exportReport.click();
+  else await clickCreatorSystemAction(page, "Export report");
   const download = await downloadPromise;
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
@@ -131,7 +135,11 @@ test("published Creator completes authoring, playback, and durable reload", asyn
 
   const mode = await bootMode(page);
   const imported = await importProject(page, mode);
-  await page.getByRole("button", {name: "Activate audio"}).click();
+  // Historical Hosts expose an explicit gate; current Hosts wake on a real
+  // musical gesture. Both paths must reach running audio before playback.
+  const activate = page.getByRole("button", {name: "Activate audio", exact: true});
+  if (await activate.isVisible()) await activate.click();
+  else await wakeAudioWithPad(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
   });
