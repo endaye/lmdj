@@ -53,6 +53,8 @@ The Owner deferred the remaining physical browser/device/hearing acceptance into
 
 Version impact: none. The already allocated Product Build 2.0.87.0, release target and immutable snapshot are retained. This Task adds release evidence only.
 
-Documentation impact: required
+Documentation impact: none
 
-Affected portal pages: /releases/; /releases/2.0.87.0/; /versions/2.0.87.0/. The approved notes are bound here; the observed publication and normal Git-triggered website projection follow in their own evidence Task.
+Reason: this operational qualification refresh changes no current Portal content
+or projected identity. The approved notes remain frozen; the observed publication
+and normal Git-triggered website projection follow in their own evidence Task.

@@ -25,6 +25,8 @@ and owner-accepted retained-distribution risks in #1860 and #1861.
   current qualifying source and retain historical and deferred evidence.
 - `docs/plans/2026-10-08-build87-current-policy-evidence.md`: this Task boundary
   and verification record.
+- `.agents/pitfalls/documentation-impact-means-portal-pages.md`: record the
+  corrected Portal impact declaration recurrence.
 
 No Product source, approved notes, immutable snapshot, release assets, tag,
 Release, deployment, or promotion changes belong to this commit.
@@ -61,19 +63,27 @@ and Model identities and immutable snapshot bytes remain unchanged.
 
 ## Documentation Impact
 
-Documentation impact: required
+Documentation impact: none
 
-Affected portal pages: /releases/; /releases/2.0.87.0/; /versions/2.0.87.0/.
-
-The canonical intent supplies projected release facts. This Task records no
-publication or production website deployment; those have separate far-side
-verification.
+Reason: the refreshed operational qualification reference changes no current
+Portal content or projected Product identity. The public release pages follow
+actual publication in their own evidence Task. Existing Portal source references
+were checked against the diff; the build and route/link check passed.
 
 ## Pitfall Impact
 
-Pitfall impact: none — reason: this Task consumes existing canonical evidence
-and release procedures. The confirmed journal transport recurrence was recorded
-with its repair in PR #1872; no new process invariant is introduced here.
+Pitfall impact: recurrence — the first PR declaration incorrectly equated a
+release-evidence edit with a current Portal page change. The Documentation impact
+gate correctly refused it. This Task records the eighth recurrence in
+`documentation-impact-means-portal-pages`, retaining its existing skill exit,
+and validates the corrected body against the complete changed-file list before
+pushing a fresh head.
+
+The initial committed-head Deploy Contract attempt failed because the inherited
+PATH contained the literal relative entry `~/.dotnet/tools`. A failing source
+setup test passed with an absolute command-local PATH. The complete lane must
+be rerun on the corrected committed head using the same Python and Node tools;
+no gate, test, timeout or suite selection is relaxed.
 
 ## Authority and deferred acceptance
 
