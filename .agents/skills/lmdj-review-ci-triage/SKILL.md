@@ -83,6 +83,42 @@ Two lane facts that make a red look impossible to explain:
 | `why: all configured review backends are unavailable` + `error_class: budget_exhausted`, `num_ai_calls: 0` in `t2-result.json` | Every enabled review-host provider is out of budget (2026-09-17: kimi disabled earlier, deepseek was the last one enabled and its budget ran out). Not a diff defect; rerunning cannot fix it. | Owner-side: restore a provider budget on the review host, or record an authorized current-head owner review/waiver per `issue-done` §5.3, then merge with the expected-head guard. Classify by downloading `pr-review-result-<head>-<run>-<attempt>` and reading `failure.json` / `t2-result.json` / `t2-config-witness.json` (witness `providers` shows which backends are enabled). |
 | `no model reviewed this head (status=not-reviewed)` | Downstream of any of the above model-step failures | Fix the upstream class first; then rerun. |
 
+## macOS real-Git lane timeouts
+
+When a macOS verification lane that launches real Git commands times out,
+follow this diagnostic path before changing its environment:
+
+1. Retain the failed lane's exact command, selected cases, tool resolution and
+   original deadlines. Profile the unchanged failing group and measure time
+   spent in Git calls and subprocess launches; compare launch cost against
+   the already installed executable resolved by `xcrun --find git`. Continue
+   only when the profile identifies material Git launch overhead.
+2. Prove executable equivalence before an adjustment: compare Git version,
+   `git --exec-path`, actual isolated `git init` stderr, `.git/info/exclude`
+   bytes and all sample hooks. A relocated symlink can change Git's exec path
+   and template directory despite an identical version. Reject it when these
+   outputs differ; preserve that failed probe.
+3. Select an adjustment only when both equivalence and measured launch cost
+   justify it. A private thin wrapper must execute the installed Git by its
+   original absolute path; wrappers can be slower. Alternatively select the
+   original Git directory command-locally after comparing resolution and
+   identity of every other tool used by the lane, including Python, Node,
+   GPG, shell and compiler identity/resource/search paths where applicable.
+   Keep those original tools, Git config/filter guards and writer FD
+   inheritance. Record the exact command-local PATH and resolved executable.
+4. Run the complete original failing lane with every case and original
+   deadline intact. Retain the terminal result alongside the original
+   failures and profiles. Only that full pass verifies the adjusted
+   environment; a microbenchmark, passing shard/prefix, interrupted profile
+   or timeout remains diagnostic or failed evidence.
+
+Keep any PATH adjustment local to the verification command. Do not change
+global PATH or `xcode-select`, install another toolchain, weaken guards, reduce
+selection or widen timeouts. If equivalence, useful cost reduction or the
+complete lane pass is missing, report that unresolved condition. This
+machine-specific diagnosis adds no universal performance threshold or CI gate.
+See [`macos-git-launch-overhead`](../../pitfalls/macos-git-launch-overhead.md).
+
 ## Proving "not my diff"
 
 Stash the working changes (`git stash -u`), rerun the failing test or wait for a clean-main
