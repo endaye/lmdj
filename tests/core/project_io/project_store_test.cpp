@@ -4,10 +4,12 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -1464,6 +1466,264 @@ void test_create_rejects_mismatched_existing_initial_checkpoint() {
   LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
   LMDJ_CHECK(!std::filesystem::exists(bundle / "manifest.json"));
   LMDJ_CHECK(read_bytes(checkpoint) == different_bytes);
+}
+
+// Four Pads, one per combination of an Asset category and a Pad colour
+// override: both, category only, override only, neither. Their blobs are
+// written under `sources` for stage_pad_colour_blobs.
+lmdj::domain::ProjectState pad_colour_project(
+    const std::filesystem::path& sources) {
+  auto state = new_project();
+  const std::array<std::optional<lmdj::domain::AssetCategory>, 4> categories{
+      lmdj::domain::AssetCategory::drums, lmdj::domain::AssetCategory::bass,
+      std::nullopt, std::nullopt};
+  const std::array<std::optional<std::uint8_t>, 4> colours{
+      std::uint8_t{3}, std::nullopt, std::uint8_t{0}, std::nullopt};
+  for (std::uint8_t pad = 0; pad < 4; ++pad) {
+    const AssetId id{test_uuid("colour-asset-" + std::to_string(pad))};
+    const auto source = sources / ("colour-" + std::to_string(pad) + ".wav");
+    write_bytes(source, "RIFF-pad-colour-" + std::to_string(pad));
+    const auto artifact =
+        lmdj::foundation::describe_artifact(source, "audio/wav");
+    LMDJ_CHECK(artifact.has_value());
+    state.assets.emplace(
+        id, Asset{id, artifact.value(), std::nullopt, categories.at(pad)});
+    state.banks.at(0).at(pad).asset_id = id;
+    state.banks.at(0).at(pad).colour = colours.at(pad);
+  }
+  return state;
+}
+
+// A created Project's Assets need their blobs before it can be loaded.
+void stage_pad_colour_blobs(
+    const std::filesystem::path& sources, const std::filesystem::path& bundle,
+    const lmdj::domain::ProjectState& state) {
+  for (std::uint8_t pad = 0; pad < 4; ++pad) {
+    const auto& asset = state.assets.at(*state.banks.at(0).at(pad).asset_id);
+    std::filesystem::copy_file(
+        sources / ("colour-" + std::to_string(pad) + ".wav"),
+        bundle / "assets" / (asset.artifact.sha256 + ".wav"),
+        std::filesystem::copy_options::overwrite_existing);
+  }
+}
+
+nlohmann::json checkpoint_asset(
+    const nlohmann::json& checkpoint, const lmdj::domain::ProjectState& state,
+    std::uint8_t pad) {
+  const auto id = state.banks.at(0).at(pad).asset_id->value();
+  for (const auto& asset : checkpoint.at("assets")) {
+    if (asset.at("asset_id") == id) {
+      return asset;
+    }
+  }
+  throw std::runtime_error("checkpoint has no Asset for the Pad");
+}
+
+void test_pad_colour_and_category_round_trip_each_combination() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "pad-colour.lmdj";
+  const auto initial = pad_colour_project(temp.path());
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  stage_pad_colour_blobs(temp.path(), bundle, initial);
+
+  // Each key is written only where it is set.
+  const auto checkpoint = read_json(bundle / "history/checkpoints/0.json");
+  const auto& pads = checkpoint.at("banks").at(0).at("pads");
+  LMDJ_CHECK(pads.at(0).at("colour") == 3);
+  LMDJ_CHECK(!pads.at(1).contains("colour"));
+  LMDJ_CHECK(pads.at(2).at("colour") == 0);
+  LMDJ_CHECK(!pads.at(3).contains("colour"));
+  LMDJ_CHECK(checkpoint_asset(checkpoint, initial, 0).at("category") == "drums");
+  LMDJ_CHECK(checkpoint_asset(checkpoint, initial, 1).at("category") == "bass");
+  LMDJ_CHECK(!checkpoint_asset(checkpoint, initial, 2).contains("category"));
+  LMDJ_CHECK(!checkpoint_asset(checkpoint, initial, 3).contains("category"));
+
+  ProjectStore reopened;
+  const auto loaded = reopened.load(bundle);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value() == initial);
+}
+
+void test_pre_v5_checkpoint_refuses_colour_and_category_keys() {
+  for (const bool category : {false, true}) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "v4-pad-colour.lmdj";
+    auto initial = pad_colour_project(temp.path());
+    for (auto& [id, asset] : initial.assets) {
+      (void)id;
+      asset.category = std::nullopt;
+    }
+    for (auto& pad : initial.banks.at(0)) {
+      pad.colour = std::nullopt;
+    }
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, initial).has_value());
+    stage_pad_colour_blobs(temp.path(), bundle, initial);
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    checkpoint["contract"] = "lmdj.project.v4";
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    // Control: the relabelled checkpoint alone is a legal v4 Project.
+    LMDJ_CHECK(store.load(bundle).has_value());
+
+    if (category) {
+      checkpoint["assets"][0]["category"] = "drums";
+    } else {
+      checkpoint["banks"][0]["pads"][0]["colour"] = 1;
+    }
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto rejected = store.load(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  }
+}
+
+void test_v5_checkpoint_refuses_invalid_colour_and_category() {
+  const auto refuses = [](const std::function<void(nlohmann::json&)>& mutate) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "invalid-pad-colour.lmdj";
+    const auto initial = pad_colour_project(temp.path());
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, initial).has_value());
+    stage_pad_colour_blobs(temp.path(), bundle, initial);
+    const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+    auto checkpoint = read_json(checkpoint_path);
+    mutate(checkpoint);
+    write_bytes(
+        checkpoint_path, lmdj::foundation::canonical_json(checkpoint) + "\n");
+    const auto rejected = store.load(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  };
+  // An empty Pad carrying an override.
+  refuses([](nlohmann::json& c) { c["banks"][0]["pads"][9]["colour"] = 1; });
+  // An index outside the palette, and a colour that is not an index.
+  refuses([](nlohmann::json& c) { c["banks"][0]["pads"][1]["colour"] = 5; });
+  refuses([](nlohmann::json& c) { c["banks"][0]["pads"][1]["colour"] = -1; });
+  refuses([](nlohmann::json& c) { c["banks"][0]["pads"][1]["colour"] = "red"; });
+  // There is no "none" category, and `other` is unclassified, not a value.
+  refuses([](nlohmann::json& c) { c["assets"][2]["category"] = "none"; });
+  refuses([](nlohmann::json& c) { c["assets"][2]["category"] = "other"; });
+  refuses([](nlohmann::json& c) { c["assets"][2]["category"] = nullptr; });
+}
+
+void test_legacy_project_opens_unclassified_and_first_save_writes_set_keys() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "legacy-pad-colour.lmdj";
+  auto initial = pad_colour_project(temp.path());
+  initial.contract = ProjectContract::v4;
+  for (auto& [id, asset] : initial.assets) {
+    (void)id;
+    asset.category = std::nullopt;
+  }
+  for (auto& pad : initial.banks.at(0)) {
+    pad.colour = std::nullopt;
+  }
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  stage_pad_colour_blobs(temp.path(), bundle, initial);
+  auto checkpoint = read_json(bundle / "history/checkpoints/0.json");
+  checkpoint["contract"] = "lmdj.project.v4";
+  write_bytes(
+      bundle / "history/checkpoints/0.json",
+      lmdj::foundation::canonical_json(checkpoint) + "\n");
+  const auto before_open = managed_bundle_snapshot(bundle);
+
+  const auto opened = store.load(bundle);
+  LMDJ_CHECK(opened.has_value());
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v4);
+  for (const auto& [id, asset] : opened.value().assets) {
+    (void)id;
+    LMDJ_CHECK(!asset.category.has_value());
+  }
+  for (const auto& bank : opened.value().banks) {
+    for (const auto& pad : bank) {
+      LMDJ_CHECK(!pad.colour.has_value());
+    }
+  }
+  // Opening an older Project writes nothing.
+  LMDJ_CHECK(managed_bundle_snapshot(bundle) == before_open);
+
+  // The first save promotes the Project to v5 and writes only the override
+  // it set; every other Pad and every Asset keeps its older shape.
+  const auto saved = store.execute(
+      bundle,
+      lmdj::domain::SetPadColour{meta("legacy-colour", 0), PadSlotId{0, 1},
+                                 std::uint8_t{2}});
+  LMDJ_CHECK(saved.has_value());
+  const auto written = read_json(bundle / "history/checkpoints/1.json");
+  LMDJ_CHECK(written.at("contract") == "lmdj.project.v5");
+  for (std::size_t pad = 0; pad < 16; ++pad) {
+    LMDJ_CHECK(
+        written.at("banks").at(0).at("pads").at(pad).contains("colour") ==
+        (pad == 1));
+  }
+  LMDJ_CHECK(written.at("banks").at(0).at("pads").at(1).at("colour") == 2);
+  for (const auto& asset : written.at("assets")) {
+    LMDJ_CHECK(!asset.contains("category"));
+  }
+}
+
+void test_set_pad_colour_persists_replays_and_survives_reopen() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "set-pad-colour.lmdj";
+  const auto initial = pad_colour_project(temp.path());
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  stage_pad_colour_blobs(temp.path(), bundle, initial);
+  const lmdj::domain::SetPadColour set{
+      meta("set-colour", 0), PadSlotId{0, 1}, std::uint8_t{4}};
+  const auto committed = store.execute(bundle, set);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().state.banks.at(0).at(1).colour == 4);
+
+  // The transaction carries the command, so a reload replays it exactly.
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto transaction = read_json(
+      bundle / manifest.at("transactions").at(0).get<std::filesystem::path>());
+  LMDJ_CHECK(
+      transaction.at("command") ==
+      (nlohmann::json{{"colour", 4},
+                      {"meta",
+                       {{"command_id", set.meta.command_id.value()},
+                        {"expected_revision", 0}}},
+                      {"slot", {{"bank", 0}, {"pad", 1}}},
+                      {"type", "SetPadColour"}}));
+  ProjectStore reopened;
+  const auto loaded = reopened.load(bundle);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value() == committed.value().state);
+  LMDJ_CHECK(loaded.value().banks.at(0).at(1).colour == 4);
+  const auto replayed = reopened.execute(bundle, set);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state.revision == 1);
+
+  // Restoring the category default removes the key again.
+  const auto restored = reopened.execute(
+      bundle,
+      lmdj::domain::SetPadColour{
+          meta("restore-colour", 1), PadSlotId{0, 1}, std::nullopt});
+  LMDJ_CHECK(restored.has_value());
+  LMDJ_CHECK(!read_json(bundle / "history/checkpoints/2.json")
+                  .at("banks").at(0).at("pads").at(1).contains("colour"));
+  const auto reloaded = ProjectStore{}.load(bundle);
+  LMDJ_CHECK(reloaded.has_value());
+  LMDJ_CHECK(reloaded.value() == restored.value().state);
+  LMDJ_CHECK(reloaded.value().banks.at(0).at(1) == initial.banks.at(0).at(1));
+
+  // An empty Pad has no colour; the refusal writes nothing.
+  const auto before_refusal = managed_bundle_snapshot(bundle);
+  const auto refused = reopened.execute(
+      bundle,
+      lmdj::domain::SetPadColour{
+          meta("empty-colour", 2), PadSlotId{0, 9}, std::uint8_t{1}});
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(refused.error().details.at("reason") == "pad_empty");
+  LMDJ_CHECK(managed_bundle_snapshot(bundle) == before_refusal);
 }
 
 void test_committed_transactions_replay_to_manifest_head() {
@@ -3001,6 +3261,11 @@ int main() {
     test_create_resumes_manifest_after_valid_checkpoint_publish();
     test_create_rejects_mismatched_existing_initial_checkpoint();
     test_committed_transactions_replay_to_manifest_head();
+    test_pad_colour_and_category_round_trip_each_combination();
+    test_pre_v5_checkpoint_refuses_colour_and_category_keys();
+    test_v5_checkpoint_refuses_invalid_colour_and_category();
+    test_legacy_project_opens_unclassified_and_first_save_writes_set_keys();
+    test_set_pad_colour_persists_replays_and_survives_reopen();
     test_imported_assets_are_content_addressed_and_deduplicated();
     test_owner_read_holds_one_lease_and_never_writes();
     for (int field = 0; field < 5; ++field) test_owner_read_refuses_unowned_identity(field);

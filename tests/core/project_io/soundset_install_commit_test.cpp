@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -466,6 +467,64 @@ void test_a_promoted_v3_project_still_reopens_after_an_install() {
 
 }  // namespace
 
+// Re-installing over an overridden Pad (`replace`) keeps the user's override
+// and records the new slot role's category on the new Asset, through save and
+// reopen.
+void test_reinstall_keeps_the_override_and_updates_the_category() {
+  TempDirectory temp("reinstall-colour");
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_v4_project()).has_value());
+  auto first = install_fixture("first-install", 0);
+  for (auto& slot : first.request.slots) {
+    slot.category = lmdj::domain::AssetCategory::drums;
+  }
+  LMDJ_CHECK(store.install_soundset(bundle, first.request).has_value());
+  const auto coloured = store.execute(
+      bundle,
+      lmdj::domain::SetPadColour{
+          CommandMeta{CommandId{test_uuid("override")}, 1},
+          PadSlotId{kBank, 0}, std::uint8_t{3}});
+  LMDJ_CHECK(coloured.has_value());
+
+  auto second = install_fixture("second-install", 2);
+  for (auto& slot : second.request.slots) {
+    slot.asset_id = AssetId{test_uuid("re-asset-" + std::to_string(slot.slot.pad))};
+    slot.category = lmdj::domain::AssetCategory::bass;
+  }
+  const auto reinstalled = store.install_soundset(bundle, second.request);
+  LMDJ_CHECK(reinstalled.has_value());
+
+  // The transaction carries each category, so replay reproduces it.
+  const auto manifest =
+      nlohmann::json::parse(read_bytes(bundle / "manifest.json"));
+  const auto transaction = nlohmann::json::parse(read_bytes(
+      bundle / manifest.at("transactions").back().get<std::filesystem::path>()));
+  for (const auto& assignment : transaction.at("command").at("assignments")) {
+    LMDJ_CHECK(assignment.at("asset").at("category") == "bass");
+  }
+
+  const auto reopened = ProjectStore{}.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == reinstalled.value().state);
+  for (const auto& slot : second.request.slots) {
+    const auto& pad = reopened.value().banks.at(kBank).at(slot.slot.pad);
+    LMDJ_CHECK(pad.asset_id == slot.asset_id);
+    LMDJ_CHECK(
+        reopened.value().assets.at(slot.asset_id).category ==
+        lmdj::domain::AssetCategory::bass);
+    LMDJ_CHECK(
+        pad.colour ==
+        (slot.slot.pad == 0 ? std::optional<std::uint8_t>{3} : std::nullopt));
+  }
+  // The override wins over the new category; the others follow it.
+  LMDJ_CHECK(
+      lmdj::domain::effective_pad_colour(reopened.value(), PadSlotId{kBank, 0}) == 3);
+  LMDJ_CHECK(
+      lmdj::domain::effective_pad_colour(reopened.value(), PadSlotId{kBank, 1}) ==
+      lmdj::domain::pad_colour_index(lmdj::domain::AssetCategory::bass));
+}
+
 int main() {
   try {
     test_install_commits_every_asset_and_pad_in_exactly_one_revision();
@@ -473,6 +532,7 @@ int main() {
     test_faults_before_publication_preserve_every_project_truth_projection();
     test_install_refuses_before_it_changes_anything();
     test_a_promoted_v3_project_still_reopens_after_an_install();
+    test_reinstall_keeps_the_override_and_updates_the_category();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

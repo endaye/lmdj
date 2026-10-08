@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -270,6 +271,23 @@ const nlohmann::json& bank_pads(
     const nlohmann::json& project,
     std::uint8_t bank) {
   return project.at("banks").at(bank).at("pads");
+}
+
+// The committed Project Truth category of one Pad's Asset, read from the head
+// checkpoint (the inspection does not project it), or null when unclassified.
+nlohmann::json committed_category(
+    const std::filesystem::path& project, std::uint8_t bank, std::uint8_t pad) {
+  const auto manifest = nlohmann::json::parse(read_text(project / "manifest.json"));
+  const auto checkpoint = nlohmann::json::parse(read_text(
+      project / manifest.at("head_checkpoint").get<std::string>()));
+  const auto& asset_id =
+      checkpoint.at("banks").at(bank).at("pads").at(pad).at("asset_id");
+  for (const auto& asset : checkpoint.at("assets")) {
+    if (asset.at("asset_id") == asset_id) {
+      return asset.value("category", nlohmann::json(nullptr));
+    }
+  }
+  throw std::runtime_error("committed checkpoint has no Asset for the Pad");
 }
 
 nlohmann::json catalog_list(Application& application) {
@@ -946,6 +964,9 @@ void test_install_policies_write_the_three_write_sets() {
       lineage.at("source").at("artifact_sha256") ==
       "e51f446a04207989eea06f7206befd4306362d8a9bcd34b5638100062e2af29c");
   LMDJ_CHECK(lineage.at("derivation").at("kind") == "soundset_install");
+  // Each installed Asset records its Set slot role's category: kick, then bass.
+  LMDJ_CHECK(committed_category(project, 2, 0) == "drums");
+  LMDJ_CHECK(committed_category(project, 2, 3) == "bass");
 
   // Write set one: the Foundry Set collides on Pads 0..3, and an omitted
   // policy is refused with the whole list and zero change.
@@ -1004,6 +1025,10 @@ void test_install_policies_write_the_three_write_sets() {
   for (const auto pad : {10, 11, 13, 14, 15}) {
     LMDJ_CHECK(replaced_bank.at(pad).at("asset_id").is_null());
   }
+  // `replace` records the new roles: hat_closed is drums, `other` is
+  // unclassified.
+  LMDJ_CHECK(committed_category(project, 2, 3) == "drums");
+  LMDJ_CHECK(committed_category(project, 2, 12).is_null());
   // S8-D5: a replaced Asset is not deleted, so all three write sets' Assets
   // are still Project Truth.
   LMDJ_CHECK(after_replace.at("assets").size() == 22);

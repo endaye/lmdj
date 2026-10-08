@@ -9645,6 +9645,7 @@ struct Application::Impl {
                   },
                   domain::SoundSetInstallLineageDerivation{},
               },
+              pad.category,
           });
     }
     const auto committed = projects.install_soundset(
