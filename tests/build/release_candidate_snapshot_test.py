@@ -272,10 +272,14 @@ class SnapshotSafetyTest(SnapshotFixture):
         (self.fixture.root / ".git/info/attributes").write_text("scripts/docs-site.sh filter=hide\n")
         self.fixture.git("config", "filter.hide.clean", "git show HEAD:scripts/docs-site.sh")
         (self.root / "scripts/docs-site.sh").write_text("echo UNTRUSTED > .fixture-evil\n")
-        # Ordinary Git applies the actual disguise; the trusted helper already
-        # disables filters. Neither path replaces the runner's raw-byte check.
-        self.assertEqual(self.fixture.git("-C", str(self.root), "diff", "--name-only", "--", "scripts/docs-site.sh"), "")
-        self.assertNotEqual(self.tool.git("diff", "--name-only", "--", "scripts/docs-site.sh"), b"")
+        # Make the entry non-racy: the filtered diff refreshes its stat cache,
+        # then even the filter-disabled helper can trust that cache (#1873).
+        # Neither Git observation replaces the runner's raw-byte check.
+        os.utime(self.root / "scripts/docs-site.sh", ns=(1_000_000_000, 1_000_000_000))
+        self.assertEqual(self.fixture.git("-C", str(self.root), "diff", "--name-only", "--", "scripts/docs-site.sh"), "",
+                         "why: the real clean filter did not hide the replacement; remedy: repair the filter fixture")
+        self.assertEqual(self.tool.git("diff", "--name-only", "--", "scripts/docs-site.sh"), b"",
+                         "why: the fixture did not retain the clean stat cache; remedy: repair the non-racy mtime setup")
         with self.assertRaisesRegex(CandidateSnapshotError, "tracked source files changed"):
             self.run_snapshot()
         self.assertFalse((self.root / ".fixture-evil").exists())
