@@ -1,0 +1,88 @@
+---
+title: LMDJ 2.0.87.0 release changelog
+area: history
+status: implemented
+owners: [release, docs]
+source_paths: [docs/release-evidence/release-intents.json, docs/release-evidence/changelog-publications.json, tools/release/changelog_site.py]
+---
+
+{/* Generated release projection; do not hand-edit frozen version pages. */}
+
+Published: 2026-10-08T02:16:17Z. Release ID: 406335405.
+
+[GitHub Release](https://github.com/endaye/lmdj/releases/tag/lmdj-v2.0.87.0) · [全部版本](./index.mdx)
+
+本页记录经审查的 Release 公开事实，不表示两个 Host 已部署或已晋级。
+
+# LMDJ 2.0.87.0
+
+Tag: `lmdj-v2.0.87.0`
+Target: `5abc52106728f463768210eb4186777a0b44ad7f`
+
+Changes since `lmdj-v1.0.66.0` (`603af8f9e429d06a8a8d560ecddd7f4c4d14dc0d`).
+
+## Features
+
+- creator: Open or create a Project at startup, and create or duplicate Projects from the library. ([0bf6298ee5fb](https://github.com/endaye/lmdj/commit/0bf6298ee5fb39bf4413277055611021f7be9436), [1b0eac9f6414](https://github.com/endaye/lmdj/commit/1b0eac9f6414b61567cac47b98ae3f0fe34d5dc3), [7dab76c5f06f](https://github.com/endaye/lmdj/commit/7dab76c5f06f6c2a2e583216c579676c32d9ee98), [63f22fe57aa0](https://github.com/endaye/lmdj/commit/63f22fe57aa0c4634152494739fef25aea16f533), [9bd866b8b1fd](https://github.com/endaye/lmdj/commit/9bd866b8b1fde0533790eef1ce8940455a5823eb), [206fcd571f60](https://github.com/endaye/lmdj/commit/206fcd571f60a0608fa3cded0e744b1e7ae1a84c))
+
+- creator: Add session Undo/Redo through the SHIFT rail controls; deleting Pad sounds preserves the rhythm. ([b46c65e75456](https://github.com/endaye/lmdj/commit/b46c65e754562eb292bf99805327b69491591ef2), [20d57962f056](https://github.com/endaye/lmdj/commit/20d57962f05693ae95e4cd76f9c4d092b08f5bf8), [b889aac3b36e](https://github.com/endaye/lmdj/commit/b889aac3b36eb7d4800239f894fabd61d5c04af9))
+
+- creator: Edit Pad reverse, pitch, pan, loop mode, attack, release, tone and three-band EQ through the shared audio engine. ([93359d23a8bf](https://github.com/endaye/lmdj/commit/93359d23a8bf4a2c13ac586cf6a6485ac0d3fc29), [0d9156edcff2](https://github.com/endaye/lmdj/commit/0d9156edcff2ae384c2096caf1f5447007137f5f), [f6dedbe53645](https://github.com/endaye/lmdj/commit/f6dedbe53645b52446078ffa9a66710f83fbf24b), [65d0125330ba](https://github.com/endaye/lmdj/commit/65d0125330baa5e9d5318b8f0a557e51ac16dd36))
+
+- creator: Show and edit the Sequence grid with gestures and Undo/Redo, with atomic Pattern event editing in Core and the Web Host. ([b76cf20765c2](https://github.com/endaye/lmdj/commit/b76cf20765c2026067ee8e7c3837be06360a7d91), [de09fbd69826](https://github.com/endaye/lmdj/commit/de09fbd69826810fa02b71eb294f633efa0d7526), [49d4a3c21d0a](https://github.com/endaye/lmdj/commit/49d4a3c21d0a8cb1fc3fdab301d2aa670a01f742))
+
+- creator: Control Tempo/Swing directly, use Tap Tempo, and enable a metronome that is excluded from recordings. ([3fdcfa7a7a1a](https://github.com/endaye/lmdj/commit/3fdcfa7a7a1a878904b61ae7c0440c14c9319583), [3112b179250b](https://github.com/endaye/lmdj/commit/3112b179250b83d7dfd2254008b7d1b21efc69ef))
+
+- creator: Apply Perform FX with press gestures without requiring a Performance recording session. ([6c58a19fb8cc](https://github.com/endaye/lmdj/commit/6c58a19fb8cc2101155692a22d2538f427605d1d))
+
+- creator: Wake browser audio on the first musical gesture without a dedicated activation gate. ([1e7540c5a3c8](https://github.com/endaye/lmdj/commit/1e7540c5a3c8707100b659bdb8886ad5ac9a7d4f))
+
+- creator: Stream an original 16-Pad default drum set from an independent asset service, verifying and installing each slot separately. ([54d85ead0996](https://github.com/endaye/lmdj/commit/54d85ead09960a8b0914ccf93e6a8801a2013bcb), [43dd32e58adf](https://github.com/endaye/lmdj/commit/43dd32e58adffd5d144a4c9928a6579a94e9e793))
+
+- creator: Record an empty Pad immediately on press and finish on release; first microphone permission prepares the next press. ([9964cda1f471](https://github.com/endaye/lmdj/commit/9964cda1f471b77ec29e62155e44c7e0bf944895))
+
+- creator: Move settings, MIDI, Provider management and diagnostics into System while retaining the four music pages. ([b1b990d57fb8](https://github.com/endaye/lmdj/commit/b1b990d57fb88565b7fdf151092f346a65918f01))
+
+- creator: Refresh the stage shell, brand/favicon, colours and console typography, with a centred layout and bounded scrolling. ([1e0e1293fa9d](https://github.com/endaye/lmdj/commit/1e0e1293fa9da81e96f412b9a52dbb967d00059d), [6244fa544351](https://github.com/endaye/lmdj/commit/6244fa544351441bcca7873d782dd231dc403d49), [96b015a3769e](https://github.com/endaye/lmdj/commit/96b015a3769ea83b7a2e351a95051d712ba1de44), [d1acd8720379](https://github.com/endaye/lmdj/commit/d1acd872037950ea0c98a77c8b2f7aea2f42f60e), [4a6646dd2ce8](https://github.com/endaye/lmdj/commit/4a6646dd2ce86f07c168c8796d66bdd72407b92e), [b40204e08986](https://github.com/endaye/lmdj/commit/b40204e08986888fe11ce6fe09eed167b564f6db))
+
+- core: Define the four-role Stem PCM16 contract and durable proof Provider; shared content retains distinct port roles. This is contract/replay proof, with real model quality still outside the delivered proof. ([7e40a0e83a80](https://github.com/endaye/lmdj/commit/7e40a0e83a803997682302e88f06b62e10e02820), [e03461555ade](https://github.com/endaye/lmdj/commit/e03461555ade79c6e5c9f40d61c1fb28b7315cb6))
+
+- runtime: Recover receiver-owned transfer display state for the Cardputer Host; physical hardware acceptance remains separate. ([57dda226f49c](https://github.com/endaye/lmdj/commit/57dda226f49c8f34482c556277de40331087333d))
+
+## Fixes
+
+- creator: Restore the last Project after a crash, support explicit takeover from another tab, and ask whether to retain interrupted recordings on reopen. ([52385a95bc3c](https://github.com/endaye/lmdj/commit/52385a95bc3c18856289f5268e82f735c6fd1676), [3a3e9d7a92df](https://github.com/endaye/lmdj/commit/3a3e9d7a92df63e804aec34f98eb9cbc1d606d13), [eedfdd9cc4da](https://github.com/endaye/lmdj/commit/eedfdd9cc4da0d62d253c81d70eebf995f7c7add))
+
+- creator: Explain Project, Sample, import, capture, Slice, Sound Set, Perform and Undo errors with actionable user-facing messages. ([70e2bf24ceb6](https://github.com/endaye/lmdj/commit/70e2bf24ceb6b2ae9310cda3ccd8cb7027cf7276), [f73980bd4a62](https://github.com/endaye/lmdj/commit/f73980bd4a6269ba0cb6e2c0ddd9312814c93d5c), [36e21f9686f7](https://github.com/endaye/lmdj/commit/36e21f9686f77329147669c31073929dbf1de8f6))
+
+- creator: Allow Pad Delete, Reset, Mute and Replace while audio is inactive. ([17f895ab02de](https://github.com/endaye/lmdj/commit/17f895ab02dee546bf89e3d07adb210027c90ed9))
+
+- creator: Fit the Sequence overview/grid to their displays and anchor the playhead to observed Runtime frames. ([985a13142774](https://github.com/endaye/lmdj/commit/985a131427748004d9b7e264b548e03b4cb3df44), [9046279937f3](https://github.com/endaye/lmdj/commit/9046279937f345972f3063cfae23aef697f34646))
+
+- runtime: Load the AudioWorklet graph on a parked context and handle output-device startup refusal without sealing the session. ([e94dce9cf8d8](https://github.com/endaye/lmdj/commit/e94dce9cf8d8fb4b69627fad8a1aafde24a9659c), [69565c16c913](https://github.com/endaye/lmdj/commit/69565c16c913cf88d127560868450d1592783498))
+
+- runtime: Preserve an active Performance replay across Host publications and keep Runtime state current across settings changes. ([14f4fbb3d215](https://github.com/endaye/lmdj/commit/14f4fbb3d215860f314888a1593258ebb9a65ee4), [7745bbb98a67](https://github.com/endaye/lmdj/commit/7745bbb98a67f79f6bb56ec02b93f3e44e848ff8))
+
+- creator: Preserve default streaming across owner loss and keep cached offline recovery consistent with the Host favicon inventory. ([454a400fc55a](https://github.com/endaye/lmdj/commit/454a400fc55adbb1899efdc025dc872efeb5d3fa), [fb66a608d821](https://github.com/endaye/lmdj/commit/fb66a608d82134f7f485a05aad0f7a61f0107130))
+
+- core: Reduce deep Web stack copies of ProjectState and restore build compatibility after cross-feature integration. ([7b95e06df033](https://github.com/endaye/lmdj/commit/7b95e06df0337209bb27542c6a86f704fec0a0b6), [8d67ab867c27](https://github.com/endaye/lmdj/commit/8d67ab867c27f9ef9a2981cb2be9f8755bd728b7), [724576f80a21](https://github.com/endaye/lmdj/commit/724576f80a211b445f258fe39dd5824b67a08f3c), [127825eca1d2](https://github.com/endaye/lmdj/commit/127825eca1d27f7e65c52f3528848cb6fabe6f5d))
+
+## Compatibility / migration
+
+- core: Advance lmdj.project.v5 through compatible 5.1 and 5.2 updates for the current authoring capabilities. ([2e0e989c907d](https://github.com/endaye/lmdj/commit/2e0e989c907d880f184bb8512d306d3835fcfa50), [25ec0a147f3c](https://github.com/endaye/lmdj/commit/25ec0a147f3c222d1437fc1258db53105f0871e7))
+
+- release: Propagate coordinated P1 Host identities and derive offline/package/deployment asset inventories from the actual Creator version. ([0bf98229374d](https://github.com/endaye/lmdj/commit/0bf98229374d355313502b2f9fb593e74e2297cf), [566ce0b14fd1](https://github.com/endaye/lmdj/commit/566ce0b14fd17d00d9f5e18fd488506cb291b226), [5d3e631d6b6c](https://github.com/endaye/lmdj/commit/5d3e631d6b6cc0ca43e964fe83c7be7b3c27b27b))
+
+## Known issues
+
+- creator: P1 device and subjective-audio acceptance remains deferred in Issues 1851-1854: real microphone/Master capture and replay, offline reopening, iPad touch/lifecycle, and physical MIDI. Native Chrome/Safari GUI observations are partial evidence. This release makes no beta/stable or hearing-acceptance claim. ([5abc52106728](https://github.com/endaye/lmdj/commit/5abc52106728f463768210eb4186777a0b44ad7f))
+
+Content SHA-256: `72afc0fd481ba45add6af33940b190bcd852313d62c0891447b77be91c8b21be`
+
+Notes SHA-256: `f5e990dadfe081926cd5b3abf9580f2e933322182ecb6096bff04d6b8e630fd5`
+
+Plan SHA-256 (reviewed publication record): `2006f4589d293d1b3963a0e30c2dc4e0eb6387e9d27743b220e0891a8419700a`
+
+本投影重算 Content / Notes 摘要；Plan 摘要、Release ID 与公开时间来自经审查的公开记录，不在此处重新认证远端 Release。
+
+[Creator Host 日志](../operations/creator-changelog.mdx) · [Runtime Host 日志](../operations/runtime-changelog.mdx)
