@@ -13,7 +13,8 @@ Declared files:
 - `.agents/pitfalls/macos-git-launch-overhead.md`
 - `docs/plans/2026-10-08-macos-git-diagnostic.md`
 
-The skill owns the diagnostic procedure; the absorbed pitfall retains the two
+The skill description includes local macOS real-Git timeouts so the diagnostic
+path is discoverable before its body is loaded. The skill owns the diagnostic procedure; the absorbed pitfall retains the two
 historical occurrences and points to that procedure. No launcher, PATH, test,
 CI trigger or required gate changes in this Task.
 

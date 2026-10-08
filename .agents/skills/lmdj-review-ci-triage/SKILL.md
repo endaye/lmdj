@@ -1,6 +1,6 @@
 ---
 name: lmdj-review-ci-triage
-description: Use when an LMDJ PR review or CI job fails on GitHub.
+description: Use when an LMDJ PR review or CI job fails on GitHub, or local macOS real-Git verification times out.
 ---
 
 # LMDJ PR Review / CI failure triage
