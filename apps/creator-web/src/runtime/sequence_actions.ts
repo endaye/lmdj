@@ -3,6 +3,7 @@ import type {
   PatternEventRequest,
 } from "@lmdj/web-runtime-platform/runtime_types";
 import type {
+  CreatorPatternLengthRuntimeSession,
   CreatorSequenceRuntimeSession,
   PatternEventsEditMutation,
   SequenceMutation,
@@ -26,6 +27,18 @@ export function isSequenceSession(value: unknown): value is CreatorSequenceRunti
     typeof session.applySequenceRecovery === "function" &&
     typeof session.discardSequenceRecovery === "function" &&
     typeof session.subscribeSequenceBarBoundary === "function";
+}
+
+// SETUP's BARS, DOUBLE UP and COPY (#1823) need all three operations; a
+// Sequence session without them keeps those controls disabled.
+export function isPatternLengthSession(
+  value: unknown,
+): value is CreatorPatternLengthRuntimeSession {
+  if (!isSequenceSession(value)) return false;
+  const session = value as Partial<CreatorPatternLengthRuntimeSession>;
+  return typeof session.resizePattern === "function" &&
+    typeof session.doubleUpPattern === "function" &&
+    typeof session.copyPattern === "function";
 }
 
 export function reconcileSequenceAuthoringRevision(

@@ -25,6 +25,9 @@ import {PatternStepper, TouchSegment, type TouchSegmentOption} from "./touch_kit
 const BAR_COUNTS = [1, 2, 4, 8] as const;
 const BAR_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
   ({value: count, label: String(count), ariaLabel: `${count} bars`}));
+// The selected Pattern's length; distinct names from the new-Pattern choice.
+const LENGTH_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
+  ({value: count, label: String(count), ariaLabel: `Length ${count} bars`}));
 type SequenceLayer = "edit" | "setup";
 const LAYER_OPTIONS: readonly TouchSegmentOption<SequenceLayer>[] = [
   {value: "edit", label: "EDIT"},
@@ -50,6 +53,11 @@ interface SequenceTouchWorkspaceProps {
   onRefresh(): void;
   onSwitch(patternId: string): void;
   onCreatePattern(bars: 1 | 2 | 4 | 8): void;
+  // #1823. Absent when the session cannot change or copy a Pattern; the
+  // controls are then disabled rather than silently doing nothing.
+  onResizePattern?(bars: 1 | 2 | 4 | 8): void;
+  onDoubleUpPattern?(): void;
+  onCopyPattern?(): void;
   onSnapChange(snap: SequenceGridSnap): void;
   onEditModeChange(mode: SequenceGridEditMode): void;
   onViewportChange(viewport: SequenceGridViewport): void;
@@ -118,6 +126,16 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     if (tapped !== null) requestBpm(tapped);
   };
   const playing = selectTransportPlaying(transport);
+  // BARS, DOUBLE UP and COPY change Truth only while stopped, as CREATE does
+  // (2026-10-08 decision, item 5). They also wait for a projection refresh,
+  // because the current length they compare against is read from it.
+  const structureDisabled = disabled || playing || props.projectionRefreshing ||
+    selectedPattern === undefined;
+  const resizePattern = (next: 1 | 2 | 4 | 8) => {
+    // Choosing the current length changes nothing, so it commits nothing.
+    if (selectedPattern === undefined || next === selectedPattern.bars) return;
+    props.onResizePattern?.(next);
+  };
   const stepPattern = (offset: -1 | 1) => {
     const next = project.patterns[patternIndex - 1 + offset];
     if (next !== undefined) props.onSwitch(next.patternId);
@@ -214,13 +232,28 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             Tempo and Swing are locked while recording
           </p>
         ) : null}
-        {/* BARS is the current Pattern's length. Changing an existing
-            Pattern's length waits for #1823, so it is read here only. */}
-        <div className="sequence-setup-row" role="group" aria-label="Pattern length">
+        {/* BARS is the selected Pattern's length. A longer choice adds empty
+            bars, a shorter one drops and cuts notes past the new end; DOUBLE
+            UP repeats the notes; COPY selects a copy (#1823). */}
+        <div className="sequence-setup-row sequence-setup-bars">
           <span>BARS</span>
-          <output className="sequence-bars-value">
-            {selectedPattern === undefined ? "—" : selectedPattern.bars}
-          </output>
+          <TouchSegment<1 | 2 | 4 | 8> label="Pattern length" options={LENGTH_OPTIONS}
+            value={selectedPattern?.bars ?? null}
+            disabled={structureDisabled || props.onResizePattern === undefined}
+            onChange={resizePattern} />
+        </div>
+        <div className="sequence-setup-row sequence-setup-actions">
+          <button type="button" className="touch-control" aria-label="Double Up Pattern"
+            disabled={structureDisabled || props.onDoubleUpPattern === undefined ||
+              selectedPattern.bars === 8}
+            onClick={() => props.onDoubleUpPattern?.()}>
+            DOUBLE UP
+          </button>
+          <button type="button" className="touch-control" aria-label="Copy Pattern"
+            disabled={structureDisabled || props.onCopyPattern === undefined}
+            onClick={() => props.onCopyPattern?.()}>
+            COPY
+          </button>
         </div>
         <div className="sequence-setup-row sequence-setup-toggles">
           <button type="button" className="touch-control" aria-label="Quantize"

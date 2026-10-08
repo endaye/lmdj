@@ -4,6 +4,7 @@ import {
   beginSequenceJourney,
   disarmSequenceCaptureJourney,
   editPatternEventsJourney,
+  isPatternLengthSession,
   isSequenceSession,
   reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
@@ -60,6 +61,21 @@ test("Sequence capability detection includes settings and Pattern authoring", ()
   expect(isSequenceSession({...value, createPattern: undefined})).toBe(false);
   expect(isSequenceSession({...value, applySequenceRecovery: undefined})).toBe(false);
   expect(isSequenceSession({...value, discardSequenceRecovery: undefined})).toBe(false);
+});
+
+test("SETUP's length and copy capability needs a Sequence session and all three operations", () => {
+  const sequence = Object.fromEntries([
+    "beginSequence", "flushSequence", "createPattern", "updateSequenceSettings", "stopSequence",
+    "editPatternEvents", "disarmSequenceCapture",
+    "requestPatternSwitch", "querySequenceStatus", "listSequenceRecovery",
+    "applySequenceRecovery", "discardSequenceRecovery", "subscribeSequenceBarBoundary",
+  ].map((name) => [name, () => {}]));
+  const value = {...sequence, resizePattern() {}, doubleUpPattern() {}, copyPattern() {}};
+  expect(isPatternLengthSession(value)).toBe(true);
+  expect(isPatternLengthSession({...value, resizePattern: undefined})).toBe(false);
+  expect(isPatternLengthSession({...value, doubleUpPattern: undefined})).toBe(false);
+  expect(isPatternLengthSession({...value, copyPattern: undefined})).toBe(false);
+  expect(isPatternLengthSession({...value, beginSequence: undefined})).toBe(false);
 });
 
 test("the Pattern events edit journey delegates one gesture's command verbatim", async () => {

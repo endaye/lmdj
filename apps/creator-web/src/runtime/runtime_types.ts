@@ -422,6 +422,35 @@ export interface PatternEventsEditMutation {
   snapshotError: Readonly<SampleSnapshotError> | null;
 }
 
+// #1823: a resized or doubled Pattern's view. `publication` is "none" for a
+// Pattern that is not the Runtime's current one, "published" when it was
+// republished at once, "deferred" when it swaps once a Pattern slot frees, and
+// "failed" when the committed change's view could not swap (`snapshotError`).
+export interface PatternLengthMutation {
+  committedRevision: number;
+  projectRevision: number;
+  patternId: string;
+  bars: 1 | 2 | 4 | 8;
+  replayed: boolean;
+  publication: "none" | "published" | "deferred" | "failed";
+  patternPublication: Readonly<{
+    generation: number;
+    activationFrame: number;
+  }> | null;
+  snapshotError: Readonly<SampleSnapshotError> | null;
+}
+
+// #1823: a copy holds the lowest empty Pattern slot after its source's slot,
+// or none (`patternSlot` null). A copy publishes nothing.
+export interface PatternCopyMutation {
+  committedRevision: number;
+  projectRevision: number;
+  sourcePatternId: string;
+  patternId: string;
+  patternSlot: number | null;
+  replayed: boolean;
+}
+
 export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSession {
   createPattern(request: {
     patternId: string;
@@ -474,6 +503,25 @@ export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSessi
     runtimeFrame: number;
     generation: number;
   }>) => void): () => boolean;
+}
+
+// SETUP's BARS, DOUBLE UP and COPY (#1823). Each mints its command identity
+// per call; the Host refuses all three while playing, recording or settling.
+export interface CreatorPatternLengthRuntimeSession extends CreatorSequenceRuntimeSession {
+  resizePattern(request: {
+    patternId: string;
+    bars: 1 | 2 | 4 | 8;
+    expectedRevision: number;
+  }): Promise<Readonly<PatternLengthMutation>>;
+  doubleUpPattern(request: {
+    patternId: string;
+    expectedRevision: number;
+  }): Promise<Readonly<PatternLengthMutation>>;
+  copyPattern(request: {
+    sourcePatternId: string;
+    patternId: string;
+    expectedRevision: number;
+  }): Promise<Readonly<PatternCopyMutation>>;
 }
 
 export type RuntimeSessionFactory = () => CreatorRuntimeSession;
