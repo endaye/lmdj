@@ -250,6 +250,10 @@ While the replay plays, edits commit to Truth as usual, but no Pattern view is
 published over the replay's:
 
 - `pattern.events.edit` of the current Pattern returns `publication: "deferred"`;
+- `pattern.resize` or `pattern.double` of the current Pattern also returns
+  `publication: "deferred"`, and `pattern.copy` publishes nothing; the
+  [2026-10-08 decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-08-replay-pattern-structure.md)
+  admits all three during a replay;
 - a BPM or Swing change returns `pattern_publication: null`;
 - Undo/Redo, a Pad edit's re-preparation and a reload publish the Bank only;
 - a slot-full deferral from before the replay does not swap its view in.
