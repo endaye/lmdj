@@ -514,6 +514,8 @@ returns to it.
 
 The physical column drives the same page (Desktop Final plan T6):
 
+- **Encoder 1** scrolls EDIT horizontally by one bar per detent, clamped at
+  either end. It is unavailable while the grid is hidden in SETUP.
 - **Encoder 2** scrolls the upper screen's eight rows one row per detent. A
   Bank key moves them to that Bank's first row.
 - **Encoder 3 and encoder 4** turn Tempo (±1 BPM) and Swing (±1%). A turn
@@ -524,8 +526,11 @@ The physical column drives the same page (Desktop Final plan T6):
   while stopped. With SHIFT they remain Undo and Redo.
 
 An encoder turns by wheel (accumulated, 50 px of travel per detent, so a trackpad burst is not one detent per event), vertical drag (8 px per detent) or the arrow keys while focused. A turn begun before the previous turn's commit lands continues from that commit.
-Encoder 1, `↑` / `↓` and every other page's encoders stay unassigned until
-#1822.
+`↑` / `↓` select the current Pad in A01–D16 order and stop at the ends.
+Crossing a Bank updates the Bank and keeps the current Pad visible on the upper
+screen. The Pad, row label and overview highlight together; navigation neither
+triggers sound nor changes selected notes or Project Truth. Other pages' encoder
+and direction mappings remain open in #1822.
 
 Every control in the touch area is a 44 px button with an 8 px radius. There
 are no browser-native dropdowns or checkboxes.

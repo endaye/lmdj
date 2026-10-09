@@ -35,6 +35,7 @@ interface SequenceOverviewProps {
   selection: readonly SequenceGridEventKey[];
   // First of the eight overview rows (0–56); defaults to the Bank's first row.
   rowOffset?: number;
+  currentPad?: number;
 }
 
 
@@ -46,6 +47,7 @@ export function SequenceOverview({
   snap,
   viewport,
   selection,
+  currentPad,
   rowOffset = bank * SEQUENCE_BANK_PADS,
 }: SequenceOverviewProps) {
   const selectedPatternId = state.selectedPatternId ?? project?.patternId ?? null;
@@ -124,6 +126,9 @@ export function SequenceOverview({
           <dt>Bank</dt>
           <dd>{bankName(bank)}</dd>
         </div>
+        {currentPad === undefined ? null : (
+          <div><dt>Pad</dt><dd>{slotAddress(currentPad)}</dd></div>
+        )}
         {selection.length > 0 ? (
           <>
             <div>
@@ -155,6 +160,7 @@ export function SequenceOverview({
           <ol className="sequence-overview-names" aria-hidden="true">
             {overview.rows.map((row) => (
               <li key={row} data-row={row}
+                data-current-pad={currentPad === row ? "true" : undefined}
                 data-pad-colour={padColourAttribute(padColourOf(project, row))}>
                 {slotAddress(row)}
               </li>

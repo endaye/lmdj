@@ -27,7 +27,7 @@
 | #1905 连续提交刷新丢失 | 已交付：#1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`，Issue closed。旧代码从滞后 render ref 取刷新 revision，现由 grid/structure/colour 成功路径传入已提交 revision；回归测试检查最终画面，不重复修复。 |
 | #1868 导入偶发停在 0 B | Issue open；尚未建立原因。R2 是条件调查，只有验收受阻时才启用，不把一次重跑通过当作修复。 |
 | #1873 测试问题仍未修 | 已反证：Issue closed，相关修复已合并；本 Goal 不重做。 |
-| #1822 其余控件映射已有决定 | 仍未决定：Issue open；`physical_controls.tsx` 对未绑定旋钮禁用，原决策只批准 Sequence ENC2–4 和左右键。D1 等待 owner。 |
+| #1822 其余控件映射已有决定 | 部分批准：owner 已批准下文 I1a 的 Sequence ENC1/↑/↓；原 T6 的 ENC2–4/左右键已交付。其余页与粗调步长仍待决定；Issue open。 |
 | 400 ms 规则已正式确认 | 原计划 T6 仍记录为待 owner 确认的提案。D2 需正式决定，不把实现存在当作产品批准。 |
 | D01/D03/D04 图示能力均可直接接线 | 部分反证：下文 C0 核实了可复用的复制与 Sample 编辑；MASTER、独立滤波参数、live Mute/Solo 及电平投影仍需 producer 工作。D01 自动保存/复制语义已有决定，不重新设计。 |
 | 合并/自动化可代替人工验收 | 不成立。原验收台账保留真实输入、听感、辅助技术和生命周期缺口；A1/A2 分开记录。 |
@@ -44,7 +44,7 @@
 | R1 | #1905 连续 authoring 提交刷新 | 已合并 | #1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`；red/green、完整 Creator lane、Portal 与当前头独立评审通过；不代表 A2 人工验收。 |
 | C0 | D2–D5 当前能力及决定边界调查 | 调查已记录 | 绑定下文 inspected revision；只更新本计划，不批准产品提案或实现 I Task。 |
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
-| D1 | #1822 统一原则及逐页映射 | 原则已确认；逐页待决 | owner 已选统一原则；再逐页确定具体参数、当前 Pad、边界/播放/录音/SHIFT 行为。 |
+| D1 | #1822 统一原则及逐页映射 | 原则与 Sequence 已确认；其余页待决 | owner 已选统一原则；再逐页确定具体参数、当前 Pad、边界/播放/录音/SHIFT 行为。 |
 | D2 | 400 ms 连续旋钮提交 | 待 owner 决策 | 确认预览、提交、取消、离页、锁定、Undo 语义。 |
 | D3 | D01 Save / Save As / 未保存提示 | 语义已有决定；界面待确认 | 保留自动保存、复制新身份并打开副本的已交付流程；确认 D01 命名/入口，不能引入虚构的未保存状态。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | 能力已调查；待 owner 决策 | 区分已实现的导入/替换/trim 与新 Assign、参数细调入口；明确目标、单位/步长、Undo/Redo、取消/失败。 |
@@ -64,6 +64,74 @@ owner 明确同意移出本 Goal。
 2026-10-09 owner 已确认统一原则：旋钮 1/2 管视图位置，旋钮 3/4 管当前页
 主要数值，方向键做导航，SHIFT 保留撤销/重做并支持粗调。此回答只确认
 原则，具体页的参数、当前 Pad 与步长尚未批准；不以它推导完整映射。
+
+## I1a — Sequence view and current-Pad navigation (#1822)
+
+Owner 于 2026-10-09 回复「采用」，批准：ENC1 每格横向滚动一小节；↑/↓
+按 A01–D16 选择当前 Pad，跨 Bank 同步 Bank 与上屏，在首尾停止；只高亮，
+不发声、不改变音符选择或 Project Truth。其余页映射与粗调步长仍待决定。
+
+**Premise disposition before implementation:** Task base 与 freshly fetched
+`origin/main` 均为 `d4eb51161e8b97d33f2cb8cc7f4184696576caef`。Live #1822
+open、无评论；当前 `PhysicalControls` 禁用 ENC1/↑/↓，App 只有 ENC2–4 与
+左右 Pattern 绑定，Grid 仅有原生滚动，故本次批准的连接仍缺失。原 T6 已交付
+ENC2–4/左右键，不重做。继任 #1907 只修复 authoring refresh，#1908 只更新
+能力调查；唯一开放 PR #1904 是不重叠的 audition 计划。App 现有 Bank effect
+清空音符选择；↑/↓ 必须绕开该清空，保留显式 Bank 键原有的清空语义。
+
+**Declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/components/physical_controls.tsx`
+- `apps/creator-web/src/components/sequence_grid.tsx`
+- `apps/creator-web/src/components/sequence_touch_workspace.tsx`
+- `apps/creator-web/src/components/sequence_overview.tsx`
+- `apps/creator-web/src/components/overview_display.tsx`
+- `apps/creator-web/src/components/pad_surface.tsx`
+- `apps/creator-web/src/styles.css`
+- `apps/creator-web/test/sequence_grid_edit.test.tsx`
+- `tests/platform/web/creator/creator_web_sequence_grid.spec.mjs`
+- `apps/docs-site/docs/hosts/creator-web.mdx`
+- `apps/docs-site/docs/platform/input.mdx`
+- `docs/prd/decisions/2026-10-09-sequence-view-and-pad-navigation.md`
+- 本计划。
+
+**Lowest-tier verification and journey:** App component red/green 验证每格实际
+小节宽度及横向两端；当前 Pad 首尾、跨 Bank 与上屏可见性；跨 Bank 后返回
+仍保留所选音符，Truth/revision/trigger 调用保持原值；显式 Bank 键仍清空选择。
+Packaged Chromium 从 EDIT 的真实滚动容器读取几何，验证滚动与 overview frame；
+从音符框选经过 Pad 跨 Bank、边界及返回，逐段检查高亮、Bank、音符选择、
+完整 Truth 与 history 不变；SETUP/离页禁用 ENC1，不积存隐藏的滚动命令。
+完整 Creator lane 保留既有 ENC2–4、Pattern、SHIFT history 与 accessibility
+到首个 Pad 的 journey。Portal check；新增文件 stage 后 scope Python suite；
+clean committed head 的所有实际 batch-only lanes 与当前 head 独立评审。
+真实 Safari/iPad/物理旋钮及听感未执行仍归 A2，不以自动化替代。
+
+**Precommit evidence:** 再次 fetch main 后仍为上述 `d4eb51161`；继任记录与
+源行为无变化。新增控件在未实现树上 2 red；CSS scale 0.5 的独立回归先显示
+192 px 而非 384 px，再由 layout-pixel 修复通过。最终 App component 14/14、
+TypeScript、Portal check（50 routes）通过。完整 Creator/batch lane、当前 head
+独立评审与合并状态由本 Task PR 的验证记录承载；本记录不预先宣称这些已通过。
+
+**Independent review follow-up:** #1909 初始头 `108c3d9b` 的独立评审在真实
+Chromium 复现禁用旋钮仍累计 wheel 余量。已补 red（SETUP 半格 + EDIT 半格
+误滚一小节）并修复：禁用时拒绝 wheel/pointer 起点，可用状态/参数切换清空
+wheel/drag；同时保留启用后两次半格组成整格的正常行为。Packaged journey
+使用原生 wheel 并等待事件送达后再断言，不能以 disabled 属性代替该边界。
+初始完整 lane 为修改而主动中止，exit 143，保持未通过；新头重新验证。
+
+**Packaged fixture pacing:** 第二次 lane 的新场景在首个音符前失败。保留的
+trace 显示 resize 已写 Truth，但 EDIT 刚挂载时仍是 1-bar 投影且
+`data-editing-disabled=true`；测试当时量取旧几何并点击被正确锁定的网格。
+新场景改为先等待上屏实际呈现 4 bars 且投影允许编辑，再量取/点击；原有完整
+Truth、history、trigger、选择保留与边界断言均保留，不增加 sleep 或超时。
+此为测试前置条件修正，产品实现未改变；失败 trace 留存后，新场景使用
+`eaaf6759` 已打包产品单独完整通过（1 test，15.3 s）。该诊断不替代最终
+committed head 的完整 Creator lane；最终头仍重新执行该 lane。
+
+**Version Management:** Creator 新交互积累 MINOR debt，留待本计划 V1 协调
+结算；本 Task 不分配 Product Build。**Documentation impact: required** —
+`/hosts/creator-web/`、`/platform/input/`，同时记录新的产品决定。
 
 ## P0 — ship this bounded plan
 

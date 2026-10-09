@@ -45,6 +45,8 @@ interface SequenceTouchWorkspaceProps {
   editMode: SequenceGridEditMode;
   selection: readonly SequenceGridEventKey[];
   defaultVelocity: number;
+  currentPad?: number;
+  onScrollReady?(scroll: ((bars: number) => void) | null): void;
   // True while the projection is being re-read from Truth after a commit; the
   // grid's model can be behind Truth in that window, so no gesture starts.
   projectionRefreshing: boolean;
@@ -159,6 +161,8 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         <SequenceGrid
           pattern={selectedPattern}
           bank={props.bank}
+          {...(props.currentPad === undefined ? {} : {currentPad: props.currentPad})}
+          {...(props.onScrollReady === undefined ? {} : {onScrollReady: props.onScrollReady})}
           snap={props.snap}
           editMode={props.editMode}
           editing={{

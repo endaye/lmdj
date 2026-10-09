@@ -24,6 +24,10 @@ async function installGridProofRecorder(page) {
           async send(...arguments_) {
             const [request] = arguments_;
             const operation = request?.operation;
+            if (operation === "trigger") {
+              window.__gridTriggerRequests ??= [];
+              window.__gridTriggerRequests.push(structuredClone(request.payload));
+            }
             const response = await nativeTransport.send(...arguments_);
             if (operation === "pattern.events.edit") {
               window.__patternEventsEditProof ??= [];
@@ -455,4 +459,127 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   await expect(page.getByTestId("sequence-grid")
     .getByTestId("sequence-grid-note"))
     .toHaveCount(3, {timeout: 30_000});
+});
+
+
+test("Sequence view controls scroll bars and navigate Pads without changing selected notes or Truth", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await installGridProofRecorder(page);
+  await page.goto("/index.html");
+  await importProject(page);
+  await enterSequenceAndPlay(page);
+  await page.getByRole("button", {name: "SETUP", exact: true}).click();
+  await page.getByRole("button", {name: "Length 4 bars", exact: true}).click();
+  const patternId = await selectedSequencePatternId(page);
+  await expect.poll(async () => (await inspectTruth(page)).patterns[patternId].bars,
+    {timeout: 30_000}).toBe(4);
+  await page.getByRole("button", {name: "EDIT", exact: true}).click();
+  // Truth commits before the refreshed projection. Wait for the rendered
+  // four-bar model and its editing admission before measuring/tapping it.
+  await expect(overviewFact(page, "Bars")).toHaveText("01–04");
+  await expect(page.getByTestId("sequence-grid"))
+    .not.toHaveAttribute("data-editing-disabled", "true");
+  await tapEmptyCell(page, 2, 480, 4 * 3840);
+  await awaitTruthEvents(page, patternId, [{slot: {bank: 0, pad: 2},
+    onset_tick: 480, duration_tick: 240, velocity: 100}]);
+  // A real box gesture selects the note before any physical navigation.
+  const from = await laneBox(page, 1);
+  const to = await laneBox(page, 3);
+  await page.mouse.move(tickX(from, 300, 15360), from.y + 2);
+  await page.mouse.down();
+  await page.mouse.move(tickX(to, 900, 15360), to.y + to.height / 2, {steps: 6});
+  await page.mouse.up();
+  await expect(overviewFact(page, "Selected")).toHaveText("1");
+  const before = await inspectTruth(page);
+  const history = async () => {
+    const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1, request_id: crypto.randomUUID(), operation: "history.inspect", payload: {},
+    }));
+    expect(response.ok).toBe(true);
+    return response.result;
+  };
+  const historyBefore = await history();
+  const triggersBefore = await page.evaluate(() => (window.__gridTriggerRequests ?? []).length);
+  const assertViewOnly = async () => {
+    expect(await inspectTruth(page)).toEqual(before);
+    expect(await history()).toEqual(historyBefore);
+    expect(await page.evaluate(() => (window.__gridTriggerRequests ?? []).length)).toBe(triggersBefore);
+    await expect(overviewFact(page, "Selected")).toHaveText("1");
+  };
+
+  const scroller = page.locator(".sequence-grid-scroll");
+  const geometry = () => scroller.evaluate(element => ({
+    left: element.scrollLeft, max: element.scrollWidth - element.clientWidth,
+    // Independent layout oracle: one bar fills the port after the Pad column.
+    // DOM rectangles are transformed by the console's responsive CSS scale.
+    bar: element.clientWidth - element.querySelector(".sequence-grid-lane").offsetLeft,
+  }));
+  const encoder = physicalKey(page, "Encoder 1 — scroll bars");
+  const frame = page.locator(".sequence-overview-frame");
+  const frameBefore = Number(await frame.getAttribute("x"));
+  await encoder.focus();
+  await expect(encoder).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  let position = await geometry();
+  expect(position.left).toBeCloseTo(position.bar, 0);
+  await expect.poll(async () => Number(await frame.getAttribute("x"))).toBeGreaterThan(frameBefore);
+  await assertViewOnly();
+  for (let detent = 0; detent < 5; detent += 1) await page.keyboard.press("ArrowUp");
+  position = await geometry();
+  expect(position.left).toBe(position.max);
+  for (let detent = 0; detent < 6; detent += 1) await page.keyboard.press("ArrowDown");
+  expect((await geometry()).left).toBe(0);
+  await assertViewOnly();
+
+  const up = physicalKey(page, "Previous Pad — ↑");
+  const down = physicalKey(page, "Next Pad — ↓");
+  const assertPad = async (address) => {
+    await expect(overviewFact(page, "Pad")).toHaveText(address);
+    await expect(physicalKey(page, `Bank ${address[0]}`)).toHaveAttribute("aria-current", "page");
+    await expect(page.locator(".sequence-overview-names [data-current-pad]")).toHaveText(address);
+    await expect(page.locator(".sequence-grid-row[data-current-pad] .sequence-grid-pad")).toHaveText(address);
+    await expect(page.locator('.pad[aria-current="true"] strong')).toHaveText(address);
+    await assertViewOnly();
+  };
+  await assertPad("A01");
+  await expect(up).toBeDisabled();
+  for (let step = 0; step < 16; step += 1) await down.click();
+  await assertPad("B01");
+  await expect(page.getByRole("group", {name: "Note selection"})).toHaveCount(0);
+  await up.click();
+  await assertPad("A16");
+  await expect(page.locator(".sequence-grid-note-selected")).toHaveCount(1);
+  for (const [steps, address] of [[1, "B01"], [16, "C01"], [16, "D01"], [15, "D16"]]) {
+    for (let step = 0; step < steps; step += 1) await down.click();
+    await assertPad(address);
+  }
+  await expect(down).toBeDisabled();
+  // Hidden grids never accumulate encoder turns for the next EDIT mount.
+  await page.getByRole("button", {name: "SETUP", exact: true}).click();
+  await expect(encoder).toBeDisabled();
+  // Disabled buttons receive real wheel events too. Observe event delivery
+  // before checking the absence of a turn, rather than racing the wheel task.
+  await encoder.evaluate(element => {
+    window.__sequenceEncoderWheels = 0;
+    element.addEventListener("wheel", () => { window.__sequenceEncoderWheels += 1; });
+  });
+  await encoder.hover();
+  await page.mouse.wheel(0, -25);
+  await expect.poll(() => page.evaluate(() => window.__sequenceEncoderWheels)).toBe(1);
+  await page.getByRole("button", {name: "EDIT", exact: true}).click();
+  await expect(encoder).toBeEnabled();
+  expect((await geometry()).left).toBe(0);
+  await encoder.hover();
+  await page.mouse.wheel(0, -25);
+  await expect.poll(() => page.evaluate(() => window.__sequenceEncoderWheels)).toBe(2);
+  expect((await geometry()).left).toBe(0);
+  await page.mouse.wheel(0, -25);
+  await expect.poll(() => page.evaluate(() => window.__sequenceEncoderWheels)).toBe(3);
+  position = await geometry();
+  expect(position.left).toBeCloseTo(position.bar, 0);
+  await assertViewOnly();
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  await expect(physicalKey(page, "Encoder 1 — unassigned until hardware mapping is approved")).toBeDisabled();
+  await expect(physicalKey(page, "Up — unassigned until direction mapping is approved")).toBeDisabled();
 });

@@ -31,9 +31,11 @@ Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`tri
 
 Creator 默认键盘 mapping 使用 `KeyboardEvent.code`，按实体键盘与视觉 Pad 的共同上下顺序分配：`Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，`A S D F G H J K` 对应 Pad 9–16。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
 
-Creator 控制台左栏的旋钮按页面绑定。目前只有 Sequence 页绑定了旋钮（Desktop Final 计划 T6），其余页面与旋钮 1、↑ ↓ 等待 #1822。
+Creator 控制台左栏的旋钮按页面绑定。Sequence 页绑定四个旋钮及方向键；其余页面的具体映射仍等待 #1822。
 
 - **操作方式：** 滚轮（按滚动距离累计，每 50 px 一格，触控板的一串小滚动不会每个都算一格）、竖向拖动（每 8 px 一格）或聚焦后的方向键（每按一次一格）；向上和向右为顺时针。
+- **旋钮 1：** EDIT 网格每格横向滚动一小节，在两端停止；SETUP 中禁用。
+- **↑ ↓：** 按 A01–D16 顺序选择当前 Pad，首尾停止；跨 Bank 同步 Bank 与上屏可见行。只高亮，不发声，不改变音符选择或 Project Truth。
 - **旋钮 2：** 一格滚动上屏一行。
 - **旋钮 3 / 4：** 每格 ±1 BPM / ±1% Swing。转动时立即预览，停转 400 ms 后提交一次，所以一次转动只算一条撤销记录；这条规则待 owner 确认。录音中或 transport 命令在途时锁定。
 - **← →：** 在 Sequence 页不按 SHIFT 时切换 Pattern，只在停止时可用；按住 SHIFT 时仍是撤销、重做。

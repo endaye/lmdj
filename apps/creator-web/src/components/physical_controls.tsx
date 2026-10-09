@@ -1,4 +1,4 @@
-import {useRef, type ReactNode, type MouseEvent, type Ref} from "react";
+import {useEffect, useRef, type ReactNode, type MouseEvent, type Ref} from "react";
 
 import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
@@ -70,6 +70,7 @@ interface PhysicalControlsProps {
   systemEntryRef?: Ref<HTMLButtonElement>;
   encoders?: Readonly<Partial<Record<EncoderPosition, EncoderBinding>>>;
   directionStep?: DirectionStep;
+  padStep?: DirectionStep;
 }
 
 // Pixels of vertical drag per detent.
@@ -84,6 +85,13 @@ const ENCODER_WHEEL_STEP = 50;
 function Encoder({position, binding}: {position: EncoderPosition; binding: EncoderBinding | undefined}) {
   const drag = useRef<{pointerId: number; lastY: number} | null>(null);
   const wheel = useRef(0);
+  const available = binding !== undefined && !binding.disabled;
+  // A partial gesture belongs to the current enabled parameter. Hiding the
+  // grid or changing the binding must not carry it into the next context.
+  useEffect(() => {
+    wheel.current = 0;
+    drag.current = null;
+  }, [available, binding?.label]);
   if (binding === undefined) {
     return (
       <button type="button" className="physical-encoder" disabled
@@ -108,6 +116,7 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
         turn(detents);
       }}
       onWheel={(event) => {
+        if (!available) return;
         const pixels = event.deltaY *
           (event.deltaMode === 1 ? ENCODER_WHEEL_STEP : event.deltaMode === 2 ? 800 : 1);
         wheel.current -= pixels;
@@ -117,6 +126,7 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
         turn(detents);
       }}
       onPointerDown={(event) => {
+        if (!available) return;
         event.currentTarget.setPointerCapture?.(event.pointerId);
         drag.current = {pointerId: event.pointerId, lastY: event.clientY};
       }}
@@ -205,6 +215,7 @@ export function PhysicalControls({
   systemEntryRef,
   encoders,
   directionStep,
+  padStep,
 }: PhysicalControlsProps) {
   // Without SHIFT the arrows take the page's step; with SHIFT, or on a page
   // without one, they are Undo / Redo.
@@ -266,8 +277,14 @@ export function PhysicalControls({
             onClick={() => onSelectBank(bank as Bank)}
           />
         ))}
-        <PhysicalKey label="↑" ariaLabel="Up — unassigned until direction mapping is approved" disabled />
-        <PhysicalKey label="↓" ariaLabel="Down — unassigned until direction mapping is approved" disabled />
+        <PhysicalKey label="↑"
+          ariaLabel={padStep?.backLabel ?? "Up — unassigned until direction mapping is approved"}
+          disabled={!padStep?.backAvailable} lit={padStep?.backAvailable ?? false}
+          {...(padStep === undefined ? {} : {onClick: padStep.onBack})} />
+        <PhysicalKey label="↓"
+          ariaLabel={padStep?.forwardLabel ?? "Down — unassigned until direction mapping is approved"}
+          disabled={!padStep?.forwardAvailable} lit={padStep?.forwardAvailable ?? false}
+          {...(padStep === undefined ? {} : {onClick: padStep.onForward})} />
         {stepping ? (
           <>
             <PhysicalKey
