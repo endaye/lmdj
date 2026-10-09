@@ -48,3 +48,34 @@ test("an unreadable seed journal offers diagnostics without inventing retryable 
   expect(screen.getByRole("status").textContent).toContain("existing content is preserved");
   expect(screen.getAllByRole("button").map(button => button.textContent)).toEqual(["System details"]);
 });
+
+
+test("a recovered publication does not reuse a previous preparation failure", async () => {
+  const callbacks = actions();
+  callbacks.onPrepare.mockRejectedValueOnce(new Error("publication failed"));
+  const view = render(<DefaultSoundsStatus seed={seed("saved-unavailable")} error={null} {...callbacks} />);
+  fireEvent.click(screen.getByRole("button", {name: "Prepare default sounds"}));
+  await screen.findByText(/Playback is still unavailable/);
+  view.rerender(<DefaultSoundsStatus seed={seed("ready")} error={null} {...callbacks} />);
+  view.rerender(<DefaultSoundsStatus seed={seed("saved-unavailable")} error={null} {...callbacks} />);
+  expect(screen.queryByText(/Playback is still unavailable/)).toBeNull();
+  expect((screen.getByRole("button", {name: "Prepare default sounds"}) as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("a late failure from before publication cannot poison a new preparation", async () => {
+  const callbacks = actions();
+  let reject!: (reason: Error) => void;
+  callbacks.onPrepare.mockImplementationOnce(() => new Promise<void>((_, fail) => {reject = fail;}));
+  const view = render(<DefaultSoundsStatus seed={seed("saved-unavailable")} error={null} {...callbacks} />);
+  fireEvent.click(screen.getByRole("button", {name: "Prepare default sounds"}));
+  view.rerender(<DefaultSoundsStatus seed={seed("ready")} error={null} {...callbacks} />);
+  view.rerender(<DefaultSoundsStatus seed={seed("saved-unavailable")} error={null} {...callbacks} />);
+  let resolve!: () => void;
+  callbacks.onPrepare.mockImplementationOnce(() => new Promise<void>(done => {resolve = done;}));
+  fireEvent.click(screen.getByRole("button", {name: "Prepare default sounds"}));
+  await act(async () => reject(new Error("old attempt failed")));
+  expect(screen.queryByText(/Playback is still unavailable/)).toBeNull();
+  expect((screen.getByRole("button", {name: "Preparing playback…"}) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => resolve());
+  expect((screen.getByRole("button", {name: "Prepare default sounds"}) as HTMLButtonElement).disabled).toBe(false);
+});

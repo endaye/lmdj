@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import type {DefaultSeed} from "../state/default_seed";
 
 interface DefaultSoundsStatusProps {
@@ -12,10 +12,20 @@ interface DefaultSoundsStatusProps {
 export function DefaultSoundsStatus({seed, error, onRetry, onPrepare, onDetails}: DefaultSoundsStatusProps) {
   const [preparing, setPreparing] = useState(false);
   const [prepareFailed, setPrepareFailed] = useState(false);
+  const prepareAttempt = useRef(0);
   const slots = seed?.slots ?? [];
   const ready = slots.filter(slot => slot.phase === "ready").length;
   const failed = slots.filter(slot => slot.phase === "failed").length;
   const pendingAudio = slots.filter(slot => slot.phase === "saved-unavailable").length;
+  const needsPreparation = pendingAudio > 0;
+  useEffect(() => {
+    if (needsPreparation) return;
+    // Publication may recover independently of the button's outstanding promise.
+    // Its late result must not become a failure for a later pending publication.
+    prepareAttempt.current += 1;
+    setPreparing(false);
+    setPrepareFailed(false);
+  }, [needsPreparation]);
   const loading = slots.filter(slot => ["pending", "loading", "processing"].includes(slot.phase)).length;
   const needsAttention = error !== null || failed > 0 || pendingAudio > 0;
   if (seed === null && error === null) return null;
@@ -33,8 +43,13 @@ export function DefaultSoundsStatus({seed, error, onRetry, onPrepare, onDetails}
     <output role="status">{summary}</output>
     {failed > 0 && <button type="button" onClick={onRetry}>Retry default sounds</button>}
     {pendingAudio > 0 && <button type="button" disabled={preparing} onClick={() => {
+      const attempt = ++prepareAttempt.current;
       setPreparing(true); setPrepareFailed(false);
-      void onPrepare().catch(() => setPrepareFailed(true)).finally(() => setPreparing(false));
+      void onPrepare().catch(() => {
+        if (prepareAttempt.current === attempt) setPrepareFailed(true);
+      }).finally(() => {
+        if (prepareAttempt.current === attempt) setPreparing(false);
+      });
     }}>{preparing ? "Preparing playback…" : "Prepare default sounds"}</button>}
     {prepareFailed && pendingAudio > 0 && <output role="status">
       Playback is still unavailable. Try again or open System details.

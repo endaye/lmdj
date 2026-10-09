@@ -42,6 +42,7 @@ No persistence, Core, Contract, DSP, controller lifecycle or mapping changes.
 - apps/creator-web/test/shell_polish.test.tsx
 - tests/platform/web/creator/creator_web_default_streaming.spec.mjs
 - tests/platform/web/creator/creator_web_perform.spec.mjs
+- tests/platform/web/creator/creator_web_touch_fit.spec.mjs
 - tests/platform/web/creator/creator_web_system.spec.mjs
 - tests/platform/web/creator/creator_web_sample_editor.spec.mjs
   (open Sample playback details while retaining exact saved/runtime revisions)
@@ -158,3 +159,38 @@ component tests, TypeScript/Vite and 50-route portal pass already recorded.
 Only this plan changes after those proofs; product and acceptance source bytes
 are unchanged. Final committed-head Creator batch and independent review are
 still required before merge.
+
+
+## Review and full-lane correction
+
+Refreshed main remains 4281d5f54dd01ad73c18e876c2119a35b0229e0b.
+The full Creator run on f2362b5 finished with exit 1: general Chromium had
+85 passes, one platform skip and one Perform first-screen failure. The
+failure banner pushed HOLD/FX below the panel; no batch pass is claimed.
+Keep download recovery in the same outer scroller after the current workspace,
+so it cannot displace primary musical actions. Preserve Pad Save/Discard and
+active Performance notices above the workspace. Strengthen the existing fit
+case to await all 16 failed downloads before measuring its original bounds.
+
+Review #1947 identified stale preparation failure and a silent unavailable
+session return. Project identity already keys the component. Within one
+Project, clear resolved preparation state and invalidate late continuations
+when no slots remain pending. An unavailable Project/session must reject
+through the existing error/reporting path. Declare regressions above before
+editing; retain red evidence and rerun affected native journeys and full lane.
+
+
+Follow-up verification: both new preparation regressions failed on the prior
+component and passed after the fix (5 status tests total). The strengthened
+late-result case starts a second preparation and proves the old rejection
+cannot clear its busy state. Workspace/status components passed 116 tests.
+The settled failure-layout case failed at the original HOLD/FX bound before
+the move; all eight touch-fit tests then passed. The final test explicitly
+returns Catalog HTTP 503, reloads and awaits 16 unavailable slots so server
+configuration cannot silently remove the failure condition; it passed again.
+Default/System complete native journeys passed 2 tests (21.1s), including
+first native touch, download retry, exact request count, persisted reload,
+manual Project non-seeding and System return during playback. TypeScript/Vite
+and portal 50-route/link checks passed. No controller or Contract changed.
+Old full-batch failure remains retained; run the complete Creator lane again
+on the new committed head before merge.

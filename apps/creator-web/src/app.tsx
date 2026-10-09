@@ -2833,23 +2833,6 @@ function Workspace({
           </>}
         </section>
       )}
-      <DefaultSoundsStatus key={currentProjectId ?? "no-project"}
-        seed={defaultSeed?.projectId === currentProjectId ? defaultSeed : null}
-        error={defaultSeedError}
-        onRetry={() => {defaultSeed?.slots.forEach((slot, index) => {
-          if (slot.phase === "failed") void defaultSeedController.current?.retry(index)
-            .catch(error => reportFailure("Retry default sound", error));
-        });}}
-        onPrepare={async () => {
-          const project = stateRef.current.project.current;
-          const controller = defaultSeedController.current;
-          if (project === null || !isSampleSession(session)) return;
-          try {
-            const publication = await retryPrepareJourney(session, project.patternId);
-            controller?.acceptPublication(publication);
-          } catch (error) {reportFailure("Prepare default sounds", error); throw error;}
-        }}
-        onDetails={openSystem} />
       {(systemOpen || activeMode !== "perform") && performController !== null &&
         !["idle", "saved", "discarded"].includes(historyPerformPhase) && (
         <section className="workspace-status" aria-label="Performance recording notice">
@@ -3156,6 +3139,26 @@ function Workspace({
               </div>
               ) : null}
               </div>
+      {/* Download recovery follows the workspace so musical controls keep their first screen. */}
+      <DefaultSoundsStatus key={currentProjectId ?? "no-project"}
+        seed={defaultSeed?.projectId === currentProjectId ? defaultSeed : null}
+        error={defaultSeedError}
+        onRetry={() => {defaultSeed?.slots.forEach((slot, index) => {
+          if (slot.phase === "failed") void defaultSeedController.current?.retry(index)
+            .catch(error => reportFailure("Retry default sound", error));
+        });}}
+        onPrepare={async () => {
+          const project = stateRef.current.project.current;
+          const controller = defaultSeedController.current;
+          try {
+            if (project === null || !isSampleSession(session)) {
+              throw new Error("Playback preparation is unavailable for the current Project. Open System details to recover.");
+            }
+            const publication = await retryPrepareJourney(session, project.patternId);
+            controller?.acceptPublication(publication);
+          } catch (error) {reportFailure("Prepare default sounds", error); throw error;}
+        }}
+        onDetails={openSystem} />
               {recoveryOffer !== null &&
                 recoveryOffer.projectId === state.project.current?.projectId && (
                 <RecoveryPrompt

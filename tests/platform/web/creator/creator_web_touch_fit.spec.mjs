@@ -184,6 +184,13 @@ test("Sample empty and assigned controls stay inside the touch panel", async ({p
 
 
 test("Perform live faders and HOLD fit the first screen without overlapping", async ({page}) => {
+  // Exercise the product's download-failure path independently of the server's
+  // Catalog configuration; Retry must not displace first-screen musical controls.
+  await page.route("**/soundset-catalog/**", route => route.fulfill({status: 503, body: "Catalog unavailable"}));
+  await page.reload();
+  await waitForBootProject(page);
+  await expect(page.getByRole("region", {name: "Default sounds", exact: true})
+    .getByRole("status")).toContainText("16 unavailable", {timeout: 60_000});
   await page.getByTestId("physical-controls").getByRole("button", {name: "Perform", exact: true}).click();
   for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
     {width: 768, height: 600}]) {
