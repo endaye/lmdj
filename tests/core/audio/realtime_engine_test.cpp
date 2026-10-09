@@ -1473,8 +1473,8 @@ void loop_gate_wraps_only_inside_the_selection_then_releases() {
 void loop_toggle_is_latched_per_pad_and_stops_on_its_next_press() {
   RealtimeEngine engine;
   auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 4);
-  const std::array<float, 2> first{0.1F, 0.2F};
-  const std::array<float, 2> second{0.3F, 0.4F};
+  const std::array<float, 2> first{0.125F, 0.25F};
+  const std::array<float, 2> second{0.25F, 0.5F};
   const auto toggle =
       ResolvedPlayback{0, 2, TriggerMode::loop_toggle, 1.0F, false};
   LMDJ_CHECK(bank.set_sample(0, first, toggle).has_value());
@@ -1495,7 +1495,7 @@ void loop_toggle_is_latched_per_pad_and_stops_on_its_next_press() {
       engine.enqueue_control(control(41, 1, PadControlKind::press, 127)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.2F * ramp_part(1));
+  LMDJ_CHECK(left.at(0) == 0.25F * ramp_part(1));
   LMDJ_CHECK(engine.telemetry().active_voices == 2);
 
   LMDJ_CHECK(
@@ -1504,11 +1504,12 @@ void loop_toggle_is_latched_per_pad_and_stops_on_its_next_press() {
   engine.render(left.data(), right.data(), 1);
   // F6 ramp: the toggled voice keeps rendering its release tail, so it is
   // still active and audible (first tail frame at full release scale). The
-  // expectation mirrors the engine's per-voice rounding exactly: each
-  // voice term is rounded through a named value before the accumulation,
-  // so no FMA contraction can reorder rounding.
-  const float toggle_tail = 0.1F * ramp_part(2);
-  const float latched_second = 0.4F * ramp_part(1);
+  // power-of-two samples scale the represented ramp without additional
+  // multiplication rounding, so separate and fused accumulation produce
+  // the same exact mixed value. Named float temporaries alone would not
+  // prevent contraction for decimal samples.
+  const float toggle_tail = 0.125F * ramp_part(2);
+  const float latched_second = 0.5F * ramp_part(1);
   float expected_mix = 0.0F;
   expected_mix += toggle_tail;
   expected_mix += latched_second;
