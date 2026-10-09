@@ -5,6 +5,27 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-09 LiteLLM stdout footer contamination
+
+Dispatch run 37948423143 against PR #1904 (after overlay `cutover.a54Bifel`
+carrying both GLM corrections) showed the engine itself succeeding end to end:
+DeepSeek refused with HTTP 402 as known, then GLM reviewed with
+`status=reviewed`, served identity `zai/glm-5.3-flash`, 14425 prompt + 397
+completion tokens, complete coverage. The pipeline still finalized
+`not-reviewed`: the pinned LiteLLM prints its "Give Feedback / Get Help"
+footer to stdout while mapping the DeepSeek exception, so the captured
+`t2-result.json` was not parseable and capture fell back to the
+engine-failure path. All earlier not-reviewed runs in October share this
+contamination signature; it only became decisive once a fallback provider
+actually succeeded.
+
+The adapter now pins `litellm.suppress_debug_info = True` at upstream import;
+error classification is unchanged and stays with the adapter. Proof on the
+pinned vendored LiteLLM 1.100.0 in the installed release: with the default
+flag the mapped provider exception prints 231 bytes including the footer;
+with the flag pinned the same call prints zero bytes. A pinned-runtime
+integration test exercises the real footer path after engine import.
+
 ## 2026-10-09 GLM pricing-envelope reopen after the identity correction
 
 The served-identity correction changed GLM's reservation basis

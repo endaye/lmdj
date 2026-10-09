@@ -2358,6 +2358,13 @@ def _import_upstream(source_root: str | os.PathLike[str], *,
         from pr_agent.tools.pr_reviewer import PRReviewer
         from pr_agent.config_loader import get_settings
         from pr_agent.log import setup_logger
+        # LiteLLM prints a "Give Feedback / Get Help" footer to stdout while
+        # mapping a provider exception. The engine's result document is the
+        # only stdout payload and the adapter classifies the error itself, so
+        # pin the suppression flag before any provider call. Production run
+        # 37948423143 discarded a successful GLM fallback review because that
+        # footer made the result file unparseable.
+        litellm_ai_handler.litellm.suppress_debug_info = True
     except Exception as exc:
         raise EngineError("engine_unavailable", "pinned PR-Agent dependencies are unavailable") from exc
     finally:
