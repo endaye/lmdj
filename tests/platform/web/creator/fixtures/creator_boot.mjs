@@ -13,14 +13,13 @@ export const PROJECT_OPEN_TIMEOUT_MS = 3 * 30_000 + 35_000;
 // The short identity the read-only overview shows for the open Project.
 export function overviewProjectId(page) {
   return page.getByRole("region", {name: "Overview display"})
-    .locator(".overview-facts div", {has: page.locator("dt", {hasText: /^Project$/})})
-    .locator("dd");
+    .getByTestId("opened-project");
 }
 
 // Wait for boot to settle on an open Project.
 export async function waitForBootProject(page, {timeout = PROJECT_OPEN_TIMEOUT_MS} = {}) {
   await expect(page.getByTestId("creator-phase")).toHaveText("ready", {timeout});
-  await expect(overviewProjectId(page)).not.toHaveText("—", {timeout});
+  await expect(overviewProjectId(page)).toHaveText(/^[0-9a-f]{8}$/, {timeout});
 }
 
 // Wait for boot, then show the Project page with Import available.

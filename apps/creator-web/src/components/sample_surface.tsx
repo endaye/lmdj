@@ -919,10 +919,6 @@ export function SampleSurface({
         </div>
         <div className="selected-sample" aria-live="polite">
           <strong>{selectedAddress}</strong>
-          <span>{inspect?.assetId === null || inspect?.assetId === undefined
-            ? "Empty"
-            : `Asset ${inspect.assetId.slice(0, 8)}`}</span>
-          <span>{metadataCopy(state)}</span>
         </div>
       </header>
 
@@ -947,6 +943,14 @@ export function SampleSurface({
 
       {page === "pad" ? (
         <section className="sample-pad-management" aria-label={`${selectedAddress} management`}>
+          <details className="sample-details">
+            <summary>Sample details</summary>
+            <dl>
+              <div><dt>Asset ID</dt><dd>{inspect?.assetId ?? "No Sample assigned"}</dd></div>
+              <div><dt>Source</dt><dd>{metadataCopy(state)}</dd></div>
+              <div><dt>Revision</dt><dd>{inspect?.projectRevision ?? "—"}</dd></div>
+            </dl>
+          </details>
           {selectedSlot !== null ? (
             <button
               type="button"

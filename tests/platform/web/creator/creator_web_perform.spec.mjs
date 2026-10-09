@@ -736,10 +736,12 @@ async function launchPersistedCreatorOwner(profile) {
   }
 }
 
+// Read the persistent System details projection without leaving a live gesture.
+// The hardware journey separately opens the disclosure and verifies visibility.
 function projectRevisionLocator(page) {
-  return page.locator(".overview-facts div").filter({
+  return page.locator(".creator-details-facts div").filter({
     has: page.getByText("Rev", {exact: true}),
-  }).getByRole("definition");
+  }).getByRole("definition", {includeHidden: true});
 }
 
 async function projectRevision(page) {
@@ -1039,13 +1041,24 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
 
   const launch = page.getByRole("button", {name: "Launch Pattern 2"});
   await armAttributeObservation(launch, "data-launch", "pending");
+  const launchCue = page.getByRole("status", {name: "Pattern launch cue"});
+  await launchCue.evaluate(element => {
+    const observer = new MutationObserver(() => {
+      if (element.textContent.includes("QUEUED SLOT 02")) {
+        element.setAttribute("data-proof-saw-queued", "02");
+        observer.disconnect();
+      }
+    });
+    observer.observe(element, {childList: true, subtree: true, characterData: true});
+  });
   await launch.click();
   await expect(launch).toHaveAttribute("data-proof-saw-launch", "pending",
     {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
   await expect(launch).toHaveAttribute("data-launch", "acknowledged", {
     timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
   });
-  await expect(recordingStatus).toContainText(/last launch.*2.*acknowledged/i);
+  await expect(launchCue).toHaveAttribute("data-proof-saw-queued", "02");
+  await expect(launchCue).toHaveText("ACKNOWLEDGED SLOT 02 · NOTHING QUEUED");
 
   await pad.dispatchEvent("pointerdown", {
     button: 0,
@@ -1372,9 +1385,9 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
   await expect(emptySlot).toHaveAttribute("data-launch", "acknowledged");
   await expect(page.getByRole("status", {name: "Pattern launch status"}))
     .toContainText("silent gap");
-  await expect(status).toContainText(
-    /open Pads?\s*[:·]\s*0.*last launch.*16.*acknowledged/i,
-  );
+  await expect(status).toContainText(/open Pads?\s*[:·]\s*0/i);
+  await expect(page.getByRole("status", {name: "Pattern launch cue"}))
+    .toHaveText("ACKNOWLEDGED SLOT 16 · NOTHING QUEUED");
 
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", {

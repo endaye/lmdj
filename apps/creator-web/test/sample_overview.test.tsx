@@ -24,10 +24,9 @@ function stateWith(trimStartFrame: number, trimEndFrame: number | null): Creator
   } as CreatorState;
 }
 
-test("D03 upper screen names the Pad, the format and the trim selection over the whole waveform", () => {
+test("D03 upper screen shows the format and trim selection over the whole waveform", () => {
   render(<SampleOverview state={stateWith(4_800, 43_200)} />);
   const overview = screen.getByTestId("sample-overview");
-  expect(overview.textContent).toMatch(/^PAD A03/);
   expect(overview.textContent).toContain("mono 48000 Hz · 1.000 s");
   expect(overview.textContent).toContain("0.100 – 0.900 s");
   const waveform = within(overview).getByRole("img", {name: /trim selection/});
@@ -48,4 +47,45 @@ test("a trim beyond the Sample's frames is drawn at the waveform's edge", () => 
   expect(overview.textContent).toContain("0.100 – 1.000 s");
   const outside = overview.querySelectorAll(".sample-overview-outside");
   expect([...outside].map((rect) => rect.getAttribute("width"))).toEqual(["72", "0"]);
+});
+
+test("selecting a different Pad cannot show the previous Pad's format or waveform", () => {
+  const state = stateWith(4_800, 43_200);
+  const view = render(<SampleOverview state={state} />);
+  expect(screen.getByTestId("sample-overview").textContent).toContain("mono 48000 Hz");
+  view.rerender(<SampleOverview state={{...state, sample: {...state.sample, selectedSlot: 18}}} />);
+  expect(screen.getByTestId("sample-overview").textContent).not.toContain("48000");
+  expect(screen.getByRole("img", {name: "No Sample waveform"})
+    .querySelectorAll(".sample-overview-peak,.sample-overview-edge")).toHaveLength(0);
+});
+
+
+test.each([
+  {assetId: "sample-id", category: "melodic" as const, inspect: false, pending: false, error: false, label: "MELODIC · LOADING"},
+  {assetId: "sample-id", category: "melodic" as const, inspect: true, pending: true, error: false, label: "MELODIC · UPDATING"},
+  {assetId: "sample-id", category: null, inspect: true, pending: false, error: true, label: "SAMPLE · CHECK SAMPLE"},
+  {assetId: null, category: null, inspect: false, pending: false, error: false, label: "EMPTY"},
+])("selected Pad reports $label from its actual projection", (scenario) => {
+  const base = stateWith(0, null);
+  const state: CreatorState = {...base,
+    project: {...base.project, current: {
+      projectId: "11111111-1111-4111-8111-111111111111",
+      patternId: "22222222-2222-4222-8222-222222222222",
+      revision: 4, bpm: 120, assetCount: 1, assignedPadCount: scenario.assetId === null ? 0 : 1,
+      bundleDigest: "a".repeat(64), key: "—", patterns: [],
+      patternSlots: Array<string | null>(16).fill(null),
+      sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
+      pads: [{slot: 2, assetId: scenario.assetId, category: scenario.category,
+        colour: null, colourOverride: null}],
+    }},
+    sample: {...base.sample, inspect: scenario.inspect ? base.sample.inspect : null,
+      pendingAction: scenario.pending ? {kind: "update", slot: 2, expectedRevision: 4} : null,
+      lastError: scenario.error ? {code: "IO_ERROR", message: "Save failed", retryPrepare: false} : null,
+    },
+  };
+  render(<SampleOverview state={state} />);
+  const overview = screen.getByTestId("sample-overview");
+  expect(overview.querySelector(".sample-overview-pad")?.textContent).toBe(scenario.label);
+  expect(within(overview).getByText("Format").nextElementSibling?.textContent)
+    .toBe(scenario.inspect ? "mono 48000 Hz · 1.000 s" : "—");
 });

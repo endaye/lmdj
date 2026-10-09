@@ -19,6 +19,7 @@ import {
   appendDiagnostic, diagnosticRecord, DiagnosticsLog, type DiagnosticRecord,
 } from "./components/diagnostics_log";
 import {ErrorPanel} from "./components/error_panel";
+import {CreatorDetails} from "./components/creator_details";
 import {DiagnosticsProvider} from "./runtime/diagnostics_context";
 import {PUBLIC_ERROR_CODES, sampleMessage, userMessage} from "./state/error_messages";
 import {RecoveryPrompt, type RecoveryCounts} from "./components/recovery_prompt";
@@ -2776,6 +2777,7 @@ function Workspace({
           }
           overview={
             <OverviewDisplay
+              performController={performController}
               state={state}
               activeMode={activeMode}
               sequence={sequence}
@@ -2788,7 +2790,6 @@ function Workspace({
               swingPreview={swingPreview}
               transport={transport}
               midi={midi}
-              {...(buildIdentity ? {buildIdentity} : {})}
             />
           }
           pads={padSurface}
@@ -2888,6 +2889,10 @@ function Workspace({
                 {isCandidateSession(session) && <ProviderSettings session={session} />}
                 <DiagnosticsLog records={diagnostics} />
               </SystemSurface>}
+              <div hidden={!systemOpen}>
+                <CreatorDetails state={state} midi={midi}
+                  {...(buildIdentity ? {buildIdentity} : {})} />
+              </div>
               <div hidden={systemOpen}>
               {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (

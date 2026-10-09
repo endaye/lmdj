@@ -1155,16 +1155,19 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   max-width: 100%;
 }
 .hardware-workspace .sample-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
 }
 .hardware-workspace .selected-sample {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 12px;
-  gap: 8px;
+  display: block;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
 }
-.hardware-workspace .selected-sample > span:last-of-type { grid-column: 1 / -1; }
 .hardware-workspace .sample-controls {
   grid-template-columns: minmax(0, 1fr);
   /* Keep the EQ's full-width editor and hit geometry out of nested card
@@ -1573,6 +1576,16 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .sample-overview-peak { fill: var(--creator-purple); }
 .sample-overview-outside { fill: rgb(32 35 33 / 72%); }
 .sample-overview-edge { stroke: var(--creator-text); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.sample-details { min-width: 0; }
+.sample-details summary { cursor: pointer; padding: 12px 0; }
+.sample-details dl { margin: 8px 0; font-size: 11px; }
+.sample-details dd { margin: 4px 0 12px; overflow-wrap: anywhere; }
+.creator-details { min-width: 0; }
+.creator-details summary { cursor: pointer; padding: 12px 0; }
+.creator-details-facts { display: grid; gap: 12px; margin: 12px 0; }
+.creator-details-facts dt { color: var(--creator-muted); font-size: 11px; }
+.creator-details-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.creator-details > p { font-size: 11px; overflow-wrap: anywhere; }
 /* D04's upper screen: transport state at the right edge, the bar and beat
    counter over a progress strip, then the Bank / Quantize / slot facts. */
 .overview-display.is-perform .overview-primary { justify-content: flex-start; gap: 40px; }
@@ -1592,6 +1605,10 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   font-size: 20px;
   letter-spacing: .04em;
   font-variant-numeric: tabular-nums;
+}
+.perform-overview-launch {
+  display:block; min-width:0; color:#f2af78; font-size:10px; line-height:16px;
+  overflow-wrap:anywhere;
 }
 .perform-overview-progress {
   height: 12px;
@@ -1655,8 +1672,8 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .sequence-overview-rows {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 16px;
 }
 .sequence-overview-names {
   display: grid;

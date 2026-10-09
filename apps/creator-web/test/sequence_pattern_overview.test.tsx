@@ -80,12 +80,13 @@ const rowNames = () => [...screen.getByTestId("sequence-overview")
 
 test("shows eight Pad rows from the active Bank's first row", () => {
   const view = renderOverview();
-  expect(rowNames()).toEqual(["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08"]);
+  expect(rowNames()).toEqual(["A01 / EMPTY", "A02 / EMPTY", "A03 / EMPTY", "A04 / EMPTY",
+    "A05 / EMPTY", "A06 / EMPTY", "A07 / EMPTY", "A08 / EMPTY"]);
   expect(overviewNotes().map((note) => note.getAttribute("data-row"))).toEqual(["0"]);
   // The C06 note (row 37) appears once the window is on Bank C.
   view.rerender(<SequenceOverview project={project} state={initialSequenceState}
     bank={2} snap="1/16" viewport={null} selection={[]} />);
-  expect(rowNames()[0]).toBe("C01");
+  expect(rowNames()[0]).toBe("C01 / EMPTY");
   expect(overviewNotes().map((note) => note.getAttribute("data-row"))).toEqual(["37"]);
   expect(screen.getByTestId("sequence-overview").textContent ?? "")
     .not.toMatch(/live projection target/);
@@ -288,34 +289,22 @@ test("the selection facts follow the touch grid's live selection", () => {
   expect(fact("Velocity")).toBe("mixed");
 });
 
-test("Sequence draws only its status and rows; the phase and facts stay readable", () => {
+test("all upper screens keep lifecycle announcements but put technical facts in System", () => {
   const state: CreatorState = {
     ...initialCreatorState,
     project: {...initialCreatorState.project, phase: "ready", current: project},
   };
-  const display = (activeMode: "sequence" | "project" | "sample" | "perform" | "slice") => (
+  const display = (activeMode: "sequence" | "project" | "sample" | "perform" | "slice" | "soundset") => (
     <OverviewDisplay state={state} activeMode={activeMode} sequence={initialSequenceState}
       snap="1/16" viewport={null} selection={[]} />
   );
   const view = render(display("sequence"));
-  const hidden = (selector: string) =>
-    view.container.querySelector(selector)?.classList.contains("visually-hidden");
   expect(view.container.querySelector(".overview-swing")?.textContent).toBe("SWING 50%");
-  expect(hidden(".overview-phase")).toBe(true);
-  expect(hidden(".overview-facts")).toBe(true);
-  expect(screen.getByTestId("audio-state").textContent).toMatch(/^Audio /);
-  expect(screen.getByText("Rev").nextElementSibling?.textContent).toBe("7");
-
-  // Project (D01), Sample (D03) and Perform (D04) draw their own upper
-  // screens and hide them too; Slice still draws the shared phase and facts.
-  view.rerender(display("project"));
-  expect(view.container.querySelector(".overview-swing")).toBeNull();
-  expect(hidden(".overview-facts")).toBe(true);
-  view.rerender(display("sample"));
-  expect(hidden(".overview-facts")).toBe(true);
-  view.rerender(display("perform"));
-  expect(hidden(".overview-facts")).toBe(true);
-  view.rerender(display("slice"));
-  expect(hidden(".overview-phase")).toBe(false);
-  expect(hidden(".overview-facts")).toBe(false);
+  for (const mode of ["sequence", "project", "sample", "perform", "slice", "soundset"] as const) {
+    view.rerender(display(mode));
+    expect(screen.getByTestId("audio-state").textContent).toMatch(/^Audio /);
+    expect(screen.queryByText("Rev")).toBeNull();
+    expect(screen.queryByText("Assets")).toBeNull();
+    expect(view.container.querySelector("button,input,select,[tabindex]")).toBeNull();
+  }
 });

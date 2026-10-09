@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
 import {PerformSurface} from "../src/components/perform_surface";
+import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
 import {
   createPerformController,
@@ -785,23 +786,24 @@ test("keeps Pattern launch pending until query reports the actual acknowledgemen
     .getAttribute("aria-busy")).toBe("false"));
 });
 
-test("says queued and playing in words, not only through the launch attribute", async () => {
+test("the upper launch cue and local controls follow the same pending and acknowledged producer", async () => {
   const fixture = controllerFixture();
   const query = fixture.runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>;
   query.mockResolvedValueOnce(authority({
     pendingLaunch: {requestId: "event-1", patternSlot: 0, targetTick: 1920, claimed: false},
   }));
   renderSurface(fixture);
+  render(<PerformOverview state={creatorState()} controller={fixture.controller} />);
   const slot = () => screen.getByRole("button", {name: "Launch Pattern 1"});
   const cue = () => screen.getByLabelText("Pattern launch cue").textContent;
   expect(slot().textContent).not.toMatch(/Queued|Playing/);
-  expect(cue()).toBe("No Pattern queued");
+  expect(cue()).toBe("LAST LAUNCH — · NOTHING QUEUED");
 
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(slot());
   await waitFor(() => expect(slot().textContent).toMatch(/Queued/));
   expect(slot().getAttribute("data-launch")).toBe("pending");
-  expect(cue()).toBe("Slot 1 queued");
+  expect(cue()).toBe("LAST LAUNCH — → QUEUED SLOT 01");
   await userEvent.click(screen.getByRole("button", {name: "Pattern slots 13 to 16"}));
   expect(screen.getByRole("button", {name: "Pattern slots 1 to 4"}).textContent).toContain("Queued");
   expect(screen.queryByRole("button", {name: "Launch Pattern 1"})).toBeNull();
@@ -812,7 +814,7 @@ test("says queued and playing in words, not only through the launch attribute", 
   await userEvent.click(screen.getByRole("button", {name: "Pattern slots 1 to 4"}));
   await waitFor(() => expect(slot().textContent).toMatch(/Playing/));
   expect(slot().getAttribute("data-launch")).toBe("acknowledged");
-  expect(cue()).toBe("Slot 1 live");
+  expect(cue()).toBe("ACKNOWLEDGED SLOT 01 · NOTHING QUEUED");
 });
 
 test("does not invent pending UI when the first authority query already has the ack", async () => {

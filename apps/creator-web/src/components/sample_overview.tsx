@@ -1,5 +1,5 @@
 import type {CreatorState} from "../state/creator_state";
-import {padAddress} from "../state/view_model";
+import {padContent} from "../state/overview_context";
 
 interface SampleOverviewProps {
   state: CreatorState;
@@ -17,7 +17,7 @@ function seconds(frames: number, sampleRate: number): string {
 // audition, assign and capture stay in the touch workspace.
 export function SampleOverview({state}: SampleOverviewProps) {
   const slot = state.sample.selectedSlot;
-  const inspect = state.sample.inspect;
+  const inspect = state.sample.inspect?.slot === slot ? state.sample.inspect : null;
   const metadata = inspect?.metadata ?? null;
   const playback = inspect?.playback ?? null;
   const envelope = state.sample.waveform;
@@ -33,10 +33,15 @@ export function SampleOverview({state}: SampleOverviewProps) {
       const height = Math.max(1, Math.round(bucket.peakMagnitude * (HEIGHT - 8) / 32_768));
       return {x: x(bucket.startFrame), width: Math.max(1, x(bucket.endFrame) - x(bucket.startFrame)), height};
     });
+  const content = padContent(state.project.current, slot);
+  const status = state.sample.lastError !== null ? "CHECK SAMPLE"
+    : state.sample.pendingAction !== null ? "UPDATING"
+    : slot !== null && inspect === null && content !== "EMPTY" && content !== "UNAVAILABLE"
+      ? "LOADING" : null;
   return (
     <div className="sample-overview" data-testid="sample-overview">
       <p className="sample-overview-pad">
-        {slot === null ? "NO PAD" : `PAD ${padAddress({slot, assetId: null})}`}
+        {content}{status === null ? "" : ` · ${status}`}
       </p>
       <dl className="sample-overview-facts">
         <div>

@@ -1,9 +1,6 @@
-import {midiLabel, type MidiStatus} from "./midi_status";
+import {type MidiStatus} from "./midi_status";
 import {selectCreatorPhase, type CreatorState} from "../state/creator_state";
 import type {CreatorMode} from "./creator_mode";
-import type {CreatorBuildIdentity} from "../runtime/build_identity";
-import {describeBuildIdentity, shortBuildLabel} from "../runtime/build_identity";
-import {shortProjectId} from "../state/view_model";
 import type {SequenceState} from "../state/sequence_state";
 import type {
   SequenceGridEventKey,
@@ -16,6 +13,8 @@ import {PerformOverview} from "./perform_overview";
 import {SampleOverview} from "./sample_overview";
 import {SequenceOverview} from "./sequence_overview";
 import {transportStatusLabel} from "./transport_status";
+import {projectIdentity, sampleIdentity} from "../state/overview_context";
+import type {PerformController} from "../state/perform_state";
 
 interface OverviewDisplayProps {
   state: CreatorState;
@@ -31,7 +30,7 @@ interface OverviewDisplayProps {
   swingPreview?: number | null;
   transport?: PatternTransportState;
   midi?: MidiStatus | null;
-  buildIdentity?: CreatorBuildIdentity;
+  performController?: PerformController | null;
 }
 
 function modeLabel(mode: CreatorMode): string {
@@ -58,7 +57,7 @@ export function OverviewDisplay({
   swingPreview = null,
   transport,
   midi = null,
-  buildIdentity,
+  performController,
 }: OverviewDisplayProps) {
   const project = state.project.current;
   const selectedPatternId = sequence.selectedPatternId ?? project?.patternId ?? null;
@@ -72,12 +71,13 @@ export function OverviewDisplay({
   // hardware UI decision), Project its summary and three columns (D01) and
   // Sample its Pad, format, selection and whole waveform (D03), and Perform
   // its transport, bar and beat (D04).
-  // The Creator and audio phase, the Project facts and the build label stay
-  // readable by assistive technology but are not drawn on those pages.
+  // Keep lifecycle announcements available to assistive technology; technical
+  // identities and counts live in System > Project and build details.
   const sequenceMode = activeMode === "sequence";
-  const ownScreen = sequenceMode || activeMode === "project" || activeMode === "sample" ||
-    activeMode === "perform";
-  const hiddenInSequence = ownScreen ? " visually-hidden" : "";
+  const showsProject = activeMode === "project" || activeMode === "perform" || activeMode === "soundset";
+  const projectLabel = <span data-testid="opened-project" aria-label="Open Project">
+    {projectIdentity(project)}
+  </span>;
   return (
     <div className={`overview-display${sequenceMode ? " is-sequence" : ""}${
       activeMode === "project" ? " is-project" : ""}${activeMode === "sample" ? " is-sample" : ""}${
@@ -85,9 +85,15 @@ export function OverviewDisplay({
       <div className="overview-primary">
         <output className="overview-context">
           {modeLabel(activeMode)}
-          {patternIndex !== null ? ` / ${String(patternIndex).padStart(2, "0")}` : ""}
+          {activeMode === "sequence"
+            ? patternIndex === null ? " / NO PATTERN" : ` / ${String(patternIndex).padStart(2, "0")}`
+            : activeMode === "sample" ? ` / ${sampleIdentity(state.sample.selectedSlot)}`
+            : showsProject ? <> / {projectLabel}</> : ` / ${sampleIdentity(state.sample.selectedSlot)}`}
         </output>
-        <output className="overview-bpm">
+        {/* Object-focused modes still name their enclosing Project to a screen
+            reader, without drawing unrelated technical facts above the editor. */}
+        {!showsProject ? <span className="visually-hidden">Project {projectLabel}</span> : null}
+        <output className={`overview-bpm${activeMode === "sequence" || activeMode === "perform" ? "" : " visually-hidden"}`}>
           {project ? `${tempoPreview ?? project.bpm} BPM` : "NO PROJECT"}
         </output>
         {sequenceMode && project ? (
@@ -95,7 +101,7 @@ export function OverviewDisplay({
             SWING {swingPreview ?? project.sequenceSettings.swingPercent}%
           </output>
         ) : null}
-        <output className={`overview-phase${hiddenInSequence}`}>
+        <output className="overview-phase visually-hidden">
           <span data-testid="creator-phase">{selectCreatorPhase(state)}</span>
           {" / "}
           <span data-testid="audio-state">Audio {state.audio.phase}</span>
@@ -108,44 +114,6 @@ export function OverviewDisplay({
               : ""}
         </output>
       </div>
-      <dl className={`overview-facts${hiddenInSequence}`}>
-        <div>
-          <dt>Project</dt>
-          <dd>{project ? shortProjectId(project.projectId) : "—"}</dd>
-        </div>
-        <div>
-          <dt>Rev</dt>
-          <dd>{project?.revision ?? "—"}</dd>
-        </div>
-        <div>
-          <dt>Pads</dt>
-          <dd>{project ? `${project.assignedPadCount} / 64` : "—"}</dd>
-        </div>
-        <div>
-          <dt>Assets</dt>
-          <dd>{project?.assetCount ?? "—"}</dd>
-        </div>
-        <div>
-          <dt>Key</dt>
-          <dd>{project?.key ?? "—"}</dd>
-        </div>
-        <div>
-          <dt>MIDI</dt>
-          <dd data-testid="midi-state">{midiLabel(midi)}</dd>
-        </div>
-        {pattern !== undefined ? (
-          <div>
-            <dt>Pattern</dt>
-            <dd>{pattern.bars} {pattern.bars === 1 ? "bar" : "bars"}</dd>
-          </div>
-        ) : null}
-      </dl>
-      {buildIdentity ? (
-        <p className={`overview-build${hiddenInSequence}`} data-testid="build-identity"
-          title={describeBuildIdentity(buildIdentity)}>
-          {shortBuildLabel(buildIdentity)}
-        </p>
-      ) : null}
       {activeMode === "sequence" ? (
         <SequenceOverview
           project={project}
@@ -165,12 +133,13 @@ export function OverviewDisplay({
       ) : activeMode === "slice" || activeMode === "soundset" ? (
         <p className="overview-grid-caption">
           {activeMode === "slice"
-            ? "Slice preview does not write Project Truth until Adopt."
-            : "Sound Set install writes only after an explicit Keep or Replace."}
+            ? "Preview slices on the touch screen. Adopt to save them to Pads."
+            : "Browse and audition on the touch screen. Choose a target Bank before installing."}
         </p>
       ) : activeMode === "perform" ? (
         <PerformOverview
           state={state}
+          {...(performController === undefined ? {} : {controller: performController})}
           {...(transport === undefined ? {} : {transport})}
         />
       ) : (
