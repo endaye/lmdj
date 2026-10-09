@@ -51,3 +51,12 @@ export async function createSequencePattern(page, bars = null) {
   if (bars !== null) await page.getByRole("button", {name: `${bars} bars`, exact: true}).click();
   await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
 }
+
+// Only the selected Sample page renders its controls. Selecting an already
+// current page leaves focus and any in-progress gesture untouched.
+export async function showSamplePage(page, name) {
+  const button = page.getByRole("navigation", {name: "Sample pages"})
+    .getByRole("button", {name, exact: true});
+  if (await button.getAttribute("aria-current") !== "page") await button.click();
+  await button.and(page.locator("[aria-current='page']")).waitFor();
+}

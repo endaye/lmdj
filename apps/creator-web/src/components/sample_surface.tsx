@@ -5,7 +5,7 @@ import {
   sampleNextStep,
 } from "../state/error_messages";
 import {useReportFailure} from "../runtime/diagnostics_context";
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState, type ReactNode} from "react";
 
 import {ConfirmationDialog, SampleControls} from "./sample_controls";
 import {WaveformEditor} from "./waveform_editor";
@@ -52,6 +52,7 @@ import {
 import {padAddress, slotAddress} from "../state/view_model";
 
 interface SampleSurfaceProps {
+  padColourControls?: ReactNode;
   state: CreatorState;
   externalCaptureBusy?: boolean;
   session?: CreatorSampleRuntimeSession;
@@ -175,6 +176,7 @@ function quotaErrorCopy(
 }
 
 export function SampleSurface({
+  padColourControls,
   state,
   session,
   padDropIntent,
@@ -197,8 +199,8 @@ export function SampleSurface({
     reportFailure(operation, error);
     return publicOperationError(error);
   };
+  const [page, setPage] = useState<"trim" | "playback" | "tone" | "pad">("trim");
   const input = useRef<HTMLInputElement | null>(null);
-  const surface = useRef<HTMLElement | null>(null);
   const fileSlot = useRef<number | null>(null);
   const replaceReturnFocus = useRef<HTMLElement | null>(null);
   const importController = useRef<AbortController | null>(null);
@@ -892,8 +894,24 @@ export function SampleSurface({
         return envelope;
       };
 
+  const sampleControls = inspect?.metadata != null && editablePlayback !== undefined &&
+    page !== "trim" ? (
+    <SampleControls
+      key={selectedSlot}
+      page={page}
+      padLabel={selectedAddress}
+      playback={editablePlayback}
+      audioSuspended={audioSuspended}
+      disabled={actionsDisabled}
+      onPreview={preview}
+      onCommit={(playback) => { void performUpdate(playback); }}
+      onCancel={cancelPreview}
+      onReset={() => { void reset(); }}
+    />
+  ) : null;
+
   return (
-    <main ref={surface} className="sample-surface">
+    <main className="sample-surface">
       <header className="sample-heading">
         <div>
           <p className="eyebrow">Sample surface</p>
@@ -905,23 +923,42 @@ export function SampleSurface({
             ? "Empty"
             : `Asset ${inspect.assetId.slice(0, 8)}`}</span>
           <span>{metadataCopy(state)}</span>
-          {selectedAssigned && selectedSlot !== null ? (
+        </div>
+      </header>
+
+      <nav className="sample-page-nav" aria-label="Sample pages">
+        {([
+          ["trim", "Trim"],
+          ["playback", "Playback"],
+          ["tone", "Tone / EQ"],
+          ["pad", "Pad"],
+        ] as const).map(([target, label]) => (
+          <button key={target} type="button"
+            aria-current={page === target ? "page" : undefined}
+            onClick={() => {
+              if (page === target) return;
+              cancelPreview();
+              setPage(target);
+            }}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {page === "pad" ? (
+        <section className="sample-pad-management" aria-label={`${selectedAddress} management`}>
+          {selectedSlot !== null ? (
             <button
               type="button"
               disabled={session === undefined || projectUnavailable ||
                 sample.pendingAction !== null}
               onClick={() => chooseFile(selectedSlot)}
             >
-              Replace Sample
+              {selectedAssigned ? "Replace Sample" : `Add Sample to ${selectedAddress}`}
             </button>
           ) : null}
           {selectedSlot !== null ? (
             <div className="selected-pad-actions">
-              <button type="button" aria-label={`Edit ${selectedAddress}`}
-                disabled={actionsDisabled}
-                onClick={() => surface.current?.querySelector<HTMLInputElement>(".sample-value-input")?.focus()}>
-                Edit
-              </button>
               <button type="button" aria-label={`Delete ${selectedAddress}`}
                 disabled={deleteDisabledReason !== null}
                 aria-describedby={deleteDisabledReason === null ? undefined : "pad-delete-reason"}
@@ -951,12 +988,14 @@ export function SampleSurface({
               Record Sample
             </button>
           ) : null}
-        </div>
-      </header>
+          {sampleControls}
+          {padColourControls}
+        </section>
+      ) : null}
 
       {inspect !== null && inspect.metadata !== null && editablePlayback !== undefined ? (
         <>
-          <WaveformEditor
+          {page === "trim" ? <WaveformEditor
             key={`${inspect.slot}:${inspect.waveformCacheIdentity ?? "none"}`}
             padLabel={selectedAddress}
             envelope={sample.waveform}
@@ -971,19 +1010,10 @@ export function SampleSurface({
             {...(queryViewportWaveform === undefined
               ? {}
               : {onQueryWaveform: queryViewportWaveform})}
-          />
-          <SampleControls
-            padLabel={selectedAddress}
-            playback={editablePlayback}
-            audioSuspended={audioSuspended}
-            disabled={actionsDisabled}
-            onPreview={preview}
-            onCommit={(playback) => { void performUpdate(playback); }}
-            onCancel={cancelPreview}
-            onReset={() => { void reset(); }}
-          />
+          /> : null}
+          {page !== "pad" ? sampleControls : null}
         </>
-      ) : (
+      ) : page !== "pad" ? (
         <section className="empty-sample" aria-label="Selected Pad Sample">
           <p>Select an assigned Pad to edit its waveform and playback.</p>
           {selectedSlot === null ? null : (
@@ -997,7 +1027,7 @@ export function SampleSurface({
             </button>
           )}
         </section>
-      )}
+      ) : null}
 
       {sample.lastError === null ? null : (
         <div className="sample-error" role="alert">

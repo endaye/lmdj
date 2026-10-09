@@ -1,4 +1,4 @@
-import {clickCreatorSystemAction} from "./fixtures/creator_navigation.mjs";
+import {clickCreatorSystemAction, showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -359,6 +359,7 @@ async function enterLoopToggleSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
+  await showSamplePage(page, "Playback");
   const loop = page.getByRole("button", {name: "Loop"});
   if (await loop.getAttribute("aria-pressed") !== "true") {
     await loop.click();

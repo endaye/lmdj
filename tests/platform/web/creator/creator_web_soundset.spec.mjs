@@ -1,3 +1,4 @@
+import {showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 // Stage 11 Task 7, the Browser leg of the Sound Set acceptance journey.
 //
@@ -917,7 +918,7 @@ async function expectUndoRedo(page, pad, before, after) {
   await expectPadColourSurfaces(page, pad, after.colour);
 }
 
-// Sample owns Pad selection; the colour controls sit under its editor.
+// Sample owns Pad selection; colour lives on its Pad management page.
 async function padColourControls(page, pad) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   const address = `A${String(pad + 1).padStart(2, "0")}`;
@@ -925,6 +926,7 @@ async function padColourControls(page, pad) {
   await page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)})
     .evaluate((element) =>
       element.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1})));
+  await showSamplePage(page, "Pad");
   const controls = page.getByRole("region", {name: "Pad colour"});
   await expect(controls).toContainText(`PAD COLOUR · ${address}`);
   return controls;

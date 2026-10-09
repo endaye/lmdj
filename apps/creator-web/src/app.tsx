@@ -3049,6 +3049,23 @@ function Workspace({
               <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
                 hidden={activeMode !== "sample" && !trimOverlayOpen}>
                 <SampleSurface
+                  padColourControls={activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
+                    state.project.current !== null ? (
+                    <PadColourControls
+                      pad={state.sample.selectedSlot === null
+                        ? null
+                        : state.project.current.pads.find(
+                          ({slot}) => slot === state.sample.selectedSlot) ?? null}
+                      disabledReason={padColourDisabledReason}
+                      error={padColourError !== null && padColourError.slot === state.sample.selectedSlot
+                        ? padColourError.message
+                        : null}
+                      onChoose={(colour) => {
+                        const slot = state.sample.selectedSlot;
+                        if (slot !== null) void setPadColour(slot, colour);
+                      }}
+                    />
+                  ) : null}
                   state={state}
                   externalCaptureBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                     recording || !["idle", "saved", "discarded"].includes(historyPerformPhase)}
@@ -3076,26 +3093,6 @@ function Workspace({
                   {...(isSampleSession(session) ? {session} : {})}
                 />
               </div>
-              ) : null}
-              {/* The selected Pad's colour sits under the Sample editor: Sample
-                  is the page that owns Pad selection (D03 names "A03 / BASS"),
-                  and no Desktop Final frame draws a colour control. */}
-              {activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
-                state.project.current !== null ? (
-                <PadColourControls
-                  pad={state.sample.selectedSlot === null
-                    ? null
-                    : state.project.current.pads.find(
-                      ({slot}) => slot === state.sample.selectedSlot) ?? null}
-                  disabledReason={padColourDisabledReason}
-                  error={padColourError !== null && padColourError.slot === state.sample.selectedSlot
-                    ? padColourError.message
-                    : null}
-                  onChoose={(colour) => {
-                    const slot = state.sample.selectedSlot;
-                    if (slot !== null) void setPadColour(slot, colour);
-                  }}
-                />
               ) : null}
               </div>
               {recoveryOffer !== null &&

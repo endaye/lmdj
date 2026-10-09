@@ -41,6 +41,7 @@ function renderControls(overrides: Partial<React.ComponentProps<typeof SampleCon
   const onReset = vi.fn();
   const view = render(
     <SampleControls
+      page="playback"
       padLabel="Pad A01"
       playback={playback}
       audioSuspended={false}
@@ -131,6 +132,7 @@ test.each(["pointer", "keyboard"] as const)(
       const [current, setCurrent] = useState(playback);
       return (
         <SampleControls
+          page="playback"
           padLabel="Pad A01"
           playback={current}
           audioSuspended={false}
@@ -165,7 +167,7 @@ test.each(["pointer", "keyboard"] as const)(
 
 test("Reset requires an explicit accessible confirmation", async () => {
   const user = userEvent.setup();
-  const {onReset} = renderControls();
+  const {onReset} = renderControls({page: "pad"});
   await user.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
   expect(screen.getByRole("dialog", {name: "Reset Pad A01?"})).toBeTruthy();
   await user.click(screen.getByRole("button", {name: "Cancel reset"}));
@@ -178,9 +180,8 @@ test("Reset requires an explicit accessible confirmation", async () => {
 
 test("contains Reset focus, cancels with Escape, and restores its trigger", async () => {
   const user = userEvent.setup();
-  renderControls();
+  renderControls({page: "pad"});
   const reset = screen.getByRole("button", {name: "Reset Pad to Defaults"});
-  const loop = screen.getByRole("button", {name: "Loop"});
   reset.focus();
   await user.click(reset);
 
@@ -189,7 +190,7 @@ test("contains Reset focus, cancels with Escape, and restores its trigger", asyn
   const confirm = screen.getByRole("button", {name: "Confirm reset"});
   expect(dialog.getAttribute("aria-modal")).toBe("true");
   expect(document.activeElement).toBe(cancel);
-  expect(loop.closest("[inert]")).not.toBeNull();
+  expect(reset.closest("[inert]")).not.toBeNull();
 
   confirm.focus();
   fireEvent.keyDown(dialog, {key: "Tab"});
@@ -211,6 +212,7 @@ test("restores Reset confirmation focus to a safe enabled fallback", async () =>
       <div>
         <button type="button">Safe focus fallback</button>
         <SampleControls
+          page="pad"
           padLabel="Pad A01"
           playback={playback}
           audioSuspended={false}
@@ -243,17 +245,18 @@ test("keeps editing available while audio preview is suspended", () => {
     .toBe(false);
 });
 
-test("every toggle, value control, and confirmation action has a 44 px target", async () => {
+test.each(["playback", "tone", "pad"] as const)("every %s control and confirmation action has a 44 px target", async (page) => {
   const user = userEvent.setup();
-  renderControls();
+  renderControls({page});
   const backgroundActions = [
-    ...screen.getAllByRole("button"),
-    ...screen.getAllByRole("slider"),
+    ...screen.queryAllByRole("button"),
+    ...screen.queryAllByRole("slider"),
   ];
-  await user.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+  expect(backgroundActions.length).toBeGreaterThan(0);
+  if (page === "pad") await user.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
   for (const action of [
     ...backgroundActions,
-    ...screen.getAllByRole("button"),
+    ...screen.queryAllByRole("button"),
   ]) {
     const name = action.getAttribute("aria-label") ?? action.textContent ?? action.tagName;
     if (action instanceof SVGElement) {
@@ -391,7 +394,7 @@ test("Release edits a releasing Pad and is unavailable on a one-shot", () => {
 });
 
 test("Tone is bipolar: low-pass below centre, high-pass above, off in the deadband", () => {
-  const {onPreview, onCommit} = renderControls();
+  const {onPreview, onCommit} = renderControls({page: "tone"});
   const tone = screen.getByRole("slider", {name: "Pad A01 Tone"});
   expect(screen.getByText("Off")).toBeTruthy();
   fireEvent.pointerDown(tone, {pointerId: 6});

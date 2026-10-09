@@ -64,6 +64,13 @@ function wavFile(name: string): File {
   ], name, {type: "audio/wav"});
 }
 
+function selectSamplePage(name: "Trim" | "Playback" | "Tone / EQ" | "Pad") {
+  const button = within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name});
+  if (button.getAttribute("aria-current") !== "page") fireEvent.click(button);
+  expect(button.getAttribute("aria-current")).toBe("page");
+}
+
 async function commitLongSourceSelection(): Promise<void> {
   await screen.findByRole("button", {name: "Commit selection"});
   await userEvent.click(screen.getByRole("button", {name: "Commit selection"}));
@@ -224,7 +231,6 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
 
   const metadata = screen.getByText("Asset 33333333").closest(".selected-sample")!;
   const waveform = screen.getByRole("region", {name: "Pad A01 waveform editor"});
-  const controls = screen.getByRole("region", {name: "Pad A01 Sample controls"});
   const pads = screen.getByRole("region", {name: "Pad matrix"});
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).queryByLabelText("Playable Pads")).toBeNull();
@@ -237,14 +243,24 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
   }
   expect(metadata.compareDocumentPosition(waveform) & Node.DOCUMENT_POSITION_FOLLOWING)
     .not.toBe(0);
-  expect(waveform.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING)
-    .not.toBe(0);
   expect(touch.contains(metadata)).toBe(true);
   expect(touch.contains(waveform)).toBe(true);
-  expect(touch.contains(controls)).toBe(true);
+  expect(screen.queryByRole("region", {name: "Pad A01 Sample controls"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Edit Pad A01"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Replace Sample"})).toBeNull();
+  const pages = screen.getByRole("navigation", {name: "Sample pages"});
+  await userEvent.click(within(pages).getByRole("button", {name: "Playback"}));
+  expect(screen.queryByRole("region", {name: "Pad A01 waveform editor"})).toBeNull();
+  expect(within(touch).getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
+  expect(screen.queryByRole("slider", {name: "Pad A01 Tone"})).toBeNull();
+  await userEvent.click(within(pages).getByRole("button", {name: "Tone / EQ"}));
+  expect(within(touch).getByRole("slider", {name: "Pad A01 Tone"})).toBeTruthy();
+  expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
+  await userEvent.click(within(pages).getByRole("button", {name: "Pad"}));
   expect(screen.getByRole("button", {name: "Replace Sample"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Record Sample"})).toBeTruthy();
-  expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
+  expect(within(screen.getByRole("region", {name: "Pad A01 management"}))
+    .getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   const visiblePads = screen.getAllByRole("button", {
     name: /^Pad A(?:0[1-9]|1[0-6]) — (?:assigned|empty) — Key [QWERTYUIASDFGHJK]$/,
@@ -422,6 +438,7 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
 
   // S8-D12: recording onto an assigned Pad is a replacement, so the existing
   // confirmation runs before the microphone is ever requested (S8B-D2).
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   expect(screen.queryByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeNull();
   const dialog = screen.getByRole("dialog", {name: "Replace Pad A01?"});
@@ -432,6 +449,7 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
   await userEvent.click(screen.getByRole("button", {name: "Cancel replace"}));
   expect(screen.queryByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeNull();
 
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
   expect(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeTruthy();
@@ -445,6 +463,7 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
 
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   expect(screen.queryByRole("dialog", {name: "Replace Pad A02?"})).toBeNull();
   expect(screen.getByRole("dialog", {name: "Pad A02 Pad Capture"})).toBeTruthy();
@@ -479,6 +498,7 @@ test("audio recovery keeps an open capture panel instead of discarding it", asyn
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   const dialog = screen.getByRole("dialog", {name: "Pad A02 Pad Capture"});
 
@@ -1254,6 +1274,7 @@ test("commits composed controlled Volume once per pointer and keyboard completio
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Playback");
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
 
   fireEvent.pointerDown(volume, {pointerId: 31});
@@ -1300,8 +1321,10 @@ test.each(["update", "reset"] as const)(
 
     const selectedAfter = 1;
     if (kind === "update") {
+      selectSamplePage("Playback");
       await userEvent.click(screen.getByRole("button", {name: "Mute"}));
     } else {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
       await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
     }
@@ -1364,6 +1387,7 @@ test("atomically refreshes full Project truth on a real mutation conflict", asyn
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Playback");
   await userEvent.click(screen.getByRole("button", {name: "Mute"}));
 
   expect((await screen.findByRole("alert")).textContent).toBe(
@@ -1485,6 +1509,7 @@ test.each([
 
     vi.useFakeTimers();
     try {
+      selectSamplePage("Playback");
       fireEvent.click(screen.getByRole("button", {name: "Mute"}));
       await flushAsyncTurns();
 
@@ -1527,8 +1552,10 @@ test.each([
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await screen.findByText("Asset 33333333");
+    selectSamplePage("Playback");
     await userEvent.click(screen.getByRole("button", {name: "Mute"}));
 
+    selectSamplePage("Pad");
     await waitFor(() => expect(screen.getByRole("button", {
       name: "Reset Pad to Defaults",
     }).hasAttribute("disabled")).toBe(false));
@@ -1551,6 +1578,7 @@ test.each(["project", "sample"] as const)(
 
     vi.useFakeTimers();
     try {
+      selectSamplePage("Playback");
       fireEvent.click(screen.getByRole("button", {name: "Mute"}));
       await flushAsyncTurns();
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -1633,8 +1661,10 @@ test.each(["update", "reset"] as const)(
     vi.useFakeTimers();
     try {
       if (kind === "update") {
+        selectSamplePage("Playback");
         fireEvent.click(screen.getByRole("button", {name: "Mute"}));
       } else {
+        selectSamplePage("Pad");
         fireEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
         fireEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
       }
@@ -1649,6 +1679,7 @@ test.each(["update", "reset"] as const)(
 
       expect(mutationCount).toBe(1);
       expect(screen.queryByRole("alert")).toBeNull();
+      selectSamplePage("Pad");
       expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})
         .hasAttribute("disabled")).toBe(false);
       fireEvent.click(screen.getByRole("button", {name: "Project"}));
@@ -2143,13 +2174,17 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     await waitFor(() => expect(triggerCount).toBe(1));
 
     if (kind === "mute") {
+      selectSamplePage("Playback");
       await userEvent.click(screen.getByRole("button", {name: "Mute"}));
     } else if (kind === "reset") {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
       await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
     } else if (kind === "delete") {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
     } else {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
       const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
       await userEvent.upload(input, wavFile("replace.wav"));
@@ -2239,8 +2274,10 @@ test("shows saved and stale Runtime revisions and retries Prepare explicitly", a
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Playback");
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
 
+  selectSamplePage("Playback");
   await userEvent.click(screen.getByRole("button", {name: "Mute"}));
   expect(await screen.findByText(
     "Saved at revision 4; Runtime is still revision 3",
@@ -3314,14 +3351,17 @@ test("Sample mode sets and restores the selected Pad's colour through Truth", as
   await screen.findByText("Asset 33333333");
   const padA01 = () => screen.getByRole("button", {name: /^Pad A01 /});
   expect(padA01().getAttribute("data-pad-colour")).toBe("1");
+  selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   expect(controls.getByTestId("pad-colour-source").textContent).toBe("BASS default");
 
+  selectSamplePage("Pad");
   await userEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
   await waitFor(() => expect(padA01().getAttribute("data-pad-colour")).toBe("2"));
   expect(requests).toEqual([{slot: 0, colour: 2, expectedRevision: 3}]);
   expect(controls.getByTestId("pad-colour-source").textContent).toBe("Custom colour");
   // The stored override is not sent again.
+  selectSamplePage("Pad");
   await userEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
   expect(requests).toHaveLength(1);
 
@@ -3359,8 +3399,10 @@ test("a Pad colour queued behind another names the revision that commit left", a
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   // Two choices before either renders: the second queues behind the first.
+  selectSamplePage("Pad");
   fireEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
   fireEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
   await waitFor(() => expect(requests).toHaveLength(2));
@@ -3423,6 +3465,7 @@ test("a grid edit queued behind a Pad colour shows both committed changes", asyn
   await screen.findByText("Asset 33333333");
   // Queue both before the first commit renders. Pointer events drive the
   // component's gesture mapping; this does not claim native input acceptance.
+  selectSamplePage("Pad");
   fireEvent.click(screen.getByRole("button", {name: "MELODIC colour"}));
   fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
   const lane = document.querySelector('.sequence-grid-row[data-pad="0"] .sequence-grid-lane')!;
@@ -3452,6 +3495,7 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   await userEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
   await controls.findByRole("alert");
@@ -3460,9 +3504,11 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
   expect(fixture.revision).toBe(3);
   // The refusal belongs to A01: it is not shown under another Pad's controls.
   await userEvent.click(screen.getByRole("button", {name: /^Pad A02 /}));
+  selectSamplePage("Pad");
   expect(within(screen.getByRole("region", {name: "Pad colour"})).queryByRole("alert"))
     .toBeNull();
   await userEvent.click(screen.getByRole("button", {name: /^Pad A01 /}));
+  selectSamplePage("Pad");
   expect(within(screen.getByRole("region", {name: "Pad colour"})).getByRole("alert"))
     .toBeTruthy();
 });
@@ -3488,11 +3534,13 @@ test("Delete cancels a pending import and ignores its late completion", async ()
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
   await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("pending.wav"));
   await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
   await commitLongSourceSelection();
   await waitFor(() => expect(importSignal).toBeDefined());
+  // Delete here belongs to the retained long-source dialog; the pages are inert.
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   await screen.findByRole("button", {name: "Pad A01 — empty — Key Q"});
   expect(requests).toEqual([{slot: 0, expectedRevision: 3}]);
@@ -3500,6 +3548,7 @@ test("Delete cancels a pending import and ignores its late completion", async ()
     runtimeRevision: 5, runtimePublished: true, snapshotError: null}));
   expect(fixture.revision).toBe(4);
   expect(screen.queryByText("Asset 33333333")).toBeNull();
+  selectSamplePage("Pad");
   expect(screen.getByRole("button", {name: "Delete Pad A01"}).hasAttribute("disabled")).toBe(true);
 });
 
@@ -3512,6 +3561,7 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   await screen.findByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"});
   // #1680: the alert names no code; Developer diagnostics keeps it.
@@ -3571,13 +3621,17 @@ function preStopFixture(order: string[]) {
 
 async function performPadMutation(kind: PreStopMutation, container: HTMLElement) {
   if (kind === "delete") {
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   } else if (kind === "reset") {
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
     await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
   } else if (kind === "mute") {
+    selectSamplePage("Playback");
     await userEvent.click(screen.getByRole("button", {name: "Mute"}));
   } else {
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("replace.wav"));
     await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
@@ -3610,13 +3664,14 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before comm
 });
 
 
-test("Edit beside Delete moves focus into the selected Pad's controls", async () => {
+test("Trim exposes the selected Pad inputs directly without a redundant Edit button", async () => {
   const fixture = sampleRuntimeFixture();
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
-  await userEvent.click(screen.getByRole("button", {name: "Edit Pad A01"}));
+  expect(screen.queryByRole("button", {name: "Edit Pad A01"})).toBeNull();
+  await userEvent.click(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}));
   expect(document.activeElement).toBe(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}));
 });
 
@@ -3642,6 +3697,7 @@ test("Delete invalidates a decoding source and discards its eventual result", as
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("decoding.wav"));
     await waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
     await screen.findByText("Decoding long source…");
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Delete Pad A02"}));
     await waitFor(() => expect(fixture.revision).toBe(4));
     expect(screen.queryByText("Decoding long source…")).toBeNull();
@@ -3663,6 +3719,7 @@ test("Delete waits for the selected Pad inspection to match the current Project 
   };
   const props = {session: fixture.session, filePickIntent: {current: () => {}}, dispatch: vi.fn()};
   const view = render(<SampleSurface {...props} state={state} />);
+  selectSamplePage("Pad");
   const remove = screen.getByRole("button", {name: "Delete Pad A01"});
   expect(remove.hasAttribute("disabled")).toBe(true);
   await userEvent.click(remove);
@@ -3754,4 +3811,57 @@ test("recovery Open Sequence after a refused Keep leaves System with the take re
   expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
   expect(apply).toHaveBeenCalledExactlyOnceWith({sessionId: "interrupted-session", destinationPatternId: null});
   expect(discard).not.toHaveBeenCalled();
+});
+
+
+test("Sample pages keep their selection across Pad, Bank and System changes", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  selectSamplePage("Playback");
+  expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: /^Pad A02 /}));
+  await screen.findByRole("button", {name: "Add Sample to Pad A02"});
+  expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
+  expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name: "Playback"}).getAttribute("aria-current")).toBe("page");
+  await userEvent.click(screen.getByRole("button", {name: "Bank B"}));
+  await screen.findByRole("button", {name: "Add Sample to Pad B02"});
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  expect(screen.queryByRole("navigation", {name: "Sample pages"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+  expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name: "Playback"}).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("button", {name: "Add Sample to Pad B02"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name: "Trim"}).getAttribute("aria-current")).toBe("page");
+});
+
+test("changing Sample page cancels an unfinished pointer preview without committing it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  const clear = vi.spyOn(fixture.session, "clearSamplePreview");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  selectSamplePage("Playback");
+  const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
+  fireEvent.pointerDown(volume, {pointerId: 31});
+  fireEvent.change(volume, {target: {value: "-3.2"}});
+  await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+  // A second input changes page before the first pointer is released.
+  selectSamplePage("Tone / EQ");
+  await waitFor(() => expect(clear).toHaveBeenCalledWith(0));
+  expect(update).not.toHaveBeenCalled();
+  expect(screen.getByRole("slider", {name: "Pad A01 Tone"})).toBeTruthy();
+  fireEvent.pointerUp(window, {pointerId: 31});
+  expect(update).not.toHaveBeenCalled();
+  selectSamplePage("Playback");
+  expect((screen.getByRole("slider", {name: "Pad A01 Volume"}) as HTMLInputElement).value).toBe("0");
 });

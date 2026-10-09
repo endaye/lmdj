@@ -1,7 +1,7 @@
 import {fileURLToPath} from "node:url";
 import {expect, test} from "@playwright/test";
 import {waitForBootProject} from "./fixtures/creator_boot.mjs";
-import {showSequenceLayer} from "./fixtures/creator_navigation.mjs";
+import {showSequenceLayer, showSamplePage} from "./fixtures/creator_navigation.mjs";
 
 const captureFile = fileURLToPath(new URL(
   "./fixtures/capture-440hz-2s-mono-48k.wav", import.meta.url,
@@ -84,9 +84,10 @@ test("long title and disabled controls fit without widening the panel", async ({
   await expectControlFits(page, page.getByRole("button", {name: "SETUP", exact: true}));
   await page.getByTestId("physical-controls").getByRole("button", {name: "Sample", exact: true}).click();
   await page.getByTestId("physical-controls").getByRole("button", {name: "Bank B", exact: true}).click();
-  const edit = page.getByRole("button", {name: "Edit Pad B01", exact: true});
-  await expect(edit).toBeDisabled();
-  await expectControlFits(page, edit);
+  await showSamplePage(page, "Pad");
+  const remove = page.getByRole("button", {name: "Delete Pad B01", exact: true});
+  await expect(remove).toBeDisabled();
+  await expectControlFits(page, remove);
   await expectTouchFits(page);
 });
 
@@ -128,16 +129,29 @@ test("Sample empty and assigned controls stay inside the touch panel", async ({p
   await selection.getByRole("button", {name: "Commit selection", exact: true}).click();
   await expect(selection).toHaveCount(0, {timeout: 125_000});
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("slider", {name: "Pad B01 Volume", exact: true}))
     .toBeVisible({timeout: 125_000});
   for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
     {width: 768, height: 600}]) {
     await page.setViewportSize(viewport);
     await expectTouchFits(page);
+    await showSamplePage(page, "Playback");
     for (const name of ["Pad B01 Volume", "Pad B01 Pitch", "Pad B01 Pan"]) {
       await expectControlFits(page, page.getByRole("slider", {name, exact: true}));
     }
-    await expectControlFits(page, page.getByRole("button", {name: "Reset Pad to Defaults", exact: true}));
+    await showSamplePage(page, "Tone / EQ");
+    await expectControlFits(page, page.getByRole("slider", {name: "Pad B01 Tone", exact: true}));
+    await expectControlFits(page, page.getByRole("slider", {name: "Pad B01 EQ High", exact: true}));
+    await expectTouchFits(page);
+    await showSamplePage(page, "Pad");
+    for (const name of ["Replace Sample", "Record Sample", "Delete Pad B01", "Reset Pad to Defaults"]) {
+      await expectControlFits(page, page.getByRole("button", {name, exact: true}));
+    }
+    await expectTouchFits(page);
+    await showSamplePage(page, "Trim");
+    await expectControlFits(page, page.getByRole("spinbutton", {name: "Pad B01 Start time (seconds)", exact: true}));
+    await expect(page.getByRole("slider", {name: "Pad B01 Volume", exact: true})).toHaveCount(0);
     await expectTouchFits(page);
   }
 });
