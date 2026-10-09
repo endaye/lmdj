@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {type ReactNode, useEffect, useRef, useState} from "react";
 
 import type {PerformanceFx} from "@lmdj/web-runtime-platform/runtime_types";
 
@@ -23,6 +23,9 @@ function isLive(fx: PerformanceFx): boolean {
 }
 
 interface FxSliderBankProps {
+  readonly active?: boolean;
+  readonly action?: ReactNode;
+  readonly onGestureActiveChange?: (active: boolean) => void;
   readonly order: readonly PerformanceFx[];
   readonly values: Readonly<Record<PerformanceFx, number>>;
   readonly onEngage: (fx: PerformanceFx, value: number) => string;
@@ -38,6 +41,7 @@ export function FxSliderBank(props: FxSliderBankProps) {
     if (gestureId === undefined) return;
     gestures.current.delete(fx);
     props.onRelease(gestureId, fx);
+    if (gestures.current.size === 0) props.onGestureActiveChange?.(false);
   };
   // Collapsing FX / MORE unmounts those inputs, so their open gestures close
   // here; the unmount effect below only fires when the whole bank goes away.
@@ -56,9 +60,13 @@ export function FxSliderBank(props: FxSliderBankProps) {
   const slider = (fx: PerformanceFx) => (
     <input type="range" min={0} max={1000} step={1}
       aria-label={LABELS[fx]} value={props.values[fx]}
-      onPointerDown={() => {
+      onPointerDown={(event) => {
         if (!gestures.current.has(fx)) {
           gestures.current.set(fx, props.onEngage(fx, props.values[fx]));
+          props.onGestureActiveChange?.(true);
+        }
+        try { event.currentTarget.setPointerCapture(event.pointerId); } catch {
+          // Synthetic component events do not own a native pointer.
         }
       }}
       onChange={(event) => {
@@ -66,13 +74,16 @@ export function FxSliderBank(props: FxSliderBankProps) {
         if (gestureId === undefined) {
           gestureId = props.onEngage(fx, props.values[fx]);
           gestures.current.set(fx, gestureId);
+          props.onGestureActiveChange?.(true);
         }
         props.onMove(gestureId, fx, event.currentTarget.valueAsNumber);
       }}
       onPointerUp={() => release(fx)}
       onPointerCancel={() => release(fx)}
+      onLostPointerCapture={() => release(fx)}
       onBlur={() => release(fx)} />
   );
+  if (props.active === false) return null;
   const live = props.order.filter(isLive);
   const more = props.order.filter((fx) => !isLive(fx));
   return (
@@ -90,12 +101,15 @@ export function FxSliderBank(props: FxSliderBankProps) {
           </label>
         ))}
       </div>
-      {more.length === 0 ? null : (
-        <>
+      <div className="perform-fx-actions">
+        {props.action}
+        {more.length === 0 ? null : (
           <button type="button" className="perform-fx-more"
             aria-expanded={expanded}
             onClick={() => setExpanded((open) => !open)}>FX / MORE</button>
-          {expanded ? (
+        )}
+      </div>
+          {expanded && more.length > 0 ? (
             <div className="perform-fx-more-bank" role="group"
               aria-label="More Performance FX">
               {more.map((fx) => (
@@ -106,8 +120,6 @@ export function FxSliderBank(props: FxSliderBankProps) {
               ))}
             </div>
           ) : null}
-        </>
-      )}
     </section>
   );
 }

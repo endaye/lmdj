@@ -1,3 +1,4 @@
+import {showPerformPage} from "./fixtures/creator_navigation.mjs";
 import {
   createSequencePattern,
   selectedSequencePatternId,
@@ -1134,6 +1135,7 @@ test("SETUP changes, doubles and copies a Pattern, undoes exactly, and reopens w
   const copySlot = slots.findIndex((value, index) => index > sourceSlot && value === null);
   await openPerform(page);
   before = await inspectTruth(page);
+  await showPerformPage(page, "Slots");
   await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
   await page.getByRole("combobox", {name: "Pattern slot", exact: true})
     .selectOption(String(sourceSlot));

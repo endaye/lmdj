@@ -311,25 +311,27 @@ Sample 使用四个子页，作用于同一个选中 Pad。**首次挂载默认 
 
 | 状态 | 控件／操作 | 直接效果 | 上屏 | Pad 区 | 触摸区 | 声音／保存 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Perform 已就绪 | Bank A／B／C／D | 与左栏 Bank 同步；演出控制器 Bank 同步 | Bank 更新 | 同 Bank 16 声音 Pad | Bank pressed 更新 | 视图／输入路由变化，不改作者内容 |
-| 演出录制 idle | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 选择后续槽位编辑的参数 | — | — | 下拉值变化 | 尚未分配／清空／移动 |
-| idle，有选项 | Assign Pattern／Clear Pattern／Move Pattern | 将 Pattern 绑定槽位、清绑定、移动绑定 | 修订／已分配槽位数更新 | 声音 Pad 不变成 Pattern | 16 个 Pattern 槽的身份／Empty 状态更新 | 写 Project；Move 同源目标禁用；非 idle 禁用这些编辑 |
-| Performance recording／flushing | 触摸区 01–16 Pattern Launch | 排队切演出 Pattern，等待权威确认 | 上屏仍由全局 Pattern 投影驱动，不把 queued 当立即换曲 | 下边声音 Pad 保持声音用途 | 槽位 Queued → Playing；cue queued → live | 记录演出 launch 操作；空槽可成为 silent gap |
+| Perform 已就绪 | 左栏 Bank A／B／C／D | 唯一 Bank 入口；演出控制器跟随 Host Bank | Bank 更新 | 同 Bank 16 声音 Pad | 不重复 Bank 按钮 | 视图／输入路由变化，不改作者内容 |
+| Perform 内 | Live／Slots／Takes／Replay | 切子页并回到该页开头 | 总览保持 | 声音 Pad 保持 | 启动与 FX／槽位管理／录音处理／回放恢复 | 保留录制、回放轮询、HOLD、表单与 More 展开；FX 手势释放前暂禁切页 |
+| Live | 1–4／5–8／9–12／13–16 | 选择四个 Pattern 槽的可视组 | 当前全局 Pattern 保持 | 不重映射声音 Pad | 所选组与槽位更新；其他组仍标 Queued／Playing | 不发送 launch；跨子页保留所选组 |
+| Slots，演出录制 idle | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 选择后续槽位编辑的参数 | — | — | 下拉值变化 | 尚未分配／清空／移动 |
+| Slots，idle，有选项 | Assign Pattern／Clear Pattern／Move Pattern | 将 Pattern 绑定槽位、清绑定、移动绑定 | 修订／已分配槽位数更新 | 声音 Pad 不变成 Pattern | 16 个 Pattern 槽的身份／Empty 状态更新 | 写 Project；Move 同源目标禁用；非 idle 禁用这些编辑 |
+| Live，Performance recording／flushing | 四组共 01–16 Pattern Launch | 排队切演出 Pattern，等待权威确认 | 上屏仍由全局 Pattern 投影驱动，不把 queued 当立即换曲 | 下边声音 Pad 保持声音用途 | 槽位 Queued → Playing；cue queued → live | 记录演出 launch 操作；空槽可成为 silent gap |
 | 其他演出阶段 | Pattern Launch | 禁用 | — | — | — | 仅全局 Play 已启动还不足以使用此入口 |
 | 运行中可用 | Filter／Delay 推子 | engage → move → release 的实时 FX 手势 | 没有独立 FX 参数／电平投影 | Pad 发声受主 FX 影响 | 数值百分比更新 | 非录制走实时 FX；录制中同时记录演出 FX 操作 |
 | 同上 | FX / MORE | 展开／收回其余六个 FX | — | — | Reverb／Stutter／Gate／Reverse／Crush／Cutter 推子显示／隐藏 | 收回会释放这些输入的未结束手势 |
 | More 展开 | 六类 FX 推子 | 同样 engage／move／release | — | 输出被对应 FX 处理 | 推子更新 | 不是 Sample 中的 Reverse／Tone；这里是主效果 |
 | FX 可用 | HOLD | 切 FX 的保持状态 | — | — | HOLD pressed 更新 | 松开 FX 时按引擎 hold 规则保留效果；与 Sample Loop 的 Hold 分开 |
 | 可录演出，其他录音未占用 | Record Performance | 开始记录演出操作和主输出 WAV | 全局 Pattern 总览不改解释成演出录音计数器 | Pad 输入可被记录 | 演出／WAV 状态；Launch 可用 | 不等同于左栏 Record；准备失败会提示原因 |
-| recording | Flush Performance | 显式刷新本轮操作记录 | — | — | recording／flushing 与权威状态更新 | 不等于停止或另存音频 |
-| recording／flushing | Stop Performance | 结束本轮录制，封存供保存／丢弃 | 不自动把全局 Pattern Play 灯灭掉 | Pad 正常输入条件仍在 | stopped，Save／Discard 可用，Launch 禁用 | 未点 Save 前不算完成演出保存 |
-| 任何演出表单 | Performance name 输入 | 改保存名称 | — | — | 文本变化 | 不写 Project；空白名阻止 Save |
-| stopped，有名称 | Save Performance | 保存演出记录与 WAV 绑定，刷新项目／演出列表 | 修订及 Project 投影更新 | — | saved／绑定状态、新 Replay 项 | 绑定失败可出现 Retry WAV bind；不假装 WAV 已绑定 |
-| stopped | Discard Performance | 丢弃当前待保存演出 | Project 按实际结果刷新 | — | discarded 状态 | 不是删掉所有已保存演出 |
-| 有 WAV | Export Performance WAV | 下载本次 WAV | — | — | 导出成功／错误提示 | 本地下载，不新增一次作者编辑 |
-| 绑定需重试 | Retry WAV bind | 重试保存 WAV 的绑定阶段 | 成功后修订／投影更新 | — | bindingStatus 变化 | 不要求再演一次或录另一份 WAV |
-| 已有演出条目 | Replay／Stop Replay | 回放演出记录／请求停止并中和 replay 状态 | 上屏仍显示全局 Pattern 的事实 | 可听输出取决于回放引擎 | playing／idle／neutral 与 resolved revision | 回放不是再次录入 Pattern；状态按独立 replay 回读 |
-| 有演出 recovery | Apply recovery／Discard recovery | 恢复演出并刷新列表／丢候选 | 恢复提交后修订更新 | — | recoveryStatus、演出列表更新 | 恢复会处理未闭合 Pad 手势；丢候选不是删除既有演出 |
+| Takes，recording | Flush Performance | 显式刷新本轮操作记录 | — | — | recording／flushing 与权威状态更新 | 不等于停止或另存音频 |
+| recording／flushing | Stop Performance | 结束本轮录制，封存供保存／丢弃 | 不自动把全局 Pattern Play 灯灭掉 | Pad 正常输入条件仍在 | stopped，Live 的 Review recording 进入 Takes 保存／丢弃，Launch 禁用 | 未点 Save 前不算完成演出保存 |
+| Takes，stopped／saving／discarding | Performance name 输入 | 改保存名称 | — | — | stopped 可改名称；保存／丢弃中只读 | 不写 Project；空白名阻止 Save |
+| Takes，stopped，有名称 | Save Performance | 保存演出记录与 WAV 绑定，刷新项目／演出列表 | 修订及 Project 投影更新 | — | saved／绑定状态、新 Replay 项 | 绑定失败可出现 Retry WAV bind；不假装 WAV 已绑定 |
+| Takes，stopped | Discard Performance | 丢弃当前待保存演出 | Project 按实际结果刷新 | — | discarded 状态 | 不是删掉所有已保存演出 |
+| Takes，有 WAV | Export Performance WAV | 下载本次 WAV | — | — | 导出成功／错误提示 | 本地下载，不新增一次作者编辑 |
+| Takes，绑定需重试 | Retry WAV bind | 重试保存 WAV 的绑定阶段 | 成功后修订／投影更新 | — | bindingStatus 变化 | 不要求再演一次或录另一份 WAV |
+| Replay 页已有演出条目／任意页回放中 | Replay／Stop Replay | 回放演出记录／请求停止并中和 replay 状态 | 上屏仍显示全局 Pattern 的事实 | 可听输出取决于回放引擎 | playing／idle／neutral 与 resolved revision | 回放不是再次录入 Pattern；状态按独立 replay 回读 |
+| Replay，有演出 recovery | Apply recovery／Discard recovery | 恢复演出并刷新列表／丢候选 | 恢复提交后修订更新 | — | recoveryStatus、演出列表更新 | 恢复会处理未闭合 Pad 手势；丢候选不是删除既有演出 |
 
 ### 4.8 Sound Sets
 

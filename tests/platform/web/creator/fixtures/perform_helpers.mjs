@@ -1,5 +1,5 @@
 import {readFile} from "node:fs/promises";
-import {showSamplePage} from "./creator_navigation.mjs";
+import {showSamplePage, showPerformPage, showPatternLaunchGroup} from "./creator_navigation.mjs";
 
 import {expect} from "@playwright/test";
 
@@ -15,11 +15,20 @@ export async function openPerform(page) {
   await expect(perform).toBeEnabled({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await perform.click();
   await expect(page.getByRole("main", {name: "Perform"})).toBeVisible();
-  await expect(page.getByRole("button", {name: /^Launch Pattern /}))
-    .toHaveCount(16);
+  await showPerformPage(page, "Live");
+  const names = [];
+  for (const first of [1, 5, 9, 13]) {
+    await showPatternLaunchGroup(page, first);
+    const slots = page.getByRole("button", {name: /^Launch Pattern /});
+    await expect(slots).toHaveCount(4);
+    names.push(...await slots.evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))));
+  }
+  expect(names).toEqual(Array.from({length: 16}, (_, index) => `Launch Pattern ${index + 1}`));
+  await showPatternLaunchGroup(page, 1);
 }
 
 export async function beginRecording(page) {
+  await showPerformPage(page, "Live");
   await page.getByRole("button", {name: "Record Performance"}).click();
   const status = page.getByRole("status", {name: "Performance recording status"});
   await expect(status).toContainText("recording", {
@@ -29,6 +38,7 @@ export async function beginRecording(page) {
 }
 
 export async function stopRecording(page) {
+  await showPerformPage(page, "Live");
   await page.getByRole("button", {name: "Stop Performance"}).click();
   await expect(page.getByRole("status", {name: "WAV recording status"}))
     .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
@@ -94,6 +104,7 @@ export function firstSignalFrame(channel, from = 0) {
 }
 
 export async function exportPerformanceWav(page) {
+  await showPerformPage(page, "Takes");
   const pending = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export Performance WAV"}).click();
   return readFile(await (await pending).path());

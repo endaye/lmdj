@@ -296,17 +296,21 @@ function controllerFixture(options: {
 
 function renderSurface(fixture = controllerFixture()) {
   let state = creatorState();
-  const onBankChange = vi.fn((bank) => { state = {...state, activeBank: bank}; });
   const rendered = render(
     <PerformSurface controller={fixture.controller}
-      project={project} bank={state.activeBank} onBankChange={onBankChange} />,
+      project={project} bank={state.activeBank} />,
   );
-  return {fixture, onBankChange, rerender(bank = state.activeBank) {
+  return {fixture, rerender(bank = state.activeBank) {
     state = {...state, activeBank: bank};
     rendered.rerender(<PerformSurface controller={fixture.controller}
-      project={project} bank={bank}
-      onBankChange={onBankChange} />);
+      project={project} bank={bank} />);
   }, unmount: rendered.unmount};
+}
+
+function selectPerformPage(name: "Live" | "Slots" | "Takes" | "Replay") {
+  const button = within(screen.getByRole("navigation", {name: "Perform pages"}))
+    .getByRole("button", {name});
+  if (button.getAttribute("aria-current") !== "page") fireEvent.click(button);
 }
 
 test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad surface", () => {
@@ -345,17 +349,16 @@ test("keeps the other six confirmed FX behind FX / MORE", async () => {
   expect(within(fx).queryByRole("slider", {name: "Cutter"})).toBeNull();
 });
 
-test("switches Bank synchronously without any Core request", async () => {
+test("projects the Host Bank without duplicate buttons or a Core request", () => {
   const rendered = renderSurface();
   const before = Object.values(rendered.fixture.runtime.calls)
     .reduce((count, call) => count + call.mock.calls.length, 0);
-  await userEvent.click(screen.getByRole("button", {name: "Bank B"}));
-  expect(rendered.onBankChange).toHaveBeenCalledWith(1);
+  rendered.rerender(1);
+  expect(rendered.fixture.controller.getState().bank).toBe(1);
+  expect(screen.queryByRole("group", {name: "Perform Bank"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Bank B"})).toBeNull();
   expect(Object.values(rendered.fixture.runtime.calls)
     .reduce((count, call) => count + call.mock.calls.length, 0)).toBe(before);
-  rendered.rerender(1);
-  expect(screen.getByRole("button", {name: "Bank B"}).getAttribute("aria-pressed"))
-    .toBe("true");
 });
 
 test.each([
@@ -799,9 +802,14 @@ test("says queued and playing in words, not only through the launch attribute", 
   await waitFor(() => expect(slot().textContent).toMatch(/Queued/));
   expect(slot().getAttribute("data-launch")).toBe("pending");
   expect(cue()).toBe("Slot 1 queued");
+  await userEvent.click(screen.getByRole("button", {name: "Pattern slots 13 to 16"}));
+  expect(screen.getByRole("button", {name: "Pattern slots 1 to 4"}).textContent).toContain("Queued");
+  expect(screen.queryByRole("button", {name: "Launch Pattern 1"})).toBeNull();
 
   query.mockResolvedValueOnce(authority({journalRevision: 2,
     lastLaunchAck: {requestId: "event-1", patternSlot: 0, effectiveTick: 1920}}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Pattern slots 1 to 4"}).textContent).toContain("Playing"));
+  await userEvent.click(screen.getByRole("button", {name: "Pattern slots 1 to 4"}));
   await waitFor(() => expect(slot().textContent).toMatch(/Playing/));
   expect(slot().getAttribute("data-launch")).toBe("acknowledged");
   expect(cue()).toBe("Slot 1 live");
@@ -853,6 +861,7 @@ test("assigns, clears, and moves slots only through Facade then projection refre
     fromSlot: 0, toSlot: 3, patternId: ids.pattern1,
     committedRevision: 10, replayed: false, projectRevision: 10,
   });
+  selectPerformPage("Slots");
   await userEvent.selectOptions(screen.getByRole("combobox", {name: "Pattern assignment"}),
     ids.pattern2);
   fireEvent.change(screen.getByRole("combobox", {name: "Pattern slot"}),
@@ -901,12 +910,15 @@ test("serializes Project mutations through one projection refresh lane", async (
 test("stops capture, saves the named draft, then binds the WAV", async () => {
   const {fixture} = renderSurface();
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Flush Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
   await waitFor(() => expect(fixture.runtime.calls.stop).toHaveBeenCalledTimes(1));
   expect(fixture.order.slice(-3)).toEqual(["core-stop", "capture-stop", "tail-drained"]);
+  selectPerformPage("Takes");
   await userEvent.clear(screen.getByRole("textbox", {name: "Performance name"}));
   await userEvent.type(screen.getByRole("textbox", {name: "Performance name"}), "Night Set");
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledWith({
     expectedRevision: 9,
@@ -932,6 +944,7 @@ test("keeps a busy save stopped and makes the same action explicitly retryable",
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toMatch(/Project is busy.*retry Save Performance/i));
@@ -940,6 +953,7 @@ test("keeps a busy save stopped and makes the same action explicitly retryable",
     .hasAttribute("disabled")).toBe(false);
   expect(fixture.store.bind).not.toHaveBeenCalled();
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(fixture.runtime.session.savePerformance)
     .toHaveBeenCalledTimes(2));
@@ -988,12 +1002,14 @@ test("retains a failed WAV binding for an explicit retry without saving twice", 
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Retry WAV bind"}))
     .not.toBeNull());
 
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("alert").textContent).toBe("The recording could not be saved into the Project. Choose Retry WAV bind.");
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Retry WAV bind"}));
   await waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(2));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
@@ -1007,6 +1023,7 @@ test("retries Project projection after save without saving the Performance twice
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
   fixture.refreshProject.mockRejectedValueOnce(new Error("projection failed"));
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toBe("The Performance was saved, but Creator could not show the latest Project. Choose Save Performance again."));
@@ -1014,6 +1031,7 @@ test("retries Project projection after save without saving the Performance twice
   expect(fixture.store.bind).not.toHaveBeenCalled();
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(1));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
@@ -1031,12 +1049,14 @@ test("retries the saved Performance list projection before binding", async () =>
   (fixture.runtime.session.listPerformances as ReturnType<typeof vi.fn>)
     .mockRejectedValueOnce(new Error("list failed"));
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toBe("The Performance was saved, but Creator could not show the latest Project. Choose Save Performance again."));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
   expect(fixture.store.bind).not.toHaveBeenCalled();
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(1));
   expect(fixture.runtime.session.savePerformance).toHaveBeenCalledTimes(1);
@@ -1052,12 +1072,14 @@ test("retries projection after a committed WAV bind without binding twice", asyn
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Retry WAV bind"}))
     .not.toBeNull());
   expect(fixture.store.bind).toHaveBeenCalledTimes(1);
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Retry WAV bind"}));
   await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("idle"));
   expect(fixture.store.bind).toHaveBeenCalledTimes(1);
@@ -1076,8 +1098,10 @@ test("reconciles a lost save response before binding and never resubmits save", 
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  selectPerformPage("Takes");
   await userEvent.clear(screen.getByRole("textbox", {name: "Performance name"}));
   await userEvent.type(screen.getByRole("textbox", {name: "Performance name"}), "Lost Reply");
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
 
   await waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(1));
@@ -1095,11 +1119,13 @@ test("retries projection after committed discard without discarding twice", asyn
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
   await waitFor(() => expect(fixture.store.discard).toHaveBeenCalledTimes(1));
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
   expect(screen.getByRole("alert").textContent).toBe("The Performance was discarded, but Creator could not show the latest Project. Choose Discard Performance again.");
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
   await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("idle"));
   expect(fixture.store.discard).toHaveBeenCalledTimes(1);
@@ -1134,6 +1160,7 @@ test("renders authoritative recording, WAV, launch, replay, recovery and resampl
   await waitFor(() => expect(screen.getByRole("status", {name: "WAV recording status"})
     .textContent).toContain("sealed · stopped"));
 
+  selectPerformPage("Replay");
   await userEvent.click(await screen.findByRole("button", {name: "Replay Take 1"}));
   expect(screen.getByRole("status", {name: "Replay status"}).textContent)
     .toContain("resolved revision · 7");
@@ -1165,6 +1192,7 @@ test("blocks a second recording while owner-loss recovery is actionable", async 
   await fixture.controller.refreshRecovery();
   await waitFor(() => expect(screen.getByRole("button", {name: "Record Performance"})
     .hasAttribute("disabled")).toBe(true));
+  selectPerformPage("Replay");
   expect(screen.getByRole("status", {name: "Performance recovery status"}).textContent)
     .toContain("owner lost");
 });
@@ -1202,6 +1230,7 @@ test("leaving Perform stops active replay before the controller is reused", asyn
       state: "stopped", resolvedRevision: 7, eventCursor: 0, eventCount: 4,
       replayed: false, projectRevision: null});
   const rendered = renderSurface(fixture);
+  selectPerformPage("Replay");
   await userEvent.click(await screen.findByRole("button", {name: "Replay Take 1"}));
   rendered.unmount();
   await waitFor(() => expect(fixture.runtime.session.stopPerformanceReplay)
@@ -1318,6 +1347,7 @@ test("renders saved replay after moving resampling to empty Pad capture", async 
     .mockResolvedValue({performanceId: ids.performance, committedRevision: 8,
       runtimePrepareRequired: true, projectRevision: 8});
   renderSurface(fixture);
+  selectPerformPage("Replay");
   await userEvent.click(await screen.findByRole("button", {name: "Replay Take 1"}));
   expect(screen.getByRole("status", {name: "Replay status"}).textContent).toContain("playing");
   expect(screen.queryByRole("spinbutton", {name: "Resample start frame"})).toBeNull();
@@ -1330,6 +1360,7 @@ test("discards the stopped WAV through the store and refreshes Project truth", a
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
   await waitFor(() => expect(fixture.runtime.calls.stop).toHaveBeenCalledTimes(1));
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
   expect(fixture.store.discard).toHaveBeenCalledWith({expectedRevision: 8,
     performanceId: ids.performance});
@@ -1388,9 +1419,134 @@ test("lists, replays, resamples, and recovers through Facade operations", async 
 test("another recording owner disables Perform Record before acquiring its master tap", async () => {
   const fixture = controllerFixture();
   render(<PerformSurface controller={fixture.controller} project={project} bank={0}
-    onBankChange={() => {}} recordingBusy />);
+    recordingBusy />);
   const record = screen.getByRole("button", {name:"Record Performance"});
   expect((record as HTMLButtonElement).disabled).toBe(true);
   await userEvent.click(record);
   expect(fixture.controller.getState().recording.phase).toBe("idle");
+});
+
+
+test("Slots retains assignment choices across pages without mutating Truth", async () => {
+  const {fixture} = renderSurface();
+  expect(screen.getAllByRole("button", {name: /^Launch Pattern /})).toHaveLength(4);
+  expect(screen.queryByRole("combobox", {name: "Pattern assignment"})).toBeNull();
+  expect(screen.queryByRole("textbox", {name: "Performance name"})).toBeNull();
+  selectPerformPage("Slots");
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Pattern slot"}),
+    within(screen.getByRole("combobox", {name: "Pattern slot"})).getByRole("option", {name: "16"}));
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Pattern assignment"}), ids.pattern2);
+  selectPerformPage("Takes");
+  selectPerformPage("Slots");
+  expect((screen.getByRole("combobox", {name: "Pattern slot"}) as HTMLSelectElement).value).toBe("15");
+  expect((screen.getByRole("combobox", {name: "Pattern assignment"}) as HTMLSelectElement).value).toBe(ids.pattern2);
+  expect(fixture.runtime.session.assignPatternSlot).not.toHaveBeenCalled();
+  selectPerformPage("Live");
+  expect(screen.getAllByRole("button", {name: /^Launch Pattern /})).toHaveLength(4);
+});
+
+test("subpages retain the recording and HOLD until explicit Stop", async () => {
+  const {fixture} = renderSurface();
+  expect(screen.queryByRole("button", {name: "Stop Performance"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  (fixture.runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>)
+    .mockResolvedValue(authority({hold: true}));
+  await userEvent.click(screen.getByRole("button", {name: "HOLD"}));
+  const session = fixture.controller.getState().recording.sessionId;
+  expect(session).not.toBeNull();
+  expect(screen.queryByRole("button", {name: "Record Performance"})).toBeNull();
+  for (const name of ["Slots", "Takes", "Replay", "Live"] as const) {
+    selectPerformPage(name);
+    expect(fixture.controller.getState().recording.sessionId).toBe(session);
+    expect(fixture.controller.getState().recording.phase).toBe("recording");
+    expect(fixture.controller.getState().hold).toBe(true);
+  }
+  expect(fixture.runtime.calls.begin).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.captureStop).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Review recording"}));
+  await userEvent.clear(screen.getByRole("textbox", {name: "Performance name"}));
+  await userEvent.type(screen.getByRole("textbox", {name: "Performance name"}), "Retained take");
+  selectPerformPage("Replay");
+  selectPerformPage("Takes");
+  expect((screen.getByRole("textbox", {name: "Performance name"}) as HTMLInputElement).value).toBe("Retained take");
+  expect(screen.getByRole("button", {name: "Save Performance"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Discard Performance"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Export Performance WAV"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Stop Performance"})).toBeNull();
+  expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+});
+
+test("page navigation waits for an FX gesture and keeps More FX expansion", async () => {
+  const {fixture} = renderSurface();
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  const filter = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(filter, {pointerId: 41});
+  fireEvent.change(filter, {target: {value: "650"}});
+  const pages = within(screen.getByRole("navigation", {name: "Perform pages"}));
+  expect(pages.getAllByRole("button").every(button => (button as HTMLButtonElement).disabled)).toBe(true);
+  selectPerformPage("Slots");
+  expect(pages.getByRole("button", {name: "Live"}).getAttribute("aria-current")).toBe("page");
+  fireEvent.pointerUp(filter, {pointerId: 41});
+  fireEvent.lostPointerCapture(filter, {pointerId: 41});
+  await waitFor(() => expect(fixture.runtime.calls.fx.mock.calls.map(([event]) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "fx_release"]));
+  expect(pages.getAllByRole("button").every(button => !(button as HTMLButtonElement).disabled)).toBe(true);
+  selectPerformPage("Slots");
+  selectPerformPage("Live");
+  expect(screen.getByRole("button", {name: "FX / MORE"}).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("slider", {name: "Reverb"})).toBeTruthy();
+  // Component events fix one release; packaged native pointer capture covers
+  // drag-off delivery, which jsdom cannot establish.
+});
+
+test("Replay keeps playing and polling while another subpage is visible", async () => {
+  const fixture = controllerFixture();
+  const session = fixture.runtime.session;
+  (session.listPerformances as ReturnType<typeof vi.fn>).mockResolvedValue([
+    {performanceId: ids.performance, name: "Take 1", createdBpm: 120,
+      recordingArtifact: null, eventCount: 4},
+  ]);
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>).mockResolvedValue({
+    replayId: "replay-1", state: "playing", resolvedRevision: 7,
+    eventCursor: 0, eventCount: 4, projectRevision: null,
+  });
+  (session.stopPerformanceReplay as ReturnType<typeof vi.fn>).mockResolvedValue({
+    replayId: "replay-1", requestId: "stop-replay", state: "stopped", resolvedRevision: 7,
+    eventCursor: 0, eventCount: 4, replayed: false, projectRevision: null,
+  });
+  renderSurface(fixture);
+  selectPerformPage("Replay");
+  await userEvent.click(await screen.findByRole("button", {name: "Replay Take 1"}));
+  selectPerformPage("Slots");
+  expect(fixture.controller.getState().replay?.state).toBe("playing");
+  expect(session.stopPerformanceReplay).not.toHaveBeenCalled();
+  await waitFor(() => expect(session.queryPerformanceReplayStatus).toHaveBeenCalled());
+  selectPerformPage("Replay");
+  expect(screen.getByRole("status", {name: "Replay status"}).textContent).toContain("playing");
+  await userEvent.click(screen.getByRole("button", {name: "Stop Replay"}));
+  expect(session.stopPerformanceReplay).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("status", {name: "Replay status"}).textContent).toContain("stopped");
+});
+
+
+test("launch groups keep all sixteen addresses and the selected group across pages", async () => {
+  const {fixture} = renderSurface();
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  const labels: string[] = [];
+  for (const first of [1, 5, 9, 13]) {
+    await userEvent.click(screen.getByRole("button", {name: `Pattern slots ${first} to ${first + 3}`}));
+    const slots = screen.getAllByRole("button", {name: /^Launch Pattern /});
+    expect(slots).toHaveLength(4);
+    labels.push(...slots.map(slot => slot.getAttribute("aria-label")!));
+    for (const slot of slots) await userEvent.click(slot);
+  }
+  expect(labels).toEqual(Array.from({length: 16}, (_, index) => `Launch Pattern ${index + 1}`));
+  expect(fixture.runtime.calls.launch.mock.calls.map(([request]) => request.patternSlot))
+    .toEqual(Array.from({length: 16}, (_, index) => index));
+  selectPerformPage("Slots");
+  selectPerformPage("Live");
+  expect(screen.getByRole("button", {name: "Pattern slots 13 to 16"}).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", {name: "Launch Pattern 16"})).toBeTruthy();
 });

@@ -673,8 +673,8 @@ button:disabled { color: #737b87; }
 }
 .perform-fx label { display: grid; justify-items: center; gap: .5rem; }
 .perform-fx input[type="range"] {
-  block-size: 10rem;
-  inline-size: 2.5rem;
+  inline-size: 10rem;
+  block-size: 44px;
   accent-color: #b7ffc5;
   writing-mode: vertical-lr;
   direction: rtl;
@@ -1752,7 +1752,7 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   font-variant-numeric: tabular-nums;
 }
 .hardware-workspace .perform-fader input[type="range"] {
-  block-size: 120px;
+  inline-size: 120px;
   accent-color: var(--creator-lime);
 }
 .hardware-workspace .perform-fx-more {
@@ -1780,7 +1780,7 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   letter-spacing: .06em;
 }
 .hardware-workspace .perform-fx-more-bank input[type="range"] {
-  block-size: 80px;
+  inline-size: 80px;
   accent-color: var(--creator-blue);
 }
 .hardware-workspace .perform-hold {
@@ -1894,4 +1894,70 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .sequence-overview-names li[data-current-pad] {
   outline: 1px solid var(--creator-lime);
   outline-offset: -1px;
+}
+
+
+/* Perform navigation stays inside the sole touch scroller. */
+.perform-page-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--creator-base);
+}
+.hardware-workspace .perform-page-nav button {
+  min-width: 0;
+  min-height: 44px;
+  padding-inline: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.hardware-workspace .perform-page-nav button[aria-current="page"] {
+  background: var(--creator-lime);
+  color: var(--creator-base);
+}
+
+/* Four launch groups keep every real slot reachable beside live FX. Group
+   navigation is local presentation; it never remaps the physical sound Pads. */
+.hardware-workspace .perform-surface { gap: 8px; }
+.perform-launch-groups,
+.perform-fx-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.perform-fx-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hardware-workspace .perform-launch-groups button {
+  min-height: 44px;
+  padding: 4px;
+  display: grid;
+  align-content: center;
+  font-size: 10px;
+}
+.hardware-workspace .perform-launch-groups button[aria-pressed="true"] {
+  border-color: var(--creator-lime);
+  color: var(--creator-lime);
+}
+.hardware-workspace .perform-patterns,
+.hardware-workspace .perform-fx { padding: 8px; gap: 8px; }
+.hardware-workspace .perform-fader { padding: 8px; }
+.hardware-workspace .perform-fader input[type="range"] { inline-size: 80px; }
+.hardware-workspace .perform-fx-actions button { min-height: 44px; min-width: 0; width: 100%; }
+
+.hardware-workspace .perform-surface[data-page="live"] {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+}
+.hardware-workspace .perform-surface[data-page="live"] > * { grid-column: 1 / -1; }
+.hardware-workspace .perform-surface[data-page="live"] > .perform-patterns { grid-column: 1; }
+.hardware-workspace .perform-surface[data-page="live"] > .perform-fx { grid-column: 2; align-self: start; }
+.hardware-workspace .perform-launch-groups,
+.hardware-workspace .perform-pattern-slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hardware-workspace .perform-live-faders { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.hardware-workspace .perform-fx-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hardware-workspace .perform-fx-more-bank { grid-template-columns: minmax(0, 1fr); padding: 4px; }
+
+.hardware-workspace .perform-fader { grid-template-columns: minmax(0, 1fr); padding-inline: 4px; }
+.hardware-workspace .perform-fx-actions button { font-size: 10px; padding-inline: 4px; }
+.hardware-workspace .perform-patterns output { font-size: 10px; overflow-wrap: anywhere; }
+
+.hardware-console > [aria-label="Touch workspace"]:has(.perform-surface) {
+  scroll-padding-block-start: 52px;
 }

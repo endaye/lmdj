@@ -130,7 +130,14 @@ Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页
 - 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
 - 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
 
-Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。Pattern 槽与 Filter/Delay 并排，HOLD 和 More FX 位于推子下方。
+
+- **Live**：16 个 Pattern 启动槽、Filter/Delay、FX / MORE、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
+- **Slots**：Pattern Assign/Clear/Move 和 revision；选项在切页后保留。
+- **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
+- **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
+
+子页切换保留录制 session、回放轮询、HOLD、名称草稿和 FX / MORE 展开状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
 
 FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。折叠 FX / MORE 或卸载时强制释放未闭合手势。HOLD 是链路级开关，同样随时可切换。
 

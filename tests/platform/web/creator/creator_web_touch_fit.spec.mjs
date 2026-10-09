@@ -1,7 +1,7 @@
 import {fileURLToPath} from "node:url";
 import {expect, test} from "@playwright/test";
 import {waitForBootProject} from "./fixtures/creator_boot.mjs";
-import {showSequenceLayer, showSamplePage} from "./fixtures/creator_navigation.mjs";
+import {showSequenceLayer, showSamplePage, showPerformPage, showPatternLaunchGroup} from "./fixtures/creator_navigation.mjs";
 
 const captureFile = fileURLToPath(new URL(
   "./fixtures/capture-440hz-2s-mono-48k.wav", import.meta.url,
@@ -98,6 +98,32 @@ test("Perform and Sound Sets use the outer touch scroller", async ({page}) => {
   await page.getByRole("button", {name: "FX / MORE", exact: true}).click();
   await expectTouchFits(page);
   await expect(page.locator(".perform-surface")).toHaveCSS("overflow-y", "visible");
+  await expect(page.getByRole("button", {name: "Bank B", exact: true})).toHaveCount(1);
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
+    {width: 768, height: 600}]) {
+    await page.setViewportSize(viewport);
+    for (const name of ["Live", "Slots", "Takes", "Replay"]) {
+      await showPerformPage(page, name);
+      await expectTouchFits(page);
+      const pages = page.getByRole("navigation", {name: "Perform pages"});
+      await expectControlFits(page, pages.getByRole("button", {name: "Live", exact: true}));
+      await expectControlFits(page, pages.getByRole("button", {name: "Replay", exact: true}));
+      if (name === "Live") {
+        const slots = page.getByRole("button", {name: /^Launch Pattern /});
+        for (let index = 1; index <= 16; index += 1) {
+          await showPatternLaunchGroup(page, index);
+          await expect(slots).toHaveCount(4);
+          await expectControlFits(page, page.getByRole("button", {name: `Launch Pattern ${index}`, exact: true}));
+        }
+        await expectControlFits(page, page.getByRole("slider", {name: "Filter", exact: true}));
+      } else if (name === "Slots") {
+        await expectControlFits(page, page.getByRole("button", {name: "Move Pattern", exact: true}));
+      } else if (name === "Takes") {
+        await expectControlFits(page, page.getByRole("button", {name: "Record Performance", exact: true}));
+      }
+      await expectTouchFits(page);
+    }
+  }
   await keys.getByRole("button", {name: "Project", exact: true}).click();
   await page.getByRole("button", {name: "Sound Sets", exact: true}).click();
   await expectTouchFits(page);
@@ -154,4 +180,50 @@ test("Sample empty and assigned controls stay inside the touch panel", async ({p
     await expect(page.getByRole("slider", {name: "Pad B01 Volume", exact: true})).toHaveCount(0);
     await expectTouchFits(page);
   }
+});
+
+
+test("Perform live faders and HOLD fit the first screen without overlapping", async ({page}) => {
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Perform", exact: true}).click();
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
+    {width: 768, height: 600}]) {
+    await page.setViewportSize(viewport);
+    const touch = page.getByTestId("touch-workspace");
+    await touch.evaluate(element => { element.scrollTop = 0; });
+    const boundary = await touch.boundingBox();
+    const filter = await page.getByRole("slider", {name: "Filter", exact: true}).boundingBox();
+    const delay = await page.getByRole("slider", {name: "Delay", exact: true}).boundingBox();
+    expect(filter.x + filter.width).toBeLessThanOrEqual(delay.x);
+    for (const name of ["Filter", "Delay"]) {
+      const box = await page.getByRole("slider", {name, exact: true}).boundingBox();
+      expect(box.height).toBeGreaterThan(box.width);
+      expect(box.x).toBeGreaterThanOrEqual(boundary.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(boundary.x + boundary.width);
+      expect(box.y).toBeGreaterThanOrEqual(boundary.y);
+      expect(box.y + box.height).toBeLessThanOrEqual(boundary.y + boundary.height);
+    }
+    for (const name of ["HOLD", "FX / MORE"]) {
+      const box = await page.getByRole("button", {name, exact: true}).boundingBox();
+      expect(box.y + box.height).toBeLessThanOrEqual(boundary.y + boundary.height);
+    }
+    await expectTouchFits(page);
+  }
+});
+
+
+test("switching Perform pages starts at the new page's controls", async ({page}) => {
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Perform", exact: true}).click();
+  await showPerformPage(page, "Slots");
+  const touch = page.getByTestId("touch-workspace");
+  await touch.hover();
+  await page.mouse.wheel(0, 1200);
+  await expect.poll(() => touch.evaluate(element => element.scrollTop)).toBeGreaterThan(100);
+  await showPerformPage(page, "Live");
+  // The page may start below the retained default-sound failure banner; its
+  // first control row, not the prior management form's offset, is the target.
+  await expect.poll(() => page.getByRole("navigation", {name: "Perform pages"})
+    .evaluate(element => element.parentElement.getBoundingClientRect().top -
+      element.closest('[data-testid="touch-workspace"]').getBoundingClientRect().top))
+    .toBeGreaterThanOrEqual(-1);
+  await expectControlFits(page, page.getByRole("button", {name: "Launch Pattern 1", exact: true}));
 });

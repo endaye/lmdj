@@ -66,6 +66,10 @@ Pad 正在下载或处理时按它不会出声；想换成别的声音，先删�
 
 ## 6. 现场演奏（Perform）
 
+触摸屏默认打开 **Live**。用 **Slots** 分配、清除和移动 Pattern 槽；在 **Takes** 命名、保存、丢弃或导出演奏录音；在 **Replay** 回放已有 Performance 或处理恢复候选。左侧 Bank 和声音 Pad 驱动同一当前 Bank，触摸屏不再重复 Bank 按钮。Live 的 16 个启动键是 Pattern 槽，按 1–4、5–8、9–12、13–16 四组切换；组按钮显示排队和播放状态，右侧仍可操作 Filter/Delay。它们不是另一套声音 Pad。
+
+子页切换保留录音、回放和 HOLD。按住 FX 时先松手或取消，再切页；播放中的 **Stop Replay** 始终可用。演奏录音停止后，点 **Review recording** 进入 Takes。Pattern 启动沿用当前录制 session 的准入规则；本次重组没有新增独立于录制的 Pattern 启动能力。
+
 - 随时按住效果（Filter、Delay、Reverb、Stutter 等）即可生效，松开就取消，多个手指可以叠加多个效果；打开 **HOLD** 后，松手效果也会保持。
 - 切换 Pattern 会在下一小节生效，节奏不会断。
 - 想把带效果的声音存下来：按住一个空 Pad，来源选"现在听到的声音"。
