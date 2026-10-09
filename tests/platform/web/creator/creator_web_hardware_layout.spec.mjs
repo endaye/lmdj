@@ -347,7 +347,7 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
 // Desktop Final plan T1b: the console face ships inside the stylesheet as a
 // data: URL, so it needs the distribution CSP's `font-src data:` and no
 // network. A blocked or missing face reports "error" or nothing here.
-test("the console renders in the bundled IBM Plex Mono that the CSP admits", async ({page}) => {
+test("the console loads both bundled font roles under its distribution CSP", async ({page}) => {
   const violations = [];
   page.on("console", (message) => {
     if (/Content Security Policy|font-src/i.test(message.text())) violations.push(message.text());
@@ -357,10 +357,66 @@ test("the console renders in the bundled IBM Plex Mono that the CSP admits", asy
   const loaded = await page.evaluate(async () =>
     (await document.fonts.load('12px "IBM Plex Mono"')).map((face) => face.status));
   expect(loaded).toEqual(["loaded"]);
+  const actionLoaded = await page.evaluate(async () =>
+    (await document.fonts.load('500 12px "Space Grotesk"')).map((face) => face.status));
+  expect(actionLoaded).toEqual(["loaded"]);
   const family = await page.getByTestId("hardware-console")
     .evaluate((element) => getComputedStyle(element).fontFamily);
   expect(family).toMatch(/^"IBM Plex Mono"/);
   expect(violations).toEqual([]);
+});
+
+// The hit box is laid out at its full size, rather than enlarged over a
+// neighbour. Read the painted face inset and the transformed target geometry;
+// a CSS class alone cannot prove either property. Sequence keeps its approved
+// full-height Mono controls. Physical iPad ergonomics remain a separate check.
+test("compact actions keep their font, visible face and separate hit boxes after scaling", async ({page}) => {
+  await page.goto("/");
+  await waitForBootProject(page);
+  const touch = page.getByTestId("touch-workspace");
+  const keys = page.getByTestId("physical-controls");
+  for (const viewport of [{width:1440, height:900}, {width:1280, height:600}, {width:768, height:600}]) {
+    await page.setViewportSize(viewport);
+    for (const mode of ["Project", "Sample", "Sequence", "Perform"]) {
+      await keys.getByRole("button", {name:mode, exact:true}).click();
+      await touch.evaluate(element => { element.scrollTop = 0; });
+      // Mode effects may scroll the touch panel, never its scaled stage.
+      await expectConsoleFitsStage(page);
+      const group = mode === "Project" ? touch.locator(".project-open-row")
+        : mode === "Sample" ? touch.getByRole("navigation", {name:"Sample pages"})
+        : mode === "Perform" ? touch.getByRole("navigation", {name:"Perform pages"})
+        : touch.locator(".sequence-layer");
+      await expect(group).toBeVisible();
+      const rendered = await group.locator("button").evaluateAll(elements => elements.map(element => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        const inset = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+        return {text:element.textContent, height:element.offsetHeight,
+          face:element.offsetHeight - inset, family:style.fontFamily,
+          size:style.fontSize, clip:style.backgroundClip, rect:rect.toJSON()};
+      }));
+      expect(rendered.length).toBeGreaterThan(1);
+      for (const button of rendered) {
+        expect(button.height, `${mode}: ${button.text}`).toBe(44);
+        expect(button.face).toBe(mode === "Sequence" ? 44 : 36);
+        expect(button.family).toMatch(mode === "Sequence" ? /^"IBM Plex Mono"/ : /^"Space Grotesk"/);
+        if (mode !== "Sequence") {
+          expect(button.size).toBe("12px");
+          expect(button.clip).toBe("padding-box");
+        }
+      }
+      for (let i=0; i<rendered.length; i++) for (let j=i+1; j<rendered.length; j++) {
+        const a=rendered[i].rect, b=rendered[j].rect;
+        const intersection=Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left)) *
+          Math.max(0, Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));
+        expect(intersection, `${mode}: ${rendered[i].text} / ${rendered[j].text}`).toBe(0);
+      }
+      const fit = await touch.evaluate(element => ({width:element.clientWidth, content:element.scrollWidth}));
+      expect(fit.content).toBeLessThanOrEqual(fit.width);
+      const overviewFamily = await page.getByTestId("overview-display").evaluate(element => getComputedStyle(element).fontFamily);
+      expect(overviewFamily).toMatch(/^"IBM Plex Mono"/);
+    }
+  }
 });
 
 async function expectOverviewFits(overview, context) {
