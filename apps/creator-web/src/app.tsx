@@ -1062,6 +1062,18 @@ function Workspace({
     }
   };
 
+  const refreshCommittedProjectProjection = async (committedRevision: number) => {
+    // The authoring tail can commit again before the previous refresh renders.
+    // Advance the reducer before minting its token, using committed Truth rather
+    // than the render ref; the reducer's identity/revision guards stay intact.
+    dispatch({type: "project-revision-updated", revision: committedRevision});
+    try {
+      await refreshPerformProject(committedRevision);
+    } catch {
+      // The refresh reports its own failure. Never repeat a committed mutation.
+    }
+  };
+
   const refreshCandidateProject = async (projectId: string, committedRevision?: number) => {
     if (!isSampleSession(session) || stateRef.current.project.current?.projectId !== projectId) {
       throw new Error("Candidate Project is no longer open");
@@ -2107,14 +2119,7 @@ function Workspace({
         if (result === null) return;
         sequenceAuthoringRevision.current = result.committedRevision;
         dispatchTransport({type: "revision", revision: result.committedRevision});
-        try {
-          await refreshPerformProject();
-        } catch {
-          dispatch({
-            type: "project-revision-updated",
-            revision: result.committedRevision,
-          });
-        }
+        await refreshCommittedProjectProjection(result.committedRevision);
         if (result.snapshotError !== null) {
           // The edit committed; only the in-place swap failed. Say so
           // instead of letting the grid look unheard.
@@ -2253,11 +2258,7 @@ function Workspace({
       const result = await commit(session, patternId, sequenceAuthoringRevision.current);
       sequenceAuthoringRevision.current = result.committedRevision;
       dispatchTransport({type: "revision", revision: result.committedRevision});
-      try {
-        await refreshPerformProject();
-      } catch {
-        dispatch({type: "project-revision-updated", revision: result.committedRevision});
-      }
+      await refreshCommittedProjectProjection(result.committedRevision);
       // The copy is durable Truth once committed: it is selected even when
       // making it runtime-current fails, and that failure is reported on its
       // own after any failed swap rather than as a failed copy.
@@ -2330,14 +2331,7 @@ function Workspace({
         });
         sequenceAuthoringRevision.current = result.committedRevision;
         dispatchTransport({type: "revision", revision: result.committedRevision});
-        try {
-          await refreshPerformProject();
-        } catch {
-          dispatch({
-            type: "project-revision-updated",
-            revision: result.committedRevision,
-          });
-        }
+        await refreshCommittedProjectProjection(result.committedRevision);
       } catch (error) {
         const code = reportFailure("Set Pad colour", error);
         setPadColourError({slot, message: userMessage(code, errorDetails(error)).message});

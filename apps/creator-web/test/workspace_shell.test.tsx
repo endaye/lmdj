@@ -12,6 +12,7 @@ import {SampleSurface} from "../src/components/sample_surface";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import type {
   CreatorRuntimeSession,
+  CreatorSequenceRuntimeSession,
   CreatorSampleRuntimeSession,
   CreatorCandidateRuntimeSession,
   CandidateJobView,
@@ -3369,7 +3370,73 @@ test("a Pad colour queued behind another names the revision that commit left", a
   // Truth accepted both: the second was not refused as a stale revision.
   await waitFor(() => expect(fixture.revision).toBe(5));
   expect(fixture.padColours.get(0)?.colour_override).toBe(3);
+  await waitFor(() => expect(screen.getByRole("button", {name: /^Pad A01 /})
+    .getAttribute("data-pad-colour")).toBe("3"));
   expect(controls.queryByRole("alert")).toBeNull();
+});
+
+test("a grid edit queued behind a Pad colour shows both committed changes", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  fixture.padColours.set(0, {category: "bass", colour_override: null, colour: 1});
+  type EditRequest = Parameters<CreatorSequenceRuntimeSession["editPatternEvents"]>[0];
+  let events: EditRequest["put"] = [];
+  const requests: Array<{kind: string; expectedRevision: number}> = [];
+  const commit = (kind: string, expectedRevision: number) => {
+    requests.push({kind, expectedRevision});
+    if (expectedRevision !== fixture.revision) {
+      throw Object.assign(new Error("stale"), {code: "REVISION_CONFLICT", details: {}});
+    }
+    fixture.revision += 1;
+    return {committedRevision: fixture.revision, projectRevision: fixture.revision,
+      replayed: false};
+  };
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: async () => {
+      const inspected = fixture.inspectProject();
+      return {...inspected, project: {...inspected.project, patterns: {
+        [listedSummary.patternId]: {bars: 1, events: events.map((event) => ({
+          slot: {bank: Math.floor(event.slot / 16), pad: event.slot % 16},
+          onset_tick: event.onsetTick, duration_tick: event.durationTick,
+          velocity: event.velocity,
+        }))},
+      }}};
+    },
+    setPadColour: async (request: {slot: number; colour: number | null;
+      expectedRevision: number}) => {
+      const result = commit("colour", request.expectedRevision);
+      fixture.padColours.set(request.slot, {
+        category: "bass", colour_override: request.colour, colour: request.colour ?? 1,
+      });
+      return result;
+    },
+    editPatternEvents: async (request: EditRequest) => {
+      const result = commit("grid", request.expectedRevision);
+      events = request.put;
+      return {...result, patternId: request.patternId, publication: "published" as const,
+        patternPublication: {generation: 2, activationFrame: 0}, snapshotError: null};
+    },
+  });
+  render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  // Queue both before the first commit renders. Pointer events drive the
+  // component's gesture mapping; this does not claim native input acceptance.
+  fireEvent.click(screen.getByRole("button", {name: "MELODIC colour"}));
+  fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  const lane = document.querySelector('.sequence-grid-row[data-pad="0"] .sequence-grid-lane')!;
+  fireEvent.pointerDown(lane, {pointerId: 1, clientX: 0, clientY: 0, button: 0});
+  fireEvent.pointerUp(window, {pointerId: 1});
+
+  await waitFor(() => expect(requests).toEqual([
+    {kind: "colour", expectedRevision: 3}, {kind: "grid", expectedRevision: 4},
+  ]));
+  expect(fixture.revision).toBe(5);
+  expect(events).toEqual([{slot: 0, onsetTick: 0, durationTick: 240, velocity: 100}]);
+  await waitFor(() => expect(screen.getByTestId("sequence-grid-note")
+    .getAttribute("data-onset-tick")).toBe("0"));
+  expect(screen.getByRole("button", {name: /^Pad A01 /})
+    .getAttribute("data-pad-colour")).toBe("2");
 });
 
 test("a refused Pad colour is reported and the Pad keeps its Truth colour", async () => {

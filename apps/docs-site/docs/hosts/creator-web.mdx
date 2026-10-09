@@ -572,6 +572,12 @@ other conflict or refusal restores the projection from Truth and shows the
 reason; a committed edit whose swap fails surfaces the typed snapshot error
 honestly. Undo and Redo are the existing stop-only history controls.
 
+Grid edits, Pattern structure changes and Pad colour changes share a serialized
+authoring queue. Each successful commit advances the Project revision before
+refreshing its projection with that committed revision, so consecutive changes
+remain visible even when the preceding refresh has not rendered yet. Project,
+Pattern and refresh-token identity checks still reject stale projections.
+
 The upper display follows the 2026-10-04 Sequence hardware UI decision. It
 draws three things:
 
