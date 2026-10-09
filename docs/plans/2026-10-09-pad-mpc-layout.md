@@ -24,6 +24,8 @@ Grid；Sound Set preview 也直接遍历 `selectPadPlan`。事件已传稳定槽
   更新现有 DOM 键帽顺序到新的空间排列。
 - `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`：实际
   几何角落、命中目标、Tab 顺序、Q 提示，覆盖 A–D Bank。
+- `tests/platform/web/creator/creator_web_accessibility.spec.mjs`：保留完整
+  实体控制区 Tab 旅程，将首个 Pad 的预期同步到屏幕左上角 A13。
 - `docs/design/2026-09-29-creator-user-workflow-guide.md`：用户的排列说明。
 - `apps/docs-site/docs/hosts/creator-web.mdx`：当前行为及设备验收边界。
 - 本计划。
