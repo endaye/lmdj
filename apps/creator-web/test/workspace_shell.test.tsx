@@ -134,7 +134,8 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
     })).toBeTruthy();
   }
   expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
-    .toEqual(keys);
+    .toEqual(["G", "H", "J", "K", "A", "S", "D", "F",
+      "T", "Y", "U", "I", "Q", "W", "E", "R"]);
 
   expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
   // The brand mark is the System entry and the rail's first stop.

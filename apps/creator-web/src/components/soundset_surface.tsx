@@ -4,7 +4,7 @@ import {useCallback, useEffect, useReducer} from "react";
 
 import {BankSelector} from "./bank_selector";
 import type {Bank} from "../state/creator_state";
-import {bankName, slotAddress} from "../state/view_model";
+import {PAD_MATRIX_ORDER, bankName, slotAddress} from "../state/view_model";
 import {
   initialSoundSetState,
   reduceSoundSet,
@@ -435,7 +435,7 @@ export function SoundSetSurface({
                 {collisions.length === 1 ? "Pad" : "Pads"} in the way
               </p>
               <div className="pad-grid" aria-label="Proposed Bank mapping">
-                {padPlan.map((outcome) => (
+                {PAD_MATRIX_ORDER.map((localPad) => padPlan[localPad]!).map((outcome) => (
                   <div
                     className="pad"
                     key={outcome.pad}
