@@ -2528,7 +2528,8 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_connect_direct(
-    std::int32_t audio_context_handle) {
+    std::int32_t audio_context_handle,
+    std::int32_t output_destination_handle) {
   if (!emscripten_is_main_browser_thread() ||
       web_manifest_terminal_failure.load(std::memory_order_acquire)) {
     return 0;
@@ -2536,7 +2537,7 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_connect_direct(
   auto* adapter = web_audio.load(std::memory_order_acquire);
   return adapter != nullptr &&
                  adapter->connect_direct_output_on_browser_main(
-                     audio_context_handle)
+                     audio_context_handle, output_destination_handle)
              ? 1
              : 0;
 }

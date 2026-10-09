@@ -309,6 +309,16 @@ export interface WebPerformanceCaptureSession {
   ): Promise<PerformanceMasterCapture>;
 }
 
+/** Host monitoring only: after the capture tap, never authoring or recorded PCM. */
+export interface MonitorOutputSession {
+  /** Linear amplitude percentage, 0..100; default 100. */
+  monitorVolume(): number;
+  /** Available after graph creation, null before activation or after close. */
+  monitorDestination(): AudioNode | null;
+  /** Synchronous, no activation or transport; invalid/terminal updates throw. */
+  setMonitorVolume(value: number): void;
+}
+
 /**
  * One synchronous sample of the session audio clock.
  *

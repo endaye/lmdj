@@ -74,7 +74,8 @@ class RealtimeAudioWorklet final {
       std::int32_t audio_context_handle,
       std::int32_t output_destination_handle) noexcept;
   bool connect_direct_output_on_browser_main(
-      std::int32_t audio_context_handle) noexcept;
+      std::int32_t audio_context_handle,
+      std::int32_t output_destination_handle = 0) noexcept;
   void complete_control_install(bool installed) noexcept;
   foundation::Result<void> begin_rendering() noexcept;
   foundation::Result<void> await_quiescent(

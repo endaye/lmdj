@@ -45,6 +45,16 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         super();
         this.sampleRate = options.sampleRate;
         this.state = "suspended";
+        this.currentTime = 0;
+        this.destination = {context: this};
+      }
+      createGain() {
+        return {
+          context: this,
+          gain: {setValueAtTime() {}, cancelAndHoldAtTime() {}, linearRampToValueAtTime() {}},
+          connect() {},
+          disconnect() {},
+        };
       }
       async resume() {
         this.state = "running";
@@ -113,6 +123,7 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
       }),
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
+        registerAudioNode: () => 2,
         audioCallbackHeartbeat: () => {
           if (callbackRunning) {
             callbackHeartbeat = (callbackHeartbeat + 1) >>> 0;

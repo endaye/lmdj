@@ -27,8 +27,8 @@
 | #1905 连续提交刷新丢失 | 已交付：#1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`，Issue closed。旧代码从滞后 render ref 取刷新 revision，现由 grid/structure/colour 成功路径传入已提交 revision；回归测试检查最终画面，不重复修复。 |
 | #1868 导入偶发停在 0 B | Issue open；尚未建立原因。R2 是条件调查，只有验收受阻时才启用，不把一次重跑通过当作修复。 |
 | #1873 测试问题仍未修 | 已反证：Issue closed，相关修复已合并；本 Goal 不重做。 |
-| #1822 其余控件映射已有决定 | 部分批准：owner 已批准下文 I1a 的 Sequence ENC1/↑/↓；原 T6 的 ENC2–4/左右键已交付。其余页与粗调步长仍待决定；Issue open。 |
-| 400 ms 规则已正式确认 | 原计划 T6 仍记录为待 owner 确认的提案。D2 需正式决定，不把实现存在当作产品批准。 |
+| #1822 其余控件映射已有决定 | 部分批准：I1a 的 Sequence 导航已交付；owner 进一步批准 I1b/I1c 的逐页 ENC1–3 与固定 ENC4 监听音量、SHIFT 细调。其他页方向键仍待决；Issue open。 |
+| 400 ms 规则已正式确认 | 本计划初始调查时尚未确认；owner 现已批准立即预览、400 ms 合并 authoring 保存及明确的取消边界，见 I1b/I1c。 |
 | D01/D03/D04 图示能力均可直接接线 | 部分反证：下文 C0 核实了可复用的复制与 Sample 编辑；MASTER、独立滤波参数、live Mute/Solo 及电平投影仍需 producer 工作。D01 自动保存/复制语义已有决定，不重新设计。 |
 | 合并/自动化可代替人工验收 | 不成立。原验收台账保留真实输入、听感、辅助技术和生命周期缺口；A1/A2 分开记录。 |
 
@@ -38,18 +38,18 @@
 
 ## Progress and order
 
-| ID | 工作 | 初始状态 | 依赖/完成条件 |
+| ID | 工作 | 当前状态 | 依赖/完成条件 |
 | --- | --- | --- | --- |
 | P0 | 本后续计划 | 已合并 | #1906 → `cd5fbf9290fba820139bfdc9d41b9166a7fe333b`；独立接管评审及修订已验证。 |
 | R1 | #1905 连续 authoring 提交刷新 | 已合并 | #1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`；red/green、完整 Creator lane、Portal 与当前头独立评审通过；不代表 A2 人工验收。 |
 | C0 | D2–D5 当前能力及决定边界调查 | 调查已记录 | 绑定下文 inspected revision；只更新本计划，不批准产品提案或实现 I Task。 |
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
-| D1 | #1822 统一原则及逐页映射 | 原则与 Sequence 已确认；其余页待决 | owner 已选统一原则；再逐页确定具体参数、当前 Pad、边界/播放/录音/SHIFT 行为。 |
-| D2 | 400 ms 连续旋钮提交 | 待 owner 决策 | 确认预览、提交、取消、离页、锁定、Undo 语义。 |
+| D1 | #1822 统一原则及逐页映射 | 全页旋钮已确认；其余方向键待决 | 执行 I1b/I1c；固定 ENC4 监听音量，ENC1–3 随页/组变化，SHIFT 细调。 |
+| D2 | 400 ms 连续旋钮提交 | 已确认；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；Perform 保持效果并按 HOLD 离页释放。 |
 | D3 | D01 Save / Save As / 未保存提示 | 语义已有决定；界面待确认 | 保留自动保存、复制新身份并打开副本的已交付流程；确认 D01 命名/入口，不能引入虚构的未保存状态。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | 能力已调查；待 owner 决策 | 区分已实现的导入/替换/trim 与新 Assign、参数细调入口；明确目标、单位/步长、Undo/Redo、取消/失败。 |
 | D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 能力已调查；待 owner 决策 | 明确作用域、Truth 与 live 状态归属、真实投影及 DSP 能力；producer 与 consumer 分 Task。 |
-| I1–I5 | D1–D5 的对应实现 | 等待相应决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
+| I1–I5 | D1–D5 的对应实现 | I1b/I1c 实施；其他范围等决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
 | A1 | 四页自动化与视觉核对 | 待验收 | I1–I5 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
 | V1 | 协调版本结算与 snapshot | 待实施 | 读取最终 manifests 和版本政策；独立 version Task、Portal snapshot 及合并后 provenance。 |
@@ -132,6 +132,80 @@ committed head 的完整 Creator lane；最终头仍重新执行该 lane。
 **Version Management:** Creator 新交互积累 MINOR debt，留待本计划 V1 协调
 结算；本 Task 不分配 Product Build。**Documentation impact: required** —
 `/hosts/creator-web/`、`/platform/input/`，同时记录新的产品决定。
+
+## I1b — Web monitoring output producer
+
+Owner 已批准 [三个页面旋钮与固定监听音量](../prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)，
+并分别确认 400 ms 取消边界、本设备音量记忆和 Perform 效果保持。
+该决定替代 D1 原则中上排统一视图/SHIFT 粗调；D2 的产品语义已确认，
+实现与验收尚未完成。其他页方向键、D3/D4/D5 其余问题不从此推导。
+
+**Premise dispositions before implementation:** fresh main 与 Task base 为
+`502932e345b621abc5533431e61adf0d0253a189`。#1909 已交付 Sequence 导航，
+不重做；#1822 open，唯一开放 PR #1904 为 audition 计划。检查 Runtime Session
+的实际 bootstrap、capture factory 与 processor-failure 分支：正常路径直达
+AudioContext destination，失败恢复调用固定直连 destination 的 bridge；同一
+注册表中 `registerAudioNode`/`startAudioWorklet` 已接入 tap，为正向控制。
+Session 完整公开返回对象无监听音量/目标接口；Creator metronome 同样直达
+destination。故监听 gain producer 仍缺失，须同步保持恢复路径和 capture 边界。
+
+**Behaviour:** Session 提供 0–100 的监听音量（默认 100）、读取值与 Host
+监听目标。可在 activation 前设置，AudioContext 创建时先应用，再连接任何
+发声路径；运行中短 ramp 平滑调节。master capture 位于 gain 前，tap 故障
+恢复也进入同一 gain；跨 context/无效目的地拒绝，重复恢复不叠加连接。
+关闭后拒绝修改并断开 gain。设备记忆、metronome 路由与旋钮 UI 属于 I1c。
+
+**Declared files:**
+
+- `packages/audio-runtime/include/lmdj/audio/web/realtime_audio_worklet.hpp`
+- `packages/audio-runtime/src/web/realtime_audio_worklet.cpp`
+- `packages/web-runtime-platform/src/bridge.cpp`
+- `packages/web-runtime-platform/src/web-runtime-pre.js`
+- `packages/web-runtime-platform/web/runtime_session.mjs`
+- `packages/web-runtime-platform/web/runtime_types.d.ts`
+- `packages/web-runtime-platform/web/performance_master_capture.mjs`
+- `packages/web-runtime-platform/test/runtime_session.test.mjs`
+- `packages/web-runtime-platform/test/performance_master_capture.test.mjs`
+- `tests/platform/web/audio/realtime_audio_worklet.spec.mjs`
+- `tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs`
+- `apps/docs-site/docs/platform/web-runtime.mdx`
+- `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`
+- `apps/docs-site/diagrams/web-runtime-platform.architecture.json`
+- `apps/docs-site/static/diagrams/web-runtime-platform.html`
+- `apps/docs-site/static/diagrams/web-runtime-platform.svg`
+- `docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md`
+- 本计划。
+
+**Lowest-tier tests and journeys:** Node Session tests bind pre-activation volume,
+normal graph, tap initialization/processor failure, repeat connections, invalid
+input and terminal cleanup to actual producer calls; master-tap controller tests
+assert gain is downstream and batch bytes unchanged. Real rebuilt AudioWorklet
+conformance exercises alternate same-context monitor destination, zero/half/full
+output energy, rejection of cross-context nodes, idempotent fallback and audible
+continuation. Existing activation/recovery/capture journeys remain intact. Run
+Portal check and exact clean-head selected batch-only lanes under issue-done;
+record platform-not-runnable and unperformed physical hearing honestly.
+
+**Version Management:** additive Web Session capability and Web Audio routing
+accumulate Web Platform/Audio Runtime MINOR debt for V1; no Product Build or
+persisted Contract change. **Documentation impact: required** — `/platform/web-runtime/`,
+`/core/modules/web-runtime-platform/`; update the source diagram in the same Task.
+
+**Source-shell fixture correction:** the full Web Host proof reaches the existing
+source-shell activation journey, whose injected AudioContext predates monitoring
+and has no `createGain`, destination or node registration. This fails activation
+at the newly required browser capability, before any lifecycle assertion. Keep
+the failed trace and update only that fake's Web Audio surface; preserve every
+activation, interruption, recovery and cleanup leg and the existing deadlines.
+
+## I1c — Creator contextual encoders (dependent on I1b)
+
+Deliver the approved per-page table, touch parameter groups and visible readback,
+SHIFT fine steps, device-local ENC4 memory, and metronome monitoring routing.
+Sample/BPM follow the approved 400 ms cancel/commit lifecycle; Perform uses owned
+live gestures retained through rest and group switches and released on page exit
+under HOLD. Before edits, refresh producer delivery and append exact consumer
+files, tests, steps, state transitions and independent review evidence here.
 
 ## P0 — ship this bounded plan
 
