@@ -335,17 +335,21 @@ Sample 使用四个子页，作用于同一个选中 Pad。**首次挂载默认 
 
 ### 4.8 Sound Sets
 
+触摸区分为 **Browse / Details / Target / Review**。Browse 保留 Catalog、缓存与拒绝列表；Details 提供许可、16 槽和试听；Target 选择独立的安装 Bank；Review 展示只读映射、冲突策略和确认。只有外层触摸区纵向滚动，步骤条保持可达。返回 Browse 保留选中的 Set，并恢复原 Inspect 控件的焦点与列表位置；切步骤不重新查询详情、不安装，也不隐含停止试听。
+
+目标变化会清除旧映射和策略；预览／安装请求未完成时锁住步骤、目标及策略，防止确认内容与请求不一致。安装始终使用预览时的 Bank 和 revision，若 Project 已变化，保留拒绝与 Refresh mapping 后重新确认的路径。许可与 attribution 在详情、目标和确认页都可见。
+
 | 状态 | 控件／操作 | 直接效果 | 上屏 | Pad 区 | 触摸区 | 声音／保存 |
 | --- | --- | --- | --- | --- | --- | --- |
 | Catalog 可查询 | Refresh Catalog | 重新列出可用与不可用 Set | — | — | Catalog／离线缓存提示更新 | 不安装；离线时可列 Workspace 缓存 |
-| 有 Set | Inspect Set | 读取 Set 详情 | — | — | 名称、许可、16 槽、demo、目标 Bank 面板 | 不写 Project |
+| 有 Set | Inspect Set | 读取 Set 详情 | — | — | Details 的名称、许可、16 槽与 demo | 不写 Project |
 | 有 demo／非空声音槽 | Audition set demo／声音名称按钮 | 试听 demo 或单个 Set 声音 | 无 Set 波形总览 | 演奏 Pad 内容保持 | 错误可提示；没有持久的 now-playing 状态 | 不先安装；第二次试听由引擎替换前次 |
 | 任意试听态 | Stop audition | 请求停止 Set 试听 | — | — | 失败时显示错误 | 不停止全局 Pattern、不删除 Set |
-| 详情打开 | Install target Bank A–D | 只选安装目标 | 演奏 Bank 不变 | 下边演奏 Bank 不变 | 目标 Bank 与旧映射方案清理／重选 | 与左栏 Bank 键不是同一个状态 |
-| 已选 Set／目标且有 Project | Preview mapping | 查询目标 Bank 的 16 槽方案和占用冲突 | — | 演奏 Pads 不变 | 方案格显示 Install／Occupied／Empty in Set | 方案格是只读预览，不是可演奏 Pad |
+| Target 页 | Install target Bank A–D | 只选安装目标 | 演奏 Bank 不变 | 下边演奏 Bank 不变 | 目标 Bank 与旧映射方案清理／重选 | 与左栏 Bank 键不是同一个状态 |
+| 已选 Set／目标且有 Project | Preview mapping | 查询目标 Bank 的 16 槽方案和占用冲突 | — | 演奏 Pads 不变 | Review 显示 Install／Occupied／Empty source／Unmapped，空源不改 Pad | 方案格是只读预览，不是可演奏 Pad |
 | 映射有冲突 | Keep／Replace 单选 | 选择保留现有占用 Pad／替换 | — | 未确认前原内容保持 | 安装数量／可提交状态变化 | 未选择策略时不能提交碰撞安装 |
 | 方案可提交 | Install into Bank | 执行确认的映射并回读 | 修订／Pad／Asset 数按结果更新 | 当前 Bank 若为目标，声音／颜色更新 | Installed 回执或冲突／失败 | 空 Set 槽不清原 Pad；Replace 按 Pad 颜色保留规则 |
-| 详情／错误 | Close／Dismiss | 收详情／清错误 | — | — | 对应局部面板收回 | 不撤销已完成安装，不隐含 Stop audition |
+| 详情／错误 | Browse／Dismiss | 返回保留选中的列表／清错误 | — | — | 列表焦点恢复／错误收回 | 不撤销已完成安装，不隐含 Stop audition |
 | Sound Sets 页 | Back to Project | 回 Project | Project 总览 | 演奏 Bank 保留 | Project 页面 | 不安装未确认方案 |
 
 ### 4.9 Slice

@@ -67,6 +67,7 @@ export type SoundSetAction =
   | {type: "installing"}
   | {type: "installed"; receipt: Readonly<SoundSetInstallReceipt>}
   | {type: "failed"; error: SoundSetError}
+  | {type: "audition-failed"; error: SoundSetError}
   | {type: "error-dismissed"};
 
 // A preview is a statement about one Set on one Bank at one revision. Anything
@@ -130,6 +131,10 @@ export function reduceSoundSet(
       };
     case "failed":
       return {...state, phase: "browsing", lastError: action.error};
+    // Audition is independent of preview/install ownership; a late failure
+    // must not unlock controls belonging to an in-flight authoring request.
+    case "audition-failed":
+      return {...state, lastError: action.error};
     case "error-dismissed":
       return {...state, lastError: null};
   }

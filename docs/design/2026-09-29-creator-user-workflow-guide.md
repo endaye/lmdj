@@ -37,7 +37,7 @@ Creator 像一台乐器：
   - 单次最长 60 秒；完全没有声音的录音不会被保存。
 - **导入文件**：**点一下空 Pad**，选一个音频文件（WAV、MP3、M4A、AAC、FLAC）。也可以直接把文件拖到 Pad 上。
 - **歌曲素材（目标流程）**：像导入普通文件一样导入到一个 Pad，然后在 Sample 编辑里用 **Tools → Split Stems** 拆成鼓、人声、贝斯、其他，或用 **Tools → Chop** 切成多段。先试听，再确认把选中的声音放到建议的空 Pad 上；原 Pad 默认保留。处理时可继续演奏。首轮 Stem 评测只覆盖短片段，整曲支持尚待验证；当前交付边界见 [Stem/Slice 计划](../plans/2026-10-03-stem-slice-provider-delivery.md)。
-- **声音包**：在 Project 页安装更多声音包到任意 Bank。
+- **声音包**：从 Project 打开 Sound Sets，在 **Browse** 选包，在 **Details** 试听，在 **Target** 选安装 Bank，再到 **Review** 看映射并确认。有占用冲突时明确选择 Keep 或 Replace；空源槽不会清空原 Pad。安装目标不会切换正在演奏的 Bank。返回 Browse 会保留选中的包和列表位置；改变目标后需要重新查看映射。
 
 ## 4. 调整声音（Sample）
 

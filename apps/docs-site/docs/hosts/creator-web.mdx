@@ -70,6 +70,21 @@ Sequence 的 ↑/↓ 仍按 A01–D16 选择当前 Pad。自动化验证显示�
 
 阻断该 surface 的三个缺陷都已修复并合并。[#900](https://github.com/endaye/lmdj/issues/900) 曾使本 Build 产出的任何 Project 都无法导入——浏览器侧 Bundle reader 的枚举停在 `1.1.0` / v3，而导入 Bundle 是浏览器获得 Project 的唯一途径；[#901](https://github.com/endaye/lmdj/issues/901) 的 `connect-src 'self'` 曾拦截一切跨源 Catalog，Creator 现在通过同源前缀 `/soundset-catalog/` 取用，由 Host 转发到部署配置的上游，页面不再获得任何外部 origin，该指令对 OPFS 中 Project 与音频的外泄保护保持原样；[#902](https://github.com/endaye/lmdj/issues/902) 曾使 Workspace Set Store 在浏览器存储平台上从不发布。`tests/platform/web/creator/creator_web_soundset.spec.mjs` 的六腿 journey 现已无援转绿，并在两台独立搭建的环境上各跑通一次；其断言经逐条扰动验证，包括一次零写入 `keep` 安装不得推进 revision。
 
+### Sound Set 分步安装
+
+从 Project 进入 Sound Sets 后，通过 **Browse → Details → Target → Review** 操作。
+Browse 显示 Catalog、缓存和不可用 Set；Details 保留全部 16 槽与 demo／单槽试听、
+Stop audition；Target 选择安装 Bank；Review 显示只读映射和确认。
+步骤切换只改变视图，返回 Browse 恢复选中的 Inspect 按钮焦点与列表位置。
+许可和 attribution 在详情与安装确认中保持可见，内容仅沿外层触摸区纵向滚动。
+
+映射按 MPC 地址顺序排列，明确区分 Install、Occupied、Empty source（原 Pad 不变）
+与 Unmapped；没有可演奏 Pad 的外观或点击行为。目标 Bank 与左侧演奏 Bank 独立。
+改目标会作废旧映射及 Keep／Replace 选择；预览和安装期间锁住步骤、目标与策略。
+有冲突时仍需明确选择 Keep 或 Replace，未确认不会修改 Project。
+安装发送预览时的 Bank 与 revision；过期或失败时保留错误、Refresh mapping 和重试，
+不把当前 revision 偷换成已确认的版本。成功回执与原有保存重开行为保持不变。
+
 ## 创作边界
 
 当前 UI 提供 browser-local Project discovery/open、New Project（经共享 Runtime Session 在本机创建空 Project：120 BPM、1 Bar 初始 Pattern，创建后列入 Local Projects 并进入 Sample）、Duplicate Project（自动保存下取代 Save As：Host 以新身份复制当前 Project 的 Project Truth 与 Asset，原 Project、它的 writer 与 Runtime 不受影响，随后 Creator 打开副本——副本 revision 为 0，并成为本设备记住的 Project；音频运行或其他 Project action 进行中时不可用；复制被拒绝（另一标签页占用、未完成录音、播放或 Sample 导入进行中）时原 Project 保持打开，拒绝原因内联显示在 Project 页；副本已存但打开失败时照常报告打开错误，并把副本列入 Local Projects）、portable Project Bundle import、64 个稳定 Pad Slot、Sample Surface 与 Sequence Surface。长素材在读内容前检查 100 MiB source ceiling，可判定的声道/时长在 decode 前拒绝，decode 后再精确验证最多 2 声道和 43,200,000 帧；取消、替换、提交成功、Project 切换和后台恢复都会释放完整源缓冲。Capture 与导入选区都使用 `sample.quota` 返回的 target-exclusive effective headroom，不再有固定单 Pad 帧数上限；冲突或配额拒绝保留源与选区。Pointer、Keyboard、MIDI 经同一 Input Controller 同时进入 live trigger 和全局 Pattern transport 的 post-enqueue admission：candidate 由 Facade 持有的 coordinator 在 acknowledged admission/cutoff 区间内 durable 保留，Record-off 按 exact fence 结算提交，播放保持；Stop 先停调度再结算。实体 Play/Stop 与 Record 键在任何 mode 下都驱动同一 transport projection 与命令身份——Play/Stop 是 Pattern 播放/停止，Record 是当前 Pattern 的 overdub，绝不表示 Sample capture 或 master recording；普通 mode 导航不再停止 transport。Creator 只提交 intent 并渲染 projection：busy、refused、committed-but-not-published 与 recoverable 均如实显示，重试是 inspect/reconcile 同一命令身份，绝不发出新的反向 toggle。播放中的 engagement 诚实拒绝跨身份 Pattern reload；停止态 reload 注销 engagement，由下一条命令按当前 Pattern 重新 vend。Capture、空 Pad 录音与 Pattern／Performance 录音互斥，Pattern 播放仍可继续。敲击 armed Pad 只停采并进入 trim overlay；裁剪/保存由 Host 独立显示，无需 Pattern recording journal。armed 期间其他 Pad 仍可演奏，但不能改写 Capture 所拥有的 Sample selection。已有 transport journal 时，Core 的 Sample 提交 busy 守卫仍保持有效；take 保留，录音结算后可重试提交。Capture 提交的失败或取消仍由 Core 在 writer lease 下判定 exact receipt/Project Truth，冲突 fail closed。Sequence recovery 只允许 fingerprint 匹配的原 Pattern、用户明确选择的有效新 Pattern或 discard；owner-lost 的 transport admission 在列出时被 reconcile 密封为 owner_lost 候选；Apply 把演奏者听到的 take（按下在 attack tail 后结束）回放进目标 Pattern（#1515），只有输入转换尚未结束的 admission 才以 `sequence_admission_unresolved` 拒绝并保留 journal，Discard 释放它。Host 不解析 Bundle、Project、journal、quantizer 或 fingerprint，Project Truth、revision、receipt 与 Runtime publication 均由 Core 决定。
