@@ -41,6 +41,8 @@ interface SequenceGridProps {
   editing: SequenceGridEditing;
   selection: readonly SequenceGridEventKey[];
   defaultVelocity: number;
+  currentPad?: number;
+  onScrollReady?(scroll: ((bars: number) => void) | null): void;
   onSnapChange(snap: SequenceGridSnap): void;
   onEditModeChange(mode: SequenceGridEditMode): void;
   onViewportChange(viewport: SequenceGridViewport): void;
@@ -216,8 +218,21 @@ export function SequenceGrid(props: SequenceGridProps) {
     report();
     const scroller = scrollRef.current;
     scroller?.addEventListener("scroll", report);
-    return () => scroller?.removeEventListener("scroll", report);
-  }, [model.lengthTicks, onViewportChange]);
+    props.onScrollReady?.((bars) => {
+      const lane = scroller?.querySelector<HTMLElement>(".sequence-grid-lane");
+      if (scroller === null || lane == null) return;
+      // scrollLeft uses layout pixels; DOM rectangles also contain the
+      // responsive console's CSS scale and would under-scroll a bar.
+      const barWidth = lane.clientWidth / model.bars;
+      scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth,
+        scroller.scrollLeft + bars * barWidth));
+      report();
+    });
+    return () => {
+      scroller?.removeEventListener("scroll", report);
+      props.onScrollReady?.(null);
+    };
+  }, [model.lengthTicks, model.bars, onViewportChange, props.onScrollReady]);
 
   const finishGesture = (pointerId: number, cancelled: boolean) => {
     const current = gestureRef.current;
@@ -524,6 +539,7 @@ export function SequenceGrid(props: SequenceGridProps) {
           {displayRows.map((row) => (
             // The row carries the Pad colour; its label and notes inherit it.
             <div className="sequence-grid-row" data-pad={row.pad} key={row.pad}
+              data-current-pad={props.currentPad === bank * 16 + row.pad ? "true" : undefined}
               data-pad-colour={padColourAttribute(props.padColour?.(bank * 16 + row.pad) ?? null)}>
               <span className="sequence-grid-pad">{slotAddress(bank * 16 + row.pad)}</span>
               <div

@@ -1789,3 +1789,10 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .pad-colour-restore { min-height: 28px; font-size: 9px; }
 .pad-colour-reason { margin: 0; color: var(--creator-muted); }
 .pad-colour-error { margin: 0; color: #ffc0c0; }
+
+/* Current Pad navigation is view state, separate from Pad colour and note selection. */
+.sequence-grid-row[data-current-pad] .sequence-grid-pad,
+.sequence-overview-names li[data-current-pad] {
+  outline: 1px solid var(--creator-lime);
+  outline-offset: -1px;
+}

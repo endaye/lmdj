@@ -109,6 +109,7 @@ import type {
 } from "./runtime/runtime_types";
 import {
   creatorReducer,
+  isCreatorActionAllowed,
   initialCreatorState,
   selectCanStartGesture,
   selectCanCreateProject,
@@ -371,10 +372,16 @@ function Workspace({
     useState<SequenceGridViewport | null>(null);
   // The Sequence upper screen's eight-row window: encoder 2 scrolls it a row
   // at a time and a Bank key moves it to that Bank's first row. View state.
-  const [overviewRowOffset, setOverviewRowOffset] = useState(0);
-  useEffect(() => {
-    setOverviewRowOffset(state.activeBank * SEQUENCE_BANK_PADS);
-  }, [state.activeBank]);
+  const [overviewRowOffset, setOverviewRowOffset] =
+    useState(initialState.activeBank * SEQUENCE_BANK_PADS);
+  const [sequenceCurrentPad, setSequenceCurrentPad] =
+    useState(initialState.activeBank * SEQUENCE_BANK_PADS);
+  const sequenceCurrentPadRef = useRef(initialState.activeBank * SEQUENCE_BANK_PADS);
+  const [scrollSequenceBars, setScrollSequenceBars] =
+    useState<((bars: number) => void) | null>(null);
+  const bindSequenceScroll = useCallback((scroll: ((bars: number) => void) | null) => {
+    setScrollSequenceBars(() => scroll);
+  }, []);
   // Encoder 3 / 4 turns preview Tempo / Swing and commit once at rest.
   const [tempoPreview, setTempoPreview] = useState<number | null>(null);
   const [swingPreview, setSwingPreview] = useState<number | null>(null);
@@ -502,10 +509,11 @@ function Workspace({
     dispatchSequence({type: "selected", patternId: project.patternId});
   }, [state.project.current, sequence.selectedPatternId]);
 
-  // The box selection belongs to the Pattern and Bank it was drawn on.
+  // Selection keys carry their Bank. Pad navigation preserves them across Banks;
+  // explicit Bank keys clear them in selectBank.
   useEffect(() => {
     setSequenceGridSelection([]);
-  }, [sequence.selectedPatternId, state.activeBank, state.project.current?.projectId]);
+  }, [sequence.selectedPatternId, state.project.current?.projectId]);
 
   // Events can change in place (Undo/Redo, a transport settle, another
   // surface's edit); keys they removed leave the selection.
@@ -2561,6 +2569,14 @@ function Workspace({
     inputController.current?.clearPressed();
     setRailShift(false);
     dispatch({type: "bank-selected", bank});
+    if (bank !== stateRef.current.activeBank &&
+        isCreatorActionAllowed(stateRef.current, {type: "bank-selected", bank})) {
+      setOverviewRowOffset(bank * SEQUENCE_BANK_PADS);
+      setSequenceGridSelection([]);
+      sequenceCurrentPadRef.current = bank * SEQUENCE_BANK_PADS +
+        sequenceCurrentPadRef.current % SEQUENCE_BANK_PADS;
+      setSequenceCurrentPad(sequenceCurrentPadRef.current);
+    }
     const current = stateRef.current;
     if (activeMode === "sample" && armedCaptureSlot === null &&
         current.runtime.phase === "ready" && current.project.phase === "ready" &&
@@ -2568,6 +2584,19 @@ function Workspace({
       const localPad = (stateRef.current.sample.selectedSlot ?? 0) % 16;
       dispatch({type: "sample-action", action: {type: "slot-selected", slot: bank * 16 + localPad}});
     }
+  };
+  const padNavigationAvailable = isCreatorActionAllowed(state,
+    {type: "bank-selected", bank: state.activeBank});
+  const stepSequencePad = (step: -1 | 1) => {
+    if (!isCreatorActionAllowed(stateRef.current,
+        {type: "bank-selected", bank: stateRef.current.activeBank})) return;
+    const next = Math.max(0, Math.min(63, sequenceCurrentPadRef.current + step));
+    sequenceCurrentPadRef.current = next;
+    setSequenceCurrentPad(next);
+    const bank = Math.floor(next / SEQUENCE_BANK_PADS) as typeof state.activeBank;
+    if (bank !== stateRef.current.activeBank) dispatch({type: "bank-selected", bank});
+    setOverviewRowOffset((offset) => clampSequenceOverviewRowOffset(
+      next < offset ? next : next >= offset + 8 ? next - 7 : offset));
   };
   const runtimeActions = session && inputController.current
     ? {
@@ -2585,6 +2614,7 @@ function Workspace({
       emptyPadCapture={padCaptureState !== null}
       {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
+      {...(activeMode === "sequence" ? {currentSlot: sequenceCurrentPad} : {})}
       {...(activeMode === "sample" ? {
         onSelectSample: (slot: number) => {
           dispatch({type: "sample-action", action: {type: "slot-selected", slot}});
@@ -2682,11 +2712,15 @@ function Workspace({
               onOpenSystem={openSystem}
               systemOpen={systemOpen}
               systemEntryRef={systemEntry}
-              // Sequence binds encoders 2–4 and the direction keys (2026-10-04
-              // decision, items 4–5); encoder 1, ↑ ↓ and every other page's
-              // controls wait for #1822.
+              // Sequence view navigation extends the 2026-10-04 bindings.
+              // Other pages still await their specific #1822 mapping.
               {...(activeMode === "sequence" && sequenceProject !== null ? {
                 encoders: {
+                  1: {
+                    label: "scroll bars",
+                    disabled: scrollSequenceBars === null,
+                    onTurn: (detents: number) => scrollSequenceBars?.(detents),
+                  },
                   2: {
                     label: "scroll track rows",
                     onTurn: (detents: number) => setOverviewRowOffset((offset) =>
@@ -2703,6 +2737,14 @@ function Workspace({
                     onTurn: (detents: number) => swingTurn.current?.turn(
                       detents, sequenceProject.sequenceSettings.swingPercent),
                   },
+                },
+                padStep: {
+                  backLabel: "Previous Pad — ↑",
+                  forwardLabel: "Next Pad — ↓",
+                  backAvailable: padNavigationAvailable && sequenceCurrentPad > 0,
+                  forwardAvailable: padNavigationAvailable && sequenceCurrentPad < 63,
+                  onBack: () => stepSequencePad(-1),
+                  onForward: () => stepSequencePad(1),
                 },
                 directionStep: {
                   backLabel: "Pattern back — ←",
@@ -2741,6 +2783,7 @@ function Workspace({
               viewport={sequenceGridViewport}
               selection={sequenceGridSelection}
               rowOffset={overviewRowOffset}
+              currentPad={sequenceCurrentPad}
               tempoPreview={tempoPreview}
               swingPreview={swingPreview}
               transport={transport}
@@ -2908,7 +2951,9 @@ function Workspace({
                 bank={state.activeBank}
                 snap={sequenceGridSnap}
                 editMode={sequenceGridMode}
-                selection={sequenceGridSelection}
+                selection={sequenceGridSelection.filter((key) => key.bank === state.activeBank)}
+                currentPad={sequenceCurrentPad}
+                onScrollReady={bindSequenceScroll}
                 defaultVelocity={sequenceGridVelocity}
                 projectionRefreshing={state.projectProjectionRefresh !== null}
                 onSnapChange={setSequenceGridSnap}

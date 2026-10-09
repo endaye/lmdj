@@ -26,6 +26,7 @@ interface OverviewDisplayProps {
   selection: readonly SequenceGridEventKey[];
   // Sequence's eight-row window and the encoder turns' unsettled values.
   rowOffset?: number;
+  currentPad?: number;
   tempoPreview?: number | null;
   swingPreview?: number | null;
   transport?: PatternTransportState;
@@ -52,6 +53,7 @@ export function OverviewDisplay({
   viewport,
   selection,
   rowOffset,
+  currentPad,
   tempoPreview = null,
   swingPreview = null,
   transport,
@@ -152,6 +154,7 @@ export function OverviewDisplay({
           snap={snap}
           viewport={viewport}
           selection={selection}
+          {...(currentPad === undefined ? {} : {currentPad})}
           {...(rowOffset === undefined ? {} : {rowOffset})}
           {...(transport === undefined ? {} : {transport})}
         />

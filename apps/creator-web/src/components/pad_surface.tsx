@@ -16,6 +16,7 @@ interface PadSurfaceProps {
   emptyPadCapture?: boolean;
   controller?: ReturnType<typeof createCreatorInputController>;
   armedCaptureSlot?: number | null;
+  currentSlot?: number;
   onSelectSample?: (slot: number) => void;
   onChooseSample?: (slot: number) => void;
   onDropSample?: (slot: number, file: File, target: HTMLElement) => void;
@@ -35,7 +36,7 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 );
 
 export function PadSurface({
-  state, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, onSelectSample, onChooseSample, onDropSample,
+  state, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, currentSlot, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
   const canTrigger = selectCanStartGesture(state);
   return (
@@ -43,6 +44,7 @@ export function PadSurface({
       {selectVisiblePads(state).map((pad) => {
         const address = padAddress(pad);
         const selected = state.sample.selectedSlot === pad.slot;
+        const highlighted = currentSlot === pad.slot || (onSelectSample !== undefined && selected);
         const assigned = pad.assetId !== null || (onSelectSample !== undefined &&
           selected && state.sample.inspect?.assetId != null);
         const seedPhase = pad.slot < 16 ? seedSlots?.[pad.slot]?.phase : undefined;
@@ -55,7 +57,8 @@ export function PadSurface({
         return (
           <button
             type="button"
-            className={`pad${onSelectSample !== undefined && selected ? " is-selected" : ""}`}
+            className={`pad${highlighted ? " is-selected" : ""}`}
+            aria-current={currentSlot === pad.slot ? "true" : undefined}
             aria-pressed={onSelectSample === undefined ? undefined : selected}
             // One effective colour from Project Truth (#1207); null is the
             // neutral EMPTY outline. Selection is drawn separately (white
@@ -116,7 +119,7 @@ export function PadSurface({
             <strong>{address}</strong>
             <span>{status ?? (capturing ? "Capturing" : assigned ? "Assigned" : "Empty")}</span>
             <kbd aria-hidden="true">{keyboardKey}</kbd>
-            {onSelectSample !== undefined && selected ? (
+            {highlighted ? (
               <i className="pad-selected-dot" data-testid="pad-selected-dot" aria-hidden="true" />
             ) : null}
           </button>

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
+import {initialCreatorState, type Bank} from "../src/state/creator_state";
 import type {CreatorRuntimeSession} from "../src/runtime/runtime_types";
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
@@ -22,6 +23,7 @@ interface TruthEvent {
 // (inspect, listing revision, transport inspection) derives from that Truth.
 function gridFixture(options: {
   events?: TruthEvent[];
+  bars?: 1 | 2 | 4 | 8;
   playing?: boolean;
   publication?: "none" | "published" | "live" | "deferred" | "failed";
 } = {}) {
@@ -46,7 +48,7 @@ function gridFixture(options: {
         bank,
         pads: Array.from({length: 16}, (_, pad) => ({pad, asset_id: null, category: null, colour_override: null, colour: null})),
       })),
-      patterns: {[PATTERN_ID]: {bars: 1, events: truth.events}},
+      patterns: {[PATTERN_ID]: {bars: options.bars ?? 1, events: truth.events}},
       pattern_slots: Array<string | null>(16).fill(null),
       sequence_settings: {quantize_enabled: true, swing_percent: 50},
     },
@@ -129,7 +131,7 @@ function gridFixture(options: {
     reloadSnapshot: async () => ({}),
     activateAudio: async () => true,
     suspendAudio: async () => true,
-    trigger: async () => false as const,
+    trigger: vi.fn(async () => false as const),
     requestMidi: async () => true,
     subscribeDiagnostics: () => () => {},
     subscribeHostState: () => () => {},
@@ -239,8 +241,9 @@ const lane = (pad: number) =>
   document.querySelector(
     `.sequence-grid-row[data-pad="${pad}"] .sequence-grid-lane`) as HTMLElement;
 
-async function openSequenceGrid(fixture: ReturnType<typeof gridFixture>) {
-  render(<App runtimeFactory={() => fixture.session} />);
+async function openSequenceGrid(fixture: ReturnType<typeof gridFixture>, initialBank: Bank = 0) {
+  render(<App initialState={{...initialCreatorState, activeBank: initialBank}}
+    runtimeFactory={() => fixture.session} />);
   await userEvent.click(
     await screen.findByRole("button", {name: "Open Project 11111111"}));
   await userEvent.click(
@@ -461,4 +464,117 @@ test("an Undo that removes a selected note drops it from the selection", async (
     expect(within(grid).queryByTestId("sequence-grid-note")).toBeNull());
   // An empty selection drops the Selected fact from the context line.
   await waitFor(() => expect(within(overview()).queryByText("Selected")).toBeNull());
+});
+
+
+test("ENC1 scrolls whole bars, clamps both ends and is unavailable off EDIT", async () => {
+  const fixture = gridFixture({bars: 4});
+  await openSequenceGrid(fixture);
+  const mockScrollGeometry = () => {
+    const scroller = document.querySelector(".sequence-grid-scroll") as HTMLElement;
+    Object.defineProperties(scroller, {
+      clientWidth: {configurable: true, value: 420},
+      scrollWidth: {configurable: true, value: 1572},
+      getBoundingClientRect: {configurable: true, value: () =>
+        ({left: 0, right: 210, width: 210, top: 0, bottom: 176})},
+    });
+    document.querySelectorAll(".sequence-grid-lane").forEach((element) => {
+      // CSS scale halves the displayed rectangle, never the scroll coordinate.
+      Object.defineProperties(element, {
+        clientWidth: {configurable: true, value: 1536},
+        getBoundingClientRect: {configurable: true, value: () =>
+          ({left: 18 - scroller.scrollLeft / 2, right: 786 - scroller.scrollLeft / 2,
+            width: 768, top: 0, bottom: 10})},
+      });
+    });
+    return scroller;
+  };
+  const scroller = mockScrollGeometry();
+  const encoder = screen.getByRole("button", {name: "Encoder 1 — scroll bars"});
+  fireEvent.keyDown(encoder, {key: "ArrowDown"});
+  expect(scroller.scrollLeft).toBe(0);
+  fireEvent.keyDown(encoder, {key: "ArrowUp"});
+  expect(scroller.scrollLeft).toBe(384);
+  expect(screen.getByTestId("sequence-pattern-overview").querySelector(".sequence-overview-frame")
+    ?.getAttribute("x")).toBe("3480");
+  // A native partial scroll is the next turn's starting position.
+  scroller.scrollLeft = 500;
+  fireEvent.keyDown(encoder, {key: "ArrowUp"});
+  expect(scroller.scrollLeft).toBe(884);
+  fireEvent.wheel(encoder, {deltaY: -500});
+  expect(scroller.scrollLeft).toBe(1152);
+  fireEvent.wheel(encoder, {deltaY: 500});
+  expect(scroller.scrollLeft).toBe(0);
+  expect(fixture.truth.revision).toBe(0);
+  expect(fixture.editPatternEvents).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  expect(encoder.hasAttribute("disabled")).toBe(true);
+  fireEvent.wheel(encoder, {deltaY: -25});
+  await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+  expect(encoder.hasAttribute("disabled")).toBe(false);
+  let remounted = mockScrollGeometry();
+  fireEvent.wheel(encoder, {deltaY: -25});
+  expect(remounted.scrollLeft).toBe(0);
+  fireEvent.wheel(encoder, {deltaY: -25});
+  expect(remounted.scrollLeft).toBe(384);
+  // Partial wheel and drag gestures are discarded when their grid is hidden.
+  fireEvent.wheel(encoder, {deltaY: -25});
+  fireEvent.pointerDown(encoder, {pointerId: 44, clientY: 20});
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+  remounted = mockScrollGeometry();
+  fireEvent.pointerMove(encoder, {pointerId: 44, clientY: 12});
+  expect(remounted.scrollLeft).toBe(0);
+  fireEvent.pointerUp(encoder, {pointerId: 44});
+  fireEvent.wheel(encoder, {deltaY: -25});
+  expect(remounted.scrollLeft).toBe(0);
+});
+
+test.each([false, true])("Pad navigation crosses Banks without edits or triggers (playing=%s)", async (playing) => {
+  const fixture = gridFixture({playing, events: [{slot: {bank: 0, pad: 2},
+    onset_tick: 480, duration_tick: 240, velocity: 100}]});
+  await openSequenceGrid(fixture);
+  const before = structuredClone(fixture.truth);
+  fireEvent.pointerDown(lane(2), {pointerId: 43, clientX: 40, clientY: 50, button: 0});
+  fireEvent.pointerMove(lane(2), {pointerId: 43, clientX: 100, clientY: 60});
+  fireEvent.pointerUp(window, {pointerId: 43});
+  const overview = screen.getByTestId("sequence-overview");
+  const selectedCount = () => within(overview).getByText("Selected").nextElementSibling?.textContent;
+  expect(selectedCount()).toBe("1");
+  const up = screen.getByRole("button", {name: "Previous Pad — ↑"});
+  const down = screen.getByRole("button", {name: "Next Pad — ↓"});
+  const currentPad = () => within(overview).getByText("Pad").nextElementSibling?.textContent;
+  expect(currentPad()).toBe("A01");
+  expect(up.hasAttribute("disabled")).toBe(true);
+  for (let step = 0; step < 16; step += 1) await userEvent.click(down);
+  expect(currentPad()).toBe("B01");
+  expect(screen.getByRole("button", {name: "Bank B"}).getAttribute("aria-current")).toBe("page");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("B01");
+  expect(document.querySelector('.sequence-grid-row[data-current-pad] .sequence-grid-pad')?.textContent).toBe("B01");
+  expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("B01");
+  expect(selectedCount()).toBe("1");
+  expect(screen.queryByRole("group", {name: "Note selection"})).toBeNull();
+  await userEvent.click(up);
+  expect(currentPad()).toBe("A16");
+  expect(gridNote()?.classList.contains("sequence-grid-note-selected")).toBe(true);
+  expect(selectedCount()).toBe("1");
+  for (let step = 15; step < 63; step += 1) await userEvent.click(down);
+  expect(currentPad()).toBe("D16");
+  expect(down.hasAttribute("disabled")).toBe(true);
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("D16");
+  expect(fixture.truth).toEqual(before);
+  expect(fixture.editPatternEvents).not.toHaveBeenCalled();
+  expect(fixture.session.trigger).not.toHaveBeenCalled();
+  // Explicit Bank keys retain their previous selection-reset behaviour.
+  await userEvent.click(screen.getByRole("button", {name: "Bank A"}));
+  expect(within(overview).queryByText("Selected")).toBeNull();
+});
+
+
+test("current Pad and overview start in the initial Bank", async () => {
+  await openSequenceGrid(gridFixture(), 3);
+  const overview = screen.getByTestId("sequence-overview");
+  expect(within(overview).getByText("Pad").nextElementSibling?.textContent).toBe("D01");
+  expect(overview.querySelector(".sequence-overview-names li")?.textContent).toBe("D01");
+  expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("D01");
 });
