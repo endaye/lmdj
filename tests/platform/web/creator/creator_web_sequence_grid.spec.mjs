@@ -541,7 +541,7 @@ test("Sequence view controls scroll bars and navigate Pads without changing sele
   const assertPad = async (address) => {
     await expect(overviewFact(page, "Pad")).toHaveText(address);
     await expect(physicalKey(page, `Bank ${address[0]}`)).toHaveAttribute("aria-current", "page");
-    await expect(page.locator(".sequence-overview-names [data-current-pad]")).toHaveText(address);
+    await expect(page.locator(".sequence-overview-names [data-current-pad]")).toHaveText(`${address} / SAMPLE`);
     await expect(page.locator(".sequence-grid-row[data-current-pad] .sequence-grid-pad")).toHaveText(address);
     await expect(page.locator('.pad[aria-current="true"] strong')).toHaveText(address);
     await assertViewOnly();

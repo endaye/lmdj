@@ -386,13 +386,13 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
   // to that Bank's first row, where these two Bank A notes are out of view,
   // and back.
   const rowNames = page.locator(".sequence-overview-names li");
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
   await page.getByRole("button", {name: "Bank B", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("B01");
-  await expect(rowNames.last()).toHaveText("B08");
+  await expect(rowNames.first()).toHaveText("B01 / SAMPLE");
+  await expect(rowNames.last()).toHaveText("B08 / SAMPLE");
   await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(0);
   await page.getByRole("button", {name: "Bank A", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
   await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(2);
 
   await playStopKey(page).click();
@@ -927,15 +927,15 @@ test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns wh
 
   // Encoder 2 scrolls the eight upper-screen rows one row per detent; a Bank
   // key moves the window back to that Bank's first row.
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
   await encoder("Encoder 2 — scroll track rows").focus();
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("ArrowUp");
-  await expect(rowNames.first()).toHaveText("A03");
+  await expect(rowNames.first()).toHaveText("A03 / SAMPLE");
   await page.getByRole("button", {name: "Bank B", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("B01");
+  await expect(rowNames.first()).toHaveText("B01 / SAMPLE");
   await page.getByRole("button", {name: "Bank A", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
 
   // Three encoder 3 detents preview at once and commit once at rest: Truth
   // moves by +3 BPM in one revision and one undo entry.

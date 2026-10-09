@@ -223,3 +223,34 @@ CHECK LAST ACTION text; portal 50 routes and internal links all passed.
 Precommit refresh remains main `414268d654adeae32dfb500f62c000f06e4f2b47`;
 no intervening successor changed these premises. Logs: `1920-cross-pad-*`
 and `1920-hardware-source-7.log` in the retained Goal evidence directory.
+
+
+### Follow-up Task: complete Sequence row identity oracles
+
+The committed-head complete Creator proof completed with three failed browser
+journeys: Sequence view/Pad navigation, recording and persisted grid reopen,
+and row/Tempo/Swing encoders. Each stopped on the former address-only row label
+(`A01` versus the actual `A01 / SAMPLE`). The source proof subset had not run
+these complete Sequence files. Preserve their entire navigation, Truth/history,
+recording, encoder and reopen legs; update the full expected row label, including
+SAMPLE for the authoritative fixture's 64 explicitly assigned, uncategorized
+Pads. Do not replace exact text matching with a substring or drop the row check.
+
+Declare two additional files for this follow-up:
+- tests/platform/web/creator/creator_web_sequence.spec.mjs
+- tests/platform/web/creator/creator_web_sequence_grid.spec.mjs
+
+The only other declared file is this plan. No product behavior changes.
+Run both full Sequence specs, then rerun the complete Creator lane on the new
+commit. Retain `1920-final-batch.log` and its per-invocation traces as failed;
+it supplies no batch pass key. Version impact: none. Documentation impact:
+none for this test-only follow-up; the parent Task's portal impact remains.
+
+Both complete Sequence specs now pass: 11/11 in 2.8 minutes, including all
+recording, history, view-only navigation, encoder and persisted reopen legs
+(`1920-sequence-source-final.log`). Precommit main remains
+`414268d654adeae32dfb500f62c000f06e4f2b47`; no successor changed the premise.
+The earlier complete lane passed 1183 components, 83 other general browser
+tests, Catalog 4, Sample 9, capture 8 and explicit denied/capability boundaries;
+three old row-text expectations failed. Those successes do not replace the
+required complete rerun on this test correction.
