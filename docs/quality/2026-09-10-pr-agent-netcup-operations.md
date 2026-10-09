@@ -5,6 +5,19 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-09 GLM pricing-envelope reopen after the identity correction
+
+The served-identity correction changed GLM's reservation basis
+(`priced_response_model` is a basis member), so the durable ledger refused the
+first post-install admission with `budget_exhausted` ("reservation basis does
+not match durable history"; dispatch run 37936391551 against PR #1904, zero AI
+calls). The pricing revision was bumped to `glm-5.3-flash-cn-standard-2026-10-09`
+to open a fresh envelope: prices are unchanged from the 2026-10-02 reading and
+the old envelope's 53-record glm history is retained untouched in the shared
+ledger. Overlay `cutover.xfO4GtMR` (adapter 40a725186, runtime 8122adf1) was
+installed before this admission refusal was known; the runtime correction lands
+as its own overlay on top.
+
 ## 2026-10-09 GLM served-identity binding correction
 
 Production diagnosis over the retained run diagnostics and the host monetary
