@@ -461,7 +461,8 @@ function snapshotDocumentPath(sourcePath, version) {
 // worth remembering before adding another one.
 // K1 (#1049) added artifact-audio and slice-points. The current-tree regression
 // checks this independent inventory pin before the next rare freeze operation.
-export const SOURCE_DOCUMENT_COUNT = 51;
+// Creator's four-region interaction manual adds one current Host guide.
+export const SOURCE_DOCUMENT_COUNT = 52;
 
 export async function createSnapshotMetadata({
   repoRoot,
