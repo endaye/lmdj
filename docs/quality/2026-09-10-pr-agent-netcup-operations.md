@@ -5,6 +5,37 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-09 GLM served-identity binding correction
+
+Production diagnosis over the retained run diagnostics and the host monetary
+ledger found two independent reliability defects in the current installation:
+
+1. Every GLM fallback attempt since 2026-10-02 (53 of 53 ledger requests)
+   failed. Eight sampled `unsupported_model` failures across runs
+   37806892771/37808524934/37808787956/37867697617/37868348887/37869819612/
+   37871642621/37878721002 all show the API actually succeeded (real usage up
+   to 552265 prompt tokens, known cost) but returned the served identity
+   `zai/glm-5.3-flash` — the pinned LiteLLM zai handler reports the
+   request-qualified model name — while the runtime config bound
+   `priced_response_model = "glm-5.3-flash"`, so the anti-mispricing identity
+   check discarded every successful GLM review. The binding now carries the
+   observed qualified identity `zai/glm-5.3-flash`; the check stays
+   fail-closed for any other identity.
+2. DeepSeek failures since 2026-10-08T16:13Z are HTTP 402
+   (`insufficient_balance` provider warning on all 12 sampled
+   `invalid_parameter` failures), i.e. account balance exhaustion, not a
+   request defect. Balance checks and recharge remain owner-side per the
+   2026-09-11 scope adjustment; the sanitized failure evidence is retained in
+   the run artifacts and ledger.
+
+A separate residual class is GLM `timeout` at the 60 s per-request bound on
+the largest inputs (four sampled occurrences; 552265 prompt tokens completed
+in 44 s while larger inputs exceed the bound). Its disposition is decided from
+post-fix production observation, not by lowering input completeness.
+
+This entry records diagnosis and a config correction; it is not an
+installation, replay acceptance, or T5/T6 completion record.
+
 ## 2026-09-17 budget raise to USD 100 (owner decision)
 
 The pilot spent its original USD 20 budget (the ledger's lifetime pilot total,
