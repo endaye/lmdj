@@ -10,6 +10,9 @@ import {createRuntimeSession} from "../web/runtime_session.mjs";
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
+  "monitorDestination",
+  "monitorVolume",
+  "setMonitorVolume",
   "runCandidateJob", "inspectCandidateJob", "cancelCandidateJob", "discardCandidateSet",
   "auditionCandidate", "stopCandidateAudition", "adoptCandidates",
   "listProviders",
@@ -279,6 +282,24 @@ function fixture({
   let defaultAudioCallbackHeartbeat = 0;
   const context = Object.assign(new EventTarget(), {
     state: "suspended",
+    currentTime: 0,
+    destination: {kind: "speakers"},
+    createGain() {
+      const calls = [];
+      return {
+        context: this,
+        connected: [],
+        disconnected: [],
+        gain: {
+          value: 1, calls,
+          setValueAtTime(value, time) { this.value = value; calls.push(["set", value, time]); },
+          cancelAndHoldAtTime(time) { calls.push(["hold", time]); },
+          linearRampToValueAtTime(value, time) { this.value = value; calls.push(["ramp", value, time]); },
+        },
+        connect(destination) { this.connected.push(destination); },
+        disconnect() { this.disconnected.push(true); },
+      };
+    },
     async resume() {
       this.state = "running";
     },
@@ -391,6 +412,86 @@ function fixture({
     terminated: () => terminated,
   };
 }
+
+test("monitor volume is applied before audio starts and changes no Project or capture request", async () => {
+  const registered = [];
+  const starts = [];
+  const requests = [];
+  const {session, context} = fixture({
+    registerAudioNode: (node) => { registered.push(node); return 2; },
+    startAudioWorklet: (...args) => { starts.push(args); return {ok: true}; },
+    send: async (request) => { requests.push(request); return success(request, defaultResult(request.operation)); },
+  });
+  await session.start();
+  const before = requests.length;
+  assert.equal(session.monitorVolume(), 100);
+  assert.equal(session.monitorDestination(), null);
+  session.setMonitorVolume(25);
+  assert.equal(requests.length, before);
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const monitor = session.monitorDestination();
+  assert.deepEqual(registered, [monitor]);
+  assert.deepEqual(starts, [[1, 2]]);
+  assert.deepEqual(monitor.connected, [context.destination]);
+  assert.deepEqual(monitor.gain.calls[0], ["set", 0.25, 0]);
+  const activated = requests.length;
+  context.currentTime = 2;
+  session.setMonitorVolume(0);
+  assert.equal(session.monitorVolume(), 0);
+  assert.deepEqual(monitor.gain.calls.slice(-2), [["hold", 2], ["ramp", 0, 2.02]]);
+  assert.equal(requests.length, activated);
+  for (const value of [-1, 101, NaN, Infinity, "25"]) {
+    assert.throws(() => session.setMonitorVolume(value));
+  }
+  assert.equal(session.monitorVolume(), 0);
+  await session.close();
+  assert.deepEqual(monitor.disconnected, [true]);
+  assert.equal(session.monitorDestination(), null);
+  assert.throws(() => session.setMonitorVolume(100));
+});
+
+test("capture failure recovers through the same monitor instead of bypassing volume", async () => {
+  const tapNode = Object.assign(new EventTarget(), {disconnect(destination) { this.disconnected = destination; }});
+  const direct = [];
+  let captureDestination;
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {perform_recording_frames: 86_400_000, perform_recording_queue_batches: 32},
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    registerAudioNode: (node) => node === tapNode ? 3 : 2,
+    createPerformanceMasterTap: async ({destination}) => {
+      captureDestination = destination;
+      return {destinationNode: tapNode, failProcessor() {}, async close() {}, async start() { return {async stop() {}}; }};
+    },
+    connectAudioWorkletDirect: (...args) => { direct.push(args); return true; },
+  });
+  await session.start();
+  session.setMonitorVolume(0);
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(captureDestination, session.monitorDestination());
+  tapNode.dispatchEvent(new Event("processorerror"));
+  tapNode.dispatchEvent(new Event("processorerror"));
+  await drainTasks();
+  assert.deepEqual(direct, [[1, 2]]);
+  assert.equal(tapNode.disconnected, session.monitorDestination());
+  assert.equal(session.monitorDestination().gain.value, 0);
+});
+
+test("closing while the context parks cannot create a late monitor graph", async () => {
+  const {session, context} = fixture();
+  const parked = Promise.withResolvers();
+  context.suspend = () => parked.promise;
+  context.createGain = () => { assert.fail("closed bootstrap must not create a gain"); };
+  await session.start();
+  const activation = session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  await session.close();
+  parked.resolve();
+  assert.equal(await activation, false);
+  assert.equal(session.monitorDestination(), null);
+});
 
 function trackedEventTarget() {
   const listeners = new Map();
@@ -900,7 +1001,7 @@ test("tap initialization failure preserves direct live audio and publishes unava
   await session.start();
   assert.equal(await session.activateAudio(
     createUserGestureToken({isTrusted: true})), true);
-  assert.deepEqual(destinations, [1]);
+  assert.deepEqual(destinations, [2]);
   assert.deepEqual(session.performanceMasterCaptureStatus(), {
     state: "unavailable",
     config: {
@@ -1050,7 +1151,12 @@ test("closes a late tap factory result without publishing or starting the engine
       factoryStarted();
       return factoryResult;
     },
-    registerAudioNode: () => { registrations += 1; return 2; },
+    registerAudioNode: (node) => {
+      // Only late capture-node registration is forbidden; the monitor node
+      // is installed before the asynchronous tap factory starts.
+      if (node === destinationNode) registrations += 1;
+      return 2;
+    },
     startAudioWorklet: async () => { engineStarts += 1; return {ok: true}; },
   });
   const seen = [];
@@ -1351,7 +1457,7 @@ test("processor failure settles capture, detaches the tap, and connects direct o
   await drainTasks();
   assert.equal(failed, 1);
   assert.equal(stopped, 1);
-  assert.deepEqual(disconnected, [context.destination]);
+  assert.deepEqual(disconnected, [session.monitorDestination()]);
   assert.equal(direct, 1);
   assert.equal(session.performanceMasterCaptureStatus().state, "unavailable");
   assert.equal(

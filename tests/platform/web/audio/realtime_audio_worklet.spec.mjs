@@ -26,8 +26,8 @@ async function waitForFormalHost(page) {
 }
 
 
-async function activateFromClick(page, sampleRate) {
-  await page.evaluate((requestedSampleRate) => {
+async function activateFromClick(page, sampleRate, withMonitor = false) {
+  await page.evaluate(({requestedSampleRate, withMonitor}) => {
     const button = document.createElement("button");
     button.id = "activate-formal-audio";
     button.addEventListener("click", async () => {
@@ -39,9 +39,21 @@ async function activateFromClick(page, sampleRate) {
         tapNode.gain.value = 1;
         const analyser = context.createAnalyser();
         tapNode.connect(analyser);
-        analyser.connect(context.destination);
+        const monitor = withMonitor ? context.createGain() : null;
+        const monitorAnalyser = withMonitor ? context.createAnalyser() : null;
+        const monitorHandle = monitor === null ? null :
+          window.lmdjWebRuntimeHost.registerAudioNode(monitor);
+        if (monitor !== null) {
+          analyser.connect(monitor);
+          monitor.connect(monitorAnalyser);
+          monitorAnalyser.connect(context.destination);
+        } else {
+          analyser.connect(context.destination);
+        }
         const tapHandle = window.lmdjWebRuntimeHost.registerAudioNode(tapNode);
-        window.__lmdjFormalAudioGraph = {context, tapNode, analyser, handle};
+        window.__lmdjFormalAudioGraph = {
+          context, tapNode, analyser, handle, monitor, monitorAnalyser, monitorHandle,
+        };
         window.__lmdjFormalActivation = await window.lmdjWebRuntimeHost
           .startAudioWorklet(handle, tapHandle);
       } catch (error) {
@@ -52,11 +64,76 @@ async function activateFromClick(page, sampleRate) {
       }
     }, {once: true});
     document.body.append(button);
-  }, sampleRate);
+  }, {requestedSampleRate: sampleRate, withMonitor});
   await page.locator("#activate-formal-audio").click();
   await page.waitForFunction(() => window.__lmdjFormalActivation !== undefined);
   return page.evaluate(() => window.__lmdjFormalActivation);
 }
+
+test("monitor attenuates the Wasm output after the master bus and survives direct recovery", async ({page}) => {
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000, true)).ok).toBe(true);
+  expect((await page.evaluate(() =>
+    window.lmdjWebRuntimeHostTest.runSharedEngineProof())).outputEnergy).toBeGreaterThan(0);
+
+  for (const level of [1, 0.5, 0]) {
+    const energy = await page.evaluate(async (level) => {
+      const {context, analyser, monitor, monitorAnalyser} = window.__lmdjFormalAudioGraph;
+      monitor.gain.setValueAtTime(level, context.currentTime);
+      await window.lmdjWebRuntimeHostTest.runDirectOutputContinuationProof();
+      // One complete analyser window after the gain change; the real Bank
+      // voice lasts 100 ms. Both readbacks cover the same rendered frames.
+      await new Promise((resolve) => setTimeout(resolve, 45));
+      const read = (node) => {
+        const values = new Float32Array(node.fftSize);
+        node.getFloatTimeDomainData(values);
+        return values.reduce((sum, value) => sum + value * value, 0);
+      };
+      return {master: read(analyser), output: read(monitorAnalyser)};
+    }, level);
+    expect(energy.master).toBeGreaterThan(0);
+    expect(energy.output / energy.master).toBeCloseTo(level * level, 5);
+  }
+
+  const recovery = await page.evaluate(async () => {
+    const {context, tapNode, handle, monitorHandle} = window.__lmdjFormalAudioGraph;
+    const otherContext = new AudioContext();
+    window.lmdjWebRuntimeHost.registerAudioContext(otherContext);
+    const otherHandle = window.lmdjWebRuntimeHost.registerAudioNode(otherContext.createGain());
+    const crossContext = window.lmdjWebRuntimeHost.connectAudioWorkletDirect(handle, otherHandle);
+    await otherContext.close();
+    tapNode.disconnect();
+    const connect = window.lmdjWebRuntimeHost.connectAudioWorkletDirect(handle, monitorHandle);
+    const repeated = window.lmdjWebRuntimeHost.connectAudioWorkletDirect(handle, monitorHandle);
+    // Once recovered, a different destination must not add an unattenuated path.
+    const reroute = window.lmdjWebRuntimeHost.connectAudioWorkletDirect(handle);
+    return {connect, repeated, crossContext, reroute, state: context.state,
+      connections: window.lmdjWebRuntimeHostTest.directOutputConnections()};
+  });
+  expect(recovery).toEqual({connect: true, repeated: true, crossContext: false,
+    reroute: false, state: "running", connections: 1});
+  const muted = await page.evaluate(async () => {
+    const {monitorAnalyser} = window.__lmdjFormalAudioGraph;
+    const proof = await window.lmdjWebRuntimeHostTest.runDirectOutputContinuationProof();
+    const values = new Float32Array(monitorAnalyser.fftSize);
+    monitorAnalyser.getFloatTimeDomainData(values);
+    return {engineEnergy: proof.outputEnergy,
+      outputEnergy: values.reduce((sum, value) => sum + value * value, 0)};
+  });
+  expect(muted.engineEnergy).toBeGreaterThan(0);
+  expect(muted.outputEnergy).toBe(0);
+  await page.evaluate(() => {
+    const {context, monitor} = window.__lmdjFormalAudioGraph;
+    monitor.gain.setValueAtTime(0.5, context.currentTime);
+  });
+  await page.evaluate(() => window.lmdjWebRuntimeHostTest.runDirectOutputContinuationProof());
+  await expect.poll(() => page.evaluate(() => {
+    const {monitorAnalyser} = window.__lmdjFormalAudioGraph;
+    const values = new Float32Array(monitorAnalyser.fftSize);
+    monitorAnalyser.getFloatTimeDomainData(values);
+    return values.reduce((sum, value) => sum + value * value, 0);
+  }), {intervals: [10]}).toBeGreaterThan(0);
+});
 
 
 opfsTest("live press and release complete while an executor owns a paused OPFS write", async ({page}) => {
