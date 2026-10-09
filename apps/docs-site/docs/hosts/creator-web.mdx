@@ -96,7 +96,7 @@ System 的 **Project and build details** 保留 Project 完整 ID、revision、P
 ### 模式相关的只读顶屏
 
 - **Project** 标题绑定实际打开的 Project，选中另一张卡片不会提前换标题。没有名称投影时显示短 ID。`LOCAL AUTOSAVE` 表达本地自动保存策略，不是所有独立草稿的保存回执；可观察的 Sample 更新、错误、未提交草稿以及“已保存但 audio pending”会覆盖该提示，不虚构保存时间。
-- **Sample** 标题是当前 Pad 地址；右侧显示真实类别，缺少类别但已分配时为 `SAMPLE`，空槽为 `EMPTY`。格式、总时长和已提交裁剪范围配合完整波形显示。切换 Pad 时不沿用上一 Pad 的 inspect。Asset ID、源格式／帧数和 revision 收进 **Pad → Sample details**，编辑控件仍保留本地参数值与必要 Pad 上下文。
+- **Sample** 标题是当前 Pad 地址；右侧显示真实类别，缺少类别但已分配时为 `SAMPLE`，空槽为 `EMPTY`。格式、总时长和已提交裁剪范围配合完整波形显示。切换 Pad 时不沿用上一 Pad 的 inspect。后台更新明确标出实际操作的 Pad；错误提示为 `CHECK LAST ACTION`，表示上一笔 Sample 操作，不能误认为当前 Pad 的错误。Asset ID、源格式／帧数和 revision 收进 **Pad → Sample details**，编辑控件仍保留本地参数值与必要 Pad 上下文。
 - **Sequence** 标题是选中 Pattern 序号；八条轨道显示地址与真实类别／空态，沿用 Project 投影颜色与当前 Pad 高亮。没有素材名称字段时不臆造 KICK／SNARE 等名称。
 - **Perform** 同时显示 `ACKNOWLEDGED SLOT` 和 `QUEUED SLOT`，分别来自同一个 Perform controller 的 `lastLaunchAck` 与 `pendingLaunch`；待切换不会覆盖已确认槽位。确认是 Runtime 回执，不是听感验收。全局 Pattern 的 bar／beat／进度仍来自独立的 Pattern transport，不能把它当作 Performance 录音时钟。触摸区保留启动键及分组的就地 Queued／Playing 高亮，重复的页首 cue 和录制 authority 中的 last-launch 段落移除。
 

@@ -452,7 +452,7 @@ test("mode-specific overview identity, read-only feedback and details survive na
   const beforeFailure = await inspectTruth(page);
   await page.evaluate(() => { window.__failOverviewUpdate = true; });
   await reverse.click();
-  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE · CHECK SAMPLE");
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE · CHECK LAST ACTION");
   await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
   await expect(reverse).toHaveAttribute("aria-pressed", "false");
   expect(await inspectTruth(page)).toEqual(beforeFailure);

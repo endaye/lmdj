@@ -200,3 +200,26 @@ this source proof is not packaged or release acceptance. Real Safari/iPad touch,
 MIDI and listening remain in #248/#365/#721/#1854/#1221. #1921 retains live
 trim/Tempo/Swing drafts, #1924 shared visual polish and #1925 broader status/
 recovery consolidation. This Task neither releases nor deploys the Creator.
+
+
+### Follow-up Task: cross-Pad pending feedback
+
+Self-review after the initial commit found that an in-flight mutation can retain
+its original slot while selection moves to another Pad. An unqualified UPDATING
+would label the new Pad incorrectly. Scope is the already-declared
+`sample_overview.tsx`, its component test, hardware proof, Creator portal page
+and this plan. Name the pending action's real Pad when it differs; describe the
+unscoped last-error producer as CHECK LAST ACTION rather than attributing it to
+the current selection. No producer, mutation ownership or recovery semantics
+change. A red component proof first reports UPDATING instead of UPDATING PAD
+A03; the final native proof must also fit the longer qualified failure label.
+The first committed-head lane was intentionally stopped during compilation;
+retain its log as incomplete, not a pass. Rerun on the new committed input.
+Version impact: none; Documentation impact: required, /hosts/creator-web/.
+
+Follow-up verification: focused Sample overview 9/9; TypeScript/Vite build;
+native Chromium hardware/layout journey 5/5 (25.8 s), including the longer
+CHECK LAST ACTION text; portal 50 routes and internal links all passed.
+Precommit refresh remains main `414268d654adeae32dfb500f62c000f06e4f2b47`;
+no intervening successor changed these premises. Logs: `1920-cross-pad-*`
+and `1920-hardware-source-7.log` in the retained Goal evidence directory.

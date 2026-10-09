@@ -1,5 +1,6 @@
 import type {CreatorState} from "../state/creator_state";
 import {padContent} from "../state/overview_context";
+import {slotAddress} from "../state/view_model";
 
 interface SampleOverviewProps {
   state: CreatorState;
@@ -34,8 +35,11 @@ export function SampleOverview({state}: SampleOverviewProps) {
       return {x: x(bucket.startFrame), width: Math.max(1, x(bucket.endFrame) - x(bucket.startFrame)), height};
     });
   const content = padContent(state.project.current, slot);
-  const status = state.sample.lastError !== null ? "CHECK SAMPLE"
-    : state.sample.pendingAction !== null ? "UPDATING"
+  // lastError describes the last Sample action, not necessarily this Pad.
+  // Pending mutations retain their own slot even if selection moves away.
+  const pending = state.sample.pendingAction;
+  const status = state.sample.lastError !== null ? "CHECK LAST ACTION"
+    : pending !== null ? pending.slot === slot ? "UPDATING" : `UPDATING PAD ${slotAddress(pending.slot)}`
     : slot !== null && inspect === null && content !== "EMPTY" && content !== "UNAVAILABLE"
       ? "LOADING" : null;
   return (

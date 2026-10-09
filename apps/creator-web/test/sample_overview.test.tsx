@@ -63,7 +63,7 @@ test("selecting a different Pad cannot show the previous Pad's format or wavefor
 test.each([
   {assetId: "sample-id", category: "melodic" as const, inspect: false, pending: false, error: false, label: "MELODIC · LOADING"},
   {assetId: "sample-id", category: "melodic" as const, inspect: true, pending: true, error: false, label: "MELODIC · UPDATING"},
-  {assetId: "sample-id", category: null, inspect: true, pending: false, error: true, label: "SAMPLE · CHECK SAMPLE"},
+  {assetId: "sample-id", category: null, inspect: true, pending: false, error: true, label: "SAMPLE · CHECK LAST ACTION"},
   {assetId: null, category: null, inspect: false, pending: false, error: false, label: "EMPTY"},
 ])("selected Pad reports $label from its actual projection", (scenario) => {
   const base = stateWith(0, null);
@@ -88,4 +88,15 @@ test.each([
   expect(overview.querySelector(".sample-overview-pad")?.textContent).toBe(scenario.label);
   expect(within(overview).getByText("Format").nextElementSibling?.textContent)
     .toBe(scenario.inspect ? "mono 48000 Hz · 1.000 s" : "—");
+});
+
+
+test("a background update names its actual Pad after the selection changes", () => {
+  const state = stateWith(0, null);
+  render(<SampleOverview state={{...state, sample: {...state.sample,
+    selectedSlot: 18,
+    pendingAction: {kind: "update", slot: 2, expectedRevision: 4},
+  }}} />);
+  expect(screen.getByTestId("sample-overview").querySelector(".sample-overview-pad")?.textContent)
+    .toBe("UNAVAILABLE · UPDATING PAD A03");
 });
