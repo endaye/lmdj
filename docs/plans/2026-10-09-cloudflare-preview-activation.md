@@ -82,9 +82,13 @@ workflow run at all — zero hosted cost.
 ### Bounded allocation and automatic monitoring (#921 row)
 
 `cloudflare_preview_budget.py` computes month-to-date consumption from the
-Actions API: `run_duration_ms` of every completed Preview Build run since the
-UTC month start, plus a full 20-minute timeout reservation for each
-in-progress/queued run. Two modes:
+Actions API by billed-time overlap: a completed run counts when it finished
+inside the UTC month (whenever it was created), and each queued/in-progress
+run consumes a full 20-minute timeout reservation, so every same-window
+concurrent admission is itself already a visible reservation and a burst trips
+the stop instead of overshooting; the 10% stop margin (200 minutes = ten
+concurrent reservations) bounds the remaining API-indexing-latency race. Two
+modes:
 
 - `--gate` (build job, first step, trusted base checkout): exits nonzero with
   `why`/`remedy` once consumption reaches 90% of the monthly budget. Requires

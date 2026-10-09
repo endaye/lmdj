@@ -9,7 +9,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.request import build_opener
 
 from cloudflare_preview_artifact import REPOSITORY, require
@@ -32,9 +32,24 @@ def month_start(now):
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
+def parse_instant(value):
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
 def consumption(github, now):
-    """Month-to-date hosted minutes: completed durations plus full reservations."""
-    created = month_start(now).strftime('%Y-%m-%d')
+    """Month-to-date hosted minutes by billed-time overlap, not creation date.
+
+    A completed run counts when it finished inside the month (its minutes bill
+    this month), whenever it was created; missing timing consumes the full
+    reservation. A run still queued or in progress consumes the full timeout
+    reservation, so every same-window concurrent admission is itself already a
+    visible reservation and a burst is what trips the 90% stop. The residual is
+    API indexing latency between run creation and listing, bounded by the 10%
+    stop margin (200 of 2000 minutes = ten concurrent reservations) before any
+    overshoot is possible.
+    """
+    start = month_start(now)
+    created = (start - timedelta(days=1)).strftime('%Y-%m-%d')
     minutes = 0.0
     runs = 0
     page = 1
@@ -43,12 +58,13 @@ def consumption(github, now):
                                f'?created=%3E%3D{created}&per_page=100&page={page}')
         batch = data['workflow_runs']
         for run in batch:
-            runs += 1
-            # Missing timing consumes the full reservation, like the pilot ledger.
-            if run['status'] == 'completed' and run.get('run_duration_ms'):
-                minutes += run['run_duration_ms']
-            else:
+            if run['status'] != 'completed':
                 minutes += RESERVE_SECONDS * 1000
+                runs += 1
+            elif parse_instant(run['updated_at']) >= start:
+                # Missing timing consumes the full reservation, like the pilot ledger.
+                minutes += run['run_duration_ms'] if run.get('run_duration_ms') else RESERVE_SECONDS * 1000
+                runs += 1
         if len(batch) < 100:
             return minutes / 60000, runs
         page += 1

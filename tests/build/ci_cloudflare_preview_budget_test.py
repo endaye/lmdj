@@ -39,8 +39,8 @@ class FakeGitHub:
         return FakeRequest()
 
 
-def run_entry(status, duration_ms=None):
-    run = {'status': status}
+def run_entry(status, duration_ms=None, updated_at='2026-10-05T00:00:00Z'):
+    run = {'status': status, 'updated_at': updated_at}
     if duration_ms is not None:
         run['run_duration_ms'] = duration_ms
     return run
@@ -71,10 +71,36 @@ class ConsumptionTest(unittest.TestCase):
         minutes, runs = budget.consumption(github, NOW)
         self.assertEqual((minutes, runs), (101.0, 101))
 
-    def test_query_is_bounded_to_the_utc_month(self):
+    def test_query_overlaps_the_month_boundary(self):
         github = FakeGitHub([[]])
         budget.consumption(github, NOW)
-        self.assertIn('created=%3E%3D2026-10-01', github.queries[0])
+        self.assertIn('created=%3E%3D2026-09-30', github.queries[0])
+
+    def test_run_completed_last_month_is_not_billed_this_month(self):
+        github = FakeGitHub([[run_entry('completed', 600_000, updated_at='2026-09-30T23:59:59Z')]])
+        self.assertEqual(budget.consumption(github, NOW), (0.0, 0))
+
+    def test_run_completed_after_midnight_counts_full_duration(self):
+        # Created last month, finished inside the new month: its minutes bill
+        # the new month, so the full duration counts (review finding 2).
+        github = FakeGitHub([[run_entry('completed', 600_000, updated_at='2026-10-01T00:00:01Z')]])
+        self.assertEqual(budget.consumption(github, NOW), (10.0, 1))
+
+    def test_last_months_unfinished_run_still_consumes_reservation(self):
+        github = FakeGitHub([[run_entry('in_progress', updated_at='2026-09-30T23:59:00Z')]])
+        self.assertEqual(budget.consumption(github, NOW), (20.0, 1))
+
+    def test_concurrent_admissions_are_bounded_by_reservations(self):
+        # Review finding 1: every admitted build already exists as a queued or
+        # in-progress run, so a same-window burst consumes reservations and
+        # trips the stop rather than overshooting the budget.
+        github = FakeGitHub([[run_entry('in_progress')] * 5])
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 't', 'CLOUDFLARE_PREVIEW_BUDGET_MINUTES': '100'}, clear=True):
+            with self.assertRaisesRegex(ValueError, 'budget exhausted'):
+                budget.main(['prog', '--gate'], github=github, now=NOW)
+        github = FakeGitHub([[run_entry('in_progress')] * 4])
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 't', 'CLOUDFLARE_PREVIEW_BUDGET_MINUTES': '100'}, clear=True):
+            budget.main(['prog', '--gate'], github=github, now=NOW)
 
 
 class GateTest(unittest.TestCase):
