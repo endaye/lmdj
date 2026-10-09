@@ -46,7 +46,7 @@
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
 | D1 | #1822 统一原则及逐页映射 | 全页旋钮已确认；其余方向键待决 | 执行 I1b/I1c；固定 ENC4 监听音量，ENC1–3 随页/组变化，SHIFT 细调。 |
 | D2 | 400 ms 连续旋钮提交 | 已确认；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；Perform 保持效果并按 HOLD 离页释放。 |
-| D3 | D01 Save / Save As / 未保存提示 | 语义已有决定；界面待确认 | 保留自动保存、复制新身份并打开副本的已交付流程；确认 D01 命名/入口，不能引入虚构的未保存状态。 |
+| D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | 能力已调查；待 owner 决策 | 区分已实现的导入/替换/trim 与新 Assign、参数细调入口；明确目标、单位/步长、Undo/Redo、取消/失败。 |
 | D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 能力已调查；待 owner 决策 | 明确作用域、Truth 与 live 状态归属、真实投影及 DSP 能力；producer 与 consumer 分 Task。 |
 | I1–I5 | D1–D5 的对应实现 | I1b/I1c 实施；其他范围等决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
@@ -206,6 +206,28 @@ Sample/BPM follow the approved 400 ms cancel/commit lifecycle; Perform uses owne
 live gestures retained through rest and group switches and released on page exit
 under HOLD. Before edits, refresh producer delivery and append exact consumer
 files, tests, steps, state transitions and independent review evidence here.
+
+## D3 — record the approved DUPLICATE name
+
+Owner 于 2026-10-10 选择「DUPLICATE（推荐，明确表示复制工程）」，保留
+自动保存、复制新身份并打开副本的已有语义。决定见
+[D01 DUPLICATE](../prd/decisions/2026-10-10-creator-project-duplicate-label.md)。
+
+**Refreshed premise:** Task base 与 inspected main 均为
+`864c0f061033a7f0c3488f1908a8817516cd3b62`。D01 的
+`project_surface.tsx` 已显示 DUPLICATE，并用 `onDuplicate` 调用 App 的
+`duplicateProject`：经现有 journey 复制，再打开副本；复制/打开失败保留
+真实结果与可重试入口。9 月 29 日 workflow baseline 已批准自动保存与复制。
+因此没有新的产品实现缺口，不重复修改按钮、存储或失败处理。
+该判断不声称完成整体四页、真机或听感验收。
+
+**Declared files:** 本计划；
+`docs/prd/decisions/2026-10-10-creator-project-duplicate-label.md`。
+**Lowest-tier verification:** 相对链接、源码/回调链与已有决定核对；stage 后
+77-case ownership suite；staged diff check；committed-head docs_static；
+PR body lint、declaration-only 与无 batch lane 的 evidence check。
+**Version Management:** Version impact: none — 产品行为已存在，只记录命名决定。
+**Documentation impact: none** — 只新增产品决策并更新计划，Portal 页面与事实不变。
 
 ## P0 — ship this bounded plan
 
