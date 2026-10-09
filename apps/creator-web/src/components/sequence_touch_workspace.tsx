@@ -34,7 +34,6 @@ const LAYER_OPTIONS: readonly TouchSegmentOption<SequenceLayer>[] = [
   {value: "edit", label: "EDIT"},
   {value: "setup", label: "SETUP"},
 ];
-const NOOP = () => {};
 
 interface SequenceTouchWorkspaceProps {
   project: ProjectView;
@@ -50,6 +49,7 @@ interface SequenceTouchWorkspaceProps {
   // True while the projection is being re-read from Truth after a commit; the
   // grid's model can be behind Truth in that window, so no gesture starts.
   projectionRefreshing: boolean;
+  settingsActive?: boolean;
   metronomeOn: boolean;
   onToggleMetronome(): void;
   showRefresh?: boolean;
@@ -72,6 +72,10 @@ interface SequenceTouchWorkspaceProps {
     quantizeEnabled?: boolean;
     swingPercent?: number;
   }>): void;
+  onSettingsPreview?(changes: Readonly<{
+    bpm?: number | null;
+    swingPercent?: number | null;
+  }>): void;
   onRecover(candidate: SequenceRecoveryCandidate, destinationPatternId: string | null): void;
   onDiscard(candidate: SequenceRecoveryCandidate): void;
 }
@@ -91,7 +95,8 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   // failed commit resyncs the base to the committed truth.
   const requestedBpmRef = useRef<number | null>(null);
   const requestedSwingRef = useRef<number | null>(null);
-  const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
+  const disabled = selectTransportBusy(transport) || selectTransportRecording(transport) ||
+    props.settingsActive === false;
   // Grid editing is refused while the transport records (the Core refuses it
   // too); a busy transport holds the commit instead, and the app retries it.
   const editReason = selectTransportRecording(transport)
@@ -103,6 +108,10 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
   const bpm = project.bpm;
   const swing = project.sequenceSettings.swingPercent;
+  useEffect(() => {
+    requestedBpmRef.current = null;
+    requestedSwingRef.current = null;
+  }, [project.projectId, selectedPatternId]);
   useEffect(() => {
     if (requestedBpmRef.current === project.bpm) requestedBpmRef.current = null;
   }, [project.bpm]);
@@ -116,10 +125,12 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     }
   }, [state.errorCode]);
   const requestBpm = (next: number) => {
+    props.onSettingsPreview?.({bpm: null});
     requestedBpmRef.current = next;
     props.onSettingsChange({bpm: next});
   };
   const requestSwing = (next: number) => {
+    props.onSettingsPreview?.({swingPercent: null});
     requestedSwingRef.current = next;
     props.onSettingsChange({swingPercent: next});
   };
@@ -178,7 +189,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         />
       )) : (
       <section aria-label="Sequence settings" className="sequence-settings">
-        <div className="sequence-param-row">
+        <div className="sequence-param-row" key={`${project.projectId}:${selectedPatternId}`}>
           <div className="sequence-param-card sequence-param-tempo">
             <ValueSlider
               label="TEMPO"
@@ -190,9 +201,9 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               step={1}
               format={(value) => `${value} BPM`}
               disabled={disabled}
-              onPreview={NOOP}
+              onPreview={(bpm) => props.onSettingsPreview?.({bpm})}
               onCommit={requestBpm}
-              onCancel={NOOP}
+              onCancel={() => props.onSettingsPreview?.({bpm: null})}
             />
             <div className="sequence-param-actions" role="group" aria-label="Tempo actions">
               <button type="button" aria-label="Decrease BPM"
@@ -215,9 +226,9 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               step={1}
               format={(value) => `${value}%`}
               disabled={disabled}
-              onPreview={NOOP}
+              onPreview={(swingPercent) => props.onSettingsPreview?.({swingPercent})}
               onCommit={requestSwing}
-              onCancel={NOOP}
+              onCancel={() => props.onSettingsPreview?.({swingPercent: null})}
             />
             <div className="sequence-param-actions" role="group" aria-label="Swing actions">
               <button type="button" aria-label="Decrease Swing"

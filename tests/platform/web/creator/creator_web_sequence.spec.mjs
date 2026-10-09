@@ -732,12 +732,19 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   // Leg 1 — a drag previews locally and commits exactly once on release: one
   // settings command, one revision, Truth carries the dragged tempo.
   const direction = baseline.bpm <= 230 ? 1 : -1;
-  const dragged = baseline.bpm + 10 * direction;
-  await bpmFader.fill(String(dragged));
+  const dragged = baseline.bpm + direction;
+  const moveKey = direction > 0 ? "ArrowRight" : "ArrowLeft";
+  const historyBefore = await undoCount(page);
+  await bpmFader.focus();
+  await page.keyboard.down(moveKey);
+  await expect(page.locator(".overview-bpm")).toHaveText(`${dragged} BPM`);
+  expect(await undoCount(page)).toBe(historyBefore);
   expect((await inspectTruth(page)).bpm).toBe(baseline.bpm);
   expect(await settingsUpdates()).toHaveLength(0);
-  await bpmFader.dispatchEvent("pointerup");
+  await page.keyboard.up(moveKey);
   await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(dragged);
+  await expect(page.locator(".overview-bpm")).toHaveText(`${dragged} BPM`);
+  expect(await undoCount(page)).toBe(historyBefore + 1);
   let truth = await inspectTruth(page);
   expect(truth.revision).toBe(baseline.revision + 1);
   let updates = await settingsUpdates();
@@ -784,12 +791,17 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   // Leg 4 — Escape cancels a Swing draft: no command, no revision, and the
   // control falls back to the committed value.
   const baseSwing = baseline.sequence_settings.swing_percent;
-  const swung = baseSwing <= 65 ? baseSwing + 10 : baseSwing - 10;
-  await swingFader.fill(String(swung));
+  const swingKey = baseSwing < 75 ? "ArrowRight" : "ArrowLeft";
+  const swung = baseSwing + (baseSwing < 75 ? 1 : -1);
+  await swingFader.focus();
+  await page.keyboard.down(swingKey);
+  await expect(page.locator(".overview-swing")).toHaveText(`SWING ${swung}%`);
   expect((await inspectTruth(page)).sequence_settings.swing_percent)
     .toBe(baseSwing);
   await swingFader.press("Escape");
+  await page.keyboard.up(swingKey);
   await expect(swingFader).toHaveValue(String(baseSwing));
+  await expect(page.locator(".overview-swing")).toHaveText(`SWING ${baseSwing}%`);
   truth = await inspectTruth(page);
   expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
   expect(truth.revision).toBe(baseline.revision + 3);
@@ -820,6 +832,7 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
   expect(truth.revision).toBe(baseline.revision + 3);
   await expect(swingFader).toHaveValue(String(baseSwing));
+  await expect(page.locator(".overview-swing")).toHaveText(`SWING ${baseSwing}%`);
   updates = await settingsUpdates();
   expect(updates).toHaveLength(4);
   expect(updates[3]).toMatchObject({ok: null, failed: true});

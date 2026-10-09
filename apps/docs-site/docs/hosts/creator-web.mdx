@@ -693,3 +693,16 @@ moves, resizes, adjusts velocity, batch-deletes and batch-moves against
 swaps a playback edit in place without restarting playback, and reopens with
 the same Truth and an empty history. Physical touch and drag ergonomics on
 iPad or touch screens and audible in-place swaps are not claimed.
+
+
+### 上下屏的实时编辑反馈
+
+Sequence 的触摸 Tempo / Swing 在手势进行时同步显示于只读顶屏；Sample
+裁切的数值和顶屏选区跟随同一份当前 Pad 草稿，不等待较早的试听回执。
+预览不写入 Project Truth，不增加 revision 或 Undo。触摸释放仍按原协议提交
+一次；取消、失败、对象或模式切换以及录音锁定会清理对应草稿。旋钮仍采用
+最后一格之后 400 ms 的原有提交规则，离开编辑上下文会取消未结束的转动。
+
+音频尚未激活时，Sample 仍可进行视觉裁切并提交；此时不向停止的音频引擎
+请求试听。音频运行时若试听预览被拒绝，选区和触摸手势一起回到权威值，
+延迟到达的松手不能再提交已失效的草稿。顶屏保持只读。

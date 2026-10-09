@@ -68,14 +68,31 @@ test("a preview clamps to the range instead of committing past it", () => {
 });
 
 test("a gesture that returns to its base value never commits", () => {
-  const {onCommit} = renderSlider();
+  const {onCommit, onCancel} = renderSlider();
   const level = screen.getByRole("slider", {name: "Level"});
   fireEvent.pointerDown(level, {pointerId: 6});
   fireEvent.change(level, {target: {value: "42"}});
   fireEvent.change(level, {target: {value: "10"}});
   fireEvent.pointerUp(level, {pointerId: 6});
   expect(onCommit).not.toHaveBeenCalled();
+  expect(onCancel).toHaveBeenCalledTimes(1);
   expect(screen.getByText("10 units")).toBeTruthy();
+});
+
+test("locking a slider cancels its live draft and a later release cannot commit", () => {
+  const callbacks = {onPreview: vi.fn(), onCommit: vi.fn(), onCancel: vi.fn()};
+  const props = {label: "Level", ariaLabel: "Level", className: "level-control",
+    value: 10, min: 0, max: 100, step: 1, format: (value: number) => `${value} units`,
+    ...callbacks};
+  const {rerender} = render(<ValueSlider {...props} disabled={false} />);
+  const level = screen.getByRole("slider", {name: "Level"});
+  fireEvent.pointerDown(level, {pointerId: 12});
+  fireEvent.change(level, {target: {value: "80"}});
+  rerender(<ValueSlider {...props} disabled />);
+  expect(callbacks.onCancel).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("10 units")).toBeTruthy();
+  fireEvent.pointerUp(window, {pointerId: 12});
+  expect(callbacks.onCommit).not.toHaveBeenCalled();
 });
 
 test.each([

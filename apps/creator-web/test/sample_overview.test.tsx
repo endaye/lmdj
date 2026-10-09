@@ -100,3 +100,45 @@ test("a background update names its actual Pad after the selection changes", () 
   expect(screen.getByTestId("sample-overview").querySelector(".sample-overview-pad")?.textContent)
     .toBe("UNAVAILABLE · UPDATING PAD A03");
 });
+
+test("the upper selection follows the latest draft before audition acknowledges it", () => {
+  const state = stateWith(0, null);
+  const saved = state.sample.inspect!.playback;
+  const proposed = {...saved, trimStartFrame: 9_600, trimEndFrame: 38_400};
+  const {rerender} = render(<SampleOverview state={{...state, sample: {...state.sample,
+    auditionPlayback: {...saved, trimStartFrame: 4_800},
+    draft: {baseRevision: 4, saved, proposed, dirty: true},
+  }}} />);
+  const overview = screen.getByTestId("sample-overview");
+  expect(overview.textContent).toContain("0.200 – 0.800 s");
+  expect([...overview.querySelectorAll(".sample-overview-outside")]
+    .map((rect) => rect.getAttribute("width"))).toEqual(["144", "144"]);
+  // Cancellation is visual immediately, even while Host preview clearing waits.
+  rerender(<SampleOverview state={{...state, sample: {...state.sample,
+    auditionPlayback: proposed, draft: null,
+  }}} />);
+  expect(overview.textContent).toContain("0.000 – 1.000 s");
+});
+
+test("a draft from an older inspect revision cannot replace current trim", () => {
+  const state = stateWith(4_800, 43_200);
+  const saved = state.sample.inspect!.playback;
+  render(<SampleOverview state={{...state, sample: {...state.sample,
+    draft: {baseRevision: 3, saved,
+      proposed: {...saved, trimStartFrame: 9_600, trimEndFrame: 38_400}, dirty: true},
+  }}} />);
+  expect(screen.getByTestId("sample-overview").textContent).toContain("0.100 – 0.900 s");
+});
+
+
+test("another selected Pad cannot inherit the old Pad's draft selection", () => {
+  const state = stateWith(0, null);
+  const saved = state.sample.inspect!.playback;
+  render(<SampleOverview state={{...state, sample: {...state.sample, selectedSlot: 18,
+    draft: {baseRevision: 4, saved,
+      proposed: {...saved, trimStartFrame: 9_600, trimEndFrame: 38_400}, dirty: true},
+  }}} />);
+  const overview = screen.getByTestId("sample-overview");
+  expect(within(overview).getByText("Selection").nextElementSibling?.textContent).toBe("—");
+  expect(overview.querySelectorAll(".sample-overview-outside")).toHaveLength(0);
+});

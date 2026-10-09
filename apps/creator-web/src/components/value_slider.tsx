@@ -70,6 +70,10 @@ export function ValueSlider({
     setDraft(null);
   }, [audioSuspended]);
 
+  useEffect(() => {
+    if (disabled && !audioSuspended) cancelRef.current();
+  }, [disabled, audioSuspended]);
+
   const begin = () => {
     if (gesture.current === null) {
       gesture.current = {base: value, latest: value};
@@ -91,6 +95,9 @@ export function ValueSlider({
     setDraft(null);
     if (current.base !== current.latest) {
       onCommit(current.latest);
+    } else {
+      // Returning to the base still settles the shared visual/audio preview.
+      onCancel();
     }
   };
   const cancel = () => {

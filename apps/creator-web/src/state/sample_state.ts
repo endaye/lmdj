@@ -104,6 +104,17 @@ export interface SampleState {
   readonly runtimeRevision: number | null;
 }
 
+// Visual editing follows the latest synchronous draft, not an older audible
+// preview acknowledgement. Once its owner settles/cancels the draft, both
+// displays return to inspect immediately, even if clearing audio is pending.
+export function selectSampleEditingPlayback(state: SampleState): Readonly<PadPlayback> | undefined {
+  const inspect = state.inspect;
+  if (inspect === null || inspect.slot !== state.selectedSlot) return undefined;
+  return state.draft?.baseRevision === inspect.projectRevision
+    ? state.draft.proposed
+    : inspect.playback;
+}
+
 export type SampleStateAction =
   | Readonly<{type: "slot-selected"; slot: number}>
   | Readonly<{type: "inspect-stored"; inspect: unknown}>

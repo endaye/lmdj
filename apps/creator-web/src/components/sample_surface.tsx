@@ -40,6 +40,7 @@ import {
   beginSampleDraft,
   fitSampleViewport,
   samplePlayheadFrameAt,
+  selectSampleEditingPlayback,
   updateSampleDraft,
   waveformWindowForViewport,
   type SamplePendingAction,
@@ -571,7 +572,6 @@ export function SampleSurface({
     if (session === undefined || inspect === null || sample.pendingAction !== null ||
       operationPending.current !== null) return;
     const epoch = ++previewEpoch.current;
-    previewOwner.current = {session, slot: inspect.slot};
     const draft = updateSampleDraft(
       beginSampleDraft(inspect.playback, inspect.projectRevision),
       playback,
@@ -583,6 +583,10 @@ export function SampleSurface({
       type: "sample-action",
       action: {type: "draft-updated", changes: playback},
     });
+    // Editing is available before audio activation. The visual draft still
+    // previews, but the stopped Host cannot accept an audible preview.
+    if (audioSuspended) return;
+    previewOwner.current = {session, slot: inspect.slot};
     void previewSampleDraftJourney(session, inspect.slot, draft).then(
       () => {
         if (previewEpoch.current === epoch) {
@@ -857,7 +861,7 @@ export function SampleSurface({
   const selectedAddress = selectedSlot === null
     ? "No Pad selected"
     : `Pad ${padAddress({slot: selectedSlot, assetId: inspect?.assetId ?? null})}`;
-  const editablePlayback = sample.auditionPlayback ?? sample.draft?.proposed ?? inspect?.playback;
+  const editablePlayback = selectSampleEditingPlayback(sample);
   const selectedAssigned = inspect?.assetId !== null && inspect?.assetId !== undefined;
   const projectUnavailable = state.project.phase !== "ready" ||
     state.project.current === null;
@@ -1008,6 +1012,7 @@ export function SampleSurface({
             playback={editablePlayback}
             playheadFrame={playheadFrame}
             disabled={actionsDisabled}
+            previewActive={sample.draft !== null}
             onPreview={preview}
             onCommit={(playback) => { void performUpdate(playback); }}
             onCancel={cancelPreview}

@@ -1,5 +1,6 @@
 import type {CreatorState} from "../state/creator_state";
 import {padContent} from "../state/overview_context";
+import {selectSampleEditingPlayback} from "../state/sample_state";
 import {slotAddress} from "../state/view_model";
 
 interface SampleOverviewProps {
@@ -20,7 +21,7 @@ export function SampleOverview({state}: SampleOverviewProps) {
   const slot = state.sample.selectedSlot;
   const inspect = state.sample.inspect?.slot === slot ? state.sample.inspect : null;
   const metadata = inspect?.metadata ?? null;
-  const playback = inspect?.playback ?? null;
+  const playback = selectSampleEditingPlayback(state.sample) ?? null;
   const envelope = state.sample.waveform;
   const frames = metadata?.sourceFrames ?? 0;
   const clamp = (frame: number) => Math.min(Math.max(frame, 0), frames);

@@ -1,10 +1,10 @@
-import {fireEvent, render, screen, waitFor, within} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {initialCreatorState, type Bank} from "../src/state/creator_state";
-import type {CreatorRuntimeSession} from "../src/runtime/runtime_types";
+import type {CreatorRuntimeSession, CreatorSequenceRuntimeSession} from "../src/runtime/runtime_types";
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const PATTERN_ID = "22222222-2222-4222-8222-222222222222";
@@ -259,6 +259,55 @@ async function tapEmptyCell(pad: number, clientX: number, clientY: number) {
 
 const gridNote = () =>
   within(screen.getByTestId("sequence-grid")).queryByTestId("sequence-grid-note");
+
+test("touch timing previews reach the upper screen and cancel without a Truth write", async () => {
+  const fixture = gridFixture();
+  const commit = vi.spyOn(fixture.session as CreatorSequenceRuntimeSession, "updateSequenceSettings");
+  await openSequenceGrid(fixture);
+  fireEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  const bpm = screen.getByRole("slider", {name: "BPM"});
+  const swing = screen.getByRole("slider", {name: "Swing"});
+  fireEvent.pointerDown(bpm, {pointerId: 53});
+  fireEvent.change(bpm, {target: {value: "132"}});
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("132 BPM");
+  expect(commit).not.toHaveBeenCalled();
+  expect(fixture.truth.revision).toBe(0);
+  fireEvent.keyDown(bpm, {key: "Escape"});
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM");
+  fireEvent.pointerUp(window, {pointerId: 53});
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.pointerDown(swing, {pointerId: 54});
+  fireEvent.change(swing, {target: {value: "61"}});
+  expect(document.querySelector(".overview-swing")?.textContent).toBe("SWING 61%");
+  fireEvent.click(screen.getByRole("button", {name: "Project"}));
+  fireEvent.pointerUp(window, {pointerId: 54});
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(document.querySelector(".overview-swing")?.textContent).toBe("SWING 50%");
+  fireEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  const again = screen.getByRole("slider", {name: "BPM"});
+  fireEvent.change(again, {target: {value: "134"}});
+  fireEvent.pointerUp(again);
+  await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+  // This fixture refuses settings writes; both displays return to Truth.
+  await waitFor(() => expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM"));
+  expect((again as HTMLInputElement).value).toBe("120");
+  expect(fixture.truth.revision).toBe(0);
+});
+
+test("leaving Sequence drops an unsettled encoder turn before its 400 ms commit", async () => {
+  const fixture = gridFixture();
+  const commit = vi.spyOn(fixture.session as CreatorSequenceRuntimeSession, "updateSequenceSettings");
+  await openSequenceGrid(fixture);
+  fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Tempo"}), {key: "ArrowUp"});
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("121 BPM");
+  fireEvent.click(screen.getByRole("button", {name: "Project"}));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM");
+  expect(fixture.truth.revision).toBe(0);
+});
 
 test("one gesture commits one flat-slot pattern events edit and both grids follow Truth", async () => {
   const fixture = gridFixture();

@@ -692,9 +692,10 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   const trimEnd = page.getByRole("spinbutton", {name: "Pad A01 End time (seconds)"});
   await expect(trimStart).toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
-  const dragGrip = async (grip, deltaX) => {
+  const dragGrip = async (grip, deltaX, beforeRelease) => {
     // The touch workspace is a fixed 368 × 368 region that scrolls; the mouse
     // must be aimed at where the grip actually is, not where it was laid out.
+    await expect(grip).toBeVisible();
     await grip.scrollIntoViewIfNeeded();
     const box = await grip.boundingBox();
     expect(box).not.toBeNull();
@@ -703,10 +704,19 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     await page.mouse.move(pressX, pressY);
     await page.mouse.down();
     await page.mouse.move(pressX + deltaX, pressY, {steps: 4});
+    await beforeRelease?.();
     await page.mouse.up();
   };
   await waitForControlMutation(page, trimStart, async () => {
-    await dragGrip(page.locator('[data-grip-zone="start"]'), 40);
+    await dragGrip(page.locator('[data-grip-zone="start"]'), 40, async () => {
+      const startSeconds = Number(await trimStart.inputValue());
+      expect(startSeconds).toBeGreaterThan(0);
+      await expect(page.locator(".sample-overview-facts")).toContainText(
+        `${startSeconds.toFixed(3)} – 2.000 s`);
+      const truth = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+      expect(truth.result.project_revision).toBe(60);
+      expect(truth.result.playback.trim_start_frame).toBe(0);
+    });
   }, 61);
   await expect(trimStart).not.toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
