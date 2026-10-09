@@ -1,3 +1,4 @@
+import {showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {clickCreatorSystemAction, selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
@@ -173,6 +174,7 @@ async function selectPadWithoutPress(page, label) {
 // the panel's own elapsed readout is what makes this deterministic rather than
 // sleeping for a wall-clock duration.
 async function recordAtLeast(page, padLabel, seconds) {
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: `${padLabel} Pad Capture`});
   await expect(panel).toBeVisible();
@@ -210,6 +212,7 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await enterSampleEditor(page);
 
   await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A01 Pad Capture"});
   await expect(panel).toBeVisible();
@@ -320,7 +323,9 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
-  // the Pad reads assigned and the Sample Editor renders its waveform.
+  // the Pad reads assigned; Trim exposes the saved waveform after returning
+  // from the Pad management page that opened capture.
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   const truth = await inspectProjectTruth(page);
@@ -598,6 +603,7 @@ test("a denied microphone permission is explicit and retryable", async ({page}, 
   await enterSampleEditor(page);
 
   await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A01 Pad Capture"});
   await expect(panel).toBeVisible();

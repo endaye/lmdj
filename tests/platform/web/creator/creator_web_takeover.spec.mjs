@@ -1,3 +1,4 @@
+import {showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
 
@@ -162,6 +163,7 @@ test("a second tab takes over the open Project and the first takes it back", asy
 
   // Leg 5: the new holder commits its own write.
   await second.getByRole("button", {name: "Sample", exact: true}).click();
+  await showSamplePage(second, "Pad");
   await expect(second.getByRole("button", {name: "Delete Pad A01", exact: true}))
     .toBeEnabled({timeout: 30_000});
   await second.getByRole("button", {name: "Delete Pad A01", exact: true}).click();

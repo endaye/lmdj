@@ -259,6 +259,20 @@ button:disabled { color: #737b87; }
   align-items: flex-start;
   gap: 1.5rem;
 }
+.sample-page-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .25rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--creator-bg, #17191d);
+}
+.sample-page-nav button { min-width: 0; padding-inline: .25rem; }
+.sample-pad-management { display: grid; gap: .75rem; min-width: 0; }
+.sample-pad-management > *, .sample-pad-management button { min-width: 0; max-width: 100%; }
+.sample-pad-management .selected-pad-actions > button { width: 100%; }
+
 .sample-heading h1 { margin: .25rem 0 0; font-size: clamp(1.6rem, 3vw, 2.6rem); }
 .selected-sample {
   display: grid;
@@ -1089,6 +1103,15 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   border-radius: 8px;
   background: var(--creator-raised);
   color: var(--creator-text);
+}
+.hardware-workspace .sample-page-nav button {
+  min-height: 44px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.hardware-workspace .sample-page-nav button[aria-current="page"] {
+  background: var(--creator-purple);
+  color: var(--creator-base);
 }
 .hardware-workspace .sample-surface .selected-sample strong { color: var(--creator-purple); }
 .hardware-workspace .waveform-editor { border-radius: 10px; background: var(--creator-base); }

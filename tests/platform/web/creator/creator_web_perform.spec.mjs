@@ -1,3 +1,4 @@
+import {showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
@@ -925,6 +926,7 @@ async function replacePadSample(page) {
   const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
+  await showSamplePage(page, "Pad");
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Replace Sample"}).click();
   await (await chooser).setFiles({
@@ -1121,6 +1123,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
   await page.getByRole("button", {name: /^Pad B01 — assigned/}).focus();
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Delete Pad B01", exact: true}).click();
   revision = await expectRevisionAfter(page, revision);
   const afterDelete = await inspectProjectTruth(page);
@@ -1478,6 +1481,7 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
   await page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/})
     .evaluate((element) => element.click());
   expect(await inspectedPadA1Pan(page)).toBe(0);
+  await showSamplePage(page, "Playback");
   const pan = page.getByRole("slider", {name: "Pad A01 Pan"});
   await pan.dispatchEvent("pointerdown", {pointerId: 81, isPrimary: true, button: 0});
   await pan.fill("-100");
@@ -1511,6 +1515,7 @@ async function installWitnessOn(page, padName, key) {
   const pad = page.getByRole("button", {name: new RegExp(`^${padName} — assigned — Key ${key}$`)});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
+  await showSamplePage(page, "Pad");
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Replace Sample"}).click();
   await (await chooser).setFiles({
@@ -1544,6 +1549,7 @@ test("a tone -100 Pad attenuates a bright source in the recorded master output",
   // The same witness on two Pads: A1 untouched, A2 low-passed at 100 Hz.
   await installWitnessOn(page, "Pad A01", "Q");
   await installWitnessOn(page, "Pad A02", "W");
+  await showSamplePage(page, "Tone / EQ");
   const tone = page.getByRole("slider", {name: "Pad A02 Tone"});
   await tone.dispatchEvent("pointerdown", {pointerId: 91, isPrimary: true, button: 0});
   await tone.fill("-100");

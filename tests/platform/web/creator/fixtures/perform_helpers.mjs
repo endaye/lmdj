@@ -1,4 +1,5 @@
 import {readFile} from "node:fs/promises";
+import {showSamplePage} from "./creator_navigation.mjs";
 
 import {expect} from "@playwright/test";
 
@@ -105,6 +106,7 @@ export async function installPerformWitnessSample(page) {
   const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
+  await showSamplePage(page, "Pad");
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Replace Sample"}).click();
   await (await chooser).setFiles({
