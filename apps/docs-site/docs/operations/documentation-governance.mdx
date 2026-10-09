@@ -11,6 +11,10 @@ source_paths:
   - docs/governance/pitfall-ledger.md
   - .github/workflows/architecture-portal.yml
   - .github/workflows/deploy-cloudflare-portal.yml
+  - .github/workflows/cloudflare-preview-build.yml
+  - .github/workflows/cloudflare-preview-publish.yml
+  - .github/workflows/cloudflare-preview-budget.yml
+  - scripts/ci/cloudflare_preview_paths.json
   - scripts/cloudflare-portal-deploy.py
   - apps/docs-site/deploy/wrangler.json
   - docs/deploy/architecture-portal.md
@@ -58,25 +62,31 @@ Netlify 专用 Portal 构建、依赖和 smoke 已移除；三个旧站点的 Gi
 Cloudflare 控制台须按部署手册显式设置构建命令；不能仅依赖 Wrangler custom build。
 
 
-## Cloudflare PR Preview 试点
+## Cloudflare PR Preview
 
 PR Preview 使用隔离构建和独立可信发布两个 workflow。构建绑定 PR head，
 不接收部署凭据；发布端从 GitHub API 核实 run、artifact 和当前 head，验证
 静态归档后生成固定配置，只上传到 `portal-preview` 的版本地址，并在页面、
 响应头和文件摘要检查通过后回写 `Cloudflare Portal Preview` 状态。
 
-试点默认关闭。仓库变量 `CLOUDFLARE_PREVIEW_PILOT_BRANCH` 必须显式指定一个
-同仓库分支；启用前需落实临时 runner 预算、`portal-cloudflare-preview`
-Environment 凭据以及现场验收。代码合并和本地测试不代表试点已启用或验收通过。
-旧 Netlify 检查的退役仍由迁移清单单独追踪。
+Preview 默认关闭。广泛激活需要三个仓库变量同时显式设置：
+`CLOUDFLARE_PREVIEW_ENABLED=1`、批准的月度托管分钟预算
+`CLOUDFLARE_PREVIEW_BUDGET_MINUTES`、以及接收阈值告警的运维 Issue
+`CLOUDFLARE_PREVIEW_BUDGET_ISSUE`。构建触发经依赖完整的路径过滤
+（权威集合见 `scripts/ci/cloudflare_preview_paths.json`，与
+`cloudflare-preview-build.yml` 的 `paths:` 由测试锁定一致）：不触及门户构建
+输入的 PR 不产生 Preview run，零托管成本。每次构建先执行只读的月度预算门：
+当月已完成 run 的实际时长加未完成 run 的全额预留达到预算 90% 时，新构建以
+why/remedy 失败关闭；每日 `Cloudflare Preview Budget` workflow 在 50/75/90%
+阈值各发一条去重告警到运维 Issue。未知用量或缺失预算变量同样失败关闭。
 
+2026-10-09 批准的持续月度额度为 2,000 GitHub-hosted Linux 分钟：依据试点
+实测约 3.6 分钟/次与 2026-09 相关 PR 需求约 1,340 分钟/月（需求约占 67%）。
+撤销 `CLOUDFLARE_PREVIEW_ENABLED` 可立即停用全部 Preview；调整预算属于新的
+预算决策，须先记录再修改变量。外部 fork PR 始终不参与 Preview。
 
-2026-09-08 已批准单个同仓库 PR 的监督试点：标准 GitHub-hosted Linux
-执行预算最多 60 分钟，每次预留完整 20 分钟，最多三次（含重跑、失败和取消）。
-运行结束后在 #921 记录实际耗时、剩余预算及 50/75/90% 阈值通知；未知用量或
-达到 90% 时停止接纳新尝试。这是人工监督台账，尚非自动账单告警。
-试点结束并等待最后一个发布任务终止后，移除试点变量；全量 Preview 尚未授权。
-
+2026-09-08 的 60 分钟单 PR 监督试点已完成并拆除（实测三次构建共 652 秒）；
+原 `CLOUDFLARE_PREVIEW_PILOT_BRANCH` 变量机制已被上述广泛激活模型取代。
 稳定观察期为验收通过后的连续七天。2026-09-08 用户追加授权删除旧站点和托管
 数据，替代此前旧部署保留 30 天及保留 Creator 旧 origin 的决定。私有恢复证据
 仍按原期限保存，不能依赖仅保留七天的构建 artifact。删除远端站点不会清除用户

@@ -31,7 +31,23 @@
 
 GitHub 上的 netlify/lmdj/deploy-preview、Header rules、Redirect rules 和 Pages changed 由外部 Netlify 集成生成。三个旧站点的 Git 连接已断开，旧 Worker 构建触发器已删除；随后按用户追加授权删除四个旧资源。新 PR 已验证不再出现旧检查。GitHub 历史 CheckRun 和归档证据保留，共享 App 授权未卸载。
 
-#867 的旧失败证据保留。目标是退役旧服务，不是恢复 Netlify Preview；Cloudflare 逐 PR Preview 是否启用须另以真实 PR URL、SHA 和线上内容确认。
+#867 的旧失败证据保留。目标是退役旧服务，不是恢复 Netlify Preview。
+
+## Cloudflare PR Preview 激活模型（2026-10-09）
+
+逐 PR Preview 由 `cloudflare-preview-build.yml`（隔离、无部署凭据）与
+`cloudflare-preview-publish.yml`（可信 publisher，凭据在
+`portal-cloudflare-preview` Environment）执行，只写 `portal-preview` Worker 的
+版本地址并回写 `Cloudflare Portal Preview` 状态。广泛激活需要三个仓库变量：
+`CLOUDFLARE_PREVIEW_ENABLED=1`、批准的月度托管分钟预算
+`CLOUDFLARE_PREVIEW_BUDGET_MINUTES`（2026-10-09 批准 2,000 分钟，依据试点实测
+3.6 分钟/次与 2026-09 需求约 1,340 分钟/月）、接收 50/75/90% 阈值告警的运维
+Issue `CLOUDFLARE_PREVIEW_BUDGET_ISSUE`。构建触发经依赖完整的路径过滤，权威
+集合为 `scripts/ci/cloudflare_preview_paths.json`，与 workflow `paths:` 由
+`tests/build/ci_cloudflare_preview_paths_test.py` 锁定一致；无关 PR 零成本跳过。
+每次构建先跑只读月度预算门，90% 停收；`cloudflare-preview-budget.yml` 每日
+自动发阈值告警。原 `CLOUDFLARE_PREVIEW_PILOT_BRANCH` 试点机制已取代。
+是否启用以变量状态与真实 PR 的 URL、SHA 和线上内容确认为准。
 
 ## 历史 Cloudflare Portal pilot (#873)
 

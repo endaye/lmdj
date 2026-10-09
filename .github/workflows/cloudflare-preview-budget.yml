@@ -1,0 +1,33 @@
+name: Cloudflare Preview Budget
+
+on:
+  schedule:
+    # Daily 04:23 UTC, off the herd marks.
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    if: >-
+      github.repository == 'endaye/lmdj' &&
+      vars.CLOUDFLARE_PREVIEW_ENABLED == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Report crossed monthly budget thresholds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_PREVIEW_BUDGET_MINUTES: ${{ vars.CLOUDFLARE_PREVIEW_BUDGET_MINUTES }}
+          CLOUDFLARE_PREVIEW_BUDGET_ISSUE: ${{ vars.CLOUDFLARE_PREVIEW_BUDGET_ISSUE }}
+        run: python3 scripts/ci/cloudflare_preview_budget.py --report
