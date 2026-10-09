@@ -2714,8 +2714,8 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   await user.click(screen.getByRole("button", {name: "Sequence"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
   expect(padA1()).toBeTruthy();
-  expect(within(touch()).getByRole("heading", {name: /GROOVE \//})).toBeTruthy();
-  expect(within(touch()).getByRole("button", {name: "Next Pattern"})).toBeTruthy();
+  expect(within(touch()).getByRole("button", {name: "Choose Pattern"}).textContent).toContain("GROOVE /");
+  expect(within(touch()).getByRole("button", {name: "Choose Pattern"})).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
 
   await user.click(screen.getByRole("button", {name: "Perform"}));

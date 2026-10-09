@@ -496,7 +496,7 @@ test("ENC1 scrolls whole bars, clamps both ends and is unavailable off EDIT", as
   fireEvent.keyDown(encoder, {key: "ArrowUp"});
   expect(scroller.scrollLeft).toBe(384);
   expect(screen.getByTestId("sequence-pattern-overview").querySelector(".sequence-overview-frame")
-    ?.getAttribute("x")).toBe("3480");
+    ?.getAttribute("x")).toBe("3840");
   // A native partial scroll is the next turn's starting position.
   scroller.scrollLeft = 500;
   fireEvent.keyDown(encoder, {key: "ArrowUp"});

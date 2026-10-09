@@ -327,7 +327,9 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
 
   // Velocity: a vertical drag in VEL mode sets velocity; a later note takes
   // the last velocity the grid set.
+  await page.getByRole("button", {name: "Grid tools", exact: true}).click();
   await page.getByRole("button", {name: "Velocity mode"}).click();
+  await page.getByRole("dialog", {name: "Grid tools", exact: true}).getByRole("button", {name: "Done", exact: true}).click();
   {
     // Rows are 13 px since the EDIT layer fits all sixteen (T5): press near
     // the row's foot and drag up to its middle, past the 4 px drag threshold.
@@ -338,7 +340,9 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
       box.y + box.height / 2, {steps: 4});
     await page.mouse.up();
   }
+  await page.getByRole("button", {name: "Grid tools", exact: true}).click();
   await page.getByRole("button", {name: "Note mode"}).click();
+  await page.getByRole("dialog", {name: "Grid tools", exact: true}).getByRole("button", {name: "Done", exact: true}).click();
   await awaitTruthEvents(page, patternId, [event(2, 960, 960, 64)]);
   await undo(page);
   await awaitTruthEvents(page, patternId, [event(2, 960, 960, 100)]);
@@ -582,4 +586,83 @@ test("Sequence view controls scroll bars and navigate Pads without changing sele
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(physicalKey(page, "Encoder 1 — unassigned until hardware mapping is approved")).toBeDisabled();
   await expect(physicalKey(page, "Up — unassigned until direction mapping is approved")).toBeDisabled();
+});
+
+
+test("touch bar navigation keeps views independent and persists last-cell and cross-bar edits", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.goto("/index.html");
+  await importProject(page);
+  await enterSequenceAndPlay(page);
+  const patternId = await selectedSequencePatternId(page);
+  const chooseBar = async (bar) => {
+    await page.getByRole("button", {name: "Choose bar", exact: true}).click();
+    await page.getByRole("dialog", {name: "Choose bar", exact: true})
+      .getByRole("button", {name: `Bar ${bar}`, exact: true}).click();
+    await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toBeFocused();
+  };
+  const frame = page.locator(".sequence-overview-frame");
+  for (const bars of [1, 2, 4, 8]) {
+    await page.getByRole("button", {name: "SETUP", exact: true}).click();
+    await page.getByRole("button", {name: `Length ${bars} bars`, exact: true}).click();
+    await expect.poll(async () => (await inspectTruth(page)).patterns[patternId].bars).toBe(bars);
+    await page.getByRole("button", {name: "EDIT", exact: true}).click();
+    const before = await inspectTruth(page);
+    for (const viewport of [{width:1440,height:900}, {width:1280,height:600}, {width:768,height:600}]) {
+      await page.setViewportSize(viewport);
+      await chooseBar(1);
+      await expect(page.getByRole("button", {name: "Previous bar", exact: true})).toBeDisabled();
+      for (let bar = 1; bar <= bars; bar += 1) {
+        await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toHaveText(`BAR ${bar} / ${bars}`);
+        // Absolute tick oracle excludes the sticky Pad labels independently
+        // of the shared touch/overview viewport reporting implementation.
+        await expect.poll(async () => Number(await frame.getAttribute("x"))).toBeCloseTo((bar - 1) * 3840, -1);
+        await expectSequenceLayoutFits(page);
+        if (bar < bars) await page.getByRole("button", {name: "Next bar", exact: true}).click();
+      }
+      await expect(page.getByRole("button", {name: "Next bar", exact: true})).toBeDisabled();
+      for (let bar = bars; bar >= 1; bar -= 1) {
+        await chooseBar(bar);
+        await expect(page.getByRole("button", {name: "Choose bar", exact: true})).toHaveText(`BAR ${bar} / ${bars}`);
+      }
+      expect(await inspectTruth(page)).toEqual(before);
+    }
+  }
+  await page.setViewportSize({width:1440,height:900});
+  // Editing uses the full eight-bar coordinates after real touch navigation;
+  // never reset scrollLeft in these later-bar assertions.
+  const tapAt = async (pad, tick) => {
+    const lane = page.locator(`.sequence-grid-row[data-pad='${pad}'] .sequence-grid-lane`);
+    const rect = await lane.boundingBox();
+    await page.mouse.click(tickX(rect, tick + 120, 30720), rect.y + rect.height / 2);
+  };
+  await chooseBar(8);
+  await tapAt(2, 30480);
+  const finalEvent = {slot:{bank:0,pad:2}, onset_tick:30480, duration_tick:240, velocity:100};
+  await awaitTruthEvents(page, patternId, [finalEvent]);
+  await chooseBar(1);
+  await tapAt(3, 3600);
+  const lane = page.locator(".sequence-grid-row[data-pad='3'] .sequence-grid-lane");
+  const rect = await lane.boundingBox();
+  const end = page.locator(".sequence-grid-row[data-pad='3'] .sequence-grid-note-end");
+  const edge = await end.boundingBox();
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(tickX(rect, 4080, 30720), edge.y + edge.height / 2, {steps:6});
+  await page.mouse.up();
+  const crossEvent = {slot:{bank:0,pad:3}, onset_tick:3600, duration_tick:480, velocity:100};
+  await awaitTruthEvents(page, patternId, [finalEvent, crossEvent]);
+  await chooseBar(2);
+  await expect(end).toBeInViewport();
+  await undo(page);
+  await awaitTruthEvents(page, patternId, [finalEvent, {...crossEvent, duration_tick:240}]);
+  await redo(page);
+  await awaitTruthEvents(page, patternId, [finalEvent, crossEvent]);
+  await reopenProject(page);
+  await enterSequenceAndPlay(page);
+  await awaitTruthEvents(page, patternId, [finalEvent, crossEvent]);
+  await chooseBar(8);
+  await expect(page.locator(".sequence-grid-row[data-pad='2'] .sequence-grid-note-end")).toBeInViewport();
 });

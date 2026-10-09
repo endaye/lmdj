@@ -493,8 +493,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   // Switching Pattern waits for Stop (2026-10-04 decision, item 7): while
   // playing, ‹ › are disabled, no Pattern reload is attempted and the playing
   // Pattern stays selected.
-  await expect(page.getByRole("button", {name: "Next Pattern", exact: true})).toBeDisabled();
-  await expect(page.getByRole("button", {name: "Previous Pattern", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true})).toBeDisabled();
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", patternId);
   expect(await page.evaluate(() => window.__snapshotReloadProof ?? [])).toEqual([]);
   await transportStatus(page, "playing");

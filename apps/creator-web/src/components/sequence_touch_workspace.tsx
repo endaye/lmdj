@@ -21,7 +21,7 @@ import {
 } from "../state/pattern_transport_state";
 import {padColourOf} from "../state/pad_colour";
 import {SequenceGrid} from "./sequence_grid";
-import {PatternStepper, TouchSegment, type TouchSegmentOption} from "./touch_kit";
+import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
 const BAR_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
@@ -139,18 +139,14 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     if (selectedPattern === undefined || next === selectedPattern.bars) return;
     props.onResizePattern?.(next);
   };
-  const stepPattern = (offset: -1 | 1) => {
-    const next = project.patterns[patternIndex - 1 + offset];
-    if (next !== undefined) props.onSwitch(next.patternId);
-  };
   return (
     <section className="sequence-touch-workspace" aria-label="Sequence editor"
       data-layer={layer}>
       <header className="sequence-editor-header">
         {/* Switching Pattern waits for Stop, as the ← → keys do. */}
-        <PatternStepper index={patternIndex} count={project.patterns.length}
+        <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
           patternId={selectedPatternId} disabled={disabled || playing}
-          onStep={stepPattern} />
+          onSelect={props.onSwitch} />
         <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
           value={layer} onChange={setLayer} />
       </header>
@@ -159,6 +155,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         : <p role="status">committed, publication pending</p>}
       {layer === "edit" ? (selectedPattern === undefined ? null : (
         <SequenceGrid
+          key={selectedPatternId}
           pattern={selectedPattern}
           bank={props.bank}
           {...(props.currentPad === undefined ? {} : {currentPad: props.currentPad})}
