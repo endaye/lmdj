@@ -150,23 +150,14 @@ export function SequenceIcon({active, size = 24}: IconProps & {active: boolean})
 
 export type EncoderPosition = 1 | 2 | 3 | 4;
 
-const ENCODER_INDICATORS: Record<EncoderPosition, string> = {
-  1: "M13.5 11.6699L11 7.33975",
-  2: "M18.5 11.6699L21 7.33975",
-  3: "M16 11V6",
-  4: "M20.3301 13.5L24.6603 11",
-};
-
-export function EncoderIcon({position, size = 32}: IconProps & {position: EncoderPosition}) {
-  const indicator = (
-    <path d={ENCODER_INDICATORS[position]} stroke="#DDF478" strokeWidth={2} strokeLinecap="round" />
-  );
+// All four are relative encoders. Their position identifies a binding, not
+// an absolute value or a global Volume role. Keep the existing CSP-safe icon
+// component, without the obsolete position marks (#1924).
+export function EncoderIcon({size = 32}: IconProps & {position: EncoderPosition}) {
   return (
     <Svg size={size} viewBox="0 0 32 32">
-      <path d="M16 31C24.2843 31 31 24.2843 31 16C31 7.71573 24.2843 1 16 1C7.71573 1 1 7.71573 1 16C1 24.2843 7.71573 31 16 31Z" stroke="#667060" strokeDasharray="1 4"/>
       <path d="M16 28C22.6274 28 28 22.6274 28 16C28 9.37258 22.6274 4 16 4C9.37258 4 4 9.37258 4 16C4 22.6274 9.37258 28 16 28Z" fill="#343A34" stroke="#929C89"/>
       <path d="M16 25C20.9706 25 25 20.9706 25 16C25 11.0294 20.9706 7 16 7C11.0294 7 7 11.0294 7 16C7 20.9706 11.0294 25 16 25Z" fill="#292D29"/>
-      {indicator}
     </Svg>
   );
 }

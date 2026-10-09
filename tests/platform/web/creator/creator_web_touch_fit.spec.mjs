@@ -17,13 +17,20 @@ async function expectTouchFits(page) {
 }
 
 async function expectControlFits(page, control) {
-  await control.scrollIntoViewIfNeeded();
-  const touch = await page.getByTestId("touch-workspace").boundingBox();
-  const box = await control.boundingBox();
-  expect(box.x).toBeGreaterThanOrEqual(touch.x - 1);
-  expect(box.x + box.width).toBeLessThanOrEqual(touch.x + touch.width + 1);
-  expect(box.y).toBeGreaterThanOrEqual(touch.y - 1);
-  expect(box.y + box.height).toBeLessThanOrEqual(touch.y + touch.height + 1);
+  // Default sound failures can insert recovery between scroll and measurement
+  // (observed height 368 -> 407). Re-scroll the current layout until reachable;
+  // read both rectangles in one browser task so they describe the same frame.
+  // The original four boundaries and 1px tolerance remain unchanged. A fixed
+  // off-panel control still fails, rather than being hidden or skipped.
+  await expect.poll(async () => {
+    await control.scrollIntoViewIfNeeded();
+    return control.evaluate(element => {
+      const touch = document.querySelector('[data-testid="touch-workspace"]').getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      return {left:box.left >= touch.left - 1, right:box.right <= touch.right + 1,
+        top:box.top >= touch.top - 1, bottom:box.bottom <= touch.bottom + 1};
+    });
+  }).toEqual({left:true, right:true, top:true, bottom:true});
 }
 
 test.beforeEach(async ({page}) => {
