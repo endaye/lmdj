@@ -32,11 +32,11 @@ function internalPath(value, pageRoute) {
   if (!value || value.startsWith('#') || /^(mailto|tel|javascript|data):/i.test(value)) return null;
   let url;
   try {
-    url = new URL(value, `https://lmdj.netlify.app${pageRoute}`);
+    url = new URL(value, `https://docs.lmdj.workers.dev${pageRoute}`);
   } catch {
     return null;
   }
-  if (url.origin !== 'https://lmdj.netlify.app') return null;
+  if (url.origin !== 'https://docs.lmdj.workers.dev') return null;
   return url.pathname;
 }
 
