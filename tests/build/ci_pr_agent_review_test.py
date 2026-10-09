@@ -3569,9 +3569,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
+source_root = Path(sys.argv[2])
+sys.path.insert(0, str(source_root / "vendor"))
 import pr_agent_review as adapter
 
-source_root = Path(sys.argv[2])
 adapter.TRUSTED_ENGINE_ROOT = source_root
 upstream = adapter._import_upstream(source_root)
 litellm = upstream["litellm_ai_handler"].litellm
