@@ -40,8 +40,8 @@
 
 | ID | 工作 | 初始状态 | 依赖/完成条件 |
 | --- | --- | --- | --- |
-| P0 | 本后续计划 | 实施中 | 链接、路径 ownership、声明检查；PR 评审并合并。 |
-| R1 | #1905 连续 authoring 提交刷新 | 可实施 | 减小复现；同类与不同类连续操作显示最新 Truth；回归测试、验证、评审、合并。 |
+| P0 | 本后续计划 | 已合并 | #1906 → `cd5fbf9290fba820139bfdc9d41b9166a7fe333b`；独立接管评审及修订已验证。 |
+| R1 | #1905 连续 authoring 提交刷新 | 修复完成，验证/评审中 | 同类与不同类操作的 red/green、Creator unit/typecheck、Portal check 已通过；committed-head Creator lane、评审与合并待完成。 |
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
 | D1 | #1822 统一原则及逐页映射 | 原则已确认；逐页待决 | owner 已选统一原则；再逐页确定具体参数、当前 Pad、边界/播放/录音/SHIFT 行为。 |
 | D2 | 400 ms 连续旋钮提交 | 待 owner 决策 | 确认预览、提交、取消、离页、锁定、Undo 语义。 |
@@ -100,6 +100,16 @@ committed head 实际选择的 batch-only creator lane。
 **Documentation:** `/hosts/creator-web/` 描述成功 authoring 后投影刷新的一致性。
 **Version:** Creator 修复至少欠 PATCH，纳入 V1；不在修复 Task 猜测身份。
 **Pitfall:** 产品逻辑的回归测试是其出口；不为该逻辑错误新增流程 pitfall。
+
+2026-10-09 R1 进度：两个同步颜色请求以 revision 3 → 4 → 5 成功提交，旧代码
+仍画第一色（预期 `3`，实际 `2`）；颜色紧接 grid edit 的 fixture 使用真实
+snake_case Project event 字段，旧代码同样在最终 UI 缺少音符的断言处失败。
+恢复修复后，完整 Creator Vitest 67 files / 1,135 tests 与 `tsc --noEmit`
+通过，现有 stale Project/Runtime 和失败清空投影测试继续通过；
+`scripts/docs-site.sh check` 通过（50 routes）。修复仅让 grid、structure、
+colour 三条成功路径先 dispatch 已提交 revision，再以该 revision 刷新；
+settings 的现有显式 revision 刷新不变，reducer 不改。以上不代替最终提交头的
+batch-only lane、当前头评审、实际 merge 或 A2 的人工验收。
 
 ## Decision and implementation Task contract (D1–D5 / I1–I5)
 
