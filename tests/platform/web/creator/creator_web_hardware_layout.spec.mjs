@@ -256,15 +256,15 @@ async function reopenLocalProject(page) {
 }
 
 // The upper screen publishes the committed tempo.
-async function committedBpm(page) {
+async function displayedBpm(page) {
   const text = await page.locator(".overview-bpm").innerText();
   const bpm = Number.parseFloat(text.replace(/[^0-9]/g, ""));
   // An unreadable tempo has to fail right here. `toBe` compares with
   // Object.is, under which two NaNs agree, so a drill that never managed to
-  // read the published tempo would otherwise report every leg as unchanged.
+  // read the displayed tempo would otherwise report every leg as unchanged.
   expect(
     Number.isFinite(bpm),
-    `published tempo must be readable, got ${JSON.stringify(text)}`,
+    `displayed tempo must be readable, got ${JSON.stringify(text)}`,
   ).toBe(true);
   return bpm;
 }
@@ -292,13 +292,13 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
-  const committed = await committedBpm(page);
+  const committed = await displayedBpm(page);
   expect(committed).toBeGreaterThan(0);
   const baseline = await inspectTruth(page);
   expect(baseline.bpm).toBe(committed);
 
   // Leg 1 — a draft without release is not a commit. Moving the fader only
-  // previews locally: the published tempo and Project Truth stay put, and no
+  // previews on both displays: Project Truth stays put, and no
   // Apply button exists to turn the draft into a commit.
   await page.getByRole("button", {name: "Sequence"}).click();
   await showSequenceLayer(page, "SETUP");
@@ -306,7 +306,7 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
   await expect(bpmFader).toBeVisible();
   await bpmFader.fill(String(committed + 12));
   await expect(page.getByRole("button", {name: /Apply/})).toHaveCount(0);
-  expect(await committedBpm(page)).toBe(committed);
+  expect(await displayedBpm(page)).toBe(committed + 12);
   expect((await inspectTruth(page)).bpm).toBe(committed);
 
   // Leg 2 — Escape cancels the draft: the control falls back to the
@@ -321,7 +321,7 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
   // to the dragged value with one revision.
   await bpmFader.fill(String(committed + 12));
   await bpmFader.dispatchEvent("pointerup");
-  await expect.poll(() => committedBpm(page)).toBe(committed + 12);
+  await expect.poll(() => displayedBpm(page)).toBe(committed + 12);
   const released = await inspectTruth(page);
   expect(released.bpm).toBe(committed + 12);
   expect(released.revision).toBe(baseline.revision + 1);
@@ -340,7 +340,7 @@ test("commits Tempo only on release and keeps Project Truth across a reload", as
   // with a stale tempo, so the phase is asserted rather than inferred.
   await expect(page.getByTestId("creator-phase"))
     .toHaveText("ready", {timeout: 30_000});
-  expect(await committedBpm(page)).toBe(committed + 12);
+  expect(await displayedBpm(page)).toBe(committed + 12);
   expect((await inspectTruth(page)).bpm).toBe(committed + 12);
 });
 

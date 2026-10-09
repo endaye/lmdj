@@ -29,6 +29,9 @@ interface WaveformEditorProps {
   playback: Readonly<PadPlayback>;
   playheadFrame: number | null;
   disabled?: boolean;
+  // When supplied, the owner can invalidate an in-flight visual gesture on
+  // preview rejection/lifecycle reset without asking the Host to cancel again.
+  previewActive?: boolean;
   onPreview: (playback: Readonly<PadPlayback>) => void;
   onCommit: (playback: Readonly<PadPlayback>) => void;
   onCancel: () => void;
@@ -155,6 +158,7 @@ export function WaveformEditor({
   playback,
   playheadFrame,
   disabled = false,
+  previewActive,
   onPreview,
   onCommit,
   onCancel,
@@ -187,7 +191,7 @@ export function WaveformEditor({
   const queryEpoch = useRef(0);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
-  const effective = draftPlayback ?? playback;
+  const effective = previewActive === false ? playback : draftPlayback ?? playback;
   const resolvedEnd = effective.trimEndFrame ?? sourceFrames;
   // Reverse mirrors the trimmed region together with its loop point, so a
   // loop boundary is drawn and edited at its mirror: later passes then wrap
@@ -197,6 +201,18 @@ export function WaveformEditor({
     : frame;
   const loopStartBoundary = loopBoundary(
     effective.loopStartFrame ?? effective.trimStartFrame);
+
+  useEffect(() => {
+    if (previewActive !== false) return;
+    gesturePointerId.current = null;
+    gripDrag.current = null;
+    gesture.current = null;
+    setDraftPlayback(null);
+  }, [previewActive, draftPlayback]);
+
+  useEffect(() => {
+    if (disabled) cancelGestureRef.current();
+  }, [disabled]);
 
   useEffect(() => () => {
     queryEpoch.current += 1;
@@ -281,6 +297,7 @@ export function WaveformEditor({
     gesture.current = null;
     setDraftPlayback(null);
     if (!playbackEquals(current.base, current.latest)) onCommit(current.latest);
+    else onCancel();
   };
 
   const cancelGesture = () => {

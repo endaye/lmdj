@@ -645,6 +645,18 @@ function setRunningAudioFixture(session: CreatorRuntimeSession) {
   session.diagnostics = () => ({...diagnostics(), state: "running"});
 }
 
+// Component-only Host state seam. Publishing running after Project open keeps
+// the visual audio state aligned with diagnostics; this is not trusted browser
+// activation or physical audio evidence.
+function controlledSampleAudio(session: CreatorRuntimeSession) {
+  let publish!: (state: RuntimeHostState) => void;
+  session.subscribeHostState = (listener) => { publish = listener; return () => {}; };
+  return () => act(() => {
+    setRunningAudioFixture(session);
+    publish({state: "running", errorCode: null, errorDetails: {}});
+  });
+}
+
 function sampleRuntimeFixture(
   overrides: Partial<CreatorSampleRuntimeSession> = {},
 ) {
@@ -1275,6 +1287,7 @@ function busyProjectionFixture(
 
 test("commits composed controlled Volume once per pointer and keyboard completion", async () => {
   const fixture = mutableSampleRuntimeFixture();
+  const runAudio = controlledSampleAudio(fixture.session);
   let previewCount = 0;
   let updateCount = 0;
   fixture.session.setSamplePreview = async () => {
@@ -1299,6 +1312,8 @@ test("commits composed controlled Volume once per pointer and keyboard completio
   selectSamplePage("Playback");
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
 
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
   fireEvent.pointerDown(volume, {pointerId: 31});
   fireEvent.change(volume, {target: {value: "-3.2"}});
   await waitFor(() => expect(previewCount).toBe(1));
@@ -3871,6 +3886,7 @@ test("Sample pages keep their selection across Pad, Bank and System changes", as
 
 test("changing Sample page cancels an unfinished pointer preview without committing it", async () => {
   const fixture = mutableSampleRuntimeFixture();
+  const runAudio = controlledSampleAudio(fixture.session);
   const preview = vi.spyOn(fixture.session, "setSamplePreview");
   const clear = vi.spyOn(fixture.session, "clearSamplePreview");
   const update = vi.spyOn(fixture.session, "updatePad");
@@ -3880,6 +3896,8 @@ test("changing Sample page cancels an unfinished pointer preview without committ
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Playback");
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
   fireEvent.pointerDown(volume, {pointerId: 31});
   fireEvent.change(volume, {target: {value: "-3.2"}});
   await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
@@ -3892,4 +3910,49 @@ test("changing Sample page cancels an unfinished pointer preview without committ
   expect(update).not.toHaveBeenCalled();
   selectSamplePage("Playback");
   expect((screen.getByRole("slider", {name: "Pad A01 Volume"}) as HTMLInputElement).value).toBe("0");
+});
+
+test("trim editing before audio activation previews visually without a refused Host audition", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  const start = await screen.findByRole("slider", {name: /^Pad A01 Start —/});
+  fireEvent.pointerDown(start, {pointerId: 55});
+  fireEvent.change(start, {target: {value: "2"}});
+  expect((start as HTMLInputElement).value).toBe("2");
+  expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("180");
+  expect(preview).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  fireEvent.keyDown(start, {key: "Escape"});
+  fireEvent.pointerUp(window, {pointerId: 55});
+  expect((start as HTMLInputElement).value).toBe("0");
+  expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("0");
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.revision).toBe(3);
+});
+
+test("a rejected trim preview restores both screens and cannot commit on late release", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const runAudio = controlledSampleAudio(fixture.session);
+  const preview = vi.spyOn(fixture.session, "setSamplePreview")
+    .mockRejectedValueOnce(new Error("preview refused"));
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  const start = await screen.findByRole("slider", {name: /^Pad A01 Start —/});
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+  fireEvent.pointerDown(start, {pointerId: 52});
+  fireEvent.change(start, {target: {value: "2"}});
+  expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("180");
+  await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("0"));
+  expect((start as HTMLInputElement).value).toBe("0");
+  fireEvent.pointerUp(window, {pointerId: 52});
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.revision).toBe(3);
 });

@@ -386,6 +386,12 @@ function Workspace({
   // Encoder 3 / 4 turns preview Tempo / Swing and commit once at rest.
   const [tempoPreview, setTempoPreview] = useState<number | null>(null);
   const [swingPreview, setSwingPreview] = useState<number | null>(null);
+  const [touchSettingsPreview, setTouchSettingsPreview] = useState<Readonly<{
+    projectId: string;
+    patternId: string;
+    bpm: number | null;
+    swingPercent: number | null;
+  }> | null>(null);
   const settingsCommit = useRef<(changes: {bpm?: number; swingPercent?: number}) => void>(
     () => {});
   const encoderTurn = (min: number, max: number, onPreview: (value: number | null) => void,
@@ -2518,7 +2524,17 @@ function Workspace({
     if (!sequenceSettingsLocked) return;
     tempoTurn.current?.cancel();
     swingTurn.current?.cancel();
+    setTouchSettingsPreview(null);
   }, [sequenceSettingsLocked]);
+  // Drafts and queued encoder turns belong to the visible editing context.
+  // Dropping them on navigation must not write to the newly opened object.
+  useEffect(() => {
+    tempoTurn.current?.cancel();
+    tempoTurn.current?.forget();
+    swingTurn.current?.cancel();
+    swingTurn.current?.forget();
+    setTouchSettingsPreview(null);
+  }, [activeMode, systemOpen, state.project.current?.projectId, sequence.selectedPatternId]);
   // A failed settings commit leaves Truth where it was; the next turn starts
   // from Truth rather than from the request that did not land.
   useEffect(() => {
@@ -2528,6 +2544,11 @@ function Workspace({
   }, [sequence.errorCode]);
   settingsCommit.current = (changes) => { void updateSequenceSettings(changes); };
   const sequenceProject = state.project.current;
+  const sequencePreviewAllowed = activeMode === "sequence" && !systemOpen && !sequenceSettingsLocked;
+  const visibleTouchPreview = sequencePreviewAllowed &&
+    touchSettingsPreview?.projectId === sequenceProject?.projectId &&
+    touchSettingsPreview?.patternId === (sequence.selectedPatternId ?? sequenceProject?.patternId)
+    ? touchSettingsPreview : null;
   const sequencePatterns = sequenceProject?.patterns ?? [];
   const sequencePatternIndex = sequencePatterns.findIndex((item) =>
     item.patternId === (sequence.selectedPatternId ?? sequenceProject?.patternId));
@@ -2786,8 +2807,8 @@ function Workspace({
               selection={sequenceGridSelection}
               rowOffset={overviewRowOffset}
               currentPad={sequenceCurrentPad}
-              tempoPreview={tempoPreview}
-              swingPreview={swingPreview}
+              tempoPreview={sequencePreviewAllowed ? visibleTouchPreview?.bpm ?? tempoPreview : null}
+              swingPreview={sequencePreviewAllowed ? visibleTouchPreview?.swingPercent ?? swingPreview : null}
               transport={transport}
               midi={midi}
             />
@@ -2961,6 +2982,7 @@ function Workspace({
                 onScrollReady={bindSequenceScroll}
                 defaultVelocity={sequenceGridVelocity}
                 projectionRefreshing={state.projectProjectionRefresh !== null}
+                settingsActive={!systemOpen}
                 onSnapChange={setSequenceGridSnap}
                 onEditModeChange={setSequenceGridMode}
                 onViewportChange={setSequenceGridViewport}
@@ -2980,6 +3002,16 @@ function Workspace({
                     onDoubleUpPattern: () => { void doubleUpPattern(); },
                     onCopyPattern: () => { void copyPattern(); },
                   } : {})}
+                  onSettingsPreview={(changes) => {
+                    const project = state.project.current!;
+                    const patternId = sequence.selectedPatternId ?? project.patternId;
+                    setTouchSettingsPreview((previous) => ({
+                      ...(previous?.projectId === project.projectId && previous.patternId === patternId
+                        ? previous
+                        : {projectId: project.projectId, patternId, bpm: null, swingPercent: null}),
+                      ...changes,
+                    }));
+                  }}
                   onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
                   onRecover={(candidate, destinationPatternId) => {
                     if (!isSequenceSession(session)) return;

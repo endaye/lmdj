@@ -40,7 +40,7 @@ function renderSurface(recovery = false, options: {
 } = {}) {
   const callbacks = {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
-    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
+    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(), onSettingsPreview: vi.fn(),
     onResizePattern: vi.fn(), onDoubleUpPattern: vi.fn(), onCopyPattern: vi.fn(),
     onToggleMetronome: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
@@ -48,21 +48,43 @@ function renderSurface(recovery = false, options: {
     onEditModeChange: vi.fn(), onEdit: vi.fn(),
     onSelectionChange: vi.fn(), onVelocityChange: vi.fn(),
   };
-  render(<SequenceTouchWorkspace project={project}
-    transport={options.transport ?? initialPatternTransportState}
-    bank={0} snap="1/16"
-    editMode="note" selection={[]} defaultVelocity={100}
-    projectionRefreshing={options.projectionRefreshing ?? false}
-    metronomeOn={false}
-    state={{
+  const props: Parameters<typeof SequenceTouchWorkspace>[0] = {
+    project, transport: options.transport ?? initialPatternTransportState,
+    bank: 0, snap: "1/16", editMode: "note", selection: [], defaultVelocity: 100,
+    projectionRefreshing: options.projectionRefreshing ?? false, metronomeOn: false,
+    state: {
       ...initialSequenceState,
       recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
         bars: 1, reason: "interrupted", eventCount: 3}] : [],
       phase: recovery ? "recovery" : "stopped",
       ...options.state,
-    }} {...callbacks} />);
-  return callbacks;
+    }, ...callbacks,
+  };
+  const view = render(<SequenceTouchWorkspace {...props} />);
+  return {...callbacks,
+    update: (changes: Partial<typeof props>) => view.rerender(<SequenceTouchWorkspace {...props} {...changes} />),
+  };
 }
+
+test.each([{name: "BPM", field: "bpm", value: "132"},
+  {name: "Swing", field: "swingPercent", value: "61"}])(
+  "$name shares a draft, cancels it, and clears it before committing once", ({name, field, value}) => {
+    const callbacks = renderSurface();
+    openSetup();
+    const slider = screen.getByRole("slider", {name});
+    fireEvent.pointerDown(slider, {pointerId: 1});
+    fireEvent.change(slider, {target: {value}});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({[field]: Number(value)});
+    expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(slider, {key: "Escape"});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({[field]: null});
+    fireEvent.pointerUp(window, {pointerId: 1});
+    expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+    fireEvent.change(slider, {target: {value}});
+    fireEvent.pointerUp(slider);
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({[field]: null});
+    expect(callbacks.onSettingsChange).toHaveBeenCalledExactlyOnceWith({[field]: Number(value)});
+  });
 
 test("hardware Sequence overview is read-only and the touch workspace owns editing", () => {
   const onRecord = vi.fn();
@@ -517,3 +539,24 @@ test("Pattern picker cancellation and selecting the current Pattern preserve the
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(callbacks.onSwitch).not.toHaveBeenCalled();
 });
+
+
+test.each(["Project", "Pattern", "recording"] as const)(
+  "%s transition cancels a held timing draft before a late release", (change) => {
+    const callbacks = renderSurface();
+    openSetup();
+    const slider = screen.getByRole("slider", {name: "BPM"});
+    fireEvent.pointerDown(slider, {pointerId: 88});
+    fireEvent.change(slider, {target: {value: "132"}});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({bpm: 132});
+    if (change === "Project") callbacks.update({project: {...project,
+      projectId: "44444444-4444-4444-8444-444444444444", bpm: 88}});
+    else if (change === "Pattern") callbacks.update({state: {...initialSequenceState,
+      selectedPatternId: project.patterns[1]!.patternId}});
+    else callbacks.update({transport: transportStatus({playing: true, recording: true})});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({bpm: null});
+    expect((screen.getByRole("slider", {name: "BPM"}) as HTMLInputElement).value)
+      .toBe(change === "Project" ? "88" : "120");
+    fireEvent.pointerUp(window, {pointerId: 88});
+    expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+  });
