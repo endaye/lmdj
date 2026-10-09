@@ -53,6 +53,13 @@ export async function showSamplePage(page, name) {
   await button.and(page.locator("[aria-current='page']")).waitFor();
 }
 
+export async function showSampleDetails(page) {
+  await showSamplePage(page, "Pad");
+  const details = page.locator(".sample-details");
+  if (!(await details.evaluate(element => element.open))) await details.locator("summary").click();
+  return details;
+}
+
 // Perform controller ownership outlives its visible subpage. An already active
 // page is a no-op, preserving an in-progress native gesture and focus.
 export async function showPerformPage(page, name) {

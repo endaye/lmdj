@@ -1,5 +1,5 @@
 import {readFile} from "node:fs/promises";
-import {showSamplePage, showPerformPage, showPatternLaunchGroup} from "./creator_navigation.mjs";
+import {showSampleDetails, showSamplePage, showPerformPage, showPatternLaunchGroup} from "./creator_navigation.mjs";
 
 import {expect} from "@playwright/test";
 
@@ -127,9 +127,16 @@ export async function installPerformWitnessSample(page) {
   });
   await expect(page.getByRole("dialog", {name: "Replace Pad A01?"})).toBeVisible();
   await page.getByRole("button", {name: "Confirm replace"}).click();
+  // Every import passes through the source-selection dialog. The previous
+  // fixture already has 4,800 frames, so format alone cannot witness this
+  // replacement: finish the dialog before inspecting or leaving Sample.
+  const source = page.getByRole("dialog", {name: "Pad A01 Long Source"});
+  await expect(source).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await source.getByRole("button", {name: "Commit selection"}).click();
+  await expect(source).toBeHidden({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(page.getByRole("button", {name: "Replace Sample"}))
     .toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(page.locator(".selected-sample"))
-    .toContainText("48 kHz · Mono · 4,800 frames");
+  await expect(await showSampleDetails(page))
+    .toContainText("48 kHz · Stereo · 4,800 frames");
   await openPerform(page);
 }

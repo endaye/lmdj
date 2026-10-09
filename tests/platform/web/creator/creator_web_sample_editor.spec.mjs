@@ -1,3 +1,4 @@
+import {showSampleDetails} from "./fixtures/creator_navigation.mjs";
 import {
   clickCreatorSystemAction,
   showSamplePage,
@@ -214,8 +215,8 @@ async function importV1SampleProject(page) {
   await (await chooserPromise).setFiles(sampleBundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("44 / 64", {exact: true})).toBeVisible();
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev46");
+  await expect(page.getByText("44 / 64 Pads used", {exact: true})).toBeVisible();
+  await expect(page.locator(".creator-details-facts")).toContainText("Rev46");
   await expectProjectRevision(page, 46);
 }
 
@@ -386,7 +387,9 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
+  await showSampleDetails(page);
   await expect(page.getByText("48 kHz · Mono · 96,000 frames")).toBeVisible();
+  await showSamplePage(page, "Trim");
   await expectDefaultPlaybackUi(page);
 
   const waveformPath = page.locator("path[data-waveform]");
@@ -571,7 +574,10 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     }));
 
   await selectPadWithoutPress(page, "Pad A02 — assigned — Key W");
-  await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
+  await showSampleDetails(page);
+  await expect(page.locator(".sample-details div").filter({
+    has: page.locator("dt", {hasText: /^Asset ID$/}),
+  }).locator("dd")).toHaveText(/^[0-9a-f-]{36}$/, {timeout: 30_000});
   await showSamplePage(page, "Playback");
   const a2Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a2Loop, () => a2Loop.click(), 56);
@@ -664,8 +670,8 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev60");
-  await expect(page.getByText("45 / 64", {exact: true})).toBeVisible();
+  await expect(page.locator(".creator-details-facts")).toContainText("Rev60");
+  await expect(page.getByText("45 / 64 Pads used", {exact: true})).toBeVisible();
   await enterSampleEditor(page);
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true})).toBeVisible();
   await expectProjectRevision(page, 60);
@@ -740,6 +746,7 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
 
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
+  await showSampleDetails(page);
   await expect(page.getByText(
     `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
   )).toBeVisible();
@@ -834,7 +841,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   await page.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev47");
+  await expect(page.locator(".creator-details-facts")).toContainText("Rev47");
 });
 
 test("Creator history preserves sound identity across modes, cancelled edits and persisted reopen", async ({page, browserName}) => {

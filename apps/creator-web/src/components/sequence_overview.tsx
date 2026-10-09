@@ -24,6 +24,7 @@ import {padColourAttribute, padColourOf} from "../state/pad_colour";
 import {bankName, slotAddress} from "../state/view_model";
 import {transportStatusLabel} from "./transport_status";
 import {usePatternPlayheadTick} from "./use_pattern_playhead";
+import {padContent} from "../state/overview_context";
 
 interface SequenceOverviewProps {
   project: ProjectView | null;
@@ -162,7 +163,7 @@ export function SequenceOverview({
               <li key={row} data-row={row}
                 data-current-pad={currentPad === row ? "true" : undefined}
                 data-pad-colour={padColourAttribute(padColourOf(project, row))}>
-                {slotAddress(row)}
+                <span>{slotAddress(row)}</span>{" / "}{padContent(project, row)}
               </li>
             ))}
           </ol>

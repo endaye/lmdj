@@ -89,7 +89,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 | Sequence stopped，SHIFT 关 | ←／→ | 前／后一个 Pattern；到边界禁用 | GROOVE 序号、长度、音符总览换 Pattern | — | EDIT／SETUP 使用新 Pattern，原音符选区清空 | 切当前 Pattern；playing／recording／结算时不能这样切 |
 | Sequence 以外，SHIFT 关 | ←／→ | Undo／Redo 控件保持禁用，需要先打开 SHIFT | — | — | — | 历史灯可显示可用，但不代表现在可按 |
 | 任意页面 | SHIFT | 切换 Undo／Redo 修饰层 | — | — | 状态通过左栏 SHIFT 与方向灯表达 | 本身不写 Project；换页、Bank、Play/Record 或完成 Undo/Redo 时清除 |
-| SHIFT 开，历史可用 | SHIFT＋←／→ | Undo／Redo 一次作者编辑 | 修订号、内容、当前 Pattern 投影重新读取 | 分配、颜色等恢复到历史结果 | Sample 草稿清理；Sequence／Sample 等重新投影 | 影响已提交作者状态；不是撤销一次播放或下载 |
+| SHIFT 开，历史可用 | SHIFT＋←／→ | Undo／Redo 一次作者编辑 | 内容、当前 Pattern 投影重新读取；修订号在 System 详情 | 分配、颜色等恢复到历史结果 | Sample 草稿清理；Sequence／Sample 等重新投影 | 影响已提交作者状态；不是撤销一次播放或下载 |
 | 历史不可用／采样或演出待处理／草稿未完成／写入中 | SHIFT＋←／→ | 按钮禁用或等待；执行历史时全控制台暂时 inert | 等待结果 | 等待结果 | 提示由可访问状态和按钮标题提供 | 不允许用 Undo 绕过未完成操作 |
 
 400 ms 是当前实现的旋钮提交时机；相关产品交互确认仍以[硬件映射问题](https://github.com/endaye/lmdj/issues/1822)和产品决策为准。这里记录已有行为，不替这些问题补充产品结论。旋钮离开 Sequence 后仍可能按保留定时器提交；本页不承诺“换页自动取消旋钮编辑”。
@@ -114,14 +114,18 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 | 页面／状态 | 触发上屏变化的操作 | 上屏显示／变化 | 其他区域关系 |
 | --- | --- | --- | --- |
-| Project | 进入页面、打开／新建／复制 Project、作者提交、音频／MIDI 状态变化 | 当前已打开 Project 的摘要、修订、Patterns／Pads／Assets、工作区状态 | 点击尚未打开的 Project 卡片只变触摸区选中态，上屏不改成那张卡片 |
-| Sample | 选 Pad、换 Bank、成功导入／采样／删除／重置／裁剪 | PAD 地址、声道／采样率／总时长、已提交 Start–End、完整波形及范围标记 | 触摸编辑器可缩放；上屏仍看完整波形。参数拖动草稿不即时替换这里的已提交裁剪范围 |
-| Sequence | 切 Pattern、Bank、ENC1／ENC2、↑↓、Snap、框选、音符写入、Play／Record | BPM／Swing、bar／beat、传输状态、8 条轨道、视窗框、当前 Pad、选中音符与力度信息 | ENC2 只滚上屏；ENC1 与触摸区横向滚动通过 viewport 联动；音符提交回读后两边同步 |
-| Perform | Play／Record、Pattern 状态变化、换 Bank、设置或槽位编辑提交 | 全局 Pattern 传输状态、bar／beat、进度条、Bank、Quantize、已分配槽位数 | 演出录音／WAV／Replay 的详细状态在触摸区；上屏不提供主输出电平表 |
-| Sound Sets | 进入页面、安装成功、音频准备结果 | 通用身份／Project 事实及“确认安装才写入”的说明 | Catalog、试听和安装方案主要在触摸区；没有 Set 的上屏波形 |
-| Slice | 进入页面、Adopt 后回读 Project | 通用 Project 事实及“Adopt 前不写 Truth”的说明 | 检测列表、目标 Pad 方案和试听在触摸区 |
+| Project | 进入页面、打开／新建／复制 Project、作者提交、音频／MIDI 状态变化 | 当前已打开 Project 的短身份、本地保存策略／待处理状态、Patterns／Pads、工作区状态 | 点击尚未打开的 Project 卡片只变触摸区选中态，上屏不改成那张卡片 |
+| Sample | 选 Pad、换 Bank、成功导入／采样／删除／重置／裁剪 | PAD 地址、真实类别／空态、声道／采样率／总时长、已提交 Start–End、完整波形及范围标记 | 触摸编辑器可缩放；上屏仍看完整波形。参数拖动草稿不即时替换这里的已提交裁剪范围 |
+| Sequence | 切 Pattern、Bank、ENC1／ENC2、↑↓、Snap、框选、音符写入、Play／Record | BPM／Swing、bar／beat、传输状态、8 条带地址和真实类别／空态的轨道、视窗框、当前 Pad、选中音符与力度信息 | ENC2 只滚上屏；ENC1 与触摸区横向滚动通过 viewport 联动；音符提交回读后两边同步 |
+| Perform | Play／Record、Pattern 状态变化、换 Bank、设置或槽位编辑提交 | 当前已确认与待切换槽位分别显示；全局 Pattern 传输状态、bar／beat、进度条、Bank、Quantize、已分配槽位数 | 演出录音／WAV／Replay 的详细状态在触摸区；上屏不提供主输出电平表 |
+| Sound Sets | 进入页面、安装成功、音频准备结果 | 当前打开的 Project 身份与浏览／试听／选择安装目标的说明 | Catalog、试听和安装方案主要在触摸区；没有 Set 的上屏波形 |
+| Slice | 进入页面、Adopt 后回读 Project | 当前源 Pad 身份及预览后 Adopt 的说明 | 检测列表、目标 Pad 方案和试听在触摸区 |
 | System | Logo 打开／Back 返回 | 仍显示此前音乐页面，上屏音频／MIDI 状态可变化 | 只覆盖触摸区；不切换成独立 System 上屏 |
-| 作者修改已保存、Runtime 准备失败 | 参数／音频操作提交后 prepare 失败 | 可先显示新的修订号 | 新声音不因此保证可听；触摸区保留明确准备失败与重试入口 |
+| 作者修改已保存、Runtime 准备失败 | 参数／音频操作提交后 prepare 失败 | Project 显示 Sample saved · audio pending 或需检查提示 | 新声音不因此保证可听；触摸区保留明确准备失败与重试入口 |
+
+Project／Asset 友好名称只用公开投影字段：当前没有名称时显示短 Project ID 或 Pad 地址／类别，不从 Bundle 解析名称。`LOCAL AUTOSAVE` 是保存策略，不声称所有草稿已保存，也不显示虚构时间。顶屏的当前 Project 短身份仍供辅助技术读取。
+
+技术字段集中在 **System → Project and build details**；所选素材完整 Asset ID、源格式／帧数和 revision 在 **Sample → Pad → Sample details**。Perform 的页首 cue 与录制状态中的重复 last-launch 文本已合并到顶屏，启动键及分组的就地提示保留。
 
 ## 3. 下边 Pad 区（16 个 Pad）
 
@@ -168,7 +172,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 | Sequence，已分配，未录音 | 按声音 Pad | 演奏；不等同于 ↑↓ 的当前 Pad 导航 | 播放头照常运行；不自动移当前 Pad 视窗 | 发声反馈；箭头选择的 current Pad 可仍是另一个 | 网格不因一次手打而新增音符 | 不写 Pattern |
 | Sequence 或其他页，Pattern recording | 按／松声音 Pad | 音乐输入同时进入全局 Pattern 事件录音 | 录音状态继续，提交回读后总览有事件 | 按压反馈 | 结算并回读后相应 Pattern 网格显示事件 | 录音中的即时覆盖层不是“已经保存”；结束录音才结算 |
 | Perform，Performance recording／flushing | 按／松声音 Pad | 演奏并记录 pad_press／pad_release 演出操作 | 保持全局 Pattern 总览 | 声音／按压反馈 | 演出状态更新 | 进入 Performance 操作记录和主输出录音；不是启动触摸 Pattern 槽 |
-| 空 Pad，按住采样能力可用，其他录音空闲 | 鼠标／触摸／键盘按住，再松开 | 按住录当前 System 所选输入；正常松开尝试自动保存 | 成功回读后 Pad 数／修订更新；Sample 页显示新样本 | 空态变 Assigned，显示颜色／选中反馈 | 录制中显示时长；失败或中断进入 review | 麦克风或内部播放录入目标 Pad；严格数字零前导可去掉 |
+| 空 Pad，按住采样能力可用，其他录音空闲 | 鼠标／触摸／键盘按住，再松开 | 按住录当前 System 所选输入；正常松开尝试自动保存 | 成功回读后 Pad 内容更新；Sample 页显示新样本 | 空态变 Assigned，显示颜色／选中反馈 | 录制中显示时长；失败或中断进入 review | 麦克风或内部播放录入目标 Pad；严格数字零前导可去掉 |
 | 空 Pad，第一次麦克风权限未授予 | 按一下／按住 | 请求权限，本次不直接录入 | 音频状态可能唤醒 | 仍 Empty | 提示授权后再按空 Pad | 授权成功后需再次按住；不能说第一次点击就录成样本 |
 | 空 Pad，MIDI 输入 | MIDI note | 不启动空 Pad 采样 | — | 保持 Empty | — | MIDI 不能替用户申请麦克风权限或创建采样 |
 | 空 Pad，但采样被其他录音／状态挡住 | 按 Pad | 不开始新采样 | — | 可能有按压反馈，内容仍 Empty | 以现有录音／限制提示为准 | 没有音频或 Project 写入 |
@@ -198,7 +202,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 | 状态 | 控件／操作 | 直接效果 | 上屏 | Pad 区 | 触摸区 | 声音／保存 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 有本地项目卡片 | 点击 Project 卡片 | 只选择候选项目 | 保持已打开 Project 摘要 | 保持原项目 | 卡片 selected；OPEN PROJECT 目标变化 | 不打开、不切声音、不复制所选卡片 |
-| 可打开、已选择卡片 | OPEN PROJECT | 打开选中项目，重新准备 Runtime 内容 | 新 Project 摘要与修订 | 新项目当前 Bank 的 Pads | 项目库／当前项目界面；有中断录音时显示恢复提示 | 拿到项目锁且加载成功才完成；忙时可 Retry／Continue here |
+| 可打开、已选择卡片 | OPEN PROJECT | 打开选中项目，重新准备 Runtime 内容 | 新 Project 身份和摘要 | 新项目当前 Bank 的 Pads | 项目库／当前项目界面；有中断录音时显示恢复提示 | 拿到项目锁且加载成功才完成；忙时可 Retry／Continue here |
 | 已有 Project | Open local／Back to Project | 展开／收回本地库视图 | 当前 Project 不变 | — | 项目卡片列表与返回按钮变化 | 只变视图 |
 | Runtime ready，可创建 | + NEW PROJECT | 创建并打开新项目 | 自动转 Sample 总览 | 新项目 Pads | 自动进入 Sample | 新建项目落本地；不是仅插入一张待打开卡片 |
 | 当前 Project 可复制 | DUPLICATE | 复制**当前已打开** Project，生成独立身份并打开副本 | 副本身份／修订／内容 | 副本的 Pad 内容 | 本地库存新增副本，当前打开副本 | 不复制只选中未打开的卡片；Host 拒绝时显示原因 |
@@ -348,7 +352,7 @@ Sample 使用四个子页，作用于同一个选中 Pad。**首次挂载默认 
 | Target 页 | Install target Bank A–D | 只选安装目标 | 演奏 Bank 不变 | 下边演奏 Bank 不变 | 目标 Bank 与旧映射方案清理／重选 | 与左栏 Bank 键不是同一个状态 |
 | 已选 Set／目标且有 Project | Preview mapping | 查询目标 Bank 的 16 槽方案和占用冲突 | — | 演奏 Pads 不变 | Review 显示 Install／Occupied／Empty source／Unmapped，空源不改 Pad | 方案格是只读预览，不是可演奏 Pad |
 | 映射有冲突 | Keep／Replace 单选 | 选择保留现有占用 Pad／替换 | — | 未确认前原内容保持 | 安装数量／可提交状态变化 | 未选择策略时不能提交碰撞安装 |
-| 方案可提交 | Install into Bank | 执行确认的映射并回读 | 修订／Pad／Asset 数按结果更新 | 当前 Bank 若为目标，声音／颜色更新 | Installed 回执或冲突／失败 | 空 Set 槽不清原 Pad；Replace 按 Pad 颜色保留规则 |
+| 方案可提交 | Install into Bank | 执行确认的映射并回读 | Project 内容回读；修订／Asset 计数在 System 详情 | 当前 Bank 若为目标，声音／颜色更新 | Installed 回执或冲突／失败 | 空 Set 槽不清原 Pad；Replace 按 Pad 颜色保留规则 |
 | 详情／错误 | Browse／Dismiss | 返回保留选中的列表／清错误 | — | — | 列表焦点恢复／错误收回 | 不撤销已完成安装，不隐含 Stop audition |
 | Sound Sets 页 | Back to Project | 回 Project | Project 总览 | 演奏 Bank 保留 | Project 页面 | 不安装未确认方案 |
 
@@ -363,7 +367,7 @@ Sample 使用四个子页，作用于同一个选中 Pad。**首次挂载默认 
 | pending／interrupted 尝试 | Cancel analysis | 取消该次尝试 | — | — | cancelled；之前 active slices 可仍保留 | 不删除此前已采用 Pad |
 | 有候选 | Preview／Stop preview | 试听一个切片／停止候选试听 | 没有切片波形上屏 | 原 Pad 保持 | Preview started／未播放／停止提示 | 不自动分配；未唤醒音频时会提示先打 Pad |
 | 有候选 | Add target、Slice／Bank／Pad 下拉、Remove | 增删“一个切片 → 一个明确目标 Pad”的行 | — | 原内容保持 | 目标草稿／校验错误更新 | 不切演奏 Bank，不落盘 |
-| 方案有效，无未知提交结果 | Adopt selected slices | 停试听，将选定切片写到目标 Pad，回读 Project | 修订／内容事实更新 | 目标 Pad 若可见，声音／颜色更新 | 采用结果、目标行清空 | 替换目标已有声音；保留源和 Pattern；失败／不确定时先 Refresh |
+| 方案有效，无未知提交结果 | Adopt selected slices | 停试听，将选定切片写到目标 Pad，回读 Project | 内容事实更新；修订在 System 详情 | 目标 Pad 若可见，声音／颜色更新 | 采用结果、目标行清空 | 替换目标已有声音；保留源和 Pattern；失败／不确定时先 Refresh |
 | 存在任务 | Refresh slices and Project | 回读 Project 与候选权威，解除已核对的不确定态 | 项目事实按回读更新 | 采用后的内容按回读更新 | 列表／方案／状态更新 | 不自动重试未知结果的 Adopt |
 | 有 active slices | Discard slices | 停候选试听、丢此候选集合 | 原 Project Truth 保持 | 已采用 Pad 保持 | active 结果清理 | 不回滚已经 Adopt 的作者内容 |
 | Slice 页 | Back to Sample | 回 Sample；卸载候选页会停止候选试听 | 最后选择 Pad 的 Sample 总览 | Sample 选中反馈 | Sample 编辑器 | 不自动采用未提交目标方案 |
@@ -384,11 +388,11 @@ Sample 使用四个子页，作用于同一个选中 Pad。**首次挂载默认 
 
 | 状态 | 控件／操作 | 直接效果 | 上屏 | Pad 区 | 触摸区 | 声音／保存 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 空 Pad take 为 review | Save Pad recording／Discard Pad recording | 尝试保存原目标／丢此次 take | 保存回读后内容／修订更新 | 保存后 Assigned；丢弃保持原内容 | review → saving → idle，或失败回 review | 无声音 take 不保存；异常后不自动移目标或覆盖已有新声音 |
+| 空 Pad take 为 review | Save Pad recording／Discard Pad recording | 尝试保存原目标／丢此次 take | 保存回读后内容更新；修订在 System 详情 | 保存后 Assigned；丢弃保持原内容 | review → saving → idle，或失败回 review | 无声音 take 不保存；异常后不自动移目标或覆盖已有新声音 |
 | 默认种子某槽 failed | Retry default sounds | 重试失败槽，保留其他槽 | 成功回读后内容更新 | Failed → Loading／Processing → Assigned | 失败提示更新 | 不把所有 16 槽重新覆盖 |
 | 默认声音已保存但不可播 | Prepare default sounds | 重试音频准备 | 音频／Runtime 事实更新 | 成功后恢复可演奏 | unavailable 提示清理 | 不重新写一份样本 |
 | Slice 等作者内容已保存但不可播 | Retry audio preparation | 按已保存修订回读并重新准备 | 项目／音频事实更新 | 内容、可演奏性恢复 | preparing／失败／完成 | 不重新 Adopt 切片 |
-| 打开 Project 有中断录音 | Keep recording(s) | 逐份恢复到原归属；拒绝项仍待处理 | 成功提交后的修订／内容更新 | 按内容回读 | 完成数量／剩余数量，必要时 Open Sequence／Perform | 不是只隐藏提示 |
+| 打开 Project 有中断录音 | Keep recording(s) | 逐份恢复到原归属；拒绝项仍待处理 | 成功提交后的内容更新；修订在 System 详情 | 按内容回读 | 完成数量／剩余数量，必要时 Open Sequence／Perform | 不是只隐藏提示 |
 | 同上 | Discard… → 确认 Discard | 先确认，再丢相关候选 | 既有作者内容保持 | — | 待恢复数量减少／结果显示 | 确認丢候选不可 Undo；Cancel 只退回询问 |
 | 同上 | More options／Open Sequence／Open Perform | 到有候选的专页 | 换对应总览 | 页相关高亮 | 专页恢复列表 | 不自动 Keep／Discard |
 | 同上 | Decide later／Close／忽略提示 | 只收提示或不处理 | — | — | 提示收起；专页候选仍在 | 候选保留，不当作恢复完成 |

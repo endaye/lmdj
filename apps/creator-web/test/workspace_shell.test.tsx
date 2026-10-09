@@ -71,6 +71,20 @@ function selectSamplePage(name: "Trim" | "Playback" | "Tone / EQ" | "Pad") {
   expect(button.getAttribute("aria-current")).toBe("page");
 }
 
+// The technical identity moved to Pad > Sample details. Preserve the complete
+// identity assertion and return to the original editor page before its journey.
+async function expectSelectedAsset(assetId: string): Promise<void> {
+  const pages = screen.getByRole("navigation", {name: "Sample pages"});
+  const previous = pages.querySelector('[aria-current="page"]')!.textContent as
+    "Trim" | "Playback" | "Tone / EQ" | "Pad";
+  selectSamplePage("Pad");
+  const summary = screen.getByText("Sample details", {selector: "summary"});
+  const details = summary.parentElement as HTMLDetailsElement;
+  if (!details.open) await userEvent.click(summary);
+  await within(details).findByText(assetId, {exact: true});
+  selectSamplePage(previous);
+}
+
 async function commitLongSourceSelection(): Promise<void> {
   await screen.findByRole("button", {name: "Commit selection"});
   await userEvent.click(screen.getByRole("button", {name: "Commit selection"}));
@@ -229,7 +243,7 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
   render(<App initialState={sampleReady} />);
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
 
-  const metadata = screen.getByText("Asset 33333333").closest(".selected-sample")!;
+  const selectedPad = document.querySelector(".selected-sample")!;
   const waveform = screen.getByRole("region", {name: "Pad A01 waveform editor"});
   const pads = screen.getByRole("region", {name: "Pad matrix"});
   const touch = screen.getByRole("region", {name: "Touch workspace"});
@@ -241,9 +255,12 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
     expect(screen.getAllByRole("button", {name: `Bank ${bank}`})).toHaveLength(1);
     expect(within(rail).getByRole("button", {name: `Bank ${bank}`})).toBeTruthy();
   }
-  expect(metadata.compareDocumentPosition(waveform) & Node.DOCUMENT_POSITION_FOLLOWING)
+  expect(selectedPad.compareDocumentPosition(waveform) & Node.DOCUMENT_POSITION_FOLLOWING)
     .not.toBe(0);
-  expect(touch.contains(metadata)).toBe(true);
+  expect(touch.contains(selectedPad)).toBe(true);
+  expect(selectedPad.textContent).toBe("Pad A01");
+  expect(document.querySelector(".overview-context")?.textContent).toBe("SAMPLE / PAD A01");
+  expect(within(touch).queryByText(/frames$/)).toBeNull();
   expect(touch.contains(waveform)).toBe(true);
   expect(screen.queryByRole("region", {name: "Pad A01 Sample controls"})).toBeNull();
   expect(screen.queryByRole("button", {name: "Edit Pad A01"})).toBeNull();
@@ -257,6 +274,11 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
   expect(within(touch).getByRole("slider", {name: "Pad A01 Tone"})).toBeTruthy();
   expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
   await userEvent.click(within(pages).getByRole("button", {name: "Pad"}));
+  await userEvent.click(screen.getByText("Sample details", {selector: "summary"}));
+  const details = screen.getByText("Sample details", {selector: "summary"}).parentElement!;
+  expect(within(details).getByText(sampleReady.sample.inspect!.assetId!)).toBeTruthy();
+  expect(within(details).getByText("48 kHz · Mono · 8 frames")).toBeTruthy();
+  expect(within(details).getByText("Revision").nextElementSibling?.textContent).toBe("4");
   expect(screen.getByRole("button", {name: "Replace Sample"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Record Sample"})).toBeTruthy();
   expect(within(screen.getByRole("region", {name: "Pad A01 management"}))
@@ -434,7 +456,7 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
   // S8-D12: recording onto an assigned Pad is a replacement, so the existing
   // confirmation runs before the microphone is ever requested (S8B-D2).
@@ -1273,7 +1295,7 @@ test("commits composed controlled Volume once per pointer and keyboard completio
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Playback");
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
 
@@ -1317,7 +1339,7 @@ test.each(["update", "reset"] as const)(
     );
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     const selectedAfter = 1;
     if (kind === "update") {
@@ -1386,7 +1408,7 @@ test("atomically refreshes full Project truth on a real mutation conflict", asyn
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Playback");
   await userEvent.click(screen.getByRole("button", {name: "Mute"}));
 
@@ -1450,14 +1472,14 @@ test("converges committed Sample and Project truth across interleaved revisions"
   }));
   await screen.findByText("Audio running");
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   await userEvent.upload(input, wavFile("interleaved.wav"));
   await commitLongSourceSelection();
 
-  await screen.findByText("Asset 44444444");
+  await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.getByRole("button", {name: "Pad A04 — assigned — Key R"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A05 — assigned — Key T"})).toBeTruthy();
@@ -1505,7 +1527,7 @@ test.each([
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     vi.useFakeTimers();
     try {
@@ -1551,7 +1573,7 @@ test.each([
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
     selectSamplePage("Playback");
     await userEvent.click(screen.getByRole("button", {name: "Mute"}));
 
@@ -1574,7 +1596,7 @@ test.each(["project", "sample"] as const)(
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     vi.useFakeTimers();
     try {
@@ -1656,7 +1678,7 @@ test.each(["update", "reset"] as const)(
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     vi.useFakeTimers();
     try {
@@ -1708,7 +1730,7 @@ test("keeps pre-commit Sample import abort ownership on unmount", async () => {
   );
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
@@ -1786,7 +1808,7 @@ test.each([
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
   pad.focus();
 
@@ -1972,7 +1994,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   }));
   await screen.findByText("Audio running");
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
@@ -1984,7 +2006,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
     wavFile("import.wav"),
   );
   await commitLongSourceSelection();
-  await screen.findByText("Asset 44444444");
+  await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
 
   await userEvent.click(screen.getByRole("button", {name: "Pad A03 — empty — Key E"}));
   const importedPad = await screen.findByRole("button", {
@@ -2024,7 +2046,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   );
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
 
@@ -2165,7 +2187,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     await screen.findByText("Audio running");
     setRunningAudioFixture(fixture.session);
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
     fireEvent.keyDown(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"}), {
       key: "Enter",
       code: "Enter",
@@ -2196,7 +2218,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     expect(fixture.revision).toBe(4);
     if (kind === "delete") {
       await screen.findByRole("button", {name: "Pad A01 — empty — Key Q"});
-      expect(screen.queryByText("Asset 33333333")).toBeNull();
+      expect(screen.queryByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeNull();
       expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
     }
   },
@@ -2273,7 +2295,7 @@ test("shows saved and stale Runtime revisions and retries Prepare explicitly", a
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Playback");
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
 
@@ -2628,7 +2650,7 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
   expect(within(display).queryAllByRole("button")).toHaveLength(0);
   expect(within(display).queryByRole("button", {name: "New"})).toBeNull();
   expect(within(display).getByTestId("project-overview").textContent ?? "")
-    .toMatch(/Projects save automatically/);
+    .toContain("LOCAL AUTOSAVE");
 
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
@@ -2645,6 +2667,12 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
     .getByRole("button", {name: "System"}));
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
+  await user.click(screen.getByText("Project and build details", {selector: "summary"}));
+  const details = screen.getByText("Project and build details", {selector: "summary"}).parentElement!;
+  expect(within(details).getByText("Rev").nextElementSibling?.textContent).toBe("4");
+  expect(within(details).getByText("Project ID").nextElementSibling?.textContent)
+    .toBe(ready.project.current!.projectId);
+  expect(within(display).queryByText("Rev")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(within(touch).getByRole("button", {name: "New Project"})).toBeTruthy();
   expect(within(touch).queryByRole("button", {name: "Save As"})).toBeNull();
@@ -2703,7 +2731,7 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
   // D03: the upper screen names the Pad and draws the whole waveform, read-only.
   const sampleOverview = screen.getByTestId("sample-overview");
-  expect(sampleOverview.textContent ?? "").toMatch(/^PAD A01/);
+  expect(document.querySelector(".overview-context")?.textContent).toBe("SAMPLE / PAD A01");
   expect(within(sampleOverview).getByRole("img", {name: /waveform/})).toBeTruthy();
   expect(within(sampleOverview).queryAllByRole("button")).toHaveLength(0);
   expect(within(screen.getByRole("region", {name: "Overview display"}))
@@ -3002,7 +3030,7 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A01 — assigned — Key Q"});
   const pointer = (type: string) => {
@@ -3348,7 +3376,7 @@ test("Sample mode sets and restores the selected Pad's colour through Truth", as
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const padA01 = () => screen.getByRole("button", {name: /^Pad A01 /});
   expect(padA01().getAttribute("data-pad-colour")).toBe("1");
   selectSamplePage("Pad");
@@ -3398,7 +3426,7 @@ test("a Pad colour queued behind another names the revision that commit left", a
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   // Two choices before either renders: the second queues behind the first.
@@ -3462,7 +3490,7 @@ test("a grid edit queued behind a Pad colour shows both committed changes", asyn
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   // Queue both before the first commit renders. Pointer events drive the
   // component's gesture mapping; this does not claim native input acceptance.
   selectSamplePage("Pad");
@@ -3494,7 +3522,7 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   await userEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
@@ -3533,7 +3561,7 @@ test("Delete cancels a pending import and ignores its late completion", async ()
   const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
   await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("pending.wav"));
@@ -3547,7 +3575,7 @@ test("Delete cancels a pending import and ignores its late completion", async ()
   await act(async () => lateImport.resolve({committedRevision: 5,
     runtimeRevision: 5, runtimePublished: true, snapshotError: null}));
   expect(fixture.revision).toBe(4);
-  expect(screen.queryByText("Asset 33333333")).toBeNull();
+  expect(screen.queryByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeNull();
   selectSamplePage("Pad");
   expect(screen.getByRole("button", {name: "Delete Pad A01"}).hasAttribute("disabled")).toBe(true);
 });
@@ -3560,7 +3588,7 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   await screen.findByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"});
@@ -3573,7 +3601,7 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   expect(deleteLog.getByText("Delete Pad")).toBeTruthy();
   expect(deleteLog.getByText("IO_ERROR")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
-  expect(screen.getByText("Asset 33333333")).toBeTruthy();
+  expect(screen.getByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
 });
@@ -3645,7 +3673,7 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime s
   const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual([kind]));
   expect(screen.queryByText("That can't be done right now.")).toBeNull();
@@ -3658,7 +3686,7 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before comm
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await runAudio();
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual(["stop", kind]));
 });
@@ -3669,7 +3697,7 @@ test("Trim exposes the selected Pad inputs directly without a redundant Edit but
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   expect(screen.queryByRole("button", {name: "Edit Pad A01"})).toBeNull();
   await userEvent.click(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}));
   expect(document.activeElement).toBe(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}));
@@ -3691,7 +3719,7 @@ test("Delete invalidates a decoding source and discards its eventual result", as
     const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
     await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("decoding.wav"));
@@ -3819,7 +3847,7 @@ test("Sample pages keep their selection across Pad, Bank and System changes", as
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Playback");
   expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: /^Pad A02 /}));
@@ -3849,7 +3877,7 @@ test("changing Sample page cancels an unfinished pointer preview without committ
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   selectSamplePage("Playback");
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
   fireEvent.pointerDown(volume, {pointerId: 31});

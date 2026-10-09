@@ -1,4 +1,4 @@
-import {showSequenceLayer} from "./fixtures/creator_navigation.mjs";
+import {showSamplePage, showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "@playwright/test";
 import {waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
@@ -361,4 +361,131 @@ test("the console renders in the bundled IBM Plex Mono that the CSP admits", asy
     .evaluate((element) => getComputedStyle(element).fontFamily);
   expect(family).toMatch(/^"IBM Plex Mono"/);
   expect(violations).toEqual([]);
+});
+
+async function expectOverviewFits(overview, context) {
+  const geometry = await overview.evaluate(element => {
+    const outer = element.getBoundingClientRect();
+    const errors = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent.trim() || node.parentElement.closest(".visually-hidden")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width === 0 || rect.height === 0) continue;
+        if (rect.left < outer.left - 1 || rect.right > outer.right + 1 ||
+            rect.top < outer.top - 1 || rect.bottom > outer.bottom + 1) {
+          errors.push({text: node.textContent, rect: rect.toJSON()});
+        }
+      }
+    }
+    return {errors, width: element.clientWidth, scrollWidth: element.scrollWidth,
+      height: element.clientHeight, scrollHeight: element.scrollHeight};
+  });
+  expect(geometry.errors, context).toEqual([]);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+  expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.height);
+}
+
+test("mode-specific overview identity, read-only feedback and details survive navigation and reopen", async ({page}, testInfo) => {
+  // Fault/latency injection proves Creator's rendering and recovery, not a
+  // physical device or Runtime I/O failure. Other operations reach real Wasm.
+  await page.addInitScript(() => {
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {configurable: true,
+      get: () => exposed,
+      set(host) {
+        const native = host.transport;
+        host.transport = new Proxy({}, {get(_target, key) {
+          const target = native;
+          if (key === "send") return async (...args) => {
+            const [request] = args;
+            if (request.operation === "sample.inspect" && window.__holdOverviewInspect) {
+              window.__holdOverviewInspect = false;
+              await new Promise(resolve => { window.__releaseOverviewInspect = resolve; });
+            }
+            if (request.operation === "sample.update_pad" && window.__failOverviewUpdate) {
+              window.__failOverviewUpdate = false;
+              return {protocol_version: 1, request_id: request.request_id, ok: false,
+                error: {code: "INTERNAL_ERROR", message: "Injected update failure", details: {}}};
+            }
+            return target.send(...args);
+          };
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        }});
+        exposed = host;
+      },
+    });
+  });
+  await page.goto("/");
+  await waitForBootProject(page);
+  await importAndOpenProject(page);
+  await expect(page.locator(".overview-context")).toHaveText("PROJECT / 00000000");
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
+    await page.setViewportSize(viewport);
+    for (const mode of ["Project", "Sample", "Sequence", "Perform"]) {
+      await page.getByRole("button", {name: mode, exact: true}).click();
+      const overview = page.getByTestId("overview-display");
+      await expect(overview.locator("button,input,select,[tabindex]")).toHaveCount(0);
+      await expect(overview.getByText("Rev", {exact: true})).toHaveCount(0);
+      await expectOverviewFits(overview, `${mode} at ${viewport.width}×${viewport.height}`);
+      if (viewport.width === 1440) await testInfo.attach(`${mode} overview`, {
+        body: await overview.screenshot(), contentType: "image/png",
+      });
+    }
+  }
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByRole("button", {name: "Bank B", exact: true}).click();
+  await page.evaluate(() => { window.__holdOverviewInspect = true; });
+  await page.getByRole("button", {name: /^Pad B03 /}).click();
+  await expect(page.locator(".overview-context")).toHaveText("SAMPLE / PAD B03");
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE · LOADING");
+  await expectOverviewFits(page.getByTestId("overview-display"), "Sample loading");
+  await expect.poll(() => page.evaluate(() => typeof window.__releaseOverviewInspect)).toBe("function");
+  await page.evaluate(() => window.__releaseOverviewInspect());
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
+  await showSamplePage(page, "Playback");
+  const reverse = page.getByRole("button", {name: "Reverse", exact: true});
+  await expect(reverse).toBeEnabled();
+  const beforeFailure = await inspectTruth(page);
+  await page.evaluate(() => { window.__failOverviewUpdate = true; });
+  await reverse.click();
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE · CHECK LAST ACTION");
+  await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
+  await expect(reverse).toHaveAttribute("aria-pressed", "false");
+  expect(await inspectTruth(page)).toEqual(beforeFailure);
+  await expectOverviewFits(page.getByTestId("overview-display"), "Sample commit failure");
+  // The same operation can recover; the failure must not leave a stale cue.
+  await reverse.click();
+  await expect(reverse).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
+  // The fixture assigns the same unclassified Sample to all 64 Pads.
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
+  await expect(page.locator(".selected-sample strong")).toHaveText("Pad B03");
+  await showSamplePage(page, "Pad");
+  await page.getByRole("button", {name: "Delete Pad B03", exact: true}).click();
+  await expect(page.locator(".sample-overview-pad")).toHaveText("EMPTY");
+  await expectOverviewFits(page.getByTestId("overview-display"), "Empty Pad");
+  await expect(page.getByRole("button", {name: /^Pad B03 — empty/})).toBeVisible();
+  await page.getByRole("button", {name: /^SHIFT/}).click();
+  await page.getByRole("button", {name: "Undo — SHIFT + ←", exact: true}).click();
+  await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
+  await expect(page.getByRole("button", {name: /^Pad B03 — assigned/})).toBeVisible();
+
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await page.locator(".creator-details summary").click();
+  const detailIdentity = page.locator(".creator-details-facts div").filter({
+    has: page.locator("dt", {hasText: /^Project ID$/}),
+  }).locator("dd");
+  await expect(detailIdentity).toBeVisible();
+  const truth = await inspectTruth(page);
+  await expect(detailIdentity).toHaveText(truth.project_id);
+  await page.getByRole("button", {name: "Back to music"}).click();
+  await expect(page.locator(".overview-context")).toHaveText("SAMPLE / PAD B03");
+  await page.reload();
+  await reopenLocalProject(page);
+  await expect(page.locator(".overview-context")).toHaveText("PROJECT / 00000000");
+  expect((await inspectTruth(page)).project_id).toBe(truth.project_id);
 });

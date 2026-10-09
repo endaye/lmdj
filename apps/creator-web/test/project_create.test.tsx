@@ -274,8 +274,7 @@ test("a Runtime replaced during boot discards the retired session's late reopen"
 });
 
 function overviewRevision(): string | null {
-  const facts = screen.getByRole("region", {name: "Overview display"})
-    .querySelectorAll(".overview-facts div");
+  const facts = document.querySelectorAll(".creator-details-facts div");
   const rev = [...facts].find((fact) => fact.querySelector("dt")?.textContent === "Rev");
   return rev?.querySelector("dd")?.textContent ?? null;
 }

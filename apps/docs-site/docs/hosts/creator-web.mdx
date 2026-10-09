@@ -91,7 +91,16 @@ Stop audition；Target 选择安装 Bank；Review 显示只读映射和确认。
 
 Boot 直接进入一个 Project：本机没有 Project 时自动新建（与 New Project 相同的默认值）并进入 Sample；否则重开本设备上次打开的 Project。该记录只保存在 Host 本地存储（IndexedDB，打开即提交，浏览器崩溃后重启仍回到最后打开的 Project；Chromium 延迟且限频提交 localStorage，曾使崩溃前约一分钟内的记录丢失，#1726），不是 Project Truth；记录缺失、不可读或指向已不存在的 Project 时，Creator 停在 Local Projects 由用户选择，重开失败照常显示错误。Open local 在已有 Project 时仍保持可达；list/create/duplicate/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。ready Session 的 diagnostics 更新只同步 Runtime 呈现，不得重新进入 Project inventory/reopen；inventory 只随 Session、Runtime phase 或明确 list retry 变化。Suspend audio 进入显式 `suspending` 屏障：Runtime 发布 `audio-suspended` 只负责输入清理，Project actions 必须等 `session.suspendAudio()` 的 safety cleanup 与 transport response 全部 settle 后才重新开放；拒绝但 Runtime 仍 running 时恢复 running surface。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次敲击 Pad 或点击录音，以同一次真实手势唤醒音频。
 
-状态栏显示由生成的 Product Assembly identity 派生的 build 身份（Product Build、Host、Platform 与 protocol 版本），启动时同一身份写入浏览器 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`；该显示只做呈现，不替代 Runtime Session 对部署 manifest 的验证。状态栏同时显示 Project revision 与 MIDI 授权/输入数；Project Surface 显示 import 传输进度，Local Projects 列表可返回已打开的 Project；Runtime `ready` 时的 advisory 错误可被 Dismiss，`restart-required`、`unsupported`、`failed` 与 `closed` 的 Runtime 错误则保留到 Runtime 自身改变 phase。
+System 的 **Project and build details** 保留 Project 完整 ID、revision、Pad／Asset 计数、MIDI 与生成的 Product Assembly 构建身份；顶屏不再堆叠这些技术字段。构建身份启动时仍写入 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`，它不替代 Runtime Session 的 manifest 验证。Project Surface 保留 import 进度与本地列表；advisory 错误仍可 Dismiss，Runtime 的 `restart-required`、`unsupported`、`failed`、`closed` 错误保留到 phase 改变。
+
+### 模式相关的只读顶屏
+
+- **Project** 标题绑定实际打开的 Project，选中另一张卡片不会提前换标题。没有名称投影时显示短 ID。`LOCAL AUTOSAVE` 表达本地自动保存策略，不是所有独立草稿的保存回执；可观察的 Sample 更新、错误、未提交草稿以及“已保存但 audio pending”会覆盖该提示，不虚构保存时间。
+- **Sample** 标题是当前 Pad 地址；右侧显示真实类别，缺少类别但已分配时为 `SAMPLE`，空槽为 `EMPTY`。格式、总时长和已提交裁剪范围配合完整波形显示。切换 Pad 时不沿用上一 Pad 的 inspect。后台更新明确标出实际操作的 Pad；错误提示为 `CHECK LAST ACTION`，表示上一笔 Sample 操作，不能误认为当前 Pad 的错误。Asset ID、源格式／帧数和 revision 收进 **Pad → Sample details**，编辑控件仍保留本地参数值与必要 Pad 上下文。
+- **Sequence** 标题是选中 Pattern 序号；八条轨道显示地址与真实类别／空态，沿用 Project 投影颜色与当前 Pad 高亮。没有素材名称字段时不臆造 KICK／SNARE 等名称。
+- **Perform** 同时显示 `ACKNOWLEDGED SLOT` 和 `QUEUED SLOT`，分别来自同一个 Perform controller 的 `lastLaunchAck` 与 `pendingLaunch`；待切换不会覆盖已确认槽位。确认是 Runtime 回执，不是听感验收。全局 Pattern 的 bar／beat／进度仍来自独立的 Pattern transport，不能把它当作 Performance 录音时钟。触摸区保留启动键及分组的就地 Queued／Playing 高亮，重复的页首 cue 和录制 authority 中的 last-launch 段落移除。
+
+所有顶屏保持只读；Sample 裁剪和触摸 Tempo／Swing 的连续草稿同步由独立 #1921 跟进。加载、错误和缺失字段明确降级，完整错误与恢复动作仍在触摸区。未实现的 MASTER、电平表与滤波类型没有被图示代替。
 
 Sample 触摸工作区只保留编辑与采集；Bank 导航和可演奏 Pad 网格统一在左侧实体栏／
 Pad 区。该 Pad 区在 Sample mode 同时提供选中态、空槽选样、拖入／替换，以及原有

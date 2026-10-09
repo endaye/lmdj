@@ -17,7 +17,7 @@ Creator 像一台乐器：
   4×4 矩阵从左下角 01 起，每行向右，再往上一行；右上角为 16。
   各 Bank 都使用这个顺序，Sound Set 安装预览也一样。电脑快捷键跟随
   Pad 编号，例如 Q 对应当前 Bank 的 01（左下角）。
-- **上屏**：显示当前状态；**触控屏**：根据你正在做的事显示对应的控件。
+- **上屏**：Project 看实际打开项目及保存状态，Sample 看当前 Pad／类别与波形，Sequence 看当前 Pattern／轨道，Perform 分别看已确认和待切换槽位；全部只读。**触控屏**显示对应编辑控件；技术信息在 **System → Project and build details**。
 - **System**：账号、设置、MIDI 与音频设备、扩展等，不常用的东西都在这里。
 
 ## 2. 第一次打开
@@ -46,7 +46,7 @@ Creator 像一台乐器：
 - **Trim**：编辑波形起止点与循环范围；空 Pad 可直接 Add Sample。
 - **Playback**：调整循环、反向、音量、音高、声像和包络。
 - **Tone / EQ**：调整音色与三段均衡器。
-- **Pad**：集中管理 Add/Replace、Record Sample、Delete、Reset 和颜色。
+- **Pad**：集中管理 Add/Replace、Record Sample、Delete、Reset 和颜色；**Sample details** 可查完整素材 ID、源格式／帧数与修订。
 
 切换 Pad 或 Bank 后，当前子页会编辑新选中的 Pad；重新进入 Sample 时先显示
 Trim。切子页会取消仍在进行的试听草稿；键盘参数编辑失焦时仍会提交，已提交的修改

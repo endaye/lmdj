@@ -78,10 +78,7 @@ function RecordingPanel(props: {
         {props.state.authority === null ? "" : ` · open Pads: ${
           props.state.authority.openPadGestures} · open FX: ${
           props.state.authority.openFxGestures} · HOLD: ${
-          props.state.authority.hold ? "on" : "off"}${
-          props.state.authority.lastLaunchAck === null ? "" :
-            ` · last launch: ${props.state.authority.lastLaunchAck.patternSlot + 1} acknowledged`
-        }`}
+          props.state.authority.hold ? "on" : "off"}`}
       </output>
       <output role="status" aria-label="WAV recording status">
         {props.state.wavStatus}
@@ -168,13 +165,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
       ? performCaptureUnavailableMessage(state.captureStatus.error.code)
       : null;
   const performing = ["recording", "flushing"].includes(state.recording.phase);
-  // D04 heads the touch workspace with the switch cue. NEXT BAR is pictured
-  // text; the Host only knows whether a launch is queued or acknowledged.
-  const cue = state.pendingLaunch !== null
-    ? `Slot ${state.pendingLaunch.patternSlot + 1} queued`
-    : state.lastLaunchAck !== null
-      ? `Slot ${state.lastLaunchAck.patternSlot + 1} live`
-      : "No Pattern queued";
   return (
     <main ref={surface} className="perform-surface" aria-label="Perform" data-page={page}>
       <nav className="perform-page-nav" aria-label="Perform pages">
@@ -188,8 +178,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
       </nav>
       <header className="perform-live-header">
         <p className="perform-live-title">{{live: "LIVE CONTROLS", slots: "PATTERN SLOTS", takes: "RECORDING", replay: "REPLAY"}[page]}</p>
-        <output className="perform-live-cue"
-          aria-label="Pattern launch cue">{cue}</output>
       </header>
       <PatternLaunchStrip slots={props.project.patternSlots}
         patterns={props.project.patterns}

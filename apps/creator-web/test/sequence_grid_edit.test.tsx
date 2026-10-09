@@ -549,7 +549,7 @@ test.each([false, true])("Pad navigation crosses Banks without edits or triggers
   for (let step = 0; step < 16; step += 1) await userEvent.click(down);
   expect(currentPad()).toBe("B01");
   expect(screen.getByRole("button", {name: "Bank B"}).getAttribute("aria-current")).toBe("page");
-  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("B01");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("B01 / EMPTY");
   expect(document.querySelector('.sequence-grid-row[data-current-pad] .sequence-grid-pad')?.textContent).toBe("B01");
   expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("B01");
   expect(selectedCount()).toBe("1");
@@ -561,7 +561,7 @@ test.each([false, true])("Pad navigation crosses Banks without edits or triggers
   for (let step = 15; step < 63; step += 1) await userEvent.click(down);
   expect(currentPad()).toBe("D16");
   expect(down.hasAttribute("disabled")).toBe(true);
-  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("D16");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("D16 / EMPTY");
   expect(fixture.truth).toEqual(before);
   expect(fixture.editPatternEvents).not.toHaveBeenCalled();
   expect(fixture.session.trigger).not.toHaveBeenCalled();
@@ -575,6 +575,6 @@ test("current Pad and overview start in the initial Bank", async () => {
   await openSequenceGrid(gridFixture(), 3);
   const overview = screen.getByTestId("sequence-overview");
   expect(within(overview).getByText("Pad").nextElementSibling?.textContent).toBe("D01");
-  expect(overview.querySelector(".sequence-overview-names li")?.textContent).toBe("D01");
+  expect(overview.querySelector(".sequence-overview-names li")?.textContent).toBe("D01 / EMPTY");
   expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("D01");
 });

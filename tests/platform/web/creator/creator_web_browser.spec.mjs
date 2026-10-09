@@ -23,7 +23,7 @@ async function importProject(page) {
   await chooser.setFiles(bundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("64 / 64", {exact: true})).toBeVisible();
+  await expect(page.getByText("64 / 64 Pads used", {exact: true})).toBeVisible();
 }
 
 async function inspectProject(page) {
@@ -189,9 +189,9 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   }, {timeout: 30_000}).toEqual([2, 2]);
 
   const heading = page.getByRole("heading", {name: "Project 00000000"});
-  const revision = page.locator(".overview-facts div").filter({
+  const revision = page.locator(".creator-details-facts div").filter({
     has: page.getByText("Rev", {exact: true}),
-  }).getByRole("definition");
+  }).getByRole("definition", {includeHidden: true});
   const before = await downloadReport(page);
   const expectedRevision = await revision.textContent();
 
