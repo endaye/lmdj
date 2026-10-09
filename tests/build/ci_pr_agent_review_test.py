@@ -3531,6 +3531,83 @@ print(json.dumps({"calls": calls, "source": info, "model_cost_entries": len(lite
             f"the first LiteLLM import\nstdout={completed.stdout}\nstderr={completed.stderr}",
         )
 
+    def test_provider_error_never_prints_litellm_footer_on_result_stdout(self):
+        """A provider exception must not contaminate the engine's stdout result.
+
+        Production run 37948423143 proved the defect: DeepSeek's 402 made the
+        pinned LiteLLM print its "Give Feedback / Get Help" footer to stdout,
+        the pipeline could not parse the result file, and the successful GLM
+        fallback review was discarded as not-reviewed. The engine pins
+        litellm.suppress_debug_info at upstream import; this probe exercises the
+        real pinned footer path after that import.
+        """
+        if os.environ.get("PR_AGENT_RUN_INTEGRATION") != "1":
+            self.skipTest(
+                "pinned LiteLLM footer proof is an explicit pinned-runtime lane; set "
+                "PR_AGENT_RUN_INTEGRATION=1 with PR_AGENT_TEST_PYTHON and "
+                "PR_AGENT_TEST_SOURCE_ROOT to run it"
+            )
+        runtime_value = os.environ.get("PR_AGENT_TEST_PYTHON")
+        source_value = os.environ.get("PR_AGENT_TEST_SOURCE_ROOT")
+        if not runtime_value or not source_value:
+            self.fail(
+                "why: footer suppression proof lacks its pinned runtime/source; "
+                "remedy: provide PR_AGENT_TEST_PYTHON and PR_AGENT_TEST_SOURCE_ROOT"
+            )
+        runtime = Path(runtime_value)
+        source_root = Path(source_value)
+        if not runtime.is_file() or not (source_root / "IDENTITY").is_file():
+            self.fail(
+                "why: footer suppression proof inputs are unavailable; "
+                "remedy: run the pinned integration preparation first"
+            )
+        probe = r'''
+import contextlib
+import io
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import pr_agent_review as adapter
+
+source_root = Path(sys.argv[2])
+adapter.TRUSTED_ENGINE_ROOT = source_root
+upstream = adapter._import_upstream(source_root)
+litellm = upstream["litellm_ai_handler"].litellm
+assert litellm.suppress_debug_info is True, "engine did not pin suppress_debug_info"
+
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+buffer = io.StringIO()
+with contextlib.redirect_stdout(buffer):
+    try:
+        exception_type(
+            model="probe-model",
+            original_exception=RuntimeError("synthetic provider failure probe"),
+            custom_llm_provider="deepseek",
+        )
+    except Exception:
+        pass
+observed = buffer.getvalue()
+assert "Give Feedback" not in observed, observed
+print(json.dumps({"stdout_bytes": len(observed), "suppressed": litellm.suppress_debug_info}))
+'''
+        completed = subprocess.run(
+            [str(runtime), "-c", probe, str(ROOT / "scripts/ci"), str(source_root)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            "why: a provider exception must not print the LiteLLM footer onto "
+            "the engine result stream; remedy: keep suppress_debug_info pinned "
+            f"at upstream import\nstdout={completed.stdout}\nstderr={completed.stderr}",
+        )
+
     def test_watchdog_allows_a_slow_but_progressing_child(self):
         child = (
             "import sys, time\n"
