@@ -68,3 +68,11 @@ export async function showPatternLaunchGroup(page, slot) {
   if (await button.getAttribute("aria-pressed") !== "true") await button.click();
   await button.and(page.locator("[aria-pressed='true']")).waitFor();
 }
+
+// Each Sound Set step owns its visible controls while preserving one reducer.
+export async function showSoundSetStep(page, name) {
+  const button = page.getByRole("navigation", {name:"Sound Set steps"})
+    .getByRole("button", {name, exact:true});
+  if (await button.getAttribute("aria-current") !== "step") await button.click();
+  await button.and(page.locator('[aria-current="step"]')).waitFor();
+}

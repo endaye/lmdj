@@ -727,10 +727,24 @@ button:disabled { color: #737b87; }
 .soundset-slots > li[data-empty="true"] { color: #6f7887; }
 .soundset-slot-index { min-width: 1.4rem; color: #9da6b4; font-variant-numeric: tabular-nums; }
 .soundset-target, .soundset-preview { display: grid; gap: .65rem; justify-items: start; }
-.soundset-preview .pad[data-plan="install"] { border-color: #b7ffc5; }
-.soundset-preview .pad[data-plan="collision"] { border-color: #ffb36b; }
-.soundset-preview .pad[data-plan="empty-in-set"] { color: #6f7887; }
-.soundset-preview .pad-grid { justify-self: stretch; }
+.soundset-map { margin:0; width:100%; min-width:0; display:grid; gap:8px; }
+.soundset-map figcaption { font-size:10px; color:var(--creator-muted); }
+.soundset-map-cells { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
+.soundset-map-cell { display:grid; gap:4px; padding:6px 4px; border-top:2px solid var(--creator-muted); background:var(--creator-base); font-size:9px; overflow-wrap:anywhere; }
+.soundset-map-cell strong { font-size:10px; font-weight:400; }
+.soundset-map-cell[data-plan="install"] { border-color:var(--creator-lime); }
+.soundset-map-cell[data-plan="collision"] { border-color:#ffb36b; }
+.soundset-map-cell[data-plan="empty-in-set"] { color:var(--creator-muted); }
+.soundset-map-legend { margin:0; font-size:10px; color:var(--creator-muted); }
+.soundset-steps { position:sticky; top:0; z-index:3; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; background:var(--creator-touch); }
+.soundset-steps button { min-width:0; padding:0; font-size:10px; }
+.soundset-surface :is(button, input) { scroll-margin-block:56px 12px; }
+.soundset-steps [aria-current="step"] { background:var(--creator-lime); color:var(--creator-base); }
+.soundset-step-label { font-size:10px; color:var(--creator-muted); }
+.soundset-list > li[data-selected="true"] { border-color:var(--creator-lime); }
+.soundset-target { margin:0; padding:0; border:0; min-width:0; width:100%; }
+.soundset-target legend { margin-bottom:8px; font-size:12px; }
+.soundset-preview { min-width:0; width:100%; }
 .soundset-policy { display: grid; gap: .4rem; border: 1px solid #596273; border-radius: .5rem; padding: .65rem 1rem; }
 .soundset-policy label { display: flex; gap: .5rem; align-items: center; }
 .soundset-receipt { color: #b7ffc5; }
@@ -1193,11 +1207,33 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .hardware-workspace :is(.soundset-list, .soundset-slots) {
   grid-template-columns: minmax(0, 1fr);
 }
+.hardware-workspace .soundset-surface { gap:8px; font-size:12px; }
+.hardware-workspace .soundset-header { align-items:center; gap:8px; }
+.hardware-workspace .soundset-header h2 { margin:0; font-size:14px; font-weight:400; }
+.hardware-workspace .soundset-surface button {
+  min-height:44px; padding:8px; border:0; border-radius:8px;
+  background:var(--creator-raised); color:var(--creator-text); font-size:11px;
+}
+.hardware-workspace .soundset-surface button:is([aria-current="step"], [aria-pressed="true"]) {
+  background:var(--creator-lime); color:var(--creator-base);
+}
+.hardware-workspace .soundset-surface button:disabled { opacity:.45; cursor:not-allowed; }
+.hardware-workspace .soundset-inspect { padding:0; border:0; background:transparent; gap:8px; }
+.hardware-workspace .soundset-inspect h3 { font-size:12px; font-weight:400; }
+.hardware-workspace .soundset-inspect p { margin:0; line-height:1.4; }
+.hardware-workspace .soundset-list > li { padding:12px; gap:8px; border-color:var(--creator-raised); background:var(--creator-base); }
+.hardware-workspace .soundset-list > li[data-selected="true"] { border-color:var(--creator-lime); }
+.hardware-workspace .soundset-list h3 { font-size:12px; font-weight:400; }
+.hardware-workspace .soundset-list dl { font-size:11px; }
+.hardware-workspace .soundset-attribution { color:var(--creator-muted); font-size:10px; }
+.hardware-workspace .soundset-slots > li { background:var(--creator-base); align-items:center; }
+.hardware-workspace .soundset-slot-sound { min-width:0; }
+.hardware-workspace .soundset-target .bank-selector { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); width:100%; margin:0; }
+.hardware-workspace .soundset-policy { width:100%; margin:0; padding:8px; border-color:var(--creator-raised); }
+.hardware-workspace .soundset-policy label { min-height:44px; }
+.hardware-workspace .soundset-policy input { flex:none; }
 .hardware-workspace :is(.soundset-header, .soundset-inspect > header,
   .perform-live-header, .perform-replay article) { flex-wrap: wrap; }
-.hardware-workspace .soundset-preview .pad-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
 .hardware-workspace .candidate-target { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* Touch kit (2026-10-04 decision, item 6): 44 px controls, 8 px radius,
