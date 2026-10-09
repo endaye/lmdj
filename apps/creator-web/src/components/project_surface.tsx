@@ -261,9 +261,6 @@ export function ProjectSurface({
           </button>
         </div>
       ) : null}
-      <p className="stage-note">
-        Perform mode arrives in Stage 10.
-      </p>
     </main>
   );
 }

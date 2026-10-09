@@ -631,6 +631,8 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       },
     }),
   }));
+  await expect(page.getByText("Sample saved · playback needs preparation.")).toBeVisible();
+  await page.getByText("Sample playback details", {exact: true}).click();
   await expect(page.getByText(
     "Saved at revision 60; Runtime is still revision 59",
   )).toBeVisible(

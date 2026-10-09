@@ -1116,7 +1116,18 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await page.getByRole("button", {name: "Flush Performance"}).click();
   revision = await expectRevisionAfter(page, revision);
   await expect(recordingStatus).toContainText(/flushed/i);
-  await stopRecording(page);
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  const notice = page.getByRole("region", {name: "Performance recording notice"});
+  await expect(notice.getByRole("status")).toContainText("recording");
+  await expect(page.getByRole("main", {name: "Perform", exact: true})).toHaveCount(0);
+  await notice.getByRole("button", {name: "Stop Performance", exact: true}).click();
+  await expect(notice.getByRole("status")).toContainText("Ready to save or discard",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await notice.getByRole("button", {name: "Review Performance recording", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Save Performance", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Discard Performance", exact: true})).toBeVisible();
+  await expect(page.getByRole("status", {name: "WAV recording status"}))
+    .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
   expect(wav.frames).toBeGreaterThan(0);
   verifyDeterministicMasterOutput(wav);

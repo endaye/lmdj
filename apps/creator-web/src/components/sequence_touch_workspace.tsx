@@ -316,17 +316,12 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           </div>
         )}
         {props.showRefresh === false ? null : (
-          <>
+          <details className="sequence-details">
+            <summary>Playback details</summary>
             <button type="button" className="touch-control" onClick={props.onRefresh}>
-              Refresh authority
+              Refresh playback
             </button>
-            {transport.lastFailed !== null ? (
-              <p className="transport-hint">
-                Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"}
-                {" "}command failed; retry reconciles the same command.
-              </p>
-            ) : null}
-          </>
+          </details>
         )}
       </section>
       )}
@@ -369,6 +364,16 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           ))}
         </section>
       ) : null}
+      {props.showRefresh !== false && (state.errorCode !== null ||
+        transport.errorCode !== null || transport.lastFailed !== null ||
+        transport.status?.publicationPending === true) && <section className="workspace-status"
+          aria-label="Playback recovery">
+        <button type="button" onClick={props.onRefresh}>Retry playback</button>
+        {transport.lastFailed !== null && <p role="status">
+          Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"} failed.
+          Retry checks the result of the same action.
+        </p>}
+      </section>}
       {state.errorCode !== null ? (
         <p role="alert" className="sequence-error">
           {userMessage(state.errorCode).message} {userMessage(state.errorCode).nextStep}

@@ -1,3 +1,4 @@
+import {DefaultSoundsStatus} from "./components/default_sounds_status";
 import {SystemSurface, ProviderSettings} from "./components/system_surface";
 import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
 import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
@@ -354,6 +355,7 @@ function Workspace({
   // another Pad's controls after the selection moves.
   const [padColourError, setPadColourError] = useState<{slot: number; message: string} | null>(null);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  const [performReviewRequested, setPerformReviewRequested] = useState(false);
   // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
   // history chord or by any other rail action.
   const [railShift, setRailShift] = useState(false);
@@ -2821,7 +2823,7 @@ function Workspace({
           source is chosen in System. */}
       {padCaptureState !== null &&
         (padCaptureState.phase !== "idle" || padCaptureState.message !== null) && (
-        <section aria-label="Pad recording">
+        <section className="workspace-status" aria-label="Pad recording">
           <output role="status">{padCaptureState.phase}{padCaptureState.target === null ? "" :
             ` · Pad ${slotAddress(padCaptureState.target.slot)}`} · {(padCaptureState.frames / 48_000).toFixed(2)} s</output>
           {padCaptureState.message !== null && <p role="status">{padCaptureState.message}</p>}
@@ -2831,22 +2833,37 @@ function Workspace({
           </>}
         </section>
       )}
-      {defaultSeedError !== null && <p role="status">{defaultSeedError}</p>}
-      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "failed") &&
-        <button type="button" onClick={() => {defaultSeed.slots.forEach((slot, index) => {
-          if (slot.phase === "failed") void defaultSeedController.current?.retry(index);
-        });}}>Retry default sounds</button>}
-      {defaultSeed?.projectId === currentProjectId && defaultSeed.slots.some(slot => slot.phase === "saved-unavailable") &&
-        <div><p role="status">Sounds saved; prepare playback to use them.</p>
+      <DefaultSoundsStatus key={currentProjectId ?? "no-project"}
+        seed={defaultSeed?.projectId === currentProjectId ? defaultSeed : null}
+        error={defaultSeedError}
+        onRetry={() => {defaultSeed?.slots.forEach((slot, index) => {
+          if (slot.phase === "failed") void defaultSeedController.current?.retry(index)
+            .catch(error => reportFailure("Retry default sound", error));
+        });}}
+        onPrepare={async () => {
+          const project = stateRef.current.project.current;
+          const controller = defaultSeedController.current;
+          if (project === null || !isSampleSession(session)) return;
+          try {
+            const publication = await retryPrepareJourney(session, project.patternId);
+            controller?.acceptPublication(publication);
+          } catch (error) {reportFailure("Prepare default sounds", error); throw error;}
+        }}
+        onDetails={openSystem} />
+      {(systemOpen || activeMode !== "perform") && performController !== null &&
+        !["idle", "saved", "discarded"].includes(historyPerformPhase) && (
+        <section className="workspace-status" aria-label="Performance recording notice">
+          <output role="status">Performance recording · {historyPerformPhase === "stopped"
+            ? "Ready to save or discard" : historyPerformPhase}</output>
+          {["recording", "flushing"].includes(historyPerformPhase) && <button type="button"
+            onClick={() => {void performController.stop();}}>Stop Performance</button>}
           <button type="button" onClick={() => {
-            const project = stateRef.current.project.current;
-            if (project === null || !isSampleSession(session)) return;
-            void retryPrepareJourney(session, project.patternId).then(
-              publication => defaultSeedController.current?.acceptPublication(publication),
-              error => reportFailure("Prepare default sounds", error));
-          }}>Prepare default sounds</button></div>}
+            setPerformReviewRequested(true); selectMode("perform");
+          }}>Review Performance recording</button>
+        </section>
+      )}
 
-              {["project", "sample", "soundset", "slice"].includes(activeMode) &&
+              {!systemOpen && ["project", "sample", "soundset", "slice"].includes(activeMode) &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
                 {activeMode === "project" && <button type="button" disabled={!soundSetEnabled}
                   onClick={() => selectMode("soundset")}>Sound Sets</button>}
@@ -2919,8 +2936,13 @@ function Workspace({
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
                 <section className="sample-runtime-stale" aria-label="Project audio status">
                   <p role="status">{candidateAudio.preparing
-                    ? `Preparing audio at revision ${candidateAudio.revision}…`
-                    : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
+                    ? "Changes saved · preparing playback…"
+                    : "Changes saved · playback needs preparation."}</p>
+                  <details><summary>Project playback details</summary>
+                    <p>{candidateAudio.preparing
+                      ? `Preparing audio at revision ${candidateAudio.revision}…`
+                      : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
+                  </details>
                   <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
                     onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
                     Retry audio preparation
@@ -2952,12 +2974,13 @@ function Workspace({
                   ) : null}
                   {staleSampleRuntime ? (
                     <section className="sample-runtime-stale" aria-label="Sample Runtime status">
-                      <p role="status">
-                        Saved at revision {state.sample.savedRevision}; Runtime is still revision{
+                      <p role="status">Sample saved · playback needs preparation.</p>
+                      <details><summary>Sample playback details</summary>
+                        <p>Saved at revision {state.sample.savedRevision}; Runtime is still revision{
                           " "}{state.sample.runtimeRevision === null
                           ? "unavailable"
-                          : state.sample.runtimeRevision}
-                      </p>
+                          : state.sample.runtimeRevision}</p>
+                      </details>
                       <button
                         type="button"
                         disabled={sampleRetryAction.current !== null ||
@@ -3035,6 +3058,8 @@ function Workspace({
                 performController !== null ? (
                   <PerformSurface
                     controller={performController}
+                    reviewRequested={performReviewRequested}
+                    onReviewShown={() => setPerformReviewRequested(false)}
                     project={state.project.current}
                     bank={state.activeBank}
                       transport={transport}

@@ -1552,3 +1552,22 @@ test("launch groups keep all sixteen addresses and the selected group across pag
   expect(screen.getByRole("button", {name: "Pattern slots 13 to 16"}).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByRole("button", {name: "Launch Pattern 16"})).toBeTruthy();
 });
+
+
+test("returning from System opens the retained recording review without reconnecting it", async () => {
+  const fixture = controllerFixture();
+  const onReviewShown = vi.fn();
+  const props = {controller: fixture.controller, project, bank: 0 as const, onReviewShown};
+  const view = render(<PerformSurface {...props} />);
+  await userEvent.click(await screen.findByRole("button", {name: "Record Performance"}));
+  await userEvent.click(await screen.findByRole("button", {name: "Stop Performance"}));
+  await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
+  const beginCalls = fixture.runtime.calls.begin.mock.calls.length;
+  view.rerender(<PerformSurface {...props} reviewRequested />);
+  expect(screen.getByRole("button", {name: "Save Performance"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Discard Performance"})).toBeTruthy();
+  expect(onReviewShown).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.begin).toHaveBeenCalledTimes(beginCalls);
+  await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
+  await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("idle"));
+});

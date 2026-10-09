@@ -480,9 +480,10 @@ test("Sequence authoring in a duplicate uses the copy's revision, not the source
   await bootIntoListedProject(fixture);
   // The source's Sequence authority is loaded at revision 66.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   await duplicateThenCreatePattern(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
@@ -499,9 +500,10 @@ test("a Sequence refresh that outlives its Project never reaches the next Projec
   await bootIntoListedProject(fixture);
   // A refresh of the source is still in flight when the copy opens.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   await duplicateThenCreatePattern(fixture);
   gate.wait = null;
   release?.();

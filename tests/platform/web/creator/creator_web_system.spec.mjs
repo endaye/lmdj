@@ -42,4 +42,11 @@ test("System restores creative focus while real Pattern playback continues", asy
   await page.getByRole("button", {name:"Back to music",exact:true}).click();await expect(entry).toBeFocused();
   await expect(page.getByRole("region", {name:"Sequence editor"})).toBeVisible();
   expect(await transport(page)).toMatchObject({engaged:true,playing:true,transport_epoch:before.transport_epoch});
+  await page.getByRole("button", {name:"SETUP",exact:true}).click();
+  const refresh = page.getByRole("button", {name:"Refresh playback",exact:true});
+  await expect(refresh).toHaveCount(0);
+  await page.getByText("Playback details", {exact:true}).click();
+  await expect(refresh).toBeVisible();
+  await refresh.click();
+  expect(await transport(page)).toMatchObject({engaged:true,playing:true,transport_epoch:before.transport_epoch});
 });
