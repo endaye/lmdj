@@ -26,6 +26,9 @@ Grid；Sound Set preview 也直接遍历 `selectPadPlan`。事件已传稳定槽
   几何角落、命中目标、Tab 顺序、Q 提示，覆盖 A–D Bank。
 - `tests/platform/web/creator/creator_web_accessibility.spec.mjs`：保留完整
   实体控制区 Tab 旅程，将首个 Pad 的预期同步到屏幕左上角 A13。
+- `tests/platform/web/creator/fixtures/creator_audio.mjs`：验收的首个音乐
+  手势按稳定地址选择 Pad，避免空间遍历改变循环、Perform 与接管旅程的
+  目标；保留 one-shot 优先、muted 排除、真实 admission 和 voice 断言。
 - `docs/design/2026-09-29-creator-user-workflow-guide.md`：用户的排列说明。
 - `apps/docs-site/docs/hosts/creator-web.mdx`：当前行为及设备验收边界。
 - 本计划。
