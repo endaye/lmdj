@@ -62,13 +62,17 @@ billable_categories = ["input_tokens", "output_tokens", "fixed_request"]
 # (runs 37806892771/37808524934/37808787956/37867697617/37868348887/
 # 37869819612/37871642621/37878721002, up to 552265 prompt tokens), which the
 # bare-name binding rejected as unsupported_model despite successful service.
+# The identity correction changed the reservation basis, so the pricing
+# revision was bumped to open a fresh ledger envelope; prices are unchanged
+# from the 2026-10-02 reading and the old envelope's durable glm history is
+# retained untouched.
 [providers.glm]
 enabled = true
 endpoint = "https://open.bigmodel.cn/api/paas/v4"
 model = "zai/glm-5.3-flash"
 priced_response_model = "zai/glm-5.3-flash"
 credential_ref = "PR_AGENT_ZAI_API_KEY"
-pricing_revision = "glm-5.3-flash-cn-standard-2026-10-02"
+pricing_revision = "glm-5.3-flash-cn-standard-2026-10-09"
 pricing_verified = true
 input_price_usd_per_token = 0.0000001143
 output_price_usd_per_token = 0.0000004
