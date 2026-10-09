@@ -30,7 +30,8 @@ test("a Runtime error replaces its status row without adding raw error text to t
 
 test("a saved Sample with audio still pending remains a qualified storage status", () => {
   render(<ProjectOverview state={{...state, sample: {...state.sample,
-    savedRevision: 124, runtimeRevision: 123}}} />);
+    savedRevision: 124, runtimeRevision: 123,
+    lastError: {code: "COOK_FAILED", message: "Runtime preparation failed", retryPrepare: true}}}} />);
   const overview = screen.getByTestId("project-overview");
   expect(within(overview).getByText("SAMPLE SAVED · AUDIO PENDING")).toBeDefined();
   expect(overview.textContent).not.toContain("123");

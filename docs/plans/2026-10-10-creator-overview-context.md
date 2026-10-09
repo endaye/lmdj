@@ -254,3 +254,27 @@ The earlier complete lane passed 1183 components, 83 other general browser
 tests, Catalog 4, Sample 9, capture 8 and explicit denied/capability boundaries;
 three old row-text expectations failed. Those successes do not replace the
 required complete rerun on this test correction.
+
+
+### Review follow-up: saved Sample with failed audio publication
+
+Current-head review 37984932144/4 identified a real status-priority defect:
+`applySampleMutation` retains both the successful saved revision and a
+COOK_FAILED lastError when publication fails. The overview checked the generic
+error first and obscured its saved/audio-pending status. A producer-shaped
+ProjectOverview fixture first failed expecting SAMPLE SAVED · AUDIO PENDING.
+Prioritize the known committed-but-unpublished state, retaining the error and
+its existing local recovery controls. No authoring or error producer changes.
+Declared files: state/overview_context.ts, test/project_overview.test.tsx and
+this plan, all already in the parent Task. Run the two focused overview files,
+TypeScript/Vite, then the new committed-head Creator lane before merge.
+
+The other review finding hypothesized a second CreatorDetails mount. At the
+reviewed head, complete source inventory contains exactly one JSX mount;
+SystemSurface and its children do not mount it again. Existing System tests
+query the summary without filtering hidden copies and would reject duplicates.
+The reasoned response is recorded on the PR; only this invalid finding was
+resolved manually. The storage finding remains for automatic repair recheck.
+Retain failed model attempts /1-/3 and the valid /4 findings. Main remains
+414268d654adeae32dfb500f62c000f06e4f2b47. Version impact: none; parent portal
+impact remains required and already documents saved versus audio-pending.

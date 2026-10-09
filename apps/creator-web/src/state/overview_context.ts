@@ -30,10 +30,11 @@ export function projectStorageStatus(state: CreatorState): string {
   if (state.project.current === null) return "NO PROJECT OPEN";
   if (state.sample.pendingAction !== null) return "UPDATING SAMPLE";
   if (state.projectProjectionRefresh !== null || state.sampleProjectionRefresh !== null) return "REFRESHING PROJECT";
-  if (state.sample.lastError !== null) return "SAMPLE NEEDS ATTENTION";
   if (state.sample.savedRevision !== null && state.sample.savedRevision !== state.sample.runtimeRevision) {
     return "SAMPLE SAVED · AUDIO PENDING";
   }
+  // A failed audio publication does not undo the committed Sample.
+  if (state.sample.lastError !== null) return "SAMPLE NEEDS ATTENTION";
   if (state.sample.draft?.dirty) return "UNSAVED SAMPLE EDIT";
   return "LOCAL AUTOSAVE";
 }
