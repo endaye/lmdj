@@ -499,20 +499,28 @@ Each of these failures is recorded in Developer diagnostics.
 The Sequence touch area follows the 2026-10-04 Sequence hardware UI decision
 (Desktop Final plan T5).
 
-**Header.** `‹ GROOVE / NN ›` with `current / total` replaces the Pattern
-dropdown. It steps to the previous or next Pattern, and is disabled while the
-transport plays, because a Pattern switch waits for Stop. To its right, EDIT
-and SETUP toggle the layer below. EDIT is the default, and a mode change
-returns to it.
+**Header.** `GROOVE / NN` with `current / total` opens a direct Pattern
+picker with touch buttons. The physical left/right keys retain sequential
+Pattern navigation. Both entries wait for Stop; playback, recording and busy
+transport phases lock selection. EDIT and SETUP share the header row. EDIT
+is the default, and a mode change returns to it.
 
-**EDIT** holds only the grid:
+**EDIT** keeps all sixteen grid rows at their existing size:
 
-- one toolbar row: snap 1/4, 1/8, 1/16, 1/32 or off, plus NOTE / VEL;
-- the grid fills the rest of the area. All sixteen rows show at once, and
-  each screen width is one bar, so longer Patterns scroll sideways. The Pad
-  column stays in place while they scroll.
+- previous/next bar buttons and the `BAR` range button reach every bar in
+  1/2/4/8-bar Patterns. The range button opens a direct bar picker. A partial
+  native scroll displays both intersected bars; choosing a bar aligns its start.
+- Grid tools (showing the current snap and NOTE/VEL) opens all five snap
+  choices and both editing modes. Done or Escape returns focus to the opener.
+- one bar fills the visible lane beside fixed Pad labels. The overview frame
+  follows this unobscured lane, excluding the label column. ENC1 and native
+  horizontal panning remain available; dragging a scrollbar is unnecessary.
+- bar navigation is disabled during an active note gesture. Changing view
+  never edits notes, changes the current Pad or clears a selection. Choosing
+  another Pattern starts its view at the first bar.
 - after a box selection, Delete and Clear float over the grid's bottom-right
-  corner.
+  corner. An actionable global error can still add vertical content above the
+  editor; its recovery control remains available.
 
 **SETUP** holds the settings that are set once and rarely touched:
 

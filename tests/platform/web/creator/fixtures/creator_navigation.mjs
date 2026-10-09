@@ -22,26 +22,18 @@ export async function showSequenceLayer(page, layer) {
   await toggle.and(page.locator("[aria-pressed='true']")).waitFor();
 }
 
-// `‹ GROOVE / NN ›` carries the selected Pattern and the Pattern count.
+// The direct Pattern picker carries the selected Pattern and the Pattern count.
 export const sequencePattern = (page) => page.getByTestId("sequence-pattern");
 export const selectedSequencePatternId = (page) =>
   sequencePattern(page).getAttribute("data-pattern-id");
 
-// Steps ‹ › to the Pattern with this id; stepping waits for Stop.
+// Direct touch selection waits for Stop, like the physical direction keys.
 export async function selectSequencePattern(page, patternId) {
-  const previous = page.getByRole("button", {name: "Previous Pattern", exact: true});
-  const next = page.getByRole("button", {name: "Next Pattern", exact: true});
-  while (await previous.isEnabled() && await selectedSequencePatternId(page) !== patternId) {
-    const before = await selectedSequencePatternId(page);
-    await previous.click();
-    await sequencePattern(page).and(page.locator(`:not([data-pattern-id='${before}'])`)).waitFor();
-  }
-  while (await selectedSequencePatternId(page) !== patternId) {
-    if (!await next.isEnabled()) throw new Error(`Pattern ${patternId} is not in the Project`);
-    const before = await selectedSequencePatternId(page);
-    await next.click();
-    await sequencePattern(page).and(page.locator(`:not([data-pattern-id='${before}'])`)).waitFor();
-  }
+  if (await selectedSequencePatternId(page) === patternId) return;
+  await page.getByRole("button", {name: "Choose Pattern", exact: true}).click();
+  await page.getByRole("dialog", {name: "Choose Pattern", exact: true})
+    .locator(`[data-pattern-choice="${patternId}"]`).click();
+  await sequencePattern(page).and(page.locator(`[data-pattern-id="${patternId}"]`)).waitFor();
 }
 
 // + NEW, then the new Pattern's length, then CREATE (SETUP layer).

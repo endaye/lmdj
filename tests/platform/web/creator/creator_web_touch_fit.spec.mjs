@@ -76,7 +76,7 @@ test("long title and disabled controls fit without widening the panel", async ({
   await page.getByTestId("physical-controls").getByRole("button", {name: "Sequence", exact: true}).click();
   await showSequenceLayer(page, "SETUP");
   // Text-only layout stress fixture: not a claim that Pattern rename exists.
-  await page.getByTestId("sequence-pattern").locator("h1").evaluate(element => {
+  await page.getByTestId("sequence-pattern").locator("button > span").first().evaluate(element => {
     element.textContent = "Pattern_" + "very_long_unbroken_name_".repeat(6);
   });
   await expectTouchFits(page);
@@ -226,4 +226,44 @@ test("switching Perform pages starts at the new page's controls", async ({page})
       element.closest('[data-testid="touch-workspace"]').getBoundingClientRect().top))
     .toBeGreaterThanOrEqual(-1);
   await expectControlFits(page, page.getByRole("button", {name: "Launch Pattern 1", exact: true}));
+});
+
+
+test("Sequence's header, bar controls and sixteen full-size rows fit one touch page", async ({page}) => {
+  await page.getByTestId("physical-controls").getByRole("button", {name:"Sequence", exact:true}).click();
+  for (const viewport of [{width:1440,height:900}, {width:1280,height:600}, {width:768,height:600}]) {
+    await page.setViewportSize(viewport);
+    const dimensions = await page.getByRole("region", {name:"Sequence editor"}).evaluate(editor => {
+      const touch = editor.closest('[data-testid="touch-workspace"]');
+      const scale = touch.getBoundingClientRect().width / touch.offsetWidth;
+      const style = getComputedStyle(touch);
+      const available = touch.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      const rows = [...editor.querySelectorAll('.sequence-grid-lane')];
+      return {height:editor.getBoundingClientRect().height / scale, available,
+        rowHeights: rows.map(row => row.getBoundingClientRect().height / scale),
+        headerHeight:editor.querySelector('.sequence-editor-header').offsetHeight,
+        controlHeights:[...editor.querySelectorAll('.sequence-grid-navigation button')].map(button=>button.offsetHeight)};
+    });
+    expect(dimensions.height).toBeLessThanOrEqual(dimensions.available + 0.1);
+    expect(dimensions.rowHeights).toHaveLength(16);
+    for (const height of dimensions.rowHeights) expect(height).toBeCloseTo(13, 1);
+    expect(dimensions.headerHeight).toBe(44);
+    expect(dimensions.controlHeights).toEqual([44,44,44,44]);
+    await expectTouchFits(page);
+    // Global recovery may consume vertical space; the final row must remain
+    // reachable and must never be removed or shrunk to fake first-screen fit.
+    await expectControlFits(page, page.locator('.sequence-grid-row').last());
+    for (const name of ['Choose Pattern','Choose bar','Grid tools']) {
+      await page.getByRole('button',{name,exact:true}).click();
+      const dialog = page.getByRole('dialog',{name,exact:true});
+      const rect = await dialog.boundingBox();
+      expect(rect.x).toBeGreaterThanOrEqual(0);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(viewport.width);
+      expect(rect.y).toBeGreaterThanOrEqual(0);
+      expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height);
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByRole('button',{name,exact:true})).toBeFocused();
+    }
+  }
 });

@@ -410,18 +410,18 @@ test("EDIT is the default layer and SETUP swaps the grid for the settings", () =
   expect(sequence.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
 });
 
-test("‹ › step through the Patterns and wait for Stop", () => {
+test("the touch picker directly selects a Pattern and preserves its identity/count", () => {
   const stopped = renderSurface(false, {state: {selectedPatternId: project.patterns[1]!.patternId}});
   const stepper = screen.getByTestId("sequence-pattern");
   expect(stepper.getAttribute("data-pattern-id")).toBe(project.patterns[1]!.patternId);
   expect(stepper.textContent).toContain("GROOVE / 02");
   expect(stepper.textContent).toContain("2/2");
-  expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
-  fireEvent.click(screen.getByRole("button", {name: "Previous Pattern"}));
+  fireEvent.click(screen.getByRole("button", {name: "Choose Pattern"}));
+  fireEvent.click(screen.getByRole("button", {name: "GROOVE / 01"}));
   expect(stopped.onSwitch).toHaveBeenCalledWith(project.patterns[0]!.patternId);
 });
 
-test("the Pattern stepper is disabled while the transport plays", () => {
+test("the Pattern picker is disabled while the transport plays", () => {
   renderSurface(false, {transport: {
     ...initialPatternTransportState,
     sessionId: "session-1",
@@ -431,8 +431,7 @@ test("the Pattern stepper is disabled while the transport plays", () => {
       observedAtMilliseconds: 0, commandId: null, publicationPending: false, error: null,
     } satisfies PatternTransportStatus,
   }});
-  expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("button", {name: "Previous Pattern"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled")).toBe(true);
 });
 
 // #1823: BARS, DOUBLE UP and COPY act on the selected Pattern in SETUP.
@@ -500,4 +499,21 @@ test("BARS, DOUBLE UP and COPY are disabled while recording", () => {
   for (const name of ["Length 2 bars", "Double Up Pattern", "Copy Pattern"]) {
     expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(true);
   }
+});
+
+
+test("Pattern picker cancellation and selecting the current Pattern preserve the view", () => {
+  const callbacks = renderSurface();
+  const trigger = screen.getByRole("button", {name: "Choose Pattern"});
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", {name: "Choose Pattern"});
+  expect(dialog.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
+  fireEvent.keyDown(dialog, {key:"Escape"});
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(callbacks.onSwitch).not.toHaveBeenCalled();
+  fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("button", {name: "GROOVE / 01"}));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(callbacks.onSwitch).not.toHaveBeenCalled();
 });

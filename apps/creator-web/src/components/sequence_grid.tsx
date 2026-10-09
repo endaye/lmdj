@@ -1,5 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 
+import {ModalDialog} from "./modal_dialog";
+
 import type {PadColour} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
 import {padColourAttribute} from "../state/pad_colour";
@@ -176,6 +178,10 @@ export function SequenceGrid(props: SequenceGridProps) {
   const {pattern, bank, snap, editMode, editing, selection} = props;
   const model = createSequenceGridModel(pattern, bank, snap);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [visibleRange, setVisibleRange] = useState({startTick: 0, endTick: model.lengthTicks / model.bars});
+  const [panel, setPanel] = useState<"bars" | "tools" | null>(null);
+  const panelTrigger = useRef<HTMLButtonElement | null>(null);
+  const scrollCommand = useRef<(value: number, absolute?: boolean) => void>(() => {});
   const reportedRef = useRef<SequenceGridViewport | null>(null);
   const [gesture, setGesture] = useState<GridGesture | null>(null);
   const gestureRef = useRef<GridGesture | null>(null);
@@ -194,19 +200,29 @@ export function SequenceGrid(props: SequenceGridProps) {
   useEffect(() => {
     const report = () => {
       const scroller = scrollRef.current;
-      const lane = scroller?.querySelector(".sequence-grid-lane") ?? null;
+      const lane = scroller?.querySelector<HTMLElement>(".sequence-grid-lane") ?? null;
       if (scroller === null || lane === null) return;
-      // The lane is the timeline: the scroll port also holds the Pad label
-      // column, so scroller totals would shift the reported window.
+      // Use the same unscaled layout coordinates as scrollLeft/ENC1. Rounded
+      // transformed DOMRects can put an aligned boundary one tick into the
+      // next bar. The fixed Pad column is outside this one-bar lane window.
       const window_ = scroller.getBoundingClientRect();
       const laneRect = lane.getBoundingClientRect();
-      const viewport = sequenceGridViewportForWindow({
-        windowStart: window_.left,
+      const viewport = sequenceGridViewportForWindow(lane.clientWidth > 0 ? {
+        windowStart: scroller.scrollLeft,
+        windowEnd: scroller.scrollLeft + lane.clientWidth / model.bars,
+        timelineStart: 0,
+        timelineWidth: lane.clientWidth,
+        lengthTicks: model.lengthTicks,
+      } : {
+        windowStart: Math.max(window_.left, window_.right - laneRect.width / model.bars),
         windowEnd: window_.right,
         timelineStart: laneRect.left,
         timelineWidth: laneRect.width,
         lengthTicks: model.lengthTicks,
       });
+      if (laneRect.width > 0) setVisibleRange((previous) =>
+        previous.startTick === viewport.startTick && previous.endTick === viewport.endTick
+          ? previous : viewport);
       const last = reportedRef.current;
       if (last !== null && last.startTick === viewport.startTick &&
           last.endTick === viewport.endTick) {
@@ -218,17 +234,22 @@ export function SequenceGrid(props: SequenceGridProps) {
     report();
     const scroller = scrollRef.current;
     scroller?.addEventListener("scroll", report);
-    props.onScrollReady?.((bars) => {
+    scrollCommand.current = (bars, absolute = false) => {
       const lane = scroller?.querySelector<HTMLElement>(".sequence-grid-lane");
-      if (scroller === null || lane == null) return;
+      if (scroller === null || lane == null || gestureRef.current !== null) return;
       // scrollLeft uses layout pixels; DOM rectangles also contain the
       // responsive console's CSS scale and would under-scroll a bar.
       const barWidth = lane.clientWidth / model.bars;
       scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth,
-        scroller.scrollLeft + bars * barWidth));
+        (absolute ? 0 : scroller.scrollLeft) + bars * barWidth));
       report();
-    });
+    };
+    props.onScrollReady?.((bars) => scrollCommand.current(bars));
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(report);
+    if (scroller !== null) observer?.observe(scroller);
     return () => {
+      observer?.disconnect();
+      scrollCommand.current = () => {};
       scroller?.removeEventListener("scroll", report);
       props.onScrollReady?.(null);
     };
@@ -481,10 +502,41 @@ export function SequenceGrid(props: SequenceGridProps) {
     ? null
     : 100 / model.columnCount;
   const barPercent = 100 / model.bars;
+  const ticksPerBar = model.lengthTicks / model.bars;
+  const firstBar = Math.min(model.bars, Math.floor(visibleRange.startTick / ticksPerBar + 1e-6) + 1);
+  const lastBar = Math.min(model.bars, Math.max(firstBar, Math.ceil(visibleRange.endTick / ticksPerBar - 1e-6)));
   return (
     <section className="sequence-grid" aria-label="Sequence grid"
       data-testid="sequence-grid"
       {...(editing.enabled ? {} : {"data-editing-disabled": "true"})}>
+      <div className="sequence-grid-navigation" role="group" aria-label="Bar navigation">
+        <button type="button" className="touch-control" aria-label="Previous bar"
+          disabled={gesture !== null || visibleRange.startTick <= 0}
+          onClick={() => scrollCommand.current(-1)}>‹</button>
+        <button type="button" className="touch-control" aria-label="Choose bar"
+          aria-haspopup="dialog" disabled={gesture !== null}
+          onClick={(event) => { panelTrigger.current = event.currentTarget; setPanel("bars"); }}>
+          BAR {firstBar === lastBar ? firstBar : `${firstBar}–${lastBar}`} / {model.bars}
+        </button>
+        <button type="button" className="touch-control" aria-label="Next bar"
+          disabled={gesture !== null || visibleRange.endTick >= model.lengthTicks}
+          onClick={() => scrollCommand.current(1)}>›</button>
+        <button type="button" className="touch-control" aria-label="Grid tools"
+          aria-haspopup="dialog" disabled={gesture !== null}
+          onClick={(event) => { panelTrigger.current = event.currentTarget; setPanel("tools"); }}>
+          {snap === "off" ? "FREE" : snap} · {editMode.toUpperCase()}
+        </button>
+      </div>
+      {panel === null ? null : <ModalDialog returnFocus={panelTrigger.current}
+        onCancel={() => setPanel(null)} dialogClassName="sequence-picker-dialog"
+        label={panel === "bars" ? "Choose bar" : "Grid tools"}>
+        <h2>{panel === "bars" ? "CHOOSE BAR" : "GRID TOOLS"}</h2>
+        {panel === "bars" ? <div className="sequence-bar-options">
+          {Array.from({length: model.bars}, (_, index) => <button key={index}
+            type="button" className="touch-control" aria-label={`Bar ${index + 1}`}
+            aria-pressed={firstBar === index + 1}
+            onClick={() => { scrollCommand.current(index, true); setPanel(null); }}>{index + 1}</button>)}
+        </div> : (
       <div className="sequence-grid-toolbar">
         <div className="sequence-segment" role="group" aria-label="Snap">
           <span className="visually-hidden">SNAP</span>
@@ -520,6 +572,9 @@ export function SequenceGrid(props: SequenceGridProps) {
           </button>
         </div>
       </div>
+        )}
+        <button type="button" className="touch-control" onClick={() => setPanel(null)}>Done</button>
+      </ModalDialog>}
       {editing.enabled || editing.reason === null ? null : (
         <p className="sequence-grid-reason" role="status">{editing.reason}</p>
       )}

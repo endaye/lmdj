@@ -1,3 +1,6 @@
+import {useEffect, useRef, useState} from "react";
+import {ModalDialog} from "./modal_dialog";
+
 // Touch-area controls to the Desktop Final spec (2026-10-04 Sequence hardware
 // UI decision, item 6): 44 px controls with an 8 px radius on the raised
 // fill, the selected one solid accent with dark text, and no native selects
@@ -46,25 +49,42 @@ export function TouchSegment<T extends string | number>({
   );
 }
 
-interface PatternStepperProps {
+interface PatternSelectorProps {
   index: number;
-  count: number;
+  patternIds: readonly string[];
   patternId: string;
   disabled: boolean;
-  onStep(offset: -1 | 1): void;
+  onSelect(patternId: string): void;
 }
 
-// `‹ GROOVE / NN ›` with the current position among the Project's Patterns.
-export function PatternStepper({index, count, patternId, disabled, onStep}: PatternStepperProps) {
+export function PatternSelector({index, patternIds, patternId, disabled, onSelect}: PatternSelectorProps) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   return (
-    <div className="pattern-stepper" data-testid="sequence-pattern"
-      data-pattern-id={patternId} data-pattern-count={count}>
-      <button type="button" className="touch-control" aria-label="Previous Pattern"
-        disabled={disabled || index <= 1} onClick={() => onStep(-1)}>‹</button>
-      <h1>GROOVE / {String(Math.max(index, 1)).padStart(2, "0")}</h1>
-      <span className="pattern-stepper-count">{Math.max(index, 1)}/{Math.max(count, 1)}</span>
-      <button type="button" className="touch-control" aria-label="Next Pattern"
-        disabled={disabled || index >= count} onClick={() => onStep(1)}>›</button>
+    <div className="pattern-selector" data-testid="sequence-pattern"
+      data-pattern-id={patternId} data-pattern-count={patternIds.length}>
+      <button ref={trigger} type="button" className="touch-control"
+        aria-label="Choose Pattern" aria-haspopup="dialog" disabled={disabled}
+        onClick={() => setOpen(true)}>
+        <span>GROOVE / {String(Math.max(index, 1)).padStart(2, "0")}</span>
+        <span className="pattern-selector-count">{Math.max(index, 1)}/{Math.max(patternIds.length, 1)}</span>
+      </button>
+      {open ? <ModalDialog returnFocus={trigger.current} onCancel={() => setOpen(false)}
+        dialogClassName="sequence-picker-dialog" label="Choose Pattern"
+        resolveInitialFocus={(dialog) => dialog.querySelector('[aria-pressed="true"]')}>
+        <h2>CHOOSE PATTERN</h2>
+        <div className="sequence-picker-options">
+          {patternIds.map((id, position) => <button key={id} type="button"
+            className="touch-control" data-pattern-choice={id}
+            aria-pressed={id === patternId} disabled={disabled}
+            onClick={() => {
+              setOpen(false);
+              if (id !== patternId) onSelect(id);
+            }}>GROOVE / {String(position + 1).padStart(2, "0")}</button>)}
+        </div>
+        <button type="button" className="touch-control" onClick={() => setOpen(false)}>Cancel</button>
+      </ModalDialog> : null}
     </div>
   );
 }
