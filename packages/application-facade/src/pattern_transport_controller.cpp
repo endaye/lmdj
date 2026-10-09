@@ -238,6 +238,20 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
     recording_ = true;
   }
   if (closing) {
+    // The render boundary can land our overlay before the next idle control
+    // tick records it. Once a close is pending that tick cannot run; retain
+    // the exact generation the closing receipt proves applied before cutoff.
+    // Keep the marker on IO failure so the same unacknowledged receipt retries
+    // the idempotent record, never substituting a merely queued publication.
+    if (unlanded_overlay_generation_ != 0 &&
+        receipt.pattern_generation == unlanded_overlay_generation_ &&
+        receipt.switch_decision == audio::PatternCutoffDecision::none) {
+      const auto recorded = owner_.retain_overlay_publication(
+          unlanded_overlay_generation_);
+      if (!recorded.has_value()) return recorded;
+      published_generation_ = unlanded_overlay_generation_;
+      unlanded_overlay_generation_ = 0;
+    }
     if (receipt.switch_decision ==
         audio::PatternCutoffDecision::applied_before_cutoff) {
       if (!receipt.switch_authority || !receipt.switch_applied_frame) {
