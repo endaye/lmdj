@@ -71,7 +71,7 @@ test("Project summary lists Pattern and Sequence settings and drops the stale st
   expect(screen.getByText("Quantize").nextElementSibling?.textContent).toBe("Off");
   expect(screen.getByText("Swing").nextElementSibling?.textContent).toBe("62%");
   expect(screen.queryByText(/Stages 8–10/)).toBeNull();
-  expect(screen.getByText("Perform mode arrives in Stage 10.")).toBeTruthy();
+  expect(screen.queryByText("Perform mode arrives in Stage 10.")).toBeNull();
 });
 
 test("Project surface shows import progress while a transfer is running", () => {

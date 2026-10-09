@@ -706,3 +706,26 @@ Sequence 的触摸 Tempo / Swing 在手势进行时同步显示于只读顶屏�
 音频尚未激活时，Sample 仍可进行视觉裁切并提交；此时不向停止的音频引擎
 请求试听。音频运行时若试听预览被拒绝，选区和触摸手势一起回到权威值，
 延迟到达的松手不能再提交已失效的草稿。顶屏保持只读。
+
+### Status and recovery
+
+Default sound loading uses one concise summary after the current workspace,
+while each Pad retains its loading or failure feedback. The recovery summary
+uses the outer touch scroller without displacing first-screen musical controls. Failed downloads can be retried directly; saved
+sounds awaiting playback preparation keep a separate preparation action.
+System details opens the diagnostic area without replacing the Project.
+Completed loading leaves the editing area clear and still updates the
+assistive status.
+
+Pad recording Save/Discard remains directly reachable while System is open.
+An active or stopped Performance has a notice outside its page: stop it there,
+or return directly to Takes to save or discard the retained recording.
+Opening System does not create a second recording owner. Workspace navigation
+returns with Back to music.
+
+Sequence offers **Retry playback** when an operation failed or publication is
+pending. Deliberate manual refresh remains in SETUP → **Playback details**.
+Sample/Project playback summaries distinguish saved changes from prepared
+audio; exact revisions are in their playback details. Perform recording,
+WAV binding, replay revision and gesture counts are available in details,
+with live assistive status retained.

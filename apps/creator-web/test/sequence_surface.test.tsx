@@ -196,7 +196,8 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(onRecover).toHaveBeenCalledWith(expect.anything(), null);
   fireEvent.click(within(touch).getByRole("button", {name: "Discard"}));
   expect(onDiscard).toHaveBeenCalledTimes(1);
-  fireEvent.click(within(touch).getByRole("button", {name: "Refresh authority"}));
+  fireEvent.click(within(touch).getByText("Playback details", {selector: "summary"}));
+  fireEvent.click(within(touch).getByRole("button", {name: "Refresh playback"}));
   expect(onRefresh).toHaveBeenCalledTimes(1);
 
   fireEvent.click(screen.getByRole("button", {name: "Record"}));
@@ -560,3 +561,23 @@ test.each(["Project", "Pattern", "recording"] as const)(
     fireEvent.pointerUp(window, {pointerId: 88});
     expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
   });
+
+test("normal Sequence setup keeps manual playback refresh in details", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  // jsdom does not model closed-details accessibility visibility; assert
+  // disclosure ownership here and actual visibility in the browser journey.
+  expect((screen.getByRole("button", {name: "Refresh playback"})
+    .closest("details") as HTMLDetailsElement).open).toBe(false);
+  expect(screen.queryByRole("button", {name: "Retry playback"})).toBeNull();
+  fireEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  fireEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
+  expect(callbacks.onRefresh).toHaveBeenCalledTimes(1);
+});
+
+test("failed Sequence offers playback recovery directly even in the editing page", () => {
+  const callbacks = renderSurface(false, {state: {errorCode: "IO_ERROR"}});
+  fireEvent.click(screen.getByRole("button", {name: "Retry playback"}));
+  expect(callbacks.onRefresh).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("alert")).toBeTruthy();
+});

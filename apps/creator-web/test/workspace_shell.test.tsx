@@ -899,6 +899,9 @@ test.each([
     await flushAsyncTurns();
     expect(source === "master" ? stopMaster.mock.calls.length : contexts).toBe(1);
     expect(recording.textContent).toContain("review · Pad A02");
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    expect(within(recording).getByRole("button", {name: "Save Pad recording"})).toBeTruthy();
+    expect(within(recording).getByRole("button", {name: "Discard Pad recording"})).toBeTruthy();
     if (resolution === "occupied-target refusal") {
       // A concurrent authoring result never becomes an implicit replacement.
       fixture.assigned.set(1, "55555555-5555-4555-8555-555555555555");
@@ -930,6 +933,8 @@ test.each([
     await waitFor(() =>
       expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull());
     expect(originalImport).not.toHaveBeenCalled();
+    // System never hid the decision; return before starting the next take.
+    fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
     // After the deliberate resolution the successor can own a new take.
     fireEvent.mouseDown(screen.getByRole("button", {name: /^Pad A03 — empty/}), {button: 0});
     const next = () => screen.getByRole("region", {name: "Pad recording"});
@@ -1161,7 +1166,9 @@ test("Candidate publication failure retains one commit and retries only preparat
     snapshotError: {code: "COOK_FAILED", message: "Runtime preparation failed", details: {}}}));
   await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
   expect(await screen.findByText("Adopted 1 slices.")).toBeTruthy();
-  expect(screen.getByText("Saved at revision 4; audio is not ready.")).toBeTruthy();
+  expect(screen.getByText("Changes saved · playback needs preparation.")).toBeTruthy();
+  expect((screen.getByText("Saved at revision 4; audio is not ready.")
+    .closest("details") as HTMLDetailsElement).open).toBe(false);
   expect(fixture.adopt).toHaveBeenCalledTimes(1);
   expect(fixture.revision).toBe(4);
   await userEvent.click(screen.getByRole("button", {name: "Retry audio preparation"}));
@@ -3143,9 +3150,10 @@ test("a Project that opens with an interrupted recording asks once whether to ke
   await userEvent.click(within(region).getByRole("button", {name: "Close"}));
   // A revision change within the same open never asks again.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   await flushAsyncTurns();
   expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
 });
@@ -3170,9 +3178,10 @@ test("Decide later leaves the recording in the Sequence recovery list", async ()
   await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
   expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
   expect(apply).not.toHaveBeenCalled();
   expect(discard).not.toHaveBeenCalled();
@@ -3333,9 +3342,10 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toBe("Creator could not apply that request. Try again. Details are in Developer diagnostics."));
