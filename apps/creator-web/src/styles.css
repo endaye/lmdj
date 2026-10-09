@@ -835,6 +835,9 @@ button:disabled { color: #737b87; }
   padding: 16px;
   background: var(--creator-touch);
   border-radius: 12px;
+  /* This fixed panel owns page scrolling, irrespective of browser width.
+     Reflow its contents below; clipping would hide otherwise valid actions. */
+  overflow-wrap: anywhere;
 }
 .physical-controls {
   /* Three children (brand, encoders, keys). Empty 16px tracks would steal
@@ -1105,6 +1108,75 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .hardware-workspace .stage-note { display: none; }
 
+/* Desktop viewport breakpoints cannot size a fixed 368px touch panel. Let
+   form tracks and native controls shrink inside its 336px content box. Keep
+   the separately bounded waveform and Sequence time-axis editors intact. */
+.hardware-console > [aria-label="Touch workspace"] :where(
+  main, section, header, form, fieldset, label, article, div, ul, ol
+) { min-width: 0; }
+.hardware-console > [aria-label="Touch workspace"] :where(input, select, button, fieldset) {
+  max-width: 100%;
+}
+.hardware-workspace .sample-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.hardware-workspace .selected-sample {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px;
+  gap: 8px;
+}
+.hardware-workspace .selected-sample > span:last-of-type { grid-column: 1 / -1; }
+.hardware-workspace .sample-controls {
+  grid-template-columns: minmax(0, 1fr);
+  /* Keep the EQ's full-width editor and hit geometry out of nested card
+     padding. All controls still share the touch panel's outer inset. */
+  padding: 12px 0;
+  border: 0;
+}
+.hardware-workspace :is(.volume-control, .pitch-control, .pan-control,
+  .attack-control, .release-control, .tone-control) {
+  grid-column: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+}
+.hardware-workspace :is(.volume-control, .pitch-control, .pan-control,
+  .attack-control, .release-control, .tone-control) > input {
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.hardware-workspace :is(.volume-control, .pitch-control, .pan-control,
+  .attack-control, .release-control, .tone-control) > output {
+  grid-column: 2;
+  grid-row: 1;
+}
+.hardware-workspace .reset-sample { grid-column: 1; justify-self: start; }
+.hardware-workspace .empty-sample { flex-wrap: wrap; }
+.hardware-workspace .waveform-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hardware-workspace :is(.perform-surface, .soundset-surface, .candidate-surface) {
+  padding: 0;
+  overflow: visible;
+  grid-template-columns: minmax(0, 1fr);
+}
+.hardware-workspace :is(.perform-patterns, .perform-fx) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.hardware-workspace :is(.candidate-recipes, .diagnostics-log section) {
+  max-height: none;
+  overflow: visible;
+}
+.hardware-workspace :is(.soundset-list, .soundset-slots) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.hardware-workspace :is(.soundset-header, .soundset-inspect > header,
+  .perform-live-header, .perform-replay article) { flex-wrap: wrap; }
+.hardware-workspace .soundset-preview .pad-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.hardware-workspace .candidate-target { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
 /* Touch kit (2026-10-04 decision, item 6): 44 px controls, 8 px radius,
    raised fill, selected solid accent; cards 10 px; spacing 8 or 12 only. */
 .touch-control {
@@ -1132,7 +1204,12 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 /* The Sequence touch area: a header, then one layer filling the rest. */
 .sequence-editor-header {
-  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--creator-touch);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -1142,21 +1219,23 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 .pattern-stepper .touch-control { width: 32px; padding: 0; font-size: 16px; }
 .pattern-stepper h1 {
   margin: 0;
+  max-width: 100%;
   font-size: 14px;
   font-weight: 400;
   letter-spacing: .04em;
-  white-space: nowrap;
+  white-space: normal;
 }
 .pattern-stepper-count {
   color: var(--creator-muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
-.sequence-layer { grid-auto-columns: 56px; }
+.sequence-layer { grid-auto-columns: minmax(0, 1fr); }
 .sequence-layer .touch-control { padding: 0; font-size: 10px; }
 .sequence-param-encoder {
   align-self: center;
@@ -1167,7 +1246,7 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .sequence-setup-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: center;
 }
@@ -1176,15 +1255,15 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   font-size: 10px;
   letter-spacing: .06em;
 }
-.sequence-setup-bars { grid-template-columns: 48px 1fr; }
+.sequence-setup-bars { grid-template-columns: 48px minmax(0, 1fr); }
 .sequence-settings {
   display: grid;
   gap: 12px;
 }
 .sequence-param-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 .sequence-param-card {
   display: grid;
@@ -1213,11 +1292,8 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .sequence-param-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 8px;
-}
-.sequence-param-swing .sequence-param-actions {
-  grid-template-columns: repeat(2, 1fr);
 }
 .sequence-settings-hint {
   margin: 0;
