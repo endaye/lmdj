@@ -7,7 +7,7 @@ import {
   type CreatorState,
 } from "../state/creator_state";
 import {padColourAttribute} from "../state/pad_colour";
-import {padAddress} from "../state/view_model";
+import {PAD_MATRIX_ORDER, padAddress} from "../state/view_model";
 import type {createCreatorInputController} from "../runtime/input_controller";
 
 interface PadSurfaceProps {
@@ -39,9 +39,11 @@ export function PadSurface({
   state, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, currentSlot, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
   const canTrigger = selectCanStartGesture(state);
+  const pads = selectVisiblePads(state);
   return (
     <div className="pad-grid" aria-label="Playable Pads">
-      {selectVisiblePads(state).map((pad) => {
+      {PAD_MATRIX_ORDER.map((localPad) => {
+        const pad = pads[localPad]!;
         const address = padAddress(pad);
         const selected = state.sample.selectedSlot === pad.slot;
         const highlighted = currentSlot === pad.slot || (onSelectSample !== undefined && selected);

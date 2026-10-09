@@ -10,8 +10,13 @@ export async function wakeAudioWithPad(page, {padAddress} = {}) {
     ? /Pad [A-D]\d+ — assigned — Key/ : new RegExp(`^Pad ${padAddress} — assigned — Key`)});
   let pad = null;
   let mode = null;
-  for (const candidate of await assigned.all()) {
-    const address = /Pad ([A-D])(\d+)/.exec(await candidate.getAttribute("aria-label"));
+  // Choose a stable Pad address; visual matrix order must not change the
+  // musical slot a proof sets up before its own journey.
+  const assignedLabels = await assigned.evaluateAll(pads =>
+    pads.map(pad => pad.getAttribute("aria-label")).sort());
+  for (const label of assignedLabels) {
+    const candidate = page.getByRole("button", {name: label, exact: true});
+    const address = /Pad ([A-D])(\d+)/.exec(label);
     const slot = {bank: address[1].charCodeAt(0) - 65, pad: Number(address[2]) - 1};
     const inspect = await page.evaluate(async slot => window.lmdjWebRuntimeHost.transport.send({
       protocol_version: 1, request_id: crypto.randomUUID(), operation: "sample.inspect", payload: {slot},

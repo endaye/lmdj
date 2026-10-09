@@ -355,6 +355,13 @@ test("an empty Set slot is never presented as a clear-Pad action", async () => {
     await screen.findByRole("button", {name: /Preview mapping into Bank A/}),
   );
   const matrix = await screen.findByLabelText("Proposed Bank mapping");
+  // Independent absolute order, rather than agreement with the playing grid.
+  expect([...matrix.querySelectorAll("strong")].map(label => label.textContent)).toEqual([
+    "A13", "A14", "A15", "A16", "A09", "A10", "A11", "A12",
+    "A05", "A06", "A07", "A08", "A01", "A02", "A03", "A04",
+  ]);
+  expect(within(matrix).getByText("A01").closest(".pad")?.getAttribute("data-plan"))
+    .toBe("install");
   const untouched = within(matrix)
     .getAllByText("Empty in Set — Pad unchanged");
   expect(untouched).toHaveLength(15);

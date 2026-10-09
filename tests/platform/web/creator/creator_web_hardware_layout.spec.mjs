@@ -185,6 +185,42 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
 const PROJECT_TRANSITION_TIMEOUT_MS = 125_000;
 const AUDIO_TRANSITION_TIMEOUT_MS = 35_000;
 
+test("all Banks put 01 at bottom left and preserve visual traversal and hit targets", async ({page}) => {
+  await page.setViewportSize({width: 1440, height: 900});
+  await page.goto("/");
+  await waitForBootProject(page);
+  const matrix = page.getByLabel("Playable Pads", {exact: true});
+  for (const bank of ["A", "B", "C", "D"]) {
+    await page.getByTestId("physical-controls").getByRole("button", {
+      name: `Bank ${bank}`, exact: true,
+    }).click();
+    await expect(matrix.locator("strong")).toHaveText([
+      "13", "14", "15", "16", "09", "10", "11", "12",
+      "05", "06", "07", "08", "01", "02", "03", "04",
+    ].map(pad => `${bank}${pad}`));
+    const topLeft = await matrix.getByRole("button", {name: new RegExp(`^Pad ${bank}13 `)}).boundingBox();
+    const topRight = await matrix.getByRole("button", {name: new RegExp(`^Pad ${bank}16 `)}).boundingBox();
+    const bottomLeft = await matrix.getByRole("button", {name: new RegExp(`^Pad ${bank}01 `)}).boundingBox();
+    const bottomRight = await matrix.getByRole("button", {name: new RegExp(`^Pad ${bank}04 `)}).boundingBox();
+    expect(bottomLeft.x).toBeCloseTo(topLeft.x, 0);
+    expect(bottomRight.x).toBeCloseTo(topRight.x, 0);
+    expect(bottomLeft.y).toBeGreaterThan(topLeft.y);
+    expect(topRight.x).toBeGreaterThan(topLeft.x);
+    expect(bottomRight.y).toBeCloseTo(bottomLeft.y, 0);
+    for (const [number, box] of [["01", bottomLeft], ["04", bottomRight], ["13", topLeft], ["16", topRight]]) {
+      const hit = await page.evaluate(({x, y}) =>
+        document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
+      {x: box.x + box.width / 2, y: box.y + box.height / 2});
+      expect(hit).toMatch(new RegExp(`^Pad ${bank}${number} `));
+    }
+  }
+  const first = matrix.getByRole("button", {name: /^Pad D13 /});
+  await first.focus();
+  await page.keyboard.press("Tab");
+  await expect(matrix.getByRole("button", {name: /^Pad D14 /})).toBeFocused();
+  await expect(matrix.getByRole("button", {name: /^Pad D01 /}).locator("kbd")).toHaveText("Q");
+});
+
 const projectHeading = (page) =>
   page.getByRole("heading", {name: "Project 00000000"});
 
