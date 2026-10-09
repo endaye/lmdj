@@ -60,3 +60,19 @@ export async function showSamplePage(page, name) {
   if (await button.getAttribute("aria-current") !== "page") await button.click();
   await button.and(page.locator("[aria-current='page']")).waitFor();
 }
+
+// Perform controller ownership outlives its visible subpage. An already active
+// page is a no-op, preserving an in-progress native gesture and focus.
+export async function showPerformPage(page, name) {
+  const button = page.getByRole("navigation", {name: "Perform pages"})
+    .getByRole("button", {name, exact: true});
+  if (await button.getAttribute("aria-current") !== "page") await button.click();
+  await button.and(page.locator("[aria-current='page']")).waitFor();
+}
+
+export async function showPatternLaunchGroup(page, slot) {
+  const first = Math.floor((slot - 1) / 4) * 4 + 1;
+  const button = page.getByRole("button", {name: `Pattern slots ${first} to ${first + 3}`, exact: true});
+  if (await button.getAttribute("aria-pressed") !== "true") await button.click();
+  await button.and(page.locator("[aria-pressed='true']")).waitFor();
+}

@@ -1,4 +1,4 @@
-import {showSamplePage} from "./fixtures/creator_navigation.mjs";
+import {showSamplePage, showPerformPage, showPatternLaunchGroup} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
@@ -756,6 +756,7 @@ async function expectRevisionAfter(page, before) {
 }
 
 async function savePerformanceWithBusyRetry(page, name) {
+  await showPerformPage(page, "Takes");
   const nameField = page.getByRole("textbox", {name: "Performance name"});
   const save = page.getByRole("button", {name: "Save Performance"});
   const saved = page.getByText(name, {exact: true});
@@ -772,6 +773,15 @@ async function savePerformanceWithBusyRetry(page, name) {
     }));
     const outcome = async () => {
       if (await saved.isVisible()) return "saved";
+      const stopped = await save.count() > 0 && await save.isEnabled();
+      const idle = await page.getByRole("button", {name: "Record Performance", exact: true}).count() === 1;
+      if (stopped || idle) {
+        // A persisted Performance may still be stopped with Retry WAV bind.
+        // Preserve the original saved-row oracle before classifying its alert.
+        await showPerformPage(page, "Replay");
+        if (await saved.isVisible()) return "saved";
+        await showPerformPage(page, "Takes");
+      }
       if (await busy.isVisible() && await save.isEnabled()) return "busy";
       if (await alert.isVisible()) return `error:${await alert.textContent()}`;
       return "pending";
@@ -779,7 +789,10 @@ async function savePerformanceWithBusyRetry(page, name) {
     await expect.poll(outcome, {timeout: PROJECT_TRANSITION_TIMEOUT_MS})
       .not.toBe("pending");
     const settled = await outcome();
-    if (settled === "saved") return;
+    if (settled === "saved") {
+      await expect(saved).toBeVisible();
+      return;
+    }
     if (settled !== "busy") {
       throw new Error(`Save Performance failed: ${settled.slice("error:".length)}`);
     }
@@ -791,17 +804,23 @@ async function assignThenMovePattern(page) {
   const before = await projectRevision(page);
   const slots = page.getByRole("button", {name: /^Launch Pattern /});
   for (let index = 0; index < 16; index += 1) {
-    await expect(slots.nth(index)).not.toHaveAttribute("data-pattern-id", /.+/);
+    await showPatternLaunchGroup(page, index + 1);
+    await expect(page.getByRole("button", {name: `Launch Pattern ${index + 1}`, exact: true}))
+      .not.toHaveAttribute("data-pattern-id", /.+/);
   }
 
+  await showPatternLaunchGroup(page, 1);
+  await showPerformPage(page, "Slots");
   await page.getByRole("combobox", {name: "Pattern assignment"})
     .selectOption(PATTERN_ID);
   await page.getByRole("combobox", {name: "Pattern slot", exact: true})
     .selectOption("0");
   await page.getByRole("button", {name: "Assign Pattern"}).click();
   const assignedRevision = await expectRevisionAfter(page, before);
+  await showPerformPage(page, "Live");
   await expect(slots.nth(0)).toHaveAttribute("data-pattern-id", PATTERN_ID);
 
+  await showPerformPage(page, "Slots");
   await page.getByRole("combobox", {name: "Move Pattern from"})
     .selectOption({value: "0"});
   const moveTo = page.getByRole("combobox", {name: "Move Pattern to"});
@@ -809,12 +828,14 @@ async function assignThenMovePattern(page) {
   await expect(moveTo).toHaveValue("1");
   await page.getByRole("button", {name: "Move Pattern"}).click();
   const movedRevision = await expectRevisionAfter(page, assignedRevision);
+  await showPerformPage(page, "Live");
   await expect(slots.nth(0)).not.toHaveAttribute("data-pattern-id", /.+/);
   await expect(slots.nth(1)).toHaveAttribute("data-pattern-id", PATTERN_ID);
   return movedRevision;
 }
 
 async function beginFaultingRecording(page) {
+  await showPerformPage(page, "Live");
   const before = await projectRevision(page);
   await page.getByRole("button", {name: "Record Performance"}).click();
   const status = page.getByRole("status", {name: "Performance recording status"});
@@ -826,6 +847,7 @@ async function beginFaultingRecording(page) {
 }
 
 async function applyRecoveryAfterOwnerRelease(page) {
+  await showPerformPage(page, "Replay");
   const status = page.getByRole("status", {name: "Performance recovery status"});
   const apply = page.getByRole("button", {name: "Apply recovery"});
   for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -1066,15 +1088,18 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(recordingStatus).toContainText(/hold\s*[:·]\s*off/i);
 
   const bankRevision = await projectRevision(page);
-  // The Perform strip's own Bank keys, not the physical column's: this leg
-  // is about the strip reflecting the switch it made.
-  const performBanks = page.getByRole("group", {name: "Perform Bank"});
+  // The rail is now the sole Bank owner; changing it must keep the same
+  // recorded Project revision and update the actual playable Pad bank.
+  await expect(page.getByRole("group", {name: "Perform Bank"})).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Bank B", exact: true})).toHaveCount(1);
+  const performBanks = page.getByTestId("physical-controls");
   await performBanks.getByRole("button", {name: "Bank B", exact: true}).click();
   await expect(performBanks.getByRole("button", {name: "Bank B", exact: true}))
-    .toHaveAttribute("aria-pressed", "true");
+    .toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("button", {name: /^Pad B/})).toHaveCount(16);
   expect(await projectRevision(page)).toBe(bankRevision);
 
+  await showPerformPage(page, "Takes");
   await page.getByRole("button", {name: "Flush Performance"}).click();
   revision = await expectRevisionAfter(page, revision);
   await expect(recordingStatus).toContainText(/flushed/i);
@@ -1101,6 +1126,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await openPerform(page);
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))
     .toHaveAttribute("data-pattern-id", PATTERN_ID);
+  await showPerformPage(page, "Replay");
   await expect(page.getByText("Night Set", {exact: true})).toBeVisible();
 
   await page.getByRole("button", {name: "Replay Night Set"}).click();
@@ -1132,6 +1158,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(afterDelete.project.patterns).toEqual(beforeDelete.project.patterns);
   await openPerform(page);
   await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
+  await showPerformPage(page, "Replay");
   const empty = page.getByRole("button", {name: /^Pad B01 — empty/});
   await empty.focus();
   const beforeCaptureBatches = await page.evaluate(() =>
@@ -1181,6 +1208,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
     await ownerPage.getByRole("button", {name: /^Pad A01\b/}).click();
     await stopRecording(ownerPage);
     expect((await opfsWavFiles(ownerPage)).length).toBeGreaterThan(baselineWavs.length);
+    await showPerformPage(ownerPage, "Takes");
     await ownerPage.getByRole("button", {name: "Discard Performance"}).click();
     await expect(ownerPage.getByRole("status", {name: "WAV recording status"}))
       .toContainText("temporary removed");
@@ -1202,6 +1230,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
       applyingProcess.context,
       candidateUrl,
     );
+    await showPerformPage(applyingPage, "Replay");
     await expect(applyingPage.getByRole("button", {name: "Apply recovery"})).toBeVisible();
     const beforeApply = await projectRevision(applyingPage);
     await applyRecoveryAfterOwnerRelease(applyingPage);
@@ -1241,6 +1270,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
       candidateUrl,
     );
     const beforeDiscard = await projectRevision(discardingPage);
+    await showPerformPage(discardingPage, "Replay");
     await discardingPage.getByRole("button", {name: "Discard recovery"}).click();
     await expect(discardingPage.getByRole("status", {name: "Performance recovery status"}))
       .toContainText("discarded");
@@ -1297,6 +1327,7 @@ test("a retryable WAV bind keeps the real Store receipt path and removes the tem
   await expect(page.getByRole("alert")).toContainText("The recording could not be saved into the Project. Choose Retry WAV bind.");
   expect((await opfsWavFiles(page)).length).toBeGreaterThan(baselineWavs.length);
   const revision = await projectRevision(page);
+  await showPerformPage(page, "Takes");
   await page.getByRole("button", {name: "Retry WAV bind"}).click();
   await expect(page.getByRole("status", {name: "WAV binding status"}))
     .toContainText("bound", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
@@ -1311,6 +1342,7 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
   test.setTimeout(240_000);
   await importActivateAndPerform(page);
   const status = await beginRecording(page);
+  await showPatternLaunchGroup(page, 16);
   const emptySlot = page.getByRole("button", {name: "Launch Pattern 16"});
   await expect(emptySlot).not.toHaveAttribute("data-pattern-id", /.+/);
   await armAttributeObservation(emptySlot, "data-launch", "pending");
@@ -1353,8 +1385,9 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
   });
   await expect(page.getByRole("status", {name: "WAV recording status"}))
     .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(page.getByRole("button", {name: "Stop Performance"}))
-    .toBeDisabled();
+  await expect(status).toContainText("stopped");
+  await expect(page.getByRole("button", {name: "Stop Performance"})).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Review recording"})).toBeEnabled();
 });
 
 // #1726: an opened Project is remembered durably at once. Chromium commits
@@ -1416,10 +1449,12 @@ test("owner process loss leaves one recoverable recording and no second capture 
 
     successorProcess = await launchCrashableCreatorContext(profile);
     const successor = await openProjectSuccessor(successorProcess.context, candidateUrl);
+    await showPerformPage(successor, "Replay");
     await expect(successor.getByRole("button", {name: "Apply recovery"}))
       .toHaveCount(1);
     await expect(successor.getByRole("status", {name: "Performance recovery status"}))
       .toContainText("active");
+    await showPerformPage(successor, "Live");
     await expect(successor.getByRole("button", {name: "Record Performance"}))
       .toBeDisabled();
   } finally {
@@ -1443,6 +1478,7 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     tailMs: 6_000,
   });
 
+  await showPerformPage(page, "Replay");
   await page.getByRole("button", {name: "Replay Neutral Reset"}).click();
   const replayStatus = page.getByRole("status", {name: "Replay status"});
   await expect(replayStatus).toContainText("playing", {timeout: 30_000});
@@ -1450,6 +1486,7 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   await expect(replayStatus).toContainText("stopped · neutral", {
     timeout: 30_000,
   });
+  await showPerformPage(page, "Live");
   for (const slider of await page.getByRole("slider").all()) {
     await expect(slider).toHaveValue("500");
   }
@@ -1589,4 +1626,53 @@ test("a tone -100 Pad attenuates a bright source in the recorded master output",
   expect(rms(open)).toBeGreaterThan(4_000);
   expect(rms(filtered)).toBeLessThan(rms(open) / 10);
   expect(rms(filtered)).toBeGreaterThan(0);
+});
+
+
+test("native FX drag-off releases before paging without stopping the recording", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await importActivateAndPerform(page);
+  const status = await beginRecording(page);
+  const filter = page.getByRole("slider", {name: "Filter", exact: true});
+  // Record lives below the live panel. Scroll back with native input before
+  // aiming the pointer, including the sticky page bar's occlusion.
+  const touch = page.getByTestId("touch-workspace");
+  await touch.hover();
+  await page.mouse.wheel(0, -1200);
+  await expect.poll(() => touch.evaluate(element => element.scrollTop)).toBe(0);
+  await filter.evaluate(element => {
+    // Chromium's native range thumb owns capture in its UA shadow tree.
+    // The public input receives retargeted events, but hasPointerCapture on
+    // that outer element is false. Observe the native capture-phase events
+    // and the authoritative gesture lifecycle, not outer-element ownership.
+    for (const [type, attribute] of [["gotpointercapture", "data-proof-captured"],
+      ["lostpointercapture", "data-proof-released"]]) {
+      window.addEventListener(type, event => {
+        if (event.target === element) element.setAttribute(attribute, "true");
+      }, {capture: true, once: true});
+    }
+  });
+  const box = await filter.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 3);
+  await expect(filter).toHaveAttribute("data-proof-captured", "true");
+  const pages = page.getByRole("navigation", {name: "Perform pages"});
+  for (const button of await pages.getByRole("button").all()) await expect(button).toBeDisabled();
+  await expect(status).toContainText("open FX: 1", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.mouse.move(box.x - 40, box.y - 10);
+  await page.mouse.up();
+  await expect(status).toContainText("open FX: 0", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(filter).toHaveAttribute("data-proof-released", "true");
+  for (const button of await pages.getByRole("button").all()) await expect(button).toBeEnabled();
+  for (const name of ["Slots", "Takes", "Replay", "Live"]) {
+    await showPerformPage(page, name);
+    await expect(status).toContainText("recording");
+    await expect(status).not.toContainText("stopped");
+  }
+  await stopRecording(page);
+  await page.getByRole("button", {name: "Review recording", exact: true}).click();
+  await expect(page.getByRole("textbox", {name: "Performance name"})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Save Performance"})).toBeEnabled();
 });

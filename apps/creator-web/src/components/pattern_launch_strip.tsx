@@ -1,6 +1,5 @@
 import {useEffect, useState} from "react";
 
-import type {Bank} from "../state/creator_state";
 import type {PerformState} from "../state/perform_state";
 
 interface PatternLaunchStripProps {
@@ -8,17 +7,14 @@ interface PatternLaunchStripProps {
   readonly patterns: readonly Readonly<{patternId: string}>[];
   readonly pending: PerformState["pendingLaunch"];
   readonly lastAck: PerformState["lastLaunchAck"];
-  readonly bank: Bank;
+  readonly view: "launch" | "edit" | null;
   readonly disabled?: boolean;
   readonly mutationDisabled?: boolean;
-  readonly onBankChange: (bank: Bank) => void;
   readonly onLaunch: (patternSlot: number) => void;
   readonly onAssign: (patternSlot: number, patternId: string) => void;
   readonly onClear: (patternSlot: number) => void;
   readonly onMove: (fromSlot: number, toSlot: number) => void;
 }
-
-const BANKS = ["A", "B", "C", "D"] as const;
 
 const LAUNCH_STATE = Object.freeze({
   pending: "Queued",
@@ -28,6 +24,7 @@ const LAUNCH_STATE = Object.freeze({
 
 export function PatternLaunchStrip(props: PatternLaunchStripProps) {
   const [patternId, setPatternId] = useState(props.patterns[0]?.patternId ?? "");
+  const [launchGroup, setLaunchGroup] = useState(0);
   const [assignmentSlot, setAssignmentSlot] = useState(0);
   const [clearSlot, setClearSlot] = useState(0);
   const [moveFrom, setMoveFrom] = useState(0);
@@ -37,19 +34,13 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
       setPatternId(props.patterns[0]?.patternId ?? "");
     }
   }, [patternId, props.patterns]);
+  if (props.view === null) return null;
   const slotOptions = props.slots.map((_value, index) => (
     <option value={index} key={index}>{index + 1}</option>
   ));
   return (
     <section className="perform-patterns" aria-label="Pattern Launch">
-      <div className="perform-bank" role="group" aria-label="Perform Bank">
-        {BANKS.map((label, bank) => (
-          <button type="button" key={label} aria-label={`Bank ${label}`}
-            aria-pressed={props.bank === bank}
-            onClick={() => props.onBankChange(bank as Bank)}>{label}</button>
-        ))}
-      </div>
-      <div className="perform-pattern-editor" role="group" aria-label="Pattern slot editing">
+      {props.view === "edit" ? <div className="perform-pattern-editor" role="group" aria-label="Pattern slot editing">
         <label>Pattern assignment
           <select aria-label="Pattern assignment" value={patternId}
             disabled={props.mutationDisabled || props.patterns.length === 0}
@@ -95,9 +86,25 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
         </label>
         <button type="button" disabled={props.mutationDisabled || moveFrom === moveTo}
           onClick={() => props.onMove(moveFrom, moveTo)}>Move Pattern</button>
-      </div>
-      <div className="perform-pattern-slots" role="group" aria-label="Pattern slots">
-        {props.slots.map((patternId, patternSlot) => {
+      </div> : null}
+      {props.view === "launch" ? <>
+        <nav className="perform-launch-groups" aria-label="Pattern slot groups">
+          {[0, 1, 2, 3].map((group) => {
+            const queued = props.pending !== null && Math.floor(props.pending.patternSlot / 4) === group;
+            const playing = props.lastAck !== null && Math.floor(props.lastAck.patternSlot / 4) === group;
+            return <button type="button" key={group}
+              aria-label={`Pattern slots ${group * 4 + 1} to ${group * 4 + 4}`}
+              aria-pressed={launchGroup === group}
+              onClick={() => setLaunchGroup(group)}>
+              <span>{group * 4 + 1}–{group * 4 + 4}</span>
+              {queued ? <span>Queued</span> : null}
+              {playing ? <span>Playing</span> : null}
+            </button>;
+          })}
+        </nav>
+        <div className="perform-pattern-slots" role="group" aria-label="Pattern slots">
+        {props.slots.slice(launchGroup * 4, launchGroup * 4 + 4).map((patternId, index) => {
+          const patternSlot = launchGroup * 4 + index;
           const launch = props.pending?.patternSlot === patternSlot ? "pending"
             : props.lastAck?.patternSlot === patternSlot ? "acknowledged" : "idle";
           return (
@@ -120,7 +127,7 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
             </button>
           );
         })}
-      </div>
+      </div></> : null}
       <output role="status" aria-label="Pattern launch status">
         {props.pending !== null
           ? `Pattern ${props.pending.patternSlot + 1} pending`

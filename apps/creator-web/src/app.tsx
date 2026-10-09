@@ -3000,8 +3000,7 @@ function Workspace({
                     controller={performController}
                     project={state.project.current}
                     bank={state.activeBank}
-                    onBankChange={selectBank}
-                    transport={transport}
+                      transport={transport}
                     recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                       !["idle", "permission-error"].includes(capturePhase) || recording}
                   />
