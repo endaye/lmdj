@@ -522,6 +522,15 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 print(manifest["product_build"], manifest["host_version"])
 PY
 )
+  [[ -n "$deployment_product_build" && -n "$deployment_host_version" ]] || {
+    printf '%s\n' \
+      'Creator Web error: why: the packaged distribution did not provide the' \
+      '  product_build/host_version identity the deployment journey asserts' \
+      'remedy: rebuild and package the distribution' \
+      '  (scripts/creator-web.sh package) so dist/host-manifest.json carries' \
+      '  both fields, then rerun the proof' >&2
+    return 2
+  }
   LMDJ_WEB_RESULTS_SLOT=deployment-chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \

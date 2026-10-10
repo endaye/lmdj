@@ -165,9 +165,15 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   await page.getByRole("button", {name: /^Pad A0?1 — assigned — Key Q$/}).click();
   // Hosts after #1930 organize the Sample editor into contextual pages and
   // move replacement under the Pad page; older Hosts expose it directly.
-  const samplePadPage = page.getByRole("navigation", {name: "Sample pages"})
-    .getByRole("button", {name: "Pad", exact: true});
-  if (await samplePadPage.isVisible()) await samplePadPage.click();
+  // Settle on one of the two surfaces first, so a still-rendering page cannot
+  // turn the branch into a skip, then take the route that is present.
+  const samplePagesNav = page.getByRole("navigation", {name: "Sample pages"});
+  await expect(
+    samplePagesNav.or(page.getByRole("button", {name: "Replace Sample"})),
+  ).toBeVisible();
+  if (await samplePagesNav.isVisible()) {
+    await samplePagesNav.getByRole("button", {name: "Pad", exact: true}).click();
+  }
   const sampleChooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Replace Sample"}).click();
   await (await sampleChooser).setFiles({
