@@ -13,7 +13,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: pr-contract-${{ github.event.pull_request.number }}
+  # An edited event must never replace an in-flight source run (including a
+  # retarget run). Give each edit its own group; source events still coalesce.
+  group: pr-contract-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && github.run_id || 'source' }}
   cancel-in-progress: true
 
 env:
@@ -37,7 +39,27 @@ jobs:
       base-sha: ${{ steps.scope.outputs.resolved-base-sha }}
       head-sha: ${{ steps.scope.outputs.resolved-head-sha }}
       pull-request-body: ${{ steps.scope.outputs.pull-request-body }}
+      metadata-only: ${{ steps.event.outputs.metadata-only }}
     steps:
+      - name: Classify the PR edit
+        id: event
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          changes = event.get('changes')
+          metadata_only = (
+              event.get('action') == 'edited'
+              and isinstance(changes, dict) and bool(changes)
+              and set(changes) <= {'body', 'title'}
+              and all(isinstance(value, dict) and set(value) == {'from'}
+                      and (value['from'] is None or isinstance(value['from'], str))
+                      for value in changes.values())
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('metadata-only=' + str(metadata_only).lower(), file=output)
+          PY
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -75,6 +97,7 @@ jobs:
     if: >-
       !cancelled() &&
       needs.change-scope.outputs.trusted-head == 'true' &&
+      needs.change-scope.outputs.metadata-only != 'true' &&
       fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 30
@@ -119,6 +142,7 @@ jobs:
     if: >-
       !cancelled() &&
       needs.change-scope.outputs.trusted-head == 'true' &&
+      needs.change-scope.outputs.metadata-only != 'true' &&
       fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 10
@@ -179,11 +203,14 @@ jobs:
     # heavy native queue. The verification is self-authenticating from Git
     # objects. The literal job name is a published check-run surface: keep it
     # stable, since readers may bind to it.
-    name: Architecture Portal provenance
+    # review_wait reads the latest real provenance check by its literal name.
+    # A skipped metadata run must not mask it or manufacture new evidence.
+    name: ${{ needs.change-scope.outputs.metadata-only == 'true' && 'Portal source unchanged (metadata edit)' || 'Architecture Portal provenance' }}
     needs: change-scope
     if: >-
       !cancelled() &&
       needs.change-scope.outputs.trusted-head == 'true' &&
+      needs.change-scope.outputs.metadata-only != 'true' &&
       fromJSON(needs.change-scope.outputs.manifest).lanes.portal
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 15

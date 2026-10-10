@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
+import textwrap
 import unittest
 
 
@@ -299,6 +304,75 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.portal", provenance)
         self.assertNotIn("uses: ./.github/workflows/ci.yml", self.pr_contract_source)
 
+    def classify_pr_edit(self, event: dict) -> bool:
+        # Execute the workflow's producer, not a copied implementation. The
+        # independently specified payload cases below define the event boundary.
+        match = re.search(r"python3 - <<'PY'\n(.*?)^          PY$",
+                          self.pr_contract_job("change-scope"), re.M | re.S)
+        self.assertIsNotNone(match)
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            output_path = Path(directory) / "output"
+            event_path.write_text(json.dumps(event), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-c", textwrap.dedent(match.group(1))],
+                env={**os.environ, "GITHUB_EVENT_PATH": str(event_path),
+                     "GITHUB_OUTPUT": str(output_path)},
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = output_path.read_text().strip()
+            self.assertIn(output, ("metadata-only=true", "metadata-only=false"))
+            return output == "metadata-only=true"
+
+    def test_pr_body_and_title_edits_need_only_metadata_validation(self) -> None:
+        for changes in ({"body": {"from": "old body"}}, {"title": {"from": "old title"}},
+                        {"body": {"from": None}, "title": {"from": "old"}}):
+            with self.subTest(changes=changes):
+                self.assertTrue(self.classify_pr_edit({"action": "edited", "changes": changes}))
+
+    def test_pr_source_events_keep_source_validation(self) -> None:
+        for action in ("opened", "synchronize", "reopened", "ready_for_review"):
+            with self.subTest(action=action):
+                self.assertFalse(self.classify_pr_edit({
+                    "action": action, "changes": {"body": {"from": "old"}}}))
+
+    def test_pr_base_edit_keeps_source_validation_even_with_body_edit(self) -> None:
+        self.assertFalse(self.classify_pr_edit({"action": "edited", "changes": {
+            "base": {"ref": {"from": "old-base"}}, "body": {"from": "old"}}}))
+
+    def test_pr_unknown_or_incomplete_edit_keeps_source_validation(self) -> None:
+        for changes in (None, {}, [], {"unknown": {}}, {"body": {}},
+                        {"body": "old"}, {"body": {"from": []}},
+                        {"body": {"from": "old"}, "unknown": {}}):
+            with self.subTest(changes=changes):
+                self.assertFalse(self.classify_pr_edit({"action": "edited", "changes": changes}))
+
+    def test_metadata_edit_skips_only_source_jobs(self) -> None:
+        scope = self.pr_contract_job("change-scope")
+        self.assertIn("metadata-only: ${{ steps.event.outputs.metadata-only }}", scope)
+        for name in ("ci-contract", "docs-static", "portal-provenance"):
+            with self.subTest(job=name):
+                job = self.pr_contract_job(name)
+                condition = job.split("    if: >-\n", 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("needs.change-scope.outputs.metadata-only != 'true' &&", condition)
+        self.assertNotIn("metadata-only", self.pr_contract_job("documentation-impact"))
+
+    def test_edited_runs_cannot_cancel_source_or_retarget_runs(self) -> None:
+        # Even retarget edits get a unique group: coalescing edits could cancel
+        # their source work when the next edit merely adds verification prose.
+        self.assertIn(
+            "group: pr-contract-${{ github.event.pull_request.number }}-"
+            "${{ github.event.action == 'edited' && github.run_id || 'source' }}",
+            self.pr_contract_source)
+        self.assertIn("cancel-in-progress: true", self.pr_contract_source)
+
+    def test_metadata_portal_skip_has_no_provenance_identity(self) -> None:
+        self.assertIn(
+            "name: ${{ needs.change-scope.outputs.metadata-only == 'true' && "
+            "'Portal source unchanged (metadata edit)' || 'Architecture Portal provenance' }}",
+            self.pr_contract_job("portal-provenance"))
+
     def test_pr_contract_checks_every_selected_job_at_the_exact_head(self) -> None:
         for job_name in ("change-scope", "ci-contract", "docs-static", "documentation-impact",
                          "portal-provenance"):
@@ -316,7 +390,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         commands = lanes["lanes"]["portal"]["commands"]
         self.assertEqual(commands, ["scripts/docs-site.sh install", "scripts/docs-site.sh check"])
         provenance = self.pr_contract_job("portal-provenance")
-        self.assertIn("name: Architecture Portal provenance", provenance,
+        self.assertIn("|| 'Architecture Portal provenance' }}", provenance,
                       "why: review_wait admits generated-only evidence by this literal check-run name; "
                       "remedy: keep the job name stable")
         setup = provenance.index("- uses: actions/setup-node@v6")

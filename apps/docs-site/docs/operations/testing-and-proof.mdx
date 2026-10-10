@@ -179,8 +179,12 @@ Change Scope 按确定性规则选择 `ci_contract` 与 `docs_static`，AI 只�
 `ci_*_test.py` discovery 和 SHA 固定的 actionlint 1.7.12，`docs_static` 检查 exact
 three-dot revision range；Documentation impact 则使用 API 读取的实际 PR body、正确的
 base/head 和现有 checker。Fork 与 Draft 在 runner 分配前跳过，不是通过证据；该 workflow
-不新增 required check、不修改 branch protection，也没有 hosted fallback。编辑 PR body 会
-触发新的 advisory run，使声明修正能够重新验证。
+不新增 required check、不修改 branch protection，也没有 hosted fallback。仅编辑 PR 标题或
+body 时，仍读取实际说明并检查 Documentation impact，但不重复 CI contract、source diff
+或 Portal 构建；更新代码、改变目标分支或无法识别的 edit 仍执行选中的源码检查。每次 edit
+使用独立并发组，避免填写说明时取消正在运行的源码验证。metadata edit 的跳过项使用
+`Portal source unchanged (metadata edit)` 名称，不覆盖 `Architecture Portal provenance`
+的真实结果；缺失或失败的源码证据仍不满足评审要求。
 
 合并前必须有独立的 current-head review，或由仓库 owner 明确给出的 exact-SHA exception。
 只读命令 `python3 scripts/ci/review_wait.py --repository endaye/lmdj --pr-number NUMBER --expect-head FULL_SHA`
