@@ -21,6 +21,7 @@ const status: PatternTransportStatus = {
   observedAtMilliseconds: 0,
   commandId: "command-1",
   publicationPending: false,
+  currentPatternId: null, pendingSwitch: null,
   error: null,
 };
 

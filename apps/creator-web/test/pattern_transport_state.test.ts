@@ -22,6 +22,7 @@ const status = (overrides: Partial<PatternTransportStatus> = {}): PatternTranspo
   observedAtMilliseconds: 0,
   commandId: "command-1",
   publicationPending: false,
+  currentPatternId: null, pendingSwitch: null,
   error: null,
   ...overrides,
 });

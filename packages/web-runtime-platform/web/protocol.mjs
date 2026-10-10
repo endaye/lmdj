@@ -74,6 +74,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "audio.suspend",
   "trigger",
   "pattern.transport.request",
+  "pattern.transport.switch",
   "pattern.transport.inspect",
   "sequence.record.begin",
   "sequence.capture.disarm",
@@ -940,6 +941,12 @@ function requireSampleOperationPayload(operation, payload) {
       valid =
         hasExactKeys(payload, ["session_id"]) &&
         UUID_PATTERN.test(payload.session_id);
+      break;
+    case "pattern.transport.switch":
+      valid =
+        hasExactKeys(payload, ["pattern_id", "request_id"]) &&
+        UUID_PATTERN.test(payload.pattern_id) &&
+        UUID_PATTERN.test(payload.request_id);
       break;
     case "sequence.record.begin":
       valid =

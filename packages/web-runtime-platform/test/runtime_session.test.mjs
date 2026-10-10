@@ -86,6 +86,7 @@ const API = [
   "requestPatternSwitch",
   "requestPatternTransport",
   "inspectPatternTransport",
+  "requestTransportPatternSwitch",
   "resetPad",
   "deletePad",
   "setPadColour",
@@ -6192,6 +6193,8 @@ function transportStatus(overrides = {}) {
     command_id: TRANSPORT_COMMAND_ID,
     publication_pending: false,
     error: null,
+    current_pattern_id: TRANSPORT_PATTERN_ID,
+    pending_switch: null,
     ...overrides,
   };
 }
@@ -6586,6 +6589,8 @@ test("Pattern transport request returns the pending ticket without awaiting sett
     observedAtMilliseconds: 1234.5,
     commandId: TRANSPORT_COMMAND_ID,
     publicationPending: false,
+    currentPatternId: TRANSPORT_PATTERN_ID,
+    pendingSwitch: null,
     error: null,
   });
   const inspection = sent.find((entry) =>
@@ -6683,6 +6688,133 @@ test("Pattern transport busy and retained-error surfaces propagate typed", async
   assert.equal(observed.error.code, "IO_ERROR");
   assert.deepEqual(observed.error.details, {reason: "storage_failure"});
   await session.close();
+});
+
+test("Pattern transport switch sends the exact payload and validates the result", async () => {
+  const sent = [];
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      sent.push(envelope);
+      if (envelope.operation === "pattern.transport.switch") {
+        return success(envelope, {
+          pattern_id: envelope.payload.pattern_id,
+          activation_frame: 96_000,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  // A malformed request is refused before anything is sent.
+  assert.throws(
+    () => session.requestTransportPatternSwitch({patternId: TRANSPORT_PATTERN_ID}),
+    /Pattern transport switch request is invalid/,
+  );
+  assert.throws(
+    () => session.requestTransportPatternSwitch({
+      patternId: TRANSPORT_PATTERN_ID,
+      requestId: "not-a-uuid",
+    }),
+    TypeError,
+  );
+  const switched = await session.requestTransportPatternSwitch({
+    patternId: TRANSPORT_PATTERN_ID,
+    requestId: TRANSPORT_COMMAND_ID,
+  });
+  assert.deepEqual(switched, {
+    patternId: TRANSPORT_PATTERN_ID,
+    activationFrame: 96_000,
+  });
+  const request = sent.find((entry) =>
+    entry.operation === "pattern.transport.switch");
+  assert.deepEqual(request.payload, {
+    pattern_id: TRANSPORT_PATTERN_ID,
+    request_id: TRANSPORT_COMMAND_ID,
+  });
+  await session.close();
+});
+
+test("Pattern transport switch result is exact and null means already playing", async () => {
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.switch") {
+        // The pressed Pattern already plays; the queued switch withdrew.
+        return success(envelope, {
+          pattern_id: envelope.payload.pattern_id,
+          activation_frame: null,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const withdrawn = await session.requestTransportPatternSwitch({
+    patternId: TRANSPORT_PATTERN_ID,
+    requestId: TRANSPORT_COMMAND_ID,
+  });
+  assert.deepEqual(withdrawn, {patternId: TRANSPORT_PATTERN_ID, activationFrame: null});
+  await session.close();
+
+  const strict = fixture({
+    patternTransport: true,
+    send: async (envelope) => envelope.operation === "pattern.transport.switch"
+      ? success(envelope, {pattern_id: envelope.payload.pattern_id})
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await strict.session.start();
+  await assert.rejects(
+    strict.session.requestTransportPatternSwitch({
+      patternId: TRANSPORT_PATTERN_ID,
+      requestId: TRANSPORT_COMMAND_ID,
+    }),
+    {code: "HOST_PROTOCOL_MISMATCH"},
+  );
+  await strict.session.close();
+});
+
+test("Pattern transport status maps the current Pattern and the pending switch", async () => {
+  const queued = "00000000-0000-4000-8000-0000000000ee";
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.inspect") {
+        return success(envelope, transportStatus({
+          phase: "idle",
+          playing: true,
+          current_pattern_id: TRANSPORT_PATTERN_ID,
+          pending_switch: {pattern_id: queued, activation_frame: 96_000},
+        }));
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const observed = await session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.equal(observed.currentPatternId, TRANSPORT_PATTERN_ID);
+  assert.deepEqual(observed.pendingSwitch, {
+    patternId: queued,
+    activationFrame: 96_000,
+  });
+  await session.close();
+
+  const idle = fixture({
+    patternTransport: true,
+    send: async (envelope) => envelope.operation === "pattern.transport.inspect"
+      ? success(envelope, transportStatus({
+          phase: "idle",
+          playing: true,
+          current_pattern_id: null,
+          pending_switch: null,
+        }))
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await idle.session.start();
+  const settled = await idle.session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.equal(settled.currentPatternId, null);
+  assert.equal(settled.pendingSwitch, null);
+  await idle.session.close();
 });
 
 const HISTORY_STATUS = Object.freeze({session_id: "20000000-0000-4000-8000-000000000001",

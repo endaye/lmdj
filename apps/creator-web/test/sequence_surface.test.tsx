@@ -300,6 +300,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
         runtimeGeneration: 1, transportEpoch: 1, originFrame: 0,
         runtimeFrame: 0, observedAtMilliseconds: 0,
         commandId: "command-1", publicationPending: false, error: null,
+        currentPatternId: null, pendingSwitch: null,
       },
     }}
     state={initialSequenceState}
@@ -380,6 +381,7 @@ const transportStatus = (overrides: Partial<PatternTransportStatus>): PatternTra
     observedAtMilliseconds: 0,
     commandId: null,
     publicationPending: false,
+    currentPatternId: null, pendingSwitch: null,
     error: null,
     ...overrides,
   },
@@ -452,6 +454,7 @@ test("the Pattern picker is disabled while the transport plays", () => {
       engaged: true, playing: true, recording: false, phase: "idle",
       runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
       observedAtMilliseconds: 0, commandId: null, publicationPending: false, error: null,
+      currentPatternId: null, pendingSwitch: null,
     } satisfies PatternTransportStatus,
   }});
   expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled")).toBe(true);

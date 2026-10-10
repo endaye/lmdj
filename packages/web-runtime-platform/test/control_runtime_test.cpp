@@ -7019,7 +7019,8 @@ Json pattern_transport_inspect(
           "pattern.transport.inspect", {{"session_id", session_id}}, {}),
       {"engaged", "playing", "recording", "phase", "runtime_generation",
        "transport_epoch", "origin_frame", "runtime_frame", "command_id",
-       "publication_pending", "error"});
+       "publication_pending", "error", "current_pattern_id",
+       "pending_switch"});
 }
 
 // Each inspection turn drives one bounded continuation step; a render between
@@ -9012,6 +9013,580 @@ void test_transport_record_after_applied_switch_retargets() {
   driver.stop();
 }
 
+// #1958 S1: the playing global transport switches Patterns at the next Bar.
+// A loud opted-in Project on Pattern A with the switch targets created, the
+// transport engaged and audio rendering only when the test drives it, so the
+// audio thread's claim of a publication is deterministic.
+constexpr std::string_view kSwitchPatternB =
+    "00000000-0000-4000-8000-0000000000b2";
+constexpr std::string_view kSwitchPatternC =
+    "00000000-0000-4000-8000-0000000000b3";
+
+std::unique_ptr<ControlRuntime> switch_test_runtime(
+    TempDirectory& temp, FakeCoordinator& coordinator, bool with_third) {
+  auto runtime = make_runtime(temp.path());
+  check_success(
+      runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 9830, 9831, 0);
+  check_success(runtime->dispatch(
+      "pattern.create",
+      {{"command_id", uuid(9832)},
+       {"expected_revision", 2},
+       {"pattern_id", kSwitchPatternB},
+       {"bars", 1}},
+      {}));
+  if (with_third) {
+    check_success(runtime->dispatch(
+        "pattern.create",
+        {{"command_id", uuid(9833)},
+         {"expected_revision", 3},
+         {"pattern_id", kSwitchPatternC},
+         {"bars", 1}},
+        {}));
+  }
+  check_success(
+      runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  return runtime;
+}
+
+Json transport_switch_request(std::string_view pattern, std::uint32_t suffix) {
+  return {{"pattern_id", pattern}, {"request_id", uuid(suffix)}};
+}
+
+std::uint64_t project_revision_of(ControlRuntime& runtime) {
+  return runtime.dispatch("project.inspect", Json::object(), {})
+      .at("result")
+      .at("project")
+      .at("revision")
+      .get<std::uint64_t>();
+}
+
+Json settled_transport_status(
+    ControlRuntime& runtime, RealtimeEngine& engine, auto predicate) {
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  for (unsigned step = 0; step < 16; ++step) {
+    engine.render(left.data(), right.data(), 128);
+    const auto status =
+        pattern_transport_inspect(runtime, kSequenceSessionId);
+    if (predicate(status)) {
+      return status;
+    }
+  }
+  throw std::runtime_error("Pattern transport did not settle");
+}
+
+void test_transport_switch_applies_at_the_reported_boundary() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9801);
+  const auto origin = engine.current_pattern_origin_frame();
+  LMDJ_CHECK(origin.has_value());
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+
+  const auto switched = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9802), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(switched.at("pattern_id") == kSwitchPatternB);
+  const auto boundary = switched.at("activation_frame").get<std::uint64_t>();
+  // One Bar at 120 BPM 4/4 is 96000 frames on the engine's own Bar grid.
+  LMDJ_CHECK(boundary > engine.telemetry().rendered_frames);
+  LMDJ_CHECK(boundary - *origin == 96'000);
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("current_pattern_id") == kPatternId);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(
+      queued.at("pending_switch").at("activation_frame").get<std::uint64_t>() ==
+      boundary);
+
+  // The old Pattern keeps playing up to the reported frame; the new one
+  // starts exactly there.
+  static_cast<void>(render_grid_frames(
+      engine, boundary - engine.telemetry().rendered_frames - 128));
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kPatternId)});
+  static_cast<void>(render_grid_frames(engine, 129));
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+
+  const auto settled =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(settled.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(settled.at("pending_switch").is_null());
+  // The Host names the Pattern that plays, so later Record, Play and
+  // republications target it.
+  LMDJ_CHECK(
+      runtime->dispatch("host.status", Json::object(), {})
+          .at("result")
+          .at("pattern_id") == kSwitchPatternB);
+}
+
+void test_transport_switch_replaces_an_unclaimed_request() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9804);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+
+  const auto first = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9805), {}),
+      {"pattern_id", "activation_frame"});
+  const auto boundary = first.at("activation_frame").get<std::uint64_t>();
+  // No render ran between the two requests, so the first publication is
+  // still unclaimed; the newest request replaces it at the same boundary.
+  const auto second = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternC, 9806), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(second.at("pattern_id") == kSwitchPatternC);
+  LMDJ_CHECK(second.at("activation_frame").get<std::uint64_t>() == boundary);
+  LMDJ_CHECK(
+      engine.pending_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternC)});
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternC);
+
+  // B never plays; C starts at the boundary.
+  static_cast<void>(render_grid_frames(
+      engine, boundary - engine.telemetry().rendered_frames + 129));
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternC)});
+  LMDJ_CHECK(
+      pattern_transport_inspect(*runtime, kSequenceSessionId)
+          .at("current_pattern_id") == kSwitchPatternC);
+}
+
+void test_transport_switch_after_the_claim_defers_to_the_following_bar() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9808);
+  const auto first = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9809), {}),
+      {"pattern_id", "activation_frame"});
+  const auto boundary = first.at("activation_frame").get<std::uint64_t>();
+  // One render quantum claims the publication for the audio thread.
+  static_cast<void>(render_grid_frames(engine, 128));
+
+  // The claimed switch still lands at its Bar; the new target waits behind
+  // it for the following Bar and is not published yet.
+  const auto second = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternC, 9810), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(second.at("pattern_id") == kSwitchPatternC);
+  LMDJ_CHECK(
+      second.at("activation_frame").get<std::uint64_t>() ==
+      boundary + 96'000);
+  LMDJ_CHECK(
+      engine.pending_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("current_pattern_id") == kPatternId);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternC);
+  LMDJ_CHECK(
+      queued.at("pending_switch").at("activation_frame").get<std::uint64_t>() ==
+      boundary + 96'000);
+
+  // The claimed switch lands at its boundary; the next observation publishes
+  // the deferred target for the following Bar.
+  static_cast<void>(render_grid_frames(
+      engine, boundary - engine.telemetry().rendered_frames + 129));
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+  const auto after_boundary =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(after_boundary.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(
+      after_boundary.at("pending_switch").at("pattern_id") ==
+      kSwitchPatternC);
+  LMDJ_CHECK(
+      after_boundary.at("pending_switch").at("activation_frame")
+          .get<std::uint64_t>() == boundary + 96'000);
+  LMDJ_CHECK(
+      engine.pending_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternC)});
+
+  static_cast<void>(render_grid_frames(
+      engine,
+      boundary + 96'000 - engine.telemetry().rendered_frames + 129));
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternC)});
+}
+
+void test_transport_stop_before_the_boundary_cancels_the_switch() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9812);
+  const auto switched = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9813), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(
+      switched.at("activation_frame").get<std::uint64_t>() >
+      engine.telemetry().rendered_frames);
+
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9814, 2,
+                                        "play_stop"),
+      {}));
+  const auto stopped = settled_transport_status(
+      *runtime, engine, [](const auto& status) {
+        return status.at("playing") == false && status.at("phase") == "idle";
+      });
+  LMDJ_CHECK(stopped.at("playing") == false);
+  // The switch was voided at the Stop cutoff: the old Pattern is unchanged
+  // and nothing stays queued.
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kPatternId)});
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  const auto inspected =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(inspected.at("current_pattern_id") == kPatternId);
+  LMDJ_CHECK(inspected.at("pending_switch").is_null());
+}
+
+void test_transport_record_after_an_applied_switch_records_the_new_pattern() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9816);
+  const auto switched = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9817), {}),
+      {"pattern_id", "activation_frame"});
+  static_cast<void>(render_grid_frames(
+      engine,
+      switched.at("activation_frame").get<std::uint64_t>() -
+          engine.telemetry().rendered_frames + 129));
+  // The inspection settles the applied switch and the Host names the new
+  // Pattern before Record opens its journal.
+  LMDJ_CHECK(
+      pattern_transport_inspect(*runtime, kSequenceSessionId)
+          .at("current_pattern_id") == kSwitchPatternB);
+
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9818, 2,
+                                        "record"),
+      {}));
+  settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == true && status.at("phase") == "idle";
+  });
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  // Advance the render clock between the press and the release, as live
+  // input does, so the pair admits as a held note.
+  static_cast<void>(render_grid_frames(engine, 128));
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9819, 3,
+                                        "record"),
+      {}));
+  const auto settled = settled_transport_status(
+      *runtime, engine, [](const auto& status) {
+        return status.at("recording") == false &&
+               status.at("phase") == "idle" &&
+               status.at("publication_pending") == false;
+      });
+  LMDJ_CHECK(settled.at("error").is_null());
+
+  // Record-off committed the take into the switched Pattern; A stays empty.
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto& patterns = truth.at("result").at("project").at("patterns");
+  LMDJ_CHECK(patterns.at(kSwitchPatternB).at("events").size() == 1);
+  LMDJ_CHECK(patterns.at(kPatternId).at("events").empty());
+}
+
+void test_transport_switch_refused_while_recording_and_while_stopped() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9820);
+
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9821, 2,
+                                        "record"),
+      {}));
+  settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == true && status.at("phase") == "idle";
+  });
+  const auto refused_recording = check_error(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9822), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(
+      refused_recording.at("details").at("reason") ==
+      "pattern_transport_recording");
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9823, 3,
+                                        "record"),
+      {}));
+  settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == false && status.at("phase") == "idle" &&
+           status.at("publication_pending") == false;
+  });
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9824, 4,
+                                        "play_stop"),
+      {}));
+  settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("playing") == false && status.at("phase") == "idle";
+  });
+
+  // Stopped selection keeps using snapshot.reload.
+  const auto refused_stopped = check_error(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9825), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(
+      refused_stopped.at("details").at("reason") ==
+      "pattern_transport_not_playing");
+}
+
+// A deferred successor does not publish over a transport that stopped at the
+// command cutoff: the audio-claimed blocker applied before the cutoff, and
+// the deferred target's record is spent without a publication.
+void test_transport_stop_spends_a_deferred_switch_without_publishing() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9840);
+  const auto first = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9841), {}),
+      {"pattern_id", "activation_frame"});
+  const auto boundary = first.at("activation_frame").get<std::uint64_t>();
+  // One render quantum claims the first switch for the audio thread.
+  static_cast<void>(render_grid_frames(engine, 128));
+  const auto second = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternC, 9842), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(
+      second.at("activation_frame").get<std::uint64_t>() ==
+      boundary + 96'000);
+  LMDJ_CHECK(
+      engine.pending_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+  const auto publications = engine.pattern_telemetry().accepted_publications;
+
+  // The claimed blocker lands at its boundary; no observation runs before
+  // the Stop, so the deferred target still waits behind it.
+  static_cast<void>(render_grid_frames(
+      engine, boundary - engine.telemetry().rendered_frames + 129));
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+
+  // Stop settles with the blocker applied before its cutoff.
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9843, 2,
+                                        "play_stop"),
+      {}));
+  const auto stopped = settled_transport_status(
+      *runtime, engine, [](const auto& status) {
+        return status.at("playing") == false && status.at("phase") == "idle" &&
+               status.at("publication_pending") == false;
+      });
+  LMDJ_CHECK(stopped.at("playing") == false);
+  // No publication is pending and the deferred target never became current.
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == publications);
+  const auto inspected =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(inspected.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(inspected.at("pending_switch").is_null());
+  // The Host names the blocker that plays, not the deferred target.
+  LMDJ_CHECK(
+      runtime->dispatch("host.status", Json::object(), {})
+          .at("result")
+          .at("pattern_id") == kSwitchPatternB);
+}
+
+// A tempo change republishes the current Pattern, which the engine refuses
+// over a queued switch; it is refused before any Truth commit, while a
+// swing-only update (no publication) still succeeds.
+void test_sequence_settings_bpm_refuses_a_pending_transport_switch() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  play_grid_transport(*runtime, 9844);
+  const auto revision = project_revision_of(*runtime);
+  check_success(runtime->dispatch(
+      "pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9845), {}));
+
+  const auto refused = check_error(
+      runtime->dispatch(
+          "sequence.settings.update",
+          {{"command_id", uuid(9846)},
+           {"expected_revision", revision},
+           {"session_id", nullptr},
+           {"bpm", 100},
+           {"quantize_enabled", nullptr},
+           {"swing_percent", nullptr}},
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_switch_pending");
+  // Truth is untouched and the runtime is not sealed: the transport still
+  // inspects with the switch queued.
+  LMDJ_CHECK(project_revision_of(*runtime) == revision);
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternB);
+
+  // A swing-only update publishes nothing and stays allowed.
+  const auto swing = runtime->dispatch(
+      "sequence.settings.update",
+      {{"command_id", uuid(9847)},
+       {"expected_revision", revision},
+       {"session_id", nullptr},
+       {"bpm", nullptr},
+       {"quantize_enabled", nullptr},
+       {"swing_percent", 54}},
+      {});
+  check_success(swing);
+  LMDJ_CHECK(swing.at("result").at("pattern_publication").is_null());
+  LMDJ_CHECK(project_revision_of(*runtime) == revision + 1);
+  auto& engine = runtime->engine();
+  LMDJ_CHECK(
+      engine.pending_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+  LMDJ_CHECK(
+      pattern_transport_inspect(*runtime, kSequenceSessionId)
+          .at("pending_switch")
+          .at("pattern_id") == kSwitchPatternB);
+}
+
+// The live republish a playing grid edit makes cannot supersede a queued
+// switch; the edit is refused before commit.
+void test_pattern_events_edit_refuses_a_pending_transport_switch() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  play_grid_transport(*runtime, 9848);
+  const auto revision = project_revision_of(*runtime);
+  check_success(runtime->dispatch(
+      "pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9849), {}));
+
+  const auto refused = check_error(
+      runtime->dispatch(
+          "pattern.events.edit",
+          grid_edit(9850, revision, Json::array(),
+                    Json::array({grid_note(0, 960)})),
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_switch_pending");
+  // Truth is untouched and the runtime is not sealed.
+  LMDJ_CHECK(project_revision_of(*runtime) == revision);
+  LMDJ_CHECK(grid_truth_events(*runtime) == 0);
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternB);
+}
+
+// A Record opened over a queued switch would carry it into the Journal; it
+// is refused while the transport plays, and Stop remains the way out.
+void test_transport_record_refuses_a_pending_transport_switch() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  play_grid_transport(*runtime, 9851);
+  const auto revision = project_revision_of(*runtime);
+  check_success(runtime->dispatch(
+      "pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9852), {}));
+
+  const auto refused = check_error(
+      runtime->dispatch(
+          "pattern.transport.request",
+          pattern_transport_request_payload(kSequenceSessionId, 9853, 2,
+                                            "record"),
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_switch_pending");
+  // Truth is untouched and the runtime is not sealed: the transport still
+  // plays with the switch queued.
+  LMDJ_CHECK(project_revision_of(*runtime) == revision);
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("playing") == true);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternB);
+}
+
+// A replay publishes its own Pattern view, which cannot supersede a queued
+// switch; the replay is refused before any Facade command runs.
+void test_performance_replay_begin_refuses_a_pending_transport_switch() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  const auto revision =
+      record_grid_performance(*runtime, project_revision_of(*runtime), 2'400);
+  play_grid_transport(*runtime, 9854);
+  check_success(runtime->dispatch(
+      "pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9855), {}));
+
+  const auto refused = check_error(
+      runtime->dispatch(
+          "performance.replay.begin",
+          {{"replay_id", uuid(9682)}, {"performance_id", uuid(9681)}},
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(refused.at("details").at("reason") == "pattern_switch_pending");
+  // Truth is untouched and the runtime is not sealed.
+  LMDJ_CHECK(project_revision_of(*runtime) == revision);
+  const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternB);
+}
+
 void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -9379,6 +9954,17 @@ int main() {
     test_pattern_transport_unknown_closure_blocks_clean_suspend();
     test_transport_reload_rebinds_engagement_without_bricking();
     test_transport_record_after_applied_switch_retargets();
+    test_transport_switch_applies_at_the_reported_boundary();
+    test_transport_switch_replaces_an_unclaimed_request();
+    test_transport_switch_after_the_claim_defers_to_the_following_bar();
+    test_transport_stop_before_the_boundary_cancels_the_switch();
+    test_transport_record_after_an_applied_switch_records_the_new_pattern();
+    test_transport_switch_refused_while_recording_and_while_stopped();
+    test_transport_stop_spends_a_deferred_switch_without_publishing();
+    test_sequence_settings_bpm_refuses_a_pending_transport_switch();
+    test_pattern_events_edit_refuses_a_pending_transport_switch();
+    test_transport_record_refuses_a_pending_transport_switch();
+    test_performance_replay_begin_refuses_a_pending_transport_switch();
     test_transport_recording_rejects_sample_commit_and_keeps_journal();
     test_pattern_transport_owner_loss_lists_recovery_on_reopen();
   } catch (const std::exception& error) {

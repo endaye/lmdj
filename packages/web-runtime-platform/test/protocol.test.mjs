@@ -171,6 +171,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "audio.suspend",
     "trigger",
     "pattern.transport.request",
+    "pattern.transport.switch",
     "pattern.transport.inspect",
     "sequence.record.begin",
     "sequence.capture.disarm",
