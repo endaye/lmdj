@@ -106,10 +106,10 @@ export const ConsoleDiagram = () => {
 
 | 状态 | Play 灯 | Record 灯 | 此时的限制 |
 | --- | --- | --- | --- |
-| 停止 | 灭 | 灭 | 只有此时能切 Pattern、改 Pattern 长度和结构。 |
-| 播放 | 亮 | 灭 | 可以打 Pad，可以改 Tempo／Swing；不能切 Pattern 或改长度。 |
-| 录音 | 亮 | 亮 | Pad 事件录入当前 Pattern；Sequence 网格编辑、Tempo／Swing／Quantize 和 Pad 改色不可用。 |
-| 命令处理中 | 等结果 | 等结果 | Play/Stop、Record 和相关设置暂不可用；以灯的最终状态为准。 |
+| 停止 | 灭 | 灭 | 只有此时能改 Pattern 长度和结构、切 Pattern 立即生效。 |
+| 播放 | 亮 | 灭 | 可以打 Pad，可以改 Tempo／Swing，也可以按 1 BAR 边界切 Pattern（[#1958](https://github.com/endaye/lmdj/issues/1958)）；不能改长度或结构。 |
+| 录音 | 亮 | 亮 | Pad 事件录入当前 Pattern；Sequence 网格编辑、Tempo／Swing／Quantize、Pad 改色和切 Pattern 不可用（录音中切换是 S3）。 |
+| 命令处理中 | 等结果 | 等结果 | Play/Stop、Record、切 Pattern 和相关设置暂不可用；以灯的最终状态为准。 |
 
 | 当前状态 | 按键 | 结果 |
 | --- | --- | --- |
@@ -283,10 +283,10 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 以下行为已获批准，但**当前版本还没有实现**。在实现之前，本手册其余章节描述的当前行为仍然有效。
 
-- **未实现** · 播放和录音中切换 Pattern（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)，[#1958](https://github.com/endaye/lmdj/issues/1958)）。播放或录音中可以用 ← →、GROOVE 和 Perform Launch 切 Pattern，在 SEQ SNAP 边界生效（OFF／1 BEAT／1 BAR 默认／SEQ END），录音不中断。Perform Launch 不再要求开着演奏录音。
+- **部分实现** · 播放和录音中切换 Pattern（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)，[#1958](https://github.com/endaye/lmdj/issues/1958)）。**播放中切换已实现**（S2，固定按 1 BAR 生效）：播放中可以用 ← →、GROOVE 和 Perform Launch 切 Pattern，旧 Pattern 播到小节边界才换，排队期间可以再按改目标，再按正在播的 Pattern 等于取消；上屏与 GROOVE 标题如实显示正在播的 Pattern 和排队目标。**仍未实现**：录音中切换（S3）、SEQ SNAP 的 OFF／1 BEAT／SEQ END 档位（S4、S5，当前固定 1 BAR）与 count-in。
 - **未实现** · 实体 ● 与 count-in（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)，[#1959](https://github.com/endaye/lmdj/issues/1959)）。● 在每一页都只录 Pattern 事件，这一点与当前相同。新增 count-in：Off／1／2 小节，默认 Off，只在停止状态按 ● 时数拍。
 - **未实现** · 可听 BPM 即时预览。[旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)批准每格立即预览，但当前 ENC3 只更新读数。播放位置语义仍待 owner 决定，producer 与 consumer 仍见 [PR #1929](https://github.com/endaye/lmdj/pull/1929)；本页其他已接线旋钮不替代这项验收。
-- **未实现** · 上述前两项的[实施计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-pattern-switch-and-count-in.md)分为 S1–S7：S1–S2 先做播放中按 1 BAR 切换，S4 加 1 BEAT 和 SEQ END，S6–S7 做 count-in，S3 做录音中切换，S5 做 OFF。
+- **进行中** · 上述前两项的[实施计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-pattern-switch-and-count-in.md)分为 S1–S7：S1–S2（播放中按 1 BAR 切换）已实现，S4 加 1 BEAT 和 SEQ END，S6–S7 做 count-in，S3 做录音中切换，S5 做 OFF。
 
 ## 3. Project \{#project\}
 
@@ -447,7 +447,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | ENC3 | Tempo，每格 1 BPM，40–240。规则见 [1.7](#encoders)。 |
 | ENC4 | 设备监听音量，包括节拍器；不改 Swing、录音或导出电平。规则见 [1.7](#encoders)。 |
 | ↑ ↓ | 当前 Pad 前移或后移，A01–D16，可跨 Bank，到两端不可用。只导航，不演奏、不加删音符。 |
-| ← →（SHIFT 关） | 停止时切到上一个或下一个 Pattern，到两端不可用。播放、录音或命令处理中不可用。 |
+| ← →（SHIFT 关） | 停止时切到上一个或下一个 Pattern，到两端不可用。播放且未录音时改为预约切换：在下一小节边界生效，排队期间再按改目标，再按正在播的 Pattern 取消。录音或命令处理中不可用。 |
 | SHIFT + ← →、Play/Stop、Record | 见[第 1 章](#global)。 |
 | Bank | 当前 Pad 保留本 Bank 内序号，上屏窗口跳到该 Bank 第一行，网格换成该 Bank 的 16 条轨道，清除音符选区。不发声。 |
 | 16 个 Pad | 只演奏，不新增音符，也不移动当前 Pad。录音中会录入，见 [1.3](#transport)。 |
@@ -466,8 +466,9 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
-| 停止 | GROOVE 标题 → Pattern 列表 | 直接选择任一 Pattern，网格换内容，原音符选区清空。播放、录音或命令处理中不可用。 |
-| Pattern 列表 | Cancel／Escape／点当前 Pattern | 关闭列表，焦点回到标题，不切换。 |
+| 停止 | GROOVE 标题 → Pattern 列表 | 直接选择任一 Pattern，网格换内容，原音符选区清空。 |
+| 播放且未录音 | GROOVE 标题 → Pattern 列表 | 预约在下一小节边界切到所选 Pattern；标题显示排队目标（如 `GROOVE / 01 → 02`），上屏继续命名真正在播的 Pattern，生效后选择跟随。录音或命令处理中不可用。 |
+| Pattern 列表 | Cancel／Escape／点当前正在播的 Pattern | 关闭列表，焦点回到标题，不切换，也不影响已排队的切换（排队期间用 ← 回到正在播的 Pattern 才取消它）。 |
 | 任意 | EDIT／SETUP | 切换网格和设置卡片。只改视图；离开再回来默认 EDIT。 |
 | 没有进行中的音符手势 | Grid tools | 打开 Snap／NOTE／VEL 弹窗，显示当前设置。 |
 | Grid tools | Snap 1/4／1/8／1/16／1/32／off | 改网格吸附。不改已有音符；不是录音的 Quantize。 |
@@ -534,7 +535,9 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 任意 | Live／Slots／Takes／Replay | 切子页并回到页顶。录制、回放、HOLD、表单和 More 展开都保留。FX 推子按住时暂不能切。 |
 | Live | 1–4／5–8／9–12／13–16 | 选择显示哪四个 Pattern 槽。不触发 Launch。其他组的槽仍显示 Queued／Playing。跨子页保留。 |
 | 演出录制中 | Pattern Launch 01–16 | 预约切到该 Pattern，状态 Queued → Playing。上屏在真正切换前仍显示原 Pattern。Launch 会被记录；空槽是一段静音。 |
-| 其他时候 | Pattern Launch | 不可用。只按了全局 Play 还不够。 |
+| 播放且未录音 | Pattern Launch 01–16 | 预约在下一小节边界切到该槽的 Pattern，槽位显示 Queued，正在播的 Pattern 显示 Playing；上屏的 QUEUED SLOT 同步显示排队目标。Sequence 排队到未分配槽的 Pattern 时，上屏显示 QUEUED PATTERN NN。bar／beat／进度使用正在播放的 Pattern 长度。空槽不做任何事。 |
+| 停止 | Pattern Launch 01–16 | 直接选中该槽的 Pattern，之后按 Play 从它开始。空槽不做任何事。 |
+| 录音但没有演出录制，或命令处理中 | Pattern Launch | 不可用（录音中切换是 S3）。 |
 | 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；显示百分比。演出录制中同时记录；触摸与旋钮调同一 FX 时共用拥有的手势。 |
 | 可用时 | FX / MORE | 展开或收起 Stutter、Gate、Reverse、Crush、Cutter，同时切旋钮组。旋钮效果保持；收起时释放这些触摸推子上未结束的手势。 |
 | 可用时 | HOLD | 开关 FX 保持：松开推子后效果按规则保留。与 Sample 的循环 Hold 不同。 |
@@ -669,7 +672,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 - 上屏不能点按或拖拽编辑；Sequence 网格的轨道名称也不是演奏按钮。
 - 其他页面普通 ↑↓ 等方向映射仍待批准；SHIFT＋ENC1–3 已按批准表细调，没有粗调层。可听 BPM 即时预览尚未实现，见[第 2 章](#planned)。
 - Perform 没有 MASTER 推子、LP／HP／BP 类型选择、Mute／Solo 和主输出电平表；不能按视觉稿当作已可操作。
-- 下边 16 个声音 Pad 与 Perform 触摸区的 16 个 Pattern Launch 槽是两回事。当前 Launch 需要开着演奏录制。
+- 下边 16 个声音 Pad 与 Perform 触摸区的 16 个 Pattern Launch 槽是两回事。没有演出录制时，Launch 按全局 transport 的状态工作：播放中预约切换、停止时选中（[#1958](https://github.com/endaye/lmdj/issues/1958)）。
 - Sample 没有单独的 Edit 按钮；Trim 直接编辑，其他参数分在四个子页。
 - Project 没有手动 Save／Save As；DUPLICATE 复制当前 Project。界面上没有的功能不算入口。
 - Record Sample 面板没有试听已录片段的按钮；只有文件导入的长源裁剪有 Preview selection。空 Pad 待确认的录音也没有裁剪手柄。
@@ -704,7 +707,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 - Perform 键：只要求 `project ready && current !== null`（`app.tsx:2699`）。Perform 触摸区的能力就绪条件另行要求 performController 与 capture storage（`app.tsx:2491`）。
 - Bank：`selectBank` 先清按压与 SHIFT，再 dispatch；`isCreatorActionAllowed` 不允许时 reducer 拒绝。Runtime／Project 未就绪或 `transfer.phase !== "idle"` 时拒绝；播放／录音本身不拒绝。Sample 页未武装 Capture 时同步 `slot-selected`。
 - ↑↓ 与 Bank 使用同一允许条件（`padNavigationAvailable`）。
-- ← → 切 Pattern：`patternStepOpen` 要求 Sequence 页、`!playing`、未锁定设置、Pattern 索引有效。SHIFT 关且非 Sequence 时，Undo/Redo 键保持禁用。
+- ← → 切 Pattern：`patternStepOpen` 要求 Sequence 页、未锁定设置（transport busy 或录音）、步进基准 Pattern 索引有效；播放中不再关闭。步进基准在播放中取排队的切换目标，否则 `currentPatternId`，停止时取所选 Pattern；播放中的按下走 `requestTransportPatternSwitch`，停止时走 `snapshot.reload`。SHIFT 关且非 Sequence 时，Undo/Redo 键保持禁用。
 
 **旋钮**（`state/encoder_input.ts`、`sample_encoder.ts`、`monitor_volume_preference.ts`、`app.tsx`）
 
@@ -737,7 +740,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 
 **Perform**
 
-- Pattern Launch 仅在演出录制 recording／flushing 时可用（`perform_surface.tsx`、`perform_state.ts`），记录为演出 launch 操作，等待权威确认；上屏由全局 Pattern 投影驱动，不把 queued 当作立即换曲。
+- Pattern Launch 在演出录制 recording／flushing 时记录为演出 launch 操作并等待权威确认；没有演出录制时（[#1958](https://github.com/endaye/lmdj/issues/1958)），槽位经全局选择路径工作——transport 播放且未录音时预约 `pattern.transport.switch`，停止时 `snapshot.reload` 选中，空槽不做任何事，transport 录音或结算中禁用。上屏由全局 Pattern 投影驱动，不把 queued 当作立即换曲；无演出事实时槽位的 Queued／Playing 改读 transport 的 `pendingSwitch` 与 `currentPatternId`。
 - Filter／Delay 等推子是 engage → move → release 手势；非录制时走实时 FX，录制中同时记录演出 FX 操作。HOLD 按引擎 hold 规则保留。
 - Save Performance 后 `bindingStatus` 可能需要 Retry WAV bind；不假装 WAV 已绑定。
 - Replay 状态 playing／idle／neutral 与 resolved revision 独立回读；Stop Replay 请求停止并中和 replay 状态。

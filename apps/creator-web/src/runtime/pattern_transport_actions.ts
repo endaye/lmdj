@@ -2,6 +2,8 @@ import type {
   PatternTransportRequest,
   PatternTransportStatus,
   PatternTransportTicket,
+  TransportPatternSwitchRequest,
+  TransportPatternSwitchResult,
 } from "@lmdj/web-runtime-platform/runtime_types";
 import {
   reducePatternTransport,
@@ -16,7 +18,19 @@ export interface CreatorPatternTransportSession {
     request: PatternTransportRequest,
   ): Promise<PatternTransportTicket>;
   inspectPatternTransport(sessionId: string): Promise<PatternTransportStatus>;
+  // #1958 S1: switches the playing transport's Pattern at the engine's next
+  // Bar. Every session with this transport surface carries it.
+  requestTransportPatternSwitch(
+    request: TransportPatternSwitchRequest,
+  ): Promise<TransportPatternSwitchResult>;
 }
+
+// The request and inspection journeys below use only these two members, so
+// they accept any session that carries them.
+export type PatternTransportJourneySession = Pick<
+  CreatorPatternTransportSession,
+  "requestPatternTransport" | "inspectPatternTransport"
+>;
 
 export function isPatternTransportSession(
   value: unknown,
@@ -28,21 +42,21 @@ export function isPatternTransportSession(
 }
 
 export async function requestPatternTransportJourney(
-  session: CreatorPatternTransportSession,
+  session: PatternTransportJourneySession,
   request: PatternTransportRequest,
 ): Promise<PatternTransportTicket> {
   return session.requestPatternTransport(request);
 }
 
 export async function inspectPatternTransportJourney(
-  session: CreatorPatternTransportSession,
+  session: PatternTransportJourneySession,
   sessionId: string,
 ): Promise<PatternTransportStatus> {
   return session.inspectPatternTransport(sessionId);
 }
 
 export async function observePatternTransportJourney(
-  session: CreatorPatternTransportSession,
+  session: PatternTransportJourneySession,
   readCurrent: () => PatternTransportState,
 ): Promise<{status: PatternTransportStatus; state: PatternTransportState} | null> {
   const owner = readCurrent();
@@ -68,7 +82,7 @@ export async function observePatternTransportJourney(
 // second effect) and authority is re-inspected afterwards. A retry is never a
 // new command and never the inverse toggle.
 export async function reconcilePatternTransportJourney(
-  session: CreatorPatternTransportSession,
+  session: PatternTransportJourneySession,
   retained: PatternTransportRequest,
   readCurrent: () => PatternTransportState,
 ): Promise<{ticket: PatternTransportTicket; status: PatternTransportStatus} | null> {

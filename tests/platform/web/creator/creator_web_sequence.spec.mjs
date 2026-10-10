@@ -194,6 +194,21 @@ async function inspectTransport(page, sessionId) {
   return response.result;
 }
 
+// #1958: a queued playing-state switch lands at the engine's next Bar
+// boundary. Acting only while the transport sits in the first fifth of a bar
+// keeps the queued window — at least four fifths of a bar — comfortably longer
+// than the round trips between queueing, asserting and stopping, so "the old
+// Pattern stays current until the boundary" is observed instead of raced.
+async function awaitEarlyBar(page, sessionId, bpm) {
+  const barFrames = 48_000 * 4 * 60 / bpm;
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, sessionId);
+    if (status.playing !== true || status.pending_switch != null) return false;
+    const position = (status.runtime_frame - status.origin_frame) % barFrames;
+    return position >= 0 && position < barFrames / 5;
+  }, {timeout: 30_000}).toBe(true);
+}
+
 async function transportRequests(page) {
   return page.evaluate(() => window.__patternTransportRequests ?? []);
 }
@@ -475,8 +490,10 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   expect(committed.patterns[patternId].events[0])
     .toMatchObject({slot: {bank: 0, pad: 0}, velocity: 100});
 
-  // A Pattern switch while playing is honestly refused: the Runtime keeps the
-  // live engagement on the playing Pattern and the selection stays put.
+  // #1958: while playing, ‹ › and the picker queue the transport's Pattern
+  // switch at the engine's next Bar instead of being refused. Stopped before
+  // the boundary, the switch is cancelled and the old Pattern keeps playing;
+  // nothing reloaded the snapshot.
   const sessionId = afterReconcile[0].payload.session_id;
   await expect.poll(async () =>
     (await inspectTransport(page, sessionId)).publication_pending,
@@ -484,11 +501,54 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await page.evaluate(() => {
     window.__snapshotReloadProof = [];
   });
-  // Switching Pattern waits for Stop (2026-10-04 decision, item 7): while
-  // playing, ‹ › are disabled, no Pattern reload is attempted and the playing
-  // Pattern stays selected.
-  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true})).toBeDisabled();
+  const journeyBpm = (await inspectTruth(page)).bpm;
+  const forward = physicalKey(page, "Pattern forward — →");
+  const back = physicalKey(page, "Pattern back — ←");
+  await expect(forward).toBeEnabled();
+  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true}))
+    .toBeEnabled();
+  // Leg 1 — press early in a bar; the old Pattern stays current while the
+  // queue shows in the GROOVE header.
+  await awaitEarlyBar(page, sessionId, journeyBpm);
+  await forward.click();
+  await expect.poll(async () =>
+    (await inspectTransport(page, sessionId)).pending_switch?.pattern_id,
+    {timeout: 30_000}).toBe(alternatePattern);
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", patternId);
+  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true}))
+    .toContainText("GROOVE / 01 → 02");
+  // Leg 2 — Stop before the boundary cancels the queued switch: the old
+  // Pattern is still the current one and the selection never moved.
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
+  const cancelled = await inspectTransport(page, sessionId);
+  expect(cancelled.pending_switch).toBe(null);
+  expect(cancelled.current_pattern_id).toBe(patternId);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", patternId);
+  expect(await page.evaluate(() => window.__snapshotReloadProof ?? [])).toEqual([]);
+
+  // Leg 3 — playing again and left queued past the boundary, the new Pattern
+  // becomes current and the selection follows it; queued back, the first one
+  // returns, so the stopped selection legs below still exercise the reload.
+  await playStopKey(page).click();
+  await transportStatus(page, "playing");
+  await awaitEarlyBar(page, sessionId, journeyBpm);
+  await forward.click();
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, sessionId);
+    return status.pending_switch == null &&
+      status.current_pattern_id === alternatePattern;
+  }, {timeout: 30_000}).toBe(true);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-id", alternatePattern, {timeout: 30_000});
+  await awaitEarlyBar(page, sessionId, journeyBpm);
+  await back.click();
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, sessionId);
+    return status.pending_switch == null && status.current_pattern_id === patternId;
+  }, {timeout: 30_000}).toBe(true);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-id", patternId, {timeout: 30_000});
   expect(await page.evaluate(() => window.__snapshotReloadProof ?? [])).toEqual([]);
   await transportStatus(page, "playing");
 
@@ -535,9 +595,11 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
 
   // Grouped by command identity: Record-on, the dropped Record-off (plus its
   // same-identity replays), the switched Record-on (plus its same-identity
-  // transient refusals), and two Play/Stops. The switch itself never produced
-  // a transport command, and no identity ever changed payload. The proof
-  // lives on the window, so read it before the reload wipes it.
+  // transient refusals), and four Play/Stops — the journey's own stop, plus
+  // the stop that cancels a queued switch and the restart after it. The
+  // switch itself never produced a transport command, and no identity ever
+  // changed payload. The proof lives on the window, so read it before the
+  // reload wipes it.
   const requests = await transportRequests(page);
   const byCommand = new Map();
   for (const entry of requests) {
@@ -547,7 +609,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   }
   const groups = [...byCommand.values()];
   expect(groups.filter((group) => group[0].payload.intent === "play_stop"))
-    .toHaveLength(2);
+    .toHaveLength(4);
   const recordGroups = groups.filter((group) =>
     group[0].payload.intent === "record");
   // Record-on and Record-off for each of the two Patterns.
@@ -922,7 +984,7 @@ async function undoCount(page) {
   return response.result.undo_count;
 }
 
-test("Sequence encoders turn rows, Tempo and monitor volume, and ← → step Patterns while stopped", async ({page, browserName}) => {
+test("Sequence encoders turn rows, Tempo and monitor volume; ← → step Patterns while stopped and switch them while playing", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await installTransportProofRecorder(page);
@@ -973,7 +1035,8 @@ test("Sequence encoders turn rows, Tempo and monitor volume, and ← → step Pa
   expect(await inspectTruth(page)).toEqual(after);
   expect(await undoCount(page)).toBe(outputUndo);
 
-  // ← → step Patterns while stopped and wait for Stop while playing.
+  // ← → step Patterns while stopped; while playing, → queues the transport's
+  // switch at the next Bar instead of waiting for Stop (#1958).
   const first = await selectedSequencePatternId(page);
   await createSequencePattern(page);
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2", {timeout: 30_000});
@@ -989,7 +1052,31 @@ test("Sequence encoders turn rows, Tempo and monitor volume, and ← → step Pa
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", first);
   await playStopKey(page).click();
   await transportStatus(page, "playing");
-  await expect(forward).toBeDisabled();
+  // While playing the key stays available and queues the next Pattern: the
+  // old one remains current until the boundary, then the new one becomes
+  // current and the selection follows it. The queued window is entered early
+  // in a bar so the boundary cannot pass underneath the assertions.
+  await expect(forward).toBeEnabled();
+  const playingSessionId = (await transportRequests(page))[0].payload.session_id;
+  expect((await inspectTransport(page, playingSessionId)).current_pattern_id)
+    .toBe(first);
+  const playingBpm = (await inspectTruth(page)).bpm;
+  const nextPatternId = Object.keys((await inspectTruth(page)).patterns)
+    .find((id) => id !== first);
+  await awaitEarlyBar(page, playingSessionId, playingBpm);
+  await forward.click();
+  await expect.poll(async () =>
+    (await inspectTransport(page, playingSessionId)).pending_switch?.pattern_id,
+    {timeout: 30_000}).toBe(nextPatternId);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", first);
+  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true}))
+    .toContainText("GROOVE / 01 → 02");
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, playingSessionId);
+    return status.pending_switch == null && status.current_pattern_id === nextPatternId;
+  }, {timeout: 30_000}).toBe(true);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-id", nextPatternId, {timeout: 30_000});
   await playStopKey(page).click();
   await transportStatus(page, "stopped");
 

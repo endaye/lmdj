@@ -10,6 +10,7 @@ const BANK_LABELS = ["A", "B", "C", "D"] as const;
 
 interface PerformOverviewProps {
   state: CreatorState;
+  selectedPatternId?: string | null;
   transport?: PatternTransportState;
   controller?: Pick<PerformController, "subscribe" | "getState"> | null;
 }
@@ -32,7 +33,7 @@ export function performPosition(tick: number | null, lengthTicks: number | null)
   return Math.min(Math.max(tick, 0), lengthTicks - 1);
 }
 
-export function PerformOverview({state, transport, controller}: PerformOverviewProps) {
+export function PerformOverview({state, selectedPatternId, transport, controller}: PerformOverviewProps) {
   // Observes the same producer as the touch surface. Read-only displays never
   // connect, stop or leave a Performance session.
   const performance = useSyncExternalStore(controller?.subscribe ?? noSubscription,
@@ -41,7 +42,10 @@ export function PerformOverview({state, transport, controller}: PerformOverviewP
   const assigned = project === null
     ? null
     : project.patternSlots.filter((slot) => slot !== null).length;
-  const pattern = project?.patterns.find((item) => item.patternId === project.patternId);
+  const playingPatternId = transport?.status?.playing === true
+    ? transport.status.currentPatternId : null;
+  const patternId = playingPatternId ?? selectedPatternId ?? project?.patternId;
+  const pattern = project?.patterns.find((item) => item.patternId === patternId);
   const bars = pattern?.bars ?? 1;
   const lengthTicks = pattern === undefined ? null : bars * SEQUENCE_TICKS_PER_BAR;
   const tick = usePatternPlayheadTick(transport, project?.bpm ?? null, lengthTicks);
@@ -49,6 +53,15 @@ export function PerformOverview({state, transport, controller}: PerformOverviewP
   const bar = Math.floor(at / SEQUENCE_TICKS_PER_BAR) + 1;
   const beat = Math.floor((at % SEQUENCE_TICKS_PER_BAR) / SEQUENCE_TICKS_PER_BEAT) + 1;
   const label = transport === undefined ? "stopped" : transportStatusLabel(transport);
+  // #1958: without a Performance launch pending, the playing transport's
+  // queued switch names its slot the same way.
+  const queuedTransportPatternId = performance?.pendingLaunch == null
+    ? transport?.status?.pendingSwitch?.patternId ?? null : null;
+  const queuedTransportSlot = queuedTransportPatternId === null
+    ? -1 : project?.patternSlots.indexOf(queuedTransportPatternId) ?? -1;
+  const queuedTransportPattern = queuedTransportPatternId === null
+    ? -1 : project?.patterns.findIndex((item) =>
+      item.patternId === queuedTransportPatternId) ?? -1;
   return (
     <div className="perform-overview" data-testid="perform-overview">
       <p className="perform-overview-state">
@@ -57,8 +70,14 @@ export function PerformOverview({state, transport, controller}: PerformOverviewP
       <output className="perform-overview-launch" aria-label="Pattern launch cue" aria-live="polite">
         {performance?.lastLaunchAck == null ? "LAST LAUNCH —" :
           `ACKNOWLEDGED SLOT ${two(performance.lastLaunchAck.patternSlot + 1)}`}
-        {performance?.pendingLaunch == null ? " · NOTHING QUEUED" :
-          ` → QUEUED SLOT ${two(performance.pendingLaunch.patternSlot + 1)}`}
+        {performance?.pendingLaunch != null
+          ? ` → QUEUED SLOT ${two(performance.pendingLaunch.patternSlot + 1)}`
+          : queuedTransportSlot >= 0
+            ? ` → QUEUED SLOT ${two(queuedTransportSlot + 1)}`
+            : queuedTransportPatternId !== null
+              ? ` → QUEUED PATTERN ${queuedTransportPattern < 0
+                ? "—" : two(queuedTransportPattern + 1)}`
+              : " · NOTHING QUEUED"}
       </output>
       <p className="perform-overview-counter" data-testid="perform-counter">
         BAR {two(bar)} / {two(bars)} · BEAT {two(beat)} / 04

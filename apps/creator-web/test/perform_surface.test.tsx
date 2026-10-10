@@ -3,9 +3,14 @@ import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
 import type {ContextualEncoders} from "../src/components/physical_controls";
+import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
+import {
+  initialPatternTransportState,
+  type PatternTransportState,
+} from "../src/state/pattern_transport_state";
 import {
   createPerformController,
   type PerformControllerDependencies,
@@ -333,6 +338,110 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
     expect(within(surface).queryByRole("slider", {name: pictured})).toBeNull();
     expect(within(surface).queryByRole("button", {name: pictured})).toBeNull();
   }
+});
+
+// #1958: without a Performance recording, a Launch slot selects its Pattern
+// through the app's Sequence selection path — the app queues the transport
+// switch while playing and reloads the snapshot while stopped — and an empty
+// slot does nothing.
+test("Launch without a Performance recording selects the slot's Pattern; empty slots do nothing", async () => {
+  const fixture = controllerFixture();
+  const onSelectPattern = vi.fn();
+  const transport = (overrides: Partial<PatternTransportStatus>): PatternTransportState => ({
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: 0, commandId: null, publicationPending: false,
+      error: null, currentPatternId: null, pendingSwitch: null,
+      ...overrides,
+    },
+  });
+  const view = render(
+    <PerformSurface controller={fixture.controller} project={project} bank={0}
+      transport={transport({playing: true})} onSelectPattern={onSelectPattern} />,
+  );
+  const slot = (name: string) => screen.getByRole("button", {name: new RegExp(`^${name}$`)});
+  await userEvent.click(slot("Launch Pattern 1"));
+  expect(onSelectPattern).toHaveBeenCalledExactlyOnceWith(ids.pattern1);
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+  // An empty slot launches nothing: no selection, no Performance launch.
+  await userEvent.click(slot("Launch Pattern 3"));
+  expect(onSelectPattern).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+  // Stopped works the same way; the transport state decides the path in the app.
+  view.rerender(
+    <PerformSurface controller={fixture.controller} project={project} bank={0}
+      transport={transport({playing: false})} onSelectPattern={onSelectPattern} />);
+  await userEvent.click(slot("Launch Pattern 2"));
+  expect(onSelectPattern).toHaveBeenLastCalledWith(ids.pattern2);
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+});
+
+// #1958: outside a Performance recording the slots follow the transport: a
+// settling or recording transport keeps them closed, and so does a missing
+// transport projection.
+test("Launch without a Performance recording stays closed while the transport records or settles", async () => {
+  const fixture = controllerFixture();
+  const status = (overrides: Partial<PatternTransportStatus>): PatternTransportState => ({
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: 0, commandId: null, publicationPending: false,
+      error: null, currentPatternId: null, pendingSwitch: null,
+      ...overrides,
+    },
+  });
+  const view = render(
+    <PerformSurface controller={fixture.controller} project={project} bank={0}
+      transport={status({playing: true, recording: true})} onSelectPattern={vi.fn()} />);
+  for (const name of ["Launch Pattern 1", "Launch Pattern 2", "Launch Pattern 3"]) {
+    expect(screen.getByRole("button", {name: new RegExp(`^${name}$`)})
+      .hasAttribute("disabled")).toBe(true);
+  }
+  view.rerender(
+    <PerformSurface controller={fixture.controller} project={project} bank={0}
+      transport={status({phase: "preparing"})} onSelectPattern={vi.fn()} />);
+  expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
+    .hasAttribute("disabled")).toBe(true);
+  view.rerender(
+    <PerformSurface controller={fixture.controller} project={project} bank={0}
+      onSelectPattern={vi.fn()} />);
+  expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
+    .hasAttribute("disabled")).toBe(true);
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+});
+
+// #1958: with no Performance facts, the transport's pending switch marks its
+// slot Queued and the playing Pattern marks its slot Playing.
+test("slot states follow the transport's queued switch and playing Pattern", () => {
+  const fixture = controllerFixture();
+  render(
+    <PerformSurface controller={fixture.controller} project={project} bank={0}
+      transport={{
+        ...initialPatternTransportState,
+        sessionId: "session-1",
+        status: {
+          engaged: true, playing: true, recording: false, phase: "idle",
+          runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+          observedAtMilliseconds: 0, commandId: null, publicationPending: false,
+          currentPatternId: ids.pattern1,
+          pendingSwitch: {patternId: ids.pattern2, activationFrame: 96_000},
+          error: null,
+        },
+      }} onSelectPattern={vi.fn()} />);
+  expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
+    .getAttribute("data-launch")).toBe("acknowledged");
+  expect(screen.getByRole("button", {name: /^Launch Pattern 2$/})
+    .getAttribute("data-launch")).toBe("pending");
+  expect(screen.getByRole("button", {name: /^Launch Pattern 3$/})
+    .getAttribute("data-launch")).toBe("idle");
+  const group = screen.getByRole("button", {name: /^Pattern slots 1 to 4$/});
+  expect(group.textContent).toContain("Queued");
+  expect(group.textContent).toContain("Playing");
 });
 
 test("keeps the other five confirmed FX behind FX / MORE", async () => {

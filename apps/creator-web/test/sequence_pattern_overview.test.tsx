@@ -155,6 +155,38 @@ test("shows one status line, the most severe first", () => {
   expect(status()[0]!.textContent).toBe("That can't be done right now.");
 });
 
+// #1958: while the transport plays, the upper screen names the Pattern the
+// engine actually plays — not the selection — and lists the queued switch
+// target as its own pending fact.
+test("names the playing Pattern and lists the queued switch target", () => {
+  const second = {
+    patternId: "33333333-3333-4333-8333-333333333333",
+    bars: 1 as const,
+    events: [],
+  };
+  const twoPatterns = {...project, patterns: [project.patterns[0]!, second]};
+  const queuedTransport: PatternTransportState = {
+    ...playingTransport,
+    status: {...playingTransport.status!,
+      currentPatternId: project.patterns[0]!.patternId,
+      pendingSwitch: {patternId: second.patternId, activationFrame: 96_000}},
+  };
+  const state = {
+    ...initialCreatorState,
+    project: {...initialCreatorState.project, phase: "ready" as const,
+      current: twoPatterns},
+  } as CreatorState;
+  render(<OverviewDisplay state={state} activeMode="sequence"
+    sequence={{...initialSequenceState, selectedPatternId: second.patternId}}
+    snap="1/16" viewport={null} selection={[]} transport={queuedTransport} />);
+  expect(document.querySelector(".overview-context")?.textContent)
+    .toBe("SEQUENCE / 01");
+  const fact = (name: string) =>
+    within(screen.getByTestId("sequence-overview"))
+      .getByText(name).nextElementSibling?.textContent;
+  expect(fact("Queued")).toBe(second.patternId.slice(0, 8));
+});
+
 test("a playhead frame that outlives its effect never reschedules", () => {
   let animationFrame: FrameRequestCallback | undefined;
   const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame")

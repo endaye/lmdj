@@ -532,6 +532,12 @@ function Workspace({
     attempts: number;
   }> | null>(null);
   const transportSettledEpochRef = useRef(0);
+  // #1958: the engagement a playing Pattern-switch intent was last issued
+  // under. A switch can apply with no inspection ever observing it playing,
+  // so while this remains set the first stopped observation follows the
+  // actually applied Pattern once; an explicit stopped selection or a new
+  // engagement retires that one-shot authority.
+  const playingSwitchEngagementRef = useRef<string | null>(null);
   const patternSelectionRef = useRef(0);
   const armedCaptureSlotRef = useRef(armedCaptureSlot);
   stateRef.current = state;
@@ -650,6 +656,7 @@ function Workspace({
         transportRef.current.projectId === project.projectId) return;
     transportSettledEpochRef.current = 0;
     transportRetriedCommandRef.current = null;
+    playingSwitchEngagementRef.current = null;
     const sessionId = crypto.randomUUID();
     dispatchTransport({
       type: "engaged",
@@ -2013,6 +2020,9 @@ function Workspace({
   };
 
   const transportBusy = selectTransportBusy(transport);
+  // #1958: a queued playing-state switch is observed too, so the queued
+  // target and its application surface without another user action.
+  const transportSwitchPending = transport.status?.pendingSwitch != null;
   // Busy and failed operations are observed through inspection until they
   // settle; the runtime drives the continuation cadence, the Creator only
   // polls the projection.
@@ -2020,12 +2030,41 @@ function Workspace({
     if (!isPatternTransportSession(session) || transport.sessionId === null) {
       return;
     }
-    if (!transportBusy && transport.lastFailed === null) return;
+    if (!transportBusy && transport.lastFailed === null && !transportSwitchPending) {
+      return;
+    }
     const timer = window.setInterval(() => {
       void reconcileTransport();
     }, 250);
     return () => window.clearInterval(timer);
-  }, [session, transport.sessionId, transportBusy, transport.lastFailed]);
+  }, [session, transport.sessionId, transportBusy, transport.lastFailed,
+    transportSwitchPending]);
+
+  // #1958: follow the playing Pattern even when a switch lands before the
+  // first inspection, or another target is already queued. A playing switch
+  // can also apply with no inspection ever observing it playing; while a
+  // switch intent remains outstanding, the first stopped observation follows
+  // the actually applied current Pattern once — the transport status stays
+  // the authority, never a remembered target, so a newer cancelled switch
+  // cannot mislead it — and afterwards the stopped selection belongs to the
+  // user; delayed stopped telemetry must not overwrite it.
+  useEffect(() => {
+    const status = transport.status;
+    if (status?.engaged !== true) return;
+    if (status.playing) {
+      if (status.currentPatternId != null &&
+          sequenceRef.current.selectedPatternId !== status.currentPatternId) {
+        dispatchSequence({type: "selected", patternId: status.currentPatternId});
+      }
+      return;
+    }
+    if (playingSwitchEngagementRef.current !== transport.sessionId) return;
+    playingSwitchEngagementRef.current = null;
+    if (status.currentPatternId != null &&
+        sequenceRef.current.selectedPatternId !== status.currentPatternId) {
+      dispatchSequence({type: "selected", patternId: status.currentPatternId});
+    }
+  }, [transport.status, transport.sessionId]);
 
   // A newly settled operation re-reads journal/recovery authority once, so a
   // committed Record-off surfaces its revision and a failed one its recovery.
@@ -2498,19 +2537,46 @@ function Workspace({
     const current = transportRef.current;
     if (isPatternTransportSession(session) && current.sessionId !== null) {
       if (selectTransportBusy(current)) return;
-      // Under the global transport, selection publishes the chosen Pattern as
-      // runtime-current. A playing engagement refuses the reload honestly
-      // ("stop playback before reloading another Pattern"); a stopped one is
-      // retired and re-vended on the next request against the current
-      // Pattern, with the Engine generation — and therefore the epoch
-      // sequence — continuing. Right after a committed Record-off the
-      // replaced publication can still be retiring, so the identical publish
-      // is retried a few times before the refusal is shown.
+      // #1958: while the transport plays and does not record (recording is
+      // S3), a selection press queues the transport's Pattern switch at the
+      // engine's next Bar instead of reloading the snapshot. The Host resolves
+      // latest-wins, claim deferral and pressing-the-playing-Pattern
+      // cancellation; a refusal is reported, never thrown.
+      if (selectTransportPlaying(current)) {
+        if (selectTransportRecording(current)) return;
+        try {
+          await session.requestTransportPatternSwitch({
+            patternId,
+            requestId: crypto.randomUUID(),
+          });
+        } catch (error) {
+          reportFailure("Switch Pattern", error);
+          return;
+        }
+        // Arm the one-shot stopped follow: the runtime applies this switch on
+        // its own cadence, and no inspection may observe it playing before a
+        // Stop settles the transport on the applied Pattern.
+        playingSwitchEngagementRef.current = current.sessionId;
+        // Show the queued target at once; the pending-switch observation loop
+        // below keeps following it until the switch applies or is cancelled.
+        void reconcileTransport();
+        return;
+      }
+      // Stopped under the global transport, selection publishes the chosen
+      // Pattern as runtime-current. The Host rebinds the stopped engagement
+      // while preserving its Engine generation and epoch sequence.
+      // Right after a committed Record-off the replaced publication can still
+      // be retiring, so the identical publish is retried a few times before
+      // the refusal is shown.
       const selection = ++patternSelectionRef.current;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
           await session.reloadSnapshot(patternId);
           if (patternSelectionRef.current !== selection) return;
+          // An explicit stopped selection is the user's authority; retire any
+          // outstanding switch follow so later stopped telemetry cannot
+          // override it.
+          playingSwitchEngagementRef.current = null;
           dispatchSequence({type: "selected", patternId});
           return;
         } catch (error) {
@@ -2634,11 +2700,20 @@ function Workspace({
     touchSettingsPreview?.patternId === (sequence.selectedPatternId ?? sequenceProject?.patternId)
     ? touchSettingsPreview : null;
   const sequencePatterns = sequenceProject?.patterns ?? [];
+  // #1958: while the transport plays, ← → step from the queued target if one
+  // exists, else the Pattern the engine plays; while stopped, the selection
+  // stays the stepping base.
+  const playingStepPatternId = playing
+    ? transport.status?.pendingSwitch?.patternId ??
+      transport.status?.currentPatternId
+    : null;
   const sequencePatternIndex = sequencePatterns.findIndex((item) =>
-    item.patternId === (sequence.selectedPatternId ?? sequenceProject?.patternId));
-  // The direction keys switch Pattern only while stopped, like ‹ ›.
+    item.patternId === (playingStepPatternId ??
+      sequence.selectedPatternId ?? sequenceProject?.patternId));
+  // The direction keys and ‹ › queue the transport's switch while playing
+  // (#1958); recording (until S3) and a settling transport still close them.
   const patternStepOpen = activeMode === "sequence" && sequenceProject !== null &&
-    !playing && !sequenceSettingsLocked && sequencePatternIndex >= 0;
+    !sequenceSettingsLocked && sequencePatternIndex >= 0;
   const stepPatternBy = (offset: -1 | 1) => {
     const next = sequencePatterns[sequencePatternIndex + offset];
     if (patternStepOpen && next !== undefined) void selectSequencePattern(next.patternId);
@@ -3144,7 +3219,8 @@ function Workspace({
                     onReviewShown={() => setPerformReviewRequested(false)}
                     project={state.project.current}
                     bank={state.activeBank}
-                      transport={transport}
+                    transport={transport}
+                    onSelectPattern={(patternId) => { void selectSequencePattern(patternId); }}
                     recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                       !["idle", "permission-error"].includes(capturePhase) || recording}
                   />

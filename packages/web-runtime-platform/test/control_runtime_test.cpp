@@ -8780,6 +8780,18 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   LMDJ_CHECK(after_reload.at("runtime_generation") ==
              before_reload.at("runtime_generation"));
   epoch = after_reload.at("transport_epoch").get<std::uint64_t>() + 1;
+  LMDJ_CHECK(runtime->engine().current_pattern_id()->value() == kPatternB);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
+  // The explicit stopped reload is immediate. Retain the journey's separate
+  // pending-publication refusal/retry leg by arranging a real scheduled BPM
+  // republication, which continues to own its original Bar boundary.
+  const auto selection_revision = runtime->dispatch(
+      "project.inspect", Json::object(), {}).at("result").at("project")
+      .at("revision").get<std::uint64_t>();
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(824)}, {"expected_revision", selection_revision},
+       {"session_id", nullptr}, {"bpm", 100},
+       {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
   LMDJ_CHECK(
       runtime->engine().pattern_telemetry().pending_generation != 0);
   // A Record before the pending publication applies is refused transiently;
@@ -9060,6 +9072,34 @@ std::unique_ptr<ControlRuntime> switch_test_runtime(
 
 Json transport_switch_request(std::string_view pattern, std::uint32_t suffix) {
   return {{"pattern_id", pattern}, {"request_id", uuid(suffix)}};
+}
+
+void test_stopped_snapshot_selection_applies_before_the_next_play() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  const auto before = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project");
+  // Audio is running, but the opted-in Pattern transport has never played.
+  // Each reload's Bank acknowledgement must not leave its Pattern waiting
+  // for a Bar: otherwise returning to A can skip its publication while B is
+  // still pending, and the next Play starts B despite the A selection.
+  for (const auto selected : {kSwitchPatternB, kPatternId}) {
+    {
+      ContinuousAudioDriver audio(engine);
+      check_success(runtime->dispatch(
+          "snapshot.reload", {{"pattern_id", selected}}, {}));
+    }
+    static_cast<void>(render_grid_frames(engine, 128));
+    LMDJ_CHECK(engine.current_pattern_id()->value() == selected);
+    LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  }
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {})
+                 .at("result").at("project") == before);
+  play_grid_transport(*runtime, 9899);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId)
+                 .at("current_pattern_id") == kPatternId);
 }
 
 std::uint64_t project_revision_of(ControlRuntime& runtime) {
@@ -9958,6 +9998,7 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
 
 int main() {
   try {
+    test_stopped_snapshot_selection_applies_before_the_next_play();
     test_retained_transport_replay_survives_pending_stopped_publication();
     test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
     test_provider_owner_uses_retained_project_and_survives_restart();

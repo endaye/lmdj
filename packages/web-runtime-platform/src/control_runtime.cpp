@@ -2853,7 +2853,8 @@ struct ControlRuntime::Impl {
 
   SnapshotResult prepare_and_publish(
       std::string_view selected_pattern,
-      bool preserve_saved_truth = false, bool force_pattern = false) {
+      bool preserve_saved_truth = false, bool force_pattern = false,
+      bool immediate_pattern = false) {
     const auto reclaimed = engine.reclaim_retired_bank_telemetry();
     if (reclaimed.decoded_pcm_bytes > reserved_live_bytes) {
       throw std::logic_error("runtime Bank reservation underflow");
@@ -3006,7 +3007,9 @@ struct ControlRuntime::Impl {
     }
     if (pattern.has_value()) {
       const auto pattern_publication =
-          engine.publish_pattern_view(std::move(*pattern));
+          immediate_pattern
+              ? engine.publish_pattern_view_immediate(std::move(*pattern))
+              : engine.publish_pattern_view(std::move(*pattern));
       if (pattern_publication.result !=
           audio::PatternPublishResult::accepted) {
         auto error = state_error("runtime Pattern publication is unavailable");
@@ -4976,7 +4979,19 @@ Json ControlRuntime::dispatch(
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
-      const auto snapshot = impl_->prepare_and_publish(selected_pattern);
+      // Running audio does not imply a playing opted-in Pattern transport.
+      // A stopped selection must apply on the next callback, otherwise a
+      // queued B can survive a return to the still-current A and make Play
+      // start the wrong Pattern. Legacy playback retains its Bar publication.
+      const auto transport_status = impl_->transport != nullptr
+          ? std::optional{impl_->transport->controller->inspect()}
+          : std::nullopt;
+      const bool immediate_pattern = impl_->transport_opted_in &&
+          (!transport_status.has_value() ||
+           (!transport_status->playing && !transport_status->recording &&
+            transport_status->phase == facade::PatternTransportPhase::idle));
+      const auto snapshot = impl_->prepare_and_publish(
+          selected_pattern, false, false, immediate_pattern);
       if (!snapshot.published) {
         return {{"ok", false}, {"error", snapshot.error}};
       }

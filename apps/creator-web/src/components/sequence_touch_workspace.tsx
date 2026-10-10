@@ -105,7 +105,6 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const selectedPatternId = state.selectedPatternId ?? project.patternId;
   const selectedPattern = project.patterns.find(
     (item) => item.patternId === selectedPatternId);
-  const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
   const bpm = project.bpm;
   const swing = project.sequenceSettings.swingPercent;
   useEffect(() => {
@@ -140,6 +139,17 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     if (tapped !== null) requestBpm(tapped);
   };
   const playing = selectTransportPlaying(transport);
+  // #1958: while the transport plays, the header names the Pattern the engine
+  // actually plays and, while a switch is queued, its target; while stopped it
+  // keeps naming the selection.
+  const headerPatternId = playing
+    ? transport.status?.currentPatternId ?? selectedPatternId
+    : selectedPatternId;
+  const patternIndex = project.patterns.findIndex(
+    (item) => item.patternId === headerPatternId) + 1;
+  const queuedSwitchPatternId = transport.status?.pendingSwitch?.patternId ?? null;
+  const queuedIndex = queuedSwitchPatternId === null ? null :
+    project.patterns.findIndex((item) => item.patternId === queuedSwitchPatternId) + 1;
   // BARS, DOUBLE UP and COPY change Truth only while stopped, as CREATE does
   // (2026-10-08 decision, item 5). They also wait for a projection refresh,
   // because the current length they compare against is read from it.
@@ -154,9 +164,11 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     <section className="sequence-touch-workspace" aria-label="Sequence editor"
       data-layer={layer}>
       <header className="sequence-editor-header">
-        {/* Switching Pattern waits for Stop, as the ← → keys do. */}
+        {/* #1958: a press while playing queues the transport's Pattern switch
+            at the engine's next Bar; recording (until S3) and a settling
+            transport still lock selection. */}
         <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
-          patternId={selectedPatternId} disabled={disabled || playing}
+          patternId={headerPatternId} disabled={disabled} queuedIndex={queuedIndex}
           onSelect={props.onSwitch} />
         <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
           value={layer} onChange={setLayer} />
