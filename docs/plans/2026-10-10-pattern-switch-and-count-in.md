@@ -86,6 +86,21 @@ The JS test covers the payload shape and the inspect fields.
 
 **Gate defect caught.** A switch control that is enabled but stops the music, or a queued state that never clears.
 
+**Integration repair: stopped selection.** The S2 browser journeys also
+reproduce A → B → A while audio is running but the Pattern transport is
+stopped. A stopped `snapshot.reload` must use the engine's existing immediate
+publication path; scheduling B for a Bar can leave B pending when the return
+to the still-current A skips publication, so the next Play starts B.
+This repair additionally declares
+`packages/web-runtime-platform/src/control_runtime.cpp`,
+`packages/web-runtime-platform/test/control_runtime_test.cpp`, and
+`apps/docs-site/docs/platform/web-runtime.mdx`. Its reduced Host regression
+asserts each selected Pattern is current after the next callback, no pending
+publication remains, complete Project Truth is unchanged, and the next Play
+starts A. Legacy playback and playing-state Bar switches keep their existing
+publication paths. Reclassify the complete S2 diff and run every selected lane;
+the original Creator/Portal-only scope no longer applies.
+
 ## S3 — switch while recording (Core)
 
 S3 starts with a short design addendum to the [Sequence recording semantics](../design/2026-08-22-sequence-recording-semantics-design.md). It must cover:
@@ -157,11 +172,15 @@ Version impact: none in this plan Pull Request (documentation only). The impleme
 - S5: `audio-runtime`, `web-runtime-platform`;
 - S6: `audio-runtime`, `application-facade`, `web-runtime-platform`.
 
+S2's stopped-selection integration repair also owes `web-runtime-platform`
+PATCH debt. It uses an existing engine capability and changes no API, ABI,
+Contract, Product Build or Assembly identity.
+
 No Contract SemVer change is expected: SEQ SNAP and count-in are device preferences, and switching does not change the Pattern shape. S3 and S6 re-check this in their addenda. No Product Build or Assembly change in these Tasks.
 
 ## Documentation Impact
 
-This plan Pull Request: none. It adds a plan under `docs/plans/`; no portal page describes it as implemented. S1, S3, S5 and S6 update `/platform/web-runtime/` and the affected module pages. S2, S4 and S7 update `/hosts/creator-web/` and `/hosts/creator-interactions/`.
+This plan Pull Request: none. It adds a plan under `docs/plans/`; no portal page describes it as implemented. S1, S3, S5 and S6 update `/platform/web-runtime/` and the affected module pages. S2, S4 and S7 update `/hosts/creator-web/` and `/hosts/creator-interactions/`. S2's stopped-selection repair also updates `/platform/web-runtime/`.
 
 ## Pitfall Impact
 

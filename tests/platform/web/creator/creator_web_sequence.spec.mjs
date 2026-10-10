@@ -1058,6 +1058,8 @@ test("Sequence encoders turn rows, Tempo and monitor volume; ← → step Patter
   // in a bar so the boundary cannot pass underneath the assertions.
   await expect(forward).toBeEnabled();
   const playingSessionId = (await transportRequests(page))[0].payload.session_id;
+  expect((await inspectTransport(page, playingSessionId)).current_pattern_id)
+    .toBe(first);
   const playingBpm = (await inspectTruth(page)).bpm;
   const nextPatternId = Object.keys((await inspectTruth(page)).patterns)
     .find((id) => id !== first);

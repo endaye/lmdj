@@ -1054,6 +1054,7 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
   const secondPattern = Object.keys((await inspectProjectTruth(page)).project.patterns)
     .find((id) => id !== PATTERN_ID);
   expect(secondPattern).toBeTruthy();
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", secondPattern);
   await selectSequencePattern(page, PATTERN_ID);
   await openPerform(page);
   await showPerformPage(page, "Slots");
@@ -1061,7 +1062,9 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
     const revision = await projectRevision(page);
     await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
     await page.getByRole("combobox", {name: "Pattern slot", exact: true})
-      .selectOption(String(slot));
+      .selectOption({value: String(slot)});
+    await expect(page.getByRole("combobox", {name: "Pattern slot", exact: true}))
+      .toHaveValue(String(slot));
     await page.getByRole("button", {name: "Assign Pattern"}).click();
     await expectRevisionAfter(page, revision);
   }
