@@ -118,7 +118,8 @@ describe("Creator state", () => {
     })).toBe("failed");
   });
 
-  test("selects one stable Bank and keeps pressed state immutable", () => {    const bankC = creatorReducer(readyState(), {
+  test("selects one stable Bank and keeps pressed state immutable", () => {
+    const bankC = creatorReducer(readyState(), {
       type: "bank-selected", bank: 2,
     });
     expect(selectVisiblePads(bankC).map(({slot}) => slot)).toEqual(

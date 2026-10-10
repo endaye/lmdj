@@ -2699,8 +2699,12 @@ function Workspace({
         {type: "bank-selected", bank: stateRef.current.activeBank})) return;
     const next = Math.max(0, Math.min(63, selectCurrentPad(stateRef.current) + step));
     // ↑/↓ selects the one current Pad: highlight only, no sound, no note
-    // selection change, no Project Truth write (2026-10-09 decision).
-    dispatch({type: "sample-action", action: {type: "slot-selected", slot: next}});
+    // selection change, no Project Truth write (2026-10-09 decision). A step
+    // clamped to the current Pad — unreachable from the boundary-disabled
+    // buttons — does not even enter the selection path.
+    if (next !== selectCurrentPad(stateRef.current)) {
+      dispatch({type: "sample-action", action: {type: "slot-selected", slot: next}});
+    }
     const bank = Math.floor(next / SEQUENCE_BANK_PADS) as typeof state.activeBank;
     if (bank !== stateRef.current.activeBank) dispatch({type: "bank-selected", bank});
     setOverviewRowOffset((offset) => clampSequenceOverviewRowOffset(
