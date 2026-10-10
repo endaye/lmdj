@@ -414,6 +414,20 @@ function Workspace({
     !isMonitorSession(candidate) || monitorReadyRef.current === candidate, []);
   const monitorVolumeReady = !isMonitorSession(session) || monitorReadySession === session;
   const monitorRestoring = runtimePhase === "ready" && !monitorVolumeReady;
+  const monitorVolumeDisabled = !isMonitorSession(session) ||
+    monitorReadySession !== session || runtimePhase !== "ready";
+  // ENC4 and the Perform MASTER fader share the same accepted Session value
+  // and device preference. A refused update publishes neither a readback nor
+  // a preference, and never enters authoring or the Performance FX journal.
+  const changeMonitorVolume = (volume: number) => {
+    if (!Number.isFinite(volume) || !isMonitorSession(session) ||
+        monitorReadyRef.current !== session || runtimePhase !== "ready") return;
+    const bounded = Math.max(0, Math.min(100, volume));
+    try {session.setMonitorVolume(bounded);} catch {return;}
+    monitorVolumeRef.current = bounded;
+    setMonitorVolume(bounded);
+    void writeMonitorVolumePreference(bounded);
+  };
   useEffect(() => {
     monitorReadyRef.current = null;
     setMonitorReadySession(null);
@@ -2857,14 +2871,10 @@ function Workspace({
           onTurn: (detents: number) => tempoTurn.current?.turn(detents, sequenceProject.bpm)},
       } : {} : {}),
     4: {label: "Output Volume", value: `${monitorVolume}%`,
-      disabled: !isMonitorSession(session) || monitorReadySession !== session || runtimePhase !== "ready",
+      disabled: monitorVolumeDisabled,
       onTurn: (detents: number) => {
-        if (!Number.isFinite(detents) || !isMonitorSession(session) || monitorReadyRef.current !== session) return;
-        const volume = Math.max(0, Math.min(100, monitorVolumeRef.current + Math.trunc(detents)));
-        try {session.setMonitorVolume(volume);} catch {return;}
-        monitorVolumeRef.current = volume;
-        setMonitorVolume(volume);
-        void writeMonitorVolumePreference(volume);
+        if (!Number.isFinite(detents)) return;
+        changeMonitorVolume(monitorVolumeRef.current + Math.trunc(detents));
       }},
   };
 
@@ -3214,6 +3224,8 @@ function Workspace({
                 performController !== null ? (
                   <PerformSurface
                     onEncodersReady={bindPerformEncoders}
+                    monitorVolume={{value: monitorVolume, disabled: monitorVolumeDisabled,
+                      onChange: changeMonitorVolume}}
                     controller={performController}
                     reviewRequested={performReviewRequested}
                     onReviewShown={() => setPerformReviewRequested(false)}
