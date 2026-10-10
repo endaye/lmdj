@@ -1172,7 +1172,9 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(beforeDelete.project.banks[1].pads[0].asset_id).not.toBeNull();
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await page.getByRole("button", {name: "Bank B", exact: true}).first().click();
-  await page.getByRole("button", {name: /^Pad B01 — assigned/}).focus();
+  // A Bank key no longer retargets the Sample edit object (#1961): striking
+  // the Pad itself makes B01 the one current Pad.
+  await page.getByRole("button", {name: /^Pad B01 — assigned/}).click();
   await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Delete Pad B01", exact: true}).click();
   revision = await expectRevisionAfter(page, revision);

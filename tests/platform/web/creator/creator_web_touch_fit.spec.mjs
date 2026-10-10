@@ -1,7 +1,7 @@
 import {fileURLToPath} from "node:url";
 import {expect, test} from "@playwright/test";
 import {waitForBootProject} from "./fixtures/creator_boot.mjs";
-import {showSequenceLayer, showSamplePage, showPerformPage, showPatternLaunchGroup} from "./fixtures/creator_navigation.mjs";
+import {showSequenceLayer, showSamplePage, showPerformPage, showPatternLaunchGroup, stepCurrentPad} from "./fixtures/creator_navigation.mjs";
 
 const captureFile = fileURLToPath(new URL(
   "./fixtures/capture-440hz-2s-mono-48k.wav", import.meta.url,
@@ -89,8 +89,11 @@ test("long title and disabled controls fit without widening the panel", async ({
   await expectTouchFits(page);
   await expectControlFits(page, page.getByRole("button", {name: "EDIT", exact: true}));
   await expectControlFits(page, page.getByRole("button", {name: "SETUP", exact: true}));
+  // A Bank key no longer retargets the Sample edit object (#1961): step the
+  // one current Pad to the empty B01 with sixteen Sequence ↓ steps, which
+  // also lands on Bank B.
+  await stepCurrentPad(page, 16);
   await page.getByTestId("physical-controls").getByRole("button", {name: "Sample", exact: true}).click();
-  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank B", exact: true}).click();
   await showSamplePage(page, "Pad");
   const remove = page.getByRole("button", {name: "Delete Pad B01", exact: true});
   await expect(remove).toBeDisabled();
@@ -141,8 +144,11 @@ test("Perform and Sound Sets use the outer touch scroller", async ({page}) => {
 test("Sample empty and assigned controls stay inside the touch panel", async ({page}) => {
   test.setTimeout(180_000); // Import + projection have existing bounded Host transitions.
   const keys = page.getByTestId("physical-controls");
+  // A Bank key no longer retargets the Sample edit object (#1961): step the
+  // one current Pad to the empty B01 with sixteen Sequence ↓ steps, which
+  // also lands on Bank B.
+  await stepCurrentPad(page, 16);
   await keys.getByRole("button", {name: "Sample", exact: true}).click();
-  await keys.getByRole("button", {name: "Bank B", exact: true}).click();
   await expectTouchFits(page);
   const add = page.getByRole("button", {name: "Add Sample to Pad B01", exact: true});
   await expectControlFits(page, add);
