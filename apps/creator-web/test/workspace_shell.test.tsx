@@ -6,7 +6,11 @@ import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
-import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
+import type {
+  PatternTransportRequest,
+  PatternTransportStatus,
+  PatternTransportTicket,
+} from "@lmdj/web-runtime-platform/runtime_types";
 
 import {App} from "../src/app";
 import {encodePcm16Wav} from "../src/capture/wav_encoder";
@@ -2856,6 +2860,238 @@ const sequenceStatusStub = () => ({
   pendingEventCount: 0,
   effectiveRuntimeFrame: null,
 });
+
+test("a late Stop retry failure keeps the newer Record command pending", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const publishRunning = controlledSampleAudio(fixture.session);
+  const retryTicket = deferred<PatternTransportTicket>();
+  const retryInspection = deferred<PatternTransportStatus>();
+  const recordTicket = deferred<PatternTransportTicket>();
+  const requests: PatternTransportRequest[] = [];
+  const wire: string[] = [];
+  let runtimeTail = Promise.resolve();
+  // RuntimeSession serializes request and inspect on the same action tail.
+  // In particular, a poll queued during the retry submit runs before that
+  // retry's trailing inspect; the new Record is queued behind that inspect.
+  const serialize = <T,>(action: () => Promise<T>): Promise<T> => {
+    const pending = runtimeTail.then(action);
+    runtimeTail = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
+  let stopSettled = false;
+  let retryInspectionStarted = false;
+  let recordSettled = false;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: (request: PatternTransportRequest) => {
+      requests.push(request);
+      const submission = requests.length;
+      return serialize(async () => {
+        wire.push(`request:${request.intent}:${submission}`);
+        if (submission === 1) {
+          throw Object.assign(new Error("Stop submit timed out"), {code: "HOST_TIMEOUT"});
+        }
+        if (submission === 2) return retryTicket.promise;
+        return recordTicket.promise;
+      });
+    },
+    inspectPatternTransport: () => serialize(async () => {
+      if (requests.length < 2) return engagedTransportStatus();
+      const stop = requests[1]!;
+      if (!stopSettled) {
+        stopSettled = true;
+        wire.push("inspect:Stop settled");
+        return engagedTransportStatus({
+          playing: false, transportEpoch: stop.expectedEpoch, commandId: stop.commandId,
+        });
+      }
+      if (!retryInspectionStarted) {
+        retryInspectionStarted = true;
+        wire.push("inspect:Stop retry tail");
+        return retryInspection.promise;
+      }
+      const record = requests[2];
+      return engagedTransportStatus({
+        playing: false,
+        recording: recordSettled,
+        transportEpoch: recordSettled ? record!.expectedEpoch : stop.expectedEpoch,
+        commandId: recordSettled ? record!.commandId : stop.commandId,
+      });
+    }),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await publishRunning();
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+
+  vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
+  try {
+    fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+    await flushAsyncTurns();
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    await flushAsyncTurns();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[0]!.intent).toBe("play_stop");
+
+    // Queue a second reconciliation while the identical Stop retry submit is
+    // still unresolved. Its inspection will settle Stop before the older
+    // reconciliation's trailing inspection can complete.
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    await act(async () => retryTicket.resolve({
+      sessionId: requests[1]!.sessionId,
+      commandId: requests[1]!.commandId,
+      submit: "accepted",
+      status: engagedTransportStatus({
+        phase: "awaiting_audio", transportEpoch: requests[1]!.expectedEpoch,
+        commandId: requests[1]!.commandId,
+      }),
+    }));
+    await flushAsyncTurns();
+    expect(retryInspectionStarted).toBe(true);
+    expect(transportPhase()).toBe("stopped");
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", {name: "Record"}));
+    await flushAsyncTurns();
+    expect(requests).toHaveLength(3);
+    expect(requests[2]!.intent).toBe("record");
+    expect(requests[2]!.commandId).not.toBe(requests[0]!.commandId);
+    expect(requests[2]!.expectedEpoch).toBe(requests[0]!.expectedEpoch + 1);
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    expect(wire).toEqual([
+      "request:play_stop:1", "request:play_stop:2",
+      "inspect:Stop settled", "inspect:Stop retry tail",
+    ]);
+
+    await act(async () => retryInspection.reject(Object.assign(
+      new Error("Old Stop inspection timed out"), {code: "HOST_TIMEOUT"},
+    )));
+    await flushAsyncTurns();
+    expect(wire.at(-1)).toBe("request:record:3");
+    // Record's own request is still unresolved. An error from the retired
+    // Stop must not remove its busy state or admit another transport command.
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", {name: /^Play\/Stop/}).hasAttribute("disabled")).toBe(true);
+
+    await act(async () => recordTicket.resolve({
+      sessionId: requests[2]!.sessionId,
+      commandId: requests[2]!.commandId,
+      submit: "accepted",
+      status: engagedTransportStatus({
+        playing: false, phase: "awaiting_audio", transportEpoch: requests[2]!.expectedEpoch,
+        commandId: requests[2]!.commandId,
+      }),
+    }));
+    await flushAsyncTurns();
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    recordSettled = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    await flushAsyncTurns();
+    expect(transportPhase()).toBe("recording");
+    expect(screen.getByRole("button", {name: /^Record/}).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    fireEvent.click(screen.getByText("Developer diagnostics (1)"));
+    expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+      .queryByText("Old Stop inspection timed out")).toBeNull();
+  } finally {
+    rendered.unmount();
+    vi.useRealTimers();
+  }
+});
+
+test.each(["submission", "inspection"] as const)(
+  "a still-current Stop retry %s failure reports and retains that command",
+  async (stage) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const publishRunning = controlledSampleAudio(fixture.session);
+    const retryTicket = deferred<PatternTransportTicket>();
+    const retryInspection = deferred<PatternTransportStatus>();
+    const followingRetry = deferred<PatternTransportTicket>();
+    const requests: PatternTransportRequest[] = [];
+    let runtimeTail = Promise.resolve();
+    const serialize = <T,>(action: () => Promise<T>): Promise<T> => {
+      const pending = runtimeTail.then(action);
+      runtimeTail = pending.then(() => undefined, () => undefined);
+      return pending;
+    };
+    let inspectRetry = false;
+    const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+      requestPatternTransport: (request: PatternTransportRequest) => {
+        requests.push(request);
+        const submission = requests.length;
+        return serialize(async () => {
+          if (submission === 1) {
+            throw Object.assign(new Error("Stop submit timed out"), {code: "HOST_TIMEOUT"});
+          }
+          return submission === 2 ? retryTicket.promise : followingRetry.promise;
+        });
+      },
+      inspectPatternTransport: () => serialize(async () => {
+        if (inspectRetry) {
+          inspectRetry = false;
+          return retryInspection.promise;
+        }
+        return engagedTransportStatus();
+      }),
+    });
+    const rendered = render(<App initialState={ready} runtimeFactory={() => session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await publishRunning();
+    await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+    await waitFor(() => expect(transportPhase()).toBe("playing"));
+
+    vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
+    try {
+      fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+      await flushAsyncTurns();
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      await flushAsyncTurns();
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]);
+      expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+
+      const message = `Still-current Stop retry failed during ${stage}`;
+      const error = Object.assign(new Error(message), {code: "HOST_TIMEOUT"});
+      if (stage === "submission") {
+        await act(async () => retryTicket.reject(error));
+      } else {
+        inspectRetry = true;
+        await act(async () => retryTicket.resolve({
+          sessionId: requests[1]!.sessionId,
+          commandId: requests[1]!.commandId,
+          submit: "accepted",
+          status: engagedTransportStatus({
+            phase: "awaiting_audio", transportEpoch: requests[1]!.expectedEpoch,
+            commandId: requests[1]!.commandId,
+          }),
+        }));
+        await flushAsyncTurns();
+        await act(async () => retryInspection.reject(error));
+      }
+      await flushAsyncTurns();
+      expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(false);
+      fireEvent.click(screen.getByRole("button", {name: "System"}));
+      fireEvent.click(screen.getByText("Developer diagnostics (2)"));
+      const log = screen.getByRole("region", {name: "Developer diagnostics"});
+      expect(within(log).getByText("Reconcile transport play_stop")).toBeTruthy();
+      expect(within(log).getByText(message)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
+
+      // The command remains the current failed identity. Inspection proving
+      // its epoch still absent retries that exact identity, rather than
+      // swallowing the error or inventing another toggle.
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      await flushAsyncTurns();
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toEqual(requests[0]);
+      expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    } finally {
+      rendered.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
 
 test("disengages the Pattern transport projection when the Runtime leaves ready", async () => {
   const fixture = mutableSampleRuntimeFixture();

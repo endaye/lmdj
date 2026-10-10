@@ -518,6 +518,58 @@ before the consumer's complete browser acceptance; its predecessor's passing
 Creator lane is not evidence for this consumer head. Audible BPM and the other
 open product and physical acceptance obligations remain unfinished.
 
+### 2026-10-10 — integrate the merged current-command repair
+
+Fresh protected main is `4dde8e5e6b511c3ae2bd9c310f607f7d6148d2dc`, the actual
+#1970 squash at 09:08:21 UTC. Its authenticated review and complete Creator
+receipt belong to the repair's `46f6877b` input. They are not a pass key for
+this contextual consumer. The preceding #1970-unmerged note is historical.
+
+Merge that main normally into the clean pushed consumer `f2593fd...`; retain
+its live Runtime/Project/session/command guards and all three mounted-App
+late-error/current-error regressions alongside the approved ENC1–3 bindings,
+global ENC4, Sample 400 ms cancellation and Perform HOLD/gesture ownership.
+The merge has no conflicts; it imports the existing repair rather than
+reimplementing it. Main's #1980 page-organized handbook, SVG, anchors and the
+approved contextual-control corrections remain unchanged.
+
+**Integration Task declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/runtime/pattern_transport_actions.ts`
+- `apps/creator-web/test/pattern_transport_actions.test.ts`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `docs/plans/2026-10-10-creator-transport-current-observation.md` (exact main)
+- This plan.
+
+The three additional imported-main paths are already #1970's declared and
+merged files; the consumer diff relative to actual main retains I1c's own
+38-file declaration. Verify the combined full component set at its original
+20-second bounds, TypeScript, exact staged ownership and committed docs_static.
+Current Portal pages, diagrams, projected identities and source-facing facts
+are byte-identical to the completed `f2593fd` Portal inputs; this internal
+current-command repair restores existing semantics, so it adds no new Portal
+fact or fresh full Portal build obligation. Record that comparison explicitly.
+The I1c documentation-impact declaration remains required.
+
+**Version impact:** no new identity allocation; retain the existing Creator
+compatible MINOR debt, absorbing #1970's PATCH repair at Goal V1.
+**Acceptance:** preserve the 65b complete failed run and original bounds.
+After the Conventional integration commit and normal push of the same Draft
+PR, run this consumer's own complete Creator lane when the parent's heavy-run
+window is available. Audible BPM preview, open product choices, current-head
+review, A1 visual comparison and A2 physical/hearing acceptance stay unfinished.
+
+The combined staged source passed all 72 component files / 1,248 tests
+(`npm --prefix apps/creator-web test -- --run`, 61.50 seconds including the
+wrapper, 60.33 seconds reported by Vitest). TypeScript passed in 3.82 seconds;
+the staged scope passed 77 ownership checks in 9.61 seconds. Source and test
+hashes are retained with the staged-tree receipt in
+`encoder-consumer-main-4dde8e5e` outside the worktree. The final plan-only
+results update leaves those tested product inputs unchanged. Committed-head
+docs_static and this consumer's complete Creator proof remain separate
+verification boundaries; the earlier repair's receipt does not satisfy them.
+
 ## P0 — ship this bounded plan
 
 **Declared files:** only `docs/plans/2026-10-09-creator-desktop-final-followup.md`。
