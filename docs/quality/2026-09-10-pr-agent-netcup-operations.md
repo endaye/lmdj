@@ -5,6 +5,23 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-10 fallback publication leg (canary #1937 closure evidence)
+
+Umbrella #1149's remaining fallback gap after the error-class mapping fix
+(#1939, merged as f2ae9fae): prove DeepSeek-unreachable → GLM carries →
+normal publication → read-back, end to end.
+
+- Fault overlay `cutover.505yqwj7` installed from main `89cf1c5009` (adapter
+  db208af44, runtime with DeepSeek endpoint pointed at the unroutable
+  `https://127.0.0.1:9/lmdj-fault-injection`; witness passed; ledger sha256
+  1745c0ba56… unchanged by the install; slot lock free at install time).
+- The evidence vehicle is the operations-record PR itself; its review run ids
+  are recorded below as they land.
+- Canary PR #1937 was merged manually at 2026-10-10T01:35:51Z (6b167e708) in
+  the same owner wave as #1939/#1964; the designed "close unmerged"
+  disposition is thereby superseded by the owner, and the evidence legs are
+  unaffected.
+
 ## 2026-10-10 fault-injection leg and the error-class mapping defect
 
 With the fault overlay `cutover.vOf3qSIz` (DeepSeek endpoint pointed at the
