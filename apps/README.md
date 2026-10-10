@@ -12,10 +12,9 @@ Other Core-dependent applications are `native-host`, `web-runtime-host` and
 site; it reads product manifests but does not run Core. `architecture-portal`
 retains only immutable historical snapshot storage, not an active application.
 
-Independent experiments live in [`demos/`](../demos/README.md):
-[`web-runtime-lab`](../demos/web-runtime-lab/README.md) and
-[`chameleon-lab`](../demos/chameleon-lab/README.md). They do not use Core or
-Product Assembly. The Audio Lab is distinct from the deployed
+Independent experiments live in [`demos/`](../demos/README.md), for example
+[`web-runtime-lab`](../demos/web-runtime-lab/README.md). They do not use Core
+or Product Assembly. The Audio Lab is distinct from the deployed
 `apps/web-runtime-host` diagnostic application.
 
 Hosts may parse transport flags and protocol envelopes. They must not parse

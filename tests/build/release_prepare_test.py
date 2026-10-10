@@ -169,12 +169,12 @@ class FakeGit:
 # The closed v2 lane and full job identities, written independently of the CI
 # policy file and of the release modules under test.
 LANES = (
-    "chameleon_lab", "ci_contract", "core_asan", "core_coverage", "core_macos",
+    "ci_contract", "core_asan", "core_coverage", "core_macos",
     "core_ubuntu", "creator", "deploy_contract", "docs_static", "package",
     "portal", "web_runtime_host", "web_runtime_lab", "web_toolchain",
 )
 FULL_REQUIRED_JOBS = (
-    "chameleon-lab", "ci-contract", "core-asan", "core-asan-macos",
+    "ci-contract", "core-asan", "core-asan-macos",
     "core-coverage", "core-macos", "core-ubuntu", "creator-web",
     "deploy-contract", "docs-static", "macos-primary", "package", "portal",
     "select-macos-runner", "web-runtime-host", "web-runtime-lab",

@@ -29,7 +29,7 @@ class ScopeTests(unittest.TestCase):
     def test_full_uses_complete_authoritative_inventory(self):
         selection = scope.select(self.policy, ["contracts/example/schema.json"])
         self.assertEqual(set(selection["suites"]), set(self.policy.suite_ids))
-        self.assertEqual(len(selection["suites"]), 16)
+        self.assertEqual(len(selection["suites"]), 15)
         self.assertIn("core_tsan_stress", selection["suites"])
         self.assertIn("core_release_stress", selection["suites"])
 
@@ -162,9 +162,9 @@ class ScopeTests(unittest.TestCase):
         old = copy.deepcopy(self.policy)
         old.routing["rules"].append({"match": {"kind": "prefix", "value": "docs/notes/"},
                                      "lanes": ["web_toolchain"]})
-        old.config["dependencies"] = {"web_runtime_lab": ["chameleon_lab"]}
+        old.config["dependencies"] = {"web_runtime_lab": ["package"]}
         result = scope.select_across_policies(["docs/notes/a.md"], [self.policy, old])
-        self.assertIn("chameleon_lab", result["suites"],
+        self.assertIn("package", result["suites"],
                       "why: dependency chain crosses policy versions; remedy: close all applicable edges")
 
     def test_policy_digest_binds_all_three_documents(self):

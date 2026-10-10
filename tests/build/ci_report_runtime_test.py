@@ -262,7 +262,7 @@ class ProjectionTests(unittest.TestCase):
     def test_missing_terminal_receipt_is_not_fabricated_verdict(self):
         result(self.scheduler, special="missing")
         planned = self.planned()
-        self.assertEqual(len(planned), 16)
+        self.assertEqual(len(planned), 15)
         self.assertTrue(all(r.key.endswith("-missing") for r in planned))
         self.assertTrue(all("no product verdict" in r.detail for r in planned))
 

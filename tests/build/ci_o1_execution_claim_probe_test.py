@@ -74,14 +74,14 @@ class ClaimProbeTests(unittest.TestCase):
         self.assertEqual(prepared["controller"]["control_sha"], self.control)
         self.assertEqual(self.writes(), [])
 
-    def test_real_claim_exit_then_distinct_settle_all16_missing_debt_then_fresh_replay(self):
+    def test_real_claim_exit_then_distinct_settle_all15_missing_debt_then_fresh_replay(self):
         identity = self.trigger()
         self.assertEqual(identity["run_id"], 17)
         journal = self.f.make().journal()
         events = journal.load()
         self.assertEqual([e["type"] for e in events], ["observe", "admit", "claim"])
         request = events[1]["data"]["request"]
-        self.assertEqual(len(request["selection"]["suites"]), 16)
+        self.assertEqual(len(request["selection"]["suites"]), 15)
         self.assertEqual(request["selection"]["kind"], "full")
         self.assertEqual(events[2]["data"]["run"], {"run_id": 17, "attempt": 1})
         self.assertEqual(journal.anchor.read(), {"head": identity["journal_head"], "pending": None})
@@ -181,7 +181,7 @@ class ClaimProbeTests(unittest.TestCase):
             self.make().prepare(self.intent())
         self.assertEqual(before, self.writes())
         answer = self.fresh().reconcile(execute=False)
-        self.assertEqual(len(answer["state"]["debts"]), 16)
+        self.assertEqual(len(answer["state"]["debts"]), 15)
         self.assertEqual(sum(e["type"] == "claim" for e in self.f.make(18).journal().load()), 1)
 
     def test_running_executor_waits_and_keeps_original_claim(self):

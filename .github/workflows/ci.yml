@@ -408,33 +408,6 @@ jobs:
       - run: python3 apps/web-runtime-host/test/deploy_command_test.py --shards 4
       - run: python3 apps/creator-web/test/deploy_command_test.py --shards 4
 
-  chameleon-lab:
-    # On the dual-node trusted role with the rest of the general group. Like
-    # Web Runtime Lab it keeps its own proof path: a short Node/Python suite
-    # that installs nothing on the host, so the cutover changes where it runs
-    # and nothing about what it runs.
-    name: Chameleon Lab
-    needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.chameleon_lab && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
-      - name: Verify the checked-out target
-        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
-        env:
-          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "26"
-      - run: scripts/chameleon-lab.sh test
-
   package:
     # Native Core role on the shared host. The role is named literally rather
     # than resolved by a selector, so a saturated or absent role queues this
@@ -1188,7 +1161,7 @@ jobs:
   # ci-scope: neither focused nor a new-source full is legacy release evidence.
   batch-verdict:
     name: Scoped batch verdict
-    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package, nightly-tsan, nightly-stress]
+    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, package, nightly-tsan, nightly-stress]
     if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5

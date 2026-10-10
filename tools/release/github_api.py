@@ -207,7 +207,7 @@ _CI_SCOPE_KEYS = frozenset((
 CI_SCOPE_LANES = frozenset((
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
     "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
-    "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab", "package",
+    "creator", "web_runtime_lab", "deploy_contract", "package",
 ))
 # GitHub redirects an authenticated artifact download to this closed Azure
 # storage host family with a signed query. Anything else fails closed rather

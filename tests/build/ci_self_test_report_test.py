@@ -275,7 +275,7 @@ def report(api, run_id=100, **kwargs):
 
 
 def full_legacy_api(*, failed="creator", attempt=1):
-    """Actual 16-suite aggregate with a manual exact-target candidate identity."""
+    """Actual 15-suite aggregate with a manual exact-target candidate identity."""
     protocol = rep.self_test
     document = json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())
     policy = protocol.parse_policy(document)
@@ -291,10 +291,10 @@ def full_legacy_api(*, failed="creator", attempt=1):
 
 
 class ReadOnlyPlanTest(unittest.TestCase):
-    def test_full_16_suite_manual_candidate_plan_does_not_write(self):
+    def test_full_15_suite_manual_candidate_plan_does_not_write(self):
         api = full_legacy_api()
         metadata, planned = rep.plan_run(api, 100, attempt=1, repository=REPO, sleep=Sleep())
-        self.assertEqual(len(api.policies[CONTROL]["suites"]), 16)
+        self.assertEqual(len(api.policies[CONTROL]["suites"]), 15)
         self.assertEqual(metadata.target, TARGET)
         self.assertEqual(metadata.verdict_status, "failed")
         self.assertEqual(metadata.outcomes, [])

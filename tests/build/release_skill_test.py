@@ -140,7 +140,7 @@ class ReleaseSkillTest(unittest.TestCase):
             "## Full exact-main CI evidence",
             "`complete-test-v2`",
             "`self-test-v1`",
-            "16-suite",
+            "15-suite",
             "`self_test_evidence`",
             "`batch_test_evidence`",
             "`lmdj.release-plan-marker.v3`",
@@ -165,7 +165,7 @@ class ReleaseSkillTest(unittest.TestCase):
             "`self-test-report.yml` on ref `main`",
             "`batch_operation=reconcile`",
             "Leave `journal_config` empty",
-            "Both kinds request all 16 suites",
+            "Both kinds request all 15 suites",
             "neither moves automatic processing progress or authorizes a release",
             "Redelivering the same ID and target reconciles the original request",
         ):
@@ -195,7 +195,7 @@ class ReleaseSkillTest(unittest.TestCase):
         for expected in (
             "`complete-test-v2`",
             "`self-test-v1`",
-            "16-suite",
+            "15-suite",
             "`self_test_evidence`",
             "30 天",
             "`unverifiable`",

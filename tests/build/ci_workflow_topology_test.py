@@ -30,7 +30,6 @@ FORMAL_LANE_JOBS = (
     "creator-web",
     "web-runtime-lab",
     "deploy-contract",
-    "chameleon-lab",
     "package",
 )
 SUPPORT_JOBS = (
@@ -53,7 +52,6 @@ SELF_HOSTED_JOBS = (
     "creator-web",
     "web-runtime-lab",
     "deploy-contract",
-    "chameleon-lab",
     "package",
 )
 HOSTED_CONTROL_PLANE_JOBS = (
@@ -112,7 +110,6 @@ GENERAL_JOBS = {
     "docs-static": "docs_static",
     "ci-contract": "ci_contract",
     "deploy-contract": "deploy_contract",
-    "chameleon-lab": "chameleon_lab",
 }
 # The one general lane that runs as a reusable workflow. A `uses:` job cannot
 # carry `runs-on`, so the caller holds only the lane guard and the trust
@@ -179,7 +176,6 @@ FORMAL_RESULT_LANE_GUARDS = {
     "creator-web": {"creator"},
     "web-runtime-lab": {"web_runtime_lab"},
     "deploy-contract": {"deploy_contract"},
-    "chameleon-lab": {"chameleon_lab"},
     "package": {"portal", "core_ubuntu", "package"},
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
@@ -596,7 +592,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_the_policy_does_not_claim_main_always_runs_full(self) -> None:
         """The sweep's premise and the policy must not contradict each other.
 
-        A docs-only push classifies focused (1 of 14 lanes); the sentence that
+        A docs-only push classifies focused (1 of 13 lanes); the sentence that
         said `main` always runs the full manifest predates the focused-`main`
         decision and, left alone, would have this file asserting both.
         """
@@ -872,7 +868,6 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             # on 2026-09-17, never complete within 15; re-measure after the
             # first complete run (#1506).
             "deploy-contract": 30,
-            "chameleon-lab": 10,
             "package": 35,
             "core-ubuntu": 30,
             "core-asan": 35,
@@ -965,7 +960,6 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "scripts/web-runtime-host.sh proof",
             "scripts/creator-web.sh proof",
             "scripts/web-runtime-lab.sh test",
-            "scripts/chameleon-lab.sh test",
             "scripts/core.sh package",
         )
         for command in semantic_commands:

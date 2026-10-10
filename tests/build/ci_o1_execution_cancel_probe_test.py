@@ -66,7 +66,7 @@ class CancellationProbeTests(unittest.TestCase):
             self.make().execute(self.intent())
         self.assertEqual(self.c1.writes(), [])
 
-    def test_real_claim_ready_then_cancelled_run_missing_all16_and_replay(self):
+    def test_real_claim_ready_then_cancelled_run_missing_all15_and_replay(self):
         answer = self.make().execute(self.intent())
         self.assertEqual(set(answer), {"schema", "status", "diagnostic_ready", "identity"})
         self.assertIs(answer["diagnostic_ready"], True)
@@ -77,7 +77,7 @@ class CancellationProbeTests(unittest.TestCase):
         self.assertEqual([e["type"] for e in events], ["observe", "admit", "claim"])
         frozen = deepcopy(events)
         request = events[1]["data"]["request"]
-        self.assertEqual(len(request["selection"]["suites"]), 16)
+        self.assertEqual(len(request["selection"]["suites"]), 15)
         self.assertEqual(request["selection"]["kind"], "full")
         self.assertIsNone(request["base"])
         self.assertFalse((self.f.root / "result.json").exists())

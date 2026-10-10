@@ -81,7 +81,7 @@ _STATUS_RESULTS = {
 _CANONICAL_LANES = (
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
     "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
-    "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab", "package",
+    "creator", "web_runtime_lab", "deploy_contract", "package",
 )
 _CANONICAL_LANE_JOBS = {
     "docs_static": ("docs-static",),
@@ -101,7 +101,6 @@ _CANONICAL_LANE_JOBS = {
     "creator": ("creator-web",),
     "web_runtime_lab": ("web-runtime-lab",),
     "deploy_contract": ("deploy-contract",),
-    "chameleon_lab": ("chameleon-lab",),
     "package": ("package",),
 }
 # The closed set of formal workload jobs a self-hosted role may execute.
@@ -111,7 +110,7 @@ _CANONICAL_LANE_JOBS = {
 _CANONICAL_SELF_HOSTED_JOBS = (
     "docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan",
     "core-coverage", "web-toolchain-conformance", "web-runtime-host",
-    "creator-web", "web-runtime-lab", "deploy-contract", "chameleon-lab",
+    "creator-web", "web-runtime-lab", "deploy-contract",
     "package",
 )
 # The exact reason recorded on a `push` whose event-supplied base range cannot

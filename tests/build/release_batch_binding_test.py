@@ -152,7 +152,7 @@ class BatchBindingTest(unittest.TestCase):
         self.assertIn("lmdj.release-plan-marker.v3", marker)
         self.assertIsNone(self.marker_problem(marker))
         document["ci"]["batch_test_evidence"]["request"]["selection"]["suites"].clear()
-        self.assertEqual(len(self.intent.batch_test_evidence["request"]["selection"]["suites"]), 16)
+        self.assertEqual(len(self.intent.batch_test_evidence["request"]["selection"]["suites"]), 15)
 
     def test_marker_missing_old_schema_and_each_reference_identity_drift_rejected(self):
         document = self.document()

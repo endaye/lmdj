@@ -9,7 +9,7 @@ ALIASES = {"core-tsan": "nightly-tsan", "core-stress": "nightly-stress"}
 JOB_NAMES = {
     "docs-static": "Docs / static", "portal": "Architecture Portal / portal",
     "ci-contract": "CI contract", "deploy-contract": "Deploy contract",
-    "chameleon-lab": "Chameleon Lab", "package": "Core package",
+    "package": "Core package",
     "web-toolchain-conformance": "web-toolchain-conformance",
     "web-runtime-host": "web-runtime-host", "creator-web": "creator-web",
     "web-runtime-lab": "web-runtime-lab", "core-ubuntu": "core (ubuntu-latest)",

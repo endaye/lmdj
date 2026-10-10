@@ -102,7 +102,7 @@ class PlanningTests(unittest.TestCase):
         result = self.plan(self.change("packages/foundation/src/example.cpp"))
         self.assertEqual(result["deploy_sites"], list(r.SITES))
         self.assertEqual(result["test_floor"]["kind"], "full")
-        self.assertEqual(len(result["test_floor"]["suites"]), 16)
+        self.assertEqual(len(result["test_floor"]["suites"]), 15)
 
     def test_changelog_is_also_a_docs_consumer(self):
         result = self.plan(self.change("apps/creator-web/CHANGELOG.md"))

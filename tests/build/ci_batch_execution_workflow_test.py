@@ -346,7 +346,7 @@ class WorkflowScripts(unittest.TestCase):
         result, values, verdict, needs = self.judge(execution)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(verdict["status"], "passed")
-        self.assertEqual(len(verdict["suites"]), 16)
+        self.assertEqual(len(verdict["suites"]), 15)
         self.assertEqual(values["artifact"], f"batch-verdict-{self.target}-51-1")
         self.assertEqual(json.loads((self.runner / "batch-verdict-51-1/needs.json").read_text()), needs)
         self.assertEqual(batch_verdict.scheduler_outcomes(verdict, POLICY, execution["identity"], execution["selection"]), {"creator": "passed"})
@@ -357,11 +357,11 @@ class WorkflowScripts(unittest.TestCase):
         self.assertEqual(verdict["status"], "not-required")
         self.assertTrue(all(s["status"] == "not-selected" for s in verdict["suites"]))
 
-    def test_full_covers_sixteen_and_preserves_legacy_schema_boundary(self):
+    def test_full_covers_fifteen_and_preserves_legacy_schema_boundary(self):
         result, _, verdict, _ = self.judge(self.prepare(POLICY.suite_ids))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(verdict["status"], "passed")
-        self.assertEqual(sum(s["selected"] for s in verdict["suites"]), 16)
+        self.assertEqual(sum(s["selected"] for s in verdict["suites"]), 15)
         self.assertEqual(verdict["evidence_schema"], batch_verdict.SCHEMA)
         self.assertNotEqual(verdict["evidence_schema"], "lmdj.ci-self-test.v1")
 

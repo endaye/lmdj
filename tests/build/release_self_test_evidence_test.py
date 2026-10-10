@@ -80,12 +80,12 @@ class SelfTestReleaseEvidenceTest(unittest.TestCase):
     def test_new_policy_rejects_old_fourteen_lane_reference(self):
         self.assertEqual(self.verify(ref=False).code, "unverifiable")
         self.assertEqual(self.github.calls, [])
-    def test_target_is_not_control_and_all_sixteen_suites_pass(self):
-        self.assertEqual(len(POLICY.suites), 16)
+    def test_target_is_not_control_and_all_fifteen_suites_pass(self):
+        self.assertEqual(len(POLICY.suites), 15)
         result = self.verify()
         self.assertEqual(result.code, "ok", result.message)
         self.assertEqual(result.run.head_sha, CONTROL)
-    def test_complete_test_v2_preserves_old_full_sixteen_source_without_batch_fallback(self):
+    def test_complete_test_v2_preserves_old_full_source_without_batch_fallback(self):
         self.assertEqual(self.policy.prospective_ci_protocol, "complete-test-v2")
         original = self.intent()
         for protocol in ("self-test-v1", "complete-test-v2"):

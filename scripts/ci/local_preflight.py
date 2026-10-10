@@ -123,7 +123,6 @@ LANE_INPUT_ROOTS = {
         "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE",
     ),
     "web_runtime_lab": ("demos/web-runtime-lab/", "demos/README.md"),
-    "chameleon_lab": ("demos/chameleon-lab/",),
 }
 
 

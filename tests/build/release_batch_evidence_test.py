@@ -280,7 +280,7 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
     def test_real_queued_request_claim_three_file_verdict_is_accepted(self):
         self.assertNotEqual(self.control, self.executor_control)
         self.assertEqual(self.verify(), self.verdict)
-        self.assertEqual(len(self.verdict["suites"]), 16)
+        self.assertEqual(len(self.verdict["suites"]), 15)
         self.assertTrue(all(s["selected"] and s["status"] == "passed" and not s["verification_debt"] for s in self.verdict["suites"]))
         self.assertTrue(all("/issues" not in path for path, _ in self.calls))
 

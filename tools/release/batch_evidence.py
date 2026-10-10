@@ -232,7 +232,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         require(policy.digest == policy_at(self.main).digest == policy_at(executor["head_sha"]).digest == request["policy"], "old or mismatched scope policy cannot certify a new candidate")
         batch._request(policy, request)
         # Complete current inventory is also pinned against canonical scope lanes.
-        require(set(policy.suite_ids) == CI_SCOPE_LANES | {"core_tsan_stress", "core_release_stress"}, "policy is not the complete sixteen-suite inventory")
+        require(set(policy.suite_ids) == CI_SCOPE_LANES | {"core_tsan_stress", "core_release_stress"}, "policy is not the complete fifteen-suite inventory")
         require(request["selection"]["kind"] == "full" and set(request["selection"]["suites"]) == set(policy.suite_ids), "focused or none selection cannot certify a candidate")
         # Per-verification state: all contributing artifacts must remain live
         # through the final verdict, not merely their individual downloads.

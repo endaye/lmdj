@@ -40,8 +40,8 @@ class VerdictTest(unittest.TestCase):
 
     def test_focused_reports_all_suites_without_fake_passes(self):
         document = self.build()
-        self.assertEqual(len(document["suites"]), 16, "why: report omitted policy suites; remedy: enumerate full inventory")
-        self.assertEqual(sum(suite["status"] == "not-selected" for suite in document["suites"]), 15,
+        self.assertEqual(len(document["suites"]), 15, "why: report omitted policy suites; remedy: enumerate full inventory")
+        self.assertEqual(sum(suite["status"] == "not-selected" for suite in document["suites"]), 14,
                          "why: omitted work became passes; remedy: explicit not-selected")
 
     def test_focused_outcomes_only_selected(self):
