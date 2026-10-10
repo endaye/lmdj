@@ -3261,7 +3261,16 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function requireInspectionOwner() {
+    // Explicit close revokes retained public read closures. A fatal transport
+    // keeps its own typed terminal error instead of being recast as closed.
+    if (machine.state === "closed" || (closing && fatalReservation === null)) {
+      throw typedError("HOST_STATE_INVALID", "Runtime inspection owner is closed");
+    }
+  }
+
   async function inspectProject() {
+    requireInspectionOwner();
     return recoverableQuery("project.inspect", {});
   }
 
@@ -4689,6 +4698,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function inspectSample(flatSlot) {
+    requireInspectionOwner();
     const slot = flatSlotAddress(flatSlot);
     const result = await recoverableQuery("sample.inspect", {slot});
     return normalizeSampleInspect(result, flatSlot);
@@ -5373,6 +5383,10 @@ function createRuntimeSessionController(options = {}) {
         // The packaged Host already publishes this runtime namespace. Expose
         // the same session methods for trusted programmatic callers through
         // its ordinary control lane, with no private Wasm or test-only API.
+        Object.defineProperty(runtime, "inspection", {
+          value: Object.freeze({inspectProject, inspectSample}),
+          configurable: false, writable: false,
+        });
         Object.defineProperty(runtime, "candidates", {
           value: Object.freeze({runCandidateJob, inspectCandidateJob, cancelCandidateJob,
             discardCandidateSet, auditionCandidate, stopCandidateAudition, adoptCandidates}),

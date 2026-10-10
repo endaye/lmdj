@@ -6114,6 +6114,155 @@ test("Candidate adoption validates one revision and every explicit target withou
   await session.close();
 });
 
+test("published inspection namespace shares the owned recovery request lane", async () => {
+  const browserWindow = {};
+  const truth = JSON.parse(readFileSync(new URL(
+    "../../../tests/fixtures/contracts/project-v5-playback-parity-valid.json",
+    import.meta.url,
+  ), "utf8"));
+  const project = {project_revision: truth.revision, project: truth};
+  let releaseSample;
+  const sampleGate = new Promise(resolve => { releaseSample = resolve; });
+  const calls = [];
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  const {session} = fixture({browserWindow, publishRuntime: true,
+    send: async (envelope, options) => {
+      if (!["sample.inspect", "sequence.recovery.list", "project.inspect"].includes(envelope.operation)) {
+        return success(envelope, defaultResult(envelope.operation));
+      }
+      calls.push({operation: envelope.operation, payload: envelope.payload,
+        deadlineMs: options.deadlineMs});
+      maximumInFlight = Math.max(maximumInFlight, ++inFlight);
+      try {
+        if (envelope.operation === "sample.inspect") {
+          await sampleGate;
+          return success(envelope, {
+            project_revision: 7, slot: envelope.payload.slot,
+            asset_id: "11111111-1111-4111-8111-111111111111",
+            playback: {...WIRE_PLAYBACK, pan: -100, tone: -100},
+            metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+            waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+          });
+        }
+        return success(envelope, envelope.operation === "project.inspect"
+          ? project : {candidates: [], project_revision: null});
+      } finally {
+        inFlight -= 1;
+      }
+    },
+  });
+  await session.start();
+  const {inspection} = browserWindow.lmdjWebRuntimeHost;
+
+  const sampled = inspection.inspectSample(33);
+  await drainTasks();
+  const recovery = session.listSequenceRecovery(truth.project_id);
+  const inspectedProject = inspection.inspectProject();
+  await drainTasks();
+  assert.deepEqual(calls, [{operation: "sample.inspect",
+    payload: {slot: {bank: 2, pad: 1}}, deadlineMs: 30_000}]);
+  assert.equal(maximumInFlight, 1);
+
+  releaseSample();
+  const [sample, candidates, observedProject] = await Promise.all([
+    sampled, recovery, inspectedProject,
+  ]);
+  assert.deepEqual(sample, {projectRevision: 7, slot: 33,
+    assetId: "11111111-1111-4111-8111-111111111111",
+    playback: {...SESSION_PLAYBACK, pan: -100, tone: -100},
+    metadata: {sampleRate: 48_000, channels: 2, sourceFrames: 100},
+    waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`});
+  assert.deepEqual(candidates, []);
+  assert.deepEqual(observedProject, project);
+  assert.deepEqual(calls, [
+    {operation: "sample.inspect", payload: {slot: {bank: 2, pad: 1}}, deadlineMs: 30_000},
+    {operation: "sequence.recovery.list", payload: {project_id: truth.project_id}, deadlineMs: 1_000},
+    {operation: "project.inspect", payload: {}, deadlineMs: 30_000},
+  ]);
+  assert.equal(maximumInFlight, 1);
+  await session.close();
+});
+
+test("closed inspection closures cannot send through a replacement owner", async () => {
+  const browserWindow = {};
+  const oldInspections = [];
+  const oldOwner = fixture({browserWindow, publishRuntime: true,
+    send: async envelope => {
+      if (["sample.inspect", "project.inspect"].includes(envelope.operation)) oldInspections.push(envelope);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await oldOwner.session.start();
+  const oldNamespace = browserWindow.lmdjWebRuntimeHost.inspection;
+  assert.equal(await oldOwner.session.close(), true);
+
+  const currentInspections = [];
+  const currentProject = {project_revision: 8, project: {revision: 8}};
+  const currentOwner = fixture({browserWindow, publishRuntime: true,
+    send: async envelope => {
+      if (envelope.operation === "project.inspect") currentInspections.push(envelope);
+      return success(envelope, envelope.operation === "project.inspect"
+        ? currentProject : defaultResult(envelope.operation));
+    },
+  });
+  await currentOwner.session.start();
+  const currentNamespace = browserWindow.lmdjWebRuntimeHost.inspection;
+  assert.notEqual(currentNamespace, oldNamespace);
+  await assert.rejects(oldNamespace.inspectProject(), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(oldNamespace.inspectSample(0), {code: "HOST_STATE_INVALID"});
+  await drainTasks();
+  assert.deepEqual(oldInspections, []);
+  assert.deepEqual(currentInspections, []);
+  assert.deepEqual(await currentNamespace.inspectProject(), currentProject);
+  assert.equal(currentInspections.length, 1);
+  await currentOwner.session.close();
+});
+
+test("closing inspection owner refuses reads while native close is pending", async () => {
+  const browserWindow = {};
+  let releaseClose;
+  const closeGate = new Promise(resolve => { releaseClose = resolve; });
+  const inspections = [];
+  const owner = fixture({browserWindow, publishRuntime: true,
+    send: async envelope => {
+      if (["project.inspect", "sample.inspect"].includes(envelope.operation)) inspections.push(envelope);
+      if (envelope.operation === "host.close") await closeGate;
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await owner.session.start();
+  const {inspection} = browserWindow.lmdjWebRuntimeHost;
+  const closing = owner.session.close();
+  await drainTasks();
+  await assert.rejects(inspection.inspectProject(), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(inspection.inspectSample(0), {code: "HOST_STATE_INVALID"});
+  await drainTasks();
+  assert.deepEqual(inspections, []);
+  releaseClose();
+  assert.equal(await closing, true);
+});
+
+for (const code of ["HOST_TIMEOUT", "HOST_PROTOCOL_MISMATCH"]) {
+  test(`published inspections preserve native ${code} after fatal cleanup`, async () => {
+    const browserWindow = {};
+    const terminalError = Object.assign(new Error("retained native failure"), {code});
+    const owner = fixture({browserWindow, publishRuntime: true,
+      send: async envelope => {
+        if (["project.inspect", "sample.inspect"].includes(envelope.operation)) throw terminalError;
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await owner.session.start();
+    const {inspection} = browserWindow.lmdjWebRuntimeHost;
+    owner.emitTransportFailure(terminalError);
+    await drainTasks();
+    await assert.rejects(inspection.inspectProject(), error => error === terminalError);
+    await assert.rejects(inspection.inspectSample(0), error => error === terminalError);
+    await owner.session.close();
+  });
+}
+
 test("Candidate group extends the retained packaged Host beside providers", async () => {
   const browserWindow = {};
   const {session} = fixture({browserWindow, publishRuntime: true});

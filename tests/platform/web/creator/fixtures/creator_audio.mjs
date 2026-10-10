@@ -17,14 +17,13 @@ export async function wakeAudioWithPad(page, {padAddress} = {}) {
   for (const label of assignedLabels) {
     const candidate = page.getByRole("button", {name: label, exact: true});
     const address = /Pad ([A-D])(\d+)/.exec(label);
-    const slot = {bank: address[1].charCodeAt(0) - 65, pad: Number(address[2]) - 1};
-    const inspect = await page.evaluate(async slot => window.lmdjWebRuntimeHost.transport.send({
-      protocol_version: 1, request_id: crypto.randomUUID(), operation: "sample.inspect", payload: {slot},
-    }), slot);
-    expect(inspect, JSON.stringify(inspect)).toHaveProperty("ok", true);
-    if (!inspect.result.playback.muted && (pad === null || inspect.result.playback.trigger_mode === "one_shot")) {
+    const slot = (address[1].charCodeAt(0) - 65) * 16 + Number(address[2]) - 1;
+    const inspect = await page.evaluate(slot =>
+      window.lmdjWebRuntimeHost.inspection.inspectSample(slot), slot);
+    expect(inspect.slot).toBe(slot);
+    if (!inspect.playback.muted && (pad === null || inspect.playback.triggerMode === "one_shot")) {
       pad = candidate;
-      mode = inspect.result.playback.trigger_mode;
+      mode = inspect.playback.triggerMode;
       if (mode === "one_shot") break;
     }
   }

@@ -167,15 +167,9 @@ const playStopKey = (page) => physicalKey(page, /^Play\/Stop/);
 const recordKey = (page) => physicalKey(page, /^Record\b/);
 
 async function inspectTruth(page) {
-  const response = await page.evaluate(() =>
-    window.lmdjWebRuntimeHost.transport.send({
-      protocol_version: 1,
-      request_id: crypto.randomUUID(),
-      operation: "project.inspect",
-      payload: {},
-    }));
-  expect(response.ok).toBe(true);
-  return response.result.project;
+  const inspected = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.inspection.inspectProject());
+  return inspected.project;
 }
 
 // Sequence uses PPQ 960 in 4/4. Recovery keeps an unreleased attack's
