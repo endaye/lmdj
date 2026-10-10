@@ -211,10 +211,11 @@ export function PerformSurface(props: PerformSurfaceProps) {
       : null;
   const performing = ["recording", "flushing"].includes(state.recording.phase);
   // #1958: without a Performance recording, Launch drives the global transport
-  // through selection. The slots stay closed while a transport command settles
-  // or the transport records (switching while recording is S3), and whenever
-  // no transport projection exists.
-  const transportLaunchOpen = props.transport !== undefined &&
+  // through selection. Unsettled Performance operations still own their
+  // recording/capture transition. The transport fallback also stays closed
+  // while a transport command settles or records (recording switches are S3).
+  const transportLaunchOpen = ["idle", "stopped"].includes(state.recording.phase) &&
+    props.transport !== undefined &&
     props.transport.status !== null &&
     !selectTransportBusy(props.transport) &&
     !selectTransportRecording(props.transport);
