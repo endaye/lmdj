@@ -195,8 +195,12 @@ def adapt_t2_result(result, *, identity, changed_paths, collector, trusted_confi
             mapped = {"schema": review_scope.REVIEW_SCHEMA,
                       "summary": attempt["review"].get("summary", ""),
                       "findings": attempt["review"].get("findings", []),
-                      "test_scope": {"labels": ["test:full"],
-                                     "reason": "T2 supplies no LMDJ test-scope advice; retain the deterministic full floor."}}
+                      # T2 gives no LMDJ test-scope advice, so it adds no
+                      # scope: the effective scope is the deterministic path
+                      # floor alone, which still selects full for shared,
+                      # foundational or unclassifiable paths (owner, #1955).
+                      "test_scope": {"labels": ["test:none"],
+                                     "reason": "T2 supplies no LMDJ test-scope advice; the deterministic path floor alone sets the scope."}}
             review_scope.validate_review(test_scope.load_policy(ROOT), mapped, coverage=coverage,
                                          changed_paths=changed_paths, collector=collector,
                                          trusted_config=trusted_config)
