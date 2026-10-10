@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-03
     occurrence: https://github.com/endaye/lmdj/actions/runs/37071379300
     observed_by: Kimi
+  - date: 2026-10-10
+    occurrence: https://github.com/endaye/lmdj/pull/1989
+    observed_by: Kimi
 exit: gate:tests/build/ci_build_acceleration_test.py
 ---
 
@@ -65,6 +68,20 @@ membership count could not see the Web lanes because they were never counted.
 **A role without a queue is a queue of one per runner service, which on one
 host is no isolation at all.**
 
+The 2026-10-10 recurrence moves the same shape off CI entirely: two agent
+sessions on one developer Mac each ran a batch-only browser-proof lane
+(`scripts/local-ci.sh --lanes creator`) in separate worktrees, and the lane
+whose whole window overlapped the other failed 26 of 90 chromium journeys with
+"formal Web Host request timed out" across specs unrelated to its change,
+while the load average sat at 27–50 and day-old orphaned `Chrome for Testing`
+processes accumulated. The retained artifacts carried no product-defect
+signature (no Asyncify memory trap — cf.
+[`flake-closed-on-environment-correlation`](flake-closed-on-environment-correlation.md)),
+and the same specs passed uncontended. **Local lane evidence is only as good
+as the machine's exclusivity: check for another session's proof processes and
+orphaned browsers before attributing a broad timeout scatter to the change
+under test.**
+
 Two failures that look like this one are not: PR #611 moved `queue-item` off
 hosted runners because a job that only waits should not be billed by the
 minute, which is cost rather than contention; and PR #632 fixed a golden fixture
@@ -89,3 +106,10 @@ native jobs are pinned by
 `tests/build/ci_nightly_workflow_test.py::test_both_native_jobs_share_the_repository_capacity_queue`.
 A new workflow placing a material job on `ci-core` needs the queue block and a
 gate that can see it; the `ci.yml` counter cannot.
+
+The same serialization applies off CI: a local batch-only browser-proof lane
+needs an uncontended machine. Before running one, look for another session's
+`*.sh proof` / `local-ci.sh` processes and kill only verified orphaned
+browsers (parent pid 1, stale); never stop a live sibling session's run, and
+rerun the full lane after the machine drains rather than accepting a
+contended result.
