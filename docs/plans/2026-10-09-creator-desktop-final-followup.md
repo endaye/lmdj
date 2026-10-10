@@ -45,11 +45,11 @@
 | C0 | D2–D5 当前能力及决定边界调查 | 调查已记录 | 绑定下文 inspected revision；只更新本计划，不批准产品提案或实现 I Task。 |
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
 | D1 | #1822 统一原则及逐页映射 | 全页旋钮已确认；其余方向键待决 | 执行 I1b/I1c；固定 ENC4 监听音量，ENC1–3 随页/组变化，SHIFT 细调。 |
-| D2 | 400 ms 连续旋钮提交 | 已确认；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；Perform 保持效果并按 HOLD 离页释放。 |
+| D2 | 400 ms 连续旋钮提交 | 已确认，包括 BPM 保持音乐位置；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；BPM 即时变速不重启 Pattern；Perform 保持效果并按 HOLD 离页释放。 |
 | D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
-| D4 | D03 audition/trim/browse/assign 与细调 | 能力已调查；待 owner 决策 | 区分已实现的导入/替换/trim 与新 Assign、参数细调入口；明确目标、单位/步长、Undo/Redo、取消/失败。 |
+| D4 | D03 audition/trim/browse/assign 与细调 | Assign 与精确数值编辑已批准；待独立实现 | 当前工程已有 Asset → 明确 A01–D16 目标，不移动来源、覆盖确认、取消不改 Truth；数值立即试听，Apply/Enter 一次保存/Undo，Esc/切目标取消。复用现有单位/边界与已批准旋钮细调，不改 touch slider 提交语义。 |
 | D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 能力已调查；待 owner 决策 | 明确作用域、Truth 与 live 状态归属、真实投影及 DSP 能力；producer 与 consumer 分 Task。 |
-| I1–I5 | D1–D5 的对应实现 | I1b 已合并；I1c 适配中；其他范围等决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
+| I1–I5 | D1–D5 的对应实现 | I1b/I1c 已合并，原浏览器失败项及 BPM 可听预览仍未关闭；D4 待实现，D5 待决定 | #1936 → `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce` 交付 contextual consumer，不等于完整验收；每项追加精确 Task，独立实现和合并。 |
 | A1 | 四页自动化与视觉核对 | 待验收 | I1–I5 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
 | V1 | 协调版本结算与 snapshot | 待实施 | 读取最终 manifests 和版本政策；独立 version Task、Portal snapshot 及合并后 provenance。 |
@@ -60,6 +60,45 @@
 适用条件出现时加入。每个产品问题一次给出少量选项、建议及影响，收到明确
 回答后记录 decision。决定不做可以完成该范围的处置；暂缓仍是未完成，除非
 owner 明确同意移出本 Goal。
+
+### 2026-10-10 — 已批准决定与 refreshed premises
+
+本次决策记录检查 main：`e9dae833d1c609bb203030a62053dee39b9d8b61`。
+owner 已明确批准：
+
+- [BPM 旋钮即时变速保持当前音乐位置](../prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)，
+  继续播放并沿用停转 400 ms 一次保存／Undo。#1929 的
+  [实施计划](2026-10-10-sequence-audible-tempo-preview.md) 不再把播放位置列为待决。
+- [D03 Assign 与精确数值编辑](../prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)：
+  已有工程 Asset 加明确目标、引用不移动、覆盖确认、取消不改 Truth；合法数值
+  立即试听，Apply／Enter 一次保存／Undo，Esc／切目标取消。旋钮／touch slider
+  保持各自已批准的提交方式。
+
+未交付前提仍成立：Creator 的 `tempoPreview` 只改 readback，Web 完整操作
+注册表尚无可逆 tempo preview；公开 Session 尚无 `assignPad`，Creator 尚无
+已有 Asset 的完整 Assign 与通用精确数值输入 journey。已有 `project.inspect`
+返回素材目录、`pad.assign` 持久化引用、Sample preview/update 与 Start/End
+输入可复用。#1985／#1990 的实际范围是 Pattern switch 入口与特定 generation
+fence，不能当作以上行为的交付。
+
+#1984 的 Runtime 源文件仍与 BPM producer 重叠；先交付该前置，再开始独立
+Runtime、Facade/Web、Creator Tasks。D03 已允许准备实施声明，开始实施前仍
+按 Decision/implementation contract 刷新来源、声明精确文件及最低层验收。
+四页 A1/A2、版本 V1 和未决定的 D04／方向键仍保持未完成。
+
+**本次文档 Task declared files:** 两份上述新 decision、本计划、BPM 实施计划、
+`docs/prd/questions/hardware-control-mapping.md`。按 canonical `decision-log.md`
+和 `decisions/README.md` 使用独立 decision 文件，不回改历史决定或共享索引。
+原 #1929 head `1d3e6a4e90540b7858196380b65492f33901f500` 在新隔离文档分支
+中与 fresh main 普通合并；原 worktree 保留。PR 对 main 的差异仅为文档。
+
+**Lowest-tier verification:** 声明路径与相对链接检查、staged new-file ownership
+suite、`git diff --cached --check`、clean committed-head `docs_static`、PR body
+lint 与 declaration/batch-only evidence check；不运行或声称产品音频验收。
+**Version impact: none** — 决策/计划不改变 source 或 active identities。
+**Documentation impact: none** — 仅 PRD/计划文件，不改当前 Portal 页或 source
+facts；实际实现的 Portal 更新仍由各 Task 交付。**Pitfall impact: none** —
+沿用已有决策存档、Task 分界与验收规则，不新增流程机制。
 
 2026-10-09 owner 已确认统一原则：旋钮 1/2 管视图位置，旋钮 3/4 管当前页
 主要数值，方向键做导航，SHIFT 保留撤销/重做并支持粗调。此回答只确认
@@ -727,6 +766,9 @@ Inspected revision: `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`。
 同时检查 Runtime Session 方法、Creator consumer 和现有测试。
 以下“无操作/投影”限定为本 revision 的 Web Host/Creator 公开路径，不表示所有
 Core 内部均无相关算法。进入 I Task 前仍须刷新相关源码与继任交付。
+以下 D2–D5 是该 revision 的历史调查；其中当时的待选择条目不覆盖后来批准的
+旋钮决定、DUPLICATE，以及本计划上述 2026-10-10 BPM/D03 决定。D04 未决
+范围继续保留，不能从已批准条目推导它的产品语义。
 
 ### D2 — 400 ms 的已实现部分与未决定边界
 

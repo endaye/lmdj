@@ -9,24 +9,25 @@ change, System, Escape, history navigation and loss of ownership. A numeric
 readback alone does not meet that approval. Recording admission continues to
 reject BPM changes.
 
-The temporal behavior during playback needs one additional owner decision.
-The 2026-10-02 tempo decision explicitly schedules a committed BPM at the next
-bar and restarts the Pattern there. The new immediate-preview approval does
-not specify whether a preview preserves the current musical position. On
-2026-10-10, the owner was asked to choose continuous position-preserving
-preview (recommended) or restart from the Pattern beginning on each change.
-The recommendation below is a proposal, not an adopted decision. Do not
-implement the dependent playback transition until the owner answers.
+On 2026-10-10 the owner approved
+[continuous position-preserving preview](../prd/decisions/2026-10-10-sequence-audible-tempo-preview.md):
+the BPM encoder immediately changes playback speed while continuing at the
+current musical bar/beat position. Keep the approved 400 ms authoring save/Undo.
+This supersedes the old next-bar restart boundary for encoder preview only;
+the 2026-10-02 touch slider release/blur, direct-step and Tap Tempo behavior
+remains separate. No product playback-position decision is outstanding.
 
 This plan covers source delivery and acceptance, not release or deployment.
 It supplements, and does not reduce, the parent follow-up Goal.
 
 ## Refreshed premises
 
-Integration base and this Task worktree base:
-`50d79fa894f3483d6593d50fafcfd3e1bff28ce0`.
-The consumer implementation inspected separately is
-`f9e194544ee8406be9ab8eb79fb892346a1b42af`.
+Original planning base: `50d79fa894f3483d6593d50fafcfd3e1bff28ce0`;
+original plan-only PR head: `1d3e6a4e90540b7858196380b65492f33901f500`.
+Refreshed integration base for the approved decision Task:
+`e9dae833d1c609bb203030a62053dee39b9d8b61`. A new isolated docs branch merges
+that actual main into the original PR history without editing the original
+worktree or discarding its plan. Reuse PR #1929; do not create a duplicate plan PR.
 
 - **Still outstanding:** `app.tsx` keeps `tempoPreview` locally and sends
   `updateSequenceSettings` only on idle. Cancel clears only the local number.
@@ -36,7 +37,7 @@ The consumer implementation inspected separately is
   settings operation but no reversible tempo-preview lifecycle. The Facade
   settings command persists Truth before updating a recording anchor; it
   cannot serve as a no-history preview.
-- **Still outstanding, behavior-dependent:**
+- **Still outstanding:**
   `publish_pattern_view_preserving_phase` requires identical BPM. Its native
   regression expressly rejects changed BPM. Removing that check would weaken
   the existing grid-edit publication contract, and retaining only the old
@@ -45,16 +46,25 @@ The consumer implementation inspected separately is
   control owner, publication generations, transport admission fences and
   `freeze_transport_bpm`. The freeze helper retains the exact tick numerator
   at a transition rather than rounding to a whole beat.
-- **Already delivered, do not repeat:** the old direct-settings/metronome
-  implementation, Sequence navigation, and #1905 refresh fix. Intervening
-  main changes after `502932e` concern CI review-provider handling, not tempo.
-- **Shipping dependency:** monitoring producer #1910 is still open. The
-  page-encoder consumer is local and must eventually be based on the actual
-  merged producers. An unmerged development stack is not main delivery.
+- **Already delivered, do not repeat:** the direct-settings/metronome
+  implementation, Sequence navigation, #1905 refresh, monitoring producer and
+  #1936 contextual consumer (`9b4d80c9e5ed965f5776c0321cf166d9d1f289ce`).
+  Consumer merge does not close its five unresolved original browser failures
+  or the audible preview gap.
+- **Relevant successors:** #1985 adds `pattern.transport.switch`; #1990
+  (`e9dae833d1c609bb203030a62053dee39b9d8b61`) repairs a named successor's
+  generation fence after outside republication. Neither introduces reversible
+  tempo preview. Inspection includes the complete Host operation registration,
+  actual settings handler and Session public object, not only a name search.
+- **Implementation dependency:** Core #1984 is open and overlaps I2a's
+  `realtime_engine.hpp/.cpp` and `realtime_engine_test.cpp`. Begin the native
+  implementation from its actual merged revision after it lands; do not
+  compete with the in-review transport cutoff implementation. Refresh all
+  timing premises at each dependent Task start.
 
-## Proposed playback and lifecycle contract
+## Approved playback behavior and implementation contract
 
-Subject to the owner choosing continuous preview:
+Implement the approved continuous preview with these lifecycle boundaries:
 
 1. A preview changes actual Pattern scheduling at the first effective audio
    render frame. Keep its exact fractional musical position and sounding
@@ -84,8 +94,9 @@ Subject to the owner choosing continuous preview:
    commit and cancellation and is insufficient to choose the backend action.
 
 Operation names and public response shapes will be declared in I2b before its
-first implementation edit. This proposal does not approve a persisted Contract
-change or alter record/replay semantics.
+first implementation edit. The product decision does not approve a persisted
+Contract change or alter record/replay semantics. A newly exposed operation
+must be added to the real Web bridge registration, not only the handler/SDK.
 
 ## Implementation Tasks
 
@@ -124,6 +135,7 @@ Declared files: this plan;
 `packages/application-facade/include/lmdj/facade/application.hpp`;
 `packages/application-facade/src/application.cpp`;
 `tests/core/facade/sequence_surface_test.cpp`;
+`packages/web-runtime-platform/src/bridge.cpp`;
 `packages/web-runtime-platform/src/control_runtime.cpp`;
 `packages/web-runtime-platform/web/runtime_session.mjs`;
 `packages/web-runtime-platform/web/runtime_types.d.ts`;
@@ -186,13 +198,16 @@ Contract version, tag or release allocation.
 
 ## Planning Task verification
 
-This planning Task declares only
-`docs/plans/2026-10-10-sequence-audible-tempo-preview.md`.
+The original planning Task declared only this file. The approved-decision
+follow-up Task additionally declares the two 2026-10-10 decision files for
+tempo preview and Sample Assign/numeric editing, the parent follow-up plan,
+and `docs/prd/questions/hardware-control-mapping.md`, as listed in the parent.
 Validate all declared source/test/page paths against this base, inspect the
-proposal against the prior timing decision and the actual encoder lifecycle,
-check whitespace, and run the staged new-file ownership suite. A plan review
-must retain the unapproved playback boundary and the real audible acceptance
-gap; it must not turn this proposal into a product decision.
+approved scope against the prior direct-control timing and actual encoder
+lifecycle, check relative links/whitespace, and run the staged new-file ownership
+suite plus the clean committed-head docs_static lane. A plan review must retain
+the real audible acceptance gap and must not claim the newly approved behavior
+has already been implemented. No product or Portal source is edited by this Task.
 
 ## Documentation impact
 
