@@ -479,7 +479,13 @@ exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证�
 Creator 的普通 Chromium 打包旅程使用两个隔离的 Playwright worker，各 spec 内仍串行。
 Sound Set 与默认流式下载 spec 会改写 Proof server 共用的 Catalog upstream 文件，
 因此单独串行执行；Sample Editor、Capture、拒绝权限与 WebKit 组继续使用一个 worker。
-七次浏览器调用各自保留独立的结果目录，覆盖同一份 Git tracked spec 清单。
+浏览器调用各自保留独立的结果目录，覆盖同一份 Git tracked spec 清单。最后一腿以
+`creator-deployment` project 对同一份隔离 dist 运行 deployment journey（冻结 fixture
+导入、手势激活、System 报告导出、Sample 替换、Sequence 就绪与 durable reload）：
+冻结部署 fixture 与其 UI 定位器必须在当前 writer 与当前 Creator 表面上保持新鲜，
+`packages/project-io`/`contracts` 的级别移动或 `apps/creator-web` 的界面改名都会让
+该腿在肇因变更上变红，而不是等一个不可变 Preview 部署在远处失败；这是
+`.agents/pitfalls/current-level-bundle-expires-frozen-fixtures.md` 的 gate exit。
 两次干净构建、全部测试及断言、每项测试预算和 CI 的 35 分钟上限保持不变。
 
 #542 起，全部 Creator 打包旅程共用 `tests/platform/web/creator/fixtures/refusal_diagnostics.mjs` fixture：它订阅页面 console，收集 Control Runtime 在每次 Facade 拒绝规范化时经 Emscripten printErr 发出的 `lmdj-refusal-diagnostic` 行（normalized 线上码、源码、源消息与仅标量 details，整行不超过 2048 字节），并在至少观测到一行时把原始行作为 `refusal-diagnostics.jsonl` 附件挂进该测试的 test-results，随 lane 已有的失败保留一并上传。浏览器线上载荷保持 `safe_message`/`sanitize_details` 的既有脱敏，逐字节不变；拒绝前的真实原因只存在于本地 console 与 proof artifact。Sample Editor 的 v1-to-v2 旅程在既有人造 REVISION_CONFLICT 断言之后追加 fail-closed 收集断言：发射、Worker console 转发或收集任一环节静默退化都会让该 lane 变红，而不是再次静默丢失拒绝原因。

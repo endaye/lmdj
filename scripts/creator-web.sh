@@ -506,6 +506,41 @@ PY
     npm --prefix "$web_test_root" test -- \
       --project=creator-sample-webkit "$required_relative" \
       --grep "capability boundary" || status=$?
+  # The deployment journey's frozen import bundle and UI locators must stay
+  # fresh against this build's writer and surface. Before this leg existed,
+  # a Contract-level bump without regenerating the frozen fixture or a UI
+  # rename without refreshing its locators surfaced only as a far-away
+  # immutable-Preview failure (.agents/pitfalls/
+  # current-level-bundle-expires-frozen-fixtures.md). Judged here against the
+  # locally built Host, both go stale at the change that caused them.
+  local deployment_product_build='' deployment_host_version=''
+  read -r deployment_product_build deployment_host_version \
+    < <(python3 - "$dist_root/host-manifest.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+print(manifest["product_build"], manifest["host_version"])
+PY
+)
+  LMDJ_WEB_RESULTS_SLOT=deployment-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_EXPECTED_PRODUCT_BUILD="$deployment_product_build" \
+    LMDJ_CREATOR_WEB_EXPECTED_VERSION="$deployment_host_version" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-deployment deployment/creator_web_deployment.spec.mjs \
+      || {
+      status=$?
+      printf '%s\n' \
+        'Creator Web error: why: the deployment journey is stale against this' \
+        '  build (frozen import bundle rejected or renamed UI controls), so a' \
+        '  deployed release would fail its browser smoke far from the cause' \
+        'remedy: regenerate the frozen fixture with the current writer' \
+        '  (scripts/creator-web.sh generate_project_fixture, then gzip+base64' \
+        '  into tests/platform/web/deployment/creator_project_fixture.mjs) and' \
+        '  refresh the renamed locators; see .agents/pitfalls/' \
+        '  current-level-bundle-expires-frozen-fixtures.md' >&2
+    }
   cleanup_server
   return "$status"
 }
