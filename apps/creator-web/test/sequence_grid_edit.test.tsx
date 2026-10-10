@@ -352,6 +352,34 @@ test("a refused edit restores the projection from Truth and shows the reason", a
   expect(fixture.truth.events).toHaveLength(1);
 });
 
+// A VEL-mode tap that never crosses the drag threshold is a touch landing,
+// not a delete command (#1962): the vertical velocity drag is the only VEL
+// edit gesture, so a moveless press must leave Truth and the revision alone.
+test("a moveless VEL-mode tap on a note sends no edit and keeps the note", async () => {
+  const fixture = gridFixture({events: [
+    {slot: {bank: 0, pad: 1}, onset_tick: 240, duration_tick: 240, velocity: 100},
+  ]});
+  await openSequenceGrid(fixture);
+  await userEvent.click(screen.getByRole("button", {name: "Grid tools"}));
+  await userEvent.click(screen.getByRole("button", {name: "Velocity mode"}));
+  await userEvent.click(screen.getByRole("button", {name: "Done"}));
+  const note = within(document.querySelector(
+    ".sequence-grid-row[data-pad='1']") as HTMLElement)
+    .getByTestId("sequence-grid-note");
+  fireEvent.pointerDown(note, {pointerId: 45, clientX: 30, clientY: 32, button: 0});
+  fireEvent.pointerUp(window, {pointerId: 45});
+  // The edit command is an async chain; absence can only be read after it
+  // had its turn. A delete here would reach editPatternEvents well inside
+  // this window (the refused-edit test above sees its alert immediately).
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+  expect(fixture.editPatternEvents).not.toHaveBeenCalled();
+  expect(fixture.truth.revision).toBe(0);
+  expect(fixture.truth.events).toHaveLength(1);
+  expect(within(document.querySelector(
+    ".sequence-grid-row[data-pad='1']") as HTMLElement)
+    .getByTestId("sequence-grid-note").getAttribute("data-onset-tick")).toBe("240");
+});
+
 test("a transport-busy refusal is retried before commit and never shown as a conflict", async () => {
   const fixture = gridFixture();
   fixture.editPatternEvents.mockRejectedValueOnce(
