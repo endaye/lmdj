@@ -23,16 +23,25 @@ Preview. Three issue rows remain open for the same reason:
   Preview Build workflow; 301 of 822 PRs (37%) touched Preview-relevant inputs
   (classified with this plan's pattern set). Projected demand ≈ 1,007 × 0.37 ×
   3.6 ≈ **1,340 hosted Linux minutes/month**.
-- Account Actions usage is already metered beyond included minutes
-  (2026-09: net $37.24; 2026-10 to date within included). No paid-plan change
-  is involved; Preview usage joins the existing metered consumption.
+- Cost basis (owner billing check 2026-10-10): the account is GitHub Pro
+  (3,000 included minutes/month) with a payment method; 2026-09 Actions usage
+  was billed beyond included minutes (net $37.24, of which lmdj Linux $18.75
+  and macOS fallback $14.69). `endaye/lmdj` is now public, and GitHub does not
+  bill standard GitHub-hosted runners in public repositories
+  (https://docs.github.com/en/billing/concepts/product-billing/github-actions),
+  so Preview builds on `ubuntu-24.04` are expected to cost nothing and not to
+  consume the included minutes. If the repository becomes private again,
+  Preview minutes are metered alongside the macOS fallback and can cause
+  overage; the budget gate is the stop for that case.
 
 ## Decision
 
 - **Ongoing monthly allocation: 2,000 hosted Linux minutes** for Portal
-  Preview builds (`CLOUDFLARE_PREVIEW_BUDGET_MINUTES=2000`). Measured demand is
-  ~67% of it; worst-case marginal cost ≈ $14.40/month at the published Linux
-  rate. Revoking `CLOUDFLARE_PREVIEW_ENABLED` deactivates Previews instantly.
+  Preview builds (`CLOUDFLARE_PREVIEW_BUDGET_MINUTES=2000`), approved by the
+  owner on 2026-10-10. Measured demand is ~67% of it. While the repository is
+  public the cap guards against runaway use rather than spend; if it became
+  private, the worst case is ≈ $12/month at the published $0.006/minute
+  Linux rate. Revoking `CLOUDFLARE_PREVIEW_ENABLED` deactivates Previews instantly.
 - Alerts at 50/75/90% of the monthly budget, posted automatically to the
   operations Issue recorded in `CLOUDFLARE_PREVIEW_BUDGET_ISSUE`; new builds
   stop at 90% (fail-closed gate inside the build job). This replaces the
@@ -45,7 +54,12 @@ Preview. Three issue rows remain open for the same reason:
   the gate.
 - `.github/workflows/cloudflare-preview-publish.yml` — activation variable.
 - `.github/workflows/cloudflare-preview-budget.yml` — new daily automatic
-  monitor (alerts only; trusted, no deployment credential).
+  monitor (alerts only; trusted, no deployment credential) on the self-hosted
+  `ci-general` control role, like the publisher; routine control never buys
+  hosted capacity.
+- `scripts/ci/hosted_runner_policy.json` — the Preview build's hosted entry
+  reason moves from the retired pilot variable to the activation flag and
+  approved budget.
 - `scripts/ci/cloudflare_preview_publish.py` — pilot-branch check becomes the
   activation flag.
 - `scripts/ci/cloudflare_preview_budget.py` — new: monthly consumption

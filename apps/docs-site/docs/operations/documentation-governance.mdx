@@ -80,8 +80,11 @@ Preview 默认关闭。广泛激活需要三个仓库变量同时显式设置：
 why/remedy 失败关闭；每日 `Cloudflare Preview Budget` workflow 在 50/75/90%
 阈值各发一条去重告警到运维 Issue。未知用量或缺失预算变量同样失败关闭。
 
-2026-10-09 批准的持续月度额度为 2,000 GitHub-hosted Linux 分钟：依据试点
+2026-10-10 所有者批准的持续月度额度为 2,000 GitHub-hosted Linux 分钟：依据试点
 实测约 3.6 分钟/次与 2026-09 相关 PR 需求约 1,340 分钟/月（需求约占 67%）。
+仓库公开期间标准托管 runner 不计费，该额度是防失控护栏；若仓库转为私有，
+Preview 分钟将计入付费用量，90% 预算门即为停止点。预算告警 workflow 运行在
+self-hosted `ci-general` 控制角色上，不消耗托管分钟。
 撤销 `CLOUDFLARE_PREVIEW_ENABLED` 可立即停用全部 Preview；调整预算属于新的
 预算决策，须先记录再修改变量。外部 fork PR 始终不参与 Preview。
 

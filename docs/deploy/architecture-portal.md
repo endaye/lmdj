@@ -40,8 +40,9 @@ GitHub 上的 netlify/lmdj/deploy-preview、Header rules、Redirect rules 和 Pa
 `portal-cloudflare-preview` Environment）执行，只写 `portal-preview` Worker 的
 版本地址并回写 `Cloudflare Portal Preview` 状态。广泛激活需要三个仓库变量：
 `CLOUDFLARE_PREVIEW_ENABLED=1`、批准的月度托管分钟预算
-`CLOUDFLARE_PREVIEW_BUDGET_MINUTES`（2026-10-09 批准 2,000 分钟，依据试点实测
-3.6 分钟/次与 2026-09 需求约 1,340 分钟/月）、接收 50/75/90% 阈值告警的运维
+`CLOUDFLARE_PREVIEW_BUDGET_MINUTES`（2026-10-10 所有者批准 2,000 分钟，依据试点实测
+3.6 分钟/次与 2026-09 需求约 1,340 分钟/月；仓库公开期间标准托管 runner 不计费，
+该额度是防失控护栏，仓库转私有时即为付费停止点）、接收 50/75/90% 阈值告警的运维
 Issue `CLOUDFLARE_PREVIEW_BUDGET_ISSUE`。构建触发经依赖完整的路径过滤，权威
 集合为 `scripts/ci/cloudflare_preview_paths.json`，与 workflow `paths:` 由
 `tests/build/ci_cloudflare_preview_paths_test.py` 锁定一致；无关 PR 零成本跳过。
