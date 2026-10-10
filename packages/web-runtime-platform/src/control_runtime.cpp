@@ -4725,7 +4725,11 @@ Json ControlRuntime::dispatch(
       // A cross-identity republication outside the coordinator would strand
       // the engagement's Pattern binding (its next receipt would fail the
       // journal's fence authority deterministically). Coordinate instead:
-      // refuse while playing, settle+retire otherwise, then proceed.
+      // Refuse while playing, settle otherwise, then proceed. A stopped
+      // selection keeps the same engine generation and epoch: preserve its
+      // controller/ledger too. The next Record re-anchors through the port's
+      // current Pattern; retiring only the controller would erase the epoch
+      // authority returned to its Host without resetting the running engine.
       if (impl_->transport != nullptr &&
           foundation::PatternId{selected_pattern} !=
               *impl_->transport->pattern) {
@@ -4743,7 +4747,6 @@ Json ControlRuntime::dispatch(
             return normalized_error(barrier.error());
           }
         }
-        impl_->transport.reset();
       }
       if (impl_->cancel_if_expired()) {
         return timeout_error();
@@ -4751,6 +4754,9 @@ Json ControlRuntime::dispatch(
       const auto snapshot = impl_->prepare_and_publish(selected_pattern);
       if (!snapshot.published) {
         return {{"ok", false}, {"error", snapshot.error}};
+      }
+      if (impl_->transport != nullptr) {
+        impl_->transport->pattern = foundation::PatternId{selected_pattern};
       }
       if (const auto acknowledgement =
               impl_->await_bank_acknowledgement(*snapshot.generation);

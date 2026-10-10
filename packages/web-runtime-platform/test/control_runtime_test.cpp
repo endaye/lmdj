@@ -8765,11 +8765,20 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
     return s.at("playing") == false && s.at("phase") == "idle";
   });
 
-  // Running but not playing: a cross-identity reload retires and rebinds the
-  // engagement; the accepted publication applies at the Bar boundary and must
-  // not disappear.
+  // Running but not playing: selection must preserve the engine's transport
+  // epoch authority. A private increasing counter would hide the Host losing
+  // that authority and make this test pass while the Creator requests epoch 1.
+  const auto before_reload =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternB}}, {}));
+  const auto after_reload =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(after_reload.at("transport_epoch") ==
+             before_reload.at("transport_epoch"));
+  LMDJ_CHECK(after_reload.at("runtime_generation") ==
+             before_reload.at("runtime_generation"));
+  epoch = after_reload.at("transport_epoch").get<std::uint64_t>() + 1;
   LMDJ_CHECK(
       runtime->engine().pattern_telemetry().pending_generation != 0);
   // A Record before the pending publication applies is refused transiently;
@@ -8812,6 +8821,18 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
 
   // Playing: a cross-identity reload is refused honestly and the engagement
   // stays intact.
+  // A late ticket for the pre-selection Stop still names a retained command;
+  // replay must not apply that Stop to the now-playing new Pattern.
+  const auto old_stop_replay = runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(
+          kSequenceSessionId, 815,
+          before_reload.at("transport_epoch").get<std::uint64_t>(),
+          "play_stop"),
+      {});
+  check_success(old_stop_replay);
+  LMDJ_CHECK(old_stop_replay.at("result").at("submit") == "replayed");
+  LMDJ_CHECK(old_stop_replay.at("result").at("status").at("playing") == true);
   check_error(
       runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}),
       "HOST_STATE_INVALID");

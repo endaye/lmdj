@@ -124,6 +124,14 @@ Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admis
 
 中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
 
+Pattern 已停止而 audio engine 仍在运行时，跨 Pattern 的 `snapshot.reload`
+保留当前 transport session、Runtime generation、命令序号及重放记录。
+成功发布后更新 Host 的选中 Pattern；新命令等待待发布的 Pattern 生效，
+下一次 Record 通过已有端口重锚到引擎当前 Pattern。
+Host 从 inspection 的真实序号生成下一条命令，不能因选中另一个 Pattern
+重新从 epoch 1 开始。Audio suspend 或 Project replacement 仍按实际生命周期
+退役运输控制器；重新启用的引擎 generation 才使用新的序号序列。
+
 ## 自动化证据
 
 `scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project（写出契约现为 `lmdj.project.v5`）、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 从 pending overlay 越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交，还覆盖 switch-pending BPM pre-mutation rejection 与 Stop target cancellation。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication、apply-point 精确 switch authority、target 在 cancellation 查询间 apply 的 fail-closed interleaving、延迟越过旧 boundary 的 durable Stop replay，以及 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
