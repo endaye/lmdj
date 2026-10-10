@@ -18,11 +18,11 @@ ROOT = Path(__file__).resolve().parents[2]
 HEADERS = '/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n'
 
 
-def current_pr(github, run, number, pilot):
+def current_pr(github, run, number, enabled):
     require(run['repository']['full_name'] == REPOSITORY and
             run['head_repository']['full_name'] == REPOSITORY, 'foreign build repository')
     require(run['path'] == WORKFLOW and run['event'] == 'pull_request', 'unexpected build workflow/event')
-    require(pilot and run['head_branch'] == pilot, 'build is outside the configured pilot')
+    require(enabled == '1', 'Preview is outside the configured activation')
     require(run['status'] == 'completed', 'build is not complete')
     require(any(p['number'] == number for p in run['pull_requests']), 'run/PR association number mismatch; reconcile the exact build run and PR before retry')
     pr = github.metadata(f'/repos/{REPOSITORY}/pulls/{number}')
@@ -68,7 +68,7 @@ def publish():
     require(os.environ.get('GITHUB_REF') == 'refs/heads/main', 'publisher must use main workflow')
     github = GitHub(os.environ['GITHUB_TOKEN'])
     run_id = int(os.environ['PREVIEW_RUN_ID'])
-    pilot = os.environ.get('PREVIEW_PILOT_BRANCH', '')
+    enabled = os.environ.get('PREVIEW_ENABLED', '')
     evidence = {'build_run_id': run_id, 'status': 'started'}
     output = Path(os.environ['RUNNER_TEMP']) / f"cloudflare-preview-{os.environ['GITHUB_RUN_ID']}.json"
     run, number = None, None
@@ -88,7 +88,7 @@ def publish():
         run = github.metadata(f'/repos/{REPOSITORY}/actions/runs/{run_id}')
         require(run['id'] == run_id and len(run['pull_requests']) == 1, 'ambiguous build identity')
         number = run['pull_requests'][0]['number']
-        if current_pr(github, run, number, pilot) is None:
+        if current_pr(github, run, number, enabled) is None:
             evidence['status'] = 'superseded'
             return
         require(run['conclusion'] == 'success', 'build did not succeed')
@@ -114,7 +114,7 @@ def publish():
                       'workers_dev': False, 'preview_urls': True,
                       'assets': {'directory': str(temp / 'dist'), 'not_found_handling': '404-page'}}
             (temp / 'wrangler.json').write_text(json.dumps(config))
-            if current_pr(github, run, number, pilot) is None:
+            if current_pr(github, run, number, enabled) is None:
                 evidence['status'] = 'superseded'
                 return
             env = {k: v for k, v in os.environ.items() if k != 'GITHUB_TOKEN'}
@@ -137,7 +137,7 @@ def publish():
             smoke_env = {k: v for k, v in os.environ.items() if k not in {'GITHUB_TOKEN', 'CLOUDFLARE_API_TOKEN'}}
             subprocess.run(['node', str(ROOT / 'apps/docs-site/scripts/cloudflare-preview-smoke.mjs'),
                             str(manifest)], env=smoke_env, check=True, timeout=600)
-            if current_pr(github, run, number, pilot) is None:
+            if current_pr(github, run, number, enabled) is None:
                 evidence['status'] = 'superseded'
                 return
             status_attempted = True
@@ -148,7 +148,7 @@ def publish():
         evidence['error_class'] = type(error).__name__
         if run is not None and number is not None and not status_attempted:
             try:
-                if current_pr(github, run, number, pilot) is not None:
+                if current_pr(github, run, number, enabled) is not None:
                     status_attempted = True
                     evidence['status_id'] = post_status(github, run['head_sha'], 'failure')
             except BaseException:
