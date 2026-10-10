@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -26,6 +27,9 @@ class PatternTransportAudioPort {
   virtual std::uint64_t pattern_generation() const = 0;
   virtual std::optional<audio::PatternReplacementAuthority> pending_switch()
       const = 0;
+  virtual bool supports_receipt_bound_opening() const { return false; }
+  virtual std::optional<audio::PatternTransportObservation> observe_transport()
+      const { return std::nullopt; }
   // Mirrors the public port: nullopt keeps the vendored Pattern binding.
   virtual std::optional<foundation::PatternId> current_pattern() const {
     return std::nullopt;
@@ -63,7 +67,8 @@ class PatternTransportCoordinator {
       PatternTransportAudioPort& audio, project_io::SequenceJournal& journals,
       project_io::ProjectStore& store, std::filesystem::path bundle,
       foundation::SequenceSessionId session, foundation::ProjectId project,
-      foundation::PatternId pattern, std::uint64_t runtime_generation);
+      foundation::PatternId pattern, std::uint64_t runtime_generation,
+      PatternAdmissionOwner::Clock clock = {});
 
   PatternTransportSubmit request(const PatternTransportRequest& request);
   bool retains_command_id(const foundation::CommandId& command_id) const;
@@ -103,10 +108,14 @@ class PatternTransportCoordinator {
   // withdraw it (already claimed for its apply point, or no capability).
   bool withdraw_unlanded_overlay(
       const audio::PatternReplacementAuthority& authority);
+  foundation::Result<void> prepare_receipt_bound_opening(
+      const audio::PatternTransportReceipt& receipt,
+      const PatternTransportRequest& request);
 
   PatternTransportAudioPort& audio_;
   project_io::SequenceJournal& journals_;
   std::filesystem::path bundle_;
+  PatternAdmissionOwner::Clock clock_;
   PatternAdmissionOwner owner_;
   project_io::ProjectStore& store_;
   foundation::SequenceSessionId session_;
@@ -119,6 +128,11 @@ class PatternTransportCoordinator {
   std::uint64_t origin_frame_{};
   std::optional<PatternTransportRequest> pending_;
   std::optional<PatternTransportRequest> last_;
+  struct ReceiptBoundOpening {
+    std::uint64_t revision{};
+    std::chrono::steady_clock::time_point started_at;
+  };
+  std::optional<ReceiptBoundOpening> receipt_bound_opening_;
   std::map<foundation::CommandId, PatternTransportRequest> retained_;
   PatternTransportPhase phase_{PatternTransportPhase::idle};
   std::optional<foundation::Error> error_;

@@ -60,6 +60,11 @@ class PatternAdmissionOwner {
 
   foundation::Result<void> prepare(
       const project_io::SequenceAdmissionPreparation& preparation);
+  // Receipt-bound opening starts its budget before audio submission. An IO
+  // retry must preserve this start, including an already durable prepare.
+  foundation::Result<void> prepare(
+      const project_io::SequenceAdmissionPreparation& preparation,
+      std::chrono::steady_clock::time_point started_at);
   foundation::Result<void> activate(
       const project_io::SequenceAdmissionFence& fence);
   foundation::Result<void> cutoff(

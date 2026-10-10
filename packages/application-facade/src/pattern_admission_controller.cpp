@@ -384,6 +384,16 @@ foundation::Result<void> PatternAdmissionOwner::activate(
   return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
 }
 
+foundation::Result<void> PatternAdmissionOwner::prepare(
+    const project_io::SequenceAdmissionPreparation& preparation,
+    std::chrono::steady_clock::time_point started_at) {
+  const auto prepared = journals_.prepare_admission(bundle_, session_, preparation);
+  if (!prepared.has_value()) return prepared;
+  identity_ = preparation.identity;
+  prepared_at_ = started_at;
+  return foundation::Result<void>::success();
+}
+
 foundation::Result<void> PatternAdmissionOwner::cutoff(
     const project_io::SequenceAdmissionFence& fence) {
   if (!identity_) return owner_error("admission_identity_missing");

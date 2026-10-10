@@ -8,6 +8,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
@@ -25,6 +26,9 @@
 #include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 
+#include "packages/application-facade/src/pattern_admission_controller.hpp"
+#include "packages/application-facade/src/pattern_transport_controller.hpp"
+#include "packages/application-facade/internal/lmdj/facade/pattern_transport_controller_factory.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -135,13 +139,19 @@ struct EnginePort final : PatternTransportAudioPort {
   }
   lmdj::audio::PatternTransportSubmit submit(
       const lmdj::audio::PatternTransportCommand& command) override {
-    return engine.submit_pattern_transport(command);
+    ++submit_calls;
+    if (before_submit) before_submit();
+    const auto result = engine.submit_pattern_transport(command);
+    if (result == lmdj::audio::PatternTransportSubmit::accepted) ++accepted_submits;
+    return result;
   }
   std::optional<lmdj::audio::PatternTransportReceipt> inspect(
       std::uint64_t generation, std::uint64_t epoch) const override {
     return engine.inspect_pattern_transport_receipt(generation, epoch);
   }
   bool acknowledge(std::uint64_t generation, std::uint64_t epoch) override {
+    ++acknowledge_calls;
+    if (refuse_acknowledge) return false;
     return engine.acknowledge_pattern_transport_receipt(generation, epoch);
   }
   std::uint64_t pattern_generation() const override {
@@ -174,6 +184,19 @@ struct EnginePort final : PatternTransportAudioPort {
     return lmdj::audio::PatternReplacementAuthority{
         telemetry.pending_generation, *pending,
         telemetry.pending_activation_frame};
+  }
+  bool receipt_bound_capability = false;
+  bool unavailable_observation = false;
+  bool refuse_acknowledge = false;
+  unsigned submit_calls{}, accepted_submits{}, acknowledge_calls{};
+  std::function<void()> before_submit;
+  bool supports_receipt_bound_opening() const override {
+    return receipt_bound_capability;
+  }
+  std::optional<lmdj::audio::PatternTransportObservation> observe_transport()
+      const override {
+    return unavailable_observation ? std::nullopt
+                                  : engine.pattern_transport_observation();
   }
   // Retarget information for #1403: when false the port reports no current
   // Pattern (the defaulted-port semantics) and the coordinator keeps its
@@ -242,6 +265,84 @@ struct EnginePort final : PatternTransportAudioPort {
   }
 };
 
+// Real storage delegation with one bounded failure at a durable Journal step.
+// Unknown responses write the real bytes first; retries exercise the codec,
+// not an invented success receipt or a fake in-memory Journal.
+class JournalFaultStorage final : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner{
+      lmdj::project_io::make_default_project_storage_platform()};
+  bool fail_begin = false, uncertain_begin = false, uncertain_append = false;
+  std::string fail_append_kind;
+  unsigned journal_creates{}, journal_appends{};
+  std::function<void()> before_create;
+  lmdj::foundation::Result<void> failure() const {
+    return lmdj::foundation::Result<void>::failure(
+        {lmdj::foundation::ErrorCode::io_error, "injected Journal IO failure"});
+  }
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& p) override { return inner->acquire_writer(p); }
+  lmdj::foundation::Result<void> ensure_directory(const std::filesystem::path& p) override {
+    return inner->ensure_directory(p);
+  }
+  lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override {
+    return inner->exists(p);
+  }
+  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override {
+    return inner->byte_length(p);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& p) const override { return inner->read_complete(p); }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& p, std::span<const std::byte> bytes) override {
+    if (p.filename() == "sequence.jsonl") {
+      ++journal_creates;
+      if (before_create) before_create();
+      if (fail_begin) { fail_begin = false; return failure(); }
+      if (uncertain_begin) {
+        uncertain_begin = false;
+        const auto written = inner->create_immutable(p, bytes);
+        if (!written.has_value()) return written;
+        return failure();
+      }
+    }
+    return inner->create_immutable(p, bytes);
+  }
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& p, std::span<const std::byte> bytes) override {
+    return inner->replace_complete(p, bytes);
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& p, std::uint64_t prefix,
+      std::span<const std::byte> bytes) override {
+    if (p.filename() == "sequence.jsonl") {
+      if (!bytes.empty()) ++journal_appends;
+      const std::string text(bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      if (!fail_append_kind.empty() && text.find(fail_append_kind) != std::string::npos) {
+        fail_append_kind.clear();
+        if (uncertain_append) {
+          const auto written = inner->append_durable(p, prefix, bytes);
+          if (!written.has_value()) return written;
+        }
+        return failure();
+      }
+    }
+    return inner->append_durable(p, prefix, bytes);
+  }
+  lmdj::foundation::Result<void> remove(const std::filesystem::path& p) override {
+    return inner->remove(p);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& p) const override { return inner->list_names(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& p) const override { return inner->list_directories(p); }
+  lmdj::foundation::Result<void> remove_tree(const std::filesystem::path& p) override {
+    return inner->remove_tree(p);
+  }
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& p) const override { return inner->validate_managed_tree(p); }
+};
+
 struct Fixture {
   TempDirectory directory;
   std::filesystem::path bundle;
@@ -250,7 +351,8 @@ struct Fixture {
   EnginePort audio;
   std::unique_ptr<PatternTransportController> controller;
 
-  Fixture(std::initializer_list<PatternId> extra_patterns = {})
+  Fixture(std::initializer_list<PatternId> extra_patterns = {},
+          std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> platform = {})
       : bundle(directory.path() / "project.lmdj") {
     auto created = lmdj::domain::create_project(ProjectId{kProject}, 120);
     LMDJ_CHECK(created.has_value());
@@ -259,12 +361,14 @@ struct Fixture {
     for (const auto& extra : extra_patterns) {
       state.patterns.emplace(extra, lmdj::domain::Pattern{extra, 1, {}});
     }
-    lmdj::project_io::ProjectStore store;
+    lmdj::project_io::ProjectStore store(platform);
     LMDJ_CHECK(store.create(bundle, state).has_value());
-    controller = lmdj::facade::make_pattern_transport_controller(
-        audio,
-        PatternTransportControllerConfig{
-            bundle, session, ProjectId{kProject}, pattern, 7});
+    const PatternTransportControllerConfig config{
+        bundle, session, ProjectId{kProject}, pattern, 7};
+    controller = platform
+        ? lmdj::facade::detail::PatternTransportControllerInternalFactory::make(
+              audio, config, std::move(platform))
+        : lmdj::facade::make_pattern_transport_controller(audio, config);
     LMDJ_CHECK(controller != nullptr);
   }
 
@@ -306,6 +410,452 @@ struct Fixture {
     return journal.value();
   }
 };
+
+constexpr auto kPendingPatternB = "00000000-0000-4000-8000-00000000000b";
+constexpr auto kPendingPatternC = "00000000-0000-4000-8000-00000000000c";
+
+void queue_claimed_b_and_queued_c(Fixture& f) {
+  auto b = PreparedPatternView::from_snapshot(pattern_snapshot(kPendingPatternB));
+  const auto pb = f.audio.engine.publish_pattern_view(std::move(b.value()), 96'000);
+  LMDJ_CHECK(pb.result == PatternPublishResult::accepted && pb.activation_frame == 96'000);
+  f.audio.render(1);
+  auto c = PreparedPatternView::from_snapshot(pattern_snapshot(kPendingPatternC));
+  const auto pc = f.audio.engine.publish_pattern_view(std::move(c.value()), 192'000,
+      lmdj::audio::PatternReplacementAuthority{
+          pb.generation, PatternId{kPendingPatternB}, pb.activation_frame});
+  LMDJ_CHECK(pc.result == PatternPublishResult::accepted && pc.activation_frame == 192'000);
+}
+
+void capable_stop_cancels_both_pending_views_and_does_not_open_a_journal() {
+  Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}});
+  f.audio.receipt_bound_capability = true;
+  f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+  queue_claimed_b_and_queued_c(f);
+  const auto stop = f.make(7, 2, PatternTransportIntent::play_stop);
+  LMDJ_CHECK(f.controller->request(stop) == PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  const auto receipt = f.audio.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(receipt && receipt->switch_outcomes[0] && receipt->switch_outcomes[1]);
+  LMDJ_CHECK(f.controller->continue_operation().has_value());
+  LMDJ_CHECK(!f.controller->inspect().playing && !f.controller->inspect().recording);
+  LMDJ_CHECK(!f.journal_exists());
+  f.audio.render(192'000);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == f.pattern);
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().canceled_publications == 2);
+  LMDJ_CHECK(f.audio.accepted_submits == 2 && f.audio.acknowledge_calls == 2);
+  LMDJ_CHECK(f.controller->request(stop) == PatternTransportSubmit::replayed);
+  LMDJ_CHECK(f.audio.accepted_submits == 2);
+}
+
+void receipt_bound_record_crossing_an_apply_records_and_persists_the_actual_pattern() {
+  for (const bool both_applied : {false, true}) {
+    Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}});
+    f.audio.receipt_bound_capability = true;
+    f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+    queue_claimed_b_and_queued_c(f);
+    bool crossed = false;
+    f.audio.before_submit = [&] {
+      if (!crossed) {
+        crossed = true;
+        f.audio.render(both_applied ? 192'000 : 96'000);
+      }
+    };
+    const auto record = f.make(7, 2, PatternTransportIntent::record);
+    LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::accepted);
+    LMDJ_CHECK(!f.journal_exists() && !f.controller->inspect().recording);
+    f.audio.render(1);
+    const auto target = PatternId{both_applied ? kPendingPatternC : kPendingPatternB};
+    const auto receipt = f.audio.engine.inspect_pattern_transport_receipt(7, 2);
+    LMDJ_CHECK(receipt && receipt->pattern_id == target);
+    LMDJ_CHECK(f.controller->continue_operation().has_value());
+    const auto journal = f.read_journal();
+    LMDJ_CHECK(journal.pattern_id == target && journal.admission && journal.admission->admission_fence);
+    LMDJ_CHECK(journal.admission->preparation.publication_generation == receipt->pattern_generation);
+    LMDJ_CHECK(journal.admission->admission_fence->pattern_id == target);
+    LMDJ_CHECK(journal.admission->admission_fence->origin_frame == receipt->origin_frame);
+    LMDJ_CHECK(journal.admission->admission_fence->switch_outcome ==
+        lmdj::project_io::SequenceSwitchOutcome::none);
+    LMDJ_CHECK(journal.admission->preparation.first_watermark == 10);
+    LMDJ_CHECK(journal.admission && journal.admission->admission_fence);
+    LMDJ_CHECK(journal.admission->preparation.fence_timeout_ms == 5000);
+    LMDJ_CHECK(f.controller->inspect().recording && !f.controller->inspect().error);
+    LMDJ_CHECK(f.controller->admit({10, receipt->effective_frame, {0, 1}, true, 90, 10})
+        .value() == lmdj::facade::PatternAdmissionAdmit::retained);
+    LMDJ_CHECK(f.controller->admit({11, receipt->effective_frame + 128, {0, 1}, false, 0, 10})
+        .value() == lmdj::facade::PatternAdmissionAdmit::retained);
+    f.audio.before_submit = {};
+    f.settle(f.make(8, 3, PatternTransportIntent::record));
+    LMDJ_CHECK(!f.journal_exists() && !f.controller->inspect().recording);
+    lmdj::project_io::ProjectStore store;
+    const auto reopened = store.load(f.bundle);
+    LMDJ_CHECK(reopened.has_value() && reopened.value().revision == 1);
+    LMDJ_CHECK(reopened.value().patterns.at(target).events.size() == 1);
+    LMDJ_CHECK(reopened.value().patterns.at(target).events[0].velocity == 90);
+    LMDJ_CHECK(reopened.value().patterns.at(f.pattern).events.empty());
+    const auto other = PatternId{both_applied ? kPendingPatternB : kPendingPatternC};
+    LMDJ_CHECK(reopened.value().patterns.at(other).events.empty());
+    LMDJ_CHECK(f.audio.accepted_submits == 3);
+  }
+}
+
+void capable_record_known_revision_or_foreign_owner_conflict_submits_nothing() {
+  for (const bool foreign_owner : {false, true}) {
+    auto platform = std::make_shared<JournalFaultStorage>();
+    Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}}, platform);
+    f.audio.receipt_bound_capability = true;
+    f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+    // Both generations keep the current Pattern identity, so an unrelated
+    // cross-target guard cannot hide a missing revision or owner preflight.
+    auto first_view = PreparedPatternView::from_snapshot(pattern_snapshot());
+    const auto first = f.audio.engine.publish_pattern_view(std::move(first_view.value()), 96'000);
+    LMDJ_CHECK(first.result == PatternPublishResult::accepted);
+    f.audio.render(1);
+    auto second_view = PreparedPatternView::from_snapshot(pattern_snapshot());
+    LMDJ_CHECK(f.audio.engine.publish_pattern_view(std::move(second_view.value()), 192'000,
+        lmdj::audio::PatternReplacementAuthority{first.generation, f.pattern, first.activation_frame}).result ==
+        PatternPublishResult::accepted);
+    auto request = f.make(7, 2, PatternTransportIntent::record);
+    if (foreign_owner) {
+      lmdj::project_io::ProjectStore store(platform);
+      lmdj::project_io::SequenceJournal journals(platform);
+      const auto project = store.load(f.bundle);
+      LMDJ_CHECK(journals.begin(f.bundle, SequenceSessionId{uuid(99)}, f.pattern, 1,
+          lmdj::project_io::sequence_pattern_fingerprint(project.value().patterns.at(f.pattern)),
+          project.value().revision).has_value());
+    } else request.expected_revision = 1;
+    const auto before_journal = foreign_owner
+        ? std::optional{f.read_journal()} : std::nullopt;
+    const auto before_creates = platform->journal_creates;
+    const auto before_appends = platform->journal_appends;
+    const auto before_submits = f.audio.submit_calls;
+    LMDJ_CHECK(f.controller->request(request) == PatternTransportSubmit::refused);
+    LMDJ_CHECK(f.audio.submit_calls == before_submits);
+    LMDJ_CHECK(platform->journal_creates == before_creates && platform->journal_appends == before_appends);
+    LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_publications == 2);
+    LMDJ_CHECK(!f.controller->inspect().recording);
+    if (foreign_owner) LMDJ_CHECK(f.read_journal() == *before_journal);
+    else LMDJ_CHECK(!f.journal_exists());
+  }
+}
+
+void receipt_bound_begin_failure_keeps_the_real_cutoff_until_same_command_retry() {
+  auto platform = std::make_shared<JournalFaultStorage>();
+  Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}}, platform);
+  f.audio.receipt_bound_capability = true;
+  f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+  queue_claimed_b_and_queued_c(f);
+  const auto record = f.make(7, 2, PatternTransportIntent::record);
+  LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::accepted);
+  platform->fail_begin = true;
+  f.audio.render(1);
+  const auto receipt = f.audio.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(receipt && receipt->switch_outcomes[0] && receipt->switch_outcomes[1]);
+  LMDJ_CHECK(!f.controller->continue_operation().has_value());
+  const auto failed = f.controller->inspect();
+  LMDJ_CHECK(failed.phase == PatternTransportPhase::awaiting_audio && failed.error);
+  LMDJ_CHECK(failed.error->code == lmdj::foundation::ErrorCode::io_error);
+  LMDJ_CHECK(!failed.recording && failed.command_id == record.command_id);
+  LMDJ_CHECK(f.audio.accepted_submits == 2 && f.audio.acknowledge_calls == 1);
+  LMDJ_CHECK(!f.journal_exists());
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().canceled_publications == 2);
+  LMDJ_CHECK(f.audio.engine.inspect_pattern_transport_receipt(7, 2)->effective_frame == receipt->effective_frame);
+  LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::replayed);
+  f.audio.render(192'000);
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == f.pattern);
+  LMDJ_CHECK(f.controller->continue_operation().has_value());
+  LMDJ_CHECK(f.controller->inspect().recording && !f.controller->inspect().error);
+  LMDJ_CHECK(f.read_journal().admission->admission_fence->effective_frame == receipt->effective_frame);
+  LMDJ_CHECK(f.audio.accepted_submits == 2 && f.audio.acknowledge_calls == 2);
+}
+
+void receipt_bound_unknown_durable_writes_replay_without_duplicate_bytes() {
+  for (const std::string step : {"begin", "admission-prepare", "admission-fence"}) {
+    auto platform = std::make_shared<JournalFaultStorage>();
+    Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}}, platform);
+    f.audio.receipt_bound_capability = true;
+    f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+    queue_claimed_b_and_queued_c(f);
+    const auto record = f.make(7, 2, PatternTransportIntent::record);
+    LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::accepted);
+    if (step == "begin") platform->uncertain_begin = true;
+    else {
+      platform->fail_append_kind = step;
+      platform->uncertain_append = true;
+    }
+    f.audio.render(1);
+    LMDJ_CHECK(!f.controller->continue_operation().has_value());
+    const auto partial = f.read_journal();
+    LMDJ_CHECK(partial.session_id == f.session && partial.pattern_id == f.pattern);
+    LMDJ_CHECK(!f.controller->inspect().recording && f.audio.acknowledge_calls == 1);
+    LMDJ_CHECK(f.controller->continue_operation().has_value());
+    const auto complete = f.read_journal();
+    LMDJ_CHECK(complete.admission && complete.admission->admission_fence);
+    LMDJ_CHECK(complete.admission->preparation.identity.operation_id == record.command_id);
+    LMDJ_CHECK(platform->journal_creates == 1 && platform->journal_appends == 2);
+    LMDJ_CHECK(f.audio.accepted_submits == 2 && f.audio.acknowledge_calls == 2);
+    LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::replayed);
+    LMDJ_CHECK(platform->journal_creates == 1 && platform->journal_appends == 2);
+  }
+}
+
+void capable_record_unavailable_observation_is_busy_without_audio_or_journal_effects() {
+  Fixture f;
+  f.audio.receipt_bound_capability = true;
+  f.audio.unavailable_observation = true;
+  LMDJ_CHECK(f.controller->request(f.make(6, 1, PatternTransportIntent::record)) == PatternTransportSubmit::busy);
+  LMDJ_CHECK(f.audio.submit_calls == 0 && !f.journal_exists());
+  f.audio.unavailable_observation = false;
+  f.settle(f.make(6, 1, PatternTransportIntent::record));
+  LMDJ_CHECK(f.controller->inspect().recording);
+}
+
+void receipt_bound_opening_cannot_acknowledge_before_durable_admission() {
+  auto platform = std::make_shared<JournalFaultStorage>();
+  Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}}, platform);
+  f.audio.receipt_bound_capability = true;
+  f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+  queue_claimed_b_and_queued_c(f);
+  const auto record = f.make(7, 2, PatternTransportIntent::record);
+  LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::accepted);
+  platform->before_create = [&] {
+    LMDJ_CHECK(f.audio.acknowledge_calls == 1);
+    LMDJ_CHECK(!f.controller->inspect().recording);
+    LMDJ_CHECK(f.audio.engine.inspect_pattern_transport_receipt(7, 2));
+  };
+  f.audio.render(1);
+  LMDJ_CHECK(f.controller->continue_operation().has_value());
+  LMDJ_CHECK(f.read_journal().admission->admission_fence);
+  LMDJ_CHECK(f.audio.acknowledge_calls == 2 && f.controller->inspect().recording);
+}
+
+void receipt_bound_ack_failure_keeps_recording_false_and_the_durable_journal_receipt() {
+  Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}});
+  f.audio.receipt_bound_capability = true;
+  f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+  queue_claimed_b_and_queued_c(f);
+  const auto record = f.make(7, 2, PatternTransportIntent::record);
+  LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  f.audio.refuse_acknowledge = true;
+  LMDJ_CHECK(!f.controller->continue_operation().has_value());
+  LMDJ_CHECK(f.controller->inspect().phase == PatternTransportPhase::error);
+  LMDJ_CHECK(!f.controller->inspect().recording && f.controller->inspect().command_id == record.command_id);
+  const auto journal = f.read_journal();
+  LMDJ_CHECK(journal.admission && journal.admission->admission_fence);
+  LMDJ_CHECK(journal.admission->preparation.identity.operation_id == record.command_id);
+  LMDJ_CHECK(f.audio.engine.inspect_pattern_transport_receipt(7, 2));
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().canceled_publications == 2);
+}
+
+void receipt_bound_owner_retry_preserves_the_original_deadline_and_explicit_override() {
+  using namespace lmdj;
+  for (const std::uint32_t timeout : {5000U, 23U}) {
+    Fixture f;
+    project_io::ProjectStore store;
+    project_io::SequenceJournal journals;
+    const auto state = store.load(f.bundle);
+    LMDJ_CHECK(journals.begin(f.bundle, f.session, f.pattern, 1,
+        project_io::sequence_pattern_fingerprint(state.value().patterns.at(f.pattern)), 0).has_value());
+    std::chrono::steady_clock::time_point now{};
+    const auto start = now;
+    facade::detail::PatternAdmissionOwner owner(journals, f.bundle, f.session, [&] { return now; });
+    project_io::SequenceAdmissionPreparation preparation{
+        {CommandId{uuid(7)}, 7, 2}, ProjectId{kProject}, f.pattern, 1, 10};
+    LMDJ_CHECK(preparation.fence_timeout_ms == 5000);
+    preparation.fence_timeout_ms = timeout;
+    LMDJ_CHECK(owner.prepare(preparation, start).has_value());
+    now += std::chrono::milliseconds{timeout - 1};
+    LMDJ_CHECK(owner.prepare(preparation, start).has_value());
+    const project_io::SequenceAdmissionFence fence{
+        project_io::SequenceFenceKind::admission, CommandId{uuid(7)}, 2,
+        100, 0, f.pattern, 1, 120, true, {}, project_io::SequenceSwitchOutcome::none, {}};
+    LMDJ_CHECK(owner.activate(fence).has_value());
+    LMDJ_CHECK(owner.admit({10, 100, {0, 1}, project_io::SequenceCandidateKind::press, 90, 10})
+        .value() == facade::detail::PatternAdmissionAdmit::retained);
+    now += std::chrono::milliseconds{1};
+    LMDJ_CHECK(owner.admit({11, 101, {0, 1}, project_io::SequenceCandidateKind::release, 0, 10})
+        .value() == facade::detail::PatternAdmissionAdmit::live_only);
+    const auto expired = journals.read_active(f.bundle);
+    LMDJ_CHECK(expired.value().admission->closure->reason == project_io::SequenceAdmissionCloseReason::deadline);
+    LMDJ_CHECK(expired.value().admission->candidates.size() == 1);
+  }
+}
+
+void receipt_bound_late_revision_or_foreign_journal_conflict_retains_receipt_and_owner() {
+  for (const unsigned conflict : {0U, 1U, 2U}) {
+    auto platform = std::make_shared<JournalFaultStorage>();
+    Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}}, platform);
+    f.audio.receipt_bound_capability = true;
+    f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+    queue_claimed_b_and_queued_c(f);
+    auto record = f.make(7, 2, PatternTransportIntent::record);
+    record.expected_revision = 0;
+    LMDJ_CHECK(f.controller->request(record) == PatternTransportSubmit::accepted);
+    f.audio.render(1);
+    const auto receipt = f.audio.engine.inspect_pattern_transport_receipt(7, 2);
+    lmdj::project_io::ProjectStore store(platform);
+    if (conflict == 0) {
+      // A real unrelated authoring commit occurs after read-only preflight.
+      LMDJ_CHECK(store.execute(f.bundle, lmdj::domain::EditPatternEvents{
+          {CommandId{uuid(90)}, 0}, PatternId{kPendingPatternB}, {},
+          {{{0, 1}, 0, 120, 80}}}).has_value());
+    } else {
+      lmdj::project_io::SequenceJournal journals(platform);
+      const auto project = store.load(f.bundle);
+      const auto target = conflict == 1 ? f.pattern : PatternId{kPendingPatternB};
+      const auto owner = conflict == 1 ? SequenceSessionId{uuid(99)} : f.session;
+      LMDJ_CHECK(journals.begin(f.bundle, owner, target, 1,
+          lmdj::project_io::sequence_pattern_fingerprint(project.value().patterns.at(target)), 0).has_value());
+    }
+    const auto before_creates = platform->journal_creates;
+    const auto before_appends = platform->journal_appends;
+    LMDJ_CHECK(!f.controller->continue_operation().has_value());
+    const auto status = f.controller->inspect();
+    LMDJ_CHECK(status.phase == PatternTransportPhase::error && !status.recording && status.error);
+    LMDJ_CHECK(status.command_id == record.command_id);
+    LMDJ_CHECK(f.audio.acknowledge_calls == 1 && f.audio.accepted_submits == 2);
+    LMDJ_CHECK(platform->journal_creates == before_creates && platform->journal_appends == before_appends);
+    LMDJ_CHECK(f.audio.engine.inspect_pattern_transport_receipt(7, 2)->effective_frame == receipt->effective_frame);
+    LMDJ_CHECK(f.audio.engine.pattern_telemetry().canceled_publications == 2);
+    if (conflict == 0) {
+      LMDJ_CHECK(status.error->code == lmdj::foundation::ErrorCode::revision_conflict);
+      LMDJ_CHECK(!f.journal_exists() && store.load(f.bundle).value().revision == 1);
+    } else {
+      const auto journal = f.read_journal();
+      LMDJ_CHECK(!journal.admission);
+      LMDJ_CHECK(journal.session_id == (conflict == 1 ? SequenceSessionId{uuid(99)} : f.session));
+      LMDJ_CHECK(journal.pattern_id == (conflict == 1 ? f.pattern : PatternId{kPendingPatternB}));
+    }
+  }
+}
+
+void preexisting_same_owner_journal_with_wrong_bars_or_fingerprint_refuses_before_cutoff() {
+  for (const bool wrong_bars : {false, true}) {
+    auto platform = std::make_shared<JournalFaultStorage>();
+    Fixture f({}, platform);
+    f.audio.receipt_bound_capability = true;
+    f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+    auto view = PreparedPatternView::from_snapshot(pattern_snapshot());
+    LMDJ_CHECK(f.audio.engine.publish_pattern_switch_view(std::move(view.value())).result == PatternPublishResult::accepted);
+    f.audio.render(1);
+    lmdj::project_io::ProjectStore store(platform);
+    lmdj::project_io::SequenceJournal journals(platform);
+    const auto project = store.load(f.bundle);
+    const auto fingerprint = wrong_bars
+        ? lmdj::project_io::sequence_pattern_fingerprint(project.value().patterns.at(f.pattern))
+        : std::string(64, '0');
+    LMDJ_CHECK(journals.begin(f.bundle, f.session, f.pattern, wrong_bars ? 2 : 1, fingerprint, 0).has_value());
+    const auto submits = f.audio.submit_calls;
+    const auto creates = platform->journal_creates;
+    LMDJ_CHECK(f.controller->request(f.make(7, 2, PatternTransportIntent::record)) == PatternTransportSubmit::refused);
+    LMDJ_CHECK(f.audio.submit_calls == submits && f.audio.acknowledge_calls == 1);
+    LMDJ_CHECK(platform->journal_creates == creates && platform->journal_appends == 0);
+    LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_publications == 1);
+    LMDJ_CHECK(!f.read_journal().admission);
+  }
+}
+
+void receipt_bound_preflight_preserves_existing_prefix_and_accepts_only_a_matching_empty_header() {
+  for (const unsigned prefix : {0U, 1U, 2U}) {
+    auto platform = std::make_shared<JournalFaultStorage>();
+    Fixture f({}, platform);
+    f.audio.receipt_bound_capability = true;
+    f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+    auto view = PreparedPatternView::from_snapshot(pattern_snapshot());
+    LMDJ_CHECK(f.audio.engine.publish_pattern_view(std::move(view.value()), 96'000).result == PatternPublishResult::accepted);
+    f.audio.render(1);
+    lmdj::project_io::ProjectStore store(platform);
+    lmdj::project_io::SequenceJournal journals(platform);
+    const auto state = store.load(f.bundle);
+    LMDJ_CHECK(journals.begin(f.bundle, f.session, f.pattern, 1,
+        lmdj::project_io::sequence_pattern_fingerprint(state.value().patterns.at(f.pattern)), 0,
+        prefix == 2 ? std::optional{PadSlotId{0, 1}} : std::nullopt).has_value());
+    if (prefix == 1) {
+      const std::array events{lmdj::domain::PatternEvent{{0, 1}, 0, 120, 90}};
+      LMDJ_CHECK(journals.append_tail(f.bundle, f.session, f.pattern, 0, 1, events).has_value());
+    }
+    const auto before = journals.read_active(f.bundle).value();
+    const auto creates = platform->journal_creates;
+    const auto appends = platform->journal_appends;
+    const auto submits = f.audio.submit_calls;
+    const auto request = f.make(7, 2, PatternTransportIntent::record);
+    if (prefix == 0) {
+      LMDJ_CHECK(f.controller->request(request) == PatternTransportSubmit::accepted);
+      LMDJ_CHECK(journals.read_active(f.bundle).value() == before);
+      f.audio.render(1);
+      LMDJ_CHECK(f.controller->continue_operation().has_value());
+      LMDJ_CHECK(f.controller->inspect().recording);
+      LMDJ_CHECK(platform->journal_creates == creates && platform->journal_appends == appends + 2);
+    } else {
+      LMDJ_CHECK(f.controller->request(request) == PatternTransportSubmit::refused);
+      LMDJ_CHECK(f.audio.submit_calls == submits && f.audio.acknowledge_calls == 1);
+      LMDJ_CHECK(platform->journal_creates == creates && platform->journal_appends == appends);
+      LMDJ_CHECK(journals.read_active(f.bundle).value() == before);
+      LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_publications == 1);
+      LMDJ_CHECK(!f.controller->inspect().recording);
+    }
+  }
+}
+
+struct InternalEnginePort final : lmdj::facade::detail::PatternTransportAudioPort {
+  EnginePort& port;
+  explicit InternalEnginePort(EnginePort& value) : port(value) {}
+  lmdj::audio::PatternTransportSubmit submit(const lmdj::audio::PatternTransportCommand& c) override {
+    return port.submit(c);
+  }
+  std::optional<lmdj::audio::PatternTransportReceipt> inspect(std::uint64_t g, std::uint64_t e) const override {
+    return port.inspect(g, e);
+  }
+  bool acknowledge(std::uint64_t g, std::uint64_t e) override { return port.acknowledge(g, e); }
+  std::uint64_t pattern_generation() const override { return port.pattern_generation(); }
+  std::optional<lmdj::audio::PatternReplacementAuthority> pending_switch() const override { return port.pending_switch(); }
+  bool supports_receipt_bound_opening() const override { return port.supports_receipt_bound_opening(); }
+  std::optional<lmdj::audio::PatternTransportObservation> observe_transport() const override { return port.observe_transport(); }
+};
+
+void actual_request_receipt_delay_and_unknown_prepare_retry_share_one_deadline_clock() {
+  using namespace lmdj;
+  for (const bool already_expired : {false, true}) {
+    auto platform = std::make_shared<JournalFaultStorage>();
+    Fixture f({PatternId{kPendingPatternB}, PatternId{kPendingPatternC}}, platform);
+    f.audio.receipt_bound_capability = true;
+    InternalEnginePort audio(f.audio);
+    project_io::ProjectStore store(platform);
+    project_io::SequenceJournal journals(platform);
+    std::chrono::steady_clock::time_point now{};
+    facade::detail::PatternTransportCoordinator coordinator(audio, journals, store,
+        f.bundle, f.session, ProjectId{kProject}, f.pattern, 7, [&] { return now; });
+    LMDJ_CHECK(coordinator.request(f.make(6, 1, PatternTransportIntent::play_stop)) == PatternTransportSubmit::accepted);
+    f.audio.render(1);
+    LMDJ_CHECK(coordinator.continue_operation().has_value());
+    queue_claimed_b_and_queued_c(f);
+    const auto record = f.make(7, 2, PatternTransportIntent::record);
+    LMDJ_CHECK(coordinator.request(record) == PatternTransportSubmit::accepted);
+    f.audio.render(1);
+    now += std::chrono::milliseconds{4998};
+    platform->fail_append_kind = "admission-prepare";
+    platform->uncertain_append = true;
+    LMDJ_CHECK(!coordinator.continue_operation().has_value());
+    LMDJ_CHECK(!coordinator.inspect().recording && f.audio.acknowledge_calls == 1);
+    now += std::chrono::milliseconds{already_expired ? 1002 : 1};
+    LMDJ_CHECK(coordinator.continue_operation().has_value());
+    const auto journal = f.read_journal();
+    LMDJ_CHECK(journal.admission->preparation.fence_timeout_ms == 5000);
+    const auto frame = journal.admission->admission_fence->effective_frame;
+    const auto press = coordinator.admit({10, frame, {0, 1}, project_io::SequenceCandidateKind::press, 90, 10});
+    LMDJ_CHECK(press.has_value());
+    LMDJ_CHECK(press.value() == (already_expired ? facade::detail::PatternAdmissionAdmit::live_only
+                                             : facade::detail::PatternAdmissionAdmit::retained));
+    if (!already_expired) {
+      now += std::chrono::milliseconds{1};
+      LMDJ_CHECK(coordinator.admit({11, frame + 1, {0, 1}, project_io::SequenceCandidateKind::release, 0, 10})
+          .value() == facade::detail::PatternAdmissionAdmit::live_only);
+    }
+    LMDJ_CHECK(f.read_journal().admission->closure->reason == project_io::SequenceAdmissionCloseReason::deadline);
+    LMDJ_CHECK(platform->journal_creates == 1 && platform->journal_appends == 3 + (already_expired ? 0 : 1));
+    LMDJ_CHECK(f.audio.accepted_submits == 2 && f.audio.acknowledge_calls == 2);
+  }
+}
 
 void stopped_record_plays_and_opens_admission() {
   Fixture f;
@@ -1354,7 +1904,20 @@ void superseded_overlay_is_dropped_and_the_close_settles() {
 
 int main() {
   try {
-        stopped_record_plays_and_opens_admission();
+    capable_stop_cancels_both_pending_views_and_does_not_open_a_journal();
+    receipt_bound_record_crossing_an_apply_records_and_persists_the_actual_pattern();
+    capable_record_known_revision_or_foreign_owner_conflict_submits_nothing();
+    receipt_bound_begin_failure_keeps_the_real_cutoff_until_same_command_retry();
+    receipt_bound_unknown_durable_writes_replay_without_duplicate_bytes();
+    capable_record_unavailable_observation_is_busy_without_audio_or_journal_effects();
+    receipt_bound_opening_cannot_acknowledge_before_durable_admission();
+    receipt_bound_ack_failure_keeps_recording_false_and_the_durable_journal_receipt();
+    receipt_bound_late_revision_or_foreign_journal_conflict_retains_receipt_and_owner();
+    preexisting_same_owner_journal_with_wrong_bars_or_fingerprint_refuses_before_cutoff();
+    receipt_bound_preflight_preserves_existing_prefix_and_accepts_only_a_matching_empty_header();
+    actual_request_receipt_delay_and_unknown_prepare_retry_share_one_deadline_clock();
+    receipt_bound_owner_retry_preserves_the_original_deadline_and_explicit_override();
+    stopped_record_plays_and_opens_admission();
     recording_record_off_closes_and_keeps_playing();
     playing_play_stops_without_a_journal();
     pending_operation_reports_busy_then_replays();
@@ -1383,7 +1946,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (28 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (41 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

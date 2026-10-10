@@ -283,7 +283,8 @@ void RealtimeEngine::publish_control_observation() noexcept {
 }
 
 void RealtimeEngine::publish_transport_decision() noexcept {
-  transport_decision_.publish({rendered_frames_, pattern_origin_frame_});
+  transport_decision_.publish({rendered_frames_, pattern_origin_frame_,
+      observed_current_pattern_generation_});
 }
 
 std::uint64_t RealtimeEngine::pattern_token_generation(
@@ -511,6 +512,7 @@ void RealtimeEngine::apply_published_pattern(
     }
   }
   auto& next = pattern_slots_[publication.slot];
+  pattern_applied_generations_[publication.slot] = publication.generation;
   pattern_applied_frames_[publication.slot] = runtime_frame;
   next.state.store(PatternState::current, std::memory_order_release);
   current_pattern_slot_.store(publication.slot, std::memory_order_release);
@@ -950,48 +952,64 @@ PatternTransportSubmit RealtimeEngine::submit_pattern_transport(
 
   PatternTransportCommandCell cell{command.runtime_generation, command.epoch,
       0, command.action, kNoPatternSlot};
-  if (command.pending_switch) {
+  if (command.pending_switch_predecessor && !command.pending_switch)
+    return PatternTransportSubmit::identity_mismatch;
+  if (command.pending_switch && command.pending_switch_predecessor &&
+      command.pending_switch->generation ==
+          command.pending_switch_predecessor->generation)
+    return PatternTransportSubmit::identity_mismatch;
+  const auto name = [&](const std::optional<PatternReplacementAuthority>& authority,
+                        std::uint8_t& named_slot,
+                        std::uint64_t& named_generation) {
+    if (!authority) return PatternTransportSubmit::accepted;
     if (command.action == PatternTransportAction::start)
       return PatternTransportSubmit::invalid_action;
-    if (command.pending_switch->generation == command.expected_pattern_generation)
+    if (authority->generation == 0 ||
+        authority->generation == command.expected_pattern_generation)
       return PatternTransportSubmit::identity_mismatch;
     for (std::size_t i = 0; i < pattern_slots_.size(); ++i) {
       const auto& slot = pattern_slots_[i];
-      const auto state = slot.state.load(std::memory_order_acquire);
-      if ((state == PatternState::current || state == PatternState::pending) &&
-          slot.generation == command.pending_switch->generation &&
-          slot.activation_frame == command.pending_switch->activation_frame &&
-          slot.pattern->pattern_id() == command.pending_switch->pattern_id) {
-        cell.switch_slot = static_cast<std::uint8_t>(i);
-        cell.switch_generation = slot.generation;
+      const auto slot_state = slot.state.load(std::memory_order_acquire);
+      if ((slot_state == PatternState::current || slot_state == PatternState::pending) &&
+          slot.generation == authority->generation &&
+          slot.activation_frame == authority->activation_frame &&
+          slot.pattern->pattern_id() == authority->pattern_id) {
+        named_slot = static_cast<std::uint8_t>(i);
+        named_generation = slot.generation;
+        return PatternTransportSubmit::accepted;
       }
     }
-    if (cell.switch_slot == kNoPatternSlot)
-      return PatternTransportSubmit::identity_mismatch;
-  }
-  // Every outstanding publication must be named, including an audio-local
-  // claim. No unrelated successor may cross this command's boundary.
+    return PatternTransportSubmit::identity_mismatch;
+  };
+  auto named = name(command.pending_switch, cell.switch_slot, cell.switch_generation);
+  if (named != PatternTransportSubmit::accepted) return named;
+  named = name(command.pending_switch_predecessor,
+               cell.predecessor_slot, cell.predecessor_generation);
+  if (named != PatternTransportSubmit::accepted) return named;
+  const auto names_generation = [&](std::uint64_t generation) {
+    return generation != 0 &&
+        (generation == cell.switch_generation ||
+         generation == cell.predecessor_generation);
+  };
+  // Every outstanding slot/token must be named. The additional authority
+  // extends the bounded set, never the accepted predecessor or ownership rule.
   for (const auto& slot : pattern_slots_) {
     if (slot.state.load(std::memory_order_acquire) == PatternState::pending &&
-        slot.generation != cell.switch_generation)
+        !names_generation(slot.generation))
       return PatternTransportSubmit::identity_mismatch;
   }
-  // Q releases only after A is installed; A releases only after current is
-  // installed. Read in that order before checking current, so a concurrent
-  // apply cannot turn a no-authority command into an unnamed successor.
+  // Q releases after A; A releases after current. Keep this admission order.
   const auto queued = queued_pattern_generation_.load(std::memory_order_acquire);
   const auto pending = audio_pending_pattern_generation_.load(std::memory_order_acquire);
   if ((pattern_token_generation(queued) != 0 &&
-       pattern_token_generation(queued) != cell.switch_generation) ||
+       !names_generation(pattern_token_generation(queued))) ||
       (pattern_token_generation(pending) != 0 &&
-       pattern_token_generation(pending) != cell.switch_generation))
+       !names_generation(pattern_token_generation(pending))))
     return PatternTransportSubmit::identity_mismatch;
   const auto current = current_pattern_slot_.load(std::memory_order_acquire);
-  // A named current successor needs a real acknowledged predecessor, not
-  // the initial zero sentinel shared by an unacknowledged command.
   if (current == kNoPatternSlot ||
       (pattern_slots_[current].generation != command.expected_pattern_generation &&
-       (pattern_slots_[current].generation != cell.switch_generation ||
+       (!names_generation(pattern_slots_[current].generation) ||
         acknowledged_pattern_generation_ == 0 ||
         command.expected_pattern_generation != acknowledged_pattern_generation_)))
     return PatternTransportSubmit::identity_mismatch;
@@ -1004,6 +1022,7 @@ PatternTransportSubmit RealtimeEngine::submit_pattern_transport(
     }
   }
   retained_transport_switch_ = command.pending_switch;
+  retained_transport_predecessor_ = command.pending_switch_predecessor;
   pattern_transport_reserved_ = true;
   pattern_transport_epoch_ = command.epoch;
   static_cast<void>(pattern_transport_commands_.try_push(cell));
@@ -1024,13 +1043,31 @@ RealtimeEngine::inspect_pattern_transport_receipt(
   }
   const auto& cell = *retained_transport_receipt_;
   if (cell.generation != generation || cell.epoch != epoch) return std::nullopt;
-  return PatternTransportReceipt{cell.generation, cell.epoch, cell.effective_frame,
+  const auto legacy_decision = cell.legacy_is_predecessor
+      ? cell.predecessor_decision : cell.decision;
+  const auto legacy_authority = cell.legacy_is_predecessor
+      ? retained_transport_predecessor_ : retained_transport_switch_;
+  const auto legacy_frame = cell.legacy_is_predecessor
+      ? cell.predecessor_applied_frame : cell.switch_applied_frame;
+  PatternTransportReceipt receipt{cell.generation, cell.epoch, cell.effective_frame,
       cell.origin_frame, cell.pattern_generation,
       *retained_transport_ids_[cell.pattern_slot],
-      retained_transport_bpms_[cell.pattern_slot], cell.playing, cell.decision,
-      retained_transport_switch_,
-      cell.decision == PatternCutoffDecision::applied_before_cutoff
-          ? std::optional<std::uint64_t>{cell.switch_applied_frame} : std::nullopt};
+      retained_transport_bpms_[cell.pattern_slot], cell.playing, legacy_decision,
+      legacy_authority,
+      legacy_decision == PatternCutoffDecision::applied_before_cutoff
+          ? std::optional<std::uint64_t>{legacy_frame} : std::nullopt};
+  const auto outcome = [](const auto& authority, auto decision, auto frame)
+      -> std::optional<PatternTransportSwitchOutcome> {
+    if (!authority) return std::nullopt;
+    return PatternTransportSwitchOutcome{*authority, decision,
+        decision == PatternCutoffDecision::applied_before_cutoff
+            ? std::optional<std::uint64_t>{frame} : std::nullopt};
+  };
+  receipt.switch_outcomes[0] = outcome(
+      retained_transport_switch_, cell.decision, cell.switch_applied_frame);
+  receipt.switch_outcomes[1] = outcome(retained_transport_predecessor_,
+      cell.predecessor_decision, cell.predecessor_applied_frame);
+  return receipt;
 }
 
 bool RealtimeEngine::acknowledge_pattern_transport_receipt(
@@ -1045,6 +1082,7 @@ bool RealtimeEngine::acknowledge_pattern_transport_receipt(
   acknowledged_pattern_generation_ = retained_transport_receipt_->pattern_generation;
   retained_transport_receipt_.reset();
   retained_transport_switch_.reset();
+  retained_transport_predecessor_.reset();
   pattern_transport_reserved_ = false;
   return true;
 }
@@ -1056,37 +1094,49 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
   receipt.generation = command.generation;
   receipt.epoch = command.epoch;
   receipt.effective_frame = frame;
-  if (command.switch_slot != kNoPatternSlot) {
-    const auto current = current_pattern_slot_.load(std::memory_order_relaxed);
-    if (current == command.switch_slot &&
-        pattern_applied_frames_[current] < frame) {
-      receipt.decision = PatternCutoffDecision::applied_before_cutoff;
-      receipt.switch_applied_frame = pattern_applied_frames_[current];
-    } else {
-      // The sole audio owner resolves both Q and L before this callback's
-      // claim/apply. Control cannot cancel, publish or reclaim while reserved.
-      std::uint32_t canceled_token;
-      if (audio_pending_pattern_ &&
-          audio_pending_pattern_->generation == command.switch_generation) {
-        canceled_token = audio_pending_pattern_generation_.exchange(
-            0, std::memory_order_acq_rel);
-        audio_pending_pattern_.reset();
-        observed_audio_pending_ = {};
-      } else {
-        canceled_token = queued_pattern_generation_.exchange(
-            0, std::memory_order_seq_cst);
-      }
-      pattern_slots_[command.switch_slot].state.store(
-          PatternState::reclaimable, std::memory_order_release);
-      receipt.decision = PatternCutoffDecision::canceled_at_cutoff;
-      observed_claimed_through_ = std::max(
-          observed_claimed_through_, command.switch_generation);
-      // Control may already have canceled L's token and counted that terminal
-      // outcome. Audio must still release L and retain the cutoff receipt, but
-      // only the owner removing a live token counts the cancellation.
-      if (canceled_token != 0) ++transport_canceled_publications_;
+  const auto resolve = [&](std::uint8_t slot_index, std::uint64_t generation,
+                           PatternCutoffDecision& decision,
+                           std::uint64_t& applied_frame) noexcept {
+    if (slot_index == kNoPatternSlot) return;
+    auto& slot = pattern_slots_[slot_index];
+    const auto slot_state = slot.state.load(std::memory_order_relaxed);
+    // A second successor can make an applied first one retiring. Its payload
+    // and apply evidence remain retained; never free its sounding voices.
+    if (slot.generation == generation &&
+        pattern_applied_generations_[slot_index] == generation &&
+        slot_state != PatternState::pending &&
+        (slot_state == PatternState::current || slot_state == PatternState::retiring ||
+         slot_state == PatternState::reclaimable) &&
+        pattern_applied_frames_[slot_index] < frame) {
+      decision = PatternCutoffDecision::applied_before_cutoff;
+      applied_frame = pattern_applied_frames_[slot_index];
+      return;
     }
-  }
+    std::uint32_t canceled_token = 0;
+    if (audio_pending_pattern_ &&
+        audio_pending_pattern_->generation == generation) {
+      canceled_token = audio_pending_pattern_generation_.exchange(
+          0, std::memory_order_acq_rel);
+      audio_pending_pattern_.reset();
+      observed_audio_pending_ = {};
+    } else {
+      canceled_token = queued_pattern_generation_.exchange(
+          0, std::memory_order_seq_cst);
+    }
+    slot.state.store(PatternState::reclaimable, std::memory_order_release);
+    decision = PatternCutoffDecision::canceled_at_cutoff;
+    observed_claimed_through_ = std::max(observed_claimed_through_, generation);
+    if (canceled_token != 0) ++transport_canceled_publications_;
+  };
+  // Resolve the audio-owned predecessor first, then Q. Both are immutable and
+  // fully named by admission; no control mutation can enter while reserved.
+  resolve(command.predecessor_slot, command.predecessor_generation,
+          receipt.predecessor_decision, receipt.predecessor_applied_frame);
+  resolve(command.switch_slot, command.switch_generation,
+          receipt.decision, receipt.switch_applied_frame);
+  receipt.legacy_is_predecessor =
+      receipt.predecessor_decision == PatternCutoffDecision::applied_before_cutoff &&
+      receipt.decision != PatternCutoffDecision::applied_before_cutoff;
   if (command.action == PatternTransportAction::start) {
     pattern_playing_ = true;
     pattern_origin_frame_ = frame;
@@ -1115,6 +1165,13 @@ PatternPublication RealtimeEngine::publish_pattern_view(
   return publish_pattern_view_impl(
       std::move(pattern), requested_activation_frame,
       std::move(replacement_authority), PatternPublicationTiming::scheduled);
+}
+
+PatternPublication RealtimeEngine::publish_pattern_switch_view(
+    PreparedPatternView&& pattern,
+    std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
+  return publish_pattern_view_impl(std::move(pattern), std::nullopt,
+      std::move(replacement_authority), PatternPublicationTiming::switch_bar);
 }
 
 PatternPublication RealtimeEngine::publish_pattern_view_immediate(
@@ -1201,12 +1258,15 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           replacement_authority->activation_frame == pending->activation_frame;
       const auto observed_frame =
           transport_decision_.read().rendered_frames;
-      if (pending->activation_frame >= observed_frame) {
+      const bool claimed_switch = timing == PatternPublicationTiming::switch_bar &&
+          observed_queued_token == 0 && observed_audio_generation != 0;
+      if (pending->activation_frame >= observed_frame && !claimed_switch) {
         observed_pending_activation = pending->activation_frame;
       } else if ((observed_mailbox & kPatternTokenClaimedMask) != 0 ||
                  (observed_mailbox == 0 && observed_audio_generation != 0)) {
         const auto bar_frames = pending->pattern->bar_frames();
-        const auto elapsed = observed_frame - pending->activation_frame;
+        const auto elapsed = std::max(observed_frame, pending->activation_frame) -
+            pending->activation_frame;
         const auto bars = elapsed / bar_frames;
         if (bars != std::numeric_limits<std::uint64_t>::max() &&
             (bars + 1) <=
@@ -1216,6 +1276,10 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           claimed_next_activation =
               pending->activation_frame + (bars + 1) * bar_frames;
         }
+      }
+      if (claimed_switch && !claimed_next_activation) {
+        ++pattern_publication_rejections_;
+        return {PatternPublishResult::publish_queue_full, 0, 0};
       }
       if (pending->pattern->project_id() != pattern.project_id() ||
           (!authorized_replacement &&
@@ -1277,6 +1341,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     slot->active_voices = 0;
     slot->generation = *generation;
     slot->preserve_phase = timing == PatternPublicationTiming::preserve_phase;
+    slot->switch_bar = timing == PatternPublicationTiming::switch_bar;
 
     const auto running =
         state_.load(std::memory_order_acquire) == RealtimeState::running;
@@ -1285,7 +1350,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       const auto observed_frame =
           transport_decision_.read().rendered_frames;
       activation_frame = observed_frame;
-      if (timing != PatternPublicationTiming::scheduled) {
+      if (timing == PatternPublicationTiming::immediate ||
+          timing == PatternPublicationTiming::preserve_phase) {
         activation_frame = observed_frame;
       } else if (authorized_replacement &&
                  requested_activation_frame.has_value()) {
@@ -1504,6 +1570,73 @@ RealtimeEngine::current_pattern_id() const {
     return std::nullopt;
   }
   return pattern_slots_[slot].pattern->pattern_id();
+}
+
+std::optional<PatternTransportObservation>
+RealtimeEngine::pattern_transport_observation() const {
+  for (unsigned attempt = 0; attempt != 8; ++attempt) {
+    if (pattern_claim_closed_.load(std::memory_order_seq_cst) != 0) continue;
+    const auto queued = queued_pattern_generation_.load(std::memory_order_acquire);
+    const auto pending = audio_pending_pattern_generation_.load(std::memory_order_acquire);
+    const auto current = current_pattern_slot_.load(std::memory_order_acquire);
+    const auto decision = transport_decision_.read();
+    PatternTransportObservation observation{};
+    if (current != kNoPatternSlot) {
+      if (pattern_slots_[current].state.load(std::memory_order_acquire) !=
+          PatternState::current) continue;
+      observation.current_generation = pattern_slots_[current].generation;
+      observation.current_pattern = pattern_slots_[current].pattern->pattern_id();
+      observation.current_origin_frame = decision.pattern_origin_frame;
+      if (decision.current_pattern_generation != observation.current_generation)
+        continue;
+    }
+    const auto authority = [&](std::uint32_t token)
+        -> std::optional<PatternReplacementAuthority> {
+      const auto encoded_slot = token & ~kPatternTokenClaimedMask;
+      if (encoded_slot == 0) return std::nullopt;
+      const auto& slot = pattern_slots_[encoded_slot - 1];
+      if (slot.generation == observation.current_generation ||
+          slot.state.load(std::memory_order_acquire) != PatternState::pending)
+        return std::nullopt;
+      return PatternReplacementAuthority{
+          slot.generation, slot.pattern->pattern_id(), slot.activation_frame};
+    };
+    observation.pending_switches[0] = authority(pending);
+    observation.pending_switches[1] = authority(queued);
+    if (observation.pending_switches[0] && observation.pending_switches[1] &&
+        observation.pending_switches[0]->generation ==
+            observation.pending_switches[1]->generation)
+      observation.pending_switches[1].reset();
+    // Control-canceled A retains its audio-local slot until audio retires it.
+    // Its token is zero, but admission still requires that exact immutable
+    // slot authority. Do not hide it behind the latest-only mailbox view.
+    bool overflow = false;
+    for (const auto& slot : pattern_slots_) {
+      if (slot.state.load(std::memory_order_acquire) != PatternState::pending ||
+          slot.generation == observation.current_generation) continue;
+      bool named = false;
+      for (const auto& item : observation.pending_switches)
+        named |= item && item->generation == slot.generation;
+      if (named) continue;
+      if (observation.outstanding_cancellation ||
+          (observation.pending_switches[0] && observation.pending_switches[1])) {
+        overflow = true;
+        break;
+      }
+      observation.outstanding_cancellation = PatternReplacementAuthority{
+          slot.generation, slot.pattern->pattern_id(), slot.activation_frame};
+    }
+    if (overflow) continue;
+    if (pattern_claim_closed_.load(std::memory_order_seq_cst) == 0 &&
+        queued_pattern_generation_.load(std::memory_order_acquire) == queued &&
+        audio_pending_pattern_generation_.load(std::memory_order_acquire) == pending &&
+        current_pattern_slot_.load(std::memory_order_acquire) == current &&
+        (current == kNoPatternSlot ||
+         pattern_slots_[current].state.load(std::memory_order_acquire) ==
+             PatternState::current))
+      return observation;
+  }
+  return std::nullopt;
 }
 
 std::optional<foundation::PatternId>
@@ -1773,6 +1906,7 @@ void RealtimeEngine::stop() noexcept {
   pattern_transport_receipts_.clear_quiescent();
   retained_transport_receipt_.reset();
   retained_transport_switch_.reset();
+  retained_transport_predecessor_.reset();
   for (auto& id : retained_transport_ids_) id.reset();
   retained_transport_bpms_.fill(0);
   pattern_transport_reserved_ = false;
@@ -2024,6 +2158,44 @@ FxEnqueueResult RealtimeEngine::enqueue_master_fx_tempo(
   return FxEnqueueResult::accepted;
 }
 
+void RealtimeEngine::claim_queued_pattern(bool switch_only) noexcept {
+  if (!audio_pending_pattern_.has_value()) {
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(testing::RealtimeHookPoint::before_pattern_claim);
+#endif
+    pattern_claim_closed_.store(1, std::memory_order_seq_cst);
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(
+        testing::RealtimeHookPoint::pattern_admission_closed);
+#endif
+    // RMW returns the immediately preceding owner, never a saved token that
+    // could have been reclaimed/reused while audio was paused.
+    const auto token = queued_pattern_generation_.fetch_or(
+        kPatternTokenClaimedMask, std::memory_order_seq_cst);
+    if (token != 0) {
+      const auto slot_index = static_cast<std::uint8_t>(token - 1);
+      const auto& claimed = pattern_slots_[slot_index];
+      if (switch_only && !claimed.switch_bar) {
+        // General/overlay publication keeps its original callback-start
+        // semantics. Admission is still closed while Q is restored.
+        queued_pattern_generation_.store(token, std::memory_order_seq_cst);
+        pattern_claim_closed_.store(0, std::memory_order_seq_cst);
+        return;
+      }
+      const PatternPublishEntry publication{
+          slot_index, claimed.generation, claimed.activation_frame};
+      audio_pending_pattern_ = publication;
+      observed_claimed_through_ = publication.generation;
+      observed_audio_pending_ = {
+          publication.generation, publication.activation_frame};
+      audio_pending_pattern_generation_.store(token, std::memory_order_release);
+    }
+    // Includes claimed-empty. A/L must be established before releasing Q.
+    queued_pattern_generation_.store(0, std::memory_order_seq_cst);
+    pattern_claim_closed_.store(0, std::memory_order_seq_cst);
+  }
+}
+
 void RealtimeEngine::render(
     float* left, float* right, std::uint32_t frames) noexcept {
   std::fill_n(left, frames, 0.0F);
@@ -2089,34 +2261,7 @@ void RealtimeEngine::render(
   // Apply publication-only updates even when no audition start is queued.
   refresh_audition_publications();
   if (frames != 0) apply_pattern_transport(absolute_start_frame);
-  if (!audio_pending_pattern_.has_value()) {
-#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
-    testing::invoke_realtime_hook(testing::RealtimeHookPoint::before_pattern_claim);
-#endif
-    pattern_claim_closed_.store(1, std::memory_order_seq_cst);
-#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
-    testing::invoke_realtime_hook(
-        testing::RealtimeHookPoint::pattern_admission_closed);
-#endif
-    // RMW returns the immediately preceding owner, never a saved token that
-    // could have been reclaimed/reused while audio was paused.
-    const auto token = queued_pattern_generation_.fetch_or(
-        kPatternTokenClaimedMask, std::memory_order_seq_cst);
-    if (token != 0) {
-      const auto slot_index = static_cast<std::uint8_t>(token - 1);
-      const auto& claimed = pattern_slots_[slot_index];
-      const PatternPublishEntry publication{
-          slot_index, claimed.generation, claimed.activation_frame};
-      audio_pending_pattern_ = publication;
-      observed_claimed_through_ = publication.generation;
-      observed_audio_pending_ = {
-          publication.generation, publication.activation_frame};
-      audio_pending_pattern_generation_.store(token, std::memory_order_release);
-    }
-    // Includes claimed-empty. A/L must be established before releasing Q.
-    queued_pattern_generation_.store(0, std::memory_order_seq_cst);
-    pattern_claim_closed_.store(0, std::memory_order_seq_cst);
-  }
+  claim_queued_pattern();
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
   testing::invoke_pattern_claim_hook();
 #endif
@@ -2370,6 +2515,10 @@ void RealtimeEngine::render(
       }
       audio_pending_pattern_.reset();
       observed_audio_pending_ = {};
+      // C was already published while B belonged to audio. Claim it now so
+      // its returned frame is honored even within this same long callback.
+      // One fixed mailbox RMW; no retry loop or per-frame empty polling.
+      claim_queued_pattern(true);
     }
     for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
       auto& voice = voices_[index];

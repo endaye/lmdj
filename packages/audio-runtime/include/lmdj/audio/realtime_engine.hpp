@@ -106,6 +106,18 @@ struct PatternReplacementAuthority {
   std::uint64_t activation_frame;
 };
 
+// Serialized control owner, concurrent with audio. Unlike latest-only
+// telemetry, this names both immutable publications: audio-owned, then Q.
+struct PatternTransportObservation {
+  std::uint64_t current_generation{};
+  std::optional<foundation::PatternId> current_pattern;
+  std::uint64_t current_origin_frame{};
+  std::array<std::optional<PatternReplacementAuthority>, 2> pending_switches{};
+  // Canceled audio-local material still needs cutoff/release authority, but
+  // is not a playable pending target. Total outstanding authorities is <=2.
+  std::optional<PatternReplacementAuthority> outstanding_cancellation;
+};
+
 enum class PatternTransportAction : std::uint8_t { start, stop, fence };
 enum class PatternTransportSubmit : std::uint8_t {
   accepted, busy, disabled, not_running, stale_generation,
@@ -120,6 +132,12 @@ struct PatternTransportCommand {
   std::uint64_t expected_pattern_generation{};
   PatternTransportAction action{};
   std::optional<PatternReplacementAuthority> pending_switch;
+  std::optional<PatternReplacementAuthority> pending_switch_predecessor{};
+};
+struct PatternTransportSwitchOutcome {
+  PatternReplacementAuthority authority;
+  PatternCutoffDecision decision{};
+  std::optional<std::uint64_t> applied_frame;
 };
 struct PatternTransportReceipt {
   std::uint64_t runtime_generation{};
@@ -133,6 +151,7 @@ struct PatternTransportReceipt {
   PatternCutoffDecision switch_decision{};
   std::optional<PatternReplacementAuthority> switch_authority;
   std::optional<std::uint64_t> switch_applied_frame;
+  std::array<std::optional<PatternTransportSwitchOutcome>, 2> switch_outcomes{};
 };
 
 struct PatternTelemetry {
@@ -506,6 +525,18 @@ class RealtimeEngine final {
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
+  // Opt-in 1-BAR launch. An audio-owned predecessor keeps its boundary and
+  // this successor takes the following Bar, even before that boundary arrives.
+  // Recomputes timing after a claim race; the returned frame is authoritative.
+  PatternPublication publish_pattern_switch_view(
+      PreparedPatternView&& pattern,
+      std::optional<PatternReplacementAuthority> replacement_authority =
+          std::nullopt) noexcept;
+  // Exact live ownership, including both pending publications and a
+  // generation-tagged origin. nullopt means a bounded read raced audio;
+  // callers must not fill the gap with guessed telemetry fields.
+  std::optional<PatternTransportObservation> pattern_transport_observation()
+      const;
   // Control thread. Publishes at the first render frame that can observe the
   // new mailbox entry. Unlike exact scheduled publication, a render callback
   // racing this call cannot make the internally observed frame stale.
@@ -618,6 +649,7 @@ class RealtimeEngine final {
   };
   enum class PatternPublicationTiming : std::uint8_t {
     scheduled,
+    switch_bar,
     immediate,
     preserve_phase,
   };
@@ -661,6 +693,7 @@ class RealtimeEngine final {
     std::uint64_t activation_frame = 0;
     std::size_t active_voices = 0;
     bool preserve_phase = false;
+    bool switch_bar = false;
   };
 
   struct PatternPublishEntry {
@@ -676,6 +709,8 @@ class RealtimeEngine final {
     std::uint64_t switch_generation{};
     PatternTransportAction action{};
     std::uint8_t switch_slot{kNoPatternSlot};
+    std::uint64_t predecessor_generation{};
+    std::uint8_t predecessor_slot{kNoPatternSlot};
   };
   struct PatternTransportReceiptCell {
     std::uint64_t generation{};
@@ -687,10 +722,14 @@ class RealtimeEngine final {
     std::uint8_t pattern_slot{kNoPatternSlot};
     bool playing{};
     PatternCutoffDecision decision{};
+    std::uint64_t predecessor_applied_frame{};
+    PatternCutoffDecision predecessor_decision{};
+    bool legacy_is_predecessor{};
   };
   static_assert(std::is_trivially_copyable_v<PatternTransportCommandCell>);
   static_assert(std::is_trivially_copyable_v<PatternTransportReceiptCell>);
   void apply_pattern_transport(std::uint64_t frame) noexcept;
+  void claim_queued_pattern(bool switch_only = false) noexcept;
   detail::FixedSpscQueue<PatternTransportCommandCell, 1> pattern_transport_commands_;
   mutable detail::FixedSpscQueue<PatternTransportReceiptCell, 1> pattern_transport_receipts_;
   mutable std::optional<PatternTransportReceiptCell> retained_transport_receipt_;
@@ -698,6 +737,7 @@ class RealtimeEngine final {
       retained_transport_ids_;
   std::array<std::uint16_t, kRealtimePatternCapacity> retained_transport_bpms_{};
   std::optional<PatternReplacementAuthority> retained_transport_switch_;
+  std::optional<PatternReplacementAuthority> retained_transport_predecessor_;
   // Control-owned, published to audio only by the command queue.
   std::uint64_t pattern_transport_generation_{};
   std::uint64_t last_pattern_transport_generation_{};
@@ -709,6 +749,8 @@ class RealtimeEngine final {
   bool pattern_transport_enabled_{};
   bool pattern_playing_{};
   std::uint64_t transport_canceled_publications_{};
+  // Audio-owned apply evidence is generation tagged across slot reuse.
+  std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_generations_{};
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
 
   enum class MasterFxControlKind : std::uint8_t { gesture, tempo };
@@ -995,6 +1037,7 @@ class RealtimeEngine final {
   struct TransportDecision {
     std::uint64_t rendered_frames = 0;
     std::uint64_t pattern_origin_frame = 0;
+    std::uint64_t current_pattern_generation = 0;
   };
   // Writer-private authority is separate from the recycled output slots.
   PatternObservation observed_audio_pending_{};

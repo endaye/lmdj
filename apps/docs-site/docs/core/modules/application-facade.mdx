@@ -165,6 +165,34 @@ preparation 错配；端口报告 `std::nullopt`（无当前 Pattern 或端口�
 vendored 绑定，下述确定性停机语义不变；journal 活跃（录制中）时永不重锚，跨
 switch 的结清仍由上文 `retain_switch`/reconcile/drain 的 close 机制拥有。
 
+公开端口追加显式能力 `supports_receipt_bound_opening()`（默认 false）与
+`observe_transport()`（默认 unavailable）。新 Host 启用后，非录制控制使用 Engine 的
+current/generation/origin 和有界双 authority 观察；Controller 不从 latest-only telemetry
+猜出第二项。两个可播放 pending 与已取消尚未退役槽分别保留其真实身份。
+没有 pending 的一致观察保留普通 prepare-before-submit；已有录制的单 switch settlement
+与旧 no-info 端口保持原行为。
+
+新公开 virtual 方法是 staged native ABI break；旧源码端口有默认实现，旧二进制仍需
+coherent 重编与协调 Module/Assembly MAJOR 结算，不能直接替换旧 ABI package。
+
+新能力下有 pending 的 Record 打开流程为：只读核对原 expected revision、已存在 Journal
+的 session/Pattern/revision/bars/fingerprint 与 Performance owner → native cutoff accepted
+→ 保留真实 receipt → 按 receipt 的 Pattern/generation begin/prepare/activate → exact ack。
+已知 owner/target 冲突拒绝且不提交音频、不写 Journal；pending 仍保留。已有同 owner 的
+prebegun Journal 也只接完全匹配的空 header，legacy input/capture/flush prefix 保留并拒绝；
+本次操作已经生成的 partial admission 仍按 exact identity/receipt 重试。已 accepted cutoff
+以后出现 IO 失败则是 pending/error、recording=false，真实已取消 B/C、receipt 和已有部分
+Journal 均保留，不能声称这是无副作用的同步拒绝。重试同一 Command/epoch，未知响应
+按实际耐久字节与严格 codec replay 核验，不复制 begin/prepare/fence，不删除或重标 foreign
+Journal，不换用较新 revision。原单 switch persisted Contract 没有扩大；这次 admission
+之前的双 cutoff outcomes 保留在 native receipt，不伪造为新 Journal 中已发生的 switch。
+
+request 捕获与 admission owner 使用同一 monotone Clock；receipt 延迟和 prepare IO 重试
+保持最初预算起点，不重新启动 deadline。缺省 `fence_timeout_ms` 仍为 5000 ms，显式值
+保持原语义；preparation aggregate 的 10 是 `first_watermark`。无耐久 admission fence
+不 ack，新流程完成 exact ack 后才报告 recording=true。晚 revision/authority 冲突保留
+实际 receipt 与明确 error phase；可重试 IO 保留 awaiting phase。
+
 自由函数形态的 controller 用默认 storage platform 全新实例自持 Journal/Store；
 原生/OPFS 的 bundle writer 锁按 open file description 生效，因此当 Host 已经过
 `Application::acquire_project_writer` 持有 lease 时，自由函数 controller 的首次

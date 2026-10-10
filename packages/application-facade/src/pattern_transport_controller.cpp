@@ -32,6 +32,13 @@ foundation::CommandId derive_command(
   return foundation::CommandId{value};
 }
 
+bool empty_legacy_prefix(const project_io::ActiveSequenceJournal& journal) {
+  return !journal.last_input_sequence && journal.next_tail_seq == 0 &&
+      journal.pending_events.empty() && journal.next_flush_seq == 0 &&
+      journal.flushes.empty() && !journal.armed_capture_slot &&
+      !journal.capture_commit;
+}
+
 // Admission authority/identity validation failures are deterministic: the same
 // retained receipt can never apply on a retry. Anything else (journal IO,
 // internal errors) may be transient and keeps its bounded retry phase.
@@ -45,9 +52,12 @@ PatternTransportCoordinator::PatternTransportCoordinator(
     PatternTransportAudioPort& audio, project_io::SequenceJournal& journals,
     project_io::ProjectStore& store, std::filesystem::path bundle,
     foundation::SequenceSessionId session, foundation::ProjectId project,
-    foundation::PatternId pattern, std::uint64_t runtime_generation)
+    foundation::PatternId pattern, std::uint64_t runtime_generation,
+    PatternAdmissionOwner::Clock clock)
     : audio_(audio), journals_(journals), bundle_(bundle),
-      owner_(journals, bundle, session), store_(store),
+      clock_(clock ? std::move(clock) : PatternAdmissionOwner::Clock{
+          [] { return std::chrono::steady_clock::now(); }}),
+      owner_(journals, bundle, session, clock_), store_(store),
       session_(session), project_(std::move(project)),
       pattern_(std::move(pattern)), runtime_generation_(runtime_generation),
       last_pattern_generation_(audio.pattern_generation()) {}
@@ -114,7 +124,85 @@ PatternTransportSubmit PatternTransportCoordinator::request(
 
   const auto opens_journal =
       request.intent == PatternTransportIntent::record && !recording_;
-  if (opens_journal) {
+  const bool observed_control = !recording_ &&
+      audio_.supports_receipt_bound_opening();
+  std::optional<audio::PatternTransportObservation> observation;
+  if (observed_control) {
+    observation = audio_.observe_transport();
+    if (!observation || !observation->current_pattern ||
+        observation->current_generation == 0)
+      return PatternTransportSubmit::busy;
+  }
+  const bool pending_publication = observation &&
+      (observation->pending_switches[0] || observation->pending_switches[1] ||
+       observation->outstanding_cancellation);
+  const bool receipt_opening = opens_journal && pending_publication;
+  std::optional<ReceiptBoundOpening> opening;
+  if (receipt_opening) {
+    const auto started = clock_();
+    const auto loaded = store_.load(bundle_);
+    if (!loaded.has_value()) {
+      error_ = loaded.error();
+      return PatternTransportSubmit::refused;
+    }
+    if (request.expected_revision &&
+        *request.expected_revision != loaded.value().revision) {
+      error_ = foundation::Error{foundation::ErrorCode::revision_conflict,
+          "Pattern transport record expected a different Project revision"};
+      return PatternTransportSubmit::refused;
+    }
+    const auto performance = journals_.read_active_performance(bundle_);
+    if (performance.has_value() ||
+        performance.error().code != foundation::ErrorCode::not_found) {
+      error_ = performance.has_value()
+          ? foundation::Error{foundation::ErrorCode::invalid_argument,
+              "Pattern transport Record conflicts with an active Performance owner"}
+          : performance.error();
+      return PatternTransportSubmit::refused;
+    }
+    const auto current_pattern = loaded.value().patterns.find(*observation->current_pattern);
+    if (current_pattern == loaded.value().patterns.end()) {
+      error_ = foundation::Error{foundation::ErrorCode::not_found,
+          "Pattern transport record target Pattern is missing"};
+      return PatternTransportSubmit::refused;
+    }
+    const auto active = journals_.read_active(bundle_);
+    if (active.has_value()) {
+      if (active.value().session_id != session_ ||
+          active.value().pattern_id != *observation->current_pattern ||
+          active.value().state != project_io::SequenceSessionState::active ||
+          active.value().admission || !empty_legacy_prefix(active.value()) ||
+          active.value().expected_revision != loaded.value().revision ||
+          active.value().bars != current_pattern->second.bars ||
+          active.value().pattern_fingerprint !=
+              project_io::sequence_pattern_fingerprint(current_pattern->second)) {
+        error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
+            "Pattern transport Record conflicts with an existing journal owner or target"};
+        return PatternTransportSubmit::refused;
+      }
+      // A prebegun journal is already bound; a different pending identity
+      // requires its settlement owner, never a silent new admission target.
+      for (const auto& authority : observation->pending_switches) {
+        if (authority && authority->pattern_id != active.value().pattern_id) {
+          error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
+              "Pattern transport existing journal cannot cross an opening switch"};
+          return PatternTransportSubmit::refused;
+        }
+      }
+    } else if (active.error().code != foundation::ErrorCode::not_found) {
+      error_ = active.error();
+      return PatternTransportSubmit::refused;
+    }
+    for (const auto& authority : observation->pending_switches) {
+      if (authority && !loaded.value().patterns.contains(authority->pattern_id)) {
+        error_ = foundation::Error{foundation::ErrorCode::not_found,
+            "Pattern transport pending Record target Pattern is missing"};
+        return PatternTransportSubmit::refused;
+      }
+    }
+    opening = ReceiptBoundOpening{loaded.value().revision, started};
+  }
+  if (opens_journal && !receipt_opening) {
     // The binding is vendored at construction, but the engine's current
     // Pattern can move behind the coordinator: a switch publication applying
     // at the Bar boundary while the transport keeps playing. Re-anchor the
@@ -124,7 +212,8 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     // (#1403). A port reporting no current Pattern keeps the vendored binding,
     // and an active journal never retargets: the switch-spanning close
     // machinery (retain_switch/reconcile_switch/drain) owns that settlement.
-    if (const auto current = audio_.current_pattern();
+    if (const auto current = observation
+            ? observation->current_pattern : audio_.current_pattern();
         current.has_value() && *current != pattern_) {
       pattern_ = *current;
     }
@@ -166,7 +255,8 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     }
     project_io::SequenceAdmissionPreparation preparation{
         {request.command_id, runtime_generation_, request.expected_epoch},
-        project_, pattern_, audio_.pattern_generation(), 10};
+        project_, pattern_, observation ? observation->current_generation
+                                       : audio_.pattern_generation(), 10};
     const auto prepared = owner_.prepare(preparation);
     if (!prepared.has_value()) {
       error_ = prepared.error();
@@ -177,10 +267,23 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   audio::PatternTransportCommand command{
       runtime_generation_, request.expected_epoch, last_pattern_generation_,
       audio_action(request.intent), {}};
-  if (playing_) command.pending_switch = audio_.pending_switch();
-  if (!command.pending_switch) {
+  const auto apply_observation = [&](const audio::PatternTransportObservation& state) {
+    command.expected_pattern_generation = state.current_generation;
+    command.pending_switch = state.pending_switches[1]
+        ? state.pending_switches[1] : state.pending_switches[0];
+    command.pending_switch_predecessor = state.pending_switches[1]
+        ? state.pending_switches[0] : std::nullopt;
+    if (state.outstanding_cancellation) {
+      if (command.pending_switch)
+        command.pending_switch_predecessor = state.outstanding_cancellation;
+      else command.pending_switch = state.outstanding_cancellation;
+    }
+  };
+  if (observation) apply_observation(*observation);
+  else if (playing_) command.pending_switch = audio_.pending_switch();
+  if (!command.pending_switch && !observation) {
     command.expected_pattern_generation = audio_.pattern_generation();
-  } else if (unlanded_overlay_generation_ != 0 &&
+  } else if (command.pending_switch && unlanded_overlay_generation_ != 0 &&
              command.pending_switch->generation ==
                  unlanded_overlay_generation_) {
     // The pending successor is this coordinator's own overlay, still queued
@@ -207,12 +310,26 @@ PatternTransportSubmit PatternTransportCoordinator::request(
     deferred_submit_ = true;
     return PatternTransportSubmit::accepted;
   }
-  const auto submitted = audio_.submit(command);
+  auto submitted = audio_.submit(command);
+  // Only a live typed observation is refreshable, and only identity races.
+  // At most two outstanding publications can advance while this serialized
+  // control operation admits its command. No authority guard is weakened.
+  for (unsigned retry = 0; observation &&
+       submitted == audio::PatternTransportSubmit::identity_mismatch && retry != 2;
+       ++retry) {
+    const auto refreshed = audio_.observe_transport();
+    if (!refreshed || !refreshed->current_pattern ||
+        refreshed->current_generation == 0) break;
+    apply_observation(*refreshed);
+    submitted = audio_.submit(command);
+  }
   if (submitted != audio::PatternTransportSubmit::accepted) {
     error_ = foundation::Error{foundation::ErrorCode::invalid_argument,
                                "Pattern transport audio submit refused"};
     return PatternTransportSubmit::refused;
   }
+  receipt_bound_opening_ = opening;
+  if (observation) error_.reset();
   pending_ = request;
   phase_ = PatternTransportPhase::awaiting_audio;
   return PatternTransportSubmit::accepted;
@@ -228,6 +345,48 @@ PatternTransportStatus PatternTransportCoordinator::inspect() const {
           error_};
 }
 
+foundation::Result<void> PatternTransportCoordinator::prepare_receipt_bound_opening(
+    const audio::PatternTransportReceipt& receipt,
+    const PatternTransportRequest& request) {
+  const auto& opening = *receipt_bound_opening_;
+  const auto loaded = store_.load(bundle_);
+  if (!loaded.has_value()) return foundation::Result<void>::failure(loaded.error());
+  if (loaded.value().revision != opening.revision ||
+      (request.expected_revision && *request.expected_revision != opening.revision))
+    return foundation::Result<void>::failure({foundation::ErrorCode::revision_conflict,
+        "Accepted Pattern Record cutoff has a different Project revision"});
+  const auto found = loaded.value().patterns.find(receipt.pattern_id);
+  if (found == loaded.value().patterns.end())
+    return foundation::Result<void>::failure({foundation::ErrorCode::not_found,
+        "Accepted Pattern Record cutoff target is missing"});
+  const auto fingerprint = project_io::sequence_pattern_fingerprint(found->second);
+  const auto active = journals_.read_active(bundle_);
+  if (active.has_value()) {
+    if (active.value().session_id != session_ ||
+        active.value().pattern_id != receipt.pattern_id ||
+        active.value().expected_revision != opening.revision ||
+        active.value().pattern_fingerprint != fingerprint ||
+        active.value().bars != found->second.bars ||
+        !empty_legacy_prefix(active.value()) ||
+        active.value().state != project_io::SequenceSessionState::active)
+      return foundation::Result<void>::failure({foundation::ErrorCode::invalid_argument,
+          "Accepted Pattern Record cutoff conflicts with an existing journal owner or target"});
+  } else {
+    if (active.error().code != foundation::ErrorCode::not_found)
+      return foundation::Result<void>::failure(active.error());
+    const auto begun = journals_.begin(bundle_, session_, receipt.pattern_id,
+        found->second.bars, fingerprint, opening.revision);
+    if (!begun.has_value()) return begun;
+  }
+  const project_io::SequenceAdmissionPreparation preparation{
+      {request.command_id, runtime_generation_, request.expected_epoch},
+      project_, receipt.pattern_id, receipt.pattern_generation, 10};
+  const auto prepared = owner_.prepare(preparation, opening.started_at);
+  if (!prepared.has_value()) return prepared;
+  pattern_ = receipt.pattern_id;
+  return foundation::Result<void>::success();
+}
+
 foundation::Result<void> PatternTransportCoordinator::apply_receipt(
     const audio::PatternTransportReceipt& receipt,
     const PatternTransportRequest& request) {
@@ -238,10 +397,22 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
       !recording_;
   bool retained_switch = false;
   if (opening) {
-    const auto activated = owner_.activate(fence_from(
-        receipt, project_io::SequenceFenceKind::admission, request.command_id));
+    if (receipt_bound_opening_) {
+      const auto prepared = prepare_receipt_bound_opening(receipt, request);
+      if (!prepared.has_value()) return prepared;
+    }
+    auto fence = fence_from(
+        receipt, project_io::SequenceFenceKind::admission, request.command_id);
+    if (receipt_bound_opening_) {
+      // These outcomes preceded this new admission; they remain exact in the
+      // native receipt, not a fictitious switch within its Journal timeline.
+      fence.switch_authority.reset();
+      fence.switch_outcome = project_io::SequenceSwitchOutcome::none;
+      fence.switch_applied_frame.reset();
+    }
+    const auto activated = owner_.activate(fence);
     if (!activated.has_value()) return activated;
-    recording_ = true;
+    if (!receipt_bound_opening_) recording_ = true;
   }
   if (closing) {
     // The render boundary can land our overlay before the next idle control
@@ -284,6 +455,7 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
         {foundation::ErrorCode::invalid_argument,
          "Pattern transport receipt was not acknowledged"});
   }
+  if (opening && receipt_bound_opening_) recording_ = true;
   if (closing) {
     // The flag is bound only after the cutoff fence and acknowledgment, so an
     // early return can never leave it set for a receipt that was not applied.
@@ -684,12 +856,17 @@ foundation::Result<void> PatternTransportCoordinator::continue_operation() {
     // retained receipt; park the engagement in the error phase instead of
     // looping awaiting_audio forever. Recovery is a Project reopen, where the
     // owner-loss recovery surface lists the unresolved journal.
-    phase_ = terminal(applied.error())
+    const bool opening_conflict = receipt_bound_opening_ &&
+        (applied.error().code == foundation::ErrorCode::revision_conflict ||
+         applied.error().code == foundation::ErrorCode::not_found);
+    phase_ = (terminal(applied.error()) || opening_conflict)
                  ? PatternTransportPhase::error
                  : (close_pending_ ? PatternTransportPhase::flushing
                                    : PatternTransportPhase::awaiting_audio);
     return applied;
   }
+  if (receipt_bound_opening_) error_.reset();
+  receipt_bound_opening_.reset();
   retained_.insert_or_assign(pending_->command_id, *pending_);
   last_ = pending_;
   pending_.reset();
