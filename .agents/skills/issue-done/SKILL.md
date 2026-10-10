@@ -121,6 +121,24 @@ Before starting the shipping pipeline:
    defect. See
    [`revert-proof-rebuild-skipped`](../../pitfalls/revert-proof-rebuild-skipped.md).
 
+   **New Product allocation cuts:** follow the canonical
+   [S0/S1 source and snapshot sequence](../../../docs/governance/git-workflow.md#product-cut-source-and-snapshot-phases)
+   and [Portal phase checks](../../../docs/governance/architecture-portal.md#5-稳定命令与-task-所有权)
+   before treating a version Task as shippable. Declare two linked atomic Tasks,
+   each one Conventional Commit, on one cut PR from a verified-main
+   implementation baseline. S0 requires all owning checks and the entire
+   `check:current` PASS, plus the actual full check's nonzero result containing
+   only that exact new Build's three absent snapshot prerequisites. Retain the
+   nonzero evidence; any other error stops S0. Its local source commit is only
+   a clean freeze checkpoint, never standalone push/PR/merge or completion.
+   S1 owns only the official generated boundary and must pass the original
+   complete check before both Tasks enter this skill's unchanged shipping and
+   exact-head review/merge procedure. Keep baseline/freeze source/squash target
+   distinct, preserve interrupted bytes for official resume, and perform actual
+   postmerge provenance/witness verification. No accepted-risk, old snapshot,
+   current-only proof, skipped check, release or cleanup authority is added.
+   See [`portal-snapshot-not-deferrable`](../../pitfalls/portal-snapshot-not-deferrable.md).
+
    Run the Task's declared, relevant verification; do not substitute an automatic
    full lane set or an unrelated portal build. For example:
    ```bash

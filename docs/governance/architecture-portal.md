@@ -67,10 +67,36 @@ scripts/docs-site.sh install
 scripts/docs-site.sh dev
 scripts/docs-site.sh check
 scripts/docs-site.sh version PRODUCT_BUILD CHANNEL
+scripts/docs-site.sh resume-version PRODUCT_BUILD CHANNEL SOURCE_REVISION
 scripts/docs-site.sh smoke BASE_URL
 ```
 
 实现 Task 的负责人同时负责相关 current 页面和源图。影响页面、源图、门户工具、投影身份或已记载源码事实的 Task，在提交前运行 `scripts/docs-site.sh check`，覆盖单测、元数据、current truth、确定性图、类型、生产构建、路由、身份和站内链接。无关 Task 不强制运行门户重构建，也不把它搬成所有 PR 的 pre-push 门禁；全量增量批次与显式完整候选／节点自测仍保留该 suite。
+
+新 identity-only allocation cut 的 S0 本地 source checkpoint 采用
+[canonical S0/S1 顺序](git-workflow.md#product-cut-source-and-snapshot-phases)。它仍实际运行
+完整 `scripts/docs-site.sh check`，并另行取得整个 `check:current` 与全部 owning
+source/version/conformance checks 的 PASS。完整 check 可能在 `check:release-docs`
+提前停止，不能把这个执行前缀当成 type/build/routes 全通过。
+
+只有新 Build 的 `versions.json` 条目、snapshot source 与 metadata 三项均不存在，
+且完整 check 的错误集合恰为以下三条，才能把该非零结果保留为同 PR 未完成的生成
+前置；任何该 Build 的既有/部分 snapshot 字节都不能借此被忽略。下文 `B` 指实际
+已声明的新 Build，不是本治理文档分配的版本：
+
+```text
+Product Build B is missing from versions.json
+Product Build B snapshot source is missing
+Product Build B metadata is missing
+```
+
+其他 identity/hash、unit、current docs、diagram、changelog、type、production build、
+route、既有 snapshot 或 provenance 错误全部停止 S0。该非零结果不记录为 PASS，
+不授予 standalone push/PR/merge、分发或完成资格。S1 正式冻结和提交前必须通过原
+完整 check，整个 cut 仍完成版本事实、snapshot/provenance、适用 Task 与 batch-only
+验证、独立 current-head review、冲突、findings/conversations、live protection 和
+实际 merge 核验。accepted-risk、旧结果、current-only 或生成文件过滤不能替代这些
+最终要求；S0/S1 只能在同一 PR 中一起 shipping。
 
 ## 6. 构建与快照分级
 
@@ -81,7 +107,7 @@ scripts/docs-site.sh smoke BASE_URL
 | `stable` 发布 | 强制使用匹配快照，并补齐 Release、生产部署和 release verification 证据 |
 
 current 路由跟随 `main` 并明确标为非正式快照。任何已经分配 Product Build、准备
-交付给测试者或正式发布的构建，都必须在同一版本 Task 中运行：
+交付给测试者或正式发布的构建，都必须在同一版本 cut PR 的 S1 Task 中运行：
 
 ```bash
 scripts/docs-site.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
@@ -112,11 +138,18 @@ Product Build 条目必须唯一。仓库只保留最近 5 个 Product Build 快
 中，可按 revision 检出审计，不随 HEAD 携带。既有 schema-1 快照保持只读
 兼容，不回写。
 
-冻结方应先让 direct-parent 成立，而不是依赖 witness 补救。squash 使 introducing
-commit 的 parent 等于合并时的 `main` tip，而冻结记录的是它运行时的 HEAD，两者只有
-在「冻结是从当前 `main` 切出的分支上首个且唯一的提交，并在 `main` 前进之前合并」时
-才相等。把冻结混入已有提交的分支，记录的就是被 squash 丢弃的那个分支提交，
-direct-parent 从此无法成立，只能退到 projection 比对或 witness。
+Build/BOM 已在 `main` 的 snapshot-only Task 优先建立 direct-parent：冻结是从当前
+`main` 切出的分支上首个且唯一的提交，并在 `main` 前进之前合并。新 allocation cut
+按 S0/S1 在同一 PR 建立 clean source 与 matching snapshot，其 source commit 被
+squash 替换，因此必须实际证明 byte-identical squash projection，而不把 source
+branch SHA 称为 `main`。冻结之后不修改 source projection；需要 witness 时只走
+下述官方机制，不能从历史两提交实例或本地检查推断来源已经成立。
+
+冻结中断时保留原 source HEAD、日志与生成字节；
+`scripts/docs-site.sh resume-version PRODUCT_BUILD CHANNEL SOURCE_REVISION` 仅验证
+完整但尚未提交的原 freeze，严格回读其原 SHA/channel、metadata、inventory、provenance
+与完整 check，绝不补生成或覆盖历史。部分、不匹配或无法核实的 freeze 停止 shipping，
+等待显式 reconciliation；不执行通用删除/refreeze 来掩盖失败，也不手写 metadata。
 
 若 squash introducing tree 合法包含冻结之后的 mutable current/non-projection
 更新，因而不能逐字等同 source projection，必须另行提交由

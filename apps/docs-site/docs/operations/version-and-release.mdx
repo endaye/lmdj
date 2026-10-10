@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/orchestration-policy.json, tools/release/orchestration_policy.py, tools/release/orchestration.py, tools/release/orchestration_driver.py, tools/release/orchestration_backend.py, tools/release/cli.py, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/governance/architecture-portal.md, apps/docs-site/scripts/lib/version-docs.mjs, apps/docs-site/scripts/lib/snapshot-provenance.mjs, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/orchestration-policy.json, tools/release/orchestration_policy.py, tools/release/orchestration.py, tools/release/orchestration_driver.py, tools/release/orchestration_backend.py, tools/release/cli.py, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
 ---
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
@@ -99,7 +99,30 @@ Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那
 
 ## Release cut
 
-Product Build 从 `main` 切出，不在分支上组装。功能、Host、Provider、deploy workflow 与发布脚本先各自经普通 PR 当前 head 评审合入 `main`；control-plane 按可评审性和真实依赖拆分，不再要求 Integration Queue。切版 PR 只携带分配材料：`version.json` Build 分配、必要时的 `assembly.json` 与 `assembly.lock.json`、该 Build 的 immutable Portal snapshot 与 release-evidence 文档，经评审后 squash 合入。squash 产生的精确 `main` SHA 就是该 Build 唯一合法的 release target；之后的 `main` 提交不进入该 Build。发布后的修复走 PATCH：从已发布 tag 拉短命 `fix/<task>`，分配下一 PATCH，同一修复经普通 PR 回 `main`；仓库不设 `release/*` 或 `hotfix/*` 长期分支。规则全文见 `docs/governance/git-workflow.md` §6。
+Product Build 的产品实现先经普通 PR 合入精确、已取得规定 CI 验证的 `main` baseline；
+cut 不在 branch 组装未合入实现。identity-only cut 只结算该基线已有 API/ABI/行为与
+依赖闭包所需的 Module、Host、Provider、Contract、Product 身份和 Assembly/lock、
+确定性生成物、current 说明页、计划及 matching snapshot。registered Contract 的兼容
+schema formalization 是需明确声明的附加范围，包含 conformance/正反例/grammar，
+不构成 producer、DSP 或 Replay 支持证据；不能夹带工作流、保护、生成器或验证器修改。
+
+S0/S1 是两个 linked 原子 Task，各一个 Conventional Commit，同一 PR 完整 shipping。
+S0 源/版本/Contract checks 与 entire `check:current` 全通过，实际完整 check 只容许
+canonical 指定的新 Build 三项 snapshot 生成前置缺失，真实非零结果保留而不记 PASS。
+S0 local commit 只提供 clean allocation/freeze source，不具备独立 push/PR/merge 或完成
+资格。S1 在该 unchanged HEAD 仅生成官方 snapshot 精确边界，原完整检查全通过后才
+一起 push、current-head review 与 protected squash；retention 若获明确授权也须在
+S0 的声明范围，不能夹入 S1。baseline、freeze source 和实际 squash target 各自记录；
+freeze source 不声称 main/CI，baseline CI 不代替 actual target 的候选验证。
+
+squash 产生的精确 `main` SHA 才是该 Build 的合法 release target，Release intent 在它
+存在后独立绑定；source Build/snapshot 无需同时产生 release intent，也不发起 tag、
+publication、deployment 或 Channel 操作。冻结后 source projection 保持不变，实际
+postmerge provenance/witness 与中断 official resume 继续适用。之后的 main 提交不进入
+该 Build；PATCH 仍不得改变 Assembly 身份或 lock，身份变化须新 BUILD。发布后的修复
+从已发布 tag 拉短命 `fix/<task>`，同一修复经普通 PR 回 main，不设长期 release/hotfix
+branch。规则全文见 `docs/governance/version-management.md` §2.3/2.4 和
+`docs/governance/git-workflow.md` 的 cut/source 与 Release 段。
 
 ## Channel promotion
 
@@ -736,7 +759,7 @@ PATCH may not change Product Assembly identity or `assembly.lock`. Any module/pr
 权威链必须逐环核验并分别记录：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。branch-local Proof、快照、CI、tag 或后写的证据文档都不能替代链中其他一环。
 ## 不可变性
 已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
-schema-2 快照冻结 41 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+schema-2 快照冻结 52 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。官方 freeze 开始前必须是 clean source HEAD；生成后、提交前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
 ### 已冻结快照的已知错误（勘误）
 
 不可变性是双向的：快照保存的是冻结那一刻 current 页面所说的话，**包括当时已经为假的话**。
