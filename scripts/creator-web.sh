@@ -205,7 +205,10 @@ clean_creator() {
 generate_project_fixture() {
   local output="$1"
   "$repo_root/scripts/core.sh" configure dev
-  "$repo_root/scripts/core.sh" build dev
+  # The fixtures execute only lmdj-core. The whole dev tree compiles every
+  # native test binary, which the Core lanes own, and it alone cost ~6.5 of
+  # the CI job's 35 minutes (#1965).
+  cmake --build --preset dev --target lmdj_core_cli
   python3 - \
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \

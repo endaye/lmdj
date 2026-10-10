@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-09-19
     occurrence: https://github.com/endaye/lmdj/actions/runs/35419357786
     observed_by: Claude Code (Fable 5.1)
+  - date: 2026-10-10
+    occurrence: https://github.com/endaye/lmdj/issues/1965
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -65,6 +68,13 @@ PR-Agent integration child in `tests/build/ci_pr_agent_review_test.py`
 (`run_child_with_watchdog`, #1389) is the reference shape: 120s of no test
 progress kills the child; a total ceiling remains only against a child that
 emits progress forever.
+
+A CI job's `timeout-minutes` is the same kind of budget at lane scale. The
+main batch Creator job grew from 33.6 to 35.3 minutes against its fixed 35
+over one day and was then cancelled on every batch (#1965). Before
+touching the budget, read the job's phase timings and remove work the
+proof never consumes: that job compiled the whole native dev tree for one
+fixture binary.
 
 Prefer a
 budget that is generous to one that is tight: an over-long budget only delays a
