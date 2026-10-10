@@ -5,7 +5,9 @@ import {
   sampleNextStep,
 } from "../state/error_messages";
 import {useReportFailure} from "../runtime/diagnostics_context";
-import {useCallback, useEffect, useRef, useState, type ReactNode} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from "react";
+import {createSampleEncoderTurn, type SampleEncoderParameter} from "../state/sample_encoder";
+import type {ContextualEncoders} from "./physical_controls";
 
 import {ConfirmationDialog, SampleControls} from "./sample_controls";
 import {WaveformEditor} from "./waveform_editor";
@@ -67,6 +69,8 @@ interface SampleSurfaceProps {
   onContinueCaptureInSequence?(): void;
   closeCaptureAfterResolution?: boolean;
   captureBackgrounded?: boolean;
+  encodersActive?: boolean;
+  onEncodersReady?: (encoders: ContextualEncoders | null) => void;
   sequenceCapture?: Readonly<{
     sessionId: string;
     expectedRevision: number;
@@ -191,6 +195,8 @@ export function SampleSurface({
   onContinueCaptureInSequence,
   closeCaptureAfterResolution = false,
   captureBackgrounded = false,
+  encodersActive = true,
+  onEncodersReady,
   sequenceCapture,
 }: SampleSurfaceProps) {
   // #1680: every Sample failure keeps its code and details in Developer
@@ -227,6 +233,18 @@ export function SampleSurface({
   const previousAudioSuspended = useRef(audioSuspended);
   const inspect = sample.inspect;
   const selectedSlot = sample.selectedSlot;
+  const [encoderGroup, setEncoderGroup] = useState<"trim" | "sound">("trim");
+  const encoderCallbacks = useRef({preview: (_playback: Readonly<PadPlayback>) => {},
+    commit: (_playback: Readonly<PadPlayback>) => {}, cancel: () => {}});
+  const encoderTurn = useRef<ReturnType<typeof createSampleEncoderTurn> | null>(null);
+  encoderTurn.current ??= createSampleEncoderTurn({
+    schedule: (callback, delay) => window.setTimeout(callback, delay),
+    clear: (handle) => window.clearTimeout(handle as number),
+    preview: (playback) => encoderCallbacks.current.preview(playback),
+    commit: (playback) => encoderCallbacks.current.commit(playback),
+    cancel: () => encoderCallbacks.current.cancel(),
+  });
+  const encoderTarget = useRef<string | null>(null);
   const [animatedPlayhead, setAnimatedPlayhead] = useState<Readonly<{
     sequence: number;
     sourceFrame: number;
@@ -279,9 +297,13 @@ export function SampleSurface({
     const owner = previewOwner.current;
     if (owner === null) return;
     previewOwner.current = null;
-    previewEpoch.current += 1;
+    const epoch = ++previewEpoch.current;
     void cancelSamplePreviewJourney(owner.session, owner.slot).then(
-      () => dispatch({type: "sample-action", action: {type: "preview-cleared"}}),
+      () => {
+        if (previewEpoch.current === epoch) {
+          dispatch({type: "sample-action", action: {type: "preview-cleared"}});
+        }
+      },
       () => {},
     );
   }, [dispatch]);
@@ -867,6 +889,60 @@ export function SampleSurface({
     state.project.current === null;
   const actionsDisabled = session === undefined || projectUnavailable || inspect === null ||
     !selectedAssigned || sample.pendingAction !== null;
+  const encoderDisabled = actionsDisabled || !encodersActive || externalCaptureBusy ||
+    captureTarget !== null || state.projectProjectionRefresh !== null ||
+    inspect?.slot !== selectedSlot || inspect?.projectRevision !== state.project.current?.revision;
+  const encoderKey = `${state.project.current?.projectId}:${inspect?.slot}:${inspect?.assetId}:${inspect?.projectRevision}`;
+  const encoderContext = useRef({key: encoderKey, disabled: encoderDisabled});
+  encoderContext.current = {key: encoderKey, disabled: encoderDisabled};
+  encoderCallbacks.current = {
+    preview,
+    commit: (playback) => {
+      if (encoderContext.current.disabled || encoderTarget.current !== encoderContext.current.key) {
+        cancelPreview();
+        return;
+      }
+      void performUpdate(playback);
+    },
+    cancel: cancelPreview,
+  };
+  useEffect(() => {
+    if (encoderDisabled) encoderTurn.current?.cancel();
+    return () => encoderTurn.current?.cancel();
+  }, [encoderKey, encoderDisabled]);
+  const encoders = useMemo<ContextualEncoders>(() => {
+    const group: readonly SampleEncoderParameter[] = encoderGroup === "trim"
+      ? ["start", "end", "pitch"] : ["gain", "pan", "tone"];
+    const labels = {start: "Start", end: "End", pitch: "Pitch", gain: "Pad Volume", pan: "Pan", tone: "Tone"};
+    const playback = editablePlayback;
+    const metadata = inspect?.metadata;
+    const value = (parameter: SampleEncoderParameter): string => {
+      if (playback === undefined || metadata == null) return "—";
+      switch (parameter) {
+        case "start": return `${(playback.trimStartFrame / metadata.sampleRate).toFixed(5)} s`;
+        case "end": return `${((playback.trimEndFrame ?? metadata.sourceFrames) / metadata.sampleRate).toFixed(5)} s`;
+        case "pitch": return `${(playback.pitchCents / 100).toFixed(1)} st`;
+        case "gain": return `${(playback.gainMillidb / 1000).toFixed(1)} dB`;
+        case "pan": return playback.pan === 0 ? "C" : `${playback.pan < 0 ? "L" : "R"}${Math.abs(playback.pan)}`;
+        case "tone": return Math.abs(playback.tone) <= 2 ? "Off" : `${playback.tone < 0 ? "LP" : "HP"} ${Math.abs(playback.tone)}`;
+      }
+    };
+    return {pending: encoderTurn.current?.pending() === true,
+      cancel: () => encoderTurn.current?.cancel(),
+      bindings: Object.fromEntries(group.map((parameter, index) => [index + 1, {
+        label: labels[parameter], value: value(parameter), disabled: encoderDisabled || metadata == null,
+        onTurn: (detents: number, fine = false) => {
+          if (encoderContext.current.key !== encoderKey || encoderContext.current.disabled ||
+            inspect === null || metadata == null || operationPending.current !== null) return;
+          encoderTarget.current = encoderKey;
+          encoderTurn.current?.turn(parameter, detents, fine, inspect.playback, metadata);
+        },
+      }]))};
+  }, [encoderGroup, editablePlayback, inspect, encoderKey, encoderDisabled]);
+  useEffect(() => {
+    onEncodersReady?.(encodersActive ? encoders : null);
+    return () => onEncodersReady?.(null);
+  }, [onEncodersReady, encodersActive, encoders]);
   const pendingDeleteAllowed = sample.pendingAction === null ||
     (sample.pendingAction.slot === selectedSlot &&
       (sample.pendingAction.kind === "import" || sample.pendingAction.kind === "replace"));
@@ -907,15 +983,19 @@ export function SampleSurface({
       playback={editablePlayback}
       audioSuspended={audioSuspended}
       disabled={actionsDisabled}
-      onPreview={preview}
-      onCommit={(playback) => { void performUpdate(playback); }}
-      onCancel={cancelPreview}
+      onPreview={(playback) => {encoderTurn.current?.cancel(); preview(playback);}}
+      onCommit={(playback) => {encoderTurn.current?.cancel(); void performUpdate(playback);}}
+      onCancel={() => {encoderTurn.current?.cancel(); cancelPreview();}}
       onReset={() => { void reset(); }}
     />
   ) : null;
 
   return (
     <main className="sample-surface">
+      <div className="sample-encoder-groups" role="group" aria-label="Sample encoder group">
+        <button type="button" aria-pressed={encoderGroup === "trim"} onClick={() => setEncoderGroup("trim")}>Trim / Pitch</button>
+        <button type="button" aria-pressed={encoderGroup === "sound"} onClick={() => setEncoderGroup("sound")}>Pad Sound</button>
+      </div>
       <header className="sample-heading">
         <div>
           <p className="eyebrow">Sample surface</p>
@@ -937,6 +1017,7 @@ export function SampleSurface({
             aria-current={page === target ? "page" : undefined}
             onClick={() => {
               if (page === target) return;
+              encoderTurn.current?.cancel();
               cancelPreview();
               setPage(target);
             }}>
@@ -1013,9 +1094,9 @@ export function SampleSurface({
             playheadFrame={playheadFrame}
             disabled={actionsDisabled}
             previewActive={sample.draft !== null}
-            onPreview={preview}
-            onCommit={(playback) => { void performUpdate(playback); }}
-            onCancel={cancelPreview}
+            onPreview={(playback) => {encoderTurn.current?.cancel(); preview(playback);}}
+            onCommit={(playback) => {encoderTurn.current?.cancel(); void performUpdate(playback);}}
+            onCancel={() => {encoderTurn.current?.cancel(); cancelPreview();}}
             {...(queryViewportWaveform === undefined
               ? {}
               : {onQueryWaveform: queryViewportWaveform})}

@@ -326,6 +326,8 @@ export interface PerformController {
   engageFx(fx: PerformanceFx, value: number): string;
   moveFx(gestureId: string, fx: PerformanceFx, value: number): void;
   releaseFx(gestureId: string, fx: PerformanceFx): void;
+  turnFx(fx: PerformanceFx, detents: number, fine?: boolean): void;
+  releaseEncoderFx(): void;
   toggleHold(): void;
   launchPattern(patternSlot: number): Promise<void>;
   refreshAuthority(): Promise<void>;
@@ -377,6 +379,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
   let discardCommitted = false;
   const openPadGestures = new Map<string, number>();
   const openFxGestures = new Map<PerformanceFx, string>();
+  const encoderFxGestures = new Map<PerformanceFx, string>();
   let closed = false;
   const listeners = new Set<() => void>();
 
@@ -564,6 +567,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (leavePromise !== null) return leavePromise;
       const operation = (async () => {
         await recordSetupPromise?.catch(() => {});
+        controller.releaseEncoderFx();
         await controller.stop().catch(fail);
         await finalizationPromise?.catch(fail);
         await projectMutationTail;
@@ -913,6 +917,11 @@ export function createPerformController(options: PerformControllerOptions): Perf
       return appendRawEvent(sessionId, event);
     },
     engageFx(fx, value) {
+      const existing = openFxGestures.get(fx);
+      if (existing !== undefined) {
+        controller.moveFx(existing, fx, value);
+        return existing;
+      }
       const gestureId = createId();
       dispatch({type: "fx", fx, value});
       openFxGestures.set(fx, gestureId);
@@ -937,11 +946,32 @@ export function createPerformController(options: PerformControllerOptions): Perf
     },
     releaseFx(gestureId, fx) {
       if (openFxGestures.get(fx) !== gestureId) return;
+      if (encoderFxGestures.get(fx) === gestureId) return;
       openFxGestures.delete(fx);
       if (["recording", "flushing"].includes(state.recording.phase)) {
         void controller.recordRawEvent({kind: "fx_release", gestureId, fx}).catch(fail);
       } else {
         void session.applyFxGesture({kind: "fx_release", fx}).catch(fail);
+      }
+    },
+    turnFx(fx, detents, fine = false) {
+      if (!Number.isFinite(detents) || detents === 0) return;
+      const value = Math.min(1000, Math.max(0,
+        state.fx[fx] + Math.trunc(detents) * (fine ? 1 : 10)));
+      if (value === state.fx[fx]) return;
+      // A turn continues the current FX gesture instead of stranding a
+      // journalled touch engagement. Subsequent touch-up cannot release the
+      // value the rotary now owns; page exit releases it under Core HOLD.
+      let gestureId = openFxGestures.get(fx);
+      if (gestureId === undefined) gestureId = controller.engageFx(fx, value);
+      else controller.moveFx(gestureId, fx, value);
+      encoderFxGestures.set(fx, gestureId);
+    },
+    releaseEncoderFx() {
+      for (const [fx, gestureId] of encoderFxGestures) {
+        encoderFxGestures.delete(fx);
+        controller.releaseFx(gestureId, fx);
+        if (!state.hold) dispatch({type: "fx", fx, value: 500});
       }
     },
     toggleHold() {

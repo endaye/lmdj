@@ -246,6 +246,36 @@ async function expectSequenceLayoutFits(page) {
     .toBeLessThanOrEqual(0);
 }
 
+test("Sequence status style draws text beside encoder readbacks without clipping eight rows", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  await page.goto("/index.html");
+  await openProjectPageAfterBoot(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.locator(".sequence-overview-names li")).toHaveCount(8);
+  // This is a stylesheet regression, not a transport failure journey. Supply
+  // the component's status markup inside the real rendered console so layout
+  // containment is measured without a transient Runtime error as a clock.
+  const geometry = await page.getByTestId("sequence-overview").evaluate((overview) => {
+    const status = document.createElement("p");
+    status.className = "sequence-overview-status is-encoder-status";
+    status.textContent = "Committed, publication pending";
+    overview.append(status);
+    try {
+      const rect = status.getBoundingClientRect();
+      const display = overview.closest('[data-testid="overview-display"]').getBoundingClientRect();
+      const rows = [...overview.querySelectorAll(".sequence-overview-names li")].map((row) => row.getBoundingClientRect());
+      return {width: rect.width, height: rect.height,
+        inside: rect.left >= display.left && rect.right <= display.right && rect.bottom <= display.bottom,
+        overlapsRows: rows.some((row) => rect.top < row.bottom && rect.bottom > row.top && rect.left < row.right && rect.right > row.left)};
+    } finally {status.remove();}
+  });
+  expect(geometry.width, "the status text must occupy a drawn area").toBeGreaterThan(0);
+  expect(geometry.height).toBeGreaterThan(0);
+  expect(geometry.inside).toBe(true);
+  expect(geometry.overlapsRows).toBe(false);
+  await expectSequenceLayoutFits(page);
+});
+
 async function awaitConsoleInteractive(page) {
   await page.waitForFunction(() =>
     document.querySelector(".creator-console-frame")?.inert !== true,
@@ -584,7 +614,7 @@ test("Sequence view controls scroll bars and navigate Pads without changing sele
   expect(position.left).toBeCloseTo(position.bar, 0);
   await assertViewOnly();
   await page.getByRole("button", {name: "Project", exact: true}).click();
-  await expect(physicalKey(page, "Encoder 1 — unassigned until hardware mapping is approved")).toBeDisabled();
+  await expect(physicalKey(page, "Encoder 1 — Select Project")).toBeEnabled();
   await expect(physicalKey(page, "Up — unassigned until direction mapping is approved")).toBeDisabled();
 });
 

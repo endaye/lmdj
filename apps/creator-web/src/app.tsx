@@ -37,7 +37,7 @@ import type {CreatorMode} from "./components/creator_mode";
 import {OverviewDisplay} from "./components/overview_display";
 import {PadColourControls} from "./components/pad_colour_controls";
 import {PadSurface} from "./components/pad_surface";
-import {PhysicalControls} from "./components/physical_controls";
+import {PhysicalControls, type ContextualEncoders, type EncoderBinding, type EncoderPosition} from "./components/physical_controls";
 import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {ProjectTouchWorkspace} from "./components/project_touch_workspace";
@@ -95,7 +95,7 @@ import {
   useRuntime,
   type RuntimeProviderPhase,
 } from "./runtime/runtime_context";
-import type {PatternTransportIntent} from
+import type {MonitorOutputSession, PatternTransportIntent} from
   "@lmdj/web-runtime-platform/runtime_types";
 import type {
   CreatorPadColourRuntimeSession,
@@ -123,6 +123,7 @@ import {
   type CreatorState,
 } from "./state/creator_state";
 import {readLastProjectId, writeLastProjectId} from "./state/last_project";
+import {readMonitorVolumePreference, writeMonitorVolumePreference} from "./state/monitor_volume_preference";
 import {
   readMetronomePreference,
   writeMetronomePreference,
@@ -153,6 +154,7 @@ import {
   type SequenceGridViewport,
   clampSequenceOverviewRowOffset,
   SEQUENCE_BANK_PADS,
+  SEQUENCE_TICKS_PER_BAR,
 } from "./state/sequence_grid_model";
 import {createEncoderTurn, type EncoderTurn} from "./state/encoder_input";
 import {
@@ -170,6 +172,13 @@ import {
   type PerformanceRecoverySummary,
 } from "./state/perform_state";
 import type {CapturePhase} from "./state/capture_state";
+
+function isMonitorSession(session: CreatorRuntimeSession | undefined):
+  session is CreatorRuntimeSession & MonitorOutputSession {
+  const candidate = session as Partial<MonitorOutputSession> | undefined;
+  return typeof candidate?.monitorVolume === "function" &&
+    typeof candidate.setMonitorVolume === "function" && typeof candidate.monitorDestination === "function";
+}
 
 interface AppProps {
   initialState?: CreatorState;
@@ -386,9 +395,43 @@ function Workspace({
   const bindSequenceScroll = useCallback((scroll: ((bars: number) => void) | null) => {
     setScrollSequenceBars(() => scroll);
   }, []);
-  // Encoder 3 / 4 turns preview Tempo / Swing and commit once at rest.
+  const [projectEncoders, setProjectEncoders] = useState<ContextualEncoders | null>(null);
+  const [sampleEncoders, setSampleEncoders] = useState<ContextualEncoders | null>(null);
+  const [performEncoders, setPerformEncoders] = useState<ContextualEncoders | null>(null);
+  const sampleEncodersRef = useRef<ContextualEncoders | null>(null);
+  const bindProjectEncoders = useCallback((value: ContextualEncoders | null) => setProjectEncoders(value), []);
+  const bindSampleEncoders = useCallback((value: ContextualEncoders | null) => {
+    sampleEncodersRef.current = value;
+    setSampleEncoders(value);
+  }, []);
+  const bindPerformEncoders = useCallback((value: ContextualEncoders | null) => setPerformEncoders(value), []);
+  const [monitorVolume, setMonitorVolume] = useState(100);
+  const monitorVolumeRef = useRef(100);
+  const [monitorReadySession, setMonitorReadySession] = useState<CreatorRuntimeSession | null>(null);
+  const monitorReadyRef = useRef<CreatorRuntimeSession | null>(null);
+  const monitorInputReady = useCallback((candidate: CreatorRuntimeSession | undefined) =>
+    !isMonitorSession(candidate) || monitorReadyRef.current === candidate, []);
+  const monitorVolumeReady = !isMonitorSession(session) || monitorReadySession === session;
+  const monitorRestoring = runtimePhase === "ready" && !monitorVolumeReady;
+  useEffect(() => {
+    monitorReadyRef.current = null;
+    setMonitorReadySession(null);
+    if (!isMonitorSession(session)) return;
+    let current = true;
+    void readMonitorVolumePreference().then((volume) => {
+      if (!current) return;
+      try {
+        session.setMonitorVolume(volume);
+        monitorVolumeRef.current = volume;
+        setMonitorVolume(volume);
+        monitorReadyRef.current = session;
+        setMonitorReadySession(session);
+      } catch { /* A terminal session stays unavailable. */ }
+    });
+    return () => {current = false;};
+  }, [session]);
+  // Encoder 3 previews BPM and commits one authoring change at rest.
   const [tempoPreview, setTempoPreview] = useState<number | null>(null);
-  const [swingPreview, setSwingPreview] = useState<number | null>(null);
   const [touchSettingsPreview, setTouchSettingsPreview] = useState<Readonly<{
     projectId: string;
     patternId: string;
@@ -406,9 +449,23 @@ function Workspace({
   const tempoTurn = useRef<EncoderTurn | null>(null);
   tempoTurn.current ??= encoderTurn(40, 240, setTempoPreview,
     (bpm) => settingsCommit.current({bpm}));
-  const swingTurn = useRef<EncoderTurn | null>(null);
-  swingTurn.current ??= encoderTurn(50, 75, setSwingPreview,
-    (swingPercent) => settingsCommit.current({swingPercent}));
+  const cancelPendingEncoders = useCallback(() => {
+    tempoTurn.current?.cancel();
+    sampleEncodersRef.current?.cancel?.();
+  }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {if (event.key === "Escape") cancelPendingEncoders();};
+    const onVisibility = () => {if (document.hidden) cancelPendingEncoders();};
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", cancelPendingEncoders);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", cancelPendingEncoders);
+      document.removeEventListener("visibilitychange", onVisibility);
+      cancelPendingEncoders();
+    };
+  }, [session, cancelPendingEncoders]);
   const [sequenceGridMode, setSequenceGridMode] =
     useState<SequenceGridEditMode>("note");
   const [sequenceGridSelection, setSequenceGridSelection] =
@@ -500,6 +557,13 @@ function Workspace({
   // stale key once so no browser keeps a value nothing reads.
   useEffect(() => { retireCreatorLayoutPreference(); }, []);
   const currentProjectId = state.project.current?.projectId ?? null;
+  useEffect(() => {
+    cancelPendingEncoders();
+    tempoTurn.current?.forget();
+  }, [currentProjectId, session, cancelPendingEncoders]);
+  useEffect(() => {
+    if (runtimePhase !== "ready") cancelPendingEncoders();
+  }, [runtimePhase, cancelPendingEncoders]);
   useEffect(() => {
     if (currentProjectId !== null) void writeLastProjectId(currentProjectId);
   }, [currentProjectId]);
@@ -662,6 +726,7 @@ function Workspace({
   }, [state.project.phase, state.project.current]);
 
   const resetInputForAdverseLifecycle = () => {
+    cancelPendingEncoders();
     const current = inputController.current;
     if (current !== null) {
       inputController.current = null;
@@ -757,6 +822,7 @@ function Workspace({
       dispatch,
       onAdverseLifecycle: () => { gestureEpoch.current += 1; },
       canUsePad: (slot: number) => {
+        if (!monitorInputReady(session)) return false;
         const seed = defaultSeedRef.current;
         return seed?.projectId !== stateRef.current.project.current?.projectId || slot >= 16 ||
           ["ready", "retired"].includes(seed!.slots[slot]!.phase);
@@ -819,7 +885,7 @@ function Workspace({
         controller.dispose();
       }
     };
-  }, [session, runtimePhase, inputControllerEpoch]);
+  }, [session, runtimePhase, inputControllerEpoch, monitorInputReady]);
 
   useEffect(() => {
     if (!runtimeHostState) return;
@@ -1193,7 +1259,9 @@ function Workspace({
             : selectCanImportProject(stateRef.current);
       if (!allowed) return null;
     }
-    return projectActions.claim(session);
+    const token = projectActions.claim(session);
+    if (token !== null) cancelPendingEncoders();
+    return token;
   };
 
   const ownsProjectAction = (token: ProjectActionToken): boolean =>
@@ -1433,7 +1501,7 @@ function Workspace({
   };
 
   const activateAudio = (event: {isTrusted: boolean}): Promise<boolean> | null => {
-    if (!session || runtimePhase !== "ready") return Promise.resolve(false);
+    if (!session || runtimePhase !== "ready" || !monitorInputReady(session)) return Promise.resolve(false);
     const pending = activationInFlight.current;
     if (pending?.session === session) return pending.promise;
     if (stateRef.current.audio.phase === "running" ||
@@ -1987,8 +2055,9 @@ function Workspace({
   const metronomeBpm = state.project.current?.bpm ?? null;
   useEffect(() => {
     const context = retainedAudioContext();
+    const destination = isMonitorSession(session) ? session.monitorDestination() : null;
     if (!metronomeOn || metronomeAudioPhase !== "running" || !metronomePlaying ||
-        session == null || context === null ||
+        session == null || context === null || destination === null ||
         metronomeOriginFrame === null || metronomeBpm === null) {
       if (metronomeAudioPhase !== "running") invalidateAudioClockAnchor();
       if (!metronomePlaying && metronomePendingGrid !== null) {
@@ -2024,7 +2093,7 @@ function Workspace({
         ]
       : [{fromFrame: 0, originFrame: metronomeOriginFrame, bpm: metronomeBpm}];
     const loop = createMetronomeClickLoop({
-      context,
+      context, destination,
       supply: (fromSeconds, untilSeconds) => {
         const fromFrame = Math.max(
           0, Math.ceil(contextSecondsToEngineFrame(fromSeconds)));
@@ -2509,6 +2578,7 @@ function Workspace({
   // never Sample capture or master recording — and every mode consumes this
   // same projection.
   const transportReady = isPatternTransportSession(session) &&
+    monitorVolumeReady &&
     transport.sessionId !== null &&
     state.project.phase === "ready" && state.project.current !== null &&
     selectCanStartGesture(state) && (
@@ -2520,7 +2590,9 @@ function Workspace({
   const playing = selectTransportPlaying(transport);
   // Tempo and Swing lock while recording or while a transport command
   // settles, as the touch controls do; a turn in progress is dropped.
-  const sequenceSettingsLocked = transportBusy || recording;
+  const sequenceSettingsLocked = transportBusy || recording || state.project.phase !== "ready" ||
+    state.runtime.phase !== "ready" || state.projectProjectionRefresh !== null ||
+    state.transfer.phase !== "idle";
   // Core refuses a Pad colour change while recording or while the transport
   // settles; playing is fine. A pending Project change would leave the
   // controls naming a stale revision.
@@ -2536,25 +2608,22 @@ function Workspace({
     : null;
   useEffect(() => {
     if (!sequenceSettingsLocked) return;
-    tempoTurn.current?.cancel();
-    swingTurn.current?.cancel();
+    cancelPendingEncoders();
     setTouchSettingsPreview(null);
-  }, [sequenceSettingsLocked]);
+  }, [sequenceSettingsLocked, cancelPendingEncoders]);
   // Drafts and queued encoder turns belong to the visible editing context.
   // Dropping them on navigation must not write to the newly opened object.
   useEffect(() => {
-    tempoTurn.current?.cancel();
+    cancelPendingEncoders();
     tempoTurn.current?.forget();
-    swingTurn.current?.cancel();
-    swingTurn.current?.forget();
     setTouchSettingsPreview(null);
-  }, [activeMode, systemOpen, state.project.current?.projectId, sequence.selectedPatternId]);
+  }, [activeMode, systemOpen, state.project.current?.projectId,
+    sequence.selectedPatternId, cancelPendingEncoders]);
   // A failed settings commit leaves Truth where it was; the next turn starts
   // from Truth rather than from the request that did not land.
   useEffect(() => {
     if (sequence.errorCode === null) return;
     tempoTurn.current?.forget();
-    swingTurn.current?.forget();
   }, [sequence.errorCode]);
   settingsCommit.current = (changes) => { void updateSequenceSettings(changes); };
   const sequenceProject = state.project.current;
@@ -2578,14 +2647,18 @@ function Workspace({
   const trimOverlayOpen = sequence.phase === "trim-overlay" ||
     captureTransportOverlay;
   const applyMode = (mode: CreatorMode) => {
+    cancelPendingEncoders();
     setActiveMode(mode);
   };
   const openSystem = () => {
+    cancelPendingEncoders();
+    performControllerRef.current?.releaseEncoderFx();
     inputController.current?.clearPressed();
     void padCapture.current?.cancel();
     setSystemOpen(true);
   };
   const selectMode = (mode: CreatorMode) => {
+    cancelPendingEncoders();
     setSystemOpen(false);
     inputController.current?.clearPressed();
     setRailShift(false);
@@ -2602,6 +2675,7 @@ function Workspace({
     applyMode(mode);
   };
   const selectBank = (bank: typeof state.activeBank) => {
+    cancelPendingEncoders();
     inputController.current?.clearPressed();
     setRailShift(false);
     dispatch({type: "bank-selected", bank});
@@ -2624,6 +2698,7 @@ function Workspace({
   const padNavigationAvailable = isCreatorActionAllowed(state,
     {type: "bank-selected", bank: state.activeBank});
   const stepSequencePad = (step: -1 | 1) => {
+    cancelPendingEncoders();
     if (!isCreatorActionAllowed(stateRef.current,
         {type: "bank-selected", bank: stateRef.current.activeBank})) return;
     const next = Math.max(0, Math.min(63, sequenceCurrentPadRef.current + step));
@@ -2647,12 +2722,14 @@ function Workspace({
   const padSurface = (
     <PadSurface
       state={state}
+      audioPreparing={monitorRestoring}
       emptyPadCapture={padCaptureState !== null}
       {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
       {...(activeMode === "sequence" ? {currentSlot: sequenceCurrentPad} : {})}
       {...(activeMode === "sample" ? {
         onSelectSample: (slot: number) => {
+          cancelPendingEncoders();
           dispatch({type: "sample-action", action: {type: "slot-selected", slot}});
         },
         onChooseSample: (slot: number) => sampleFilePickIntent.current(slot),
@@ -2674,7 +2751,8 @@ function Workspace({
       state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
       !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
       historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
-      state.sample.draft !== null ? "Finish the parameter edit first." : "",
+      state.sample.draft !== null && sampleEncoders?.pending !== true ? "Finish the parameter edit first." : "",
+    beforeRestore: cancelPendingEncoders,
     onBusy: setHistoryBusy,
     onChanged: async () => {
       const project = await refreshPerformProject();
@@ -2688,6 +2766,31 @@ function Workspace({
       await refreshSequence();
     },
   });
+
+  const encoderBindings: Partial<Record<EncoderPosition, EncoderBinding>> = {
+    ...(!systemOpen ? activeMode === "project" ? projectEncoders?.bindings :
+      activeMode === "sample" ? sampleEncoders?.bindings :
+      activeMode === "perform" && performEnabled ? performEncoders?.bindings :
+      activeMode === "sequence" && sequenceProject !== null ? {
+        1: {label: "scroll bars", value: sequenceGridViewport === null ? "—" :
+          `${(sequenceGridViewport.startTick / SEQUENCE_TICKS_PER_BAR + 1).toFixed(1)}`,
+          disabled: scrollSequenceBars === null, onTurn: (detents: number) => scrollSequenceBars?.(detents)},
+        2: {label: "scroll track rows", value: `${slotAddress(overviewRowOffset)}–${slotAddress(overviewRowOffset + 7)}`,
+          onTurn: (detents: number) => setOverviewRowOffset((offset) => clampSequenceOverviewRowOffset(offset + detents))},
+        3: {label: "Tempo", value: `${visibleTouchPreview?.bpm ?? tempoPreview ?? sequenceProject.bpm} BPM`, disabled: sequenceSettingsLocked,
+          onTurn: (detents: number) => tempoTurn.current?.turn(detents, sequenceProject.bpm)},
+      } : {} : {}),
+    4: {label: "Output Volume", value: `${monitorVolume}%`,
+      disabled: !isMonitorSession(session) || monitorReadySession !== session || runtimePhase !== "ready",
+      onTurn: (detents: number) => {
+        if (!Number.isFinite(detents) || !isMonitorSession(session) || monitorReadyRef.current !== session) return;
+        const volume = Math.max(0, Math.min(100, monitorVolumeRef.current + Math.trunc(detents)));
+        try {session.setMonitorVolume(volume);} catch {return;}
+        monitorVolumeRef.current = volume;
+        setMonitorVolume(volume);
+        void writeMonitorVolumePreference(volume);
+      }},
+  };
 
   return (
     <DiagnosticsProvider value={reportFailure}>
@@ -2748,32 +2851,8 @@ function Workspace({
               onOpenSystem={openSystem}
               systemOpen={systemOpen}
               systemEntryRef={systemEntry}
-              // Sequence view navigation extends the 2026-10-04 bindings.
-              // Other pages still await their specific #1822 mapping.
-              {...(activeMode === "sequence" && sequenceProject !== null ? {
-                encoders: {
-                  1: {
-                    label: "scroll bars",
-                    disabled: scrollSequenceBars === null,
-                    onTurn: (detents: number) => scrollSequenceBars?.(detents),
-                  },
-                  2: {
-                    label: "scroll track rows",
-                    onTurn: (detents: number) => setOverviewRowOffset((offset) =>
-                      clampSequenceOverviewRowOffset(offset + detents)),
-                  },
-                  3: {
-                    label: "Tempo",
-                    disabled: sequenceSettingsLocked,
-                    onTurn: (detents: number) => tempoTurn.current?.turn(detents, sequenceProject.bpm),
-                  },
-                  4: {
-                    label: "Swing",
-                    disabled: sequenceSettingsLocked,
-                    onTurn: (detents: number) => swingTurn.current?.turn(
-                      detents, sequenceProject.sequenceSettings.swingPercent),
-                  },
-                },
+              encoders={encoderBindings}
+              {...(activeMode === "sequence" && !systemOpen && sequenceProject !== null ? {
                 padStep: {
                   backLabel: "Previous Pad — ↑",
                   forwardLabel: "Next Pad — ↓",
@@ -2822,7 +2901,9 @@ function Workspace({
               rowOffset={overviewRowOffset}
               currentPad={sequenceCurrentPad}
               tempoPreview={sequencePreviewAllowed ? visibleTouchPreview?.bpm ?? tempoPreview : null}
-              swingPreview={sequencePreviewAllowed ? visibleTouchPreview?.swingPercent ?? swingPreview : null}
+              swingPreview={sequencePreviewAllowed ? visibleTouchPreview?.swingPercent ?? null : null}
+              encoders={encoderBindings}
+              systemOpen={systemOpen}
               transport={transport}
               midi={midi}
             />
@@ -2830,6 +2911,8 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
+              {monitorRestoring && <p id="output-volume-restore-status" role="status"
+                aria-label="Output volume restore status">Restoring output volume…</p>}
       {/* The touch area belongs to the page; Pad recording appears only while
           a take is in progress, awaits review or reports a message. Its
           source is chosen in System. */}
@@ -2946,6 +3029,8 @@ function Workspace({
               ) : null}
               {activeMode === "project" ? (
                 <ProjectTouchWorkspace
+                  encodersActive={!systemOpen}
+                  onEncodersReady={bindProjectEncoders}
                   state={state}
                   canOpen={canOpenProject}
                   canImport={canImportProject}
@@ -3052,6 +3137,7 @@ function Workspace({
               ) : activeMode === "perform" && state.project.current !== null ? (
                 performController !== null ? (
                   <PerformSurface
+                    onEncodersReady={bindPerformEncoders}
                     controller={performController}
                     reviewRequested={performReviewRequested}
                     onReviewShown={() => setPerformReviewRequested(false)}
@@ -3122,6 +3208,8 @@ function Workspace({
                       }}
                     />
                   ) : null}
+                  encodersActive={activeMode === "sample" && !systemOpen}
+                  onEncodersReady={bindSampleEncoders}
                   state={state}
                   externalCaptureBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                     recording || !["idle", "saved", "discarded"].includes(historyPerformPhase)}
@@ -3143,7 +3231,7 @@ function Workspace({
                   onCaptureGesture={(event) => { void activateAudio(event); }}
                   onContinueCaptureInSequence={() => {
                     if (isSequenceSession(session) && state.project.current !== null) {
-                      setActiveMode("sequence");
+                      applyMode("sequence");
                     }
                   }}
                   {...(isSampleSession(session) ? {session} : {})}

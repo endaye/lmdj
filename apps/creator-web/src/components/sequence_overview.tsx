@@ -27,6 +27,7 @@ import {usePatternPlayheadTick} from "./use_pattern_playhead";
 import {padContent} from "../state/overview_context";
 
 interface SequenceOverviewProps {
+  hideContext?: boolean;
   project: ProjectView | null;
   state: SequenceState;
   transport?: PatternTransportState;
@@ -42,6 +43,7 @@ interface SequenceOverviewProps {
 
 export function SequenceOverview({
   project,
+  hideContext = false,
   state,
   transport,
   bank,
@@ -104,9 +106,9 @@ export function SequenceOverview({
       </p>
       {/* One context line: a status, when there is one, takes its place. */}
       {statusLine !== null ? (
-        <p className="sequence-overview-status">{statusLine}</p>
+        <p className={`sequence-overview-status${hideContext ? " is-encoder-status" : ""}`} title={statusLine}>{statusLine}</p>
       ) : (
-      <dl className="sequence-overview-context">
+      <dl className={`sequence-overview-context${hideContext ? " visually-hidden" : ""}`}>
         <div>
           <dt>Bars</dt>
           <dd>{bars === null ? "—" : `01–${String(bars).padStart(2, "0")}`}</dd>

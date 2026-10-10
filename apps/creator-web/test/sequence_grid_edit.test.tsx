@@ -270,10 +270,14 @@ test("touch timing previews reach the upper screen and cancel without a Truth wr
   fireEvent.pointerDown(bpm, {pointerId: 53});
   fireEvent.change(bpm, {target: {value: "132"}});
   expect(document.querySelector(".overview-bpm")?.textContent).toBe("132 BPM");
+  expect(document.querySelector('.encoder-readbacks [data-encoder="3"] dd')?.textContent)
+    .toBe("132 BPM");
   expect(commit).not.toHaveBeenCalled();
   expect(fixture.truth.revision).toBe(0);
   fireEvent.keyDown(bpm, {key: "Escape"});
   expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM");
+  expect(document.querySelector('.encoder-readbacks [data-encoder="3"] dd')?.textContent)
+    .toBe("120 BPM");
   fireEvent.pointerUp(window, {pointerId: 53});
   expect(commit).not.toHaveBeenCalled();
   fireEvent.pointerDown(swing, {pointerId: 54});
@@ -291,6 +295,8 @@ test("touch timing previews reach the upper screen and cancel without a Truth wr
   await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
   // This fixture refuses settings writes; both displays return to Truth.
   await waitFor(() => expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM"));
+  expect(document.querySelector('.encoder-readbacks [data-encoder="3"] dd')?.textContent)
+    .toBe("120 BPM");
   expect((again as HTMLInputElement).value).toBe("120");
   expect(fixture.truth.revision).toBe(0);
 });

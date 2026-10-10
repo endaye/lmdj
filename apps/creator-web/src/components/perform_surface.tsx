@@ -1,5 +1,7 @@
 import {performCaptureUnavailableMessage} from "../state/error_messages";
-import {useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore} from "react";
+import {useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
+import type {PerformanceFx} from "@lmdj/web-runtime-platform/runtime_types";
+import type {ContextualEncoders} from "./physical_controls";
 
 import type {ProjectView} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
@@ -25,6 +27,7 @@ export interface PerformSurfaceProps {
   readonly recordingBusy?: boolean;
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
+  readonly onEncodersReady?: (encoders: ContextualEncoders | null) => void;
 }
 
 type PerformPage = "live" | "slots" | "takes" | "replay";
@@ -156,11 +159,25 @@ export function PerformSurface(props: PerformSurfaceProps) {
   }, [page]);
   const [fxGestureActive, setFxGestureActive] = useState(false);
   useEffect(() => { controller.setBank(props.bank); }, [controller, props.bank]);
+  const [moreEncoders, setMoreEncoders] = useState(false);
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getState,
     controller.getState,
   );
+  const encoders = useMemo<ContextualEncoders>(() => {
+    const group: readonly PerformanceFx[] = moreEncoders
+      ? ["crush", "stutter", "gate"] : ["filter", "delay", "reverb"];
+    return {bindings: Object.fromEntries(group.map((fx, index) => [index + 1, {
+      label: fx[0]!.toUpperCase() + fx.slice(1),
+      value: `${(state.fx[fx] / 10).toFixed(1)}%`,
+      onTurn: (detents: number, fine?: boolean) => controller.turnFx(fx, detents, fine),
+    }]))};
+  }, [controller, moreEncoders, state.fx]);
+  useEffect(() => {
+    props.onEncodersReady?.(encoders);
+    return () => props.onEncodersReady?.(null);
+  }, [props.onEncodersReady, encoders]);
   useEffect(() => {
     const disconnect = controller.connect();
     const stopWhenHidden = () => {
@@ -223,6 +240,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
       </dl></details> : null}
       <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
         onClick={() => controller.toggleHold()}>HOLD</button>} active={page === "live"} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
+        onGroupChange={setMoreEncoders}
         onEngage={(fx, value) => controller.engageFx(fx, value)}
         onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
         onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
