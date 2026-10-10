@@ -326,6 +326,183 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(self.fresh().deliver(self.api, self.report)["status"], "needs-reconciliation")
         self.assertEqual(len(self.posts()), 1)
 
+    def strand(self, *, posted):
+        """Persist a claim whose business POST outcome is unknown (gen-879 shape)."""
+        original = self.api.create_issue
+        def lost(**kwargs):
+            if posted:
+                original(**kwargs)
+            raise Crash()
+        self.api.create_issue = lost
+        with self.assertRaises(Crash):
+            self.fresh().deliver(self.api, self.report)
+        self.api.create_issue = original
+        state = self.fresh().load()
+        key, row = next(iter(state["deliveries"].items()))
+        self.assertEqual(row["status"], "claimed")
+        self.assertIsNone(row["ack"])
+        return key, row["claim"]["digest"]
+
+    def command(self, key, digest, resolution):
+        return {"delivery": key, "claim_digest": digest, "resolution": resolution}
+
+    def test_reconcile_claim_requires_closed_command_and_exact_audited_claim(self):
+        key, digest = self.strand(posted=False)
+        for command in (None, [], "absent",
+                        {"delivery": key, "claim_digest": digest},
+                        {"delivery": key, "claim_digest": digest, "resolution": {"kind": "absent"}, "extra": 1},
+                        {"delivery": "g" * 64, "claim_digest": digest, "resolution": {"kind": "absent"}},
+                        {"delivery": key[:-1].upper() + key[-1], "claim_digest": digest, "resolution": {"kind": "absent"}},
+                        {"delivery": "0" * 64, "claim_digest": digest, "resolution": {"kind": "absent"}},
+                        {"delivery": key, "claim_digest": "0" * 64, "resolution": {"kind": "absent"}},
+                        {"delivery": key, "claim_digest": digest, "resolution": {"kind": "unknown"}},
+                        {"delivery": key, "claim_digest": digest, "resolution": {"kind": "absent", "issue_number": 9}},
+                        {"delivery": key, "claim_digest": digest, "resolution": {"kind": "receipt", "issue_number": 901}},
+                        {"delivery": key, "claim_digest": digest, "resolution": {"kind": "receipt", "issue_number": 0, "comment_id": None}},
+                        {"delivery": key, "claim_digest": digest, "resolution": {"kind": "receipt", "issue_number": 901, "comment_id": 0}},
+                        {"delivery": key, "claim_digest": digest,
+                         "resolution": {"kind": "receipt", "issue_number": 901, "comment_id": None, "x": 1}}):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                    self.fresh().reconcile_claim(self.api, command)
+                self.assertEqual(self.fresh().load()["deliveries"][key]["status"], "claimed")
+        self.assertFalse(self.posts())
+
+    def test_claim_cleared_reducer_transition_is_exact(self):
+        key, digest = self.strand(posted=False)
+        before = self.fresh().load()
+        event = {"id": "outbox:report-epoch:2", "epoch": "report-epoch", "generation": 2,
+                 "type": "claim-cleared", "data": {"delivery": key, "claim_digest": digest, "why": "audited absence"}}
+        cleared = outbox.reduce(before, event)
+        self.assertEqual(cleared["deliveries"][key]["status"], "queued")
+        self.assertIsNone(cleared["deliveries"][key]["claim"])
+        self.assertEqual(before["deliveries"][key]["status"], "claimed")
+        for data in ({"delivery": key, "claim_digest": "0" * 64, "why": "x"},
+                     {"delivery": key, "claim_digest": digest, "why": ""},
+                     {"delivery": key, "claim_digest": digest, "why": "x", "extra": 1},
+                     {"delivery": "0" * 64, "claim_digest": digest, "why": "x"}):
+            with self.subTest(data=data):
+                with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                    outbox.reduce(before, {**event, "data": data})
+        self.memory, self.api = Memory(), FakeGitHubApi()
+        delivered = self.fresh().deliver(self.api, self.report)
+        self.assertEqual(delivered["status"], "delivered")
+        key = outbox.batch.digest({"key": self.report.key, "observation": self.report.observation})
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+            outbox.reduce(self.fresh().load(), {"id": "outbox:report-epoch:9", "epoch": "report-epoch",
+                "generation": 4, "type": "claim-cleared",
+                "data": {"delivery": key, "claim_digest": digest, "why": "x"}})
+
+    def test_absent_reconcile_requeues_and_ordinary_path_rederives_identical_claim(self):
+        key, digest = self.strand(posted=False)
+        answer = self.fresh().reconcile_claim(self.api, self.command(key, digest, {"kind": "absent"}))
+        self.assertEqual(answer, {"status": "claim-cleared", "delivery": key})
+        self.assertFalse(self.posts())
+        self.assertEqual([e["type"] for e in self.memory.journal().load()], ["queue", "claim", "claim-cleared"])
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+            self.fresh().reconcile_claim(self.api, self.command(key, digest, {"kind": "absent"}))
+        answer = self.fresh().deliver(self.api, self.report)
+        self.assertEqual(answer["status"], "delivered")
+        self.assertEqual(len(self.posts()), 1)
+        events = self.memory.journal().load()
+        self.assertEqual([e["type"] for e in events],
+                         ["queue", "claim", "claim-cleared", "claim", "ack", "delivered"])
+        claims = [e["data"] for e in events if e["type"] == "claim"]
+        self.assertEqual(len(claims), 2)
+        self.assertEqual(claims[0], claims[1])
+
+    def test_absent_reconcile_refused_while_receipt_visible(self):
+        key, digest = self.strand(posted=True)
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+            self.fresh().reconcile_claim(self.api, self.command(key, digest, {"kind": "absent"}))
+        self.assertEqual(self.fresh().load()["deliveries"][key]["status"], "claimed")
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_receipt_reconcile_binds_the_exact_live_receipt(self):
+        key, digest = self.strand(posted=True)
+        number = self.api.issues[0]["number"]
+        resolution = {"kind": "receipt", "issue_number": number, "comment_id": None}
+        answer = self.fresh().reconcile_claim(self.api, self.command(key, digest, resolution))
+        self.assertEqual(answer, {"status": "delivered", "delivery": key,
+                                  "receipt": {"issue_number": number, "comment_id": None}})
+        self.assertEqual(len(self.posts()), 1)
+        self.assertEqual([e["type"] for e in self.memory.journal().load()], ["queue", "claim", "delivered"])
+        self.assertEqual(self.fresh().recover(self.api), {"status": "ready"})
+        self.assertEqual(self.fresh().deliver(self.api, self.report)["status"], "delivered")
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_receipt_reconcile_rejects_a_mismatched_or_forged_receipt(self):
+        key, digest = self.strand(posted=True)
+        number = self.api.issues[0]["number"]
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+            self.fresh().reconcile_claim(self.api, self.command(
+                key, digest, {"kind": "receipt", "issue_number": number + 100, "comment_id": None}))
+        self.api.issues[0]["body"] += "forged"
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+            self.fresh().reconcile_claim(self.api, self.command(
+                key, digest, {"kind": "receipt", "issue_number": number, "comment_id": None}))
+        self.api.issues[0]["body"] = self.api.issues[0]["body"][:-6]
+        self.api.issues[0]["user"] = {"login": "human", "type": "User"}
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+            self.fresh().reconcile_claim(self.api, self.command(
+                key, digest, {"kind": "receipt", "issue_number": number, "comment_id": None}))
+        self.assertEqual(self.fresh().load()["deliveries"][key]["status"], "claimed")
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_absent_reconcile_never_clears_an_acknowledged_write(self):
+        # The business POST really persisted and its ack is durable; only the
+        # delivered confirmation is missing. Build that exact state directly.
+        issue = self.api.create_issue(title=self.report.title, body=self.report.issue_body("endaye"),
+                                      labels=list(self.report.labels), assignees=["endaye"])
+        driver = self.fresh()
+        driver.load()
+        key = outbox.batch.digest({"key": self.report.key, "observation": self.report.observation})
+        payload = outbox.freeze(self.report, "endaye")
+        driver._persist("queue", {"delivery": key, "payload": payload})
+        operation = {"kind": "create-issue", "issue_number": None,
+                     "payload": {"title": self.report.title, "body": payload["issue_body"],
+                                 "labels": list(self.report.labels), "assignees": ["endaye"]}}
+        operation["digest"] = outbox.batch.digest(operation)
+        driver._persist("claim", {"delivery": key, "operation": operation})
+        receipt = {"issue_number": issue["number"], "comment_id": None}
+        driver._persist("ack", {"delivery": key, "receipt": receipt})
+        row = self.fresh().load()["deliveries"][key]
+        self.assertEqual(row["status"], "acknowledged")
+        digest = row["claim"]["digest"]
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "acknowledged"):
+            self.fresh().reconcile_claim(self.api, self.command(key, digest, {"kind": "absent"}))
+        answer = self.fresh().reconcile_claim(self.api, self.command(
+            key, digest, {"kind": "receipt", "issue_number": issue["number"], "comment_id": None}))
+        self.assertEqual(answer["status"], "delivered")
+        self.assertEqual(len(self.posts()), 1)
+        self.assertEqual([e["type"] for e in self.memory.journal().load()], ["queue", "claim", "ack", "delivered"])
+
+    def test_absent_reconcile_of_comment_claim_rederives_one_comment(self):
+        self.fresh().deliver(self.api, self.report)
+        newer = replace(self.report, observation="52/1/suite/hash")
+        original = self.api.create_comment
+        self.api.create_comment = lambda number, body: (_ for _ in ()).throw(Crash())
+        with self.assertRaises(Crash):
+            self.fresh().deliver(self.api, newer)
+        self.api.create_comment = original
+        state = self.fresh().load()
+        key = outbox.batch.digest({"key": newer.key, "observation": newer.observation})
+        row = state["deliveries"][key]
+        self.assertEqual((row["status"], row["claim"]["kind"]), ("claimed", "create-comment"))
+        answer = self.fresh().reconcile_claim(self.api, self.command(key, row["claim"]["digest"], {"kind": "absent"}))
+        self.assertEqual(answer["status"], "claim-cleared")
+        answer = self.fresh().deliver(self.api, newer)
+        self.assertEqual(answer["status"], "delivered")
+        self.assertIsNotNone(answer["receipt"]["comment_id"])
+        self.assertEqual([p[0] for p in self.posts()], ["create_issue", "create_comment"])
+
+    def test_reconcile_claim_requires_the_writer_lock(self):
+        key, digest = self.strand(posted=False)
+        self.memory.lock = False
+        with self.assertRaisesRegex(outbox.OutboxBlocked, "lock"):
+            self.fresh().reconcile_claim(self.api, self.command(key, digest, {"kind": "absent"}))
+        self.assertFalse(self.posts())
+
 
 if __name__ == "__main__":
     unittest.main()

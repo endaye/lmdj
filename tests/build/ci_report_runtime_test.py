@@ -1107,6 +1107,99 @@ class RuntimeJourneyTests(unittest.TestCase):
         self.assertEqual(self.make().execute('drain'), {'status': 'idle'})
         self.assertEqual([call for call in self.api.calls if call[0] in {'create_issue', 'create_comment'}], posts)
 
+    def stranded_claim(self, *, posted):
+        """Persist one claimed business POST whose outcome stays unknown."""
+        self.review.finalize_with_current_producer()
+        self.initialize()
+        original = self.api.create_issue
+        def lost(**kwargs):
+            if posted:
+                original(**kwargs)
+            raise Crash('claim outcome unknown')
+        self.api.create_issue = lost
+        with self.assertRaises(Crash):
+            self.make().execute('review', run_id=51, attempt=1)
+        self.api.create_issue = original
+        state = self.make().outbox().load()
+        key, row = next(iter(state['deliveries'].items()))
+        self.assertEqual(row['status'], 'claimed')
+        self.assertIsNone(row['ack'])
+        return key, row['claim']['digest']
+
+    def test_reconcile_claim_requires_its_closed_command(self):
+        self.initialize()
+        for command in (None, {'delivery': '0' * 64}, 'absent'):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(Exception, 'why:'):
+                    self.make().execute('reconcile-claim', command=command)
+        self.assertFalse(self.api.issues)
+        self.assertFalse(self.outbox_http.comments)
+
+    def test_reconcile_claim_absent_recovers_one_stranded_business_post(self):
+        key, digest = self.stranded_claim(posted=False)
+        scheduler_before = deepcopy((self.scheduler_http.issue, self.scheduler_http.comments))
+        posts = [call for call in self.api.calls if call[0] == 'create_issue']
+        answer = self.make().execute('reconcile-claim', command={
+            'delivery': key, 'claim_digest': digest, 'resolution': {'kind': 'absent'}})
+        self.assertEqual(answer, {'status': 'claim-cleared', 'delivery': key})
+        self.assertEqual([call for call in self.api.calls if call[0] == 'create_issue'], posts)
+        self.assertEqual(deepcopy((self.scheduler_http.issue, self.scheduler_http.comments)), scheduler_before)
+        self.assertFalse(self.api.issues)
+        self.assertEqual(self.make().execute('drain')['status'], 'delivered')
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertEqual(self.make().execute('drain'), {'status': 'idle'})
+        self.assertEqual(len(self.api.issues), 1)
+
+    def test_reconcile_claim_binds_exact_receipt_without_a_second_post(self):
+        key, digest = self.stranded_claim(posted=True)
+        number = self.api.issues[0]['number']
+        answer = self.make().execute('reconcile-claim', command={
+            'delivery': key, 'claim_digest': digest,
+            'resolution': {'kind': 'receipt', 'issue_number': number, 'comment_id': None}})
+        self.assertEqual(answer, {'status': 'delivered', 'delivery': key,
+                                  'receipt': {'issue_number': number, 'comment_id': None}})
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertEqual(self.make().execute('drain'), {'status': 'idle'})
+        self.assertEqual(len(self.api.issues), 1)
+
+    def test_reconcile_claim_cli_uses_request_file_and_never_posts(self):
+        key, digest = self.stranded_claim(posted=False)
+        with tempfile.TemporaryDirectory() as directory:
+            config, summary = Path(directory) / 'config.json', Path(directory) / 'summary'
+            request = Path(directory) / 'request.json'
+            config.write_text(json.dumps(self.config))
+            request.write_text(json.dumps(
+                {'delivery': key, 'claim_digest': digest, 'resolution': {'kind': 'absent'}}))
+            with mock.patch.dict('os.environ', self.fixture.env, clear=True), mock.patch.object(
+                    batch_runtime, 'UrllibGitHubApi', return_value=self.api):
+                code = module.main(['--config', str(config), '--root', str(self.fixture.root), '--summary', str(summary),
+                                    'reconcile-claim', '--request', str(request)])
+            self.assertEqual(code, 0)
+            self.assertIn('"status": "claim-cleared"', summary.read_text())
+            self.assertFalse(self.api.issues)
+            self.assertEqual(self.make().execute('drain')['status'], 'delivered')
+            self.assertEqual(len(self.api.issues), 1)
+
+    def test_reconcile_claim_cli_rejects_a_wrong_digest_with_redacted_summary(self):
+        key, _ = self.stranded_claim(posted=False)
+        with tempfile.TemporaryDirectory() as directory:
+            config, summary = Path(directory) / 'config.json', Path(directory) / 'summary'
+            request = Path(directory) / 'request.json'
+            config.write_text(json.dumps(self.config))
+            request.write_text(json.dumps(
+                {'delivery': key, 'claim_digest': '0' * 64, 'resolution': {'kind': 'absent'}}))
+            with mock.patch.dict('os.environ', self.fixture.env, clear=True), mock.patch.object(
+                    batch_runtime, 'UrllibGitHubApi', return_value=self.api):
+                code = module.main(['--config', str(config), '--root', str(self.fixture.root), '--summary', str(summary),
+                                    'reconcile-claim', '--request', str(request)])
+            self.assertEqual(code, 1)
+            self.assertIn('"why"', summary.read_text())
+            self.assertIn('"remedy"', summary.read_text())
+            self.assertNotIn('SECRET', summary.read_text())
+            self.assertFalse(self.api.issues)
+            state = self.make().outbox().load()
+            self.assertEqual(next(iter(state['deliveries'].values()))['status'], 'claimed')
+
     def settled_batch(self):
         self.initialize()
         start = self.fixture.start()

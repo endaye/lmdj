@@ -14,7 +14,7 @@ import self_test_report as reporting
 SCHEMA = "lmdj.report-outbox.v1"
 _FROZEN_FIELD_DEFAULTS = {"management": None, "causal_order": None}
 _EVENT_TYPES = frozenset({
-    "queue", "claim", "ack", "delivered", "refused",
+    "queue", "claim", "ack", "delivered", "refused", "claim-cleared",
     "recovery-queue", "recovery-comment-claim", "recovery-comment-ack",
     "recovery-comment-delivered", "recovery-close-claim", "recovery-abandon",
     "recovery-stale", "recovery-close-ack", "recovery-close-delivered",
@@ -232,6 +232,16 @@ def reduce(state, event):
             delivery["status"] = "refused"
         else:
             require(False, "unknown outbox transition")
+    elif event["type"] == "claim-cleared":
+        require(key in result["deliveries"], "outbox event has no queued report")
+        delivery = result["deliveries"][key]
+        require(set(data) == {"delivery", "claim_digest", "why"}
+                and isinstance(data["claim_digest"], str)
+                and delivery["status"] == "claimed" and delivery["claim"] is not None
+                and data["claim_digest"] == delivery["claim"]["digest"]
+                and isinstance(data["why"], str) and data["why"],
+                "claim clearing is not the exact audited uncertain claim")
+        delivery["claim"], delivery["status"] = None, "queued"
     elif event["type"].startswith("recovery-"):
         recovery_data = data.get("recovery")
         if event["type"] == "recovery-queue":
@@ -598,6 +608,57 @@ class Outbox:
                         "why": "a prior POST claim has no confirmed durable delivery, including possible death before sending",
                         "remedy": "inspect exact issue/comment IDs and intent; do not automatically repeat or reset this claim"}
         return {"status": "ready"}
+
+    def reconcile_claim(self, api, command):
+        """Operator-audited settlement of one uncertain business POST claim.
+
+        The only safe resolution for a claimed POST whose outcome stayed
+        unknown: the closed command names the exact delivery and claim digest,
+        then either proves the POST absent from the complete authenticated
+        inventory (the claim returns to queued and the next ordinary delivery
+        re-derives the byte-identical claim and POST from the frozen payload)
+        or binds a canonical positive receipt verified live against the frozen
+        payload. No business POST is issued here and no reducer check is
+        skipped; an acknowledged write can only be settled by its receipt."""
+        require(isinstance(command, dict) and set(command) == {"delivery", "claim_digest", "resolution"},
+                "reconcile-claim requires a closed audited command")
+        key, claim_digest, resolution = command["delivery"], command["claim_digest"], command["resolution"]
+        require(all(isinstance(value, str) and len(value) == 64
+                    and all(character in "0123456789abcdef" for character in value)
+                    for value in (key, claim_digest)),
+                "reconcile-claim identities must be exact lowercase digests")
+        self.load()
+        row = self.state["deliveries"].get(key)
+        require(row is not None and row["status"] in {"claimed", "acknowledged"}
+                and row["claim"] is not None and row["claim"]["digest"] == claim_digest,
+                "reconcile-claim names no audited uncertain claim; remedy: re-audit the exact delivery and claim digest")
+        require(isinstance(resolution, dict) and resolution.get("kind") in {"absent", "receipt"},
+                "reconcile-claim resolution is not closed")
+        if resolution["kind"] == "absent":
+            require(set(resolution) == {"kind"}, "absent reconciliation carries no receipt")
+            require(row["status"] == "claimed",
+                    "an acknowledged write contradicts absence; remedy: settle it with the exact receipt resolution")
+            claim = row["claim"]
+            if claim["kind"] == "create-issue":
+                report = FrozenReport(row["payload"])
+                require(reporting._find_issue(api, report.key, sleep=lambda _: None,
+                                              managed=report.management) is None,
+                        "a candidate bucket is visible in the complete inventory; remedy: inspect it and bind the exact receipt, never clear a visible POST")
+            require(self._receipt(api, row) is None,
+                    "a canonical receipt is visible; remedy: bind it with the receipt resolution, never clear a delivered POST")
+            self._persist("claim-cleared", {"delivery": key, "claim_digest": claim_digest,
+                "why": "operator-audited complete inventory absence; the ordinary path re-derives the byte-identical claim"})
+            return {"status": "claim-cleared", "delivery": key}
+        require(set(resolution) == {"kind", "issue_number", "comment_id"}
+                and type(resolution["issue_number"]) is int and resolution["issue_number"] > 0
+                and (resolution["comment_id"] is None
+                     or type(resolution["comment_id"]) is int and resolution["comment_id"] > 0),
+                "receipt reconciliation requires an exact positive issue/comment identity")
+        receipt = {"issue_number": resolution["issue_number"], "comment_id": resolution["comment_id"]}
+        require(self._receipt(api, row) == receipt,
+                "audited receipt differs from the live exact receipt; remedy: re-audit the actual Issue/comment before binding")
+        self._persist("delivered", {"delivery": key, "receipt": receipt})
+        return {"status": "delivered", "delivery": key, "receipt": deepcopy(receipt)}
 
     def deliver(self, api, report, *, assignee=reporting.DEFAULT_ASSIGNEE):
         self.load()
