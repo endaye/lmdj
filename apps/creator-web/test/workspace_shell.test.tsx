@@ -3274,6 +3274,60 @@ test("a playing transport routes Pattern presses to the queued switch and follow
     .toBe(listedSummary.patternId);
 });
 
+test("a stopped transport inspection preserves the user's selected Pattern", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const oldInspection = deferred<PatternTransportStatus>();
+  let inspections = 0;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture, 2),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => {
+      inspections += 1;
+      if (inspections === 2) return oldInspection.promise;
+      return engagedTransportStatus({
+        playing: false,
+        currentPatternId: listedSummary.patternId,
+      });
+    },
+  });
+  const initialState: CreatorState = {
+    ...secondPatternReady,
+    project: {
+      ...secondPatternReady.project,
+      current: {
+        ...secondPatternReady.project.current!,
+        patterns: secondPatternReady.project.current!.patterns.map((pattern) =>
+          pattern.patternId === secondSwitchPattern ? {...pattern, bars: 2} : pattern),
+      },
+    },
+  };
+  render(<App initialState={initialState} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(inspections).toBeGreaterThan(0));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("stopped"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  // Start the real reconciliation path before selection, and delay only its
+  // response. It observes A, then arrives after B's stopped reload succeeds.
+  await refreshPlaybackProjection();
+  await waitFor(() => expect(inspections).toBe(2));
+  await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+  await userEvent.click(forward);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose bar"})
+    .textContent).toMatch(/\/ 2$/));
+
+  await act(async () => oldInspection.resolve(engagedTransportStatus({
+    playing: false,
+    currentPatternId: listedSummary.patternId,
+  })));
+  // The grid's length reads selection independently of the overview header.
+  expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+    .toMatch(/\/ 2$/);
+});
+
 test("a switch applied before the first inspection still updates the Sequence selection", async () => {
   const fixture = mutableSampleRuntimeFixture();
   const switchRequests: {patternId: string; requestId: string}[] = [];

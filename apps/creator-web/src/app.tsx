@@ -2033,13 +2033,12 @@ function Workspace({
   }, [session, transport.sessionId, transportBusy, transport.lastFailed,
     transportSwitchPending]);
 
-  // #1958: follow the authoritative current Pattern even when a switch lands
-  // before the first inspection, or another target is already queued. Stop
-  // cancellation leaves the current Pattern unchanged; a stopped selection
-  // reload retires the engagement instead of changing this authority.
+  // #1958: follow the playing Pattern even when a switch lands before the
+  // first inspection, or another target is already queued. Stopped selection
+  // belongs to the user; a delayed stopped observation must not overwrite it.
   useEffect(() => {
     const status = transport.status;
-    if (status?.engaged !== true || status.currentPatternId == null) return;
+    if (status?.engaged !== true || !status.playing || status.currentPatternId == null) return;
     if (sequenceRef.current.selectedPatternId !== status.currentPatternId) {
       dispatchSequence({type: "selected", patternId: status.currentPatternId});
     }
@@ -2538,9 +2537,8 @@ function Workspace({
         return;
       }
       // Stopped under the global transport, selection publishes the chosen
-      // Pattern as runtime-current: the stopped engagement is retired and
-      // re-vended on the next request against the current Pattern, with the
-      // Engine generation — and therefore the epoch sequence — continuing.
+      // Pattern as runtime-current. The Host rebinds the stopped engagement
+      // while preserving its Engine generation and epoch sequence.
       // Right after a committed Record-off the replaced publication can still
       // be retiring, so the identical publish is retried a few times before
       // the refusal is shown.
