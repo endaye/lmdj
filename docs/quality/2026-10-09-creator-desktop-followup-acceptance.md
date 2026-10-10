@@ -1,6 +1,7 @@
 # Creator Desktop Final 后续验收台账
 
-本记录是 **2026-10-10 的未完成验收快照**。工作区基于
+本记录是 **2026-10-10 的未完成验收快照**。本节保留初始证据；后续完成的
+transport 验证、实际合并与局部清理见下文「Transport 后续完成证据」。初始工作区基于
 `133939a945b3ea10f7686ab1f0a9f8d58c998aee`；提交前重新检查的 main 为
 `59a121b78db1486b01f482ba2726eb8fd05cb0f6`。四旋钮 consumer 为 Draft PR
 [#1936](https://github.com/endaye/lmdj/pull/1936) 的
@@ -31,7 +32,88 @@ Source merge、组件测试和某次浏览器成功不能代替人工听感或�
 | #1868 | 仍 open；历史导入 0 B 停滞未证实因果 | 当前完整证明若受阻，绑定原始 fixture/trace 调查；某次成功或负载相关性不构成根因关闭 |
 | A1 / A2 | 见下文 | 完整四页、视觉及真实人工验收未完成 |
 | V1 | 当前 active identities 未为 Goal 结算 | 最终 manifests、版本消费者、Portal snapshot 与实际 squash provenance |
-| C1 | 已清理项保留原记录；本记录不新增删除 | 活跃、dirty、未保留及身份不清的工作区保护；逐个证明安全后清理 |
+| C1 | 已清理项保留原记录；本次新增的已证明局部清理见下文 | 活跃、dirty、未保留及身份不清的工作区保护；逐个证明安全后清理 |
+
+## Transport 后续完成证据
+
+本次核对的 main 为 `4dde8e5e6b511c3ae2bd9c310f607f7d6148d2dc`。以下新增
+证据不覆盖四旋钮 #1936 的后续联合输入，也不完成 A1/A2 或整个 Goal。
+本次两文件文档 Task 见
+[证据对账计划](../plans/2026-10-10-creator-transport-acceptance-reconciliation.md)。
+
+- Native stopped-Pattern authority 修复已由
+  [#1978](https://github.com/endaye/lmdj/pull/1978) 合并到
+  `03a8b1d8b3eea15ad03f44234b390bb3ab85fc59`，PR 源头为
+  `6ae8de0cce600d99ad08196758ff5d15047f6522`。它保留停机后切换 Pattern 时的
+  engagement/session/generation/epoch，避免丢失既有 command authority。
+  此项 source merge 不等于该源头全部 sanitizer 验证通过。
+- Creator 当前 observation/retry 修复已由
+  [#1970](https://github.com/endaye/lmdj/pull/1970) 合并到上述 `4dde8e5e6`。
+  验证源头为 `46f6877b02c984e7c6a089444c71e4da43267eb3`。异步返回后重新检查
+  Runtime/Project/session 和 unresolved command；旧 Stop 的迟到结果或错误
+  不再清除后来 Record 的 pending 状态。真实 mounted-App 回归在未修复输入
+  上失败，并通过到 eventual recording 的 far-side；当前请求的真实错误仍保留。
+  最终 70 文件 / 1222 component cases、TypeScript 和全部原 Creator lane
+  通过，原 timeout/assertion 未更改。七组 browser 为 general Chromium
+  87 pass / 1 skip、Catalog 4 pass、Sample Chromium 9 pass / 1 skip、WebKit
+  boundary 1 pass、capture 8 pass / 1 skip、denied capture 1 pass / 8 skip、
+  Sample WebKit boundary 1 pass：合计 111 pass / 11 既有 capability skips，
+  122 cases 全部结束；完整 lane 1368.45 s，exit 0。
+  实际 key 为
+  `27b6fd7412c5b906d81d9f7e146b31033054b14d3a52d8b7c818719b94dbead9`，
+  仅属于这一实际输入，不供 #1936、S1 或后续版本复用。
+- 当前源头的正式 DeepSeek review
+  [38039934982/1](https://github.com/endaye/lmdj/actions/runs/38039934982)、
+  [review 5478402807](https://github.com/endaye/lmdj/pull/1970#pullrequestreview-5478402807)
+  无 findings；可信 helper 验证其 eligible。最终检查时全部 review threads 与
+  closing-issue references 均为空，冲突不存在，live main protection 已核对，
+  使用 exact-head guarded squash merge；五个 Task 文件与实际合并逐 blob 相等。
+  Review 另指出未修改的 engagement/Resume 直接 inspection 路径；此 observation
+  不在本轮 polling/retry 修复中，不宣称已解决。
+- 原 GNU 13.3 / ARM64 的 `6ae8de0` 完整 sanitizer lane 已终止失败，exit 1，
+  7999.54 s；full CTest 为 190 pass / 66 fail，stress 未运行。旧日志、语义断言
+  和 timeout 全部保留，无 pass key 或 owner accepted-risk。GNU 13.4 隔离工具链
+  已通过实际 compiler/runtime 身份及 Address/Undefined/UAR 检测的最小 fixture；
+  这项最小 fixture 仅证明工具链可用，不是完整 Core lane 通过或旧 66 项失败根因关闭。
+  后续在相同 clean `6ae8de0` 源码上，用已核实的 GNU 13.4 私有前缀重新执行
+  原完整 lane，实际 exit 0，1612.75 s：full 256/256 pass（588.29 s）、stress
+  15/15 pass（405.32 s），原 Address/Undefined/UAR、断言、case 和 timeout
+  均保留。实际 Core ASAN key 为
+  `7e7198a0aafea47a2747b1caf9905c12f7d6b6131228dc13478903fa1080f3c3`。
+  新 pass 属于这次源头/工具链执行；原失败不抹除，且 #1978 的外部合并早于
+  这次完成，不能将它倒填为合并前证据、其他源码验证或发布/人工验收。
+- C1 已移除且只移除了 #1970 最终源头的
+  `/Users/endaye/Projects/lmdj-wt-transport-current-command-ownership` 与本地
+  `fix/creator-transport-command-ownership`。删除前核实完整 Task patch 已在实际
+  squash 保留、clean 含 untracked、无 lock/process/cwd，并确认其他代理无路径
+  依赖；使用非强制 `worktree remove` 和 `branch -d`。外置原始日志/fixture
+  inventory、远端分支、旧 f1/2b/native 工作区均保留。共享根 main 仍为原
+  `dad3baa38b029ad0ee8340ea9b4ac04789eedf0c` 且 clean，未切分支、reset 或 pull。
+
+四旋钮 #1936 已在 clean committed
+`367a14daa980e7106789d346023cdfb31837f0e9` 中整合上述实际 merged
+producer/consumer；该输入的 full Creator 尚在运行，仍需其终态、当前 head
+review 和 merge。上述 46f 的 green 不能替代这些步骤，未来 S1 也需独立整合。
+播放中 1 BAR Pattern switch 的产品决定已经合并，但新 Core
+前置能力和 Host S1 仍是未交付工作，其他 SNAP/录音切换/count-in 不因此完成。
+可听 BPM、其余方向键、D03/D04 的待决定范围、四页视觉比对/真实设备验收和
+V1 版本/snapshot/provenance 均保留原完成条件。
+
+以下新增路径仍相对下文证据根目录，完整 digest/长度来自实际冻结文件：
+
+| 报告 | 完整身份 | 证明与限制 |
+| --- | --- | --- |
+| `transport-command-ownership/committed-creator/terminal.json` | 779 bytes；`648eaf147972e72e9d8266df523f3fe5bbe37aa124f4c39a3b4f1bf470f190ec` | 46f 原完整 Creator exit 0；仅这一源头 |
+| `transport-command-ownership/committed-creator/creator.log` | 90972 bytes；`04244cd222cd87fc162fca3cb88829ef0c48ff6cb5083b3acc1733a40d898eff` | 原 1222 component 和七组 browser 终态；不代表 physical/visual fidelity |
+| `transport-command-ownership/final-premerge/terminal.json` | 650 bytes；`4652b8766c984077153a0bf5d293e1b56f05dbc872676b63f338ee03d89c349e` | exact head、eligible review、live protection/conflict/conversation/closing 和 batch evidence |
+| `transport-command-ownership/actual-merge-4dde8e5e.json` | 6614 bytes；`9b4282b29330d1e48f05368fe422f2e81edad946db5549c46dd36ec056752186` | live actual merge 与五文件逐 blob 保留，不是整体验收 |
+| `transport-command-ownership/c1-final-worktree-cleanup/terminal.json` | 594 bytes；`8da4bf7382959cd7380755fab2a3f51a7537fc201b8f4c5e9855fe900882e3f1` | 上述一个 worktree/local branch 的已证明删除；其余资源保留 |
+| `stopped-pattern-reselection/committed-linux-asan-after-space/terminal.json` | 583 bytes；`a10ea8ac411980ce6f34267d6862d09f37425887a864d02483ace824d9b14ee4` | 6ae 原完整 sanitizer 失败终态；stress 未完成，passes 为空 |
+| `stopped-pattern-reselection/committed-linux-asan-after-space/core_asan.log` | 107101 bytes；`b4588894361706678b73acf07e88ec24978dabb550b54b5f5b5f4c98cc195cca` | 原 full 的 190 pass / 66 fail，保留失败事实 |
+| `stopped-pattern-reselection/gcc13_4-owned-prefix/20261010T083436Z/terminal.json` | 6142 bytes；`2eaa6cfb35fc7eb55de08af727bf715924b4efcb7befa481c2b803bcd72a2d4b` | 六包/工具链与最小 fixture 检测；formal Core pass=false，无 local pass key |
+| `stopped-pattern-reselection/committed-linux-asan-gcc13_4/terminal.json` | 944 bytes；`e795688d198ef9cdd52ad6d72a801550afb379148eeeefd66035dec3bac35411` | clean 6ae 的新原完整 full/stress exit 0；实际 key 归这一执行 |
+| `stopped-pattern-reselection/committed-linux-asan-gcc13_4/core_asan-terminal.json` | 669 bytes；`40a9c607a6f19b682a0b49efc62b0cdaba650562cc74db3c679f21ab72f5d94e` | lane 执行源头、工具链 handoff、未改 bounds 和 terminal exit 0 |
+| `stopped-pattern-reselection/committed-linux-asan-gcc13_4/core_asan.log` | 101824 bytes；`392a000e230fd88ed8e6d86367c1a8996a64eea4519afcfb4e5e5272f81b5e7f` | 原 full 256/256 与 stress 15/15 均已结束，不是单独 benchmark |
 
 ## 直接证据及适用范围
 
@@ -55,7 +137,7 @@ digest、长度及格式验证，不能用报告 digest 代替。
 | `json-depth-immediate-refusal/live-postmerge-state.json` | 569 bytes；`bdbf6e2057ef51ca815544b64ff221275e0c669e902b7581427e2fbab952c631` | #1956 已合并 `133939a945b3ea10f7686ab1f0a9f8d58c998aee`；全 batch 验收未完成 |
 | `consumer-65b237cd-complete-creator/terminal.json` | 729 bytes；`e3943a2c15d9d784990a3df2bb68f0a224b3c5a10e3f6045641ef03191829eab` | 精确 65b 的原完整 Creator lane 七组全部结束，exit 1，1987.298 s；112 passed / 2 failed / 11 skipped；不是整体验收通过 |
 
-当前 Creator 原完整验证绑定 65b，冻结输入未改：原 general/candidate、Catalog、
+初始 consumer 的 Creator 原完整验证绑定 65b，冻结输入未改：原 general/candidate、Catalog、
 Sample、WebKit boundary、capture、denied capture、Sample WebKit 七次调用必须
 全部结束并检查各自终态。执行时使用锁定 npm/browsers、官方 OPFS WebKit
 `pw_run.sh` 和 pinned SDK；早先 raw app launcher 的失败/取消保留为无效启动
@@ -71,13 +153,14 @@ WebKit boundary 1 passed；capture 8 passed / 1 skipped；denied capture
 两项失败保留原 trace：硬件 identity 场景的 System 点击开始后约 0.31 s
 即触及整个原 30 s case deadline，期间 workspace 截获 pointer；这尚不能
 证明持续的 CSS 遮挡。Sequence 场景在 Pattern switch 后点击 Record 却仍
-重发旧 Stop command ID，出现 pending-publication/refusal；需要定位旧请求
-何时应完成，不能以已合并的 retainer 修复或新 timeout 推定解决。
+重发旧 Stop command ID，出现 pending-publication/refusal。这一原始失败保留；
+后续实际 producer/consumer 修复与 46f 完整证明见上文，仍不能替代 #1936 的
+最终联合证明，也不能用 retainer merge 或新 timeout 推定间歇根因消失。
 trace/error-context 位于 65b 工作区的原 `tests/platform/web/test-results/`，
 局部 trace 事件保留在证据目录的
 `consumer-65b237cd-complete-creator/hardware-brand-intercept-diagnostic/`。
 
-0fda 的原完整 ASan/full+stress、coverage、package、Deploy Contract 验证也未全部
+本台账初始记录时，0fda 的原完整 ASan/full+stress、coverage、package、Deploy Contract 验证未全部
 终止；旧 6ec 的完整失败和两个超时 Deploy shard 仍保留。JSON 的深层拒绝
 原因有直接证据，不能据此宣称其他 74 个历史失败都已解决。主分支已有修复
 不改变冻结 proof 的实际源码身份，也不补出过去未执行的合并检查。
@@ -104,8 +187,10 @@ Safari/iPad。未决定的功能没有可接受的最终期望，不能用当前
 前置：先完成产品决定和实现，选择含 #1953 本地 Catalog 配置及 Goal 最终
 整合结果的 clean source；记录完整 revision、由 manifests/report 读取的身份、
 设备/浏览器版本、实际操作者与日期，按 Creator README 配好锁定 SDK、Node 与
-browser 前置。使用 `scripts/creator-web.sh package`，
-再 `scripts/creator-web.sh serve --port 9000`，打开 `http://localhost:9000`。
+browser 前置。先执行 `scripts/creator-web.sh configure` 与
+`scripts/creator-web.sh build`，再执行 `scripts/creator-web.sh package` 和
+`scripts/creator-web.sh serve --port 9000`，打开 `http://localhost:9000`。
+`package` 检查并打包已构建产物，不负责构建；上述步骤仍是未执行的人工前置。
 package/serve 成功后记录实际 report 的完整 digest/byte length；不要把当前
 65b 或旧 Build 偷换成该最终来源。
 
