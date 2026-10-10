@@ -52,6 +52,7 @@ const playingTransport: PatternTransportState = {
     observedAtMilliseconds: 1_000,
     commandId: null,
     publicationPending: false,
+    currentPatternId: null, pendingSwitch: null,
     error: null,
   } satisfies PatternTransportStatus,
 };

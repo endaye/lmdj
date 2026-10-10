@@ -2827,6 +2827,7 @@ const engagedTransportStatus = (
   observedAtMilliseconds: 0,
   commandId: null,
   publicationPending: false,
+  currentPatternId: null, pendingSwitch: null,
   error: null,
   ...overrides,
 });
