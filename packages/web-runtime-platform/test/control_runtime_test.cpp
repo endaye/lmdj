@@ -9005,6 +9005,8 @@ void test_transport_record_after_applied_switch_retargets() {
     return runtime->engine().current_pattern_id() ==
            lmdj::foundation::PatternId{std::string(kPatternB)};
   });
+  // The live Pattern ID can advance before the callback publishes telemetry.
+  driver.wait_for_next_callback();
   LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
 
   // #1403: the next Record retargets the engagement's Pattern binding to the
