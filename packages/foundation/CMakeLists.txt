@@ -22,6 +22,12 @@ target_link_libraries(
 lmdj_target_warnings(lmdj_foundation)
 lmdj_target_sanitizers(lmdj_foundation)
 
+if(EMSCRIPTEN)
+  # The depth guard contains its private refusal signal inside the parser.
+  target_compile_options(lmdj_foundation PRIVATE -fexceptions)
+  target_link_options(lmdj_foundation INTERFACE -fexceptions)
+endif()
+
 if(BUILD_TESTING)
   add_executable(
     lmdj_foundation_tests

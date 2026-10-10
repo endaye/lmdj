@@ -32,7 +32,7 @@ usage:
   scripts/creator-web.sh test
   scripts/creator-web.sh proof
   scripts/creator-web.sh package
-  scripts/creator-web.sh serve [--port PORT]
+  scripts/creator-web.sh serve [--port PORT] [--catalog-upstream URL]
   scripts/creator-web.sh clean
 EOF
 }
@@ -205,7 +205,10 @@ clean_creator() {
 generate_project_fixture() {
   local output="$1"
   "$repo_root/scripts/core.sh" configure dev
-  "$repo_root/scripts/core.sh" build dev
+  # The fixtures execute only lmdj-core. The whole dev tree compiles every
+  # native test binary, which the Core lanes own, and it alone cost ~6.5 of
+  # the CI job's 35 minutes (#1965).
+  cmake --build --preset dev --target lmdj_core_cli
   python3 - \
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
@@ -579,17 +582,43 @@ case "$command_name" in
     package_creator
     ;;
   serve)
-    if [[ $# -ne 0 && ( $# -ne 2 || "$1" != "--port" ) ]]; then
-      usage
-      exit 64
-    fi
+    serve_arguments=()
+    catalog_upstream=""
+    while [[ $# -gt 0 ]]; do
+      [[ $# -ge 2 && -n "$2" ]] || { usage; exit 64; }
+      case "$1" in
+        --port) serve_arguments+=(--port "$2") ;;
+        --catalog-upstream) catalog_upstream="$2" ;;
+        *) usage; exit 64 ;;
+      esac
+      shift 2
+    done
     [[ -d "$dist_root" ]] || {
       echo "Creator Web error: package Creator before serving" >&2
       exit 2
     }
+    if [[ -z "$catalog_upstream" ]]; then
+      # The normal local Creator uses the same Catalog as its deployment.
+      # The shared proof server still permits no Catalog for refusal tests.
+      catalog_upstream="$(python3 - "$creator_root/deploy/wrangler.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        value = json.load(source)["vars"]["CATALOG_UPSTREAM"]
+    if not isinstance(value, str) or not value:
+        raise ValueError("Catalog upstream must be a nonempty string")
+except (OSError, ValueError, KeyError, TypeError):
+    print("Creator Web error: why: deployment Catalog configuration is missing or invalid; "
+          "remedy: restore vars.CATALOG_UPSTREAM or pass --catalog-upstream URL", file=sys.stderr)
+    raise SystemExit(2)
+print(value)
+PY
+)"
+    fi
+    serve_arguments+=(--catalog-upstream "$catalog_upstream")
     exec python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
       --root "$dist_root" --verifier "$creator_root/tools/package.py" \
-      --repo-root "$repo_root" "$@"
+      --repo-root "$repo_root" "${serve_arguments[@]}"
     ;;
   clean)
     [[ $# -eq 0 ]] || { usage; exit 64; }

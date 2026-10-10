@@ -69,7 +69,8 @@ PR Preview 使用隔离构建和独立可信发布两个 workflow。构建绑定
 静态归档后生成固定配置，只上传到 `portal-preview` 的版本地址，并在页面、
 响应头和文件摘要检查通过后回写 `Cloudflare Portal Preview` 状态。
 
-Preview 默认关闭。广泛激活需要三个仓库变量同时显式设置：
+Preview 已于 2026-10-10 经所有者批准广泛启用（预算告警发往 #927）；撤销任一变量即停用。
+广泛激活需要三个仓库变量同时显式设置：
 `CLOUDFLARE_PREVIEW_ENABLED=1`、批准的月度托管分钟预算
 `CLOUDFLARE_PREVIEW_BUDGET_MINUTES`、以及接收阈值告警的运维 Issue
 `CLOUDFLARE_PREVIEW_BUDGET_ISSUE`。构建触发经依赖完整的路径过滤

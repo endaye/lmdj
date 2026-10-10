@@ -33,6 +33,9 @@ recurrences:
   - date: 2026-09-28
     occurrence: https://github.com/endaye/lmdj/pull/1614
     observed_by: claude-code/opus-5.5
+  - date: 2026-10-10
+    occurrence: https://github.com/endaye/lmdj/actions/runs/38013402484
+    observed_by: claude-code/opus-5.5
 exit: gate:apps/creator-web/test/perform_surface.test.tsx
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -84,6 +87,18 @@ stages the answer itself.
 That asymmetry is the reusable part: a double for a method the code polls must
 be neutral with respect to state the test staged, which is a stronger
 requirement than merely matching the production return type.
+
+On 2026-10-10 the same shape reached an HTTP API double. The Cloudflare
+Preview budget tests fed `FakeGitHub` workflow runs carrying
+`run_duration_ms`, a field the Actions runs list never returns (it lives only
+on the per-run timing endpoint). Every test passed. In production every
+completed run, including the skipped runs from before activation, fell into
+the "missing timing" branch and cost a 20-minute reservation. The gate saw
+7,520 phantom minutes against a 2,000-minute budget, blocked the first real
+Preview, and posted false 50/75/90% alerts. For an API double, build fixtures
+from fields copied verbatim from a real response, and keep one test that
+replays a captured real response against a closed-form expectation
+(`LIVE_RUNS` in `tests/build/ci_cloudflare_preview_budget_test.py`).
 
 ## How to apply
 

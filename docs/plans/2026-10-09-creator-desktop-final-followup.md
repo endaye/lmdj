@@ -267,6 +267,7 @@ monitor downstream of capture. No alternate ENC4 or undeclared direction keys.
 - `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`
 - `tests/platform/web/creator/creator_web_touch_fit.spec.mjs`
 - `apps/docs-site/docs/hosts/creator-web.mdx`
+- `apps/docs-site/docs/hosts/creator-interactions.mdx`
 - `apps/docs-site/docs/platform/input.mdx`
 - `docs/prd/questions/hardware-control-mapping.md`
 - 本计划。
@@ -307,7 +308,8 @@ monitoring work continue independently; this finding is not silently excluded.
 
 **Version Management:** Creator MINOR debt and monitoring preference are Host
 state, deferred to V1; no persisted Contract or Product Build allocation.
-**Documentation impact: required** — `/hosts/creator-web/`, `/platform/input/`.
+**Documentation impact: required** — `/hosts/creator-web/`,
+`/hosts/creator-interactions/`, `/platform/input/`.
 No corresponding Creator/input source diagram exists; update their current
 control tables and retain I1b's shared audio graph. Other product questions
 remain in #1822 and D3–D5.
@@ -477,6 +479,44 @@ paragraph was appended afterward. Commit the same 36 declared files and update
 the owned Draft PR with an expected-head lease. Original complete Creator
 browser proof, audible BPM preview, current-head review and the unanswered
 product choices remain incomplete.
+
+2026-10-10 stopped-Pattern producer integration: refreshed main is
+`e14084f602448ee2046a9cd64e7dd3bf3bd2e7ea`, containing #1978's native
+stopped-Pattern transport authority repair, #1956's Foundation depth refusal,
+#1966's executable Creator proof build and #1977's VEL-tap regression. Merge
+that actual main into the existing I1c consumer branch without conflicts;
+retain all three shared touch/ENC3 BPM assertions alongside the new VEL test.
+No contextual mapping, commit/cancellation boundary, HOLD rule, bound or
+journey leg changes. The previous complete Creator result on `65b237cd`
+was 112 passed, two failed and 11 skipped; retain its hardware-profile timing
+failure and stopped-Record reconciliation trace as failed evidence. The
+frontend reconciliation repair in #1970 remains an independent unmerged Task,
+so this integration alone does not close that browser failure. Run the
+unchanged complete consumer verification on the new input after coordinating
+the browser/Portal build schedule. Audible BPM preview, physical acceptance,
+current-head review and pending product decisions remain unfinished.
+The newly refreshed interaction manual in main still describes ENC4 as Swing,
+other pages' encoders as unassigned and rotary drafts as surviving page exit.
+Add that existing Portal page to I1c's declaration and correct those current
+source facts in this Task; retain the open audible-BPM finding and the existing
+direction-key decisions. #1980 reorganizes the same handbook by page; retain its
+new layout and anchors while updating the relevant control cards and appendix.
+The earlier 03a integration and both successful Portal checks are retained as
+dated evidence; fresh handbook verification is required. This adds one
+documentation path, no product scope.
+
+The integrated product/test inputs pass all 72 Creator files / 1,231 cases at
+the original 20-second bounds (58.09 s) and TypeScript (1.54 s); all 32 owning
+input hashes remain unchanged through the later handbook-only refresh.
+Staged ownership passes 77 tests (6.03 s), official document validation passes,
+and the final page-organized handbook passes the complete 50-route Portal check
+(51.26 s). Its ConsoleDiagram and 39 anchors remain identical to #1980.
+The final diff contains 37 of 38 declared paths. Record these results and push
+the existing Draft PR; fresh committed-head Creator and independent review are
+still pending. The separate frontend reconciliation repair must be integrated
+before the consumer's complete browser acceptance; its predecessor's passing
+Creator lane is not evidence for this consumer head. Audible BPM and the other
+open product and physical acceptance obligations remain unfinished.
 
 ## P0 — ship this bounded plan
 

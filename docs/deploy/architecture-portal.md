@@ -48,6 +48,8 @@ Issue `CLOUDFLARE_PREVIEW_BUDGET_ISSUE`。构建触发经依赖完整的路径�
 `tests/build/ci_cloudflare_preview_paths_test.py` 锁定一致；无关 PR 零成本跳过。
 每次构建先跑只读月度预算门，90% 停收；`cloudflare-preview-budget.yml` 每日
 自动发阈值告警。原 `CLOUDFLARE_PREVIEW_PILOT_BRANCH` 试点机制已取代。
+2026-10-10 所有者批准后已设置三个变量（`CLOUDFLARE_PREVIEW_ENABLED=1`、
+`CLOUDFLARE_PREVIEW_BUDGET_MINUTES=2000`、`CLOUDFLARE_PREVIEW_BUDGET_ISSUE=927`）。
 是否启用以变量状态与真实 PR 的 URL、SHA 和线上内容确认为准。
 
 ## 历史 Cloudflare Portal pilot (#873)
