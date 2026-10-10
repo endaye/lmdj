@@ -517,18 +517,33 @@ class ContinuousAudioDriver final {
     return !running_.load(std::memory_order_acquire);
   }
 
+  void wait_for_next_callback() {
+    // An RMW observes the last start and orders the next start after this
+    // control-thread boundary. Completion must follow render, not Bank ack.
+    const auto target =
+        started_callbacks_.fetch_add(0, std::memory_order_acq_rel) + 1;
+    wait_until([&] {
+      return completed_callbacks_.load(std::memory_order_acquire) >= target;
+    });
+  }
+
  private:
   void run() noexcept {
     std::array<float, 128> left{};
     std::array<float, 128> right{};
     while (running_.load(std::memory_order_acquire)) {
+      const auto callback =
+          started_callbacks_.fetch_add(1, std::memory_order_acq_rel) + 1;
       engine_.render(left.data(), right.data(), 128);
+      completed_callbacks_.store(callback, std::memory_order_release);
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
 
   RealtimeEngine& engine_;
   std::atomic<bool> running_{true};
+  std::atomic<std::uint64_t> started_callbacks_{0};
+  std::atomic<std::uint64_t> completed_callbacks_{0};
   std::thread thread_;
 };
 
@@ -8773,6 +8788,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
       pattern_transport_inspect(*runtime, kSequenceSessionId);
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternB}}, {}));
+  driver.wait_for_next_callback();
   const auto after_reload =
       pattern_transport_inspect(*runtime, kSequenceSessionId);
   LMDJ_CHECK(after_reload.at("transport_epoch") ==
