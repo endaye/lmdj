@@ -21,6 +21,7 @@ source_paths:
   - docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md
   - docs/prd/decisions/2026-10-10-record-key-and-count-in.md
   - docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md
+  - docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md
   - docs/plans/2026-10-10-pattern-switch-and-count-in.md
   - docs/plans/2026-10-10-creator-interaction-map.md
   - docs/plans/2026-10-10-creator-interactions-refresh.md
@@ -169,7 +170,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - 单击旋钮没有额外动作。
 - ENC1–3 随页面和参数组变化，见 Project、Sample、Sequence 和 Perform 的控件速查卡。System／Sound Sets／Slice 的 ENC1–3 未分配。上屏持续显示四个当前功能和数值。
 - ENC4 在所有页面固定为 Output Volume：每格 1%，范围 0–100%，默认 100%，可恢复已记住的 0%。监听会话和偏好恢复就绪后才可转动。它立即改变本设备监听，包括节拍器；音量存 IndexedDB，不写 Project／Undo，也不改变录音、重采样或导出电平。
-- ↑↓ 只在 Sequence 导航当前 Pad；其他页面方向映射仍待批准。
+- 当前 ↑↓ 只在 Sequence 导航当前 Pad；Project／Sample／Perform 的普通方向映射已批准，仍待 K2 实现，见[第 2 章](#planned)。
 - ← → 不按 SHIFT 时只在 Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。
 - Sample 工程参数转动时立即预览，同一 Pad 的多参数停转 400 ms 后合并为一次保存／Undo。转回起点不保存。Sequence ENC3 的 BPM 当前只有即时读数预览，播放和节拍器仍等提交后发布；可听即时预览尚未实现。
 - Sample 作者锁定、Sequence 录音或传输结算时，相关工程参数旋钮不可用，未提交的预览作废；ENC4 保持监听职责。
@@ -283,10 +284,12 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 以下行为已获批准，但**当前版本还没有实现**。在实现之前，本手册其余章节描述的当前行为仍然有效。
 
+- **未实现** · Project／Sample／Perform 普通方向导航（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)，K2）。Project ←/→ 相邻选择、↑/↓ 在三列列表中移一行，只选择、由 OPEN 打开；Sample ↑/↓ 选 Pad、←/→ 切 Trim／Playback／Tone/EQ／Pad；Perform ↑/↓ 选 Pad、←/→ 切 PRIMARY／FILTER／MORE 并保持效果。导航不触发 Pad、不写 Truth，切编辑上下文取消未提交的 400 ms 预览，已发出的提交保留真实结果；SHIFT＋↑/↓ 暂不分配，既有 SHIFT＋←/→ 撤销／重做及 SHIFT＋ENC1–3 细调保持。
+- **未实现** · live Mute/Solo 共享尾音（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)，M1 及对应 consumer）。对应 Pad 当前／后续输入立即阻断，已进入共享 Delay／Reverb 的尾音自然衰减，其他 Pad 效果继续；不扩展每 Pad 尾音隔离。批准不表示声音 producer／consumer 已交付，也不批准 96-frame 输入宽限。
 - **部分实现** · 播放和录音中切换 Pattern（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)，[#1958](https://github.com/endaye/lmdj/issues/1958)）。**播放中切换已实现**（S2，固定按 1 BAR 生效）：播放中可以用 ← →、GROOVE 和 Perform Launch 切 Pattern，旧 Pattern 播到小节边界才换，排队期间可以再按改目标，再按正在播的 Pattern 等于取消；上屏与 GROOVE 标题如实显示正在播的 Pattern 和排队目标。**仍未实现**：录音中切换（S3）、SEQ SNAP 的 OFF／1 BEAT／SEQ END 档位（S4、S5，当前固定 1 BAR）与 count-in。
 - **未实现** · 实体 ● 与 count-in（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)，[#1959](https://github.com/endaye/lmdj/issues/1959)）。● 在每一页都只录 Pattern 事件，这一点与当前相同。新增 count-in：Off／1／2 小节，默认 Off，只在停止状态按 ● 时数拍。
 - **未实现** · 可听 BPM 即时预览。[旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)批准每格立即预览，但当前 ENC3 只更新读数。播放位置语义仍待 owner 决定，producer 与 consumer 仍见 [PR #1929](https://github.com/endaye/lmdj/pull/1929)；本页其他已接线旋钮不替代这项验收。
-- **进行中** · 上述前两项的[实施计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-pattern-switch-and-count-in.md)分为 S1–S7：S1–S2（播放中按 1 BAR 切换）已实现，S4 加 1 BEAT 和 SEQ END，S6–S7 做 count-in，S3 做录音中切换，S5 做 OFF。
+- **进行中** · 播放中切换 Pattern 与实体 ●／count-in 的[实施计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-pattern-switch-and-count-in.md)分为 S1–S7：S1–S2（播放中按 1 BAR 切换）已实现，S4 加 1 BEAT 和 SEQ END，S6–S7 做 count-in，S3 做录音中切换，S5 做 OFF。
 
 ## 3. Project \{#project\}
 
@@ -670,7 +673,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 ## 10. 当前没有的交互 \{#not-available\}
 
 - 上屏不能点按或拖拽编辑；Sequence 网格的轨道名称也不是演奏按钮。
-- 其他页面普通 ↑↓ 等方向映射仍待批准；SHIFT＋ENC1–3 已按批准表细调，没有粗调层。可听 BPM 即时预览尚未实现，见[第 2 章](#planned)。
+- Project／Sample／Perform 的普通方向映射已批准，当前仍未接线；SHIFT＋ENC1–3 已按批准表细调，没有粗调层。新增方向导航与可听 BPM 即时预览的实施状态见[第 2 章](#planned)。
 - Perform 没有 MASTER 推子、LP／HP／BP 类型选择、Mute／Solo 和主输出电平表；不能按视觉稿当作已可操作。
 - 下边 16 个声音 Pad 与 Perform 触摸区的 16 个 Pattern Launch 槽是两回事。没有演出录制时，Launch 按全局 transport 的状态工作：播放中预约切换、停止时选中（[#1958](https://github.com/endaye/lmdj/issues/1958)）。
 - Sample 没有单独的 Edit 按钮；Trim 直接编辑，其他参数分在四个子页。
@@ -715,7 +718,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 - 上一次提交还在路上时，新一轮从该请求值开始；提交失败后 `forget()`，下一轮从 Truth 开始。
 - 作者锁定／录音／传输结算、离页、打开 System、切 Pad／Project／所选 Pattern、Esc 或历史前，通过 `cancelPendingEncoders` 和各目标的 cleanup 取消尚未提交草稿；已发出请求保留真实结果。
 - 网页拖动每 8 px 一格，滚轮累计 50 px 一格（`physical_controls.tsx`）。
-- [2026-10-09 旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)已确认逐页映射、SHIFT 细调、设备监听记忆和 400 ms 生命周期；其他方向映射仍在 [#1822](https://github.com/endaye/lmdj/issues/1822)。BPM 可听预览未完成，不能用读数测试替代。
+- [2026-10-09 旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)已确认逐页映射、SHIFT 细调、设备监听记忆和 400 ms 生命周期；[三页普通方向映射](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)已批准，K2 实现与验收待完成，[#1822](https://github.com/endaye/lmdj/issues/1822)仍保留其他 SHIFT 提案。BPM 可听预览未完成，不能用读数测试替代。
 - ENC4 在 `encoderBindings` 中独立于页面绑定，偏好恢复绑定 Runtime session，后续转动覆盖旧恢复；`metronome_click.ts` 使用同一监听节点，位于 capture tap 之后。
 
 **Pad 输入**（`pad_surface.tsx`、`input_controller.ts`、`input_adapters.mjs`）
@@ -783,4 +786,4 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 - “现有自动化证据”列是测试定位索引，不代表每次更新都运行了全部套件。具体执行项与通过数量记录在对应 Task 或 PR 中。
 - 源码、组件测试、打包浏览器旅程、真实设备和已部署构建之间的边界保持区分。
 - 核对基线和验证命令见[刷新 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interactions-refresh.md)；初版范围见[原文档 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interaction-map.md)。
-- 本页的 I1c 旋钮源码更新和验证见[后续计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-09-creator-desktop-final-followup.md)。可听 BPM、其他页方向映射、Assign／细调编辑器、Perform MASTER／滤波类型／Mute／Solo／电平表仍待后续决定或实现；不由已有旋钮批准推导语义。
+- 本页的 I1c 旋钮源码更新和验证见[后续计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-09-creator-desktop-final-followup.md)。其他三页方向映射及 live Mute/Solo 共享尾音已获[独立批准](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)，实现与验收仍待 K2／M1：导航只改变选择或编辑页，不触发 Pad、不写 Truth；立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减，其他 Pad 效果继续。MASTER consumer 已随 #2000 合入，完整 Creator 验证仍 pending；可听 BPM、Assign／细调、独立滤波／Mute／Solo／电平表仍按对应 Task 交付和验收。本页不把批准状态或 merge 推导为新增能力或验收全部完成。

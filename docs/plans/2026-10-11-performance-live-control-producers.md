@@ -1,10 +1,17 @@
 # D04 Performance 实时控制：producer／consumer 实施计划
 
-状态：D0 技术设计 review 完成；Root完整三文档审阅与独立复核已确认R1–R6设计处置。后续产品实施与运行验收未完成，尾音决定仍pending。
+状态：D0 技术设计 review 完成；Root完整三文档审阅与独立复核已确认R1–R6设计处置。共享尾音产品选择已批准；后续产品实施与运行验收未完成。
 产品依据：[已批准 D04 决定](../prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。
 技术提案：[初始状态、顺序和确认边界](../prd/decisions/2026-10-11-performance-live-control-encoding.md)。
 当前问题：[hardware-control-mapping](../prd/questions/hardware-control-mapping.md)。
-本计划部分解决 #1822；不关闭其他方向键／SHIFT 问题。
+本计划部分解决 #1822；三页方向的产品选择见后续决定，实施待 K2；不关闭其他 SHIFT 问题。
+
+2026-10-11 批准状态更新复查实际 main
+`1e9a90c1055c8fc5c5df3fa878dda416b1d00a20`：#2000 已实际 merge
+`116280f9209245b4757a814fcf3155002b025269`，C1/C2 复用 MASTER consumer；
+其完整 Creator 仍 pending。#2005 治理已合入但 Deploy Contract 实际失败
+仍未关闭，不借 merge 当验证 PASS。本次仅决定状态更新，不分配 Build；
+下面 D0 原 base／审阅证据和 R1–R6 保持历史身份。
 
 ## Task premises refresh（issue-done §0）
 
@@ -24,7 +31,7 @@ operation registration、dispatch、正向控制测试与相关 successor scope�
 | 录制已有完整初始状态 | Still outstanding：Performance 闭合 6 键、Journal checkpoint 闭合 4 键，begin 后 Creator 才补 HOLD/open FX；新 header/typed events/ACK 尚无 | P0/P1 捕获 Core fence 起点，不从 UI 推断 |
 | Core 竞态前置未合并 | Already delivered：#1984 merge `aa12f7f1a3a2b62f965a28e3d91e5a2e55d7e889` 的 Pattern reset/admission scope；#1992 merge a98 是播放中 Pattern 切换及显示 | 不重复其修复；本 Goal 的 fresh full+stress 验证由 Root 单独持有，不能在此声称通过 |
 | Browser timeout 修复能顺便完成 D04 | Unrelated owner：PR #2001 OPEN，head `21f28e056f28540b09c453475c203716c38a3226`，实际 4 文件是历史导航保留与测试 | D0 不碰 Root App/history/Workspace 文件 |
-| Mute 共享效果尾音已获批准 | Pending：实际 owner 回答未到；推荐 pre-shared-FX gate + 自然共享尾音，另一选项需 per-Pad FX 架构 | 不启动 M1 或依赖其声音语义的实现 |
+| Mute 共享效果尾音已获批准 | 后续批准：[三页导航与共享尾音决定](../prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md) 要求立即阻断对应 Pad 当前／后续输入，已进入共享 Delay/Reverb 的尾音自然衰减，其他 Pad 效果继续 | 问答前提已满足；M1 仍待 F1 实际合并、工程验证与资源窗口，96-frame ramp 不构成已批准输入宽限 |
 
 D0 新建的 branch 为 `docs/performance-live-control-design`，worktree 为
 `/Users/endaye/Projects/lmdj-wt-performance-live-control-design`。已逐项读取 live PR file lists
@@ -43,15 +50,15 @@ capture两个ACK、七FX binding/adoption、bounded durable receipt与Journal fa
 retry、lost-owner recovery-only closure/seal、epoch/reset ACK和legacy Filter ownership。方案细节在上述
 技术提案，不把 Task 交给实现者再自行决定产品 Contract/concurrency。
 
-`D0 → P0` 与 `D0 → F1` 可并行；`F1 合并 + owner 尾音实际回答 → M1`；
+`D0 → P0` 与 `D0 → F1` 可并行；`F1 合并 + 已批准共享尾音规则 → M1`；
 `P0 + F1 + M1 → P1 → W1 → C1 → C2`。
 P0 与 F1 的 source 文件互不重叠，可在 D0 接口 review 后并行；F1/M1 共用 engine
-和 Audio Portal，必须顺序合并。M1 还等待实际尾音回答。P1 在 P0/F1/M1 都交付后闭合
+和 Audio Portal，必须顺序合并。M1 的尾音问答前提已满足，工程前置未交付。P1 在 P0/F1/M1 都交付后闭合
 admission、record/replay、begin/reset；不能只接 UI 假 projection。C1/C2 共用 Perform/
 样式/Portal，顺序合并，并吸收 MASTER #2000 的实际 main source。未选的 meter producer、
 Numeric、BPM、键盘 #1960、其他方向键、V1、release 不混入以下实现提交。
-尾音pending只约束M1和真正依赖其声音语义的Task，不作为D0、P0或F1的shipping前置；
-这些独立Task仍须各自满足技术review、最低验证和正常shipping保护，不默认任何尾音选择。
+原尾音pending只约束M1和真正依赖其声音语义的Task，不是D0、P0或F1的shipping前置；
+该选择现已批准。这些独立Task仍须各自满足技术review、最低验证和正常shipping保护。
 
 每个 implementation Task 一个 Conventional Commit，只 stage 本节的 exact files。
 新文件标 new；既有路径均已在 4a2 用 git cat-file 确认存在。实现若需要额外文件，先
@@ -69,7 +76,7 @@ lane 另按 committed head 收集 pass key；focused oracle 不等于整个 lane
 依赖：none。状态：R1–R6已获设计处置；Root已通读完整709/13/474行修订及实际recovery源，独立最终复核findings=[]，仅表示设计层闭合。
 
 D0以完整三文件设计及实际轻量检查完成原子shipping，仍须正常current-head review、
-冲突及conversation保护；不依赖尾音答复。尾音保持pending，M1不启动。完整评审保留
+冲突及conversation保护；不依赖尾音答复。D0 时尾音 pending 的产品卡点现由后续决定解除，M1 工程仍未实施。完整评审保留
 原R1–R6反例与未实施边界，不把文档交付当DSP、录制、恢复或浏览器验收。
 本文没有授权release或cleanup。
 最低验证：三文件 diff/check、所有实际相对链接与 declared path、new-path ownership、
@@ -198,10 +205,12 @@ Documentation impact: required — `/core/modules/audio-runtime/`；上列源图
 
 ## M1 — 64-Pad live Mute/Solo 的实时声音门控
 
-依赖：F1 实际合并 + owner 尾音实际回答（F1 本身依赖 D0）。状态：未实施；M1 等待 owner 回答。
+依赖：F1 实际合并 + 已批准共享尾音规则（F1 本身依赖 D0）。状态：未实施；尾音问答已批准，F1／工程验证仍待完成。
 
-**Blocked pending owner tail answer；本计划当前不授权启动。**
-若批准推荐：在工程 Pad voices 的 shared-FX 输入前增加 96-frame gate gain，cursor
+**产品前提已满足；开始实施前仍须刷新 F1 实际交付、共享 engine owner 与资源窗口。**
+立即阻断对应 Pad 当前／后续输入，已进入共享 Delay/Reverb 的尾音自然衰减，其他
+Pad 的效果继续。以下 96-frame ramp／cursor 保留为工程提案，不能当作 owner 批准的
+额外输入宽限；M1 须证明实际应用边界满足上述规则。原推荐在工程 Pad voices 的 shared-FX 输入前增加 96-frame gate gain，cursor
 继续、解除恢复当时声音；共享 Delay/Reverb 尾音自然衰减。复用有界 master-control
 queue，atomic 同时设置两组 uint64 mask，mask/status/reset 是一个 producer。
 若要求每 Pad 历史尾音隔离：本 Task 需先被新的 architecture/CPU/memory/resample
@@ -466,8 +475,8 @@ Review必须直接比对完整三文件draft及base/source证据，不以本文�
 - lost-owner recovery-only例外与普通pending guard分开；closure/seal present/absent/unknown保留原identity及未知事实，不假complete/ACK或补声；terminal旧ledger不阻塞新Performance。
 - 七FXCore binding/逻辑mapping、engaged/frozen/stale callbacks、无fakeengage；new profile无coalescing的跨Pad/Pattern反例；真实worklet started ACK及4个W1声明文件。
 - all64 slot、multiSolo、Mutepriority、audition/metronome排除、HOLD与离页两类清理。
-- owner尾音答复仍pending；Q曲线/ramp属于技术提案待review，不冒充已批准听感。
-- D0/P0/F1不依赖尾音答复，M1及声音语义依赖Task仍blocked；正常review/light验证/shipping保护不省略。
+- D0 当时的 owner 尾音答复 pending 已由后续决定解除；Q曲线/ramp仍属于技术提案待review，不冒充已批准听感或输入宽限。
+- D0/P0/F1不依赖尾音答复；M1及声音语义依赖Task仍待实际前置与工程验证，正常review/light验证/shipping保护不省略。
 
 具体命令/argv、exit、三文件hash、local links/new-path owner/body verdict保存在该Task
 外部证据目录；正式receipt应记录实际结果，不预填pass。产品测试与heavyPortal未执行，

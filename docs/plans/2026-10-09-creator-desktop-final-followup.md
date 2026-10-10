@@ -27,7 +27,7 @@
 | #1905 连续提交刷新丢失 | 已交付：#1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`，Issue closed。旧代码从滞后 render ref 取刷新 revision，现由 grid/structure/colour 成功路径传入已提交 revision；回归测试检查最终画面，不重复修复。 |
 | #1868 导入偶发停在 0 B | Issue open；尚未建立原因。R2 是条件调查，只有验收受阻时才启用，不把一次重跑通过当作修复。 |
 | #1873 测试问题仍未修 | 已反证：Issue closed，相关修复已合并；本 Goal 不重做。 |
-| #1822 其余控件映射已有决定 | 部分批准：I1a 的 Sequence 导航已交付；owner 进一步批准 I1b/I1c 的逐页 ENC1–3 与固定 ENC4 监听音量、SHIFT 细调。其他页方向键仍待决；Issue open。 |
+| #1822 其余控件映射已有决定 | 全页旋钮及三页普通方向映射已批准；I1a Sequence 导航已交付，新增三页导航待 K2。SHIFT + ←/→ 撤销／重做、SHIFT + ENC1–3 细调保持，SHIFT + ↑/↓ 不分配；其他 SHIFT 提案仍待决，Issue open。 |
 | 400 ms 规则已正式确认 | 本计划初始调查时尚未确认；owner 现已批准立即预览、400 ms 合并 authoring 保存及明确的取消边界，见 I1b/I1c。 |
 | D01/D03/D04 图示能力均可直接接线 | 部分反证：下文 C0 核实了可复用的复制与 Sample 编辑；新的 D04 复查确认 MASTER 可复用 ENC4 已交付监听 producer，独立滤波参数、live Mute/Solo 及作品电平投影仍需 producer 工作。D01 自动保存/复制语义已有决定，不重新设计。 |
 | 合并/自动化可代替人工验收 | 不成立。原验收台账保留真实输入、听感、辅助技术和生命周期缺口；A1/A2 分开记录。 |
@@ -44,14 +44,15 @@
 | R1 | #1905 连续 authoring 提交刷新 | 已合并 | #1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`；red/green、完整 Creator lane、Portal 与当前头独立评审通过；不代表 A2 人工验收。 |
 | C0 | D2–D5 当前能力及决定边界调查 | 调查已记录 | 绑定下文 inspected revision；只更新本计划，不批准产品提案或实现 I Task。 |
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
-| D1 | #1822 统一原则及逐页映射 | 全页旋钮已确认；其余方向键待决 | 执行 I1b/I1c；固定 ENC4 监听音量，ENC1–3 随页/组变化，SHIFT 细调。 |
+| D1 | #1822 统一原则及逐页映射 | 全页旋钮及三页普通方向映射已确认；导航待 K2 | 固定 ENC4 监听，ENC1–3 随页/组变化；Project 相邻／三列一行只选择，Sample 选 Pad／切子页，Perform 选 Pad／切三组保持效果；既有 SHIFT history／细调保持，SHIFT ↑/↓ 不分配。 |
 | D2 | 400 ms 连续旋钮提交 | 已确认，包括 BPM 保持音乐位置；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；BPM 即时变速不重启 Pattern；Perform 保持效果并按 HOLD 离页释放。 |
 | D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | Assign 与精确数值编辑已批准；待独立实现 | 当前工程已有 Asset → 明确 A01–D16 目标，不移动来源、覆盖确认、取消不改 Truth；数值立即试听，Apply/Enter 一次保存/Undo，Esc/切目标取消。复用现有单位/边界与已批准旋钮细调，不改 touch slider 提交语义。 |
-| D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 产品问答已批准；Contract 设计、实施与验收待完成 | MASTER 共用 ENC4；主效果 Cutoff/Delay/Reverb，新增 FILTER 类型/Cutoff/Resonance；独立滤波初始 OFF、LP/20 kHz/0%，Cutoff 20 Hz–20 kHz 对数、Resonance 0–100%，进组不改声，按实时 HOLD 规则并录制/重放全部参数。64 Pad live Mute/Solo 多个 Solo、Mute 优先，切 Bank/Pattern 保持、离 Perform/切工程清空，Performance 包含起点状态与后续变更。Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器，L/R 独立、保持 1 秒、−60…0、静音 −∞、不可用明确显示。具体事件兼容与 meter 投影设计仍由对应 Task 明确。 |
+| D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 产品问答及共享尾音已批准；Contract 设计、实施与验收待完成 | MASTER 共用 ENC4；主效果 Cutoff/Delay/Reverb，新增 FILTER 类型/Cutoff/Resonance；独立滤波初始 OFF、LP/20 kHz/0%，Cutoff 20 Hz–20 kHz 对数、Resonance 0–100%，进组不改声，按实时 HOLD 规则并录制/重放全部参数。64 Pad live Mute/Solo 多个 Solo、Mute 优先，切 Bank/Pattern 保持、离 Perform/切工程清空，Performance 包含起点状态与后续变更。对应 Pad 当前／后续输入立即阻断，已进入共享 Delay/Reverb 的尾音自然衰减，其他 Pad 效果继续。Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器，L/R 独立、保持 1 秒、−60…0、静音 −∞、不可用明确显示。具体事件兼容、ramp 工程验证与 meter 投影仍由对应 Task 完成。 |
 | I1–I5 | D1–D5 的对应实现 | I1b/I1c 已合并，原浏览器失败项及 BPM 可听预览仍未关闭；D4 待实现，D5 待设计和实现 | #1936 → `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce` 交付 contextual consumer，不等于完整验收；每项追加精确 Task，独立实现和合并。 |
 | K1 | #1960 四排键盘映射 | 已批准；实现与验收待独立 Task | 1234 → 13–16、QWER → 09–12、ASDF → 05–08、ZXCV → 01–04；Q 从 01 改为 09；MIDI note 36–51、Pad 身份与引用保持，见四排键盘决定。 |
-| A1 | 四页自动化与视觉核对 | 待验收 | I1–I5、K1 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
+| K2 | #1822 三页普通方向导航 | 已批准；实现与验收待独立 Task | 导航不触发 Pad、不写 Truth；上下文切换取消未提交预览。复用各页现有选择／子页状态，完整 Perform FILTER 导航依赖真实 producer／consumer。 |
+| A1 | 四页自动化与视觉核对 | 待验收 | I1–I5、K1、K2 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
 | V1 | 协调版本结算与 snapshot | 待实施 | 读取最终 manifests 和版本政策；独立 version Task、Portal snapshot 及合并后 provenance。 |
 | C1 | 本地工作区/分支收尾 | 待调查 | 完整改动保留、干净（含 untracked）、未锁定且无人使用；逐个安全移除。 |
@@ -211,6 +212,100 @@ check。仅 docs 检查，不运行或声称产品／浏览器／音频验收。
 **Documentation impact: none** — 记录已批准未来行为，当前 Portal 实现
 source facts 未变；实际能力实现 Task 仍负责对应 Portal 更新。
 **Pitfall impact: none** — 使用既有独立 decision 与 Task 验证机制，无新的流程缺陷。
+
+### 2026-10-11 — 三页导航与共享尾音已批准（独立 Decision Task）
+
+Fresh main / isolated Task base：`5d31f21bb7b5f91014881c05b0ef7f4708c03b29`。
+保留完整七文件草稿和 source／index guards 后，Root 授权本 Task 的独立
+worktree 快进整合实际 main `1e9a90c1055c8fc5c5df3fa878dda416b1d00a20`；
+七路径 incoming 均未改变，草稿逐字保留，index 未新增暂存修改。
+#2000 实际 merge `116280f9209245b4757a814fcf3155002b025269` 已交付 MASTER
+consumer，完整 Creator 仍 pending；#2005 已合入 S0／S1 治理，原完整 Deploy
+Contract 实际失败仍未关闭。不借上述 merge 或其他 Task 结果建立本 Task
+PASS。此 Decision Task 无身份／Build 分配，不适用 allocation-cut 特殊前缀，
+保留原完整 Portal check。
+owner 实际批准的完整问答记录在
+[三页导航与 live Mute/Solo 共享尾音](../prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)：
+
+- Project 左右相邻选择、上下在三列列表移一行，只选择，OPEN 才打开。
+- Sample 上下与 Sequence 一样选 Pad，左右切 Trim／Playback／Tone/EQ／Pad。
+- Perform 上下选 Pad，左右切 PRIMARY／FILTER／MORE，并保持效果声音。
+- 导航不触发 Pad、不写 Truth；切编辑上下文取消未提交的 400 ms 预览。
+  SHIFT + ←/→ 撤销／重做，SHIFT + ENC1–3 细调，SHIFT + ↑/↓ 不分配。
+- 对应 Pad 当前／后续输入立即阻断；已进入共享 Delay／Reverb 的尾音自然
+  衰减，其他 Pad 效果继续，不扩大为每 Pad 效果发送／尾音隔离。
+
+**Premise dispositions:** 实际 App 仅给 Sequence 接入普通方向导航；现有
+Project selection、Sample 四子页和 Perform PRIMARY／MORE 可复用，但
+新增三页接线与 FILTER producer／consumer 仍未交付。RealtimeEngine 尚无
+live Mute/Solo masks。尾音问答前提已经满足；原 96-frame ramp／cursor
+保留为工程提案，须满足已批准即时输入阻断，不是 owner 批准的宽限。
+R1–R6、legacy 兼容、真实 applied／capture ACK、receipt 与 epoch 义务不缩小。
+
+**后续工程边界：** K2 从已有页内选择／子页状态接线，不造第二份状态，保留
+Project OPEN、完整 64 Pad 边界、400 ms 取消和 SHIFT history／细调。最低
+mounted App 事实分别验证只选择不打开、上下三列一行、选 Pad 不触发／不改
+Truth、切页取消未提交预览、Perform 切组保持及 SHIFT ↑/↓ 无动作；原完整
+browser journeys 和 far-side 不缩小。完整 FILTER 导航仍依赖 D04 的
+F1→M1→P1→W1→C1 实际交付，不能渲染假组充数。
+M1 沿用 [producer 计划](2026-10-11-performance-live-control-producers.md) M1 节的十文件声明，
+等待 F1 实际合并后顺序集成；最低真实 PCM 证明当前／后续 Pad 输入门控、
+共享尾音自然衰减、其他 Pad 继续、多 Solo／Mute 优先以及 reset／旧 epoch
+拒绝，执行原 allocation 和 concurrent stress 的预算。K2／M1 的产品验证
+本 Decision Task 均未运行。
+
+**Ownership:** K1 正在自己的隔离 worktree 验证四排键盘，拥有本计划／问题
+文件及两个 Portal 页的并行修改。本 Task 仅编辑自己的新 docs worktree，
+不改 K1 冻结源。后续 main integration 保留两者批准与各自 source audit，
+不把 clean worktree 当作无人使用。K2 的 App／Sample／Perform／测试范围和
+M1 的 engine 范围开始前仍须刷新其他 Task 实际交付与 owner；不并行写共享源。
+
+**Declared files（恰好七个）：**
+
+- 新 `docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md`。
+- `docs/prd/questions/hardware-control-mapping.md`。
+- `docs/plans/2026-10-09-creator-desktop-final-followup.md`。
+- `docs/prd/decisions/2026-10-11-performance-live-control-encoding.md`。
+- `docs/plans/2026-10-11-performance-live-control-producers.md`。
+- `apps/docs-site/docs/platform/input.mdx`。
+- `apps/docs-site/docs/hosts/creator-interactions.mdx`。
+
+**Lowest-tier verification:** 声明路径／相对链接／批准来源核对，原 pitfall
+ledger 15 cases 与 CI scope／ownership 77 cases、whitespace／精确文件清单；
+新文件进入 index 后必须按原步骤重跑 ownership，预先执行不替代这项证据。提交前
+canonical `scripts/docs-site.sh check` 校验两处 current 页面及链接，随后按
+实际 committed head 完成 docs_static／PR body／declaration 与所选 batch-only
+证据检查。不运行 native、Creator browser 或声称听音验收；当前实际验证
+结果如下，staged ownership 与 committed-head shipping 证据另按步骤取得。
+
+**Actual verification:** 本 Task 的七文件 Portal 输入冻结后，以普通 uid 501
+在自己的 worktree 建立 APFS COW 依赖副本；不共享 writable symlink，不复制
+donor `.cache` 或 generated build。36,747 installed entries 的源／目标完整
+SHA-256 相同，regular inode 独立，所有 dependency symlink 留在各自树内。
+使用 Node 26.8.1 与命令-local npm 10.9.3，原完整
+`scripts/docs-site.sh check` 实际 exit 0，59.876405 秒：176/176 tests、52
+pages、10 diagram sources／20 outputs、current facts／snapshot／type／
+changelog／production build，以及 50 routes／internal links 全部完成。
+child terminal 后再采 source／index、tool、donor tree 与 lock guards，均
+与执行前一致。receipt：
+`approved-navigation-and-fx-tail-decision-preparation-20261010T2238Z/portal-execution-20261010T225903Z/final-receipt.json`，
+SHA-256 `8cf5ac77840c6735ff60a3f69de4d461039fd0e72dc67b9df685be6a41c79cf1`。
+本段仅补真实结果，不改变已校验 Portal 页的状态或新增产品行为。
+原 ledger 15 cases 和 scope 77 cases、33 个本地 relative targets／source
+paths 及 whitespace 也已通过；未暂存阶段的 77 不代替新文件正式 ownership。
+该结果仅为文档 Task 验证，不关闭 K1／K2／M1、原 Creator 失败、A1/A2 或 Goal。
+
+**Version impact: none** — 只记录未来批准和 Portal 的批准／待实施状态，无
+产品源码、Contract、active manifest、ABI 或 Build 分配。未来 K2／M1 及既有
+ABI 债保留，由实现 Task 和 V1 按实际影响结算。
+**Documentation impact: required** — `/platform/input/`、
+`/hosts/creator-interactions/` 当前写了未决方向状态；同 Task 同步批准与
+必要链接，明确实施／验收待完成。Portal 不扩写不存在的声音或导航能力。
+**Pitfall impact: none** — 使用已有 Decision Task、所有权协调和验证机制。
+
+历史段落中的方向／尾音 pending 仅表示其当时状态，由本段窄范围替代；
+其他 SHIFT 提案仍未批准。#1822 不关闭，K1／K2／M1、A1/A2、V1 和 Goal
+仍有未完成义务，#2002 的历史风险批准不转移到其他 Task。
 
 2026-10-09 owner 已确认统一原则：旋钮 1/2 管视图位置，旋钮 3/4 管当前页
 主要数值，方向键做导航，SHIFT 保留撤销/重做并支持粗调。此回答只确认
