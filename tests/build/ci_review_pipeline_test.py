@@ -509,6 +509,24 @@ class PipelineTests(unittest.TestCase):
             coverages=pipeline.coverage_inventory(self.directory), changed_paths=paths,
             collector=collector, trusted_config=trusted))
 
+    def test_t2_review_scope_is_the_deterministic_path_floor(self):
+        # Mapping every T2 review to test:full made each main batch run every
+        # suite (#1955). T2 adds nothing; the path floor decides alone.
+        result, identity, paths, collector, trusted = self.t2_fallback_fixture()
+        history, _ = pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths,
+                                              collector=collector, trusted_config=trusted)
+        review = history["attempts"][-1]["review"]
+        policy = test_scope.load_policy(ROOT)
+        identity = dict(identity, backend="glm", run_id=1, run_attempt=1)
+        expected = {("docs/plans/x.md",): ["test:none"],
+                    ("apps/creator-web/src/app.ts",): ["test:creator", "test:portal"],
+                    ("scripts/ci/review_pipeline.py",): ["test:full"]}
+        for changed, labels in expected.items():
+            with self.subTest(paths=changed):
+                publication = review_scope.prepare_publication(policy, identity, changed_paths=list(changed),
+                                                               review=review)
+                self.assertEqual(publication["labels"], labels)
+
     def test_capture_maps_engine_internal_error_to_runtime_failure(self):
         # Regression for production run 37971385452: the engine reported its
         # native internal_error for an unclassified provider fault, the
@@ -695,7 +713,7 @@ class PipelineTests(unittest.TestCase):
                     assert history["schema"] == review_scope.HISTORY_SCHEMA_V2
                     assert collector == pipeline.collector_witness(document)
                     assert persisted_config == trusted and coverage["complete"] is True
-                    assert review["test_scope"]["labels"] == ["test:full"]
+                    assert review["test_scope"]["labels"] == ["test:none"]
                     assert publication["status"] == "reviewed" and publication["publication"]["review"] == {{"summary": review["summary"], "findings": review["findings"]}}
                 marker = codec.encode_history(history)
                 assert codec.decode_history(marker) == history
