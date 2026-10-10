@@ -320,6 +320,19 @@ function selectPerformPage(name: "Live" | "Slots" | "Takes" | "Replay") {
   if (button.getAttribute("aria-current") !== "page") fireEvent.click(button);
 }
 
+function idlePatternTransport(): PatternTransportState {
+  return {
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: false, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: 0, commandId: null, publicationPending: false,
+      error: null, currentPatternId: ids.pattern1, pendingSwitch: null,
+    },
+  };
+}
+
 test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad surface", () => {
   renderSurface();
   const surface = screen.getByRole("main", {name: "Perform"});
@@ -412,6 +425,63 @@ test("Launch without a Performance recording stays closed while the transport re
       onSelectPattern={vi.fn()} />);
   expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
     .hasAttribute("disabled")).toBe(true);
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+});
+
+test("Launch stays closed until Performance recording setup finishes", async () => {
+  const fixture = controllerFixture();
+  const begin = deferred<{performanceId: string; committedRevision: number;
+    replayed: false; projectRevision: number}>();
+  fixture.runtime.calls.begin.mockReturnValueOnce(begin.promise);
+  const onSelectPattern = vi.fn();
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    transport={idlePatternTransport()} onSelectPattern={onSelectPattern} />);
+  await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+  let recording!: Promise<void>;
+  act(() => { recording = fixture.controller.record(); });
+  await waitFor(() => expect(fixture.runtime.calls.begin).toHaveBeenCalledOnce());
+  expect(fixture.controller.getState().recording.phase).toBe("starting");
+  const launch = screen.getByRole("button", {name: /^Launch Pattern 1$/});
+  expect(launch.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(launch);
+  expect(onSelectPattern).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+  await act(async () => {
+    begin.resolve({performanceId: ids.performance, committedRevision: 8,
+      replayed: false, projectRevision: 8});
+    await recording;
+  });
+  fireEvent.click(launch);
+  await waitFor(() => expect(fixture.runtime.calls.launch).toHaveBeenCalledOnce());
+  expect(onSelectPattern).not.toHaveBeenCalled();
+  await act(() => fixture.controller.stop());
+});
+
+test("Launch stays closed until Performance capture stop settles", async () => {
+  const fixture = controllerFixture();
+  const captureStopped = deferred<void>();
+  fixture.captureStop.mockImplementationOnce(() => captureStopped.promise);
+  const onSelectPattern = vi.fn();
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    transport={idlePatternTransport()} onSelectPattern={onSelectPattern} />);
+  await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+  await act(() => fixture.controller.record());
+  let stopping!: Promise<void>;
+  act(() => { stopping = fixture.controller.stop(); });
+  await waitFor(() => expect(fixture.captureStop).toHaveBeenCalledOnce());
+  expect(fixture.controller.getState().recording.phase).toBe("stopping");
+  const launch = screen.getByRole("button", {name: /^Launch Pattern 1$/});
+  expect(launch.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(launch);
+  expect(onSelectPattern).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+  await act(async () => {
+    captureStopped.resolve();
+    await stopping;
+  });
+  expect(fixture.controller.getState().recording.phase).toBe("stopped");
+  fireEvent.click(launch);
+  expect(onSelectPattern).toHaveBeenCalledExactlyOnceWith(ids.pattern1);
   expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
 });
 
