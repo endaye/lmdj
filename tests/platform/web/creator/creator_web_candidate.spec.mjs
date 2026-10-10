@@ -67,7 +67,7 @@ async function send(page, operation, payload = {}, bytes) {
     window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
       request_id: crypto.randomUUID(), operation, payload},
     bytes ? {sidecar: new Uint8Array(bytes)} : undefined),
-  {operation, payload, bytes: bytes ? [...bytes] : undefined});
+  {operation, payload, bytes: bytes ? new Uint8Array(bytes) : undefined});
 }
 function success(response) {
   expect(response, JSON.stringify(response)).toHaveProperty("ok", true);
@@ -147,7 +147,7 @@ async function target(page, index, candidateId, pad, bank = 1) {
 // OPFS is read only for saved-byte evidence. The deliberate missing-source
 // branch is test fault injection; product operations all use the public Host.
 async function files(page, projectId, removeHash = null) {
-  return page.evaluate(async ({projectId, removeHash}) => {
+  const result = await page.evaluate(async ({projectId, removeHash}) => {
     const result = {};
     async function visit(directory, prefix = "") {
       for await (const [name, handle] of directory.entries()) {
@@ -155,12 +155,16 @@ async function files(page, projectId, removeHash = null) {
         if (handle.kind === "directory") {await visit(handle, path); continue;}
         if (!path.includes(`${projectId}.lmdj/`)) continue;
         if (removeHash && name === `${removeHash}.wav`) {await directory.removeEntry(name); continue;}
-        result[path] = [...new Uint8Array(await (await handle.getFile()).arrayBuffer())];
+        result[path] = new Uint8Array(await (await handle.getFile()).arrayBuffer());
       }
     }
     await visit(await navigator.storage.getDirectory());
     return result;
   }, {projectId, removeHash});
+  // Playwright serializes typed bytes directly; expanding them in the browser
+  // spends the journey budget serializing one number per saved byte. Keep the
+  // same complete path/byte evidence and assertion shape after crossing IPC.
+  return Object.fromEntries(Object.entries(result).map(([path, bytes]) => [path, [...bytes]]));
 }
 async function restoreSource(page, originalFiles, sha256) {
   const entry = Object.entries(originalFiles).find(([path]) => path.endsWith(`${sha256}.wav`));
@@ -173,7 +177,7 @@ async function restoreSource(page, originalFiles, sha256) {
     const file = await directory.getFileHandle(name, {create: true});
     const writer = await file.createWritable();
     await writer.write(new Uint8Array(bytes)); await writer.close();
-  }, entry);
+  }, [entry[0], new Uint8Array(entry[1])]);
 }
 async function reopen(page) {
   await page.reload();
