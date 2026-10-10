@@ -1148,6 +1148,65 @@ void overlay_publication_records_and_the_cutoff_matches() {
   LMDJ_CHECK(project.value().patterns.at(f.pattern).events.size() == 1);
 }
 
+// Closing can win the control cadence immediately after an overlay lands.
+// The receipt must carry that applied authority through the durable cutoff
+// even though no idle publish_overlay call recorded it first.
+void closing_retains_an_overlay_that_landed_before_the_control_tick() {
+  for (const auto intent : {PatternTransportIntent::record,
+                            PatternTransportIntent::play_stop}) {
+    Fixture f;
+    f.settle(f.make(6, 1, PatternTransportIntent::record));
+    const auto frame = admission_frame(f.bundle);
+    LMDJ_CHECK(f.controller->admit({10, frame, {0, 1}, true, 90, 10}).has_value());
+    LMDJ_CHECK(f.controller->publish_overlay().has_value());
+    LMDJ_CHECK(f.audio.published_overlays.size() == 1);
+    for (unsigned step = 0;
+         step < 100 && f.audio.engine.pattern_telemetry().pending_generation != 0;
+         ++step) {
+      f.audio.render(9'600);
+    }
+    LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation == 0);
+    LMDJ_CHECK(f.read_journal().admission->published_generation == 0);
+    lmdj::project_io::ProjectStore store;
+    const auto before = store.load(f.bundle);
+    LMDJ_CHECK(before.has_value());
+    // Deliberately no idle control tick between audio landing and close.
+    LMDJ_CHECK(f.controller->request(f.make(7, 2, intent)) ==
+               PatternTransportSubmit::accepted);
+    f.audio.render(1);
+    if (intent == PatternTransportIntent::record) {
+      // Refuse the durable overlay append with a real foreign writer lease.
+      // Repeated continuation must keep the applied marker and the receipt
+      // until the same close can retry, rather than poison the engagement.
+      const auto foreign = lmdj::project_io::make_default_project_storage_platform();
+      auto lease = foreign->acquire_writer(f.bundle);
+      LMDJ_CHECK(lease.has_value());
+      for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        const auto refused = f.controller->continue_operation();
+        LMDJ_CHECK(!refused.has_value());
+        LMDJ_CHECK(refused.error().code == lmdj::foundation::ErrorCode::io_error);
+        LMDJ_CHECK(f.controller->inspect().phase == PatternTransportPhase::awaiting_audio);
+        LMDJ_CHECK(f.controller->inspect().recording);
+      }
+      lease.value().reset();
+    }
+    const auto closed = f.controller->continue_operation();
+    if (!closed.has_value()) std::cerr << closed.error().message << '\n';
+    LMDJ_CHECK(closed.has_value());
+    LMDJ_CHECK(!f.journal_exists());
+    LMDJ_CHECK(f.controller->inspect().playing ==
+               (intent == PatternTransportIntent::record));
+    LMDJ_CHECK(!f.controller->inspect().recording);
+    const auto reopened = store.load(f.bundle);
+    LMDJ_CHECK(reopened.has_value());
+    LMDJ_CHECK(reopened.value().revision == before.value().revision + 1);
+    const auto& events = reopened.value().patterns.at(f.pattern).events;
+    LMDJ_CHECK(events.size() == 1);
+    LMDJ_CHECK(events.front().slot.bank == 0 && events.front().slot.pad == 1);
+    LMDJ_CHECK(events.front().velocity == 90);
+  }
+}
+
 std::string read_bytes(const std::filesystem::path& path) {
   std::ifstream input(path, std::ios::binary);
   LMDJ_CHECK(input.good());
@@ -1310,6 +1369,7 @@ int main() {
     overlay_projection_does_not_disturb_the_commit();
     overlay_generation_advances_when_the_projected_pattern_changes();
     overlay_publication_records_and_the_cutoff_matches();
+    closing_retains_an_overlay_that_landed_before_the_control_tick();
     record_off_withdraws_an_unlanded_overlay_and_commits_once();
     deferred_command_meeting_an_unnamed_successor_is_refused();
     queued_overlay_tick_reads_no_journal();
