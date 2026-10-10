@@ -928,7 +928,7 @@ async function undoCount(page) {
   return response.result.undo_count;
 }
 
-test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns while stopped", async ({page, browserName}) => {
+test("Sequence encoders turn rows, Tempo and monitor volume, and ← → step Patterns while stopped", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await installTransportProofRecorder(page);
@@ -966,13 +966,18 @@ test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns wh
   expect(after.revision).toBe(before.revision + 1);
   expect(await undoCount(page)).toBe(undoBefore + 1);
 
-  // Encoder 4 is Swing, one percent per detent.
-  const swingBefore = after.sequence_settings.swing_percent;
-  const swingStep = swingBefore >= 75 ? -1 : 1;
-  await encoder("Encoder 4 — Swing").focus();
-  await page.keyboard.press(swingStep > 0 ? "ArrowUp" : "ArrowDown");
-  await expect.poll(async () => (await inspectTruth(page)).sequence_settings.swing_percent,
-    {timeout: 30_000}).toBe(swingBefore + swingStep);
+  // ENC4 changes only device monitoring; SHIFT cannot change its target or
+  // step. Swing remains on SETUP and Truth/history stay byte-for-byte equal.
+  const output = encoder("Encoder 4 — Output Volume");
+  await expect(output).toBeEnabled();
+  const outputValue = page.locator('.encoder-readbacks [data-encoder="4"] dd');
+  await expect(outputValue).toHaveText("100%");
+  const outputUndo = await undoCount(page);
+  await output.focus();
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(outputValue).toHaveText("99%");
+  expect(await inspectTruth(page)).toEqual(after);
+  expect(await undoCount(page)).toBe(outputUndo);
 
   // ← → step Patterns while stopped and wait for Stop while playing.
   const first = await selectedSequencePatternId(page);

@@ -8,6 +8,7 @@ import type {
 } from "../runtime/runtime_types";
 import {
   fitSampleViewport,
+  fitPlaybackLoop,
   panSampleViewport,
   playbackEquals,
   zoomSampleViewport,
@@ -122,24 +123,6 @@ function waveformPath(
 // Keeps the loop point inside the trim and the crossfade within half of the
 // remaining loop (none for ping-pong), so an edit never proposes a playback
 // the Core would refuse.
-function fitLoop(
-  playback: Readonly<PadPlayback>,
-  sourceFrames: number,
-): Readonly<PadPlayback> {
-  const end = playback.trimEndFrame ?? sourceFrames;
-  const loopStartFrame = playback.loopStartFrame === null
-    ? null
-    : Math.min(end - 1, Math.max(playback.trimStartFrame, playback.loopStartFrame));
-  const loopStart = loopStartFrame ?? playback.trimStartFrame;
-  const maxCrossfade = playback.loopMode === "ping_pong"
-    ? 0
-    : Math.floor((end - loopStart) / 2);
-  const loopCrossfadeFrames = Math.min(playback.loopCrossfadeFrames, maxCrossfade);
-  return loopStartFrame === playback.loopStartFrame &&
-      loopCrossfadeFrames === playback.loopCrossfadeFrames
-    ? playback
-    : {...playback, loopStartFrame, loopCrossfadeFrames};
-}
 
 function isLooping(playback: Readonly<PadPlayback>): boolean {
   return playback.triggerMode === "loop_gate" ||
@@ -282,7 +265,7 @@ export function WaveformEditor({
     } else {
       next = {...current, loopCrossfadeFrames: Math.max(0, requestedFrame)};
     }
-    next = fitLoop(next, sourceFrames);
+    next = fitPlaybackLoop(next, sourceFrames);
     if (playbackEquals(current, next)) return;
     gesture.current = {base: gesture.current!.base, latest: next};
     setDraftPlayback(next);

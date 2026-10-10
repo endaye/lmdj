@@ -297,3 +297,18 @@ test("an unmeasured stage or console is not fitted", () => {
   expect(fitConsoleToStage({width: 0, height: 600}, {width: 880, height: 640}, false)).toBeNull();
   expect(fitConsoleToStage({width: 800, height: 600}, {width: 0, height: 0}, false)).toBeNull();
 });
+
+
+test("keyboard and rail SHIFT pass fine turns without changing detent navigation", () => {
+  const onTurn = vi.fn();
+  const history = {shifted: true, onToggleShift() {}, undoAvailable: false, redoAvailable: false,
+    onUndo() {}, onRedo() {}, undoTitle: "", redoTitle: ""};
+  const view = railWith({encoders: {1: {label: "Pitch", onTurn}}});
+  const encoder = screen.getByRole("button", {name: "Encoder 1 — Pitch"});
+  fireEvent.keyDown(encoder, {key: "ArrowUp", shiftKey: true});
+  expect(onTurn).toHaveBeenLastCalledWith(1, true);
+  view.rerender(<PhysicalControls activeMode="sample" activeBank={0} onSelectMode={() => {}}
+    onSelectBank={() => {}} history={history} encoders={{1: {label: "Pitch", onTurn}}} />);
+  fireEvent.wheel(encoder, {deltaY: -50});
+  expect(onTurn).toHaveBeenLastCalledWith(1, true);
+});

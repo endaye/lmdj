@@ -1,3 +1,5 @@
+import {IDBFactory, IDBObjectStore} from "fake-indexeddb";
+import {readMonitorVolumePreference, writeMonitorVolumePreference} from "../src/state/monitor_volume_preference";
 import {readFileSync} from "node:fs";
 
 import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
@@ -4201,4 +4203,271 @@ test("a rejected trim preview restores both screens and cannot commit on late re
   fireEvent.pointerUp(window, {pointerId: 52});
   expect(update).not.toHaveBeenCalled();
   expect(fixture.revision).toBe(3);
+});
+
+async function enterEncoderSample(fixture: ReturnType<typeof mutableSampleRuntimeFixture>) {
+  const runAudio = controlledSampleAudio(fixture.session);
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await userEvent.click(screen.getByRole("button", {name: /^Pad A01 —/}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Encoder 3 — Pitch"})).toHaveProperty("disabled", false));
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+}
+
+test("Sample encoders preview together, fine-adjust and save one Pad change after rest", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const update = vi.fn(async (request: Parameters<CreatorSampleRuntimeSession["updatePad"]>[0]) => {
+    fixture.playbacks.set(request.slot, {...request.playback});
+    fixture.revision += 1;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  });
+  fixture.session.updatePad = update;
+  await enterEncoderSample(fixture);
+  vi.useFakeTimers();
+  try {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp", shiftKey: true});
+    await act(async () => {await Promise.resolve();});
+    expect(document.querySelector('.encoder-readbacks [data-encoder="3"]')?.textContent).toContain("0.1 st");
+    fireEvent.click(screen.getByRole("button", {name: "Pad Sound"}));
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 1 — Pad Volume"}), {key: "ArrowDown"});
+    await act(async () => {vi.advanceTimersByTime(399);});
+    expect(update).not.toHaveBeenCalled();
+    await act(async () => {vi.advanceTimersByTime(1); for (let i = 0; i < 40; i++) await Promise.resolve();});
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0]![0].playback).toMatchObject({pitchCents: 10, gainMillidb: -1000});
+    expect(fixture.playbacks.get(0)).toMatchObject({pitchCents: 10, gainMillidb: -1000});
+  } finally {vi.useRealTimers();}
+});
+
+test.each(["page", "Sample subpage", "Pad", "System", "Esc", "blur"])("%s navigation cancels unsubmitted Sample encoder edits", async (boundary) => {
+  const fixture = mutableSampleRuntimeFixture();
+  const update = vi.fn(fixture.session.updatePad);
+  fixture.session.updatePad = update;
+  const clear = vi.fn(fixture.session.clearSamplePreview);
+  fixture.session.clearSamplePreview = clear;
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  await enterEncoderSample(fixture);
+  vi.useFakeTimers();
+  try {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp"});
+    await act(async () => {await Promise.resolve();});
+    expect(preview).toHaveBeenCalledTimes(1);
+    if (boundary === "page") fireEvent.click(screen.getByRole("button", {name: "Project"}));
+    else if (boundary === "Sample subpage") selectSamplePage("Tone / EQ");
+    else if (boundary === "Pad") fireEvent.click(screen.getByRole("button", {name: /^Pad A02 —/}));
+    else if (boundary === "System") fireEvent.click(screen.getByRole("button", {name: "System"}));
+    else if (boundary === "Esc") fireEvent.keyDown(window, {key: "Escape"});
+    else fireEvent.blur(window);
+    await act(async () => {vi.advanceTimersByTime(400); for (let i = 0; i < 40; i++) await Promise.resolve();});
+    expect(update).not.toHaveBeenCalled();
+    expect(clear).toHaveBeenCalledWith(0);
+    expect(fixture.playbacks.get(0)!.pitchCents).toBe(0);
+  } finally {vi.useRealTimers();}
+});
+
+// Real IndexedDB requests read the stored value; only their success delivery
+// to the consumer is deferred. Other Host settings keep their normal reads.
+function deferMonitorPreferenceReads() {
+  const pending: (() => void)[] = [];
+  const get = IDBObjectStore.prototype.get;
+  const spy = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementation(function (this: IDBObjectStore, key) {
+    const request = get.call(this, key);
+    if (key !== "monitor-volume.v1") return request;
+    let notify: typeof request.onsuccess = null;
+    Object.defineProperty(request, "onsuccess", {
+      configurable: true,
+      get: () => notify === null ? null : (event: Event) => {
+        const callback = notify!;
+        pending.push(() => callback.call(request, event));
+      },
+      set: (callback: typeof request.onsuccess) => {notify = callback;},
+    });
+    return request;
+  });
+  return {pending, restore: () => spy.mockRestore()};
+}
+
+test("output-volume restore visibly gates musical input until the same session restores zero", async () => {
+  const factory = new IDBFactory();
+  await writeMonitorVolumePreference(0, factory);
+  const reads = deferMonitorPreferenceReads();
+  vi.stubGlobal("indexedDB", factory);
+  const fixture = mutableSampleRuntimeFixture();
+  const publishRunning = controlledSampleAudio(fixture.session);
+  const activate = vi.spyOn(fixture.session, "activateAudio");
+  const trigger = vi.spyOn(fixture.session, "trigger").mockImplementation(async (slot, velocity, source) =>
+    ({sequence: 1, slot, velocity, source}));
+  const setMonitorVolume = vi.fn();
+  const requestTransport = vi.fn();
+  Object.assign(fixture.session, sequenceSessionStubs(), {
+    monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume,
+    requestPatternTransport: requestTransport,
+    inspectPatternTransport: async () => engagedTransportStatus({playing: false}),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(reads.pending).toHaveLength(1));
+    const pad = screen.getByRole("button", {name: /^Pad A01 —/});
+    // This fails on the previous consumer: the musical Pad looks available
+    // even though activateAudio will silently refuse its first gesture.
+    expect(pad).toHaveProperty("disabled", true);
+    expect(screen.getByRole("status", {name: "Output volume restore status"}).textContent)
+      .toBe("Restoring output volume…");
+    expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
+    expect(screen.getByRole("button", {name: /^Play\/Stop/})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Record"})).toHaveProperty("disabled", true);
+    fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+    fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    expect(activate).not.toHaveBeenCalled();
+    expect(trigger).not.toHaveBeenCalled();
+    expect(requestTransport).not.toHaveBeenCalled();
+    expect(setMonitorVolume).not.toHaveBeenCalled();
+
+    await act(async () => {reads.pending.shift()!();});
+    await waitFor(() => expect(setMonitorVolume).toHaveBeenCalledExactlyOnceWith(0));
+    expect(screen.queryByRole("status", {name: "Output volume restore status"})).toBeNull();
+    expect(pad).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: /^Play\/Stop/})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "Record"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "Encoder 4 — Output Volume"})).toHaveProperty("disabled", false);
+
+    // jsdom cannot provide browser-trusted activation. Use the established
+    // running-audio seam for the far-side musical admission after restore.
+    publishRunning();
+    fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+    await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
+    expect(trigger.mock.calls[0]![0]).toBe(0);
+    expect(trigger.mock.calls[0]![2]).toBe("keyboard");
+    expect(pad.getAttribute("data-outcome")).toBe("admitted");
+    fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    expect(fixture.revision).toBe(3);
+  } finally {
+    rendered.unmount();
+    await act(async () => {for (const notify of reads.pending.splice(0)) notify();});
+    reads.restore();
+    vi.unstubAllGlobals();
+  }
+});
+
+test("output-volume restore from a retired session cannot unlock its replacement", async () => {
+  const factory = new IDBFactory();
+  await writeMonitorVolumePreference(30, factory);
+  const reads = deferMonitorPreferenceReads();
+  vi.stubGlobal("indexedDB", factory);
+  const first = mutableSampleRuntimeFixture();
+  const second = mutableSampleRuntimeFixture();
+  const firstVolume = vi.fn();
+  const secondVolume = vi.fn();
+  Object.assign(first.session, {monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume: firstVolume});
+  Object.assign(second.session, {monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume: secondVolume});
+  let restart!: (state: RuntimeHostState) => void;
+  first.session.subscribeHostState = (listener) => {restart = listener; return () => {};};
+  const sessions = [first.session, second.session];
+  let created = 0;
+  const rendered = render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  try {
+    await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(reads.pending).toHaveLength(1));
+    await writeMonitorVolumePreference(0, factory);
+    await act(async () => restart({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+    await waitFor(() => expect(created).toBe(2));
+    await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(reads.pending).toHaveLength(2));
+    await act(async () => {reads.pending.shift()!();});
+    expect(firstVolume).not.toHaveBeenCalled();
+    expect(secondVolume).not.toHaveBeenCalled();
+    expect(screen.getByRole("status", {name: "Output volume restore status"}).textContent)
+      .toBe("Restoring output volume…");
+    expect(screen.getByRole("button", {name: /^Pad A01 —/})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Encoder 4 — Output Volume"})).toHaveProperty("disabled", true);
+    await act(async () => {reads.pending.shift()!();});
+    await waitFor(() => expect(secondVolume).toHaveBeenCalledExactlyOnceWith(0));
+    expect(firstVolume).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status", {name: "Output volume restore status"})).toBeNull();
+    expect(screen.getByRole("button", {name: /^Pad A01 —/})).toHaveProperty("disabled", false);
+  } finally {
+    rendered.unmount();
+    await act(async () => {for (const notify of reads.pending.splice(0)) notify();});
+    reads.restore();
+    vi.unstubAllGlobals();
+  }
+});
+
+test("ENC4 restores device volume, remains available in System and changes no Project Truth", async () => {
+  const factory = new IDBFactory();
+  vi.stubGlobal("indexedDB", factory);
+  try {
+    await writeMonitorVolumePreference(24, factory);
+    const fixture = mutableSampleRuntimeFixture();
+    const setMonitorVolume = vi.fn();
+    Object.assign(fixture.session, {monitorVolume: () => 24, monitorDestination: () => null, setMonitorVolume});
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(setMonitorVolume).toHaveBeenCalledWith(24));
+    const output = screen.getByRole("button", {name: "Encoder 4 — Output Volume"});
+    await waitFor(() => expect(output).toHaveProperty("disabled", false));
+    fireEvent.keyDown(output, {key: "ArrowDown", shiftKey: true});
+    expect(setMonitorVolume).toHaveBeenLastCalledWith(23);
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
+    expect(screen.getByRole("button", {name: /^Encoder 1 — unassigned/})).toHaveProperty("disabled", true);
+    fireEvent.keyDown(output, {key: "ArrowDown"});
+    expect(setMonitorVolume).toHaveBeenLastCalledWith(22);
+    expect(await readMonitorVolumePreference(factory)).toBe(22);
+    expect(fixture.revision).toBe(3);
+    expect(fixture.playbacks.get(0)!.gainMillidb).toBe(0);
+  } finally {vi.unstubAllGlobals();}
+});
+
+
+test("Undo cancels the Sample turn before restoring history instead of saving the preview", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const order: string[] = [];
+  const update = vi.fn(fixture.session.updatePad);
+  fixture.session.updatePad = update;
+  fixture.session.clearSamplePreview = async () => {order.push("cancel"); return true;};
+  const undo = vi.fn(async () => {
+    order.push("undo"); fixture.revision += 1;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  });
+  Object.assign(fixture.session, {inspectAuthoringHistory: async () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "", disabledReason: ""}), undoAuthoring: undo, redoAuthoring: vi.fn()});
+  await enterEncoderSample(fixture);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"}).classList.contains("is-lit")).toBe(true));
+  vi.useFakeTimers();
+  try {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp"});
+    await act(async () => {for (let i = 0; i < 10; i++) await Promise.resolve();});
+    fireEvent.keyDown(window, {code: "KeyZ", ctrlKey: true});
+    await act(async () => {for (let i = 0; i < 40; i++) await Promise.resolve(); vi.advanceTimersByTime(400);});
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(order.indexOf("cancel")).toBeLessThan(order.indexOf("undo"));
+    expect(update).not.toHaveBeenCalled();
+    expect(fixture.revision).toBe(4);
+  } finally {vi.useRealTimers();}
+});
+
+test("Project encoder selection does not open a Project until explicit OPEN", async () => {
+  const summaries = [listedSummary, {...listedSummary, projectId: "44444444-4444-4444-8444-444444444444"},
+    {...listedSummary, projectId: "55555555-5555-4555-8555-555555555555"}];
+  const open = vi.fn(async () => ({}));
+  const fixture = runtimeFixture({listLocalProjects: async () => summaries, openProject: open});
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Open Project 11111111"})).toHaveProperty("disabled", false));
+  const before = open.mock.calls.length;
+  const select = screen.getByRole("button", {name: "Encoder 1 — Select Project"});
+  await waitFor(() => expect(select).toHaveProperty("disabled", false));
+  await act(async () => {
+    fireEvent.keyDown(select, {key: "ArrowUp"});
+    fireEvent.keyDown(select, {key: "ArrowUp"});
+  });
+  expect(Array.from(document.querySelectorAll(".project-card"), (card) => [card.getAttribute("aria-label"), card.getAttribute("aria-pressed")])).toEqual([["Select Project 11111111", "false"], ["Select Project 44444444", "false"], ["Select Project 55555555", "true"]]);
+  expect(open).toHaveBeenCalledTimes(before);
+  await userEvent.click(screen.getByRole("button", {name: "Open Project 55555555"}));
+  await waitFor(() => expect(open).toHaveBeenCalledTimes(before + 1));
 });

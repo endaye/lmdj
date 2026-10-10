@@ -1,5 +1,6 @@
 import {userMessage} from "../state/error_messages";
-import {useEffect, useRef, useState, type ChangeEvent} from "react";
+import {useEffect, useMemo, useRef, useState, type ChangeEvent} from "react";
+import type {ContextualEncoders} from "./physical_controls";
 
 import type {
   CreatorState,
@@ -24,6 +25,8 @@ interface ProjectSurfaceProps {
   onImport?: (file: File) => void;
   onCreate?: () => void;
   onDuplicate?: () => void;
+  encodersActive?: boolean;
+  onEncodersReady?: (encoders: ContextualEncoders | null) => void;
 }
 
 export function formatBytes(bytes: number): string {
@@ -67,11 +70,15 @@ export function ProjectSurface({
   onImport,
   onCreate,
   onDuplicate,
+  encodersActive = true,
+  onEncodersReady,
 }: ProjectSurfaceProps) {
   const project = state.project.current;
   const showChooser = project === null || showLocalProjects;
   const importing = state.transfer.phase === "importing";
   const fileInput = useRef<HTMLInputElement>(null);
+  const surface = useRef<HTMLElement>(null);
+  const [listPosition, setListPosition] = useState(0);
   // D01: tapping a card selects it; only OPEN PROJECT opens the selection.
   // The selection defaults to the open Project, else the first listed one.
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,13 +95,51 @@ export function ProjectSurface({
     ?? projects.find((item) => item.projectId === project?.projectId)
     ?? projects[0]
     ?? null;
+  const selectedIndex = selected === null ? -1 : projects.indexOf(selected);
+  const encoders = useMemo<ContextualEncoders>(() => ({bindings: {
+    1: {label: "Select Project", value: selectedIndex < 0 ? "—" : String(selectedIndex + 1).padStart(2, "0"),
+      disabled: projects.length === 0 || importing,
+      onTurn: (detents) => {
+        if (!encodersActive || importing || projects.length === 0) return;
+        if (!Number.isFinite(detents)) return;
+        setSelectedId((current) => {
+          const index = projects.findIndex((item) => item.projectId === current);
+          const next = projects[Math.max(0, Math.min(projects.length - 1,
+            (index < 0 ? selectedIndex : index) + Math.trunc(detents)))];
+          return next?.projectId ?? current;
+        });
+      }},
+    2: {label: "Scroll Projects", value: `${Math.round(listPosition)} px`, disabled: projects.length === 0,
+      onTurn: (detents) => {
+        if (!encodersActive) return;
+        const viewport = surface.current?.closest<HTMLElement>('[aria-label="Touch workspace"]');
+        if (viewport === null || viewport === undefined) return;
+        const first = surface.current?.querySelector<HTMLElement>(".project-card");
+        const row = (first?.offsetHeight ?? 0) + 8;
+        viewport.scrollTop = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight,
+          viewport.scrollTop + detents * row));
+        setListPosition(viewport.scrollTop);
+      }},
+  }}), [encodersActive, importing, projects, selectedIndex, listPosition]);
+  useEffect(() => {
+    onEncodersReady?.(encodersActive ? encoders : null);
+    return () => onEncodersReady?.(null);
+  }, [onEncodersReady, encodersActive, encoders]);
+  useEffect(() => {
+    const viewport = surface.current?.closest<HTMLElement>('[aria-label="Touch workspace"]');
+    if (viewport === null || viewport === undefined) return;
+    const read = () => setListPosition(viewport.scrollTop);
+    read();
+    viewport.addEventListener("scroll", read);
+    return () => viewport.removeEventListener("scroll", read);
+  }, []);
   const onImportFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.item(0);
     event.currentTarget.value = "";
     if (file) onImport?.(file);
   };
   return (
-    <main className="project-surface">
+    <main ref={surface} className="project-surface">
       <div className="surface-heading">
         <div className="project-chooser-header">
           <p className="eyebrow">Project surface</p>

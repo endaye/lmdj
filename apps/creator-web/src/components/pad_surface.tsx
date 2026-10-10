@@ -12,6 +12,7 @@ import type {createCreatorInputController} from "../runtime/input_controller";
 
 interface PadSurfaceProps {
   state: CreatorState;
+  audioPreparing?: boolean;
   seedSlots?: readonly SeedSlot[];
   emptyPadCapture?: boolean;
   controller?: ReturnType<typeof createCreatorInputController>;
@@ -36,7 +37,7 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 );
 
 export function PadSurface({
-  state, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, currentSlot, onSelectSample, onChooseSample, onDropSample,
+  state, audioPreparing = false, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, currentSlot, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
   const canTrigger = selectCanStartGesture(state);
   const pads = selectVisiblePads(state);
@@ -68,9 +69,11 @@ export function PadSurface({
             data-pad-colour={padColourAttribute(pad.colour)}
             data-assigned={assigned ? "true" : "false"}
             data-outcome={outcome ?? "idle"}
-            disabled={blocked || (onSelectSample !== undefined
+            disabled={audioPreparing || blocked || (onSelectSample !== undefined
               ? state.project.phase !== "ready" || state.project.current === null
               : (!assigned && !capturing && !emptyPadCapture) || !canTrigger)}
+            title={audioPreparing ? "Restoring output volume…" : undefined}
+            aria-describedby={audioPreparing ? "output-volume-restore-status" : undefined}
             aria-label={`Pad ${address} — ${status?.toLowerCase() ?? (capturing ? "capturing" : assigned ? "assigned" : "empty")} — Key ${keyboardKey}`}
             key={pad.slot}
             onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}

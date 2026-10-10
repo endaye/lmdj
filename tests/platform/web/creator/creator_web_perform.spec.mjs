@@ -1215,6 +1215,66 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(reopened.project.assets[capturedId].artifact).toEqual(captured.project.assets[capturedId].artifact);
 });
 
+test("a recorded rotary FX survives touch takeover and closes the same Core gesture on leaving Perform", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(420_000);
+  await importActivateAndPerform(page);
+  await beginRecording(page);
+  const authority = async () => {
+    const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1, request_id: crypto.randomUUID(),
+      operation: "performance.record.status", payload: {},
+    }));
+    expect(response.ok).toBe(true);
+    return response.result;
+  };
+  const knob = page.getByRole("button", {name: "Encoder 3 — Reverb", exact: true});
+  await knob.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(async () => (await authority()).open_fx_gestures).toBe(1);
+  await page.getByRole("button", {name: "FX / MORE"}).click();
+  await expect(page.getByRole("button", {name: "Encoder 3 — Gate", exact: true})).toBeEnabled();
+  expect((await authority()).open_fx_gestures).toBe(1);
+  await page.getByRole("button", {name: "FX / MORE"}).click();
+  const reverb = page.getByRole("slider", {name: "Reverb", exact: true});
+  await expect(reverb).toHaveValue("510");
+  await reverb.dispatchEvent("pointerdown", {pointerId: 91});
+  await reverb.fill("651");
+  await reverb.dispatchEvent("pointerup", {pointerId: 91});
+  await expect(reverb).toHaveValue("651");
+  expect((await authority()).open_fx_gestures).toBe(1);
+  // System leaves the music surface while retaining the recording. Its
+  // release therefore has a far-side Core count before stop can close it.
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await expect.poll(async () => (await authority()).open_fx_gestures).toBe(0);
+  const stoppedFx = await authority();
+  expect(stoppedFx.state).toBe("active");
+  expect(stoppedFx.hold).toBe(false);
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await expect(reverb).toHaveValue("500");
+  await stopRecording(page);
+  await savePerformanceWithBusyRetry(page, "Rotary touch");
+  await expect(page.getByRole("status", {name: "WAV binding status"})).toContainText("bound");
+  const inspect = async () => {
+    const response = await page.evaluate((id) => window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1, request_id: crypto.randomUUID(),
+      operation: "performance.inspect", payload: {performance_id: id},
+    }), stoppedFx.performance_id);
+    expect(response.ok).toBe(true);
+    return response.result.performance;
+  };
+  const saved = await inspect();
+  expect(saved.name).toBe("Rotary touch");
+  expect(saved.recording_artifact).toMatchObject({
+    byte_length: expect.any(Number), sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    media_type: "audio/wav",
+  });
+  expect(saved.recording_artifact.byte_length).toBeGreaterThan(44);
+  await page.reload();
+  await openLocalProject(page);
+  expect(await inspect()).toEqual(saved);
+});
+
 test("discard deletes its temporary WAV and owner-loss recovery applies or discards durable truth", async ({browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);

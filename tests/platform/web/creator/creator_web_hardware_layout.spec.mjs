@@ -101,7 +101,7 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
     height: 80,
   });
   const encoder = await box(page.getByRole("button", {
-    name: "Encoder 1 — unassigned until hardware mapping is approved",
+    name: "Encoder 1 — Start",
   }));
   expect(encoder).toMatchObject({width: 32, height: 32});
   const keyBlock = await box(page.getByTestId("physical-keys"));

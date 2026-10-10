@@ -13,10 +13,9 @@ const LABELS: Readonly<Record<PerformanceFx, string>> = Object.freeze({
   cutter: "Cutter",
 });
 
-// D04 draws vertical live faders for the two FX it names and puts the rest
-// behind FX / MORE. The pictured MASTER fader and the LP/HP/BP filter type
-// have no Host action, so nothing here renders them.
-const LIVE_FADERS: readonly PerformanceFx[] = Object.freeze(["filter", "delay"]);
+// The three main FX mirror the approved rotary group; other existing FX
+// remain available in the touch drawer.
+const LIVE_FADERS: readonly PerformanceFx[] = Object.freeze(["filter", "delay", "reverb"]);
 
 function isLive(fx: PerformanceFx): boolean {
   return LIVE_FADERS.includes(fx);
@@ -31,6 +30,7 @@ interface FxSliderBankProps {
   readonly onEngage: (fx: PerformanceFx, value: number) => string;
   readonly onMove: (gestureId: string, fx: PerformanceFx, value: number) => void;
   readonly onRelease: (gestureId: string, fx: PerformanceFx) => void;
+  readonly onGroupChange?: (more: boolean) => void;
 }
 
 export function FxSliderBank(props: FxSliderBankProps) {
@@ -106,7 +106,10 @@ export function FxSliderBank(props: FxSliderBankProps) {
         {more.length === 0 ? null : (
           <button type="button" className="perform-fx-more"
             aria-expanded={expanded}
-            onClick={() => setExpanded((open) => !open)}>FX / MORE</button>
+            onClick={() => {
+              setExpanded(!expanded);
+              props.onGroupChange?.(!expanded);
+            }}>FX / MORE</button>
         )}
       </div>
           {expanded && more.length > 0 ? (

@@ -207,8 +207,10 @@ test("Perform live faders and HOLD fit the first screen without overlapping", as
     const boundary = await touch.boundingBox();
     const filter = await page.getByRole("slider", {name: "Filter", exact: true}).boundingBox();
     const delay = await page.getByRole("slider", {name: "Delay", exact: true}).boundingBox();
+    const reverb = await page.getByRole("slider", {name: "Reverb", exact: true}).boundingBox();
     expect(filter.x + filter.width).toBeLessThanOrEqual(delay.x);
-    for (const name of ["Filter", "Delay"]) {
+    expect(delay.x + delay.width).toBeLessThanOrEqual(reverb.x);
+    for (const name of ["Filter", "Delay", "Reverb"]) {
       const box = await page.getByRole("slider", {name, exact: true}).boundingBox();
       expect(box.height).toBeGreaterThan(box.width);
       expect(box.x).toBeGreaterThanOrEqual(boundary.x);
