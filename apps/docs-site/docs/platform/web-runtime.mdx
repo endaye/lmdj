@@ -30,6 +30,20 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 
 ## 共享 Platform
 
+加载同一 packaged Runtime 的 Session 会在保留的
+`window.lmdjWebRuntimeHost` 上暴露冻结的 `inspection` namespace：
+`inspectProject()` 和 `inspectSample(flatSlot)` 直接调用该 Session 的现有方法。
+普通 Project Truth / Sample 读取与 UI 的恢复查询共用请求队列，不创建第二个
+Session，也不绕过该队列直接发送 transport 请求。Project 返回完整 Facade
+投影；Sample 的 slot 为 0–63，返回 `projectRevision`、`assetId`、`playback`
+（包括 `triggerMode`、`pan`、`tone`）、metadata 和 waveform cache identity，
+不包装成原始 `ok` / `result` envelope。读取保持现有校验、预算、取消/重读和
+类型化失败。显式关闭中的或已关闭的 owner 拒绝保留的读取闭包；新 Session
+发布自己的 namespace，旧闭包不能借用新 owner。native fatal transport 的
+`HOST_TIMEOUT` / `HOST_PROTOCOL_MISMATCH` 保持原失败，不改成关闭拒绝。
+原始 transport 仍供明确的协议、并发、触发/停止与 owner 故障证明使用；这些
+低层证明不由普通 inspection namespace 替代。
+
 两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Pointer、Keyboard、MIDI 在共享 Audio Runtime frame clock 上取得时间戳并按 `input_sequence` 串行；BPM anchor 和 Bar boundary 来自 Core，JavaScript 不实现 quantizer、fingerprint 或 fallback sequencer。Project 路径只由 retained current Project 注入，Browser payload 不得携带 `project_path`。`project.duplicate` 只携带 `source_project_id`/`project_id`，在 Workspace 内按新身份发布源 Project 的副本，不改变当前打开的 Project；OPFS 上它与 Bundle import 走同一 copy → verify → commit 目录发布。全局 Pattern transport 由 session 显式 opt-in：`createRuntimeSession` 的 `patternTransport: true` 使 `project.open` 与 `project.create` 携带 `pattern_transport: true` 协商标记，`requestPatternTransport`/`inspectPatternTransport` 分别对应 Host 操作 `pattern.transport.request`/`pattern.transport.inspect`；request 返回 pending ticket 即释放 Promise tail，settlement 由 Control 侧 continuation cadence 推进并经 inspect 观察，未协商或未启用的 session 得到类型化拒绝，legacy Sequence 操作保持默认。跨身份 `snapshot.reload` 在 engagement 存活时与之协调：播放中拒绝，其余情况结算并注销后重新 engaged；Engine stop 抹除 transport generation，每次 activation 重新武装，epoch 随新 generation 从 1 重启。playing 状态下已在 Bar 边界应用的 Pattern switch 不再使 engagement 失效：Host 端口报告引擎当前 Pattern，下一次 Record 由 Facade 协调器重锚绑定后直接提交到当前 Pattern（#1403）。
 
 播放中的全局 transport 切换 Pattern（#1958）由 `requestTransportPatternSwitch({patternId, requestId})` 对应 Host 操作 `pattern.transport.switch`：旧 Pattern 播到引擎自己的下一 Bar 边界，新 Pattern 从边界处开始，响应返回 `{patternId, activationFrame}`。边界之前再次请求时以最新为准：未认领的排队以记住的 authority 取代、仍在同一边界生效；音频线程已认领的不再被覆盖，后来的目标顺延到下一 Bar（Host 侧排队，认领的切换落地后发布）。再按正在播放的 Pattern 即取消待切换，响应 `activationFrame: null`；Stop 在边界前取消待切换且当前 Pattern 不变。切换生效后 Host 的选中 Pattern 与 engagement 绑定跟随引擎当前 Pattern，后续 Record-off、Play 与重发布都以新 Pattern 为准；录音中（`pattern_transport_recording`）、transport 命令在途（`pattern_transport_busy`）、已停止（`pattern_transport_not_playing`）与无 engagement 的请求被拒绝，停止状态的选择仍走 `snapshot.reload`。切换仍在排队时，会重发布当前 Pattern 或另起 Pattern view 的操作在提交任何 Truth 之前即被拒绝并返回原因 `pattern_switch_pending`（提示切换落地后重试）：带 `bpm` 的 `sequence.settings.update`、播放中的 `pattern.events.edit`、播放中带 Record 意图的 `pattern.transport.request` 与 `performance.replay.begin`；仅 Swing/Quantize 的设置更新与 Stop（`play_stop`，在 cutoff 取消排队）不受影响。`pattern.transport.inspect` 相应新增 `current_pattern_id` 与 `pending_switch {pattern_id, activation_frame} | null`，映射为 status 的 `currentPatternId` 与 `pendingSwitch`。

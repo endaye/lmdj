@@ -70,11 +70,8 @@ function sha256(bytes) {
 }
 
 async function inspectProjectTruth(page) {
-  const response = await page.evaluate(() => window.lmdjWebRuntimeHost.transport.send({
-    protocol_version: 1, request_id: crypto.randomUUID(), operation: "project.inspect", payload: {},
-  }));
-  expect(response.ok).toBe(true);
-  return response.result;
+  return page.evaluate(() =>
+    window.lmdjWebRuntimeHost.inspection.inspectProject());
 }
 
 async function observeMasterCaptureBatches(page) {
@@ -1582,13 +1579,8 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
 
 async function inspectedPadA1Pan(page) {
   return page.evaluate(async () => {
-    const response = await window.lmdjWebRuntimeHost.transport.send({
-      protocol_version: 1,
-      request_id: crypto.randomUUID(),
-      operation: "sample.inspect",
-      payload: {slot: {bank: 0, pad: 0}},
-    });
-    return response.ok ? (response.result.playback.pan ?? 0) : response.error.code;
+    const inspected = await window.lmdjWebRuntimeHost.inspection.inspectSample(0);
+    return inspected.playback.pan;
   });
 }
 
@@ -1676,13 +1668,8 @@ test("a tone -100 Pad attenuates a bright source in the recorded master output",
   await tone.fill("-100");
   await tone.dispatchEvent("pointerup", {pointerId: 91, isPrimary: true, button: 0});
   await expect.poll(() => page.evaluate(async () => {
-    const response = await window.lmdjWebRuntimeHost.transport.send({
-      protocol_version: 1,
-      request_id: crypto.randomUUID(),
-      operation: "sample.inspect",
-      payload: {slot: {bank: 0, pad: 1}},
-    });
-    return response.ok ? (response.result.playback.tone ?? 0) : response.error.code;
+    const inspected = await window.lmdjWebRuntimeHost.inspection.inspectSample(1);
+    return inspected.playback.tone;
   }), {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).toBe(-100);
   await expect(tone).toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await openPerform(page);

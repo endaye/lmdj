@@ -889,3 +889,170 @@ head 分类，执行所有实际选择的 batch-only lane，PR 记录 pass key�
 
 Pitfall impact: none — P0 规划不引入新流程知识。执行中按 Task area 查阅 pitfall，
 特别保留共享构建目录、环境相关性归因及真实输入完成证据的既有要求。
+
+
+## I1d — ordinary Creator proof inspections share the owned Session lane
+
+### Refreshed premises and bounded authority (2026-10-10)
+
+- Isolated Task base and freshly fetched `origin/main`:
+  `fb58ee897146c3e73426c3ba0b7cb66f69566a8f`, branch
+  `fix/creator-owned-inspection`. No implementation was already present:
+  the retained packaged Host exposes frozen `candidates` / `providers`, but
+  has no `inspection` namespace; ordinary Creator Truth and Sample helpers
+  still send raw requests outside the existing RuntimeSession request tail.
+- #1936 is actually merged as `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce`
+  with frozen source head `4a76182c6b5dfbe7f7d4b6229dbcf538eb3e0410`.
+  Its original complete Creator result remains 109 pass / 5 fail / 11 skip;
+  the new diagnostic does not replace it or produce a Creator pass key.
+- #1985 is actually merged as `da7da98ff27db8fa4c4e885631f0e4472faa64e0`.
+  Its stopped/playing Pattern transport producer and tests are already on
+  this base. This Task leaves those handlers, ownership and deadlines intact.
+- The one instrumented original 90-case Chromium group retained all 15 specs,
+  2 workers, journeys and budgets and finished 78 pass / 11 fail / 1 skip.
+  Six strict accepted/deadline/terminal identities first expired in 1000 ms
+  Recovery queries. The first native instance is linked to the resize
+  activation helper by its actual successful raw Sample response UUID,
+  `edfee179-711d-4871-9ed9-458c29b91c5a`; that raw Sample request overlapped
+  `sequence.recovery.list` request `14f53672-1484-47b2-9614-bf371e2663d8`.
+  The actual native dispatch/IO wait phase and original five root causes
+  remain unknown. CDP observer effects and all coverage gaps are retained.
+- Remaining behavior: expose the already-owned read methods through the
+  ordinary packaged Host namespace and use them for normal proof reads,
+  so those reads participate in the Creator Session's existing request tail.
+  No second Session, private getter, raw fallback or fabricated response
+  envelope. The methods keep current safety-query cancellation/retry,
+  validation and typed failures; explicitly closing/closed owners refuse
+  inspection before sending even when an injected transport would still
+  accept it. Fatal cleanup preserves the native transport's retained
+  `HOST_TIMEOUT` / `HOST_PROTOCOL_MISMATCH`, rather than recasting it as a
+  closed-owner refusal; pre-start and recovery admission is unchanged.
+- All ten tracked symlinks are real symlinks with existing targets. At Task
+  start, dependency installation and verification had not run in this new
+  worktree; their actual results are recorded below.
+
+### Declared files (exactly eight)
+
+- `packages/web-runtime-platform/web/runtime_session.mjs`
+- `packages/web-runtime-platform/test/runtime_session.test.mjs`
+- `tests/platform/web/creator/fixtures/creator_audio.mjs`
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`
+- `tests/platform/web/creator/creator_web_perform.spec.mjs`
+- `tests/platform/web/creator/creator_web_sequence.spec.mjs`
+- `apps/docs-site/docs/platform/web-runtime.mdx`
+- `docs/plans/2026-10-09-creator-desktop-final-followup.md`
+
+### Behavior and minimum verification
+
+The retained Host exposes frozen
+`inspection: {inspectProject, inspectSample}` as the same Session closures,
+without changing the raw transport. Project inspection returns the existing
+complete Facade result. Sample inspection accepts a flat slot 0–63 and returns
+validated fields including `slot`, `projectRevision`, `assetId`, `playback`
+with `triggerMode`, `pan` and `tone`, metadata and waveform cache identity.
+Ordinary helpers assert those actual fields; they do not invent `ok`/`result`
+wrappers. Musical activation keeps the real trusted Pad input and accepted
+trigger/voice far-side. Trigger, Stop, failure injection, old-owner and native
+concurrency witnesses keep their original raw interfaces.
+
+Lowest-tier tests: extend the original Node RuntimeSession suite with a
+published namespace fixture and deferred real transport. A held inspection
+must prevent a same-Session ordinary Recovery query from sending early;
+release must observe both correct results, max one in flight and exact
+1000/30000 ms options. Full Project Truth and normalized Sample slot/playback
+must remain observable. Closed retained namespace methods must reject with
+`HOST_STATE_INVALID` and produce no new transport send, both while native
+close is pending and after a replacement publishes its own namespace. Fatal
+cleanup tests preserve each retained native timeout/protocol error. Existing
+namespace, Sample cancellation/retry and lifecycle tests remain selected. The
+actual full-suite and discriminating mutation outcomes are recorded below.
+
+The original five browser journeys remain whole, including every far-side:
+
+| Journey | Required transitions and observations retained |
+| --- | --- |
+| Overview / hardware447 | Four modes × three viewports, read-only fit/screenshots → held Sample inspect LOADING → release settles SAMPLE → failure keeps complete Truth → recovery → delete EMPTY → Undo restores Sample/Pad → System/Details identity → Back → reload/reopen exact Project identity. |
+| Stop Replay / perform1551 | Record and save → replay playing → Stop Replay stopped/neutral → neutral FX, HOLD and Pattern state from real projections. |
+| Hard-left Pan / perform1595 | Activate → real witness import → Sample Pan change and complete Truth → Perform record/stop → master PCM with right-channel silence; no capture/sink substitution. |
+| Tempo/Swing / sequence710 | Original continuous commit, cancellation, honest refusal, recording locks and Stop/reload/persisted Truth; no loss of failed or cancelled legs. |
+| Sequence encoders / sequence931 | Rows, Tempo single commit, cancelled turn, device monitor volume without Project mutation, stopped Pattern navigation and original Play/Record ownership boundaries. |
+
+Use the unchanged Task-relevant Node suite first, then committed-source
+ownership/types/docs-static and `scripts/docs-site.sh check` as applicable;
+final browser validation retains the original group configuration and all
+journey legs. Do not widen a 1000/30000 ms Host budget or Playwright budget,
+change lane selection, skip cases or treat a filtered pass as the full proof.
+This Task removes the proved outside-tail inspection path; it does not by
+itself close the original five failures, Overview/Replay uncertainty, A1/A2
+or the overall Goal.
+
+### Version Management
+
+Version impact: Web Runtime Platform MINOR debt — additive ordinary public
+inspection namespace and explicit closed-owner read admission. V1 settles
+this actual merged delivery alongside the final Goal scope, using current
+manifests and canonical generators. No version number, Product Build,
+Assembly identity, snapshot, tag, release or deployment is allocated here.
+
+### Documentation Impact
+
+Documentation impact: required
+Affected portal route: `/platform/web-runtime`.
+Describe the same-owned Session namespace, validated shapes, queue, typed
+closed-owner rejection and the boundary between ordinary queries and explicit
+raw transport proofs. Do not present this Task or the instrumented diagnostic
+as complete Creator/Goal or hardware acceptance.
+
+### Verification state
+
+Actual pre-commit verification on the eight-file Task draft based on
+`fb58ee897146c3e73426c3ba0b7cb66f69566a8f`:
+
+- Refreshed `origin/main` before commit preparation remains the same base;
+  the inspection namespace and ordinary helper migration are still absent
+  there. Independent draft2 source review covered all eight files and
+  preserved the normalized shapes, raw witnesses and fatal error boundary.
+- Node 26.8.1 ran the original RuntimeSession suite: baseline 161/161 PASS.
+  Replacing only Sample inspection's owned `recoverableQuery` with the
+  same-budget `dispatchBoundedRequest` produced an actual assertion RED at
+  `runtime_session.test.mjs:6163`: Recovery and Project requests sent while
+  the Sample gate was held. Fresh source restoration and a new Node process
+  passed that same queue case. Removing only the normal close admission guard
+  produced an actual `Missing expected rejection` RED at line 6212 for the
+  retained old Project inspection closure. Fresh restoration then passed
+  the original suite again, 161/161, including both native fatal causes.
+  Neither RED was cancellation, a hang, missing namespace or syntax failure.
+- The five-phase external runner actually exited 0 in 7.163092 seconds.
+  All 49 input guards and the exact eight-file scope passed. SDK source
+  restored to SHA-256
+  `7907ee1b3f0b951372104cf75ad47dc8057c5e4ce604cf815d86b249dbf8aaf3`
+  with a strictly fresh mtime. Each child terminal preceded post-guard and
+  assertion classification. Retained Node execution receipt:
+  `creator-owned-inspection-preparation/node-validation-execution-20261010T142059Z-8992db88/final-receipt.json`,
+  SHA-256
+  `af8526b32c40a3f0f084571a7627d0017cbc4758818c9065f4c52e8a68a75017`.
+- Locked clean installation used Node 26.8.1 and the Portal's declared
+  npm 10.9.3: canonical `scripts/docs-site.sh install`, Creator `npm ci`,
+  and Web tests `npm ci` each actually exited 0. No old `node_modules` was
+  copied, and all six package/lock inputs stayed byte-identical.
+- Canonical `scripts/docs-site.sh check` actually exited 0 after its complete
+  cold build in 160.367616 seconds: 176/176 tests, 52 pages, 10 diagram
+  sources / 20 outputs, snapshot validation, typecheck, changelogs, production
+  build and 50 routes / internal links. Retained verification terminal:
+  `creator-owned-inspection-preparation/precommit-verification-20261010T142439Z-9c28b44b/terminal.json`,
+  SHA-256
+  `13e1bc6e0c66c2946cca942bb0f220da96bc832ae90ad3c069c9d9a6142b912e`.
+- All six changed MJS files passed Node syntax checking. After staging exactly
+  the eight declared files, `python3 tests/build/ci_change_scope_test.py`
+  actually passed 77/77 in 10.713 seconds, including tracked-path ownership.
+  No added files or undeclared paths were present; cached whitespace checks
+  passed. Relevant open dependency, toolchain and Web proof pitfalls were
+  read. This queue/owner defect is expressed by its behavioral regressions,
+  so it introduces no separate process-pitfall entry.
+
+No complete Web batch has run for this Task yet. The three selected batch-only
+lanes (`creator`, `web_runtime_host`, `web_toolchain`) must run on the final
+committed source; no earlier input's pass key is reused. The original five
+browser failures, Overview/Replay uncertainty and A1/A2 remain open. No push,
+PR, version allocation, tag, release, deployment or hardware acceptance has
+occurred for I1d.

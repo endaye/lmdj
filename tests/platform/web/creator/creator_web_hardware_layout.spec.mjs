@@ -271,15 +271,9 @@ async function displayedBpm(page) {
 
 // Project Truth answers with the same authority the Host writes through.
 async function inspectTruth(page) {
-  const response = await page.evaluate(() =>
-    window.lmdjWebRuntimeHost.transport.send({
-      protocol_version: 1,
-      request_id: crypto.randomUUID(),
-      operation: "project.inspect",
-      payload: {},
-    }));
-  expect(response.ok).toBe(true);
-  return response.result.project;
+  const inspected = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.inspection.inspectProject());
+  return inspected.project;
 }
 
 test("commits Tempo only on release and keeps Project Truth across a reload", async ({page}) => {
