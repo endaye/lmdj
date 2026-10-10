@@ -271,11 +271,56 @@ version settlement: new Engine/command/receipt layout and public port virtual
 methods are a staged native ABI break under `version-management.md` §6. The
 Host-only plan's earlier MINOR assumption does not cover this newly identified
 native prerequisite. Old source consumers retain defaults, but old binaries
-are not compatible replacements. Rebuild coherent static consumers and settle
-matching Module/Assembly identities before package or team-test Product Build
-allocation. No Product Build, Assembly or persisted Project Contract identity
-is allocated or guessed by this source slice; manifests remain derived through
-the normal version workflow.
+are not compatible replacements. The independent V1 Task must settle matching
+Module/Assembly identities, rebuild coherent consumers, allocate the required
+new BUILD and freeze its immutable snapshot before supported package delivery,
+replacement of an existing ABI package or team-test Product Build allocation.
+No Product Build, Assembly or persisted Project Contract identity is allocated
+or guessed by this source slice; manifests remain derived through the normal
+version workflow.
+
+All eleven selected batch-only lanes must first run against the actual
+committed Core inputs. The package lane retains its original command, selectors
+and assertions. Its generated archive and adjacent manifest/checksum stay
+isolated as private verification evidence: record the actual declared versions,
+source revision and outstanding new ABI debt. This test does not settle that
+debt or establish binary compatibility. Do not upload, issue, distribute or use
+the artifact as a supported replacement; no borrowed pass key or accepted-risk
+entry substitutes for a selected lane.
+
+The order is complete selected Core batch verification and current-head review,
+guarded source integration into actual main, then independent V1 settlement from
+that refreshed integrated source. V1 reruns its selected lanes, including
+package, on its actual changed inputs. The Core's private package proof is not
+V1's package proof or a Product Build allocation. This follows testing/allocation
+separation in `git-workflow.md` and the source-first cut and identity rules in
+`version-management.md`; it preserves the ABI debt and every verification gate.
+
+### Documentation Task — clarify verification and delivery sequencing
+
+The parent independently checked the official policies and actual package
+producer. The earlier unqualified "before package" sentence was an additional
+technical sequencing assumption in this plan, not a user product requirement.
+It incorrectly made private package verification depend on a later source-first
+version cut. This correction makes the test and delivery boundaries explicit;
+it neither waives package verification nor permits delivery with unsettled ABI
+identities.
+
+Declared files: only `docs/plans/2026-10-10-pattern-switch-core-prerequisite.md`.
+The preceding Core implementation Task retains its fourteen-file scope;
+production, manifests, Portal pages and tests remain unchanged. Lowest-tier
+verification is the staged single-file diff/whitespace check, canonical
+`docs_static`, PR body lint and declaration-only checks. Inspect the complete
+committed PR range again after this separate docs Conventional Commit; all
+eleven batch-only lanes remain selected and pending until actually executed.
+The old `b03bf51e` independent technical binding remains historical evidence;
+the new head needs its own binding and formal current-head review.
+
+Version impact: none for this documentation Task; the Core's MAJOR debt above
+remains. Documentation impact: none for this documentation Task because it
+corrects only this plan's execution order, without changing Portal source facts.
+Pitfall impact: none for this documentation Task; the existing recorded
+fresh-artifact recurrence and its exit remain unchanged.
 
 ## Documentation Impact
 
