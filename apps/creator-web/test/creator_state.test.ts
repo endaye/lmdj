@@ -7,6 +7,7 @@ import {
   selectCanActivateAudio,
   selectCanTrigger,
   selectCreatorPhase,
+  selectCurrentPad,
   selectVisiblePads,
   type CreatorState,
   type CreatorAction,
@@ -135,6 +136,22 @@ describe("Creator state", () => {
     expect(pressed.pressed.get(32)).toBe("admitted");
     const released = creatorReducer(pressed, {type: "pad-released", slot: 32});
     expect(released.pressed.has(32)).toBe(false);
+  });
+
+  // The one current Pad (#1961): the Sample selection is the single source;
+  // a Bank selection never moves it, and only the never-selected view falls
+  // back to the active Bank's first row.
+  test("current Pad is the Sample selection, falling back to the Bank only before one exists", () => {
+    const fresh = readyState();
+    expect(selectCurrentPad(fresh)).toBe(0);
+    const bankC = creatorReducer(fresh, {type: "bank-selected", bank: 2});
+    expect(selectCurrentPad(bankC)).toBe(32);
+    const struck = creatorReducer(bankC, {
+      type: "sample-action", action: {type: "slot-selected", slot: 5},
+    });
+    expect(selectCurrentPad(struck)).toBe(5);
+    const bankD = creatorReducer(struck, {type: "bank-selected", bank: 3});
+    expect(selectCurrentPad(bankD)).toBe(5);
   });
 
   test.each([

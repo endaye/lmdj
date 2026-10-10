@@ -154,7 +154,9 @@ Sample 触摸工作区按当前选中 Pad 分为四个子页：**Trim** 显示�
 **Playback** 放置播放模式、音量、音高、声像与包络，**Tone / EQ** 放置音色与
 均衡器，**Pad** 集中 Add/Replace、Record Sample、Delete、Reset 和颜色。
 空 Pad 的 Trim 页也提供直接 Add Sample；不再有只把焦点移到裁切框的 Edit 按钮。
-切换 Pad 或 Bank 时当前子页跟随新的目标，重新进入 Sample 默认打开 Trim。
+全机只有一个当前 Pad（#1961）：在任何页面击打 Pad（鼠标、触控、键盘、MIDI）都会让它成为
+Sample 编辑对象和 Sequence 高亮行；Bank 键只切换演奏的 16 个槽，不再把编辑对象换成同号
+Pad，直到下一次击打或 ↑/↓。切换 Pad 时当前子页跟随新的目标，重新进入 Sample 默认打开 Trim。
 切子页时仍在进行的试听草稿取消，键盘手势仍按既有失焦规则完成，已经提交的修改
 保留；导入确认、长素材裁切和
 录音对话框仍由 Sample 工作区持有，不随子页拆分而转移目标。Record Sample

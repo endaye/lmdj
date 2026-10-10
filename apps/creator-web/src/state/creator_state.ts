@@ -735,6 +735,14 @@ export function selectCreatorPhase(state: CreatorState): CreatorPhase {
   return "ready";
 }
 
+// The one current Pad (#1961): the Sample edit object and the Sequence
+// highlight row are the same state, updated by every Pad strike and by ↑/↓.
+// A Bank key never moves it; before the first selection the Sequence view
+// falls back to the active Bank's first row.
+export function selectCurrentPad(state: CreatorState): number {
+  return state.sample.selectedSlot ?? state.activeBank * 16;
+}
+
 export function selectVisiblePads(
   state: CreatorState,
 ): readonly ProjectPadView[] {

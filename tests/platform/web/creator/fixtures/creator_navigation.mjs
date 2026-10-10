@@ -36,6 +36,17 @@ export async function selectSequencePattern(page, patternId) {
   await sequencePattern(page).and(page.locator(`[data-pattern-id="${patternId}"]`)).waitFor();
 }
 
+// The one current Pad (#1961) is shared by the Sample edit object and the
+// Sequence highlight row. A Bank key never moves it; on the packaged product
+// the silent way to make an empty Pad the current Pad is the Sequence ↑/↓
+// step (a Pad strike on an empty Pad arms Capture instead).
+export async function stepCurrentPad(page, steps) {
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Sequence", exact: true}).click();
+  await showSequenceLayer(page, "EDIT");
+  const down = page.getByRole("button", {name: "Next Pad — ↓", exact: true});
+  for (let index = 0; index < steps; index += 1) await down.click();
+}
+
 // + NEW, then the new Pattern's length, then CREATE (SETUP layer).
 export async function createSequencePattern(page, bars = null) {
   await showSequenceLayer(page, "SETUP");
