@@ -49,7 +49,7 @@
 | D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | 能力已调查；待 owner 决策 | 区分已实现的导入/替换/trim 与新 Assign、参数细调入口；明确目标、单位/步长、Undo/Redo、取消/失败。 |
 | D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 能力已调查；待 owner 决策 | 明确作用域、Truth 与 live 状态归属、真实投影及 DSP 能力；producer 与 consumer 分 Task。 |
-| I1–I5 | D1–D5 的对应实现 | I1b/I1c 实施；其他范围等决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
+| I1–I5 | D1–D5 的对应实现 | I1b 已合并；I1c 适配中；其他范围等决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
 | A1 | 四页自动化与视觉核对 | 待验收 | I1–I5 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
 | V1 | 协调版本结算与 snapshot | 待实施 | 读取最终 manifests 和版本政策；独立 version Task、Portal snapshot 及合并后 provenance。 |
@@ -204,8 +204,142 @@ Deliver the approved per-page table, touch parameter groups and visible readback
 SHIFT fine steps, device-local ENC4 memory, and metronome monitoring routing.
 Sample/BPM follow the approved 400 ms cancel/commit lifecycle; Perform uses owned
 live gestures retained through rest and group switches and released on page exit
-under HOLD. Before edits, refresh producer delivery and append exact consumer
-files, tests, steps, state transitions and independent review evidence here.
+under HOLD. Consumer development base is `deebae1c3c99de1081e71647689bfebff7b83afc`, the
+implemented I1b producer, while fresh main remains
+`502932e345b621abc5533431e61adf0d0253a189`. I1b is independently source-reviewed
+but not merged yet: this dependent branch must be based on its actual squash
+before shipping. Inspection confirms the existing Sample preview/update and
+Perform live/journal operations are reusable; current bindings only serve
+Sequence, ENC4 is Swing, Project selection and FX groups are touch-only, and
+metronome bypasses capture directly to destination. This Task adds consumers;
+it does not reimplement those producer operations or the merged I1a navigation.
+
+**Steps and state boundaries:** trim Start/End use 10 ms per detent (SHIFT one
+source frame), Pitch 1 st (SHIFT 0.1 st), gain 1 dB (SHIFT 0.1 dB), Pan/Tone
+10 units (SHIFT 1), FX 10/1000 (SHIFT 1/1000). BPM remains integer 1 BPM;
+view/list navigation retains one bar/row/item. ENC4 is always one percentage
+point. Bounds reuse Core-valid playback/loop limits; no new units or DSP.
+Sample turns across parameters of the same Pad merge into one 400 ms update;
+no-change turns save nothing. Touch slider commit semantics remain intact.
+Target loss, System, Esc, history and recording/mutation locks cancel rotary
+work before it can submit; sent authoring results retain normal acknowledgement
+and refresh semantics. The current BPM consumer previews readback then uses existing publication on
+save; this is an unfinished acceptance item until the audible preview producer
+and consumer in PR #1929 are implemented. Perform rotary ownership persists through group/rest, shares the existing
+FX gesture when touch and rotary target the same FX, and releases before leave
+through existing HOLD semantics. Host preference restore precedes enabling
+ENC4; later turns win, storage refusal cannot stop monitoring. Metronome enters
+monitor downstream of capture. No alternate ENC4 or undeclared direction keys.
+
+**Declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/runtime/runtime_types.ts`
+- `apps/creator-web/src/runtime/metronome_click.ts`
+- `apps/creator-web/src/state/sample_state.ts`
+- `apps/creator-web/src/state/encoder_input.ts`
+- `apps/creator-web/src/state/sample_encoder.ts` (new)
+- `apps/creator-web/src/state/monitor_volume_preference.ts` (new)
+- `apps/creator-web/src/state/perform_state.ts`
+- `apps/creator-web/src/components/physical_controls.tsx`
+- `apps/creator-web/src/components/sample_surface.tsx`
+- `apps/creator-web/src/components/project_surface.tsx`
+- `apps/creator-web/src/components/perform_surface.tsx`
+- `apps/creator-web/src/components/fx_slider_bank.tsx`
+- `apps/creator-web/src/components/overview_display.tsx`
+- `apps/creator-web/src/components/sequence_overview.tsx`
+- `apps/creator-web/src/components/sequence_touch_workspace.tsx`
+- `apps/creator-web/src/components/waveform_editor.tsx`
+- `apps/creator-web/src/components/authoring_history.tsx`
+- `apps/creator-web/src/styles.css`
+- `apps/creator-web/test/hardware_console.test.tsx`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `apps/creator-web/test/sequence_grid_edit.test.tsx`
+- `apps/creator-web/test/sample_encoder.test.ts` (new)
+- `apps/creator-web/test/monitor_volume_preference.test.ts` (new)
+- `apps/creator-web/test/metronome_click.test.ts`
+- `apps/creator-web/test/perform_surface.test.tsx`
+- `apps/creator-web/test/authoring_history.test.tsx`
+- `tests/platform/web/creator/creator_web_sample_editor.spec.mjs`
+- `tests/platform/web/creator/creator_web_sequence_grid.spec.mjs`
+- `tests/platform/web/creator/creator_web_perform.spec.mjs`
+- `tests/platform/web/creator/creator_web_sequence.spec.mjs`
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`
+- `tests/platform/web/creator/creator_web_touch_fit.spec.mjs`
+- `apps/docs-site/docs/hosts/creator-web.mdx`
+- `apps/docs-site/docs/platform/input.mdx`
+- `docs/prd/questions/hardware-control-mapping.md`
+- 本计划。
+
+**Lowest-tier verification:** typed helper tests pin per-parameter bounds,
+fine steps, loop fitting, one merged save, no-change/cancel and stale target
+refusal; IndexedDB tests pin default/corruption, serialized writes and bounded
+restore. Component/controller tests exercise real registration, Project
+selection-only/scroll, Sample cancel boundaries, all six FX/group persistence,
+HOLD-aware leave, SHIFT events, monitor independence and history cancellation.
+Metronome tests assert its actual downstream destination. Packaged browser
+journeys use the real current bindings, explicit OPEN, Sample far-side Truth/
+Undo and cancellation, and monitor preference reload; preserve all existing
+journey legs including SETUP Swing. Check readback/8-row fit at console sizes.
+Recording also covers rotary-to-touch takeover of one FX and verifies Core's
+open-FX count returns to zero before the stopped recording is saved/reopened.
+Run TypeScript, ownership on the staged new files, Portal and the exact clean
+head selected batch lanes; independent full-diff/current-head review remains
+required before squash. Physical knobs/hearing and Safari/iPad remain A2.
+
+**Precommit refresh (2026-10-09):** fresh `origin/main` remains
+`502932e345b621abc5533431e61adf0d0253a189`; no successor delivered the remaining
+I1c bindings. New staged-file ownership tests pass (77), TypeScript passes,
+and the independent new App/Perform group passes (15). The reverse FX handoff
+regression fails before the fix at the second engagement, then passes with
+one matching gesture; the prior grouped Project-selection timing failure is
+retained and corrected by waiting for its actual enabled encoder. Portal passes its 175 tests and 50-route build. All 69 Creator test files / 1,164 tests and TypeScript pass. The clean build/package pass. Packaged Chromium passes the new hardware, Sequence binding, Sample merge/cancel/Undo/preference-reopen and rotary-to-touch Perform recording journeys. The status containment regression passes against the real rendered console and packaged CSS. Earlier browser failures are retained: report export entered System and correctly cancelled a pending turn; default seed Pad targets were unavailable; Truth acknowledgement preceded the history input unlock; zero playback fields are omitted by Core. Tests now observe the actual target, committed Truth, restored full playback and input availability without removing journey legs. Perform save also waits for its WAV binding before inspecting the artifact. The complete exact-head Creator lane is still pending; targeted passes do not replace that shipping obligation.
+
+**Open acceptance finding (independent review, 2026-10-09):** the implemented
+BPM preview updates readback only; playback tempo and metronome follow committed
+Truth after 400 ms. The approved decision did not limit immediate preview to
+readback. D2 is therefore not fully accepted: retain this finding until the
+approved audible runtime tempo preview/clear producer is implemented and
+consumed. The owner's pending playback-position choice is recorded in the
+supplemental plan in PR #1929; it does not narrow the immediate-preview decision. No passing UI test proves
+pre-commit audible tempo preview. The remaining contextual bindings and
+monitoring work continue independently; this finding is not silently excluded.
+
+**Version Management:** Creator MINOR debt and monitoring preference are Host
+state, deferred to V1; no persisted Contract or Product Build allocation.
+**Documentation impact: required** — `/hosts/creator-web/`, `/platform/input/`.
+No corresponding Creator/input source diagram exists; update their current
+control tables and retain I1b's shared audio graph. Other product questions
+remain in #1822 and D3–D5.
+
+2026-10-10 consumer integration refresh: monitoring producer #1910 is merged
+as `9119a7f90262e1c8ada92ac6b894f5014a5c0cab`; strict fixture #1915 is merged
+as `864c0f061033a7f0c3488f1908a8817516cd3b62`. Rebase the single consumer Task
+onto that actual main, retaining the newly merged MPC Pad arrangement and
+touch-panel layout. The only textual conflict is in the Creator Portal page:
+retain main's Pad-order paragraph and the consumer's metronome gain routing.
+The refreshed source passes all 69 Vitest files / 1,169 tests and TypeScript.
+Full packaged/browser and physical acceptance remains outstanding. The BPM
+readback still does not preview engine timing; the audible-tempo supplement
+PR #1929 and the owner's playback-position choice remain required.
+
+2026-10-10 Sample integration: rebase onto `1992e258b066152e7d08cf5382bf94d21f1d95d1`,
+including the Sample contextual pages in #1930 and the owner's DUPLICATE decision
+in #1932. Keep all four touch pages and Pad colour management; retain the approved
+independent Trim / Pitch and Pad Sound encoder groups. Touch parameter takeover
+cancels the rotary draft before the touch edit. Switching Sample subpages cancels
+the pending rotary timer and its owned runtime preview before showing the new
+page. A component regression first fails because the old timer saves Pitch after
+leaving Trim; it must pass with no update and restored playback after the full
+400 ms interval. This integration does not implement Assign, new numeric editing,
+or the outstanding audible BPM preview. The integrated tree passes all 69
+Creator test files / 1,174 tests, TypeScript, and the 50-route Portal check.
+The expanded packaged journey retains the original commit, Pad cancellation,
+Undo and device-volume reopen legs and adds the Sample subpage cancellation leg;
+its browser execution and the complete selected Creator lane remain pending.
+A later main refresh is `46df56797265942f760afb253c3e4ad2b3a13c80` (#1934),
+a documentation-only interaction map; it does not implement contextual encoders
+or the remaining audible BPM preview.
 
 ## D3 — record the approved DUPLICATE name
 
@@ -228,6 +362,121 @@ Owner 于 2026-10-10 选择「DUPLICATE（推荐，明确表示复制工程）�
 PR body lint、declaration-only 与无 batch lane 的 evidence check。
 **Version Management:** Version impact: none — 产品行为已存在，只记录命名决定。
 **Documentation impact: none** — 只新增产品决策并更新计划，Portal 页面与事实不变。
+
+2026-10-10 Perform integration: refresh onto `08c216647138ef9e1f7824a4a2624f82eef86cce`,
+which includes #1935's Live / Slots / Takes / Replay pages and #1931's Host proof
+result slots. Preserve page state, native pointer capture, navigation refusal
+while a touch FX gesture is open, and recording/replay continuity. Keep the
+approved three main FX and three more encoder mappings, HOLD semantics and
+rotary/touch ownership. Extend the existing touch geometry journey to all
+three main faders without removing any page, hit-area or first-screen assertion.
+The previous complete lane on 4d558259 was stopped for this integration after
+two failures (old-generation window listener retained; final project.inspect
+request timeout in the full Perform capture journey). Logs and traces are
+retained outside the worktree; no full pass or cause of the latter is claimed.
+The encoder cancellation listener must be owned by the Runtime session and
+rebound on replacement, verified by the unchanged packaged recovery journey.
+The resolved integration passes 69 Creator test files / 1,179 tests, including
+FX value retention through Live / Slots / Takes / Replay, TypeScript build,
+77 staged ownership tests, and the 50-route Portal check. The three primary
+faders share one row, preserving their original 44 px hit areas and 80 px
+vertical travel. Packaged geometry, recovery and the complete lane remain
+pending; these component passes do not settle those obligations or audible BPM.
+
+2026-10-10 overview integration: refresh the single consumer Task onto actual
+main `ec15f9adf3ca7c3fd09c06d61b53e0bcdf189fe6`, including #1938 Sequence
+touch controls, #1940 Sound Set navigation and #1942 mode-specific overview.
+Resolve the overview conflict by retaining the opened Project / selected Sample /
+selected Sequence identity, qualified Perform feedback and the System details
+boundary from main, alongside the four approved encoder function/value readbacks.
+Keep the SYSTEM title while its overlay is open and the opened Project identity
+available to assistive technology. Do not restore the removed generic Project
+facts or build metadata to the editor screen. Every existing navigation, history,
+capture and refusal journey remains in the consumer range. The original b07
+complete Creator failure and its 14-view static/Figma comparison remain retained
+outside this worktree; neither is a pass on this integration. This refresh does
+not settle the audible BPM playback-position question, Assign, fine numeric
+editing or the other pending product decisions. Exact integrated verification
+and the original complete Creator lane remain required. The conflict-resolved
+integration passes TypeScript, all 71 Creator component/helper files / 1,209
+tests (173.96 s), and the staged 77-case ownership suite. Portal and the
+committed-head complete Creator obligations still require their own results;
+these component passes do not replace them.
+
+2026-10-10 touch-preview integration: later main
+`4281d5f54dd01ad73c18e876c2119a35b0229e0b` adds #1946's synchronous shared
+touch drafts and rejected-gesture cleanup. Preserve its Project/Pattern/mode
+and recording-lock boundaries, the Sample editor's controlled preview-active
+signal and both sets of existing lifecycle regressions. Keep ENC4 assigned to
+monitoring; do not restore the superseded Swing encoder. Extend the existing
+touch timing journey in the declared `sequence_grid_edit.test.tsx` to verify
+that ENC3's displayed value follows the same touch draft and cancellation as
+the upper screen, without a Truth write. The Sample encoder cancellation
+fixture publishes the running Host state after Project open, rather than only
+changing diagnostics, and asserts that an audible preview actually begins
+before each existing cancellation boundary. Keep the inactive-audio visual
+preview and rejected-preview journeys from main unchanged. This refresh does not provide the
+still-missing audible BPM producer. Retain the preceding ec15 integration
+results as dated evidence; new source verification remains required.
+
+2026-10-10 status/recovery integration: refreshed main
+`42d86bfdf3c74785810ebaa0c5fe3e0e11e6e19f` includes #1947. Preserve its compact
+default-sound recovery, recording ownership notice across modes/System, and
+return-to-Takes Save/Discard workflow alongside I1c's contextual encoders and
+FX gesture ownership. Both sets of existing Perform regressions and both CSS
+blocks remain. Integrate in a separate short-lived worktree while the original
+`bbd4433` complete proof retains its frozen source. That proof is evidence only
+for its original head, and neither #1947's pass nor a clean merge substitutes
+for fresh integrated-head verification. BPM audible preview and outstanding
+product choices remain pending.
+
+2026-10-10 Graphite/font integration: refreshed main
+`d5554ed55f7ebc2d800285715cef79dcfed57c9a` includes #1948. Apply the prepared
+#1947 integration in another isolated worktree, preserving its original frozen
+verification inputs. Resolve the one overlapping CSS append by retaining both
+#1948's compact action/font rules and I1c's encoder readbacks/group controls.
+Keep main's neutral encoder icon, locked Space Grotesk dependency, stage clip,
+font/geometry assertions and late-recovery layout observation unchanged. Preserve
+#1947's recovery/recording workflows and all contextual encoder regressions.
+The original 37-file declaration still bounds this Task; no mapping, DSP,
+deadline, tolerance or unresolved product choice changes. TypeScript, complete
+components at their original timeout, ownership, portal and fresh committed
+Creator evidence remain required on this integrated input. Earlier runs on
+`bbd4433` or `42d86bf` do not establish verification of this tree.
+The integrated source now passes all 72 Creator test files / 1,230 tests at the
+original 20-second case bounds (132.87 seconds), TypeScript, 77 staged ownership
+tests, and the complete 50-route Portal check (82.27 seconds). The product and
+test sources remain identical to those verified inputs; this paragraph records
+terminal results only. Commit and replace the owned draft PR head with an exact
+expected-head lease, retaining the earlier frozen branches and evidence. Fresh
+committed-head browser proof and review, audible BPM preview and the outstanding
+product choices remain incomplete; none of these component/Portal results is
+complete Creator or device acceptance.
+
+2026-10-10 producer integration: refreshed main
+`a2a43cc088ab35e40297e80eecb7ef048923a154` includes the landed-overlay cutoff
+(#1941), Candidate typed-byte proof (#1943), retained transport replay (#1950)
+and matched-frame monitoring proof (#1949). Live PR metadata confirms each
+merged source and introducing SHA. Carry I1c's same 36-file diff into another
+isolated worktree; it applies without conflicts. Preserve all four producer
+deliveries, #1947 recovery/recording and #1948 font/geometry behavior. The
+Foundation immediate-depth-refusal repair remains a separate PR (#1956).
+The earlier e74 Creator entry failed before tests because this owned checkout
+lacked its locked Web test npm dependencies; retain that failed attempt and
+provision each required package from its lockfile before fresh verification.
+No mapping, product decision, deadline or assertion changes. Frozen earlier
+results remain evidence for their own inputs. Verify this integrated source
+before replacing the owned Draft PR head; audible BPM and the unanswered
+product decisions remain pending.
+
+This integrated input passed TypeScript, all 77 staged ownership checks, all
+72 Creator test files / 1,230 cases at their original case bounds (159.87
+seconds), and the complete 50-route Portal check (79.35 seconds). The source
+and tests remain identical to the frozen verified inputs; only this results
+paragraph was appended afterward. Commit the same 36 declared files and update
+the owned Draft PR with an expected-head lease. Original complete Creator
+browser proof, audible BPM preview, current-head review and the unanswered
+product choices remain incomplete.
 
 ## P0 — ship this bounded plan
 

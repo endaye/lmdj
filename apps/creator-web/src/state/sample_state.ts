@@ -20,6 +20,27 @@ import type {
   WaveformWindow,
 } from "../runtime/runtime_types";
 
+// Keep trim, loop start and crossfade inside the same valid source range.
+export function fitPlaybackLoop(
+  playback: Readonly<PadPlayback>,
+  sourceFrames: number,
+): Readonly<PadPlayback> {
+  const end = playback.trimEndFrame ?? sourceFrames;
+  const loopStartFrame = playback.loopStartFrame === null
+    ? null
+    : Math.min(end - 1, Math.max(playback.trimStartFrame, playback.loopStartFrame));
+  const loopStart = loopStartFrame ?? playback.trimStartFrame;
+  const maxCrossfade = playback.loopMode === "ping_pong"
+    ? 0
+    : Math.floor((end - loopStart) / 2);
+  const loopCrossfadeFrames = Math.min(playback.loopCrossfadeFrames, maxCrossfade);
+  return loopStartFrame === playback.loopStartFrame &&
+      loopCrossfadeFrames === playback.loopCrossfadeFrames
+    ? playback
+    : {...playback, loopStartFrame, loopCrossfadeFrames};
+}
+
+
 export interface SampleViewport {
   sourceFrames: number;
   startFrame: number;

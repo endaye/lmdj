@@ -2,6 +2,7 @@ import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
+import type {ContextualEncoders} from "../src/components/physical_controls";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
@@ -327,19 +328,19 @@ test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad su
   expect(fx.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
-    .toEqual(["Filter", "Delay"]);
+    .toEqual(["Filter", "Delay", "Reverb"]);
   for (const pictured of ["LP", "HP", "BP", "MASTER", "MUTE", "SOLO"]) {
     expect(within(surface).queryByRole("slider", {name: pictured})).toBeNull();
     expect(within(surface).queryByRole("button", {name: pictured})).toBeNull();
   }
 });
 
-test("keeps the other six confirmed FX behind FX / MORE", async () => {
+test("keeps the other five confirmed FX behind FX / MORE", async () => {
   renderSurface();
   const fx = screen.getByRole("region", {name: "Performance FX"});
   const more = within(fx).getByRole("button", {name: "FX / MORE"});
   expect(more.getAttribute("aria-expanded")).toBe("false");
-  expect(within(fx).queryByRole("slider", {name: "Reverb"})).toBeNull();
+  expect(within(fx).queryByRole("slider", {name: "Stutter"})).toBeNull();
 
   await userEvent.click(more);
   expect(more.getAttribute("aria-expanded")).toBe("true");
@@ -667,9 +668,9 @@ test("releases an open FX gesture when FX / MORE collapses it away", async () =>
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   const more = screen.getByRole("button", {name: "FX / MORE"});
   await userEvent.click(more);
-  const reverb = screen.getByRole("slider", {name: "Reverb"});
-  fireEvent.pointerDown(reverb, {pointerId: 5});
-  fireEvent.change(reverb, {target: {value: "700"}});
+  const stutter = screen.getByRole("slider", {name: "Stutter"});
+  fireEvent.pointerDown(stutter, {pointerId: 5});
+  fireEvent.change(stutter, {target: {value: "700"}});
   await waitFor(() => expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2));
 
   // Collapsing unmounts the input, so the gesture cannot be closed by a later
@@ -679,7 +680,7 @@ test("releases an open FX gesture when FX / MORE collapses it away", async () =>
   const requests = fixture.runtime.calls.raw.mock.calls.map(([request]) => request);
   expect(requests.map(({event}) => event.kind))
     .toEqual(["fx_engage", "fx_move", "fx_release"]);
-  expect(requests[2]?.event).toMatchObject({fx: "reverb"});
+  expect(requests[2]?.event).toMatchObject({fx: "stutter"});
 });
 
 test("keeps FX engaged across stop and re-journals them in the next recording", async () => {
@@ -1570,4 +1571,74 @@ test("returning from System opens the retained recording review without reconnec
   expect(fixture.runtime.calls.begin).toHaveBeenCalledTimes(beginCalls);
   await userEvent.click(screen.getByRole("button", {name: "Discard Performance"}));
   await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("idle"));
+});
+
+test("Perform encoder groups retain their effect values across group switches and rest", async () => {
+  const fixture = controllerFixture();
+  let current: ContextualEncoders | null = null;
+  const bind = (value: ContextualEncoders | null) => {current = value;};
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onEncodersReady={bind} />);
+  expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Filter", "Delay", "Reverb"]);
+  act(() => current!.bindings[1]!.onTurn(1, true));
+  expect(fixture.controller.getState().fx.filter).toBe(501);
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Crush", "Stutter", "Gate"]);
+  act(() => current!.bindings[1]!.onTurn(2));
+  expect(fixture.controller.getState().fx.crush).toBe(520);
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  expect(fixture.controller.getState().fx).toMatchObject({filter: 501, crush: 520});
+  for (const page of ["Slots", "Takes", "Replay", "Live"] as const) {
+    selectPerformPage(page);
+    expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Filter", "Delay", "Reverb"]);
+    expect(fixture.controller.getState().fx).toMatchObject({filter: 501, crush: 520});
+    expect(fixture.runtime.calls.fx.mock.calls.some(([event]) => event.kind === "fx_release")).toBe(false);
+  }
+  expect(fixture.runtime.calls.fx.mock.calls.some(([event]) => event.kind === "fx_release")).toBe(false);
+});
+
+test.each([false, true])("leaving Perform releases rotary gestures with HOLD=%s", async (hold) => {
+  const fixture = controllerFixture();
+  if (hold) fixture.controller.toggleHold();
+  fixture.controller.turnFx("delay", 2);
+  await fixture.controller.leave();
+  expect(fixture.runtime.calls.fx).toHaveBeenLastCalledWith({kind: "fx_release", fx: "delay"});
+  expect(fixture.controller.getState().fx.delay).toBe(hold ? 520 : 500);
+});
+
+test("a rotary takeover of a touch gesture journals one matching release before stop", async () => {
+  const fixture = controllerFixture();
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  const id = fixture.controller.engageFx("reverb", 650);
+  fixture.controller.turnFx("reverb", 1, true);
+  fixture.controller.releaseFx(id, "reverb");
+  await fixture.controller.leave();
+  const events = fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event)
+    .filter((event) => event.fx === "reverb");
+  expect(events.map((event) => event.kind)).toEqual(["fx_engage", "fx_move", "fx_release"]);
+  expect(events.every((event) => event.gestureId === id)).toBe(true);
+  expect(fixture.controller.getState().recording.phase).toBe("stopped");
+});
+
+test("touch continues a rotary FX gesture until page exit journals its matching release", async () => {
+  const fixture = controllerFixture();
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  fixture.controller.turnFx("reverb", 1);
+  const id = fixture.controller.engageFx("reverb", 650);
+  fixture.controller.moveFx(id, "reverb", 651);
+  fixture.controller.releaseFx(id, "reverb");
+  expect(fixture.controller.getState().fx.reverb).toBe(651);
+  await fixture.controller.leave();
+  const events = fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event)
+    .filter((event) => event.fx === "reverb");
+  expect(events.map((event) => event.kind)).toEqual([
+    "fx_engage", "fx_move", "fx_move", "fx_release",
+  ]);
+  expect(events.every((event) => event.gestureId === id)).toBe(true);
+  expect(fixture.controller.getState().fx.reverb).toBe(500);
+  expect(fixture.controller.getState().recording.phase).toBe("stopped");
 });

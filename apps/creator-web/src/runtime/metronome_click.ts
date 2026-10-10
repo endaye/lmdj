@@ -3,7 +3,7 @@
 // whose context time falls inside the lookahead horizon and schedules every
 // one it has not scheduled yet, directly on the AudioContext clock.
 //
-// Every click connects straight to `audioContext.destination` and NEVER
+// Every click connects to the Host's downstream monitoring destination, never
 // through the Perform master tap: the tap node is the only capture point for
 // Perform recordings and main-output resamples, so bypassing it keeps clicks
 // out of every recording while staying audible alongside them
@@ -41,6 +41,7 @@ interface ScheduledClick {
 
 export function createMetronomeClickLoop(options: {
   readonly context: AudioContext;
+  readonly destination?: AudioNode;
   // Beats wanted inside [fromSeconds, untilSeconds), in context seconds.
   readonly supply: (
     fromSeconds: number,
@@ -69,7 +70,7 @@ export function createMetronomeClickLoop(options: {
     envelope.gain.exponentialRampToValueAtTime(
       0.0001, beat.contextTime + CLICK_DECAY_SECONDS);
     oscillator.connect(envelope);
-    envelope.connect(options.context.destination);
+    envelope.connect(options.destination ?? options.context.destination);
     oscillator.start(beat.contextTime);
     oscillator.stop(beat.contextTime + CLICK_DECAY_SECONDS);
     scheduled.set(`${beat.contextTime}:${beat.beat}`, {

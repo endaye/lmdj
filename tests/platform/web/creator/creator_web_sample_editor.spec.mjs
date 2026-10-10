@@ -1459,3 +1459,111 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(reopened.redo_count).toBe(0);
   noErrors();
 });
+
+
+test("contextual Sample encoders merge one save, cancel old targets and restore monitoring level", async ({page, browserName}) => {
+  // Boot/import, two authoring transitions, Undo and persisted reopen each
+  // retain their existing bounded transition budgets within this journey.
+  test.setTimeout(300_000);
+  test.skip(browserName !== "chromium");
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  // The real Native fixture has ready assigned Pads; default seed slots
+  // may be loading/failed and cannot receive a target-change gesture.
+  const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
+  if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", {name: "Import .lmdj"}).click();
+  await (await chooser).setFiles(bundle);
+  await expect(page.getByRole("heading", {name: "Project 00000000"})).toBeVisible({timeout: 120_000});
+  const baseRevision = (await rawRequest(page, "project.inspect", {})).result.project.revision;
+  // The report helper opens System, which intentionally cancels an idle
+  // turn. Inspect committed Truth directly while waiting for the timer.
+  const expectEncoderRevision = async (revision) => {
+    await expect.poll(async () => (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.project_revision,
+      {timeout: REPORT_REVISION_TIMEOUT_MS}).toBe(revision);
+  };
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await activateAudio(page);
+  await chooseSampleFile(page, "Replace Sample", "encoder.wav", pcm16Wav({frames: 4800}));
+  await page.getByRole("button", {name: "Confirm replace", exact: true}).click();
+  await commitLongSourceSelection(page);
+  await expectEncoderRevision(baseRevision + 1);
+  const rail = page.getByTestId("physical-controls");
+  const knob = (name) => rail.getByRole("button", {name, exact: true});
+  await expect(knob("Encoder 3 — Pitch")).toBeEnabled();
+  const playbackBeforeTurn = (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback;
+  const savesBefore = await page.evaluate(() => (window.__sampleProofOperations ?? []).filter(op => op === "sample.update_pad").length);
+  await knob("Encoder 3 — Pitch").focus();
+  await page.keyboard.press("Shift+ArrowUp");
+  await expect(page.locator('.encoder-readbacks [data-encoder="3"]')).toContainText("0.1 st");
+  await expectEncoderRevision(baseRevision + 2);
+  const changed = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+  expect(changed.result.playback.pitch_cents).toBe(10);
+  expect(await page.evaluate(() => (window.__sampleProofOperations ?? []).filter(op => op === "sample.update_pad").length)).toBe(savesBefore + 1);
+  const history = await rawRequest(page, "history.inspect", {});
+  expect(history.result.undo_count).toBe(2);
+
+  // A Sample subpage switch also retires the old rotary preview. Keep the
+  // turn and navigation in one task so driver latency cannot commit it first.
+  await showSamplePage(page, "Trim");
+  await knob("Encoder 3 — Pitch").evaluate((element) => {
+    const navigation = document.querySelector('.sample-page-nav');
+    const playback = [...(navigation?.querySelectorAll('button') ?? [])]
+      .find((candidate) => candidate.textContent === 'Playback');
+    if (playback === undefined) throw new Error("Playback page is unavailable");
+    element.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowUp", bubbles: true}));
+    playback.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1}));
+  });
+  await expect(page.getByRole("slider", {name: "Pad A01 Volume", exact: true})).toBeVisible();
+  await page.waitForTimeout(450);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.pitch_cents).toBe(10);
+  await expectEncoderRevision(baseRevision + 2);
+  expect(await page.evaluate(() => (window.__sampleProofOperations ?? [])
+    .filter(op => op === "sample.update_pad").length)).toBe(savesBefore + 1);
+
+  // Start a second preview and change its Pad before its 400 ms save.
+  const nextPadLabel = await page.getByRole("button", {name: /^Pad A02 —/}).getAttribute("aria-label");
+  await knob("Encoder 3 — Pitch").focus();
+  // Dispatch both inputs in one browser task so driver round trips cannot
+  // consume the idle interval before the target actually changes.
+  await knob("Encoder 3 — Pitch").evaluate((element, label) => {
+    const pad = [...document.querySelectorAll(".pad")].find((candidate) => candidate.getAttribute("aria-label") === label);
+    if (pad === undefined) throw new Error("The next Pad is unavailable");
+    element.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowUp", bubbles: true}));
+    pad.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1}));
+  }, nextPadLabel);
+  await expect(page.getByRole("button", {name: nextPadLabel, exact: true})).toHaveAttribute("aria-pressed", "true");
+  // An observation after the complete idle interval proves the old timer cannot save.
+  await expect.poll(async () => {
+    const result = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+    return {revision: result.result.project_revision, pitch: result.result.playback.pitch_cents};
+  }).toEqual({revision: baseRevision + 2, pitch: 10});
+  await page.waitForTimeout(450);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.pitch_cents).toBe(10);
+  await expectEncoderRevision(baseRevision + 2);
+  await pressRailUndo(page);
+  await expectEncoderRevision(baseRevision + 3);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback).toEqual(playbackBeforeTurn);
+
+  const truth = (await rawRequest(page, "project.inspect", {})).result;
+  // Truth acknowledgement precedes the history controller finishing its
+  // refresh; wait for its actual input lock before sending keyboard turns.
+  await expect(page.locator(".creator-console-frame")).not.toHaveAttribute("inert", "");
+  await knob("Encoder 4 — Output Volume").focus();
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.locator('.encoder-readbacks [data-encoder="4"]')).toContainText("95%");
+  expect((await rawRequest(page, "project.inspect", {})).result).toEqual(truth);
+  await openCreatorSystem(page);
+  await expect(knob("Encoder 4 — Output Volume")).toBeEnabled();
+  await expect(knob("Encoder 1 — unassigned until hardware mapping is approved")).toBeDisabled();
+  await page.reload();
+  await waitForProjectReopen(page, truth.project.project_id.slice(0, 8));
+  await expect(knob("Encoder 4 — Output Volume")).toBeEnabled();
+  await expect(page.locator('.encoder-readbacks [data-encoder="4"]')).toContainText("95%");
+  expect((await rawRequest(page, "project.inspect", {})).result).toEqual(truth);
+  await noErrors();
+});

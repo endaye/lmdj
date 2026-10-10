@@ -1,3 +1,4 @@
+import type {EncoderBinding, EncoderPosition} from "./physical_controls";
 import {type MidiStatus} from "./midi_status";
 import {selectCreatorPhase, type CreatorState} from "../state/creator_state";
 import type {CreatorMode} from "./creator_mode";
@@ -17,6 +18,8 @@ import {projectIdentity, sampleIdentity} from "../state/overview_context";
 import type {PerformController} from "../state/perform_state";
 
 interface OverviewDisplayProps {
+  encoders?: Partial<Record<EncoderPosition, EncoderBinding>>;
+  systemOpen?: boolean;
   state: CreatorState;
   activeMode: CreatorMode;
   sequence: SequenceState;
@@ -33,6 +36,18 @@ interface OverviewDisplayProps {
   performController?: PerformController | null;
 }
 
+function encoderLabel(label: string | undefined): string {
+  switch (label) {
+    case "Select Project": return "Project";
+    case "Scroll Projects": return "List";
+    case "scroll bars": return "Bars";
+    case "scroll track rows": return "Rows";
+    case "Output Volume": return "Output";
+    case "Pad Volume": return "Pad Vol";
+    default: return label ?? "Unassigned";
+  }
+}
+
 function modeLabel(mode: CreatorMode): string {
   switch (mode) {
     case "project": return "PROJECT";
@@ -46,6 +61,8 @@ function modeLabel(mode: CreatorMode): string {
 
 export function OverviewDisplay({
   state,
+  encoders,
+  systemOpen = false,
   activeMode,
   sequence,
   snap,
@@ -84,15 +101,15 @@ export function OverviewDisplay({
       activeMode === "perform" ? " is-perform" : ""}`}>
       <div className="overview-primary">
         <output className="overview-context">
-          {modeLabel(activeMode)}
-          {activeMode === "sequence"
+          {systemOpen ? "SYSTEM" : modeLabel(activeMode)}
+          {systemOpen ? "" : activeMode === "sequence"
             ? patternIndex === null ? " / NO PATTERN" : ` / ${String(patternIndex).padStart(2, "0")}`
             : activeMode === "sample" ? ` / ${sampleIdentity(state.sample.selectedSlot)}`
             : showsProject ? <> / {projectLabel}</> : ` / ${sampleIdentity(state.sample.selectedSlot)}`}
         </output>
         {/* Object-focused modes still name their enclosing Project to a screen
             reader, without drawing unrelated technical facts above the editor. */}
-        {!showsProject ? <span className="visually-hidden">Project {projectLabel}</span> : null}
+        {systemOpen || !showsProject ? <span className="visually-hidden">Project {projectLabel}</span> : null}
         <output className={`overview-bpm${activeMode === "sequence" || activeMode === "perform" ? "" : " visually-hidden"}`}>
           {project ? `${tempoPreview ?? project.bpm} BPM` : "NO PROJECT"}
         </output>
@@ -114,8 +131,19 @@ export function OverviewDisplay({
               : ""}
         </output>
       </div>
+      {encoders === undefined ? null : (
+        <dl className="encoder-readbacks" aria-label="Encoder functions and values">
+          {([1, 2, 3, 4] as const).map((position) => (
+            <div key={position} data-encoder={position}>
+              <dt title={encoders[position]?.label}>ENC{position} {encoderLabel(encoders[position]?.label)}</dt>
+              <dd>{encoders[position]?.value ?? "—"}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       {activeMode === "sequence" ? (
         <SequenceOverview
+          hideContext={encoders !== undefined}
           project={project}
           state={sequence}
           bank={state.activeBank}

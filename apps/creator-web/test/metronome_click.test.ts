@@ -218,3 +218,14 @@ test("the loop observes lmdj:metronome-click on the window by default", () => {
     window.removeEventListener("lmdj:metronome-click", listener);
   }
 });
+
+
+test("monitoring clicks feed the supplied monitor gain instead of bypassing it", () => {
+  const {context, gains} = fakeContext();
+  const destination = {role: "monitor"} as unknown as AudioNode;
+  const loop = createMetronomeClickLoop({context, destination,
+    supply: () => [{contextTime: 0.1, beat: 0, accent: true}]});
+  loop.start(0);
+  expect(gains[0]!.connects).toEqual([destination]);
+  loop.stop();
+});

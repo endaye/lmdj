@@ -234,7 +234,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               <button type="button" aria-label="Decrease Swing"
                 disabled={disabled || (requestedSwingRef.current ?? swing) <= 50}
                 onClick={() => requestSwing((requestedSwingRef.current ?? swing) - 1)}>−</button>
-              <span className="sequence-param-encoder">ENC 4</span>
+              <span className="sequence-param-encoder" aria-hidden="true" />
               <button type="button" aria-label="Increase Swing"
                 disabled={disabled || (requestedSwingRef.current ?? swing) >= 75}
                 onClick={() => requestSwing((requestedSwingRef.current ?? swing) + 1)}>+</button>
