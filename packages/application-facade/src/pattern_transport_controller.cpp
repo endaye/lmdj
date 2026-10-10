@@ -177,9 +177,20 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   audio::PatternTransportCommand command{
       runtime_generation_, request.expected_epoch, last_pattern_generation_,
       audio_action(request.intent), {}};
+  // Read the current generation before the pending switch, so a switch that
+  // applies between the two reads is seen as current rather than as stale.
+  const auto current_generation = audio_.pattern_generation();
   if (playing_) command.pending_switch = audio_.pending_switch();
   if (!command.pending_switch) {
     command.expected_pattern_generation = audio_.pattern_generation();
+  } else if (unlanded_overlay_generation_ == 0 &&
+             command.pending_switch->generation != current_generation) {
+    // A named successor fences against the Pattern that plays now. A Host
+    // republication outside this coordinator (a Record-off completion) can
+    // have advanced it past the last receipt, and the engine refuses a
+    // command whose expected generation is neither current nor the
+    // acknowledged predecessor of an applied switch (#1958).
+    command.expected_pattern_generation = current_generation;
   } else if (unlanded_overlay_generation_ != 0 &&
              command.pending_switch->generation ==
                  unlanded_overlay_generation_) {

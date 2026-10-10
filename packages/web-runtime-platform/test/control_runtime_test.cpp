@@ -9277,6 +9277,106 @@ void test_transport_stop_before_the_boundary_cancels_the_switch() {
   LMDJ_CHECK(inspected.at("pending_switch").is_null());
 }
 
+// In a live browser the audio thread claims a queued publication at the start
+// of the next callback, long before its Bar boundary. Stop pressed in that
+// window must still cancel the switch and stop the transport.
+void test_transport_stop_cancels_an_audio_claimed_switch() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9880);
+  const auto switched = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9881), {}),
+      {"pattern_id", "activation_frame"});
+  const auto boundary = switched.at("activation_frame").get<std::uint64_t>();
+  // A few callbacks: the publication is claimed, the boundary not reached.
+  static_cast<void>(render_grid_frames(engine, 512));
+  LMDJ_CHECK(engine.telemetry().rendered_frames < boundary);
+
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9882, 2,
+                                        "play_stop"),
+      {}));
+  const auto stopped = settled_transport_status(
+      *runtime, engine, [](const auto& status) {
+        return status.at("playing") == false && status.at("phase") == "idle";
+      });
+  LMDJ_CHECK(stopped.at("playing") == false);
+  LMDJ_CHECK(stopped.at("error").is_null());
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kPatternId)});
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId)
+                 .at("pending_switch")
+                 .is_null());
+}
+
+// The browser journey that found this: a Record-off republishes the current
+// Pattern; a switch queued after it and Stop pressed before its boundary must
+// still stop the transport.
+void test_transport_stop_cancels_a_switch_queued_after_record_off() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9890);
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9891, 2,
+                                        "record"),
+      {}));
+  settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == true && status.at("phase") == "idle";
+  });
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  static_cast<void>(render_grid_frames(engine, 128));
+  check_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9892, 3,
+                                        "record"),
+      {}));
+  settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == false && status.at("phase") == "idle" &&
+           status.at("publication_pending") == false;
+  });
+  // Let any Record-off republication land, as the browser's poll does.
+  static_cast<void>(render_grid_frames(engine, 4 * 96000));
+  pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+
+  const auto switched = check_exact_success(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9893), {}),
+      {"pattern_id", "activation_frame"});
+  const auto boundary = switched.at("activation_frame").get<std::uint64_t>();
+  static_cast<void>(render_grid_frames(engine, 512));
+  LMDJ_CHECK(engine.telemetry().rendered_frames < boundary);
+
+  check_success(runtime->dispatch(
+      "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9894, 4,
+                                        "play_stop"),
+      {}));
+  const auto stopped = settled_transport_status(
+      *runtime, engine, [](const auto& status) {
+        return status.at("playing") == false && status.at("phase") == "idle";
+      });
+  LMDJ_CHECK(stopped.at("playing") == false);
+  LMDJ_CHECK(stopped.at("error").is_null());
+  LMDJ_CHECK(
+      engine.current_pattern_id() ==
+      lmdj::foundation::PatternId{std::string(kPatternId)});
+}
+
 void test_transport_record_after_an_applied_switch_records_the_new_pattern() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -9999,6 +10099,8 @@ int main() {
     test_transport_switch_replaces_an_unclaimed_request();
     test_transport_switch_after_the_claim_defers_to_the_following_bar();
     test_transport_stop_before_the_boundary_cancels_the_switch();
+    test_transport_stop_cancels_an_audio_claimed_switch();
+    test_transport_stop_cancels_a_switch_queued_after_record_off();
     test_transport_record_after_an_applied_switch_records_the_new_pattern();
     test_transport_switch_refused_while_recording_and_while_stopped();
     test_transport_stop_spends_a_deferred_switch_without_publishing();
