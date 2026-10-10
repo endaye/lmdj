@@ -3,8 +3,9 @@
 - 日期：2026-10-10
 - 来源：owner 于 2026-10-10 分别确认 D04 MASTER、独立滤波、Mute/Solo 和
   电平表四项问答；2026-10-11 又明确确认滤波旋钮分组、完整参数录制与
-  多个 Solo／Mute 优先。后续批准作为此次尚未合并决策 Task 的追加修改。
-- 结论：以下产品边界与三项补充已批准；产品实现、剩余设计和验收仍待独立 Task。
+  多个 Solo／Mute 优先。此前七项决定已通过 #1994 合并；同日后续问答再批准
+  滤波初始值与范围、Mute/Solo 生命周期及录制起点状态、电平表显示边界。
+- 结论：以下产品行为已批准；具体 Contract 设计、产品实现和验收仍待独立 Task。
 
 ## MASTER 共用 ENC4 的设备监听音量
 
@@ -34,8 +35,11 @@ Sample Tone 也不能代替它们。
 独立滤波停转和切参数组保持效果，离开 Perform 时按已有 HOLD 规则释放。
 类型、Cutoff、Resonance 完整随 Performance 录制和重放，不写入 Pad／工程
 音色参数。不能只录制旧单值 Filter，或只重放其中一个新参数。
-本条确认该行为，不凭它选择默认值、参数范围／单位或具体事件编码和兼容策略；
-这些仍需显式补齐设计。
+
+2026-10-11 后续批准：独立滤波初始为 OFF；默认类型 LP、Cutoff 20 kHz、
+Resonance 0%。Cutoff 范围为 20 Hz–20 kHz，按对数调节；Resonance 为
+0–100%。进入 FILTER 参数组本身不改变声音，不自动启用滤波。
+具体事件编码和兼容策略仍须由对应 Contract／实现 Task 显式设计。
 
 ## 全部 64 个 Pad 的实时 Mute/Solo
 
@@ -46,8 +50,10 @@ Mute／Solo 作用于全部 64 个 Pad（A01–D16）的实时演奏状态，
 允许多个 Pad 同时 Solo。只要有任一 Solo，仅放行被 Solo 的 Pad；
 Mute 优先，Mute 与 Solo 同时开启的 Pad 仍静音。
 
-初始化／恢复状态、离页和 HOLD 扩展边界、具体事件与重放 Contract 仍须补齐；
-此次回答没有批准这些细节。
+2026-10-11 后续批准：切换 Bank 或 Pattern 时保持实时 Mute/Solo 状态；
+离开 Perform 或切换工程时清空。Performance 同时捕获录制起点的状态及
+其后的变更，重放恢复这些状态；不能只录制起点之后的按钮事件而丢失起始状态。
+具体事件与重放 Contract、兼容策略仍须由对应实现 Task 明确。
 不能将既有 Sample 的持久化 mute 操作当作该实时能力已经交付。
 
 ## Post-FX／Pre-ENC4 的立体声作品电平
@@ -57,13 +63,18 @@ D04 电平表显示效果处理后、ENC4 监听音量前的立体声 dBFS 峰�
 读数必须来自这个实际测量点，不能用触发次数、波形动画或录音期间的
 PCM 批次假装常驻电平投影。
 
-本条没有批准峰值测量窗口、峰值保持时长、显示衰减、静音读数下限或
-不可用状态的具体表现；这些是后续设计内容，不在实现中静默选择。
+2026-10-11 后续批准：L／R 分别显示，峰值保持 1 秒；显示范围为
+−60…0 dBFS，静音显示 −∞。真实读数不可用时明确显示 unavailable，
+不以 0 dBFS、静音或装饰动画代替不可用状态。
+峰值测量窗口、显示衰减及测量投影接口仍由对应 producer／consumer Task
+明确；本次批准不指定这些细节。
 
 ## 当前来源与交付边界
 
-Inspected revision: `314d1cadd8aab7504513b15a42cc96bb9c8742d8`。
-该 revision 已包含 #1929 的 BPM／D03 决定记录，没有新增 D04 产品源码。
+最初 inspected revision: `314d1cadd8aab7504513b15a42cc96bb9c8742d8`。
+2026-10-11 追加决定复查 revision：`a98ae01c4f033c78221fc961f6207c7fe5cabfd7`。
+#1994 已合并决定记录；#1992 的实际 scope 是播放中 Pattern 切换及其显示，
+没有交付上述 D04 producer。下列能力边界在复查 revision 仍成立。
 
 - 已有可复用监听 producer：`runtime_types.d.ts::MonitorOutputSession` 与
   `runtime_session.mjs` 提供 `monitorVolume`／`setMonitorVolume`；App ENC4
@@ -81,12 +92,13 @@ Inspected revision: `314d1cadd8aab7504513b15a42cc96bb9c8742d8`。
   `performance_master_tap_worklet.js` 只在 capture generation 开始后发送
   PCM batch，没有上述作品测量点的常驻立体声 dBFS 峰值 API。
 
-先补齐尚未批准的产品／Contract 边界，再声明精确文件与最低层测试。
+本次补充已完成上述产品问答；后续声明精确文件与最低层测试，并明确 Contract
+兼容设计，不能将决定记录当作实现或音频验收。
 独立滤波、实时 Mute／Solo 的 producer／事件模型和 meter producer 与
 Creator consumer 按实际依赖分 Task；MASTER consumer 复用已交付监听能力。
 仅以上述 owner 批准的主效果＋FILTER 表扩展 Perform ENC1–3，ENC4 固定监听；
 不改变其他已批准映射或现有触屏 slider release／blur 提交语义。
-本决定部分解决 #1822；其他页方向键、新 SHIFT 组合键和上述剩余设计仍未决定。
+本决定部分解决 #1822；其他页方向键与新 SHIFT 组合键仍未决定。
 
 ## Version Management
 

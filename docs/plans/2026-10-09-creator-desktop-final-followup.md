@@ -48,15 +48,17 @@
 | D2 | 400 ms 连续旋钮提交 | 已确认，包括 BPM 保持音乐位置；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；BPM 即时变速不重启 Pattern；Perform 保持效果并按 HOLD 离页释放。 |
 | D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | Assign 与精确数值编辑已批准；待独立实现 | 当前工程已有 Asset → 明确 A01–D16 目标，不移动来源、覆盖确认、取消不改 Truth；数值立即试听，Apply/Enter 一次保存/Undo，Esc/切目标取消。复用现有单位/边界与已批准旋钮细调，不改 touch slider 提交语义。 |
-| D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 四项边界与三项补充已批准；剩余设计与实施待完成 | MASTER 共用 ENC4；主效果 Cutoff/Delay/Reverb，新增 FILTER 类型/Cutoff/Resonance；独立滤波按实时 HOLD 规则并录制/重放全部参数；64 Pad live Mute/Solo 随 Performance 录制/重放，多个 Solo、Mute 优先；Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器。具体事件兼容模型、剩余生命周期和峰值保持未由此次回答批准。 |
-| I1–I5 | D1–D5 的对应实现 | I1b/I1c 已合并，原浏览器失败项及 BPM 可听预览仍未关闭；D4 待实现，D5 待补齐设计和实现 | #1936 → `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce` 交付 contextual consumer，不等于完整验收；每项追加精确 Task，独立实现和合并。 |
-| A1 | 四页自动化与视觉核对 | 待验收 | I1–I5 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
+| D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 产品问答已批准；Contract 设计、实施与验收待完成 | MASTER 共用 ENC4；主效果 Cutoff/Delay/Reverb，新增 FILTER 类型/Cutoff/Resonance；独立滤波初始 OFF、LP/20 kHz/0%，Cutoff 20 Hz–20 kHz 对数、Resonance 0–100%，进组不改声，按实时 HOLD 规则并录制/重放全部参数。64 Pad live Mute/Solo 多个 Solo、Mute 优先，切 Bank/Pattern 保持、离 Perform/切工程清空，Performance 包含起点状态与后续变更。Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器，L/R 独立、保持 1 秒、−60…0、静音 −∞、不可用明确显示。具体事件兼容与 meter 投影设计仍由对应 Task 明确。 |
+| I1–I5 | D1–D5 的对应实现 | I1b/I1c 已合并，原浏览器失败项及 BPM 可听预览仍未关闭；D4 待实现，D5 待设计和实现 | #1936 → `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce` 交付 contextual consumer，不等于完整验收；每项追加精确 Task，独立实现和合并。 |
+| K1 | #1960 四排键盘映射 | 已批准；实现与验收待独立 Task | 1234 → 13–16、QWER → 09–12、ASDF → 05–08、ZXCV → 01–04；Q 从 01 改为 09；MIDI note 36–51、Pad 身份与引用保持，见四排键盘决定。 |
+| A1 | 四页自动化与视觉核对 | 待验收 | I1–I5、K1 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
 | V1 | 协调版本结算与 snapshot | 待实施 | 读取最终 manifests 和版本政策；独立 version Task、Portal snapshot 及合并后 provenance。 |
 | C1 | 本地工作区/分支收尾 | 待调查 | 完整改动保留、干净（含 untracked）、未锁定且无人使用；逐个安全移除。 |
 
 执行顺序为 P0 → R1，之后依次完成 D1/I1、D2/I2、D3/I3、D4/I4、D5/I5，
-再 A1/A2、V1、C1；人工等待时可推进不依赖该结果的调查或实施。R2 仅在
+再 A1/A2、V1、C1；已批准的 K1 可在独立声明后并行准备，验收前完成。
+人工等待时可推进不依赖该结果的调查或实施。R2 仅在
 适用条件出现时加入。每个产品问题一次给出少量选项、建议及影响，收到明确
 回答后记录 decision。决定不做可以完成该范围的处置；暂缓仍是未完成，除非
 owner 明确同意移出本 Goal。
@@ -129,11 +131,11 @@ ENC4 与设备偏好存储已提供可复用的监听 producer；MASTER 只缺�
 Domain Performance event variant、`MasterFxChain::process_filter` 及
 `PerformOverview` 仍没有上述独立滤波、live Mute/Solo 事件或常驻作品 meter。
 已有单值 FX、Sample persisted mute 与 capture-only PCM batch 不构成这些交付。
-开放 #1991 仅增加 owned Session inspection 和有关浏览器验证，尚未合并；
+当时开放的 #1991 仅增加 owned Session inspection 和有关浏览器验证；
 其实际文件范围没有上述 D04 producer，不把它视作对应能力已交付。
 
-**Remaining design and implementation:** MASTER consumer 可以基于已批准共享
-状态准备独立声明；滤波默认值／参数范围／事件兼容模型、Mute/Solo
+**当时的剩余设计与实施边界：** MASTER consumer 可以基于已批准共享
+状态准备独立声明；当时待决的滤波默认值／参数范围／事件兼容模型、Mute/Solo
 初始化／恢复／离页生命周期和 meter 峰值窗口／保持／不可用表现仍须补齐设计。
 独立滤波已明确沿用 Perform 停转／切参数组保持、离页 HOLD 规则；触屏
 slider release／blur 提交语义保持，不自动扩展到尚未定义的新状态。
@@ -152,6 +154,63 @@ lint 与 declaration／batch-only check。不运行或声称产品音频验收�
 **Documentation impact: none** — 仅 PRD／计划，不改当前 Portal source facts／图；
 后续实现保留对应 Portal 责任。**Pitfall impact: none** — 沿用已有 Task 与
 decision archive 机制，无新增流程缺陷或机制。
+
+### 2026-10-11 — D04 剩余产品边界与四排键盘已批准
+
+本次独立 Decision Task 初始检查 fresh main
+`305b76608b5c6a19b718253604973d250a795765`；开始编辑前进一步刷新并将
+新隔离 docs worktree fast-forward 到
+`a98ae01c4f033c78221fc961f6207c7fe5cabfd7`。#1992 已真实合并为该 SHA，
+实际 scope 是播放中 Pattern 切换和相关上屏，不交付本段新增 D04／键盘能力。
+#1991 已合并为 `083ac62812564266721c664dd49915d636b94123`，其 owned Session
+inspection 与浏览器验证也不等于 D04 producer 或四页 A1/A2 验收完成。
+
+owner 本次真实问答确认：
+
+- [D04 滤波](../prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)
+  初始 OFF、默认 LP／Cutoff 20 kHz／Resonance 0%；Cutoff 20 Hz–20 kHz
+  对数调节，Resonance 0–100%；进入 FILTER 组不改变声音。
+- live Mute/Solo 切 Bank／Pattern 保持，离开 Perform／切工程清空；
+  Performance 捕获录制起点状态与后续变更，重放恢复。多个 Solo、Mute 优先
+  及不修改 Pad muted Truth 的既有批准保持。
+- stereo meter 的 L／R 独立、峰值保持 1 秒、显示 −60…0 dBFS、静音 −∞；
+  真实读数不可用时明确 unavailable。沿用 Post-FX／Pre-ENC4、排除节拍器。
+- [四排键盘映射](../prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)
+  为 1234 → 13–16／QWER → 09–12／ASDF → 05–08／ZXCV → 01–04。
+  明确 Q 从当前 Bank 01 改为 09，MIDI note 36–51 与 Pad 身份不变。
+  #1960 的 owner 确认前提已经满足，状态为 approved、implementation pending。
+
+**Premise dispositions:** 复查完整默认键盘映射、Creator input controller 与
+PadSurface：仍为 Q–I／A–K 的两排默认输入，键帽从同一映射派生；已交付的
+Pad 显示顺序与 MIDI 36–51 可保留。K1 尚缺四排 producer／键帽及相关测试、
+Portal 表的实现。复查 MonitorOutputSession、App ENC4、MasterFxChain、
+Domain Performance event variant、Web raw event／operation 注册表及
+PerformOverview／capture worklet：共享监听 producer 仍可直接复用；独立
+滤波、live Mute/Solo 事件及常驻作品 meter producer 仍未交付，不重复已有能力。
+
+本 Task 只记录批准和开放问题状态。#1822 的其他页方向键、新 SHIFT 组合键
+仍待 owner 决策；新事件编码／兼容策略、meter 测量窗口／显示衰减和投影接口
+仍须对应 Task 明确，不能从本次回答推测。已批准的新滤波保持／HOLD 规则
+不改变既有 touch slider release／blur 提交语义。D04／K1 实施、真实键盘
+输入／听感、四页 A1/A2 和 V1 继续保持未完成。
+
+**Task declared files:**
+
+- `docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md`：只追加本次
+  已批准边界并解除对应未决状态，不改既有批准。
+- 新 `docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md`。
+- `docs/prd/questions/hardware-control-mapping.md`：保留未批准的方向键／SHIFT，
+  将本轮 D04／#1960 产品问答标记为已批准、待实现。
+- 本计划：同步 D5／K1 状态与本次来源及验证声明。
+
+**Lowest-tier verification:** 声明文件与相对链接、批准语义／未决边界人工核对、
+staged new-file ownership suite、精确 cached list 与 whitespace、clean
+committed-head `docs_static`、PR body lint、declaration／batch-only evidence
+check。仅 docs 检查，不运行或声称产品／浏览器／音频验收。
+**Version impact: none** — 无 source、Contract、manifest 或 active identity 改动。
+**Documentation impact: none** — 记录已批准未来行为，当前 Portal 实现
+source facts 未变；实际能力实现 Task 仍负责对应 Portal 更新。
+**Pitfall impact: none** — 使用既有独立 decision 与 Task 验证机制，无新的流程缺陷。
 
 2026-10-09 owner 已确认统一原则：旋钮 1/2 管视图位置，旋钮 3/4 管当前页
 主要数值，方向键做导航，SHIFT 保留撤销/重做并支持粗调。此回答只确认
