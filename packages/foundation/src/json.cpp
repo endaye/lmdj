@@ -7,30 +7,28 @@
 namespace lmdj::foundation {
 namespace {
 
-// Refuses to keep any container opened at or beyond the depth limit. nlohmann
+struct JsonDepthLimitExceeded {};
+
+// Stops parsing at any container opened at or beyond the depth limit. nlohmann
 // reports the depth as the container stack size before the push, so the
 // outermost container is depth 0 and the limit admits exactly
 // kMaximumJsonContainerDepth nested containers.
 class DepthGuard {
  public:
-  bool exceeded() const noexcept { return exceeded_; }
-
   bool operator()(
       int depth,
       nlohmann::json::parse_event_t event,
-      nlohmann::json&) noexcept {
+      nlohmann::json&) {
     const bool container_start =
         event == nlohmann::json::parse_event_t::object_start ||
         event == nlohmann::json::parse_event_t::array_start;
     if (container_start && depth >= kMaximumJsonContainerDepth) {
-      exceeded_ = true;
-      return false;
+      // Returning false only discards the container; it still scans the rest.
+      // Both public overloads contain this private refusal signal.
+      throw JsonDepthLimitExceeded{};
     }
     return true;
   }
-
- private:
-  bool exceeded_ = false;
 };
 
 nlohmann::json canonicalize(const nlohmann::json& value) {
@@ -58,22 +56,30 @@ std::string canonical_json(const nlohmann::json& value) {
 }
 
 std::optional<nlohmann::json> parse_bounded_json(std::string_view bytes) {
-  DepthGuard guard;
-  auto value = nlohmann::json::parse(
-      bytes.begin(), bytes.end(), std::ref(guard), false);
-  if (guard.exceeded() || value.is_discarded()) {
+  try {
+    DepthGuard guard;
+    auto value = nlohmann::json::parse(
+        bytes.begin(), bytes.end(), std::ref(guard), false);
+    if (value.is_discarded()) {
+      return std::nullopt;
+    }
+    return value;
+  } catch (const JsonDepthLimitExceeded&) {
     return std::nullopt;
   }
-  return value;
 }
 
 std::optional<nlohmann::json> parse_bounded_json(std::istream& stream) {
-  DepthGuard guard;
-  auto value = nlohmann::json::parse(stream, std::ref(guard), false);
-  if (guard.exceeded() || value.is_discarded()) {
+  try {
+    DepthGuard guard;
+    auto value = nlohmann::json::parse(stream, std::ref(guard), false);
+    if (value.is_discarded()) {
+      return std::nullopt;
+    }
+    return value;
+  } catch (const JsonDepthLimitExceeded&) {
     return std::nullopt;
   }
-  return value;
 }
 
 bool valid_utf8(std::string_view value) {
