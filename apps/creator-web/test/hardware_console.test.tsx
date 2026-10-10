@@ -73,6 +73,19 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
   })).toHaveLength(4);
 });
 
+test("the disabled Perform key names only its real gate: a playable Project", () => {
+  render(<PhysicalControls
+    activeMode="project"
+    activeBank={0}
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+  />);
+  const perform = screen.getByRole("button", {
+    name: "Perform — open a playable Project first",
+  });
+  expect(perform).toHaveProperty("disabled", true);
+});
+
 test("the rail SHIFT chord gates Undo/Redo behind the modifier with lamp availability", () => {
   const onUndo = vi.fn();
   const onRedo = vi.fn();
