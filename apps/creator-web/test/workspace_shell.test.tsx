@@ -5377,6 +5377,95 @@ test.each(["another Project", "returning to the same Project", "replacement Runt
   },
 );
 
+test("a new Project Pad capture failure re-arms its own history navigation", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const otherProjectId = "44444444-4444-4444-8444-444444444444";
+  let openedProjectId = fixture.summary().projectId;
+  const historyStatus = () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "", disabledReason: ""});
+  const inspect = vi.fn(async () => historyStatus());
+  const held = deferred<ReturnType<typeof historyStatus>>();
+  const importTake = vi.fn<CreatorSampleRuntimeSession["importAssignSample"]>(async (_file, options) => {
+    fixture.assigned.set(options.slot, "55555555-5555-4555-8555-555555555555");
+    fixture.revision++;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision - 1,
+      runtimePublished: false,
+      snapshotError: {code: "COOK_FAILED", message: "Runtime preparation failed", details: {}}};
+  });
+  Object.assign(fixture.session, {
+    inspectAuthoringHistory: inspect, undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+    importAssignSample: importTake,
+    listLocalProjects: async () => [fixture.summary(), {...fixture.summary(), projectId: otherProjectId}],
+    openProject: async (projectId: string) => {openedProjectId = projectId; return {};},
+    inspectProject: async () => {
+      const value = fixture.inspectProject();
+      return {...value, project: {...value.project, project_id: openedProjectId}};
+    },
+  });
+  const nodes: Array<{port: {onmessage: ((event: {data: unknown}) => void) | null}}> = [];
+  const stopTrack = vi.fn();
+  vi.stubGlobal("navigator", {
+    permissions: {query: async () => ({state: "granted"})},
+    mediaDevices: {getUserMedia: async () => {
+      const track = {stop: stopTrack, addEventListener() {}, removeEventListener() {}};
+      return {getTracks: () => [track], getAudioTracks: () => [track]};
+    }},
+  });
+  vi.stubGlobal("AudioContext", class {
+    audioWorklet = {addModule: async () => {}};
+    resume() {return Promise.resolve();}
+    close() {return Promise.resolve();}
+    createMediaStreamSource() {return {connect() {}, disconnect() {}};}
+  });
+  vi.stubGlobal("AudioWorkletNode", class {
+    port = {onmessage: null};
+    constructor() {nodes.push(this);}
+    disconnect() {}
+  });
+  vi.stubGlobal("localStorage", {getItem: () => null, setItem() {}, removeItem() {}});
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+    await userEvent.click(await screen.findByRole("button", {name: "Select Project 44444444"}));
+    await userEvent.click(await screen.findByRole("button", {name: "Open Project 44444444"}));
+    await screen.findByRole("heading", {name: "Project 44444444"});
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    await flushAsyncTurns();
+    const pad = screen.getByRole("button", {name: /^Pad A02 — empty/});
+    await waitFor(() => expect(pad).toHaveProperty("disabled", false));
+    fireEvent.mouseDown(pad, {button: 0});
+    const recording = screen.getByRole("region", {name: "Pad recording"});
+    await waitFor(() => expect(recording.textContent).toContain("recording · Pad A02"));
+    act(() => nodes[0]!.port.onmessage?.({data: {
+      channels: [new Float32Array([0, .25, .1])], peak: .25,
+    }}));
+    fireEvent.mouseUp(pad, {button: 0});
+    await waitFor(() => expect(importTake).toHaveBeenCalledOnce());
+    expect(importTake.mock.calls[0]![1]).toMatchObject({slot: 1, expectedRevision: 3});
+    await waitFor(() => expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull());
+    expect(stopTrack).toHaveBeenCalledOnce();
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
+    expect(screen.getByText("Developer diagnostics (1)", {selector: "summary"})).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+    await flushAsyncTurns();
+    const reads = inspect.mock.calls.length;
+    inspect.mockImplementation(() => held.promise);
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    expect(inspect).toHaveBeenCalledTimes(reads + 1);
+    expect(undo().classList.contains("is-lit")).toBe(false);
+    await act(async () => {held.resolve(historyStatus());});
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+  } finally {
+    rendered.unmount();
+    await act(async () => {held.resolve(historyStatus());});
+    vi.unstubAllGlobals();
+  }
+});
+
 test("navigation retains history inspection after a Slice adoption fails after unmount", async () => {
   let resultUnknown = false;
   const historyStatus = () => ({sessionId: "history", projectRevision: 3,

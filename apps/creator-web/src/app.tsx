@@ -810,7 +810,7 @@ function Workspace({
     setPadCaptureState(controller.getState());
     const unregister = registerRuntimeShutdownBarrier?.(() => controller.cancel());
     return () => {unregister?.(); void controller.cancel();};
-  }, [session, runtimePhase, registerRuntimeShutdownBarrier]);
+  }, [session, runtimePhase, registerRuntimeShutdownBarrier, reportFailure]);
 
   useEffect(() => () => {
     const retiring = padCapture.current;
@@ -2557,7 +2557,7 @@ function Workspace({
         dispatchSequence({type: "trim-closed"});
       }
     }
-  }, [session]);
+  }, [session, reportFailure]);
 
   const selectSequencePattern = async (patternId: string) => {
     if (!session) return;

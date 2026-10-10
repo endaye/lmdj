@@ -85,6 +85,21 @@ A callback retained by a retired context must not mark a fresh context failed.
 Returning to a previously opened Project starts a fresh context too. Preserve
 same-context fallback after any new failure, without classifying its operation.
 
+The independent exact-head review of `3ea54286d5fa83c47b7bca221a9aaa6f1f342156`
+accepted the three context-lifecycle fixes but found a residual capture binding
+P2. Pad capture's reusable commit deps and the Sequence capture phase callback
+can start a new Project operation through current refs while retaining the
+previous context's failure callback. This remains outstanding against refreshed
+main `5d31f21bb7b5f91014881c05b0ef7f4708c03b29`. The next corrective Task declares
+the same three files above, one Conventional Commit. Refresh these two bindings
+when their owning failure callback changes; an already-issued operation keeps
+its original callback. Do not resolve a late failure through a latest-context
+ref. Reduce the defect through a new empty-Pad recording in another Project in
+the same Session before changing App: after a committed but unpublished take,
+ready history must recheck on navigation, disable Undo during the held read,
+then restore ready Undo when that inspection completes. This component proof
+does not establish trusted microphone input, audible output or browser proof.
+
 ## Verification and acceptance
 
 The lowest-tier regression mounts the real App and existing Session fixtures.
@@ -174,3 +189,16 @@ tests; TypeScript, 77 ownership tests and 15 ledger tests pass. No timeout or
 journey changed. The prior integrated-head epoch-race finding has a recorded
 independent source-based rejection; the new fix still requires its own commit,
 complete Creator lane and current-head review before shipping.
+
+The residual capture-owner reduction failed on committed `3ea54286` at its
+intended navigation assertion (expected five inspections, observed four),
+after a new Project's real App/PadCapture commit reported unpublished Runtime
+preparation. Refreshing the reusable Pad deps and Sequence phase callback on
+their context-owned publisher fixes this binding while preserving each
+already-issued operation's original callback. The same regression now passes
+its held-read, unavailable Undo and eventual ready Undo assertions. Complete
+workspace/history suites pass 159 tests, and Creator TypeScript passes. This is
+a controlled component recording proof, not real microphone/hearing evidence;
+the Sequence binding also has source review, without claiming a separate new
+Sequence capture RED execution. Exact-head complete Creator proof and review
+remain required before merge.
