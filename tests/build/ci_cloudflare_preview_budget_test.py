@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import unittest
@@ -39,11 +39,27 @@ class FakeGitHub:
         return FakeRequest()
 
 
-def run_entry(status, duration_ms=None, updated_at='2026-10-05T00:00:00Z'):
-    run = {'status': status, 'updated_at': updated_at}
+def run_entry(status, duration_ms=None, updated_at='2026-10-05T00:00:00Z',
+              conclusion='success', attempt=1):
+    # Shaped like the Actions runs list, which has no run_duration_ms: timing
+    # is only run_started_at (latest attempt) and updated_at.
+    run = {'status': status, 'updated_at': updated_at, 'run_attempt': attempt,
+           'conclusion': conclusion if status == 'completed' else None}
     if duration_ms is not None:
-        run['run_duration_ms'] = duration_ms
+        started = budget.parse_instant(updated_at) - timedelta(milliseconds=duration_ms)
+        run['run_started_at'] = started.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
     return run
+
+
+# Verbatim timing fields of the three newest real runs on 2026-10-10.
+LIVE_RUNS = [
+    {'status': 'completed', 'conclusion': 'failure', 'run_attempt': 1,
+     'run_started_at': '2026-10-10T01:30:00Z', 'updated_at': '2026-10-10T01:30:24Z'},
+    {'status': 'completed', 'conclusion': 'skipped', 'run_attempt': 1,
+     'run_started_at': '2026-10-10T00:56:57Z', 'updated_at': '2026-10-10T00:56:58Z'},
+    {'status': 'completed', 'conclusion': 'skipped', 'run_attempt': 1,
+     'run_started_at': '2026-10-10T00:51:52Z', 'updated_at': '2026-10-10T00:51:53Z'},
+]
 
 
 class BudgetMinutesTest(unittest.TestCase):
@@ -64,6 +80,18 @@ class ConsumptionTest(unittest.TestCase):
         github = FakeGitHub([[run_entry('in_progress'), run_entry('completed')]])
         minutes, runs = budget.consumption(github, NOW)
         self.assertEqual((minutes, runs), (40.0, 2))
+
+    def test_live_runs_list_bills_wall_time_and_skips_nothing_run(self):
+        # The runs list has no run_duration_ms; reading it as missing timing
+        # charged every skipped run a 20-minute reservation (7,520 phantom
+        # minutes on 2026-10-10). Oracle: 24 s for the one executed run.
+        github = FakeGitHub([LIVE_RUNS])
+        minutes, runs = budget.consumption(github, datetime(2026, 10, 10, 2, tzinfo=timezone.utc))
+        self.assertEqual((round(minutes * 60), runs), (24, 1))
+
+    def test_rerun_reserves_each_earlier_attempt(self):
+        github = FakeGitHub([[run_entry('completed', 120_000, attempt=3)]])
+        self.assertEqual(budget.consumption(github, NOW), (42.0, 1))
 
     def test_paginates_until_short_page(self):
         github = FakeGitHub([[run_entry('completed', 60_000)] * 100,
