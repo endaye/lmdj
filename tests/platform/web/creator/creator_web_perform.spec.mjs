@@ -1110,12 +1110,14 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
   };
   const earlyBar = async () => {
     const barFrames = 48_000 * 4 * 60 / truth.bpm;
+    // Default polling settles at 1 s and can keep missing a 400 ms bar window.
+    // Sample more often without widening the phase window or its deadline.
     await expect.poll(async () => {
       const status = await inspect();
       const position = (status.runtime_frame - status.origin_frame) % barFrames;
       return status.playing && status.pending_switch == null &&
         position >= 0 && position < barFrames / 5;
-    }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+    }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS, intervals: [50]}).toBe(true);
   };
   await earlyBar();
   await second.click();
