@@ -279,10 +279,24 @@ PatternTransportSubmit PatternTransportCoordinator::request(
       else command.pending_switch = state.outstanding_cancellation;
     }
   };
+  // A typed observation already binds current and both exact authorities.
+  // Legacy ports read current before pending so an outside republication can
+  // advance beyond the last receipt without making a named successor stale.
+  const auto current_generation = observation
+      ? observation->current_generation : audio_.pattern_generation();
   if (observation) apply_observation(*observation);
   else if (playing_) command.pending_switch = audio_.pending_switch();
   if (!command.pending_switch && !observation) {
     command.expected_pattern_generation = audio_.pattern_generation();
+  } else if (!observation && command.pending_switch &&
+             unlanded_overlay_generation_ == 0 &&
+             command.pending_switch->generation != current_generation) {
+    // A named successor fences against the Pattern that plays now. A Host
+    // republication outside this coordinator (a Record-off completion) can
+    // have advanced it past the last receipt, and the engine refuses a
+    // command whose expected generation is neither current nor the
+    // acknowledged predecessor of an applied switch (#1958).
+    command.expected_pattern_generation = current_generation;
   } else if (command.pending_switch && unlanded_overlay_generation_ != 0 &&
              command.pending_switch->generation ==
                  unlanded_overlay_generation_) {

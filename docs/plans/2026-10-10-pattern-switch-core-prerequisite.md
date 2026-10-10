@@ -391,3 +391,53 @@ GREEN. The parent approved the fourteenth declared file to record this actual
 recurrence. The repeated proof waits more than one second, stamps fresh source,
 checks the actual compile line and artifact hash/mtime, then runs the restored
 test. The existing skill exit, gates and budgets are unchanged.
+
+## Relevant main integration: #1990
+
+Issue-done premises were refreshed against actual main
+`e9dae833d1c609bb203030a62053dee39b9d8b61` while this Task's committed
+source remained `e3dca19923125c9816183d7fc165891033e7a25b`. Main #1990
+already delivers the legacy single-authority current-generation fence for
+Stop after an outside Record-off republication, plus one Facade and two Host
+regressions. Preserve that delivery; do not reimplement or remove its coverage.
+It does not supply this Task's bounded-two observation/cutoff, claimed-safe
+native scheduling or explicitly capable receipt-bound opening, which remain
+absent from main and within this Task's declared scope.
+
+The main integration has an actual conflict in the controller's command
+construction. This follow-up changes only these existing declared files:
+`packages/application-facade/src/pattern_transport_controller.cpp`,
+`tests/core/facade/pattern_transport_controller_test.cpp`, and this plan.
+Keep the coherent observation's current generation and both authorities bound
+to that observation; main's fresh current-before-pending fence belongs to the
+non-observation fallback. Own-overlay withdrawal/deferred submission, exact
+native generation/epoch guards, recording settlement and existing retry limits
+are unchanged. Main-imported Creator changes and Host regression additions are
+preserved as main provenance, not new Core implementation scope.
+
+The minimal regression extends main's real-Engine outside-republication →
+claimed successor → Stop journey to both legacy and capable ports. Its single
+defect is refusal caused by the stale last-receipt generation; all original
+far-side assertions remain. Lowest verification is a fresh rebuild of
+`lmdj_pattern_transport_controller_tests` and its original
+`facade.pattern_transport_controller` CTest entry. The main-imported claimed
+switch and Record-off Host cases must also run in the original
+`lmdj_web_control_runtime_tests` / `host.web_control_runtime` entry. At this
+preparation stage these runs are pending; static resolution is not a test pass.
+
+The original e3 Linux GNU 13.4 run completed 256 full and 15 stress tests,
+unchanged selectors, checks and bounds, with receipts retained in
+`linux-e3dca199-source-and-asan/`. It remains historical evidence for that exact
+input. The integrated controller and Facade/Host tests change native lane
+inputs: classify the new committed source and obtain actual new run keys;
+never assign the e3 ASAN key to it. All original eleven selected batch lanes
+remain required. Ordinary-user execution, retained old cache and storage
+preparation are independent execution prerequisites, not waived verification.
+
+Version impact: no additional public ABI or identity change in this conflict
+resolution; the existing Module MAJOR debt and separate V1 delivery boundary
+remain. Documentation impact: required for the overall Task's existing two
+Portal routes; this follow-up records the integration in the plan without a
+new API or ownership rule. Required Portal verification remains pending for
+the new input. Pitfall impact: no new process recurrence; this product fact is
+expressed by the existing regression, and retained failures are not erased.

@@ -1060,6 +1060,64 @@ void record_after_an_applied_switch_retargets_the_bound_pattern() {
 // never retargets the binding mid-recording — the switch-spanning close
 // machinery (retain_switch, reconcile, drains) settles it, exactly as the
 // internal-tier switch scenarios pin.
+// #1958: a Host republication outside this coordinator (a Record-off
+// completion) advances the engine's current Pattern generation past the last
+// transport receipt. A Stop that names a switch queued after it must fence
+// against the Pattern that plays now, or the engine refuses it every time.
+void stop_names_a_switch_queued_after_an_outside_republication(
+    bool receipt_bound_capability) {
+  constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
+  Fixture f({PatternId{kPatternB}});
+  f.audio.receipt_bound_capability = receipt_bound_capability;
+  f.settle(f.make(6, 1, PatternTransportIntent::play_stop));
+  LMDJ_CHECK(f.controller->inspect().playing);
+  const auto acknowledged =
+      f.audio.engine.pattern_telemetry().current_generation;
+
+  // The Host republishes the playing Pattern; it lands at its Bar.
+  auto again = PreparedPatternView::from_snapshot(pattern_snapshot());
+  LMDJ_CHECK(again.has_value());
+  LMDJ_CHECK(f.audio.engine.publish_pattern_view(std::move(again.value()))
+                 .result == PatternPublishResult::accepted);
+  for (unsigned step = 0;
+       step < 100 && f.audio.engine.pattern_telemetry().pending_generation != 0;
+       ++step) {
+    f.audio.render(9'600);
+  }
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().current_generation !=
+             acknowledged);
+
+  // A switch to B is queued and claimed, its boundary still ahead.
+  auto view = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB));
+  LMDJ_CHECK(view.has_value());
+  const auto switched =
+      f.audio.engine.publish_pattern_view(std::move(view.value()));
+  LMDJ_CHECK(switched.result == PatternPublishResult::accepted);
+  f.audio.render(512);
+  LMDJ_CHECK(f.audio.engine.pattern_telemetry().pending_generation ==
+             switched.generation);
+
+  // Stop names the switch against the current generation and is accepted;
+  // the switch is voided at the cutoff and A stays current.
+  LMDJ_CHECK(f.controller->request(f.make(7, 2,
+                 PatternTransportIntent::play_stop)) ==
+             PatternTransportSubmit::accepted);
+  f.audio.render(1);
+  LMDJ_CHECK(f.controller->continue_operation().has_value());
+  const auto status = f.controller->inspect();
+  LMDJ_CHECK(!status.playing);
+  LMDJ_CHECK(!status.error.has_value());
+  LMDJ_CHECK(f.audio.engine.current_pattern_id() == f.pattern);
+}
+
+void stop_names_a_switch_queued_after_an_outside_republication() {
+  // The stale last-receipt generation must not refuse Stop through either
+  // the default legacy port or the coherent native observation capability.
+  stop_names_a_switch_queued_after_an_outside_republication(false);
+  stop_names_a_switch_queued_after_an_outside_republication(true);
+}
+
 void applied_switch_mid_recording_settles_through_the_close_path() {
   constexpr auto kPatternB = "00000000-0000-4000-8000-00000000000b";
   Fixture f({PatternId{kPatternB}});
@@ -1924,6 +1982,7 @@ int main() {
     stale_generation_is_rejected();
     deterministic_fence_mismatch_parks_the_engagement_in_error();
     record_after_an_applied_switch_retargets_the_bound_pattern();
+    stop_names_a_switch_queued_after_an_outside_republication();
     applied_switch_mid_recording_settles_through_the_close_path();
     recording_press_and_release_are_retained();
     overlay_projection_is_empty_outside_an_open_recording();
