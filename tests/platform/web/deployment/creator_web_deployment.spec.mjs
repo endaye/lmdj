@@ -145,8 +145,10 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   });
 
   const before = await report(page);
+  // Hosts before #1855 address the Pad as A1; current Hosts use A01. The
+  // journey runs against both, so the locator accepts each exact shape.
   const pad = page.getByRole("button", {
-    name: /^Pad A1 — assigned — Key Q$/,
+    name: /^Pad A0?1 — assigned — Key Q$/,
   });
   await pad.click();
   await expect.poll(async () => {
@@ -160,7 +162,18 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   await page.getByRole("button", {name: "Sample"}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   // The Sample workspace selects Pads on the hardware rail (ad343a6b).
-  await page.getByRole("button", {name: "Pad A1 — assigned — Key Q", exact: true}).click();
+  await page.getByRole("button", {name: /^Pad A0?1 — assigned — Key Q$/}).click();
+  // Hosts after #1930 organize the Sample editor into contextual pages and
+  // move replacement under the Pad page; older Hosts expose it directly.
+  // Settle on one of the two surfaces first, so a still-rendering page cannot
+  // turn the branch into a skip, then take the route that is present.
+  const samplePagesNav = page.getByRole("navigation", {name: "Sample pages"});
+  await expect(
+    samplePagesNav.or(page.getByRole("button", {name: "Replace Sample"})),
+  ).toBeVisible();
+  if (await samplePagesNav.isVisible()) {
+    await samplePagesNav.getByRole("button", {name: "Pad", exact: true}).click();
+  }
   const sampleChooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Replace Sample"}).click();
   await (await sampleChooser).setFiles({
@@ -195,5 +208,12 @@ test("published Creator completes authoring, playback, and durable reload", asyn
     await expect(page.getByRole("heading", {name: `Project ${imported}`}))
       .toBeVisible({timeout: 120_000});
   }
-  await expect(page.getByText("64 / 64", {exact: true})).toBeVisible();
+  // Current Hosts render the overview definition "64 / 64 Pads used"; older
+  // Hosts expose the bare Project summary "64 / 64" (which current Hosts keep
+  // in the tree hidden). Anchor both shapes and keep only the visible match,
+  // so a still-rendering overview settles on whichever surface this Host
+  // serves, instead of branching on a single visibility snapshot.
+  await expect(
+    page.getByText(/^64 \/ 64( Pads used)?$/).filter({visible: true}),
+  ).toBeVisible();
 });

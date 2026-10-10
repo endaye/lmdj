@@ -1,7 +1,7 @@
 ---
 id: current-level-bundle-expires-frozen-fixtures
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-22
     occurrence: https://github.com/endaye/lmdj/pull/1596
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-10-08
     occurrence: https://github.com/endaye/lmdj/actions/runs/37721222350
     observed_by: Codex
-exit: none
+exit: gate:tests/platform/web/deployment/creator_web_deployment.spec.mjs
 escalation: https://github.com/endaye/lmdj/issues/1883
 ---
 
@@ -33,16 +33,21 @@ musical gesture activation, but its deployment smoke still waited for the
 removed button. Report export had also moved into System. The immutable
 Preview browser check failed before production promotion; signed input and
 HTTP verification had passed. [Issue #1883](https://github.com/endaye/lmdj/issues/1883)
-tracks the second recurrence and
-the missing freshness mechanism; correcting this journey does not absorb it.
+tracked the second recurrence and the missing freshness mechanism.
 
 ## How to apply
 
-When a Task bumps the Project or Bundle Contract level, regenerate frozen
-deployment fixtures in the same Task with the current writer (the procedure
-in `scripts/creator-web.sh generate_project_fixture`, then gzip+base64 into
-the fixture module), and grep deployment specs for locators that name
-headings the redesign renamed — prefer stable region/aria labels over heading
-text. No eligible gate exists yet: freshness of a frozen fixture against the
-writer level is not mechanically decidable today, so the entry stays open
-with `exit: none`.
+The creator proof (`scripts/creator-web.sh proof`) runs the deployment
+journey — frozen fixture import, gesture activation, System report export,
+sample replacement, Sequence readiness and durable reload — against the
+locally built Host. Every change that moves the writer level
+(`packages/project-io/`, `contracts/`) or renames the Creator surface
+(`apps/creator-web/`) selects the creator lane, so a stale frozen bundle or a
+renamed locator fails that proof at the causing change, with the remedy in
+its failure message. When that leg goes red: regenerate the frozen fixture
+with the current writer (`scripts/creator-web.sh generate_project_fixture`,
+then gzip+base64 into
+`tests/platform/web/deployment/creator_project_fixture.mjs`) and refresh the
+renamed locators in the same Task. Deployed-release journeys keep exercising
+the same spec against immutable Hosts through the deploy workflows'
+`smoke_revision`.
