@@ -85,6 +85,7 @@ import {
 import {
   inspectPatternTransportJourney,
   isPatternTransportSession,
+  observePatternTransportJourney,
   reconcilePatternTransportJourney,
   requestPatternTransportJourney,
 } from "./runtime/pattern_transport_actions";
@@ -1816,15 +1817,20 @@ function Workspace({
     if (!isPatternTransportSession(session)) return;
     const current = transportRef.current;
     if (current.sessionId === null) return;
+    const readCurrent = () => sessionRef.current === session &&
+      stateRef.current.project.current?.projectId === current.projectId
+      ? transportRef.current : initialPatternTransportState;
+    const ownsCurrent = () => {
+      const live = readCurrent();
+      return live.sessionId === current.sessionId && live.projectId === current.projectId;
+    };
     try {
-      const status = await inspectPatternTransportJourney(
-        session,
-        current.sessionId,
+      const observation = await observePatternTransportJourney(
+        session, readCurrent,
       );
+      if (observation === null || !ownsCurrent()) return;
+      const {status, state: after} = observation;
       dispatchTransport({type: "observed", status});
-      // The ref only advances at the next render; the retry decision below
-      // needs the post-observation state, so apply the reducer locally.
-      const after = reducePatternTransport(current, {type: "observed", status});
       const retained = after.lastFailed;
       const project = stateRef.current.project.current;
       const retry = transportRetriedCommandRef.current;
@@ -1859,7 +1865,8 @@ function Workspace({
           expectedEpoch: retained.epoch,
           intent: retained.intent,
           expectedRevision: retained.expectedRevision,
-        });
+        }, readCurrent);
+        if (reconciled === null || !ownsCurrent()) return;
         dispatchTransport({
           type: "submitted",
           commandId: retained.commandId,
@@ -1867,6 +1874,10 @@ function Workspace({
         });
         dispatchTransport({type: "observed", status: reconciled.status});
       } catch (error) {
+        if (!ownsCurrent()) return;
+        const live = readCurrent();
+        const unresolved = live.pending ?? live.lastFailed;
+        if (unresolved?.commandId !== retained.commandId) return;
         dispatchTransport({
           type: "failed",
           command: retained,
@@ -1874,6 +1885,7 @@ function Workspace({
         });
       }
     } catch (error) {
+      if (!ownsCurrent()) return;
       dispatchTransport({type: "observe-failed", errorCode: reportFailure("Inspect transport", error)});
       return;
     }
