@@ -33,6 +33,21 @@ scripts/creator-web.sh serve --port 8080
 `build/web/creator/dist`; `serve` requires that packaged directory. After changing
 source again, rebuild and package again before inspecting the distribution.
 
+`serve` forwards the same-origin Sound Set Catalog to `vars.CATALOG_UPSTREAM`
+in `apps/creator-web/deploy/wrangler.json` by default, so an online first launch
+can load the default sounds. To use a local Catalog fixture instead, override
+that upstream explicitly:
+
+```bash
+scripts/creator-web.sh serve --port 8080 --catalog-upstream http://127.0.0.1:8091/
+```
+
+Start the fixture separately with
+`python3 tools/soundset-fixtures/catalog_fixture_server.py --port 8091`.
+The lower-level `tools/web-runtime/serve_distribution.py` offers no Catalog
+unless an upstream is explicitly configured; its Catalog prefix then returns
+404. Use the Creator entrypoint for normal local inspection.
+
 ## Complete Host proof and evidence boundary
 
 ```bash
