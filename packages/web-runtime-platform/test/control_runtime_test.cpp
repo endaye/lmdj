@@ -8212,6 +8212,93 @@ void test_a_refused_replay_restore_retries_until_a_slot_frees() {
   LMDJ_CHECK(engine.current_pattern_origin_frame() == deferral.origin + 288'000);
 }
 
+void test_retained_transport_replay_survives_pending_stopped_publication() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+  const auto play = pattern_transport_request_payload(
+      kSequenceSessionId, 9840, 1, "play_stop");
+  play_grid_transport(*runtime, 9840);
+  const auto stop = pattern_transport_request_payload(
+      kSequenceSessionId, 9841, 2, "play_stop");
+  check_success(runtime->dispatch("pattern.transport.request", stop, {}));
+  for (unsigned step = 0; step < 8; ++step) {
+    static_cast<void>(render_grid_frames(engine, 128));
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    if (status.at("playing") == false && status.at("phase") == "idle") break;
+  }
+  const auto stopped = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(stopped.at("playing") == false);
+  LMDJ_CHECK(stopped.at("phase") == "idle");
+  LMDJ_CHECK(stopped.at("transport_epoch") == 2);
+  check_success(runtime->dispatch("sequence.settings.update",
+      {{"command_id", uuid(9842)}, {"expected_revision", 2}, {"session_id", nullptr},
+       {"bpm", 100}, {"quantize_enabled", nullptr}, {"swing_percent", nullptr}}, {}));
+  const auto pending = engine.pattern_telemetry().pending_generation;
+  LMDJ_CHECK(pending != 0);
+  const auto truth = runtime->dispatch("project.inspect", Json::object(), {});
+
+  // Both the newest and an older retained identity reconcile against their
+  // original Facade ledger before a new-publication admission fence applies.
+  for (const auto& retained : {stop, play}) {
+    const auto response = runtime->dispatch("pattern.transport.request", retained, {});
+    LMDJ_CHECK(response.value("ok", false));
+    const auto replay = check_exact_success(
+        response,
+        {"session_id", "command_id", "submit", "status"});
+    LMDJ_CHECK(replay.at("submit") == "replayed");
+    LMDJ_CHECK(replay.at("command_id") == retained.at("command_id"));
+    LMDJ_CHECK(replay.at("status").at("playing") == false);
+    LMDJ_CHECK(replay.at("status").at("transport_epoch") == 2);
+  }
+  auto changed = stop;
+  changed["intent"] = "record";
+  check_error(runtime->dispatch("pattern.transport.request", changed, {}),
+              "INVALID_ARGUMENT");
+
+  const auto fresh_play = pattern_transport_request_payload(
+      kSequenceSessionId, 9843, 3, "play_stop");
+  auto fresh_record = pattern_transport_request_payload(
+      kSequenceSessionId, 9844, 3, "record");
+  fresh_record["expected_revision"] = 3;
+  for (const auto& fresh : {fresh_play, fresh_record}) {
+    const auto refused = runtime->dispatch("pattern.transport.request", fresh, {});
+    check_error(refused, "HOST_STATE_INVALID");
+    LMDJ_CHECK(refused.at("error").at("message") ==
+               "a Pattern publication is pending");
+  }
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == truth);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == pending);
+  const auto unchanged = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(unchanged.at("playing") == false);
+  LMDJ_CHECK(unchanged.at("recording") == false);
+  LMDJ_CHECK(unchanged.at("transport_epoch") == 2);
+
+  // The already scheduled publication retains its actual bar boundary while
+  // transport is stopped. Advance to that reported frame, without wall time.
+  const auto activation = engine.pattern_telemetry().pending_activation_frame;
+  LMDJ_CHECK(activation >= engine.telemetry().rendered_frames);
+  while (engine.telemetry().rendered_frames <= activation) {
+    static_cast<void>(render_grid_frames(engine, 128));
+  }
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation == pending);
+  LMDJ_CHECK(check_exact_success(
+      runtime->dispatch("pattern.transport.request", fresh_play, {}),
+      {"session_id", "command_id", "submit", "status"}).at("submit") == "accepted");
+  for (unsigned step = 0; step < 8; ++step) {
+    static_cast<void>(render_grid_frames(engine, 128));
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    if (status.at("playing") == true && status.at("phase") == "idle") break;
+  }
+  const auto started = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(started.at("playing") == true);
+  LMDJ_CHECK(started.at("phase") == "idle");
+  LMDJ_CHECK(started.at("transport_epoch") == 3);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == truth);
+}
+
 void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -9134,6 +9221,7 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
 
 int main() {
   try {
+    test_retained_transport_replay_survives_pending_stopped_publication();
     test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
     test_provider_owner_uses_retained_project_and_survives_restart();
     for (unsigned mode = 0; mode < 7; ++mode) test_web_provider_owner_refusals_are_persistent(mode);

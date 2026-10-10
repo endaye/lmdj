@@ -5025,16 +5025,6 @@ Json ControlRuntime::dispatch(
       if (engagement == nullptr) {
         return state_error("Pattern transport session is unavailable");
       }
-      // A pending Pattern publication that no playing engagement fences is not
-      // yet current; a transport command submitted against it is refused by
-      // the Engine only after the Facade would have durably prepared the
-      // admission, which no retry can reuse once the publication applies.
-      // Refuse retriably until it applies; a playing engagement names the
-      // pending switch in its fence and keeps the designed path.
-      if (impl_->engine.pattern_telemetry().pending_generation != 0 &&
-          !engagement->controller->inspect().playing) {
-        return state_error("a Pattern publication is pending");
-      }
       const facade::PatternTransportRequest request{
           *engagement->session,
           foundation::ProjectId{*impl_->project_id},
@@ -5044,6 +5034,19 @@ Json ControlRuntime::dispatch(
           intent,
           expected_revision,
       };
+      // A pending Pattern publication that no playing engagement fences is not
+      // yet current; a transport command submitted against it is refused by
+      // the Engine only after the Facade would have durably prepared the
+      // admission, which no retry can reuse once the publication applies.
+      // Refuse retriably until it applies; a playing engagement names the
+      // pending switch in its fence and keeps the designed path. A retained
+      // identity instead reaches the Facade's complete replay validation;
+      // the lookup itself grants no request or admission authority.
+      if (impl_->engine.pattern_telemetry().pending_generation != 0 &&
+          !engagement->controller->inspect().playing &&
+          !engagement->controller->retains_command_id(request.command_id)) {
+        return state_error("a Pattern publication is pending");
+      }
       const auto submitted = engagement->controller->request(request);
       switch (submitted) {
         case facade::PatternTransportSubmit::accepted:

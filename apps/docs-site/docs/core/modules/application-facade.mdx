@@ -151,6 +151,11 @@ controller 在 Facade 编译单元内自持 Sequence Journal 与 Project Store�
 transport。`request`/`inspect`/`continue_operation` 都是串行 control lane 短步：
 request 只解析一次 toggle 并保留 command/epoch，continuation 由 Host 在自己的
 control lane 上重入（无收据时立即成功返回，绝不等待），不得搬到 executor 工作线程；
+`retains_command_id` 在同一串行 control lane 上纯读待结算与已完成的 Command ID。
+Host 用它区分已有命令的重试与新 admission：停止状态仍有待发布 Pattern 时，
+新命令先拒绝，已有身份交回 `request` 核验完整 payload 与原有 authority。
+这个查询本身不批准 replay、不提交录制、不改变 Truth 或 epoch，也不允许 Host
+另建命令记录；同一 Command ID 携带不同 payload 仍由 Facade 拒绝。
 audio port 与 engine 的 submit/inspect/acknowledge 共享同一 serialized control
 owner，音频线程不调用。一个 controller 绑定一个 runtime/session/Pattern；过期
 runtime generation 按 stale 拒绝。Pattern 一腿不再是冻结身份：打开新 journal 的
