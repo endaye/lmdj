@@ -3183,6 +3183,34 @@ function withSecondPatternInspect(
     return value;
   };
 }
+// #1958: the chained Stop case needs a third Pattern whose length differs
+// from both others, so following the wrong target is distinguishable by the
+// grid alone.
+const thirdSwitchPattern = "77777777-7777-4777-8777-777777777777";
+const chainedPatternsReady: CreatorState = {
+  ...ready,
+  project: {
+    ...ready.project,
+    current: {
+      ...ready.project.current!,
+      patterns: [
+        ...ready.project.current!.patterns,
+        {patternId: secondSwitchPattern, bars: 2, events: []},
+        {patternId: thirdSwitchPattern, bars: 4, events: []},
+      ],
+    },
+  },
+};
+function withChainedPatternInspect(
+  fixture: ReturnType<typeof mutableSampleRuntimeFixture>,
+) {
+  return async () => {
+    const value = fixture.inspectProject();
+    value.project.patterns[secondSwitchPattern] = {bars: 2, events: []};
+    value.project.patterns[thirdSwitchPattern] = {bars: 4, events: []};
+    return value;
+  };
+}
 // SETUP's Refresh playback re-inspects the transport, so a state the fake
 // changed behind the app's back becomes observed without waiting on a poll
 // only busy or pending states drive.
@@ -3378,6 +3406,255 @@ test("a switch applied before the first inspection still updates the Sequence se
     .not.toContain("→");
   expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
     .toBe(reloadsBefore);
+});
+
+// #1958: a queued switch can apply with no inspection ever observing it
+// playing, and the Stop's own first ticket status is then already stopped on
+// the Pattern that switch applied. The selection follows that actually
+// applied Pattern once — through the stopped observation, without a stopped
+// snapshot reload — and later stopped telemetry cannot override it. This is a
+// component-seam projection fixture, not physical audio or an executed native
+// race.
+test("a Stop landing after an unseen applied switch follows the applied Pattern", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const publishRunning = controlledSampleAudio(fixture.session);
+  const switchRequests: {patternId: string; requestId: string}[] = [];
+  const transportRequests: PatternTransportRequest[] = [];
+  let playing = true;
+  let queued: string | null = null;
+  let currentPattern = listedSummary.patternId;
+  let epoch = 1;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture, 2),
+    requestPatternTransport: async (
+      request: PatternTransportRequest,
+    ): Promise<PatternTransportTicket> => {
+      transportRequests.push(request);
+      // The real Stop's ticket carries the first stopped status: the runtime
+      // already settled on the applied Pattern with no pending switch left.
+      playing = false;
+      queued = null;
+      epoch = request.expectedEpoch;
+      return {
+        sessionId: request.sessionId,
+        commandId: request.commandId,
+        submit: "accepted",
+        status: engagedTransportStatus({
+          playing: false,
+          transportEpoch: epoch,
+          commandId: request.commandId,
+          currentPatternId: currentPattern,
+        }),
+      };
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      playing,
+      currentPatternId: currentPattern,
+      transportEpoch: epoch,
+      ...(queued === null ? {} : {
+        pendingSwitch: {patternId: queued, activationFrame: 96_000},
+      }),
+    }),
+    requestTransportPatternSwitch: async (request: {patternId: string; requestId: string}) => {
+      switchRequests.push({...request});
+      queued = request.patternId;
+      return {patternId: request.patternId, activationFrame: 96_000};
+    },
+  });
+  const initialState: CreatorState = {
+    ...secondPatternReady,
+    project: {
+      ...secondPatternReady.project,
+      current: {
+        ...secondPatternReady.project.current!,
+        patterns: secondPatternReady.project.current!.patterns.map((pattern) =>
+          pattern.patternId === secondSwitchPattern ? {...pattern, bars: 2} : pattern),
+      },
+    },
+  };
+  const rendered = render(<App initialState={initialState} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await publishRunning();
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  const reloadsBefore = fixture.calls.filter((call) => call === "reloadSnapshot").length;
+
+  // Queue B and observe the pending switch with the current Pattern still A.
+  await userEvent.click(forward);
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+    .textContent).toContain("→ 02"));
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(listedSummary.patternId);
+
+  // B applies with the observation interval frozen: no inspection observes it
+  // playing before Stop's ticket arrives.
+  vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
+  try {
+    await act(async () => {
+      currentPattern = secondSwitchPattern;
+      queued = null;
+    });
+    await flushAsyncTurns();
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+      .toMatch(/\/ 1$/);
+
+    // The real Stop submission's ticket status is the first observation of
+    // the settled transport: stopped on B, no pending switch.
+    fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+    await flushAsyncTurns();
+    expect(transportRequests).toHaveLength(1);
+    expect(transportRequests[0]!.intent).toBe("play_stop");
+    expect(transportPhase()).toBe("stopped");
+    // The grid's two-bar length independently proves the underlying
+    // selection followed the applied Pattern; no snapshot was reloaded.
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+      .toMatch(/\/ 2$/);
+    expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+      .toBe(secondSwitchPattern);
+    expect(screen.getByRole("button", {name: "Choose Pattern"}).textContent)
+      .not.toContain("→");
+    expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+      .toBe(reloadsBefore);
+    vi.useRealTimers();
+
+    // The one stopped follow is spent: a later stopped observation reporting
+    // the older Pattern cannot override the applied selection.
+    await act(async () => {
+      currentPattern = listedSummary.patternId;
+    });
+    await refreshPlaybackProjection();
+    await waitFor(() => expect(transportPhase()).toBe("stopped"));
+    await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+      .toMatch(/\/ 2$/);
+    expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+      .toBe(reloadsBefore);
+  } finally {
+    rendered.unmount();
+    vi.useRealTimers();
+  }
+});
+
+// #1958: chained switch requests — B applies unseen, a newer C is queued, and
+// Stop cancels C while settling on B. The follow must read the transport's
+// actually applied current Pattern: never the cancelled newest target C,
+// never the stale pre-switch selection A.
+test("a Stop cancelling a newer switch after an unseen applied one follows the applied Pattern", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const publishRunning = controlledSampleAudio(fixture.session);
+  const switchRequests: {patternId: string; requestId: string}[] = [];
+  const transportRequests: PatternTransportRequest[] = [];
+  let playing = true;
+  let queued: string | null = null;
+  let currentPattern = listedSummary.patternId;
+  let epoch = 1;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withChainedPatternInspect(fixture),
+    requestPatternTransport: async (
+      request: PatternTransportRequest,
+    ): Promise<PatternTransportTicket> => {
+      transportRequests.push(request);
+      // Stop settles the transport on the applied B and cancels the queued C.
+      playing = false;
+      queued = null;
+      epoch = request.expectedEpoch;
+      return {
+        sessionId: request.sessionId,
+        commandId: request.commandId,
+        submit: "accepted",
+        status: engagedTransportStatus({
+          playing: false,
+          transportEpoch: epoch,
+          commandId: request.commandId,
+          currentPatternId: currentPattern,
+        }),
+      };
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      playing,
+      currentPatternId: currentPattern,
+      transportEpoch: epoch,
+      ...(queued === null ? {} : {
+        pendingSwitch: {patternId: queued, activationFrame: 96_000},
+      }),
+    }),
+    requestTransportPatternSwitch: async (request: {patternId: string; requestId: string}) => {
+      switchRequests.push({...request});
+      queued = request.patternId;
+      return {patternId: request.patternId, activationFrame: 96_000};
+    },
+  });
+  const rendered = render(<App initialState={chainedPatternsReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await publishRunning();
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  const reloadsBefore = fixture.calls.filter((call) => call === "reloadSnapshot").length;
+
+  // Queue B and observe the pending switch with the current Pattern still A.
+  await userEvent.click(forward);
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+    .textContent).toContain("→ 02"));
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(listedSummary.patternId);
+
+  // B applies unseen under the frozen observation loop, then C is queued from
+  // the still-playing transport, and the Stop submission lands before any
+  // inspection can observe B playing. The runtime stays the authority: the
+  // fixture state each call reads is the state the FIFO of calls produced.
+  vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
+  try {
+    await act(async () => {
+      currentPattern = secondSwitchPattern;
+      queued = null;
+    });
+    await flushAsyncTurns();
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+      .toMatch(/\/ 1$/);
+
+    fireEvent.click(forward);
+    fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+    await flushAsyncTurns();
+    expect(switchRequests).toHaveLength(2);
+    expect(switchRequests[1]!.patternId).toBe(thirdSwitchPattern);
+    expect(transportRequests).toHaveLength(1);
+    expect(transportRequests[0]!.intent).toBe("play_stop");
+    expect(transportPhase()).toBe("stopped");
+    // Two bars prove B; one would be stale A and four the cancelled C.
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+      .toMatch(/\/ 2$/);
+    expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+      .toBe(secondSwitchPattern);
+    expect(screen.getByRole("button", {name: "Choose Pattern"}).textContent)
+      .not.toContain("→");
+    expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+      .toBe(reloadsBefore);
+    vi.useRealTimers();
+
+    // The spent follow keeps the applied selection against later stopped
+    // telemetry naming another Pattern.
+    await act(async () => {
+      currentPattern = thirdSwitchPattern;
+    });
+    await refreshPlaybackProjection();
+    await waitFor(() => expect(transportPhase()).toBe("stopped"));
+    await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent)
+      .toMatch(/\/ 2$/);
+    expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+      .toBe(reloadsBefore);
+  } finally {
+    rendered.unmount();
+    vi.useRealTimers();
+  }
 });
 
 // #1958: a refused switch is reported through the failure path, not thrown;

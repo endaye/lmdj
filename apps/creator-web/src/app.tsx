@@ -532,6 +532,12 @@ function Workspace({
     attempts: number;
   }> | null>(null);
   const transportSettledEpochRef = useRef(0);
+  // #1958: the engagement a playing Pattern-switch intent was last issued
+  // under. A switch can apply with no inspection ever observing it playing,
+  // so while this remains set the first stopped observation follows the
+  // actually applied Pattern once; an explicit stopped selection or a new
+  // engagement retires that one-shot authority.
+  const playingSwitchEngagementRef = useRef<string | null>(null);
   const patternSelectionRef = useRef(0);
   const armedCaptureSlotRef = useRef(armedCaptureSlot);
   stateRef.current = state;
@@ -650,6 +656,7 @@ function Workspace({
         transportRef.current.projectId === project.projectId) return;
     transportSettledEpochRef.current = 0;
     transportRetriedCommandRef.current = null;
+    playingSwitchEngagementRef.current = null;
     const sessionId = crypto.randomUUID();
     dispatchTransport({
       type: "engaged",
@@ -2034,15 +2041,30 @@ function Workspace({
     transportSwitchPending]);
 
   // #1958: follow the playing Pattern even when a switch lands before the
-  // first inspection, or another target is already queued. Stopped selection
-  // belongs to the user; a delayed stopped observation must not overwrite it.
+  // first inspection, or another target is already queued. A playing switch
+  // can also apply with no inspection ever observing it playing; while a
+  // switch intent remains outstanding, the first stopped observation follows
+  // the actually applied current Pattern once — the transport status stays
+  // the authority, never a remembered target, so a newer cancelled switch
+  // cannot mislead it — and afterwards the stopped selection belongs to the
+  // user; delayed stopped telemetry must not overwrite it.
   useEffect(() => {
     const status = transport.status;
-    if (status?.engaged !== true || !status.playing || status.currentPatternId == null) return;
-    if (sequenceRef.current.selectedPatternId !== status.currentPatternId) {
+    if (status?.engaged !== true) return;
+    if (status.playing) {
+      if (status.currentPatternId != null &&
+          sequenceRef.current.selectedPatternId !== status.currentPatternId) {
+        dispatchSequence({type: "selected", patternId: status.currentPatternId});
+      }
+      return;
+    }
+    if (playingSwitchEngagementRef.current !== transport.sessionId) return;
+    playingSwitchEngagementRef.current = null;
+    if (status.currentPatternId != null &&
+        sequenceRef.current.selectedPatternId !== status.currentPatternId) {
       dispatchSequence({type: "selected", patternId: status.currentPatternId});
     }
-  }, [transport.status]);
+  }, [transport.status, transport.sessionId]);
 
   // A newly settled operation re-reads journal/recovery authority once, so a
   // committed Record-off surfaces its revision and a failed one its recovery.
@@ -2531,6 +2553,10 @@ function Workspace({
           reportFailure("Switch Pattern", error);
           return;
         }
+        // Arm the one-shot stopped follow: the runtime applies this switch on
+        // its own cadence, and no inspection may observe it playing before a
+        // Stop settles the transport on the applied Pattern.
+        playingSwitchEngagementRef.current = current.sessionId;
         // Show the queued target at once; the pending-switch observation loop
         // below keeps following it until the switch applies or is cancelled.
         void reconcileTransport();
@@ -2547,6 +2573,10 @@ function Workspace({
         try {
           await session.reloadSnapshot(patternId);
           if (patternSelectionRef.current !== selection) return;
+          // An explicit stopped selection is the user's authority; retire any
+          // outstanding switch follow so later stopped telemetry cannot
+          // override it.
+          playingSwitchEngagementRef.current = null;
           dispatchSequence({type: "selected", patternId});
           return;
         } catch (error) {
