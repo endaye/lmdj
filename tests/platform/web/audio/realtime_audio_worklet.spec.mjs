@@ -1,5 +1,6 @@
 import {expect, test} from "@playwright/test";
 import {test as opfsTest} from "../project_io/opfs_browser.fixture.mjs";
+import {attachPairedEnergyProbe} from "./paired_energy_probe.mjs";
 
 
 const FORMAL_HOST_PAGE = "/formal-audio/lmdj-web-runtime.html";
@@ -76,23 +77,28 @@ test("monitor attenuates the Wasm output after the master bus and survives direc
   expect((await page.evaluate(() =>
     window.lmdjWebRuntimeHostTest.runSharedEngineProof())).outputEnergy).toBeGreaterThan(0);
 
-  for (const level of [1, 0.5, 0]) {
-    const energy = await page.evaluate(async (level) => {
-      const {context, analyser, monitor, monitorAnalyser} = window.__lmdjFormalAudioGraph;
-      monitor.gain.setValueAtTime(level, context.currentTime);
-      await window.lmdjWebRuntimeHostTest.runDirectOutputContinuationProof();
-      // One complete analyser window after the gain change; the real Bank
-      // voice lasts 100 ms. Both readbacks cover the same rendered frames.
-      await new Promise((resolve) => setTimeout(resolve, 45));
-      const read = (node) => {
-        const values = new Float32Array(node.fftSize);
-        node.getFloatTimeDomainData(values);
-        return values.reduce((sum, value) => sum + value * value, 0);
-      };
-      return {master: read(analyser), output: read(monitorAnalyser)};
-    }, level);
-    expect(energy.master).toBeGreaterThan(0);
-    expect(energy.output / energy.master).toBeCloseTo(level * level, 5);
+  await attachPairedEnergyProbe(page);
+  try {
+    for (const level of [1, 0.5, 0]) {
+      const energy = await page.evaluate(async (level) => {
+        const {context, analyser, monitor} = window.__lmdjFormalAudioGraph;
+        const afterFrame = Math.ceil(context.currentTime * context.sampleRate);
+        monitor.gain.setValueAtTime(level, context.currentTime);
+        await window.lmdjWebRuntimeHostTest.runDirectOutputContinuationProof();
+        // Collect one complete analyser-sized window on the rendering thread.
+        // Both energies contain the same frames of the real 100 ms Bank voice.
+        const paired = await window.__lmdjPairedEnergyProbe.read({
+          frameCount: analyser.fftSize, afterFrame,
+        });
+        return {...paired, afterFrame, frameCount: analyser.fftSize};
+      }, level);
+      expect(energy.firstFrame).toBeGreaterThanOrEqual(energy.afterFrame);
+      expect(energy.frames).toBe(energy.frameCount);
+      expect(energy.master).toBeGreaterThan(0);
+      expect(energy.output / energy.master).toBeCloseTo(level * level, 5);
+    }
+  } finally {
+    await page.evaluate(() => window.__lmdjPairedEnergyProbe.close());
   }
 
   const recovery = await page.evaluate(async () => {
