@@ -21,6 +21,12 @@ function isLive(fx: PerformanceFx): boolean {
   return LIVE_FADERS.includes(fx);
 }
 
+export interface MonitorVolumeControl {
+  readonly value: number;
+  readonly disabled: boolean;
+  readonly onChange: (value: number) => void;
+}
+
 interface FxSliderBankProps {
   readonly active?: boolean;
   readonly action?: ReactNode;
@@ -31,6 +37,7 @@ interface FxSliderBankProps {
   readonly onMove: (gestureId: string, fx: PerformanceFx, value: number) => void;
   readonly onRelease: (gestureId: string, fx: PerformanceFx) => void;
   readonly onGroupChange?: (more: boolean) => void;
+  readonly monitorVolume?: MonitorVolumeControl | undefined;
 }
 
 export function FxSliderBank(props: FxSliderBankProps) {
@@ -88,7 +95,7 @@ export function FxSliderBank(props: FxSliderBankProps) {
   const more = props.order.filter((fx) => !isLive(fx));
   return (
     <section className="perform-fx" aria-label="Performance FX">
-      <div className="perform-live-faders">
+      <div className={`perform-live-faders${props.monitorVolume === undefined ? "" : " has-master"}`}>
         {live.map((fx) => (
           <label className="perform-fader" key={fx}>
             <span className="perform-fader-name">{LABELS[fx]}</span>
@@ -100,6 +107,19 @@ export function FxSliderBank(props: FxSliderBankProps) {
             {slider(fx)}
           </label>
         ))}
+        {props.monitorVolume === undefined ? null : (
+          <label className="perform-fader perform-master-fader">
+            <span className="perform-fader-name">MASTER</span>
+            <span className="perform-fader-value">{props.monitorVolume.value}%</span>
+            <input type="range" min={0} max={100} step={1} aria-label="MASTER"
+              value={props.monitorVolume.value} disabled={props.monitorVolume.disabled}
+              onChange={(event) => {
+                const monitor = props.monitorVolume;
+                if (monitor === undefined || monitor.disabled) return;
+                monitor.onChange(event.currentTarget.valueAsNumber);
+              }} />
+          </label>
+        )}
       </div>
       <div className="perform-fx-actions">
         {props.action}
