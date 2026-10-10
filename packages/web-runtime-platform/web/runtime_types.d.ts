@@ -82,6 +82,16 @@ export interface PatternTransportStatus {
   readonly observedAtMilliseconds: number;
   readonly commandId: string | null;
   readonly publicationPending: boolean;
+  /** The Pattern the Engine is playing, or null before one is published. */
+  readonly currentPatternId: string | null;
+  /**
+   * The queued playing-state switch (#1958): the Pattern that will start at
+   * `activationFrame`, or null when none is queued.
+   */
+  readonly pendingSwitch: Readonly<{
+    patternId: string;
+    activationFrame: number;
+  }> | null;
   readonly error: Readonly<{
     code: string;
     message: string;
@@ -98,6 +108,21 @@ export interface PatternTransportRequest {
   readonly expectedRevision: number | null;
 }
 
+export interface TransportPatternSwitchRequest {
+  readonly patternId: string;
+  readonly requestId: string;
+}
+
+/**
+ * Switches the playing transport's Pattern at the engine's next Bar. A
+ * request for the Pattern already playing withdraws any queued switch and
+ * answers `activationFrame: null`.
+ */
+export interface TransportPatternSwitchResult {
+  readonly patternId: string;
+  readonly activationFrame: number | null;
+}
+
 export interface PatternTransportTicket {
   readonly sessionId: string;
   readonly commandId: string;
@@ -110,6 +135,9 @@ export interface PatternTransportRuntimeSession {
     request: PatternTransportRequest,
   ): Promise<PatternTransportTicket>;
   inspectPatternTransport(sessionId: string): Promise<PatternTransportStatus>;
+  requestTransportPatternSwitch(
+    request: TransportPatternSwitchRequest,
+  ): Promise<TransportPatternSwitchResult>;
 }
 
 export interface PatternEventKeyRequest {

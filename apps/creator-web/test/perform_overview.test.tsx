@@ -42,6 +42,7 @@ test("playing, the counter and progress follow the transport frames", () => {
         engaged: true, playing: true, recording: false, phase: "idle",
         runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
         observedAtMilliseconds: 1_000, commandId: null, publicationPending: false, error: null,
+        currentPatternId: null, pendingSwitch: null,
       } satisfies PatternTransportStatus,
     }} />);
     expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 02 · BEAT 02 / 04");

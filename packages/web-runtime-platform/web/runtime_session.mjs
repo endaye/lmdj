@@ -3555,6 +3555,8 @@ function createRuntimeSessionController(options = {}) {
         "command_id",
         "publication_pending",
         "error",
+        "current_pattern_id",
+        "pending_switch",
       ]) ||
       typeof value.engaged !== "boolean" ||
       typeof value.playing !== "boolean" ||
@@ -3566,6 +3568,13 @@ function createRuntimeSessionController(options = {}) {
       !isUnsignedInteger(value.runtime_frame) ||
       (value.command_id !== null && !UUID_PATTERN.test(value.command_id)) ||
       typeof value.publication_pending !== "boolean" ||
+      (value.current_pattern_id !== null &&
+        !UUID_PATTERN.test(value.current_pattern_id)) ||
+      (value.pending_switch !== null &&
+        (typeof value.pending_switch !== "object" ||
+          !exactKeys(value.pending_switch, ["pattern_id", "activation_frame"]) ||
+          !UUID_PATTERN.test(value.pending_switch.pattern_id) ||
+          !isUnsignedInteger(value.pending_switch.activation_frame))) ||
       (value.error !== null &&
         (typeof value.error !== "object" ||
           !exactKeys(value.error, ["code", "message", "details"]) ||
@@ -3592,6 +3601,13 @@ function createRuntimeSessionController(options = {}) {
       observedAtMilliseconds: monotonicNow(),
       commandId: value.command_id,
       publicationPending: value.publication_pending,
+      currentPatternId: value.current_pattern_id,
+      pendingSwitch: value.pending_switch === null
+        ? null
+        : Object.freeze({
+            patternId: value.pending_switch.pattern_id,
+            activationFrame: value.pending_switch.activation_frame,
+          }),
       error: value.error === null
         ? null
         : Object.freeze({
@@ -3673,6 +3689,41 @@ function createRuntimeSessionController(options = {}) {
       normalizePatternTransportStatus(
         await boundedRequest("pattern.transport.inspect", {session_id: id}),
       ));
+  }
+
+  /** @param {import("./runtime_types.d.ts").TransportPatternSwitchRequest} request */
+  function requestTransportPatternSwitch(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["patternId", "requestId"])
+    ) {
+      throw new TypeError("Pattern transport switch request is invalid");
+    }
+    requirePatternTransportOptIn();
+    const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    const requestId = requireSequenceIdentity(request.requestId, "requestId");
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("pattern.transport.switch", {
+        pattern_id: patternId,
+        request_id: requestId,
+      });
+      if (
+        !exactKeys(value, ["pattern_id", "activation_frame"]) ||
+        value.pattern_id !== patternId ||
+        (value.activation_frame !== null &&
+          (!isUnsignedInteger(value.activation_frame) ||
+            value.activation_frame === 0))
+      ) {
+        throw protocolMismatch("Pattern transport switch result is invalid");
+      }
+      return Object.freeze({
+        patternId: value.pattern_id,
+        // Null when the pressed Pattern already plays and any queued switch
+        // was withdrawn; otherwise the frame the new Pattern starts at.
+        activationFrame: value.activation_frame,
+      });
+    });
   }
 
   function createPattern(request) {
@@ -5955,6 +6006,7 @@ function createRuntimeSessionController(options = {}) {
     requestPatternSwitch,
     requestPatternTransport,
     inspectPatternTransport,
+    requestTransportPatternSwitch,
     createPattern,
     editPatternEvents,
     resizePattern,
