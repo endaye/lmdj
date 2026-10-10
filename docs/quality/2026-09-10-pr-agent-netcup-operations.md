@@ -5,6 +5,29 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-10 fault-injection leg and the error-class mapping defect
+
+With the fault overlay `cutover.vOf3qSIz` (DeepSeek endpoint pointed at the
+unroutable `https://127.0.0.1:9/lmdj-fault-injection`), the canary PR #1937
+head 82334ea205714d8edacf75ccb7896b39bdc1b143 run 37971385452 proved the
+in-engine fallback end to end at the engine level: DeepSeek failed fast
+(internal_error, connection refused as injected), GLM reviewed in 3.4 s
+(2488 prompt + 108 completion tokens), and the result document parsed cleanly
+(the footer suppression held). The pipeline still finalized a failure:
+`adapt_t2_result` mapped engine-native error classes through an inline table
+that lacked `internal_error`, so the completed chain was rejected as
+"unsupported error category". The adaptation now shares the
+`ENGINE_FAILURE_CLASSES` table with the engine-failure path
+(internal_error → runtime_failure); regression tests cover the production
+symptom and the completeness of the mapping over every engine-safe class.
+
+The fault overlay was then rolled back by reinstalling the normal overlay
+(`cutover.i27iMjpG`, previous `cutover.vOf3qSIz` retained): witness passed,
+the ledger hash was byte-identical across the fault window
+(07735e2dc5… retained before and after), and the effective DeepSeek endpoint
+read back as `https://api.deepseek.com`. This install→fault→rollback cycle
+also serves as the T6 overlay rollback rehearsal.
+
 ## 2026-10-09 LiteLLM stdout footer contamination
 
 Dispatch run 37948423143 against PR #1904 (after overlay `cutover.a54Bifel`

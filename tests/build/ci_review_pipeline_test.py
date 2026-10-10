@@ -509,6 +509,35 @@ class PipelineTests(unittest.TestCase):
             coverages=pipeline.coverage_inventory(self.directory), changed_paths=paths,
             collector=collector, trusted_config=trusted))
 
+    def test_capture_maps_engine_internal_error_to_runtime_failure(self):
+        # Regression for production run 37971385452: the engine reported its
+        # native internal_error for an unclassified provider fault, the
+        # adaptation map lacked the class, and capture voided a completed GLM
+        # fallback review as a pipeline failure.
+        result, identity, paths, collector, trusted = self.t2_fallback_fixture()
+        result["attempts"][0]["error_class"] = "internal_error"
+        pipeline.save(self.directory / "context.json", {"identity": identity, "changed_paths": paths})
+        pipeline.save(self.directory / "t2-result.json", result)
+        (self.directory / "t2-input.json").write_text(
+            (ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text(encoding="utf-8"), encoding="utf-8")
+        with mock.patch.object(pipeline, "trusted_collector", return_value=collector), \
+                mock.patch.object(pipeline, "trusted_config", return_value=trusted):
+            self.capture("deepseek")
+        history = pipeline.read(self.directory / "history.json")
+        self.assertEqual([(a["backend"], a["status"], a["error_class"]) for a in history["attempts"]],
+                         [("deepseek", "failed", "runtime_failure"), ("glm", "reviewed", None)])
+        self.assertEqual(pipeline.read(self.directory / "review.json")["summary"], "Reviewed.")
+
+    def test_every_engine_error_class_maps_into_the_v2_vocabulary(self):
+        # The adaptation and the engine-failure path share one table; any
+        # engine class left unmapped must fail closed, never void a chain.
+        for engine_class in sorted(t2._SAFE_ERROR_CLASSES):
+            with self.subTest(engine_class=engine_class):
+                mapped = pipeline.ENGINE_FAILURE_CLASSES.get(engine_class, engine_class)
+                self.assertIn(mapped, review_scope.ERRORS,
+                              f"why: engine class {engine_class} has no v2 history mapping; "
+                              "remedy: extend ENGINE_FAILURE_CLASSES")
+
     def test_capture_provider_warnings_show_finite_categories_and_exact_attempt(self):
         result, identity, paths, collector, trusted = self.t2_warning_fixture()
         result["attempts"][0]["provider_warnings"] = sorted(t2.PROVIDER_WARNING_CATEGORIES)

@@ -204,10 +204,12 @@ def adapt_t2_result(result, *, identity, changed_paths, collector, trusted_confi
         else:
             review_scope.require(attempt["review"] is None and isinstance(attempt["error_class"], str),
                                  "T2 failed attempt lacks its finite error category")
-            error_class = {"deadline_exceeded": "timeout", "transient_network": "service_error",
-                           "authentication_error": "missing_credential", "incomplete_coverage": "invalid_output",
-                           "invalid_parameter": "invalid_output", "unsupported_model": "service_error"}.get(
-                               attempt["error_class"], attempt["error_class"])
+            # Map engine-native classes through the same table the
+            # engine-failure path uses; a class outside the table still fails
+            # closed against the v2 error vocabulary. The inline map missed
+            # internal_error (engine-unclassified provider faults), which
+            # voided a completed GLM fallback review in run 37971385452.
+            error_class = ENGINE_FAILURE_CLASSES.get(attempt["error_class"], attempt["error_class"])
             review_scope.require(error_class in review_scope.ERRORS, "T2 result has an unsupported error category")
             status = "failed"
         history_attempts.append({"backend": backend, "status": status, "error_class": error_class,
