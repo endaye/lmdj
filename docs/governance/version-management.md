@@ -101,12 +101,34 @@ MILESTONE.MINOR.BUILD.PATCH
 - 在同一正式产品版本线中单调递增，跨 Milestone 不重置。
 - 每个经保护分支 PR 评审合入、值得被测试或分发的 Product Assembly 分配一个新
   `BUILD`。
-- 新 Build 必须来自 `main` 上一个精确、CI 已验证的提交。
+- 新 Build 的产品实现基线必须绑定 `main` 上一个精确、已取得原政策规定 CI 验证的提交。
 - Build 可以有间断；失败或放弃的编号不得复用。
 - 纯文档提交默认不分配 Product Build，除非文档本身是版本、Contract 或发布
   治理的正式产物。
 - 同一个 Git SHA 不得分配两个不同 Product Build Version。
 - 同一个 Product Build Version 不得指向两个 Git SHA。
+
+版本 cut 分别记录三个真实身份：已验证的 `main` implementation baseline、干净已提交的
+allocation/freeze source，以及实际 squash 后的 `main` target；三者不得互相冒充。
+
+已合入实现所必需的 **identity-only allocation cut** 可以在同一版本 PR 中结算实际
+Module、Host、Provider、Contract、Product 与依赖闭包身份，携带对应 Assembly/lock、
+确定性身份生成物、current 说明页、实施计划和 matching snapshot。每项身份变更必须由
+该基线已有的公开 API、ABI、行为和实际依赖证明，不能借 cut 修改产品实现。已有
+registered Contract 的兼容 schema formalization 可作为明确声明的附加范围，包含
+schema、conformance、正反例和 grammar 说明；它不证明消费者、producer、DSP 或
+Replay 已支持该语法。
+
+cut 不得夹带未合入的产品实现、Host/Provider 行为、无关 Contract、工作流、保护、
+生成器或验证器变更，以及未经声明的身份调整。freeze source 可以是该 cut 的本地源
+提交，不能称为已经合入 `main` 或已经取得 exact-main CI。按
+[`git-workflow.md` 的 S0/S1 顺序](git-workflow.md#product-cut-source-and-snapshot-phases)，
+两个 linked Task 各一个 Conventional Commit，只在同一 PR 中完整 shipping。
+Build 唯一性、SemVer/API 语义、真实依赖闭包、交付验证和来源证明全部保留。
+
+源码 Build 与 snapshot 的分配不发起 Release。Release intent 只在实际 protected-main
+squash target 存在后绑定；tag、publication、deployment、Channel 与 release candidate
+仍遵循原有独立授权和门禁，不能从 local freeze source 或 baseline 的 CI 推断通过。
 
 M1 的第一个可构建集成版本为 `1.0.1.0`，最终历史收官构建为 `1.0.66.0`。
 M2 首个产品构建继承单调递增的 `BUILD` 序列（如 `2.0.67.0`）。
@@ -130,7 +152,7 @@ for another PATCH-level Assembly change.
 - Patch 从已发布 tag 上的短命 `fix/<task>` 分支产生，用完即删；仓库不设 `release/*`
   或 `hotfix/*` 长期分支。新 Build 的分配遵循
   [`git-workflow.md`](git-workflow.md) 的 Release cut 规则：功能与 control-plane
-  改动先各自合入 `main`，切版 PR 只携带分配材料并经当前 head 评审 squash 合入。
+  改动先各自合入 `main`，切版 PR 只携带上述声明的分配材料及兼容 Contract formalization 附加范围，并经当前 head 评审 squash 合入。
 
 示例：
 
