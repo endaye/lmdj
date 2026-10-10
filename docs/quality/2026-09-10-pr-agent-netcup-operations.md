@@ -5,6 +5,31 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-10 fallback publication leg (canary #1937 closure evidence)
+
+Umbrella #1149's remaining fallback gap after the error-class mapping fix
+(#1939, merged as f2ae9fae): prove DeepSeek-unreachable → GLM carries →
+normal publication → read-back, end to end.
+
+- Fault overlay `cutover.505yqwj7` installed from main `89cf1c5009` (adapter
+  db208af44, runtime with DeepSeek endpoint pointed at the unroutable
+  `https://127.0.0.1:9/lmdj-fault-injection`; witness passed; ledger sha256
+  1745c0ba56… unchanged by the install; slot lock free at install time).
+- **Evidence complete**: the operations-record PR #1967 head 5abe6dfc run
+  38016455358 — DeepSeek failed as injected (`internal_error`, 5.8 s), GLM
+  carried the review (24350 prompt + 173 completion tokens, 6.8 s), and the
+  review was published to #1967 with the `lmdj-review: glm` v2 marker at the
+  exact head and read back through the API. This closes the
+  DeepSeek-unreachable → GLM → publish → read-back chain end to end.
+- Endpoint restored by reinstalling the normal overlay (`cutover.ItApsw10`,
+  previous `cutover.505yqwj7` retained); the DeepSeek endpoint read back as
+  `https://api.deepseek.com`, witness passed, and the follow-up review of this
+  record's own amendment verifies restoration with a real DeepSeek run.
+- Canary PR #1937 was merged manually at 2026-10-10T01:35:51Z (6b167e708) in
+  the same owner wave as #1939/#1964; the designed "close unmerged"
+  disposition is thereby superseded by the owner, and the evidence legs are
+  unaffected.
+
 ## 2026-10-10 fault-injection leg and the error-class mapping defect
 
 With the fault overlay `cutover.vOf3qSIz` (DeepSeek endpoint pointed at the
