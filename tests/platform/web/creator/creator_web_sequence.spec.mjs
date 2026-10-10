@@ -201,12 +201,14 @@ async function inspectTransport(page, sessionId) {
 // Pattern stays current until the boundary" is observed instead of raced.
 async function awaitEarlyBar(page, sessionId, bpm) {
   const barFrames = 48_000 * 4 * 60 / bpm;
+  // Default polling settles at 1 s and can keep missing a 400 ms bar window.
+  // Sample more often without widening the phase window or its deadline.
   await expect.poll(async () => {
     const status = await inspectTransport(page, sessionId);
     if (status.playing !== true || status.pending_switch != null) return false;
     const position = (status.runtime_frame - status.origin_frame) % barFrames;
     return position >= 0 && position < barFrames / 5;
-  }, {timeout: 30_000}).toBe(true);
+  }, {timeout: 30_000, intervals: [50]}).toBe(true);
 }
 
 async function transportRequests(page) {
