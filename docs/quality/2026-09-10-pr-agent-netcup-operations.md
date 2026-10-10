@@ -5,6 +5,60 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-10 rollback drill (umbrella #1149, #1153a)
+
+A real `current` → `previous` → restore cycle was executed on the review host
+per the "Update and rollback" procedure, holding `/var/lib/lmdj/pr-agent/slot.lock`
+across each atomic symlink swap so no review could interleave:
+
+- Pre-state: `current` = `cutover.ItApsw10` (runtime 5eff66f29267), `previous`
+  = `cutover.505yqwj7`; ledger sha256 f5f693244570… before and after.
+- Witness (as runner account lmdj-runner-01, the install.sh invocation shape)
+  before: schema `lmdj.pr-agent-config-witness.v1`, adapter db208af44d85,
+  runtime 5eff66f29267, provider order [deepseek, glm].
+- Rollback to `cutover.505yqwj7`: witness shows runtime f8e29b91c84d — the
+  distinct retained identity of that release — same adapter, same order.
+- Restore to `cutover.ItApsw10`: witness identical to the pre-state.
+- All 17 release directories and the monetary ledger are retained; no model
+  call was made (witness performs no provider request).
+
+## Operations handover (2026-10-10, umbrella #1149 / #1153c)
+
+**Credentials.** Two GitHub Actions secrets feed the review step's environment
+and never persist on the host: `PR_AGENT_DEEPSEEK_API_KEY` (primary) and
+`PR_AGENT_ZAI_API_KEY` (fallback). Rotation means replacing the secret value in
+the repository settings; no host or release change is needed, and the next
+review run picks it up. Verify a rotation with any real PR Review run and its
+`t2-config-witness.json` / attempt evidence. The engine clears all other
+environment, so runner-level credentials never reach provider calls.
+
+**Budget and alerting.** The installed `runtime.toml` enforces USD 1 per PR
+attempt, USD 100 per Asia/Shanghai calendar month and USD 100 cumulative pilot,
+plus request-count, timeout and deadline caps; the shared append-only ledger at
+`/var/lib/lmdj/pr-agent/engine-state/ledger.jsonl` reserves at peak cache-miss
+rates and settles at metered actuals. Read it back with any monthly summary
+before changing caps. Provider-reported limit signals (insufficient balance,
+quota exhausted, rate limit) surface as bounded `provider_warnings` in the run
+diagnostics and as workflow annotations; proactive balance checks are not part
+of operations (owner checks balances; #1188 tracks the deferred warning
+improvement).
+
+**Updating the engine pin.** Land the adapter/config change on main, stage the
+four repository files (`install.sh`, `pr_agent_review.py`, `run-engine.sh`,
+`runtime.toml`) from the merged revision, run `sudo -n bash STAGING/install.sh
+STAGING` on the host, and confirm the witness, the `current` switch and the
+unchanged ledger. Roll back per the documented rollback drill above. Never edit
+a release in place; every overlay is a new root-owned release directory.
+
+**Capacity and expansion triggers.** Reviews run inside existing runner jobs in
+`lmdj-ci.slice` (14 vCPU / 48 GiB) with one global engine slot
+(`/var/lib/lmdj/pr-agent/slot.lock`) and a 600 s engine deadline. Consider a
+dedicated slice or a second host only on recorded evidence: sustained slot
+queueing visible as review latency, memory pressure on the slice during
+co-running heavy jobs, or repeated deadline failures — the resource measurement
+record in this file is the baseline. A second same-host process is concurrency,
+not redundancy; no second host is procured.
+
 ## 2026-10-10 fallback publication leg (canary #1937 closure evidence)
 
 Umbrella #1149's remaining fallback gap after the error-class mapping fix
