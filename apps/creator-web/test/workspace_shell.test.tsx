@@ -1085,7 +1085,8 @@ function mutableSampleRuntimeFixture() {
   };
 }
 
-async function candidatePlaybackFixture(runningAudio = false) {
+async function candidatePlaybackFixture(runningAudio = false,
+  configure?: (fixture: ReturnType<typeof mutableSampleRuntimeFixture>) => void) {
   const fixture = mutableSampleRuntimeFixture();
   const sourceId = "33333333-3333-4333-8333-333333333333";
   const adoptedId = "44444444-4444-4444-8444-444444444444";
@@ -1135,6 +1136,7 @@ async function candidatePlaybackFixture(runningAudio = false) {
     trigger,
   });
   if (runningAudio) setRunningAudioFixture(session);
+  configure?.(fixture);
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
@@ -5121,6 +5123,208 @@ test("Undo cancels the Sample turn before restoring history instead of saving th
     expect(update).not.toHaveBeenCalled();
     expect(fixture.revision).toBe(4);
   } finally {vi.useRealTimers();}
+});
+
+test("pure page navigation preserves ready Undo without another authority read", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const historyStatus = {sessionId: "history", projectRevision: fixture.revision,
+    canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "", disabledReason: ""};
+  const inspect = vi.fn(async () => historyStatus);
+  const held = deferred<typeof historyStatus>();
+  Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectAuthoringHistory: inspect, undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    await flushAsyncTurns();
+    const reads = inspect.mock.calls.length;
+    inspect.mockImplementation(() => held.promise);
+    for (const name of ["Sample", "Sequence", "Perform", "Project"]) {
+      await act(async () => {fireEvent.click(screen.getByRole("button", {name}));});
+      await flushAsyncTurns();
+      expect(screen.getByRole("button", {name}).getAttribute("aria-current")).toBe("page");
+      fireEvent.click(screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"}));
+      expect(undo().classList.contains("is-lit"), `${name} keeps ready global Undo`).toBe(true);
+      expect(undo()).toHaveProperty("disabled", false);
+      expect(inspect, `${name} does not invalidate unchanged history`).toHaveBeenCalledTimes(reads);
+    }
+    expect(fixture.revision).toBe(3);
+  } finally {
+    rendered.unmount();
+    await act(async () => {held.resolve(historyStatus);});
+  }
+});
+
+test("discarding the last Performance recovery refreshes Undo without a revision or page change", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const take = {sessionId: "take-session", performanceId: "take", reason: "owner_lost",
+    durableEventCount: 2, pendingEventCount: 0, fingerprint: "f".repeat(64)};
+  const performance = performanceSessionStubs([take]);
+  const discard = vi.fn(async () => {performance.listed.splice(0); return true;});
+  const inspect = vi.fn(async () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: performance.listed.length === 0, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "",
+    disabledReason: performance.listed.length > 0 ? "performance_recovery_pending" : ""}));
+  Object.assign(fixture.session, sequenceSessionStubs(), performance.stubs, {
+    discardPerformanceRecovery: discard, inspectAuthoringHistory: inspect,
+    undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    const region = await interruptedRegion();
+    await screen.findByText("Resolve the pending recording recovery first.");
+    expect(undo().classList.contains("is-lit")).toBe(false);
+    const reads = inspect.mock.calls.length;
+    await userEvent.click(within(region).getByRole("button", {name: "Discard…"}));
+    await userEvent.click(within(region).getByRole("button", {name: "Discard recording"}));
+    await within(region).findByText("The interrupted recording was discarded.");
+    expect(discard).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    expect(inspect.mock.calls.length).toBeGreaterThan(reads);
+    expect(fixture.revision).toBe(3);
+    expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current")).toBe("page");
+  } finally {rendered.unmount();}
+});
+
+test("transport publication settlement refreshes Undo without a phase, revision or page change", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let publicationPending = true;
+  const inspect = vi.fn(async () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: !publicationPending, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "",
+    disabledReason: publicationPending ? "pattern_transport_busy" : ""}));
+  const transportInspect = vi.fn(async () => engagedTransportStatus({playing: false, publicationPending}));
+  Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: async () => {throw new Error("No transport command belongs to this test");},
+    inspectPatternTransport: transportInspect, inspectAuthoringHistory: inspect,
+    undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    await waitFor(() => expect(transportInspect).toHaveBeenCalled());
+    await screen.findByText("Stop Pattern playback to undo or redo.");
+    await flushAsyncTurns();
+    const reads = inspect.mock.calls.length;
+    publicationPending = false;
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    expect(inspect.mock.calls.length).toBeGreaterThan(reads);
+    expect(fixture.revision).toBe(3);
+    expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current")).toBe("page");
+  } finally {rendered.unmount();}
+});
+
+test("page navigation retries blocked history while focus still refreshes ready history", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let blocked = true;
+  const inspect = vi.fn(async () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: !blocked, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "",
+    disabledReason: blocked ? "sample_import_pending" : ""}));
+  Object.assign(fixture.session, {
+    inspectAuthoringHistory: inspect, undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await screen.findByText("Wait for the sound import to finish.");
+    await flushAsyncTurns();
+    const blockedReads = inspect.mock.calls.length;
+    blocked = false;
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    expect(inspect.mock.calls.length).toBeGreaterThan(blockedReads);
+    const readyReads = inspect.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    await flushAsyncTurns();
+    expect(inspect).toHaveBeenCalledTimes(readyReads);
+    fireEvent.focus(window);
+    await waitFor(() => expect(inspect).toHaveBeenCalledTimes(readyReads + 1));
+    expect(undo().classList.contains("is-lit")).toBe(true);
+  } finally {rendered.unmount();}
+});
+
+test("page navigation rechecks ready history after a reported authoring failure", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const historyStatus = {sessionId: "history", projectRevision: fixture.revision,
+    canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "", disabledReason: ""};
+  const inspect = vi.fn(async () => historyStatus);
+  const held = deferred<typeof historyStatus>();
+  fixture.session.updatePad = async () => {
+    throw Object.assign(new Error("Authoring acknowledgement lost"), {code: "IO_ERROR"});
+  };
+  Object.assign(fixture.session, {
+    inspectAuthoringHistory: inspect, undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    selectSamplePage("Playback");
+    await userEvent.click(await screen.findByRole("button", {name: "Reverse"}));
+    await screen.findByRole("alert");
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    await flushAsyncTurns();
+    const reads = inspect.mock.calls.length;
+    inspect.mockImplementation(() => held.promise);
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(inspect).toHaveBeenCalledTimes(reads + 1);
+    expect(undo().classList.contains("is-lit")).toBe(false);
+    await act(async () => {held.resolve(historyStatus);});
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    expect(fixture.revision).toBe(3);
+  } finally {
+    rendered.unmount();
+    await act(async () => {held.resolve(historyStatus);});
+  }
+});
+
+test("navigation retains history inspection after a Slice adoption fails after unmount", async () => {
+  let resultUnknown = false;
+  const historyStatus = () => ({sessionId: "history", projectRevision: 3,
+    canUndo: !resultUnknown, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "",
+    disabledReason: resultUnknown ? "authoring_history_result_unknown" : ""});
+  const inspect = vi.fn(async () => historyStatus());
+  const fixture = await candidatePlaybackFixture(false, current => {
+    Object.assign(current.session, {inspectAuthoringHistory: inspect,
+      undoAuthoring: vi.fn(), redoAuthoring: vi.fn()});
+  });
+  const pending = deferred<Awaited<ReturnType<typeof fixture.adopt>>>();
+  fixture.adopt.mockImplementationOnce(() => pending.promise);
+  const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+  try {
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
+    await waitFor(() => expect(fixture.adopt).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    await flushAsyncTurns();
+    await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    const reads = inspect.mock.calls.length;
+    // The request was issued by the retired Slice component. Its local catch
+    // does not report diagnostics, and no authoring revision reaches App.
+    resultUnknown = true;
+    await act(async () => {pending.reject(Object.assign(
+      new Error("Adoption acknowledgement lost"), {code: "IO_ERROR"}));});
+    await flushAsyncTurns();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(inspect).toHaveBeenCalledTimes(reads);
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    expect(inspect).toHaveBeenCalledTimes(reads + 1);
+    await screen.findByText("Checking whether the last change was saved…");
+    expect(undo().classList.contains("is-lit")).toBe(false);
+    expect(fixture.revision).toBe(3);
+  } finally {
+    pending.reject(new Error("test ended"));
+  }
 });
 
 test("Project encoder selection does not open a Project until explicit OPEN", async () => {

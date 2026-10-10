@@ -366,6 +366,8 @@ function Workspace({
   // another Pad's controls after the selection moves.
   const [padColourError, setPadColourError] = useState<{slot: number; message: string} | null>(null);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  const [historyPerformRecoveryPending, setHistoryPerformRecoveryPending] = useState(false);
+  const [historyPerformRecoveryLoaded, setHistoryPerformRecoveryLoaded] = useState(false);
   const [performReviewRequested, setPerformReviewRequested] = useState(false);
   // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
   // history chord or by any other rail action.
@@ -1244,8 +1246,18 @@ function Workspace({
     state.project.current?.patternId, registerRuntimeShutdownBarrier]);
 
   useEffect(() => {
-    if (performController === null) { setHistoryPerformPhase("idle"); return; }
-    const update = () => setHistoryPerformPhase(performController.getState().recording.phase);
+    if (performController === null) {
+      setHistoryPerformPhase("idle");
+      setHistoryPerformRecoveryPending(false);
+      setHistoryPerformRecoveryLoaded(false);
+      return;
+    }
+    const update = () => {
+      const current = performController.getState();
+      setHistoryPerformPhase(current.recording.phase);
+      setHistoryPerformRecoveryPending(current.recovery.length > 0);
+      setHistoryPerformRecoveryLoaded(current.recoveryLoaded);
+    };
     update();
     return performController.subscribe(update);
   }, [performController]);
@@ -2023,6 +2035,7 @@ function Workspace({
   // #1958: a queued playing-state switch is observed too, so the queued
   // target and its application surface without another user action.
   const transportSwitchPending = transport.status?.pendingSwitch != null;
+  const transportPublicationPending = transport.status?.publicationPending === true;
   // Busy and failed operations are observed through inspection until they
   // settle; the runtime drives the continuation cadence, the Creator only
   // polls the projection.
@@ -2030,7 +2043,8 @@ function Workspace({
     if (!isPatternTransportSession(session) || transport.sessionId === null) {
       return;
     }
-    if (!transportBusy && transport.lastFailed === null && !transportSwitchPending) {
+    if (!transportBusy && transport.lastFailed === null && !transportSwitchPending &&
+        !transportPublicationPending) {
       return;
     }
     const timer = window.setInterval(() => {
@@ -2038,7 +2052,7 @@ function Workspace({
     }, 250);
     return () => window.clearInterval(timer);
   }, [session, transport.sessionId, transportBusy, transport.lastFailed,
-    transportSwitchPending]);
+    transportSwitchPending, transportPublicationPending]);
 
   // #1958: follow the playing Pattern even when a switch lands before the
   // first inspection, or another target is already queued. A playing switch
@@ -2820,7 +2834,9 @@ function Workspace({
     session,
     projectId: state.project.current?.projectId ?? null,
     revision: state.project.current?.revision ?? null,
-    refreshKey: `${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`,
+    refreshKey: `${sequence.phase}:${transport.status?.phase ?? "idle"}:${transport.status?.publicationPending ?? false}:${playing}:${recording}:${historyPerformPhase}:${historyPerformRecoveryLoaded}:${historyPerformRecoveryPending}`,
+    navigationKey: activeMode,
+    navigationRefreshRequired: diagnostics.length > 0 || activeMode === "slice" || activeMode === "soundset",
     disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
       state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
       state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
