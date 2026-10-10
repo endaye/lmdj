@@ -40,12 +40,24 @@ def parse_instant(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00'))
 
 
+def completed_ms(run):
+    earlier = max(int(run.get('run_attempt') or 1) - 1, 0) * RESERVE_SECONDS * 1000
+    if not run.get('run_started_at'):
+        return earlier + RESERVE_SECONDS * 1000
+    elapsed = parse_instant(run['updated_at']) - parse_instant(run['run_started_at'])
+    return earlier + max(elapsed.total_seconds(), 0) * 1000
+
+
 def consumption(github, now):
     """Month-to-date hosted minutes by billed-time overlap, not creation date.
 
     A completed run counts when it finished inside the month (its minutes bill
-    this month), whenever it was created; missing timing consumes the full
-    reservation. A run still queued or in progress consumes the full timeout
+    this month), whenever it was created. The runs list carries no billed
+    duration, so a completed run costs the wall time from its latest attempt's
+    start to completion, which includes any queue wait and so never undercounts
+    the single build job; each earlier attempt, whose timing the list no longer
+    shows, costs a full reservation, and so does missing timing. A skipped run
+    executed no job and bills nothing. A run still queued or in progress consumes the full timeout
     reservation, so every same-window concurrent admission is itself already a
     visible reservation and a burst is what trips the 90% stop. The residual is
     API indexing latency between run creation and listing, bounded by the 10%
@@ -65,9 +77,8 @@ def consumption(github, now):
             if run['status'] != 'completed':
                 minutes += RESERVE_SECONDS * 1000
                 runs += 1
-            elif parse_instant(run['updated_at']) >= start:
-                # Missing timing consumes the full reservation, like the pilot ledger.
-                minutes += run['run_duration_ms'] if run.get('run_duration_ms') else RESERVE_SECONDS * 1000
+            elif parse_instant(run['updated_at']) >= start and run.get('conclusion') != 'skipped':
+                minutes += completed_ms(run)
                 runs += 1
         if len(batch) < 100:
             return minutes / 60000, runs
