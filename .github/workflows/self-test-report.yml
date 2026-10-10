@@ -27,14 +27,14 @@ on:
       batch_operation:
         description: Durable manual controls; exact full uses reconcile with an explicit node/candidate request.
         type: choice
-        options: [report-legacy, init, reconcile, settle, resume, reconcile-pending, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
+        options: [report-legacy, init, reconcile, settle, resume, reconcile-pending, report-init-outbox, report-review, report-batches, report-drain, report-discovery, report-reconcile-claim, recovery-probe, claim-probe, cancel-probe]
         default: reconcile
       journal_config:
         description: Optional isolated journal JSON; empty uses the committed production scheduler. Init requires explicit config.
         type: string
         required: false
       batch_request:
-        description: Explicit node/candidate JSON for reconcile, closed id/suites/reason JSON for resume, or the audited pending digest JSON for reconcile-pending.
+        description: Explicit node/candidate JSON for reconcile, closed id/suites/reason JSON for resume, the audited pending digest JSON for reconcile-pending, or the audited claim reconciliation JSON for report-reconcile-claim.
         type: string
         required: false
       report_config:
@@ -224,7 +224,8 @@ jobs:
           import os, subprocess
           from pathlib import Path
           operations = {'report-init-outbox': 'init-outbox', 'report-review': 'review',
-                        'report-batches': 'batches', 'report-drain': 'drain', 'report-legacy': 'legacy'}
+                        'report-batches': 'batches', 'report-drain': 'drain', 'report-legacy': 'legacy',
+                        'report-reconcile-claim': 'reconcile-claim'}
           if os.environ['REPORT_OPERATION'] == 'report-discovery':
               import re
               if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'JOURNAL_CONFIG', 'BATCH_REQUEST', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
@@ -243,8 +244,9 @@ jobs:
               # Incomplete discovery remains red; never run the old mapping too.
               raise SystemExit(subprocess.run(command, check=False).returncode)
           operation = operations.get(os.environ['REPORT_OPERATION'])
-          if (operation is None or any(os.environ.get(key) for key in ('BATCH_REQUEST', 'JOURNAL_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
-              or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')):
+          if (operation is None or any(os.environ.get(key) for key in ('JOURNAL_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
+              or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
+              or (os.environ.get('BATCH_REQUEST') and operation != 'reconcile-claim')):
               raise SystemExit('why: report command is unknown or mixed with scheduler inputs; remedy: use only report_config and the selected report arguments')
           directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-report'
           directory.mkdir(exist_ok=True)
@@ -269,6 +271,14 @@ jobs:
               raise SystemExit('why: review identity supplied to another report operation; remedy: select report-review or omit it')
           if operation == 'batches':
               command += ['--limit', os.environ.get('REPORT_LIMIT', '8')]
+          if operation == 'reconcile-claim':
+              if not os.environ.get('BATCH_REQUEST'):
+                  raise SystemExit('why: reconcile-claim lacks the audited command; remedy: supply the closed reconciliation JSON in batch_request')
+              if os.environ.get('REPORT_LIMIT', '8') != '8':
+                  raise SystemExit('why: reconcile-claim mixed with a report limit; remedy: leave report_limit at its default and supply only batch_request')
+              request = directory / 'request.json'
+              request.write_text(os.environ['BATCH_REQUEST'])
+              command += ['--request', str(request)]
           subprocess.run(command, check=True)
           # Report CLI writes its own summary; there is deliberately no control
           # result, GITHUB_OUTPUT action, or executor request from this step.

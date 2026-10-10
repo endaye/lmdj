@@ -133,7 +133,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
         source = field(step, 'run', 8)
         return source.split("python3 - <<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 
-    def report_invoke(self, operation, *, run_id='', attempt='', fail=False, extra=None, real=None):
+    def report_invoke(self, operation, *, run_id='', attempt='', fail=False, extra=None, real=None, request=''):
         # Import after discovery: the existing HTTP fixture loads its reporter
         # through importlib; eager imports here split its exception identities
         # across the unrelated outbox tests in a full-suite process.
@@ -149,7 +149,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
                 'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary),
                 'REPORT_OPERATION': operation, 'REPORT_CONFIG': json.dumps(real.config if real else config),
                 'REVIEW_RUN_ID': run_id, 'REVIEW_ATTEMPT': attempt, 'REPORT_LIMIT': '3',
-                'JOURNAL_CONFIG': '', 'BATCH_REQUEST': '', **(extra or {})}
+                'JOURNAL_CONFIG': '', 'BATCH_REQUEST': request, **(extra or {})}
             commands = []
             original = subprocess.run
             def run(command, **kwargs):
@@ -160,6 +160,8 @@ class RehearsalWorkflowTests(unittest.TestCase):
                 self.assertEqual(Path(command[command.index('--config') + 1]).read_text(), env['REPORT_CONFIG'])
                 self.assertNotIn('--output', command)
                 self.assertEqual(command[command.index('--summary') + 1], str(summary))
+                if request:
+                    self.assertEqual(Path(command[command.index('--request') + 1]).read_text(), request)
                 if fail:
                     raise subprocess.CalledProcessError(1, command)
                 if real:
@@ -179,7 +181,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
 
     def test_manual_choices_and_inputs_are_explicit_without_new_trigger(self):
         inputs = block(block(block(self.source, 'on', 0), 'workflow_dispatch', 2), 'inputs', 4)
-        for operation in ('resume', 'reconcile-pending', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain', 'report-discovery'):
+        for operation in ('resume', 'reconcile-pending', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain', 'report-discovery', 'report-reconcile-claim'):
             self.assertIn(operation, field(block(inputs, 'batch_operation', 6), 'options', 8))
 
         self.assertIn("github.run_attempt == '1'", field(self.control, 'if', 4))
@@ -207,6 +209,47 @@ class RehearsalWorkflowTests(unittest.TestCase):
     def test_report_review_requires_explicit_attempt(self):
         with self.assertRaisesRegex(SystemExit, 'exact run/attempt'):
             self.report_invoke('report-review', run_id='51')
+
+    def test_reconcile_claim_routes_audited_command_without_execution(self):
+        request = json.dumps({'delivery': '0' * 64, 'claim_digest': '1' * 64,
+                              'resolution': {'kind': 'absent'}})
+        commands, summary = self.report_invoke('report-reconcile-claim', request=request,
+                                               extra={'REPORT_LIMIT': '8'})
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][:2], ['python3', 'scripts/ci/report_runtime.py'])
+        self.assertIn('reconcile-claim', commands[0])
+        self.assertIn('--request', commands[0])
+        self.assertNotIn('--limit', commands[0])
+        self.assertNotIn('--run-id', commands[0])
+        self.assertTrue(summary)
+
+    def test_reconcile_claim_requires_the_audited_request(self):
+        with self.assertRaisesRegex(SystemExit, 'audited'):
+            self.report_invoke('report-reconcile-claim', extra={'REPORT_LIMIT': '8'})
+
+    def test_reconcile_claim_refuses_a_report_limit_or_review_identity(self):
+        request = json.dumps({'delivery': '0' * 64, 'claim_digest': '1' * 64,
+                              'resolution': {'kind': 'absent'}})
+        with self.assertRaisesRegex(SystemExit, 'limit'):
+            self.report_invoke('report-reconcile-claim', request=request)
+        with self.assertRaisesRegex(SystemExit, 'review identity'):
+            self.report_invoke('report-reconcile-claim', request=request, run_id='51', attempt='1',
+                               extra={'REPORT_LIMIT': '8'})
+
+    def test_actual_reconcile_claim_cli_recovers_stranded_claim_then_drains_once(self):
+        import ci_report_runtime_test as report_fixture
+        fixture = report_fixture.RuntimeJourneyTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        key, digest = fixture.stranded_claim(posted=False)
+        request = json.dumps({'delivery': key, 'claim_digest': digest, 'resolution': {'kind': 'absent'}})
+        commands, summary = self.report_invoke('report-reconcile-claim', request=request, real=fixture,
+                                               extra={'REPORT_LIMIT': '8'})
+        self.assertEqual(commands[0][-3:-1], ['reconcile-claim', '--request'])
+        self.assertIn('"status": "claim-cleared"', summary)
+        self.assertFalse(fixture.api.issues)
+        self.report_invoke('report-drain', real=fixture)
+        self.assertEqual(len(fixture.api.issues), 1)
 
     def test_mixed_scheduler_input_cannot_be_ignored_by_report(self):
         for extra in ({'JOURNAL_CONFIG': '{}'}, {'BATCH_REQUEST': '{}'}):

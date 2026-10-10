@@ -391,11 +391,19 @@ class ReportRuntime:
         state = report_scheduler_state(self.scheduler)
         return causal_floor(state, self.scheduler.inputs)
 
-    def execute(self, operation, *, run_id=None, attempt=None, limit=8):
-        require(operation in {"init-outbox", "review", "legacy", "batches", "drain"}, "unknown report operation")
+    def execute(self, operation, *, run_id=None, attempt=None, limit=8, command=None):
+        require(operation in {"init-outbox", "review", "legacy", "batches", "drain", "reconcile-claim"},
+                "unknown report operation")
+        require(command is None or operation == "reconcile-claim",
+                "an audited command belongs only to reconcile-claim")
         if operation == "init-outbox":
             return self.storage.initialize()
         self.storage.authenticate_current()
+        if operation == "reconcile-claim":
+            # Operator-audited settlement of one uncertain business claim. No
+            # scheduler state, planning or product authority is involved, so a
+            # blocked scheduler journal cannot block this recovery either.
+            return self.outbox().reconcile_claim(self.api, command)
         if operation == "drain":
             outbox = self.outbox()
             stored = outbox.load()
@@ -453,12 +461,19 @@ def main(argv=None):
     legacy.add_argument("--limit", type=int, default=8)
     batches = commands.add_parser("batches")
     batches.add_argument("--limit", type=int, default=8)
+    reconcile = commands.add_parser("reconcile-claim",
+                                    help="settle one audited uncertain business claim without replaying its POST")
+    reconcile.add_argument("--request", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(), object_pairs_hook=change_scope.reject_duplicates)
         runtime = ReportRuntime(config, root=args.root)
+        command = None
+        if args.operation == "reconcile-claim":
+            command = json.loads(args.request.read_text(), object_pairs_hook=change_scope.reject_duplicates)
         answer = runtime.execute(args.operation, run_id=getattr(args, "run_id", None),
-                                 attempt=getattr(args, "attempt", None), limit=getattr(args, "limit", 8))
+                                 attempt=getattr(args, "attempt", None), limit=getattr(args, "limit", 8),
+                                 command=command)
     except Exception:
         # HTTP/git exceptions may include credential-bearing URLs or headers.
         answer = {"status": "error", "why": "authenticated reporting evidence or durable storage is unresolved",
