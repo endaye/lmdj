@@ -39,6 +39,8 @@ Declared files:
 - `tests/build/ci_workflow_topology_test.py`
 - `tests/build/ci_review_wait_test.py`
 - `apps/docs-site/docs/operations/testing-and-proof.mdx`
+- `.agents/pitfalls/skipped-job-name-retains-expression.md` (added after the
+  real-event observation below, before the follow-up edit)
 - this plan
 
 Only an `edited` event whose nonempty `changes` object contains exclusively
@@ -69,6 +71,8 @@ Lowest-tier verification:
   tests. Defect caught: a skipped metadata check masks a failed real check or
   grants provenance without one.
 - `python3 tests/build/ci_local_preflight_test.py`: existing PR lane visibility.
+- `python3 tests/build/ci_pitfall_ledger_test.py`: validate the observed platform
+  recurrence and its UTC occurrence date.
 - Pinned actionlint, `scripts/docs-site.sh check`, and staged new-path ownership
   (`python3 tests/build/ci_change_scope_test.py`). No new required status.
 
@@ -76,6 +80,14 @@ Far-side live acceptance: after opening the PR, edit its actual description;
 record the new run's skipped source jobs and executed impact checker, and
 confirm the original source run was not cancelled. A local payload test is not
 this platform evidence. If unavailable, keep the acceptance gap explicit.
+
+Initial live proof on `8c389642`: run `38096694071` completed successfully after
+a real PR #2009 body edit. Scope and Documentation impact ran; all three source
+jobs skipped. Original source run `38096650098` remained running, with real
+Portal provenance successful. GitHub retained the unexpanded name expression
+for the skipped Portal job; the follow-up consumer fixture uses that actual
+string, not an assumed evaluated alias. Final-head review and source results
+still need their own verification.
 
 ### T1 — Add explicit local quick verification and separate its evidence
 

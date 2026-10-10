@@ -22,6 +22,11 @@ import review_scope
 
 A, B = fixtures.A, fixtures.B
 REPO = "endaye/lmdj"
+# Actual skipped job name from run 38096694071: GitHub did not evaluate needs
+# in the name of the skipped job. Contains the real name as a substring, so
+# only exact matching keeps this observation out of provenance adjudication.
+METADATA_PORTAL_CHECK = ("needs.change-scope.outputs.metadata-only == 'true' && "
+                         "'Portal source unchanged (metadata edit)' || 'Architecture Portal provenance'")
 
 
 class AdmissionTests(unittest.TestCase):
@@ -685,20 +690,20 @@ class AdmissionTests(unittest.TestCase):
     def test_metadata_edit_does_not_mask_real_portal_provenance(self):
         self.render_generated()
         self.check_runs = [self.portal_run(100), self.portal_run(
-            300, name="Portal source unchanged (metadata edit)", conclusion="skipped",
+            300, name=METADATA_PORTAL_CHECK, conclusion="skipped",
             completed_at="2026-09-10T01:30:00Z")]
         self.assertTrue(self.check()["eligible"])
 
     def test_metadata_edit_does_not_supply_missing_portal_provenance(self):
         self.render_generated()
         self.check_runs = [self.portal_run(
-            300, name="Portal source unchanged (metadata edit)", conclusion="skipped")]
+            300, name=METADATA_PORTAL_CHECK, conclusion="skipped")]
         self.assertFalse(self.check()["eligible"])
 
     def test_metadata_edit_does_not_supersede_a_real_portal_failure(self):
         self.render_generated()
         self.check_runs = [self.portal_run(100), self.portal_run(200, conclusion="failure"),
-                           self.portal_run(300, name="Portal source unchanged (metadata edit)",
+                           self.portal_run(300, name=METADATA_PORTAL_CHECK,
                                            conclusion="skipped")]
         self.assertFalse(self.check()["eligible"])
 
