@@ -53,6 +53,12 @@ public:
   virtual ~PatternLaunchAcknowledger() = default;
   // Core Runtime owns musical-boundary ordering and exactly-once outcomes.
   // The resolved material is immutable Core truth; Hosts never resolve slots.
+  // `earliest_target_tick` is the Performance clock's lower bound in the
+  // journal's tick domain; wherever the global Pattern transport is playing,
+  // the reserved audio boundary itself comes from the transport's own Bar
+  // grid (#1974), and the returned `target_tick` reports that boundary back
+  // in the journal domain. `resolved_pattern == nullptr` is a journal-only
+  // launch and keeps the Performance clock boundary.
   virtual foundation::Result<PatternLaunchReservation>
   reserve(const foundation::SequenceSessionId &session_id,
           const foundation::CommandId &request_id, std::uint8_t pattern_slot,

@@ -62,6 +62,15 @@ bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
   return false;
 }
 
+// The exact Bar length the Engine's PreparedPatternView derives for the same
+// snapshot (prepared_sample_bank.cpp computes bar_frames with this public
+// tick_boundary_frame call), so a deferred launch stays on the Engine's grid.
+foundation::Result<std::uint64_t> pattern_bar_frames(
+    const cooker::RuntimeSnapshot& pattern) {
+  return audio::tick_boundary_frame(
+      domain::kBarTicks4x4, pattern.bpm, pattern.ppq);
+}
+
 bool valid_playback(const cooker::ResolvedPlayback& playback,
                     std::uint32_t frame_count) noexcept {
   return playback.start_frame < playback.end_frame &&
@@ -161,6 +170,30 @@ class EnginePerformanceClock final : public PerformanceClock {
         anchor_.runtime_frame + delta_frame);
   }
 
+  // Inverse of frame_at_tick: labels a reserved Runtime frame with the
+  // Performance clock's journal tick (#1974). The launch boundary comes from
+  // the Engine's transport grid; the journal still records Performance ticks.
+  foundation::Result<std::uint64_t> tick_at_frame(std::uint64_t frame) {
+    std::lock_guard lock(mutex_);
+    if (!anchored_ || !anchor_valid_ || anchor_.bpm < 40 ||
+        anchor_.bpm > 240) {
+      return foundation::Result<std::uint64_t>::failure(
+          adapter_error(foundation::ErrorCode::invalid_argument,
+                        "Performance engine clock is not anchored"));
+    }
+    const auto telemetry = engine_.telemetry();
+    const auto observed = observe_numerator_locked(
+        telemetry.start_epoch, telemetry.rendered_frames);
+    if (!observed.has_value()) {
+      return foundation::Result<std::uint64_t>::failure(observed.error());
+    }
+    last_tick_ = std::max(last_tick_, audio::whole_tick(observed.value()));
+    // Like frame_at_tick, only the observed playhead advances last_tick_;
+    // a reserved future boundary must not pull read_tick ahead of the
+    // performance it labels, or later admissions would land early.
+    return audio::raw_tick_at(anchor_, frame);
+  }
+
   void service() {
     std::lock_guard lock(mutex_);
     if (!anchored_) {
@@ -251,6 +284,11 @@ class EnginePatternLaunchAcknowledger final : public PatternLaunchAcknowledger {
     const auto key = session_id.value();
     bool claimed = false;
     std::optional<audio::PatternReplacementAuthority> replacement;
+    // An audio-claimed publication still ahead of the playhead keeps its
+    // boundary; the successor reserves one full Bar behind it (P10-D22).
+    bool claimed_boundary_ahead = false;
+    std::uint64_t claimed_activation_frame = 0;
+    std::uint64_t claimed_bar_frames = 0;
     auto& pending_queue = pending_[key];
     if (!pending_queue.empty()) {
       auto& previous = pending_queue.back();
@@ -293,31 +331,27 @@ class EnginePatternLaunchAcknowledger final : public PatternLaunchAcknowledger {
                 ? std::numeric_limits<std::uint64_t>::max()
                 : previous.target_tick + kBarTicks;
         earliest_target_tick = std::max(earliest_target_tick, next_bar);
+        claimed_boundary_ahead = previous.authority.has_value() &&
+            telemetry.rendered_frames < previous.activation_frame;
+        claimed_activation_frame = previous.activation_frame;
+        claimed_bar_frames = previous.bar_frames;
       }
     }
 
-    const auto activation = clock_->frame_at_tick(earliest_target_tick);
-    if (!activation.has_value()) {
-      outcomes_[key].push_back(PatternLaunchOutcome{
-          session_id,
-          request_id,
-          pattern_slot,
-          earliest_target_tick,
-          PatternLaunchOutcomeKind::failed,
-      });
-      return foundation::Result<PatternLaunchReservation>::failure(
-          activation.error());
-    }
+    // Boundary authority (#1974): while the global Pattern transport plays,
+    // a launch reserves the Engine's own next Bar from the transport origin —
+    // the same boundary derivation pattern.transport.switch uses — and the
+    // journal tick reports that boundary back through the Performance clock.
+    // The Performance-clock Bar remains the boundary only where no transport
+    // Bar exists: a journal-only empty-slot launch, or a launch with no
+    // playing Pattern to derive from.
+    const bool transport_boundary = resolved_pattern != nullptr &&
+        telemetry.state == audio::RealtimeState::running &&
+        engine_.current_pattern_id().has_value();
 
-    Pending next_pending{
-        session_id,         request_id,   pattern_slot, earliest_target_tick,
-        activation.value(), std::nullopt, false,        telemetry.start_epoch,
-    };
-    if (resolved_pattern) {
-      const auto pattern_id = resolved_pattern->pattern_id;
-      const auto publication = gateway_->publish(
-          std::move(resolved_pattern), activation.value(), replacement);
-      if (!publication.has_value()) {
+    if (!transport_boundary) {
+      const auto activation = clock_->frame_at_tick(earliest_target_tick);
+      if (!activation.has_value()) {
         outcomes_[key].push_back(PatternLaunchOutcome{
             session_id,
             request_id,
@@ -326,18 +360,126 @@ class EnginePatternLaunchAcknowledger final : public PatternLaunchAcknowledger {
             PatternLaunchOutcomeKind::failed,
         });
         return foundation::Result<PatternLaunchReservation>::failure(
-            publication.error());
+            activation.error());
       }
-      next_pending.activation_frame = publication.value().activation_frame;
-      next_pending.authority = audio::PatternReplacementAuthority{
-          publication.value().generation,
-          pattern_id,
-          publication.value().activation_frame,
+
+      Pending next_pending{
+          session_id,         request_id,   pattern_slot, earliest_target_tick,
+          activation.value(), std::nullopt, false,        telemetry.start_epoch,
+          0,
       };
+      if (resolved_pattern) {
+        const auto pattern_id = resolved_pattern->pattern_id;
+        const auto bar_frames = pattern_bar_frames(*resolved_pattern);
+        if (!bar_frames.has_value()) {
+          outcomes_[key].push_back(PatternLaunchOutcome{
+              session_id,
+              request_id,
+              pattern_slot,
+              earliest_target_tick,
+              PatternLaunchOutcomeKind::failed,
+          });
+          return foundation::Result<PatternLaunchReservation>::failure(
+              bar_frames.error());
+        }
+        const auto publication = gateway_->publish(
+            std::move(resolved_pattern), activation.value(), replacement);
+        if (!publication.has_value()) {
+          outcomes_[key].push_back(PatternLaunchOutcome{
+              session_id,
+              request_id,
+              pattern_slot,
+              earliest_target_tick,
+              PatternLaunchOutcomeKind::failed,
+          });
+          return foundation::Result<PatternLaunchReservation>::failure(
+              publication.error());
+        }
+        next_pending.activation_frame = publication.value().activation_frame;
+        next_pending.bar_frames = bar_frames.value();
+        next_pending.authority = audio::PatternReplacementAuthority{
+            publication.value().generation,
+            pattern_id,
+            publication.value().activation_frame,
+        };
+      }
+      pending_queue.push_back(std::move(next_pending));
+      return foundation::Result<PatternLaunchReservation>::success(
+          {earliest_target_tick, claimed});
     }
-    pending_queue.push_back(std::move(next_pending));
+
+    // Transport-owned boundary. Without an audio-claimed publication ahead,
+    // no frame is requested and the Engine derives the next Bar from the
+    // transport origin itself, exactly as the playing-state transport switch
+    // does; a claimed predecessor pins the successor one full Bar behind the
+    // boundary the Engine already holds, on the same grid.
+    const auto pattern_id = resolved_pattern->pattern_id;
+    const auto bar_frames = pattern_bar_frames(*resolved_pattern);
+    if (!bar_frames.has_value()) {
+      outcomes_[key].push_back(PatternLaunchOutcome{
+          session_id,
+          request_id,
+          pattern_slot,
+          earliest_target_tick,
+          PatternLaunchOutcomeKind::failed,
+      });
+      return foundation::Result<PatternLaunchReservation>::failure(
+          bar_frames.error());
+    }
+    std::optional<std::uint64_t> requested_activation;
+    if (claimed_boundary_ahead) {
+      if (claimed_activation_frame >
+          std::numeric_limits<std::uint64_t>::max() - claimed_bar_frames) {
+        outcomes_[key].push_back(PatternLaunchOutcome{
+            session_id,
+            request_id,
+            pattern_slot,
+            earliest_target_tick,
+            PatternLaunchOutcomeKind::failed,
+        });
+        return foundation::Result<PatternLaunchReservation>::failure(
+            adapter_error(foundation::ErrorCode::invalid_argument,
+                          "Performance launch boundary overflowed"));
+      }
+      requested_activation = claimed_activation_frame + claimed_bar_frames;
+    }
+    const auto publication = gateway_->publish(
+        std::move(resolved_pattern), requested_activation, replacement);
+    if (!publication.has_value()) {
+      outcomes_[key].push_back(PatternLaunchOutcome{
+          session_id,
+          request_id,
+          pattern_slot,
+          earliest_target_tick,
+          PatternLaunchOutcomeKind::failed,
+      });
+      return foundation::Result<PatternLaunchReservation>::failure(
+          publication.error());
+    }
+    const auto boundary_tick =
+        clock_->tick_at_frame(publication.value().activation_frame);
+    // The Engine boundary is already reserved; a clock that cannot label
+    // the frame keeps the Performance-clock lower bound as the journal
+    // tick rather than abandoning a publication the audio thread holds.
+    const auto target_tick =
+        boundary_tick.has_value() ? boundary_tick.value() : earliest_target_tick;
+    pending_queue.push_back(Pending{
+        session_id,
+        request_id,
+        pattern_slot,
+        target_tick,
+        publication.value().activation_frame,
+        audio::PatternReplacementAuthority{
+            publication.value().generation,
+            pattern_id,
+            publication.value().activation_frame,
+        },
+        false,
+        telemetry.start_epoch,
+        bar_frames.value(),
+    });
     return foundation::Result<PatternLaunchReservation>::success(
-        {earliest_target_tick, claimed});
+        {target_tick, claimed});
   }
 
   std::vector<PatternLaunchOutcome> peek(
@@ -479,6 +621,9 @@ class EnginePatternLaunchAcknowledger final : public PatternLaunchAcknowledger {
     std::optional<audio::PatternReplacementAuthority> authority;
     bool claimed{};
     std::uint64_t start_epoch{};
+    // Bar length of the reserved publication's Pattern, on the Engine's
+    // grid; a successor deferred behind this launch waits one Bar of it.
+    std::uint64_t bar_frames{};
   };
 
   void cancel_stale_epochs(std::uint64_t current_epoch) {
