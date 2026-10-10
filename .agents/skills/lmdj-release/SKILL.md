@@ -106,7 +106,7 @@ succeeded; it is a separate boundary from deployment and does not follow from it
 ## Full exact-main CI evidence
 
 Current prospective policy is `complete-test-v2`: the Owner explicitly references
-exactly one passed, complete 16-suite source for the exact candidate in a reviewed
+exactly one passed, complete 15-suite source for the exact candidate in a reviewed
 intent: old `self-test-v1` via `self_test_evidence`, or full incremental evidence
 via `batch_test_evidence`, together with the actual executor run ID. No reference,
 mixed references, focused/none batches or legacy fourteen-lane scope qualify.
@@ -123,7 +123,7 @@ uses `self-test-report.yml` on ref `main`, `batch_operation=reconcile`, and
 `batch_request={"id":"<stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`.
 Leave `journal_config` empty to use the repository's authenticated fixed scheduler.
 Use `kind=node` for an explicit diagnostic rather than candidate selection.
-Both kinds request all 16 suites and share the durable execution budget;
+Both kinds request all 15 suites and share the durable execution budget;
 neither moves automatic processing progress or authorizes a release.
 Redelivering the same ID and target reconciles the original request; a genuinely
 new test needs a new ID. Do not use lane selection, a queue ticket, or a SHA as

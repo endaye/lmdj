@@ -172,15 +172,6 @@
         "the release suite runner pins --shards 4 on the runner; the local run takes the default min(4, os.cpu_count())"
       ]
     },
-    "chameleon_lab": {
-      "requires": {
-        "commands": ["node", "npm"]
-      },
-      "commands": [
-        "scripts/chameleon-lab.sh test"
-      ],
-      "ci_only": []
-    },
     "package": {
       "requires": {
         "clean_worktree": true

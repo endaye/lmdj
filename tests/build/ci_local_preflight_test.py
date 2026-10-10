@@ -38,7 +38,7 @@ RELEASE_DISCOVERY = "python3 tests/build/release_suite_runner.py"
 LANES = {
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
     "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
-    "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab",
+    "creator", "web_runtime_lab", "deploy_contract",
     "package",
 }
 
@@ -944,9 +944,9 @@ class ManifestReuseTest(unittest.TestCase):
         self.assertIn("full rule: central CI control plane", plan["reasons"], message)
 
     def test_untracked_new_file_is_not_silently_ignored(self) -> None:
-        self.repository.write("demos/chameleon-lab/src/main.js", "// new\n")
+        self.repository.write("demos/web-runtime-lab/src/main.js", "// new\n")
         plan = self.plan()
-        self.assertEqual(set(plan["selected"]), {"docs_static", "portal", "chameleon_lab"})
+        self.assertEqual(set(plan["selected"]), {"docs_static", "portal", "web_runtime_lab"})
 
     def test_untracked_unclassified_path_is_named_as_the_cause(self) -> None:
         """A stale untracked leftover must not read like an unrouted tracked path."""
@@ -1131,7 +1131,7 @@ class CacheKeyTest(unittest.TestCase):
         )
 
     def test_unrelated_demo_content_keeps_native_and_web_keys(self) -> None:
-        path = "demos/chameleon-lab/src/main.js"
+        path = "demos/ascii-matrix-camera/index.html"
         blobs = {"tests/core/facade/c_api_test.cpp": "a" * 40, path: "b" * 40}
         before = self.grouped_keys(blobs)
         after = self.grouped_keys({**blobs, path: "c" * 40})
@@ -1142,14 +1142,14 @@ class CacheKeyTest(unittest.TestCase):
         ):
             with self.subTest(lane=lane):
                 self.assertEqual(before[lane], after[lane], msg=(
-                    f"why: unrelated Chameleon demo content invalidates {lane}; "
+                    f"why: unrelated demo content invalidates {lane}; "
                     "remedy: keep command read domains separate from demos"
                 ))
-        self.assertNotEqual(before["chameleon_lab"], after["chameleon_lab"])
+        self.assertNotEqual(before["docs_static"], after["docs_static"])
 
     def test_unknown_lane_binds_every_input_until_audited(self) -> None:
         policy = {**self.policy, "lanes": [*self.policy["lanes"], "new_lane"]}
-        paths = ["docs/guide.md", "demos/chameleon-lab/src/main.js"]
+        paths = ["docs/guide.md", "demos/web-runtime-lab/src/main.js"]
         grouped = self.preflight.lane_input_paths(policy, paths, self.classifier)
         self.assertEqual(grouped["new_lane"], sorted(paths))
 
@@ -1196,7 +1196,7 @@ class CacheKeyTest(unittest.TestCase):
                     normalized = source.replace("$repo_root/", "").replace(
                         "$web_test_root/", "tests/platform/web/",
                     ).replace("$creator_root/", "apps/creator-web/")
-                    if lane in {"web_runtime_lab", "chameleon_lab"}:
+                    if lane == "web_runtime_lab":
                         normalized = normalized.replace(
                             "$lab_root/", "demos/" + lane.replace("_", "-") + "/",
                         )

@@ -86,7 +86,7 @@ def verify_release_ci(github: object, *, policy: ReleasePolicy, intent: ReleaseI
                 head_branch=observed["head_branch"], workflow_name="Self-test Report", status=observed["status"],
                 conclusion=observed["conclusion"], run_attempt=observed["run_attempt"], repository_id=source["repository_id"])
             return CiEvidenceResult("ok", "published batch provenance matches its permanent reference; immutable release proof remains required"
-                if intent.disposition is Disposition.PUBLISHED else "exact target has authenticated full passed 16-suite batch evidence",
+                if intent.disposition is Disposition.PUBLISHED else "exact target has authenticated full passed 15-suite batch evidence",
                 CI_EVIDENCE_SOURCES, run)
         except BatchEvidenceError as error:
             return CiEvidenceResult(error.code, str(error), CI_EVIDENCE_SOURCES)
@@ -153,7 +153,7 @@ def verify_release_ci(github: object, *, policy: ReleasePolicy, intent: ReleaseI
         return _self_test_conflict(detail)
     except Exception:
         return _outage("why: self-test evidence projection is unavailable; remedy: restore GitHub read access and retry the exact candidate verification; no release authority granted")
-    return CiEvidenceResult("ok", "exact target has one retained, complete 16-suite self-test verdict", CI_EVIDENCE_SOURCES, run)
+    return CiEvidenceResult("ok", "exact target has one retained, complete 15-suite self-test verdict", CI_EVIDENCE_SOURCES, run)
 
 
 def _self_test_conflict(why: str, remedy: str = "create a new dispatch on main for the same target, not Re-run jobs; validate it and separately review the intent reference") -> CiEvidenceResult:

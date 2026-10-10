@@ -46,7 +46,6 @@ GENERAL_JOBS = {
     "docs-static": "docs_static",
     "ci-contract": "ci_contract",
     "deploy-contract": "deploy_contract",
-    "chameleon-lab": "chameleon_lab",
 }
 # Both trusted hosts carry the general role, but only netcup is CI-only.
 # #1557 added that label to the two contract lanes after Contabo, which shares
@@ -68,7 +67,6 @@ GENERAL_PROOFS = {
     "deploy-contract": (
         "run: python3 apps/web-runtime-host/test/deploy_command_test.py --shards 4"
     ),
-    "chameleon-lab": "run: scripts/chameleon-lab.sh test",
 }
 CORE_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"

@@ -28,7 +28,7 @@ CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 LANES = {
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
     "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
-    "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab",
+    "creator", "web_runtime_lab", "deploy_contract",
     "package",
 }
 
@@ -52,7 +52,6 @@ LANE_JOBS = {
     "creator": ["creator-web"],
     "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
-    "chameleon_lab": ["chameleon-lab"],
     "package": ["package"],
 }
 
@@ -72,7 +71,6 @@ SELF_HOSTED_JOBS = [
     "creator-web",
     "web-runtime-lab",
     "deploy-contract",
-    "chameleon-lab",
     "package",
 ]
 
@@ -106,9 +104,7 @@ CASES = {
     "apps/web-runtime-host/tools/release_bundle.py": {
         "portal", "web_runtime_host", "deploy_contract"
     },
-    "demos/chameleon-lab/src/main.js": {"docs_static", "portal", "chameleon_lab"},
     "demos/web-runtime-lab/src/worklet.js": {"docs_static", "portal", "web_runtime_lab"},
-    "apps/chameleon-lab/src/main.js": {"portal", "chameleon_lab"},
     "apps/web-runtime-lab/src/worklet.js": {"portal", "web_runtime_lab"},
     "tests/core/audio/render_test.cpp": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
@@ -137,7 +133,6 @@ CASES = {
     },
     "tests/build/web_runtime_public_deployment_docs_test.py": {"deploy_contract"},
     "tests/conformance/version_lock_test.py": {"core_ubuntu", "package"},
-    "scripts/chameleon-lab.sh": {"chameleon_lab"},
     "scripts/core.sh": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos", "package"
     },

@@ -23,7 +23,6 @@
     {"id": "creator", "origin": {"kind": "scope_lane", "lane": "creator"}, "jobs": ["creator-web"], "required": true},
     {"id": "web_runtime_lab", "origin": {"kind": "scope_lane", "lane": "web_runtime_lab"}, "jobs": ["web-runtime-lab"], "required": true},
     {"id": "deploy_contract", "origin": {"kind": "scope_lane", "lane": "deploy_contract"}, "jobs": ["deploy-contract"], "required": true},
-    {"id": "chameleon_lab", "origin": {"kind": "scope_lane", "lane": "chameleon_lab"}, "jobs": ["chameleon-lab"], "required": true},
     {"id": "package", "origin": {"kind": "scope_lane", "lane": "package"}, "jobs": ["package"], "required": true},
     {
       "id": "core_tsan_stress",

@@ -69,13 +69,13 @@ class CancelWorkflowTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         events = f.f.make().journal().load()
         self.assertEqual([e['type'] for e in events], ['observe', 'admit', 'claim'])
-        self.assertEqual(len(events[1]['data']['request']['selection']['suites']), 16)
+        self.assertEqual(len(events[1]['data']['request']['selection']['suites']), 15)
         # Only fixture metadata supplies cancellation here; actual platform
         # cancellation, waiter signals and whole-run terminal status remain O1.
         fresh = f.c1.fresh(conclusion='cancelled')
         settled = fresh.reconcile(execute=False)
         self.assertIsNone(settled['state']['active'])
-        self.assertEqual(len(settled['state']['debts']), 16)
+        self.assertEqual(len(settled['state']['debts']), 15)
         self.assertTrue(all(d['attempts'] == 1 and d['outcome'] == 'missing' for d in settled['state']['debts'].values()))
         self.assertEqual(settled['state']['failures'], [])
         self.assertEqual(fresh.journal().load()[:3], events)

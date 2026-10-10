@@ -50,12 +50,12 @@ SIGNED_REDIRECT = f"https://{BLOB_HOST}/actions-results/fixture?sig=fixture&se=2
 # The closed v2 lane set, written independently of the CI policy file and of
 # the release module under test.
 LANES = (
-    "chameleon_lab", "ci_contract", "core_asan", "core_coverage", "core_macos",
+    "ci_contract", "core_asan", "core_coverage", "core_macos",
     "core_ubuntu", "creator", "deploy_contract", "docs_static", "package",
     "portal", "web_runtime_host", "web_runtime_lab", "web_toolchain",
 )
 FULL_REQUIRED_JOBS = (
-    "chameleon-lab", "ci-contract", "core-asan", "core-asan-macos",
+    "ci-contract", "core-asan", "core-asan-macos",
     "core-coverage", "core-macos", "core-ubuntu", "creator-web",
     "deploy-contract", "docs-static", "macos-primary", "package", "portal",
     "select-macos-runner", "web-runtime-host", "web-runtime-lab",
@@ -748,7 +748,7 @@ class SelfTestGitHubApiTest(unittest.TestCase):
         raw = {"type": "file", "encoding": "base64", "path": "scripts/ci/self_test_policy.json",
                "content": base64.b64encode(json.dumps(document).encode()).decode()}
         self.transport.json_route(url, raw)
-        self.assertEqual(len(self.client.get_self_test_policy(REPOSITORY, TARGET).suites), 16)
+        self.assertEqual(len(self.client.get_self_test_policy(REPOSITORY, TARGET).suites), 15)
         raw["content"] = base64.b64encode(b'{"schema":1,"schema":2}').decode()
         self.transport.json_route(url, raw)
         with self.assertRaises(CiScopeConflictError):

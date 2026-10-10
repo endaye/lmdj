@@ -54,12 +54,12 @@ PRODUCT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 CHECKSUM = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
 
 LANES = (
-    "chameleon_lab", "ci_contract", "core_asan", "core_coverage", "core_macos",
+    "ci_contract", "core_asan", "core_coverage", "core_macos",
     "core_ubuntu", "creator", "deploy_contract", "docs_static", "package",
     "portal", "web_runtime_host", "web_runtime_lab", "web_toolchain",
 )
 FULL_REQUIRED_JOBS = (
-    "chameleon-lab", "ci-contract", "core-asan", "core-asan-macos",
+    "ci-contract", "core-asan", "core-asan-macos",
     "core-coverage", "core-macos", "core-ubuntu", "creator-web",
     "deploy-contract", "docs-static", "macos-primary", "package", "portal",
     "select-macos-runner", "web-runtime-host", "web-runtime-lab",

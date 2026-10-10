@@ -137,7 +137,7 @@ class ReleaseModelTest(unittest.TestCase):
                 identity = classify_tag(tag, self.policy)
                 self.assertEqual((identity.kind, identity.identity), expected)
         for tag in (
-            "lmdj-m1-plan.1", "v0.2.0", "wip/chameleon-2d-2026-07-26",
+            "lmdj-m1-plan.1", "v0.2.0", "wip/sample-2d-2026-07-26",
             "lmdj-v1.2.3", "module/project-io/v1.2", "module//v1.2.3",
             "module/project-io/v01.2.3", "lmdj-v1.2.3.04",
         ):
@@ -375,7 +375,7 @@ class ReleaseModelTest(unittest.TestCase):
                 "origin_run": {"run_id": 122, "attempt": 1}}}
         return document
 
-    def test_current_policy_enables_two_strict_sixteen_suite_sources(self):
+    def test_current_policy_enables_two_strict_fifteen_suite_sources(self):
         self.assertEqual(self.policy.prospective_ci_protocol, "complete-test-v2")
         self.assertEqual(dict(self.policy.batch_evidence_source), {
             "repository_id": 1286600062, "workflow_id": 352307416,

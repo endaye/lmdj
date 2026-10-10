@@ -150,7 +150,7 @@ none: retain conservative full scope or block when history cannot be obtained.
 Only explicitly safe explanatory documents without consumers may select none;
 that does not discard outstanding debt or failures.
 
-The authoritative full inventory remains the sixteen-suite self-test policy,
+The authoritative full inventory remains the fifteen-suite self-test policy,
 including TSan and Release stress; do not hand-copy a shorter inventory or lower
 coverage, stress budgets or platform coverage to reduce selection. The frozen
 batch runs selected suites once; new merges coalesce into the next target, never
@@ -198,8 +198,8 @@ visible manual follow-up, not blind re-creation.
 The canonical classifier remains available for local test selection and tracked
 path ownership. `focused` unions changed paths' consumer lanes; `full` recommends
 all local lanes for broad/unknown risk; legacy `draft` semantics remain an
-internal compatibility feature, not merge permission. The fourteen classifier
-lanes are distinct from the sixteen complete self-test suites. Renames,
+internal compatibility feature, not merge permission. The thirteen classifier
+lanes are distinct from the fifteen complete self-test suites. Renames,
 deletions, shared fixtures and generated inputs retain consumer coverage.
 Classification does not require every recommended lane to execute before push.
 
@@ -258,7 +258,7 @@ each of those cases.
 The closed lanes are `docs_static`, `portal`, `ci_contract`, `core_ubuntu`,
 `core_asan`, `core_coverage`, `core_macos`, `web_toolchain`,
 `web_runtime_host`, `creator`, `web_runtime_lab`, `deploy_contract`,
-`chameleon_lab`, and `package`. Path ownership is conservative test
+and `package`. Path ownership is conservative test
 inheritance, not component ownership: a shared fixture or tool selects every
 consumer whose behavior could change.
 
@@ -480,8 +480,8 @@ hosts, not a defect. Routing splits two ways:
   The hosted policy retains macOS recovery and separately privileged exceptions.
 - **Self-hosted workload, addressed by role.** The four Web lanes — Web
   Toolchain, Web Runtime Host, Creator and Web Runtime Lab — name
-  `ci-web-heavy` literally. The five general Linux jobs — Docs / static,
-  Architecture Portal, CI contract, Deploy contract and Chameleon Lab — name
+  `ci-web-heavy` literally. The four general Linux jobs — Docs / static,
+  Architecture Portal, CI contract and Deploy contract — name
   `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub

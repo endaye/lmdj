@@ -601,7 +601,7 @@ T7 曾将 prospective policy 切换为 `self-test-v1`。2026-09-08 B2 的 consum
 `tools/release/policy.json` 同一 Task 将现行协议设为 `complete-test-v2`：`releasable`
 intent 恰好引用一种完整证据，旧 `self_test_evidence` 或新增 `batch_test_evidence`，
 不得混用。没有 reference 不能退回旧 scope。两种来源都必须引用一次通过的完整
-16-suite 自测；旧 `lmdj.ci-scope.v2` 的 14 lanes 即使 `mode=full`、`trusted_head=true`、
+15-suite 自测；旧 `lmdj.ci-scope.v2` 的 14 lanes 即使 `mode=full`、`trusted_head=true`、
 `Change Scope` / `PR Gate` 均绿色，也只能解释旧协议，不能绕过新候选的 TSan / Release
 stress 要求。T5 切换以新 producer + consumer 的真实演练为前置条件；未通过不得
 合入切换。切换后 `ci.yml` 只保留 reusable 执行，不再接受每日或手动产品请求；
@@ -626,7 +626,7 @@ protected main 历史，且 control 不早于可信 producer 部署。必须精�
 `{"id":"<new-stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`，
 `journal_config` 留空以使用可信源码中的固定调度器，并独立 review intent 更新。
 同 ID 同目标的重送只恢复原请求；真正重新测试使用新 ID。显式诊断使用 `kind=node`，
-同样固定全 16-suite，不推进自动 processed SHA，也不被后续 main 替换。
+同样固定全 15-suite，不推进自动 processed SHA，也不被后续 main 替换。
 不能把 SHA 用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1）。已 `published`
 的旧协议 intent 继续原只读审计，新协议 intent 的持久 reference 纳入 release plan digest，
 并由 `lmdj.release-plan-marker.v2` 显式保留完整 CI 身份；fresh remote audit 对比 marker
@@ -644,7 +644,7 @@ workflow_dispatch/push/workflow_run/schedule 闭集，不能从排队 request ki
 不得信任 artifact 自称来源。原 origin 与 executor controller artifact 必须仍在有效保留期，
 且分别证明原请求及同 epoch 的 durable-claim admission；这是可信 producer attestation，
 不是独立重放最新 Issue Journal。再完整读取 verdict/execution/needs 三文件、真实 API jobs，
-独立重算 exact target、current/frozen/executor policy 一致的全 16-suite passed verdict。
+独立重算 exact target、current/frozen/executor policy 一致的全 15-suite passed verdict。
 focused、none、债务、旧 policy、缺 artifact 或跨 SHA/attempt 拼接一律不授予候选资格。
 
 新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`（带冻结 changelog 时为 v4）；v1/v2 marker
