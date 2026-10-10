@@ -337,11 +337,24 @@ function Workspace({
     initialPatternTransportState,
   );
   const [diagnostics, setDiagnostics] = useState<readonly DiagnosticRecord[]>([]);
+  const historyFailureContext = useRef({
+    session, projectId: state.project.current?.projectId ?? null, reported: false,
+  });
+  if (historyFailureContext.current.session !== session ||
+      historyFailureContext.current.projectId !== (state.project.current?.projectId ?? null)) {
+    historyFailureContext.current = {
+      session, projectId: state.project.current?.projectId ?? null, reported: false,
+    };
+  }
+  // The log survives context replacement. A retained callback reports to its
+  // own context, so late failures cannot re-arm a fresh context's navigation.
+  const failureContext = historyFailureContext.current;
   const reportFailure = useCallback((operation: string, error: unknown): string => {
     const record = diagnosticRecord(operation, error);
+    failureContext.reported = true;
     setDiagnostics((records) => appendDiagnostic(records, record));
     return record.code;
-  }, []);
+  }, [failureContext]);
   const [defaultSeed, setDefaultSeed] = useState<DefaultSeed | null>(null);
   const defaultSeedRef = useRef(defaultSeed);
   defaultSeedRef.current = defaultSeed;
@@ -2836,7 +2849,7 @@ function Workspace({
     revision: state.project.current?.revision ?? null,
     refreshKey: `${sequence.phase}:${transport.status?.phase ?? "idle"}:${transport.status?.publicationPending ?? false}:${playing}:${recording}:${historyPerformPhase}:${historyPerformRecoveryLoaded}:${historyPerformRecoveryPending}`,
     navigationKey: activeMode,
-    navigationRefreshRequired: diagnostics.length > 0 || activeMode === "slice" || activeMode === "soundset",
+    navigationRefreshRequired: failureContext.reported || activeMode === "slice" || activeMode === "soundset",
     disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
       state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
       state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||

@@ -62,8 +62,8 @@ Separate page navigation from the authority key. A page change preserves an
 already-ready history status when no client operation blocks it. A blocked or
 unknown history still rechecks on page navigation, as does any page change
 after a reported failure; its existing focus listener remains installed. The
-existing central diagnostic presence is a conservative failure flag, not a
-new error classifier or claim that a failed command did not commit. This
+current Session/Project's reported-failure signal is a conservative flag,
+not a new error classifier or claim that a failed command did not commit. This
 retains the earlier fallback for uncertain Sample abort
 or lost authoring acknowledgements instead of claiming to solve their producer
 settlement. Visiting a local authoring owner or observing a reported failure
@@ -71,6 +71,19 @@ keeps this fallback for subsequent navigation until Session/Project replacement;
 it does not classify every late failure. Add explicit Performance recovery-pending and transport
 publication-pending authority inputs, including recovery-list readiness, which can change independently of revision
 and recording phase. Do not key on runtime frames or the complete status object.
+
+Current-head independent review at `accf414a38896801d6f4ff773bff01c19cede2a1`
+found that the retained Workspace diagnostic log survives Session/Project
+replacement and immediately re-arms the hook's reset fallback. This is still
+outstanding against refreshed main `5d31f21bb7b5f91014881c05b0ef7f4708c03b29`;
+no successor implements this context boundary. This corrective Task declares
+exactly `apps/creator-web/src/app.tsx`,
+`apps/creator-web/test/workspace_shell.test.tsx` and this plan, as one
+Conventional Commit; the history hook needs no change. Bind a failure signal to each current
+Session/Project context while retaining all Developer diagnostic records.
+A callback retained by a retired context must not mark a fresh context failed.
+Returning to a previously opened Project starts a fresh context too. Preserve
+same-context fallback after any new failure, without classifying its operation.
 
 ## Verification and acceptance
 
@@ -84,6 +97,14 @@ late unmounted Slice adoption failure followed by navigation. These are distinct
 authority facts, not evidence that Sample abort producer settlement was fixed.
 Retain the existing history conflict, retry, focus, recording, recovery,
 context-cancellation and Session replacement tests.
+
+Reduce the lifecycle defect through the real App: report a failure, replace
+the Project or Runtime Session, wait for fresh ready history, then delay any
+unexpected inspection and assert that pure navigation keeps Undo available
+without another read. Include returning to the same Project and prove that
+a new failure in the fresh context still rechecks history on navigation.
+These lowest-tier assertions must fail on the pre-fix source before the
+context-owned signal is implemented.
 
 Run focused regressions against the original implementation and retain their
 actual assertion failures. Then run the workspace/history suites and Creator
@@ -137,3 +158,19 @@ PR #1936 is already merged as `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce`.
 This Task repairs remaining behavior and carries its verification debt, rather
 than repeating that implementation. Complete proof, current-head review, merge
 and the original #1936 acceptance closure remain open.
+
+The corrective context-lifecycle Task retains the independent current-head
+review and its accepted narrower P2. All three real App reductions failed at
+the intended extra-inspection assertion on the pre-fix source: another Project,
+returning to the same Project, and Runtime Session replacement. An initial
+test-fixture mistake queried System-only diagnostics while System was closed;
+that failure is retained and is not counted as a product RED.
+
+The context-owned failure callback retains its own signal object, while the
+Developer log still appends all records. Each fresh context's three regressions
+now pass, including a new failure's conservative held inspection and eventual
+ready Undo after it settles. The complete workspace/history suites pass 158
+tests; TypeScript, 77 ownership tests and 15 ledger tests pass. No timeout or
+journey changed. The prior integrated-head epoch-race finding has a recorded
+independent source-based rejection; the new fix still requires its own commit,
+complete Creator lane and current-head review before shipping.

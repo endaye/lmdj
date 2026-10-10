@@ -5287,6 +5287,96 @@ test("page navigation rechecks ready history after a reported authoring failure"
   }
 });
 
+test.each(["another Project", "returning to the same Project", "replacement Runtime Session"] as const)(
+  "retained diagnostics do not re-arm navigation after %s", async (replacement) => {
+    const first = mutableSampleRuntimeFixture();
+    const second = mutableSampleRuntimeFixture();
+    const secondSummary = {...first.summary(), projectId: "44444444-4444-4444-8444-444444444444"};
+    let opened = first.summary();
+    const historyStatus = {sessionId: "history", projectRevision: first.revision,
+      canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
+      undoLabel: "Import sample", redoLabel: "", disabledReason: ""};
+    const inspect = vi.fn(async () => historyStatus);
+    const held = deferred<typeof historyStatus>();
+    let hostListener: ((state: RuntimeHostState) => void) | undefined;
+    first.session.subscribeHostState = (listener) => {hostListener = listener; return () => {};};
+    for (const fixture of [first, second]) {
+      Object.assign(fixture.session, {
+        inspectAuthoringHistory: inspect, undoAuthoring: vi.fn(), redoAuthoring: vi.fn(),
+        duplicateProject: async () => {throw Object.assign(new Error("Duplicate acknowledgement lost"), {code: "IO_ERROR"});},
+        listLocalProjects: async () => [first.summary(), secondSummary],
+        openProject: async (projectId: string) => {
+          opened = projectId === secondSummary.projectId ? secondSummary : first.summary();
+          return {};
+        },
+        inspectProject: async () => {
+          const value = fixture.inspectProject();
+          return {...value, project: {...value.project, project_id: opened.projectId}};
+        },
+      });
+    }
+    let created = 0;
+    const sessions = [first.session, second.session];
+    const rendered = render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+    const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+    const reportFailure = async (count: number) => {
+      await userEvent.click(screen.getByRole("button", {name: "Duplicate Project"}));
+      await userEvent.click(screen.getByRole("button", {name: "System"}));
+      await screen.findByText(`Developer diagnostics (${count})`, {selector: "summary"});
+      await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+      await waitFor(() => expect(screen.getByRole("button", {name: "Duplicate Project"})).toHaveProperty("disabled", false));
+    };
+    const open = async (summary: LocalProjectSummary) => {
+      await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+      await userEvent.click(await screen.findByRole("button", {name: `Select Project ${summary.projectId.slice(0, 8)}`}));
+      await userEvent.click(await screen.findByRole("button", {name: `Open Project ${summary.projectId.slice(0, 8)}`}));
+      await screen.findByRole("heading", {name: `Project ${summary.projectId.slice(0, 8)}`});
+      await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+      await flushAsyncTurns();
+    };
+    try {
+      await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+      await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+      await reportFailure(1);
+      if (replacement === "replacement Runtime Session") {
+        await act(async () => hostListener?.({state: "restart-required", errorCode: null, errorDetails: {}}));
+        await waitFor(() => expect(created).toBe(2));
+        await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+        await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+      } else {
+        await open(secondSummary);
+        if (replacement === "returning to the same Project") await open(first.summary());
+      }
+      await flushAsyncTurns();
+      await userEvent.click(screen.getByRole("button", {name: "System"}));
+      expect(screen.getByText("Developer diagnostics (1)", {selector: "summary"})).toBeTruthy();
+      await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+      const reads = inspect.mock.calls.length;
+      // Hold an unintended read: a fast fixture must not hide the Undo lamp
+      // being cleared by a failure belonging to the retired context.
+      inspect.mockImplementation(() => held.promise);
+      await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+      await flushAsyncTurns();
+      expect(inspect).toHaveBeenCalledTimes(reads);
+      expect(undo().classList.contains("is-lit")).toBe(true);
+      await userEvent.click(screen.getByRole("button", {name: "Project"}));
+      expect(inspect).toHaveBeenCalledTimes(reads);
+
+      // A fresh failure still belongs to this context and must retain the
+      // conservative fallback; resetting old diagnostics must not suppress it.
+      await reportFailure(2);
+      await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+      expect(inspect).toHaveBeenCalledTimes(reads + 1);
+      expect(undo().classList.contains("is-lit")).toBe(false);
+      await act(async () => {held.resolve(historyStatus);});
+      await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
+    } finally {
+      rendered.unmount();
+      await act(async () => {held.resolve(historyStatus);});
+    }
+  },
+);
+
 test("navigation retains history inspection after a Slice adoption fails after unmount", async () => {
   let resultUnknown = false;
   const historyStatus = () => ({sessionId: "history", projectRevision: 3,
