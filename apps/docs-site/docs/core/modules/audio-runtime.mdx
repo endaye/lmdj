@@ -111,8 +111,13 @@ B 已应用、随后被 C 变为 retiring 时仍报告 B 的实际 applied outco
 B 的 strictly following Bar，使用 B 的 BPM/Bar anchor，并在 Q→A CAS 竞态后重新推导。
 返回的是 native publication 的实际 activation frame。B 应用后音频线程可在同一 callback
 中接管已排队 C，保证跨两个 boundary 的长 callback 也按返回帧应用，无需 Host tick。
-普通 publication 与 overlay 保留原 callback-start claim 行为；音频每次交接只有一次有界
-mailbox 操作，没有控制影子队列、逐帧空轮询或新实时分配。
+控制线程先在同一 lock-free uint32 Q mailbox 保留 publication admission，再读取时间与
+authority 并提交 payload。音频 claim 用固定 RMW 标记该 admission 失效，包括空 Q；
+该标记跨空交接保留到控制清理或重新保留，最终 CAS 不能把旧时间观察当成有效提交。
+控制被暂停直到 callback 越过原 following-Bar 后须重新观察并推导，返回帧仍是实际应用帧；
+不依赖有限 epoch 回绕、控制调度时限或新 64 位 atomic。
+普通 publication 与 overlay 保留原 callback-start claim 行为；音频每次交接只执行固定有界
+mailbox 操作，不等待或重试，没有控制影子队列、逐帧空轮询或新实时分配。
 
 调用者须先保存完整回执，再 `acknowledge_pattern_transport_receipt` 释放 reservation。
 该 API 只转移 RAM 保留责任，不提供 crash durability；录制 coordinator 必须先持久保留

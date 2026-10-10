@@ -42,7 +42,7 @@ count-in, compiler policy or clock-rounding change.
 
 ## T1 — bounded cutoff, claimed timing and receipt-bound opening
 
-One reviewable Task and one later Conventional Commit. Declared files (14):
+One reviewable implementation Task. Declared files (15):
 
 1. `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`
 2. `packages/audio-runtime/src/realtime_engine.cpp`
@@ -58,6 +58,7 @@ One reviewable Task and one later Conventional Commit. Declared files (14):
 12. `apps/docs-site/docs/core/modules/application-facade.mdx`
 13. `docs/plans/2026-10-10-pattern-switch-core-prerequisite.md`
 14. `.agents/pitfalls/revert-proof-rebuild-skipped.md`
+15. `packages/audio-runtime/src/testing_hooks.hpp`
 
 The Host S1 Task separately owns its producer, SDK, Host regression tests and
 original plan update, and depends on this prerequisite. Declared scope expands
@@ -106,6 +107,56 @@ publication uses a strictly following Bar, even when its predecessor's frame
 is still future. Recompute on Q→A CAS races. The callback must consume an
 already queued successor in time if one callback crosses its apply boundary;
 no invented callback-size restriction substitutes for the returned frame.
+
+### Formal-review publication timing follow-up
+
+PR #1984's exact-head review identified a further timing interleaving:
+a serialized control publisher can be paused after capturing its
+following-Bar floor or immediately before committing Q while audio completes
+a callback beyond that floor. The empty Q claim returns the slot token to zero,
+so a slot-only CAS can miss the intervening eligible claim. The earlier long
+callback regression queues B and C before that callback and does not exercise
+this later publication.
+
+The parent approved the fifteenth file for two accurately named private,
+testable-runtime-only hook points at those natural preemption positions.
+They pause scheduling only; no clock, ownership state, frame, result or public
+Host API is substituted. The strict regression belongs to the original
+`audio.realtime_engine` NativeTest with its unchanged component budget.
+Both schedules produced actual rebuilt RED: C returned 192000 but audio applied
+it at 192514, after the ordinary callback completed at 192514. Each reduced
+case failed the returned-frame assertion within the original 30-second budget;
+the original NativeTest failed the same fact with all existing journeys retained.
+The earlier optional diagnostic-print compile error remains failed setup, not RED.
+
+The repair reserves admission in the same lock-free uint32 Q word before time
+and authority reads. Audio invalidates that reservation with fixed RMWs even
+when Q is empty, and preserves its invalidated status until control releases or
+renews it. The final payload CAS must match the valid reservation. Empty Q
+cycling cannot restore that valid state: no counter, finite epoch, 64-bit atomic
+or scheduling-time assumption is introduced. All readers, exact cancellation and
+cutoff counters decode only the actual slot bits. Audio never waits or retries.
+A second frame read alone would not bind the final publication to its admission.
+
+The rebuilt repaired reduced cases and original NativeTest passed; both returned
+and applied C at 288000. Removing only audio's invalidation marker reproduced
+both assertion REDs (returned 192000/applied 192514) after rebuilding; restoration
+with a fresh mtime rebuilt the changed translation unit and passed both reduced
+facts and the original NativeTest. Receipts preserve source hashes, actual exits,
+compiled artifact hashes/mtimes and logs at `formal-finding-f5-race/` within the
+same external Task evidence directory. The final repaired source's five original
+targets rebuilt in 25.032 s and all five CTest entries passed in 15.187 s. The
+first full stress attempt exited 8 with all fifteen entries Not Run because their
+original executables had not been built; this setup failure is retained separately
+and does not count as behavioral RED or a pass. Building the eleven targets
+selected by the existing stress registrations completed in 41.370 s. The complete
+original `scripts/core.sh test dev stress` then passed all fifteen entries in
+172.681 s without changing selectors, fixtures or bounds. Both final native and
+stress runs retain unchanged source-hash guards; this result paragraph is the
+only later source delta. `nm` also confirms that the repaired production archive
+contains no private testing symbols, while the separate testable archive does.
+This follow-up does not claim Portal, exact committed-head batch or eligible
+review acceptance.
 
 ### Record opening and truthful failure state
 

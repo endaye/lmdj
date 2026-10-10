@@ -93,6 +93,31 @@ namespace {
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 constexpr std::uint32_t kPatternTokenClaimedMask = std::uint32_t{1} << 31U;
+constexpr std::uint32_t kPatternControlReservedMask = std::uint32_t{1} << 30U;
+constexpr std::uint32_t kPatternAdmissionInvalidatedMask = std::uint32_t{1} << 29U;
+constexpr std::uint32_t kPatternAdmissionMask =
+    kPatternControlReservedMask | kPatternAdmissionInvalidatedMask;
+constexpr std::uint32_t pattern_slot_token(std::uint32_t mailbox) noexcept {
+  return mailbox & ~(kPatternTokenClaimedMask | kPatternAdmissionMask);
+}
+
+// Only serialized control reserves publication admission. Audio invalidates
+// that reservation without waiting and preserves it through every empty Q
+// claim. Cleanup is an RMW, so audio cannot resurrect a released reservation.
+class PatternPublicationAdmission {
+ public:
+  explicit PatternPublicationAdmission(std::atomic<std::uint32_t>& mailbox)
+      : mailbox_(mailbox) {}
+  ~PatternPublicationAdmission() {
+    if (reserved_)
+      mailbox_.fetch_and(~kPatternAdmissionMask, std::memory_order_seq_cst);
+  }
+  void committed() noexcept { reserved_ = false; }
+
+ private:
+  std::atomic<std::uint32_t>& mailbox_;
+  bool reserved_ = true;
+};
 static_assert(std::atomic<std::uint16_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(
@@ -290,7 +315,7 @@ void RealtimeEngine::publish_transport_decision() noexcept {
 std::uint64_t RealtimeEngine::pattern_token_generation(
     std::uint32_t token) const noexcept {
   // Control only: this thread alone can reclaim or reuse the immutable payload.
-  const auto slot = token & ~kPatternTokenClaimedMask;
+  const auto slot = pattern_slot_token(token);
   return slot == 0 ? 0 : pattern_slots_[slot - 1].generation;
 }
 
@@ -1126,7 +1151,8 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
     slot.state.store(PatternState::reclaimable, std::memory_order_release);
     decision = PatternCutoffDecision::canceled_at_cutoff;
     observed_claimed_through_ = std::max(observed_claimed_through_, generation);
-    if (canceled_token != 0) ++transport_canceled_publications_;
+    if (pattern_slot_token(canceled_token) != 0)
+      ++transport_canceled_publications_;
   };
   // Resolve the audio-owned predecessor first, then Q. Both are immutable and
   // fully named by admission; no control mutation can enter while reserved.
@@ -1207,22 +1233,31 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
 #endif
       continue;
     }
-    const auto observed_mailbox =
+    auto observed_mailbox =
         queued_pattern_generation_.load(std::memory_order_acquire);
-    if (observed_mailbox == kPatternTokenClaimedMask) {
+    if ((observed_mailbox & kPatternTokenClaimedMask) != 0) {
       continue;  // Audio claimed an empty Q and will clear it without waiting.
     }
-    const auto observed_queued_token =
-        (observed_mailbox & kPatternTokenClaimedMask) == 0
-            ? observed_mailbox : std::uint32_t{0};
+    // Couple every timing read to this exact admission, not just a slot token
+    // that returns to zero after audio consumes an empty Q. No finite epoch or
+    // elapsed-time assumption can make a paused control publisher valid again.
+    const auto admitted_mailbox =
+        (observed_mailbox & ~kPatternAdmissionInvalidatedMask) |
+        kPatternControlReservedMask;
+    if (!queued_pattern_generation_.compare_exchange_strong(
+            observed_mailbox, admitted_mailbox,
+            std::memory_order_seq_cst, std::memory_order_seq_cst))
+      continue;
+    PatternPublicationAdmission admission{queued_pattern_generation_};
+    const auto observed_queued_token = pattern_slot_token(observed_mailbox);
     const auto observed_queued_generation =
         pattern_token_generation(observed_queued_token);
     const auto observed_audio_mailbox =
         audio_pending_pattern_generation_.load(std::memory_order_acquire);
     const auto observed_audio_generation =
         pattern_token_generation(observed_audio_mailbox);
-    const auto observed_pending_generation = observed_mailbox != 0
-        ? pattern_token_generation(observed_mailbox)
+    const auto observed_pending_generation = observed_queued_token != 0
+        ? observed_queued_generation
         : observed_audio_generation;
     if (timing == PatternPublicationTiming::preserve_phase &&
         observed_pending_generation != 0) {
@@ -1243,7 +1278,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           });
       if (pending == pattern_slots_.end()) {
         if (queued_pattern_generation_.load(std::memory_order_acquire) !=
-                observed_mailbox ||
+                admitted_mailbox ||
             audio_pending_pattern_generation_.load(
                 std::memory_order_acquire) != observed_audio_mailbox) {
           continue;
@@ -1262,8 +1297,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           observed_queued_token == 0 && observed_audio_generation != 0;
       if (pending->activation_frame >= observed_frame && !claimed_switch) {
         observed_pending_activation = pending->activation_frame;
-      } else if ((observed_mailbox & kPatternTokenClaimedMask) != 0 ||
-                 (observed_mailbox == 0 && observed_audio_generation != 0)) {
+      } else if (observed_queued_token == 0 && observed_audio_generation != 0) {
         const auto bar_frames = pending->pattern->bar_frames();
         const auto elapsed = std::max(observed_frame, pending->activation_frame) -
             pending->activation_frame;
@@ -1293,6 +1327,10 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       }
     }
 
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(
+        testing::RealtimeHookPoint::control_pattern_timing_captured);
+#endif
     const auto current =
         current_pattern_slot_.load(std::memory_order_acquire);
     if (timing == PatternPublicationTiming::preserve_phase) {
@@ -1406,7 +1444,11 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     if (!running) {
       apply_published_pattern(publication, 0);
     } else {
-      auto expected_generation = observed_queued_token;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+      testing::invoke_realtime_hook(
+          testing::RealtimeHookPoint::control_pattern_before_publication);
+#endif
+      auto expected_generation = admitted_mailbox;
       if (!queued_pattern_generation_.compare_exchange_strong(
               expected_generation,
               static_cast<std::uint32_t>(publication.slot) + 1,
@@ -1419,6 +1461,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
         slot->state.store(PatternState::empty, std::memory_order_release);
         continue;
       }
+      admission.committed();
       observed_last_queued_ = {publication.generation, activation_frame};
       if (observed_queued_generation != 0) {
         const auto superseded = std::find_if(
@@ -1501,11 +1544,15 @@ bool RealtimeEngine::cancel_unclaimed_pattern_publication(
     return false;
   }
 
-  auto expected = static_cast<std::uint32_t>(
+  const auto expected_slot = static_cast<std::uint32_t>(
       std::distance(pattern_slots_.begin(), pending)) + 1;
+  auto expected = queued_pattern_generation_.load(std::memory_order_acquire);
+  if (pattern_slot_token(expected) != expected_slot ||
+      (expected & kPatternTokenClaimedMask) != 0)
+    return false;
   if (!queued_pattern_generation_.compare_exchange_strong(
           expected,
-          0,
+          expected & kPatternAdmissionMask,
           std::memory_order_seq_cst,
           std::memory_order_seq_cst)) {
     return false;
@@ -1522,8 +1569,10 @@ foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
         "realtime Pattern may only be cleared while stopped");
   }
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_audio_observation};
-  if (queued_pattern_generation_.load(std::memory_order_acquire) != 0 ||
-      audio_pending_pattern_generation_.load(std::memory_order_acquire) != 0) {
+  if (pattern_slot_token(queued_pattern_generation_.load(
+          std::memory_order_acquire)) != 0 ||
+      pattern_slot_token(audio_pending_pattern_generation_.load(
+          std::memory_order_acquire)) != 0) {
     return invalid_argument("realtime Pattern publication is pending");
   }
   const auto current =
@@ -1592,7 +1641,7 @@ RealtimeEngine::pattern_transport_observation() const {
     }
     const auto authority = [&](std::uint32_t token)
         -> std::optional<PatternReplacementAuthority> {
-      const auto encoded_slot = token & ~kPatternTokenClaimedMask;
+      const auto encoded_slot = pattern_slot_token(token);
       if (encoded_slot == 0) return std::nullopt;
       const auto& slot = pattern_slots_[encoded_slot - 1];
       if (slot.generation == observation.current_generation ||
@@ -1644,7 +1693,7 @@ RealtimeEngine::pending_pattern_id() const {
   const auto mailbox =
       queued_pattern_generation_.load(std::memory_order_acquire);
   const auto generation =
-      mailbox != 0
+      pattern_slot_token(mailbox) != 0
           ? pattern_token_generation(mailbox)
           : pattern_token_generation(
                 audio_pending_pattern_generation_.load(
@@ -2170,15 +2219,18 @@ void RealtimeEngine::claim_queued_pattern(bool switch_only) noexcept {
 #endif
     // RMW returns the immediately preceding owner, never a saved token that
     // could have been reclaimed/reused while audio was paused.
-    const auto token = queued_pattern_generation_.fetch_or(
-        kPatternTokenClaimedMask, std::memory_order_seq_cst);
+    const auto mailbox = queued_pattern_generation_.fetch_or(
+        kPatternTokenClaimedMask | kPatternAdmissionInvalidatedMask,
+        std::memory_order_seq_cst);
+    const auto token = pattern_slot_token(mailbox);
     if (token != 0) {
       const auto slot_index = static_cast<std::uint8_t>(token - 1);
       const auto& claimed = pattern_slots_[slot_index];
       if (switch_only && !claimed.switch_bar) {
         // General/overlay publication keeps its original callback-start
         // semantics. Admission is still closed while Q is restored.
-        queued_pattern_generation_.store(token, std::memory_order_seq_cst);
+        queued_pattern_generation_.fetch_and(
+            ~kPatternTokenClaimedMask, std::memory_order_seq_cst);
         pattern_claim_closed_.store(0, std::memory_order_seq_cst);
         return;
       }
@@ -2191,7 +2243,8 @@ void RealtimeEngine::claim_queued_pattern(bool switch_only) noexcept {
       audio_pending_pattern_generation_.store(token, std::memory_order_release);
     }
     // Includes claimed-empty. A/L must be established before releasing Q.
-    queued_pattern_generation_.store(0, std::memory_order_seq_cst);
+    queued_pattern_generation_.fetch_and(
+        kPatternAdmissionMask, std::memory_order_seq_cst);
     pattern_claim_closed_.store(0, std::memory_order_seq_cst);
   }
 }

@@ -941,9 +941,12 @@ class RealtimeEngine final {
   std::uint64_t reclaimed_banks_ = 0;
   std::uint64_t bank_slot_rejections_ = 0;
   std::uint64_t publish_queue_drops_ = 0;
-  // 0 = empty, 1..4 = slot + 1, bit 31 = claimed. Payload retains the full
+  // Slot bits: 0 = empty, 1..4 = slot + 1; bit 31 = claimed. Payload retains the full
   // non-reused 64-bit generation. Only the serialized control thread reuses
   // slots; audio-owned cancellation does not release the audio-local owner.
+  // Q also reserves bit 30 for a control publication and bit 29 for audio's
+  // invalidation of that admission. Fixed audio RMWs preserve those bits even
+  // through empty claims; control's final CAS must retain its valid reservation.
   std::atomic<std::uint32_t> pattern_claim_closed_{0};
   std::atomic<std::uint32_t> queued_pattern_generation_{0};
   std::atomic<std::uint32_t> audio_pending_pattern_generation_{0};

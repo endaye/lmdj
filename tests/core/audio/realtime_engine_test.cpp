@@ -1139,6 +1139,78 @@ void strong_observation_reanchors_current_b_with_c_still_pending() {
   LMDJ_CHECK(receipt->switch_decision == PatternCutoffDecision::canceled_at_cutoff);
 }
 
+void control_publication_cannot_commit_an_expired_following_bar(
+    lmdj::audio::testing::RealtimeHookPoint point) {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  auto b = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, {0, 1}, 90));
+  LMDJ_CHECK(b.has_value());
+  const auto predecessor =
+      f.engine.publish_pattern_switch_view(std::move(b.value()));
+  LMDJ_CHECK(predecessor.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(predecessor.activation_frame == 96'000);
+  render_frames(f.engine, 1); // B belongs to audio; Q is empty.
+  auto c = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kCutoffPatternC, {0, 2}, 30));
+  LMDJ_CHECK(c.has_value());
+  struct Gate {
+    std::atomic<bool> entered{}, released{}, finished{};
+  } gate;
+  testing::PatternClaimHook hook{&gate, [](void* context) noexcept {
+    auto& g = *static_cast<Gate*>(context);
+    g.entered.store(true, std::memory_order_release);
+    while (!g.released.load(std::memory_order_acquire))
+      std::this_thread::yield();
+  }};
+  std::vector<float> left(192'512), right(left.size());
+  testing::set_realtime_hook(point, &hook);
+  PatternPublication successor{};
+  std::thread control([&] {
+    successor = f.engine.publish_pattern_switch_view(std::move(c.value()),
+        PatternReplacementAuthority{predecessor.generation,
+            PatternId{kPatternB}, predecessor.activation_frame});
+    gate.finished.store(true, std::memory_order_release);
+  });
+  while (!gate.entered.load(std::memory_order_acquire) &&
+         !gate.finished.load(std::memory_order_acquire))
+    std::this_thread::yield();
+  const bool paused = gate.entered.load(std::memory_order_acquire);
+  if (paused) {
+    // The only concurrent owner is the real audio callback. It applies B,
+    // claims empty Q and completes beyond C's previously calculated 192000.
+    f.engine.render(left.data(), right.data(),
+        static_cast<std::uint32_t>(left.size()));
+  }
+  gate.released.store(true, std::memory_order_release);
+  control.join();
+  testing::set_realtime_hook(point, nullptr);
+  // Release and join before assertions, including a failed fixture setup.
+  LMDJ_CHECK(paused);
+  LMDJ_CHECK(successor.result == PatternPublishResult::accepted);
+  const auto completed_frontier = f.engine.telemetry().rendered_frames;
+  LMDJ_CHECK(completed_frontier == 192'514);
+  LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternB});
+  const auto frames = successor.activation_frame > completed_frontier
+      ? successor.activation_frame - completed_frontier + 1 : 1;
+  render_frames(f.engine, frames);
+  const auto applied_frame = f.engine.current_pattern_origin_frame();
+  std::fprintf(stderr,
+      "F5 point=%u returned=%llu applied=%llu completed_frontier=%llu\n",
+      static_cast<unsigned>(point),
+      static_cast<unsigned long long>(successor.activation_frame),
+      static_cast<unsigned long long>(applied_frame.value_or(
+          std::numeric_limits<std::uint64_t>::max())),
+      static_cast<unsigned long long>(completed_frontier));
+  LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kCutoffPatternC});
+  LMDJ_CHECK(successor.activation_frame >= completed_frontier);
+  LMDJ_CHECK(applied_frame.has_value());
+  LMDJ_CHECK(applied_frame == successor.activation_frame);
+  LMDJ_CHECK(successor.activation_frame == 288'000);
+  LMDJ_CHECK(f.engine.pattern_telemetry().pending_publications == 0);
+}
+
 void claimed_switch_successor_honors_its_next_bar_without_control_cadence() {
   using namespace lmdj::audio;
   PatternTransportFixture f;
@@ -5787,6 +5859,10 @@ int main() {
   strong_observation_separates_control_cancellation_from_playable_pending();
   strong_observation_reanchors_current_b_with_c_still_pending();
   claimed_switch_successor_honors_its_next_bar_without_control_cadence();
+  control_publication_cannot_commit_an_expired_following_bar(
+      lmdj::audio::testing::RealtimeHookPoint::control_pattern_timing_captured);
+  control_publication_cannot_commit_an_expired_following_bar(
+      lmdj::audio::testing::RealtimeHookPoint::control_pattern_before_publication);
   bounded_cutoff_retains_both_applied_outcomes_when_b_is_retiring();
   canceled_claim_crossing_its_frame_never_becomes_applied_cutoff_evidence();
   phase_overlay_retains_sustained_samples();
