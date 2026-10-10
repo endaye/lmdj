@@ -49,6 +49,12 @@ export function PerformOverview({state, transport, controller}: PerformOverviewP
   const bar = Math.floor(at / SEQUENCE_TICKS_PER_BAR) + 1;
   const beat = Math.floor((at % SEQUENCE_TICKS_PER_BAR) / SEQUENCE_TICKS_PER_BEAT) + 1;
   const label = transport === undefined ? "stopped" : transportStatusLabel(transport);
+  // #1958: without a Performance launch pending, the playing transport's
+  // queued switch names its slot the same way.
+  const queuedTransportSlot = performance?.pendingLaunch == null &&
+      transport?.status?.pendingSwitch != null && project !== null
+    ? project.patternSlots.indexOf(transport.status.pendingSwitch.patternId)
+    : -1;
   return (
     <div className="perform-overview" data-testid="perform-overview">
       <p className="perform-overview-state">
@@ -57,8 +63,11 @@ export function PerformOverview({state, transport, controller}: PerformOverviewP
       <output className="perform-overview-launch" aria-label="Pattern launch cue" aria-live="polite">
         {performance?.lastLaunchAck == null ? "LAST LAUNCH —" :
           `ACKNOWLEDGED SLOT ${two(performance.lastLaunchAck.patternSlot + 1)}`}
-        {performance?.pendingLaunch == null ? " · NOTHING QUEUED" :
-          ` → QUEUED SLOT ${two(performance.pendingLaunch.patternSlot + 1)}`}
+        {performance?.pendingLaunch != null
+          ? ` → QUEUED SLOT ${two(performance.pendingLaunch.patternSlot + 1)}`
+          : queuedTransportSlot >= 0
+            ? ` → QUEUED SLOT ${two(queuedTransportSlot + 1)}`
+            : " · NOTHING QUEUED"}
       </output>
       <p className="perform-overview-counter" data-testid="perform-counter">
         BAR {two(bar)} / {two(bars)} · BEAT {two(beat)} / 04

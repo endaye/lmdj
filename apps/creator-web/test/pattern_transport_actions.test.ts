@@ -36,6 +36,9 @@ test("transport journeys preserve the exact command identity end to end", async 
   const session = {
     requestPatternTransport: vi.fn(async () => ticket),
     inspectPatternTransport: vi.fn(async () => status),
+    requestTransportPatternSwitch: vi.fn(async () => ({
+      patternId: "00000000-0000-4000-8000-0000000000ee", activationFrame: 96_000,
+    })),
   };
   const request = {
     sessionId: "session-1",
@@ -55,6 +58,9 @@ test("retry resends the retained command verbatim and re-inspects; it never issu
   const session = {
     requestPatternTransport: vi.fn(async () => ({...ticket, submit: "replayed" as const})),
     inspectPatternTransport: vi.fn(async () => status),
+    requestTransportPatternSwitch: vi.fn(async () => ({
+      patternId: "00000000-0000-4000-8000-0000000000ee", activationFrame: 96_000,
+    })),
   };
   const retained = {
     sessionId: "session-1",
@@ -89,6 +95,9 @@ test("the capability surface is structural: extra members do not matter", () => 
   const session: CreatorPatternTransportSession = {
     requestPatternTransport: async () => ticket,
     inspectPatternTransport: async () => status,
+    requestTransportPatternSwitch: async () => ({
+      patternId: "00000000-0000-4000-8000-0000000000ee", activationFrame: 96_000,
+    }),
   };
   expect(isPatternTransportSession({...session, unrelated: true})).toBe(true);
 });

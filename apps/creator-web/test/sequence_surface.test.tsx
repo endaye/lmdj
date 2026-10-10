@@ -446,18 +446,33 @@ test("the touch picker directly selects a Pattern and preserves its identity/cou
   expect(stopped.onSwitch).toHaveBeenCalledWith(project.patterns[0]!.patternId);
 });
 
-test("the Pattern picker is disabled while the transport plays", () => {
-  renderSurface(false, {transport: {
-    ...initialPatternTransportState,
-    sessionId: "session-1",
-    status: {
-      engaged: true, playing: true, recording: false, phase: "idle",
-      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
-      observedAtMilliseconds: 0, commandId: null, publicationPending: false, error: null,
-      currentPatternId: null, pendingSwitch: null,
-    } satisfies PatternTransportStatus,
-  }});
-  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled")).toBe(true);
+// #1958: playing no longer locks the picker — a press queues the transport's
+// switch — while recording (until S3) still does.
+test("the Pattern picker stays available while the transport plays and is disabled while recording", () => {
+  const view = renderSurface(false, {transport: transportStatus({playing: true})});
+  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled"))
+    .toBe(false);
+  view.update({transport: transportStatus({playing: true, recording: true})});
+  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled"))
+    .toBe(true);
+});
+
+// #1958: while the transport plays, the header names the Pattern the engine
+// plays and, while a switch is queued, the queued target (`GROOVE / 01 → 02`).
+test("the GROOVE header names the playing Pattern and the queued switch target", () => {
+  renderSurface(false, {
+    transport: transportStatus({
+      playing: true,
+      currentPatternId: project.patterns[0]!.patternId,
+      pendingSwitch: {patternId: project.patterns[1]!.patternId, activationFrame: 96_000},
+    }),
+    state: {selectedPatternId: project.patterns[0]!.patternId},
+  });
+  const header = screen.getByRole("button", {name: "Choose Pattern"});
+  expect(header.textContent).toContain("GROOVE / 01 → 02");
+  expect(header.textContent).toContain("1/2");
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(project.patterns[0]!.patternId);
 });
 
 // #1823: BARS, DOUBLE UP and COPY act on the selected Pattern in SETUP.

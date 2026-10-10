@@ -54,10 +54,14 @@ interface PatternSelectorProps {
   patternIds: readonly string[];
   patternId: string;
   disabled: boolean;
+  // #1958: while a playing-state switch is queued, the 1-based index of the
+  // queued target, shown after the current one (`GROOVE / 01 → 03`). Null or
+  // omitted when nothing is queued.
+  queuedIndex?: number | null;
   onSelect(patternId: string): void;
 }
 
-export function PatternSelector({index, patternIds, patternId, disabled, onSelect}: PatternSelectorProps) {
+export function PatternSelector({index, patternIds, patternId, disabled, queuedIndex, onSelect}: PatternSelectorProps) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement | null>(null);
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
@@ -67,7 +71,10 @@ export function PatternSelector({index, patternIds, patternId, disabled, onSelec
       <button ref={trigger} type="button" className="touch-control"
         aria-label="Choose Pattern" aria-haspopup="dialog" disabled={disabled}
         onClick={() => setOpen(true)}>
-        <span>GROOVE / {String(Math.max(index, 1)).padStart(2, "0")}</span>
+        <span>GROOVE / {String(Math.max(index, 1)).padStart(2, "0")}{
+          queuedIndex !== undefined && queuedIndex !== null && queuedIndex > 0
+            ? ` → ${String(queuedIndex).padStart(2, "0")}` : ""
+        }</span>
         <span className="pattern-selector-count">{Math.max(index, 1)}/{Math.max(patternIds.length, 1)}</span>
       </button>
       {open ? <ModalDialog returnFocus={trigger.current} onCancel={() => setOpen(false)}

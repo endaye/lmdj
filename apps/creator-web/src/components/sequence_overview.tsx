@@ -58,6 +58,9 @@ export function SequenceOverview({
     ? undefined
     : project?.patterns.find((item) => item.patternId === selectedPatternId);
   const pendingPatternId = state.status?.pendingPatternId ?? null;
+  // #1958: the transport's queued playing-state switch, a pending fact
+  // distinct from the legacy Sequence session's pending Pattern.
+  const queuedSwitchPatternId = transport?.status?.pendingSwitch?.patternId ?? null;
   // The 176 px display holds one status line: the most severe of the
   // transport error, the Sequence error and a pending publication.
   const statusLine = transport?.errorCode !== null && transport?.errorCode !== undefined
@@ -148,6 +151,12 @@ export function SequenceOverview({
           <div>
             <dt>Pending</dt>
             <dd>{pendingPatternId.slice(0, 8)}</dd>
+          </div>
+        ) : null}
+        {queuedSwitchPatternId !== null ? (
+          <div>
+            <dt>Queued</dt>
+            <dd>{queuedSwitchPatternId.slice(0, 8)}</dd>
           </div>
         ) : null}
         {state.recovery.length > 0 ? (

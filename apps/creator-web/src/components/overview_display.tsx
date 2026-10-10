@@ -77,7 +77,13 @@ export function OverviewDisplay({
   performController,
 }: OverviewDisplayProps) {
   const project = state.project.current;
-  const selectedPatternId = sequence.selectedPatternId ?? project?.patternId ?? null;
+  // #1958: while the transport plays, the upper screen names the Pattern the
+  // engine actually plays rather than the selection, which follows only when
+  // the queued switch applies.
+  const playingPatternId = transport?.status?.playing === true
+    ? transport.status.currentPatternId
+    : null;
+  const selectedPatternId = playingPatternId ?? sequence.selectedPatternId ?? project?.patternId ?? null;
   const pattern = selectedPatternId === null
     ? undefined
     : project?.patterns.find((item) => item.patternId === selectedPatternId);

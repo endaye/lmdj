@@ -7,6 +7,12 @@ interface PatternLaunchStripProps {
   readonly patterns: readonly Readonly<{patternId: string}>[];
   readonly pending: PerformState["pendingLaunch"];
   readonly lastAck: PerformState["lastLaunchAck"];
+  // #1958: without a Performance recording, the playing transport's queued
+  // switch and current Pattern carry the same two slot facts. Undefined when
+  // the surface has no transport projection; null when nothing plays or
+  // nothing is queued. Performance facts take precedence while present.
+  readonly transportPendingPatternId?: string | null;
+  readonly transportCurrentPatternId?: string | null;
   readonly view: "launch" | "edit" | null;
   readonly disabled?: boolean;
   readonly mutationDisabled?: boolean;
@@ -35,6 +41,20 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
     }
   }, [patternId, props.patterns]);
   if (props.view === null) return null;
+  // The slot that holds the transport's queued target (−1 when the target
+  // holds no slot or no transport projection is available).
+  const transportPendingSlot = props.transportPendingPatternId === undefined ||
+      props.transportPendingPatternId === null
+    ? -1
+    : props.slots.indexOf(props.transportPendingPatternId);
+  const transportAcknowledgedSlot = props.transportCurrentPatternId === undefined ||
+      props.transportCurrentPatternId === null
+    ? -1
+    : props.slots.indexOf(props.transportCurrentPatternId);
+  const pendingSlot = props.pending !== null ? props.pending.patternSlot
+    : transportPendingSlot;
+  const acknowledgedSlot = props.lastAck !== null ? props.lastAck.patternSlot
+    : transportAcknowledgedSlot;
   const slotOptions = props.slots.map((_value, index) => (
     <option value={index} key={index}>{index + 1}</option>
   ));
@@ -90,8 +110,8 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
       {props.view === "launch" ? <>
         <nav className="perform-launch-groups" aria-label="Pattern slot groups">
           {[0, 1, 2, 3].map((group) => {
-            const queued = props.pending !== null && Math.floor(props.pending.patternSlot / 4) === group;
-            const playing = props.lastAck !== null && Math.floor(props.lastAck.patternSlot / 4) === group;
+            const queued = pendingSlot >= 0 && Math.floor(pendingSlot / 4) === group;
+            const playing = acknowledgedSlot >= 0 && Math.floor(acknowledgedSlot / 4) === group;
             return <button type="button" key={group}
               aria-label={`Pattern slots ${group * 4 + 1} to ${group * 4 + 4}`}
               aria-pressed={launchGroup === group}
@@ -105,8 +125,8 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
         <div className="perform-pattern-slots" role="group" aria-label="Pattern slots">
         {props.slots.slice(launchGroup * 4, launchGroup * 4 + 4).map((patternId, index) => {
           const patternSlot = launchGroup * 4 + index;
-          const launch = props.pending?.patternSlot === patternSlot ? "pending"
-            : props.lastAck?.patternSlot === patternSlot ? "acknowledged" : "idle";
+          const launch = patternSlot === pendingSlot ? "pending"
+            : patternSlot === acknowledgedSlot ? "acknowledged" : "idle";
           return (
             <button type="button" key={patternSlot}
               aria-label={`Launch Pattern ${patternSlot + 1}`}
@@ -134,7 +154,9 @@ export function PatternLaunchStrip(props: PatternLaunchStripProps) {
           : props.lastAck !== null
             ? `Pattern ${props.lastAck.patternSlot + 1} acknowledged${
               props.slots[props.lastAck.patternSlot] === null ? " · silent gap" : ""}`
-            : "idle"}
+            : pendingSlot >= 0
+              ? `Pattern ${pendingSlot + 1} pending`
+              : "idle"}
       </output>
     </section>
   );

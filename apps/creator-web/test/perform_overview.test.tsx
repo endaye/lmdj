@@ -95,3 +95,37 @@ test("a pending launch preserves the acknowledged slot and clears on failure or 
   expect(controller.connect).not.toHaveBeenCalled();
   expect(controller.leave).not.toHaveBeenCalled();
 });
+
+// #1958: without a Performance launch pending, the playing transport's queued
+// switch names its slot in the same cue.
+test("the transport's queued switch names its slot when no Performance launch is pending", () => {
+  const slottedProject = {
+    ...project,
+    patternSlots: Object.freeze([
+      null, project.patterns[0]!.patternId,
+      ...Array<string | null>(14).fill(null),
+    ]),
+  };
+  const slottedState = {
+    ...initialCreatorState,
+    project: {...initialCreatorState.project, phase: "ready" as const,
+      current: slottedProject},
+  } as CreatorState;
+  const view = render(<PerformOverview state={slottedState}
+    transport={initialPatternTransportState} />);
+  expect(screen.getByLabelText("Pattern launch cue").textContent)
+    .toBe("LAST LAUNCH — · NOTHING QUEUED");
+  view.rerender(<PerformOverview state={slottedState} transport={{
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: 0, commandId: null, publicationPending: false,
+      error: null, currentPatternId: null,
+      pendingSwitch: {patternId: project.patterns[0]!.patternId, activationFrame: 96_000},
+    },
+  }} />);
+  expect(screen.getByLabelText("Pattern launch cue").textContent)
+    .toBe("LAST LAUNCH — → QUEUED SLOT 02");
+});

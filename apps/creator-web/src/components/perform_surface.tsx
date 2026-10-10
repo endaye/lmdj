@@ -6,6 +6,9 @@ import type {ContextualEncoders} from "./physical_controls";
 import type {ProjectView} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
 import {
+  selectTransportBusy,
+  selectTransportPlaying,
+  selectTransportRecording,
   type PatternTransportState,
 } from "../state/pattern_transport_state";
 import {transportStatusLabel} from "./transport_status";
@@ -28,6 +31,10 @@ export interface PerformSurfaceProps {
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
   readonly onEncodersReady?: (encoders: ContextualEncoders | null) => void;
+  // #1958: without a Performance recording, a Launch slot selects its Pattern
+  // through the app's Sequence selection path, which queues a transport switch
+  // while playing and reloads the snapshot while stopped.
+  readonly onSelectPattern?: (patternId: string) => void;
 }
 
 type PerformPage = "live" | "slots" | "takes" | "replay";
@@ -203,6 +210,19 @@ export function PerformSurface(props: PerformSurfaceProps) {
       ? performCaptureUnavailableMessage(state.captureStatus.error.code)
       : null;
   const performing = ["recording", "flushing"].includes(state.recording.phase);
+  // #1958: without a Performance recording, Launch drives the global transport
+  // through selection. The slots stay closed while a transport command settles
+  // or the transport records (switching while recording is S3), and whenever
+  // no transport projection exists.
+  const transportLaunchOpen = props.transport !== undefined &&
+    props.transport.status !== null &&
+    !selectTransportBusy(props.transport) &&
+    !selectTransportRecording(props.transport);
+  const launchDisabled = !performing && !transportLaunchOpen;
+  // The transport's slot facts exist only while it plays; stopped, no slot is
+  // Playing and a queued switch cannot outlive Stop.
+  const transportPlaying = props.transport !== undefined &&
+    selectTransportPlaying(props.transport);
   return (
     <main ref={surface} className="perform-surface" aria-label="Perform" data-page={page}>
       <nav className="perform-page-nav" aria-label="Perform pages">
@@ -221,8 +241,12 @@ export function PerformSurface(props: PerformSurfaceProps) {
         patterns={props.project.patterns}
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck}
         view={page === "live" ? "launch" : page === "slots" ? "edit" : null}
-        disabled={!performing}
+        disabled={launchDisabled}
         mutationDisabled={state.recording.phase !== "idle"}
+        transportPendingPatternId={props.transport?.status?.pendingSwitch?.patternId ?? null}
+        transportCurrentPatternId={transportPlaying
+          ? props.transport?.status?.currentPatternId ?? null
+          : null}
         onAssign={(patternSlot, patternId) => {
           void controller.assignPattern(patternSlot, patternId);
         }}
@@ -230,7 +254,17 @@ export function PerformSurface(props: PerformSurfaceProps) {
         onMove={(fromSlot, toSlot) => {
           void controller.movePattern(fromSlot, toSlot);
         }}
-        onLaunch={(patternSlot) => { void controller.launchPattern(patternSlot); }} />
+        onLaunch={(patternSlot) => {
+          if (performing) {
+            void controller.launchPattern(patternSlot);
+            return;
+          }
+          // #1958: outside a Performance recording an empty slot has nothing
+          // to launch — no switch, no selection.
+          const patternId = props.project.patternSlots[patternSlot] ?? null;
+          if (patternId === null) return;
+          props.onSelectPattern?.(patternId);
+        }} />
       {page === "slots" ? <details className="perform-details"><summary>Project details</summary>
       <dl className="project-summary perform-project-summary" aria-label="Perform Project status">
         <div>

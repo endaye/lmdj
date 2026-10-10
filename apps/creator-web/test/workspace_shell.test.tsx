@@ -3155,6 +3155,201 @@ test("re-engages the Pattern transport with a fresh identity when an open replac
   await waitFor(() => expect(transportPhase()).toBe("recording"));
 });
 
+// #1958: while the transport plays and does not record, ← → and the picker
+// queue the transport's Pattern switch instead of reloading the snapshot; the
+// selection follows once an inspection reports the switch applied.
+const secondSwitchPattern = "66666666-6666-4666-8666-666666666666";
+const secondPatternReady: CreatorState = {
+  ...ready,
+  project: {
+    ...ready.project,
+    current: {
+      ...ready.project.current!,
+      patterns: [
+        ...ready.project.current!.patterns,
+        {patternId: secondSwitchPattern, bars: 1, events: []},
+      ],
+    },
+  },
+};
+// The projection refresh must keep listing the second Pattern these journeys
+// step to, so inspectProject augments the fixture's single-Pattern Truth.
+function withSecondPatternInspect(fixture: ReturnType<typeof mutableSampleRuntimeFixture>) {
+  return async () => {
+    const value = fixture.inspectProject();
+    value.project.patterns[secondSwitchPattern] = {bars: 1, events: []};
+    return value;
+  };
+}
+// SETUP's Refresh playback re-inspects the transport, so a state the fake
+// changed behind the app's back becomes observed without waiting on a poll
+// only busy or pending states drive.
+async function refreshPlaybackProjection() {
+  const setup = screen.getByRole("button", {name: "SETUP"});
+  if (setup.getAttribute("aria-pressed") !== "true") await userEvent.click(setup);
+  const summary = screen.getByText("Playback details", {selector: "summary"});
+  if (!(summary.closest("details") as HTMLDetailsElement).open) {
+    await userEvent.click(summary);
+  }
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
+}
+test("a playing transport routes Pattern presses to the queued switch and follows the applied one", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const switchRequests: {patternId: string; requestId: string}[] = [];
+  let playing = true;
+  let queued: string | null = null;
+  let currentPattern = listedSummary.patternId;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      playing,
+      currentPatternId: currentPattern,
+      ...(queued === null ? {} : {
+        pendingSwitch: {patternId: queued, activationFrame: 96_000},
+      }),
+    }),
+    requestTransportPatternSwitch: async (request: {patternId: string; requestId: string}) => {
+      switchRequests.push({...request});
+      queued = request.patternId;
+      return {patternId: request.patternId, activationFrame: 96_000};
+    },
+  });
+  render(<App initialState={secondPatternReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  const reloadsBefore = fixture.calls.filter((call) => call === "reloadSnapshot").length;
+
+  await userEvent.click(forward);
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  expect(switchRequests[0]!.patternId).toBe(secondSwitchPattern);
+  expect(switchRequests[0]!.requestId).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
+  // The queued target shows in the GROOVE header while the playing Pattern
+  // stays named, and nothing reloaded the snapshot.
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+    .textContent).toContain("→ 02"));
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(listedSummary.patternId);
+  expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+    .toBe(reloadsBefore);
+
+  // An inspection reporting the switch applied clears the queue, and the
+  // selection follows the Pattern now playing.
+  await act(async () => {
+    currentPattern = secondSwitchPattern;
+    queued = null;
+  });
+  await waitFor(() => expect(screen.getByTestId("sequence-pattern")
+    .getAttribute("data-pattern-id")).toBe(secondSwitchPattern));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+    .textContent).not.toContain("→"));
+  expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+    .toBe(reloadsBefore);
+
+  // Stopped again — observed through SETUP's Refresh playback, the app's own
+  // reconciliation control — a picker press returns to the snapshot reload
+  // path.
+  await act(async () => {
+    playing = false;
+    queued = null;
+  });
+  await refreshPlaybackProjection();
+  await waitFor(() => expect(transportPhase()).toBe("stopped"));
+  await userEvent.click(screen.getByRole("button", {name: "Choose Pattern"}));
+  await userEvent.click(within(screen.getByRole("dialog", {name: "Choose Pattern"}))
+    .getByRole("button", {name: "GROOVE / 01"}));
+  await waitFor(() => expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+    .toBe(reloadsBefore + 1));
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(listedSummary.patternId);
+});
+
+// #1958: a refused switch is reported through the failure path, not thrown;
+// the selection stays put.
+test("a refused playing Pattern switch is reported and changes nothing", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const switchRequests: {patternId: string; requestId: string}[] = [];
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      currentPatternId: listedSummary.patternId,
+    }),
+    requestTransportPatternSwitch: async (request: {patternId: string; requestId: string}) => {
+      switchRequests.push({...request});
+      throw Object.assign(
+        new Error("Pattern transport is recording"),
+        {code: "PATTERN_TRANSPORT_RECORDING"},
+      );
+    },
+  });
+  render(<App initialState={secondPatternReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  // The picker is available while playing; its press is refused by the Host.
+  const picker = screen.getByRole("button", {name: "Choose Pattern"});
+  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
+  await userEvent.click(picker);
+  await userEvent.click(within(screen.getByRole("dialog", {name: "Choose Pattern"}))
+    .getByRole("button", {name: "GROOVE / 02"}));
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  expect(switchRequests[0]!.patternId).toBe(secondSwitchPattern);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+    .textContent).not.toContain("→"));
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(listedSummary.patternId);
+  // The refusal is recorded in Developer diagnostics instead of thrown.
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  const summary = screen.getByText("Developer diagnostics (1)", {selector: "summary"});
+  await userEvent.click(summary);
+  const diagnostics = screen.getByRole("region", {name: "Developer diagnostics"});
+  expect(within(diagnostics).getByText("Switch Pattern")).toBeTruthy();
+  expect(within(diagnostics).getByText("PATTERN_TRANSPORT_RECORDING")).toBeTruthy();
+});
+
+// #1958: playing opens the switch controls, recording keeps them closed
+// (switching while recording is S3).
+test("recording keeps the Pattern step and picker closed even though playing opens them", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let recording = false;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({recording}),
+    requestTransportPatternSwitch: async () => {
+      throw new Error("no switch is submitted while recording");
+    },
+  });
+  render(<App initialState={secondPatternReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  const picker = screen.getByRole("button", {name: "Choose Pattern"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
+  await act(async () => {
+    recording = true;
+  });
+  // The recording state becomes observed through the same refresh control.
+  await refreshPlaybackProjection();
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(true));
+  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(true));
+});
+
 test("a settled transport commit shows its revision even when the projection re-read never completes", async () => {
   const fixture = mutableSampleRuntimeFixture();
   // Truth is already ahead of the view (revision 5 vs 4), as a committed
