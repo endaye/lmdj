@@ -109,3 +109,29 @@ epoch 3 Stop; the old Stop was not reissued in this run. This is evidence of a
 remaining failure, not browser closure or proof of its exact native cause.
 Tone-recording and BPM-commit cases also failed in that full run. Retain their
 original bounds, traces and far-side assertions; none is waived by this Task.
+
+Integration refresh: main `03a8b1d8b3eea15ad03f44234b390bb3ab85fc59`
+contains the stopped-Pattern authority repair from #1978. Its native source,
+test and documentation match the reviewed producer head. Do not repeat that
+implementation. Main's Creator app and transport-actions blobs still match
+this Task's original `d77a471de81b39cefdbb56d440c54f877736b208` base: the
+guarded observation and retry ownership functions remain absent. This
+consumer repair therefore remains outstanding. Main's #1977 grid regression
+and #1979 interaction documentation are retained; Task source and shipping
+policy are otherwise unchanged.
+
+Integrate that exact main revision, rerun the complete component suite,
+TypeScript and ownership checks before committing, then run the complete
+Creator lane on the clean committed integration head. Previous heads' browser
+results and the producer's passing Creator lane do not verify this consumer.
+The producer's Linux Asan run is still incomplete with failures; its external
+merge does not establish an Asan pass or owner acceptance of those failures.
+Review and merge of this consumer remain separate, uncompleted boundaries.
+
+The merged worktree's complete component suite passed all 70 files / 1219
+cases in 64.79 s with the original bounds and unchanged tracked sources.
+TypeScript passed against the explicit Creator tsconfig; an earlier invocation
+ran from the repository root and printed compiler usage without checking a
+project, so it is retained as a failed invocation rather than verification.
+The ownership suite passed all 77 cases. These checks authorize the integration
+commit only; committed full-lane evidence and current-head review are pending.
