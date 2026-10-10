@@ -409,6 +409,10 @@ function Workspace({
   const monitorVolumeRef = useRef(100);
   const [monitorReadySession, setMonitorReadySession] = useState<CreatorRuntimeSession | null>(null);
   const monitorReadyRef = useRef<CreatorRuntimeSession | null>(null);
+  const monitorInputReady = useCallback((candidate: CreatorRuntimeSession | undefined) =>
+    !isMonitorSession(candidate) || monitorReadyRef.current === candidate, []);
+  const monitorVolumeReady = !isMonitorSession(session) || monitorReadySession === session;
+  const monitorRestoring = runtimePhase === "ready" && !monitorVolumeReady;
   useEffect(() => {
     monitorReadyRef.current = null;
     setMonitorReadySession(null);
@@ -818,6 +822,7 @@ function Workspace({
       dispatch,
       onAdverseLifecycle: () => { gestureEpoch.current += 1; },
       canUsePad: (slot: number) => {
+        if (!monitorInputReady(session)) return false;
         const seed = defaultSeedRef.current;
         return seed?.projectId !== stateRef.current.project.current?.projectId || slot >= 16 ||
           ["ready", "retired"].includes(seed!.slots[slot]!.phase);
@@ -880,7 +885,7 @@ function Workspace({
         controller.dispose();
       }
     };
-  }, [session, runtimePhase, inputControllerEpoch]);
+  }, [session, runtimePhase, inputControllerEpoch, monitorInputReady]);
 
   useEffect(() => {
     if (!runtimeHostState) return;
@@ -1496,8 +1501,7 @@ function Workspace({
   };
 
   const activateAudio = (event: {isTrusted: boolean}): Promise<boolean> | null => {
-    if (!session || runtimePhase !== "ready" ||
-        (isMonitorSession(session) && monitorReadyRef.current !== session)) return Promise.resolve(false);
+    if (!session || runtimePhase !== "ready" || !monitorInputReady(session)) return Promise.resolve(false);
     const pending = activationInFlight.current;
     if (pending?.session === session) return pending.promise;
     if (stateRef.current.audio.phase === "running" ||
@@ -2574,6 +2578,7 @@ function Workspace({
   // never Sample capture or master recording — and every mode consumes this
   // same projection.
   const transportReady = isPatternTransportSession(session) &&
+    monitorVolumeReady &&
     transport.sessionId !== null &&
     state.project.phase === "ready" && state.project.current !== null &&
     selectCanStartGesture(state) && (
@@ -2717,6 +2722,7 @@ function Workspace({
   const padSurface = (
     <PadSurface
       state={state}
+      audioPreparing={monitorRestoring}
       emptyPadCapture={padCaptureState !== null}
       {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
@@ -2905,6 +2911,8 @@ function Workspace({
           pads={padSurface}
           touchWorkspace={
             <>
+              {monitorRestoring && <p id="output-volume-restore-status" role="status"
+                aria-label="Output volume restore status">Restoring output volume…</p>}
       {/* The touch area belongs to the page; Pad recording appears only while
           a take is in progress, awaits review or reports a message. Its
           source is chosen in System. */}

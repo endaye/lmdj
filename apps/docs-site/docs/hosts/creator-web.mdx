@@ -636,7 +636,14 @@ across groups; leaving Perform or opening System releases owned gestures under
 HOLD. The upper display continuously labels all four current functions and values.
 
 Output Volume defaults to 100% and restores the device's `monitor-volume.v1`
-IndexedDB preference before enabling audio activation. It changes only monitoring:
+IndexedDB preference before enabling audio activation. While a ready Runtime
+is still restoring this preference, the touch screen visibly reports
+`Restoring output volume…` and the musical Pads, Play/Record and keyboard input
+wait for that same session's read. Restoring 0% also enables input; a retired
+session's late read cannot enable its replacement. The next gesture after
+restoration is a new input; an earlier gesture is not queued for later audio
+activation. Other page and authoring controls keep their usual availability.
+Output Volume changes only monitoring:
 captured, resampled and exported PCM and authoring history are unchanged.
 
 Every control in the touch area is a 44 px button with an 8 px radius. There

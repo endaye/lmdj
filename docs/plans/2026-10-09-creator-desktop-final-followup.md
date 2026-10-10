@@ -242,6 +242,7 @@ monitor downstream of capture. No alternate ENC4 or undeclared direction keys.
 - `apps/creator-web/src/state/monitor_volume_preference.ts` (new)
 - `apps/creator-web/src/state/perform_state.ts`
 - `apps/creator-web/src/components/physical_controls.tsx`
+- `apps/creator-web/src/components/pad_surface.tsx`
 - `apps/creator-web/src/components/sample_surface.tsx`
 - `apps/creator-web/src/components/project_surface.tsx`
 - `apps/creator-web/src/components/perform_surface.tsx`
@@ -569,6 +570,87 @@ hashes are retained with the staged-tree receipt in
 results update leaves those tested product inputs unchanged. Committed-head
 docs_static and this consumer's complete Creator proof remain separate
 verification boundaries; the earlier repair's receipt does not satisfy them.
+
+### 2026-10-10 — expose device-volume restore readiness
+
+**Premises:** PR #1936's authenticated exact-head review of
+`367a14daa980e7106789d346023cdfb31837f0e9` found that musical controls can look
+available while device-volume restoration is pending. Fresh main is
+`785d36db27dc44fde7cceb4f6cb6da0956a795e1`; its changes after #1970 are
+documentation reconciliation, not this consumer repair. The old session's
+restore is already fenced by effect cleanup, but the current session's
+`activateAudio` returns false until its preference arrives. Pad and transport
+reachability omit that prerequisite and show no visible pending reason. This
+remaining refusal is confirmed from the actual consumer source. Preserve the
+original 367 complete Creator PASS and its seven browser groups as dated
+evidence; it is not evidence for this subsequent repair.
+
+**Declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/components/pad_surface.tsx`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `apps/docs-site/docs/hosts/creator-web.mdx`
+- This plan.
+
+**State boundaries:** show a visible and accessible `Restoring output volume…`
+status. Pad, Play/Record and keyboard/pointer input share the current Runtime
+session's monitor-readiness prerequisite. Temporarily disable musical Pad
+input; other page and authoring controls retain their existing reachability.
+Keep the Runtime's actual phase, restore-before-first-audio, bounded storage
+fallback, remembered zero volume and stale-session cleanup. Do not queue or
+replay a gesture after its browser activation window has expired.
+
+**Lowest-tier verification:** a mounted App regression delays actual
+IndexedDB read-success delivery after storing a device preference. While its
+Runtime/Project are ready, pending status and musical disabled state must be
+observable and a keyboard gesture must not activate or trigger audio. Release
+the same session's read, verify restored zero, restored input reachability and
+a positive musical input through the existing running-audio component seam.
+A replacement-session case releases the old read first and verifies that it
+cannot set the replacement's volume or clear its pending state. Record an
+actual RED failure on unchanged product source before the fix, then GREEN;
+keep the original case bounds. Run affected components, TypeScript, staged
+ownership, Portal and fresh committed-head selected Creator evidence when the
+coordinated resource window allows them. No old pass key satisfies the new
+head's verification or authenticated review.
+
+**Version Management:** compatible Creator PATCH repair absorbed by the
+existing I1c MINOR debt at V1; no manifest or Product Build allocation.
+**Documentation impact: required** — `/hosts/creator-web/`; document the
+visible restoration/input boundary. The existing input diagram does not
+describe this Host preference read, so no new diagram is required. Audible
+BPM, D03/D04, S1 and A1/A2/V1 remain incomplete.
+
+The mounted deferred-IndexedDB regressions first fail on the unchanged 367
+product: the first case reports `disabled` false instead of true at
+`workspace_shell.test.tsx:4317`, and the replacement case cannot find the
+restore status. The first fixed-source attempt passes replacement but fails
+the other case's mistaken `Play` locator; retain that fixture failure. Correct
+the name to the existing `Play/Stop`, restore only the two owned old product
+blobs, and rerun the corrected test: actual RED exit 1 (1.96 s). Restore the
+fixed source with fresh mtimes; the identical corrected test then passes both
+cases (1.98 s). The other 124 cases are unselected by this reduced command,
+not a full component result. Receipts, source/test hashes and all logs remain
+in `consumer-monitor-readiness-repair` outside the worktree. The deferred
+events belong to actual stored `monitor-volume.v1` read requests, not a mock
+preference function. The positive musical admission uses the existing running
+component seam; it does not establish browser-trusted activation or hearing.
+TypeScript first reports TS2683 for the new IndexedDB spy's untyped `this`.
+Add only the erased `this: IDBObjectStore` annotation; TypeScript then passes
+(1.73 s), and both reduced regressions pass again (2.40 s). Keep the original
+type failure and the final test hash alongside the earlier RED/GREEN receipts.
+The repaired input passes all 72 Creator component/helper files and 1,250
+cases (53.56 s wrapper / 53.18 s Vitest) at the original 20-second case bounds.
+All five declared input hashes remain unchanged during that run. Portal also
+passes all 176 checks, current page/diagram validation and the 50-route build
+with internal links (52.33 s); its source guards remain unchanged. The final
+I1c declaration contains 39 unique paths, of which 38 change in the actual PR
+merge-base range. This five-file repair preserves the earlier 367 complete
+Creator result as dated evidence and allocates no identity. The final
+results-only plan update does not change tested product, test or Portal page
+inputs. Staged ownership, committed docs_static, this repair's fresh complete
+Creator and authenticated current-head review remain separate boundaries.
 
 ## P0 — ship this bounded plan
 
