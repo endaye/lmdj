@@ -209,9 +209,11 @@ test("published Creator completes authoring, playback, and durable reload", asyn
       .toBeVisible({timeout: 120_000});
   }
   // Current Hosts render the overview definition "64 / 64 Pads used"; older
-  // Hosts expose the bare Project summary "64 / 64". Both prove the reload
-  // kept every Pad assigned.
-  const padsUsed = page.getByText("64 / 64 Pads used", {exact: true});
-  if (await padsUsed.isVisible()) await expect(padsUsed).toBeVisible();
-  else await expect(page.getByText("64 / 64", {exact: true})).toBeVisible();
+  // Hosts expose the bare Project summary "64 / 64" (which current Hosts keep
+  // in the tree hidden). Anchor both shapes and keep only the visible match,
+  // so a still-rendering overview settles on whichever surface this Host
+  // serves, instead of branching on a single visibility snapshot.
+  await expect(
+    page.getByText(/^64 \/ 64( Pads used)?$/).filter({visible: true}),
+  ).toBeVisible();
 });
