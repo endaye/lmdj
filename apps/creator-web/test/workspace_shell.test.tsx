@@ -3265,20 +3265,109 @@ test("a settled transport commit's completed re-read lands its events on the gri
 });
 
 
-test("rail Bank changes select the corresponding Sample slot in the only Pad matrix", async () => {
+test("rail Bank changes keep the Sample slot until another Pad is chosen", async () => {
   render(<App initialState={{...ready, sample: {...ready.sample, selectedSlot: 2}}} />);
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  expect(screen.getByRole("button", {name: "Add Sample to Pad A03"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Bank B"}));
   const pads = screen.getByRole("region", {name: "Pad matrix"});
   expect(within(pads).getAllByRole("button")).toHaveLength(16);
   expect(within(pads).queryByRole("button", {name: /^Pad A/})).toBeNull();
-  expect(within(pads).getByRole("button", {name: "Pad B03 — empty — Key E"})
-    .getAttribute("aria-pressed")).toBe("true");
-  expect(screen.getByRole("button", {name: "Add Sample to Pad B03"})).toBeTruthy();
+  // A Bank key switches only the performing sixteen slots: A03 stays the one
+  // current Pad, so no visible Pad is pressed and the edit object is kept
+  // (#1961).
+  expect(within(pads).queryByRole("button", {pressed: true})).toBeNull();
+  expect(screen.getByRole("button", {name: "Add Sample to Pad A03"})).toBeTruthy();
   await userEvent.click(within(pads).getByRole("button", {name: "Pad B04 — empty — Key R"}));
   expect(screen.getByRole("button", {name: "Add Sample to Pad B04"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Bank A"}));
-  expect(screen.getByRole("button", {name: "Add Sample to Pad A04"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Add Sample to Pad B04"})).toBeTruthy();
+});
+
+// Synthetic pointer/input events drive the packaged controller seam; trusted
+// activation and physical hearing stay with the packaged first-gesture
+// journey. Keyboard, touch and MIDI strikes share the same controller
+// trigger seam, whose selection dispatch is pinned in
+// input_controller.test.ts.
+test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  fixture.assigned.set(20, "44444444-4444-4444-8444-444444444444");
+  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi") =>
+    ({sequence: 1, slot, velocity, source}));
+  fixture.session.trigger = triggers;
+  Object.assign(fixture.session, sequenceSessionStubs());
+  setRunningAudioFixture(fixture.session);
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  const overview = screen.getByTestId("sequence-overview");
+  const currentPad = () => within(overview).getByText("Pad").nextElementSibling?.textContent;
+  expect(currentPad()).toBe("A01");
+  const pointer = (type: string) => {
+    const event = new MouseEvent(type, {bubbles: true, button: 0});
+    Object.defineProperties(event, {
+      pointerId: {value: 31}, pointerType: {value: "mouse"}, isPrimary: {value: true},
+    });
+    return event;
+  };
+
+  // Striking A01 establishes the one current Pad.
+  const padA01 = within(screen.getByRole("region", {name: "Pad matrix"}))
+    .getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+  fireEvent(padA01, pointer("pointerdown"));
+  await waitFor(() => expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer"));
+  fireEvent(padA01, pointer("pointerup"));
+  expect(currentPad()).toBe("A01");
+
+  // A Bank key only switches the performing slots: the current Pad stays A01
+  // (outside the visible Bank, so no row is highlighted) while the overview
+  // window and grid jump to Bank B.
+  await userEvent.click(screen.getByRole("button", {name: "Bank B"}));
+  expect(currentPad()).toBe("A01");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")).toBeNull();
+  expect(document.querySelector(".sequence-grid-row[data-current-pad]")).toBeNull();
+  expect(overview.querySelector(".sequence-overview-names li")?.textContent).toBe("B01 / EMPTY");
+
+  // Striking B05 makes it the one current Pad on both surfaces.
+  const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
+    .getByRole("button", {name: "Pad B05 — assigned — Key T"});
+  fireEvent(pad, pointer("pointerdown"));
+  await waitFor(() => expect(triggers).toHaveBeenLastCalledWith(20, 100, "pointer"));
+  expect(triggers).toHaveBeenCalledTimes(2);
+  expect(currentPad()).toBe("B05");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent)
+    .toBe("B05 / SAMPLE");
+  expect(document.querySelector(".sequence-grid-row[data-current-pad] .sequence-grid-pad")
+    ?.textContent).toBe("B05");
+  expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("B05");
+  fireEvent(pad, pointer("pointerup"));
+
+  // The Sample edit object is the same current Pad.
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
+});
+
+test("↑/↓ steps the one current Pad into the Sample editor (#1961)", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const triggers = vi.fn(fixture.session.trigger);
+  fixture.session.trigger = triggers;
+  Object.assign(fixture.session, sequenceSessionStubs());
+  setRunningAudioFixture(fixture.session);
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  const overview = screen.getByTestId("sequence-overview");
+  const currentPad = () => within(overview).getByText("Pad").nextElementSibling?.textContent;
+  expect(currentPad()).toBe("A01");
+  const down = screen.getByRole("button", {name: "Next Pad — ↓"});
+  await userEvent.click(down);
+  await userEvent.click(down);
+  expect(currentPad()).toBe("A03");
+  expect(triggers).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByRole("button", {name: "Add Sample to Pad A03"});
 });
 
 test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate voice", async (releaseEvent) => {
@@ -4119,13 +4208,15 @@ test("Sample pages keep their selection across Pad, Bank and System changes", as
   expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
     .getByRole("button", {name: "Playback"}).getAttribute("aria-current")).toBe("page");
   await userEvent.click(screen.getByRole("button", {name: "Bank B"}));
-  await screen.findByRole("button", {name: "Add Sample to Pad B02"});
+  // A Bank key never hijacks the Sample edit object (#1961): A02 stays
+  // selected until another Pad is chosen.
+  expect(screen.getByRole("button", {name: "Add Sample to Pad A02"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "System"}));
   expect(screen.queryByRole("navigation", {name: "Sample pages"})).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
     .getByRole("button", {name: "Playback"}).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByRole("button", {name: "Add Sample to Pad B02"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Add Sample to Pad A02"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   expect(within(screen.getByRole("navigation", {name: "Sample pages"}))

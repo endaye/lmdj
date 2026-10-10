@@ -120,6 +120,7 @@ import {
   selectCanImportProject,
   selectCanOpenProject,
   selectCreatorPhase,
+  selectCurrentPad,
   type CreatorState,
 } from "./state/creator_state";
 import {readLastProjectId, writeLastProjectId} from "./state/last_project";
@@ -387,9 +388,9 @@ function Workspace({
   // at a time and a Bank key moves it to that Bank's first row. View state.
   const [overviewRowOffset, setOverviewRowOffset] =
     useState(initialState.activeBank * SEQUENCE_BANK_PADS);
-  const [sequenceCurrentPad, setSequenceCurrentPad] =
-    useState(initialState.activeBank * SEQUENCE_BANK_PADS);
-  const sequenceCurrentPadRef = useRef(initialState.activeBank * SEQUENCE_BANK_PADS);
+  // The one current Pad lives in the Creator reducer (`sample.selectedSlot`),
+  // shared by the Sample edit object and the Sequence highlight row (#1961).
+  const sequenceCurrentPad = selectCurrentPad(state);
   const [scrollSequenceBars, setScrollSequenceBars] =
     useState<((bars: number) => void) | null>(null);
   const bindSequenceScroll = useCallback((scroll: ((bars: number) => void) | null) => {
@@ -2679,20 +2680,15 @@ function Workspace({
     inputController.current?.clearPressed();
     setRailShift(false);
     dispatch({type: "bank-selected", bank});
+    // A Bank key only changes the performing sixteen slots: the one current
+    // Pad — and with it the Sample edit object — stays until the next strike
+    // or ↑/↓ step (#1961). The Sequence overview window and grid still jump
+    // to the Bank, and an explicit Bank key keeps clearing the note
+    // selection (2026-10-09 decision).
     if (bank !== stateRef.current.activeBank &&
         isCreatorActionAllowed(stateRef.current, {type: "bank-selected", bank})) {
       setOverviewRowOffset(bank * SEQUENCE_BANK_PADS);
       setSequenceGridSelection([]);
-      sequenceCurrentPadRef.current = bank * SEQUENCE_BANK_PADS +
-        sequenceCurrentPadRef.current % SEQUENCE_BANK_PADS;
-      setSequenceCurrentPad(sequenceCurrentPadRef.current);
-    }
-    const current = stateRef.current;
-    if (activeMode === "sample" && armedCaptureSlot === null &&
-        current.runtime.phase === "ready" && current.project.phase === "ready" &&
-        current.project.current !== null && current.transfer.phase === "idle") {
-      const localPad = (stateRef.current.sample.selectedSlot ?? 0) % 16;
-      dispatch({type: "sample-action", action: {type: "slot-selected", slot: bank * 16 + localPad}});
     }
   };
   const padNavigationAvailable = isCreatorActionAllowed(state,
@@ -2701,9 +2697,10 @@ function Workspace({
     cancelPendingEncoders();
     if (!isCreatorActionAllowed(stateRef.current,
         {type: "bank-selected", bank: stateRef.current.activeBank})) return;
-    const next = Math.max(0, Math.min(63, sequenceCurrentPadRef.current + step));
-    sequenceCurrentPadRef.current = next;
-    setSequenceCurrentPad(next);
+    const next = Math.max(0, Math.min(63, selectCurrentPad(stateRef.current) + step));
+    // ↑/↓ selects the one current Pad: highlight only, no sound, no note
+    // selection change, no Project Truth write (2026-10-09 decision).
+    dispatch({type: "sample-action", action: {type: "slot-selected", slot: next}});
     const bank = Math.floor(next / SEQUENCE_BANK_PADS) as typeof state.activeBank;
     if (bank !== stateRef.current.activeBank) dispatch({type: "bank-selected", bank});
     setOverviewRowOffset((offset) => clampSequenceOverviewRowOffset(
