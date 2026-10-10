@@ -17,6 +17,10 @@ from cloudflare_preview_download import GitHub, NoRedirect
 
 WORKFLOW = 'cloudflare-preview-build.yml'
 RESERVE_SECONDS = 20 * 60  # the build job's full timeout-minutes
+# GitHub fails a job still queued after 24 hours and the build times out after
+# 20 minutes, so no unfinished run can have been created earlier than this
+# before the month began.
+UNFINISHED_LOOKBACK = timedelta(days=2)
 ALERTS = (50, 75, 90)
 STOP_PERCENT = 90
 
@@ -49,7 +53,7 @@ def consumption(github, now):
     overshoot is possible.
     """
     start = month_start(now)
-    created = (start - timedelta(days=1)).strftime('%Y-%m-%d')
+    created = (start - UNFINISHED_LOOKBACK).strftime('%Y-%m-%d')
     minutes = 0.0
     runs = 0
     page = 1
@@ -79,11 +83,16 @@ def post_comment(github, issue, body):
         return json.load(response)['id']
 
 
-def existing_markers(github, issue):
+def existing_markers(github, issue, since):
+    # Only this month's markers matter, and a comment written this month cannot
+    # have been updated before the month began, so a busy operations Issue's
+    # history never reaches the reconciliation bound.
     markers = set()
     page = 1
+    stamp = since.strftime('%Y-%m-%dT%H:%M:%SZ')
     while True:
-        comments = github.metadata(f'/repos/{REPOSITORY}/issues/{issue}/comments?per_page=100&page={page}')
+        comments = github.metadata(f'/repos/{REPOSITORY}/issues/{issue}/comments'
+                                   f'?since={stamp}&per_page=100&page={page}')
         for comment in comments:
             markers.update(re.findall(r'cloudflare-preview-budget:[0-9]{4}-[0-9]{2}:[0-9]{2}',
                                       comment.get('body') or ''))
@@ -111,7 +120,7 @@ def report(github, budget, issue, now):
             'remedy: point the repository variable at the operations Issue receiving budget alerts')
     minutes, runs = consumption(github, now)
     month = now.strftime('%Y-%m')
-    markers = existing_markers(github, int(issue))
+    markers = existing_markers(github, int(issue), month_start(now))
     for threshold in ALERTS:
         marker = f'cloudflare-preview-budget:{month}:{threshold:02d}'
         if minutes * 100 >= budget * threshold and marker not in markers:

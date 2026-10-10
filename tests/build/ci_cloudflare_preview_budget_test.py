@@ -71,10 +71,12 @@ class ConsumptionTest(unittest.TestCase):
         minutes, runs = budget.consumption(github, NOW)
         self.assertEqual((minutes, runs), (101.0, 101))
 
-    def test_query_overlaps_the_month_boundary(self):
+    def test_query_reaches_runs_queued_a_full_day_before_the_month(self):
+        # A job may stay queued 24 hours and then run 20 minutes, so a run
+        # created on 09-29 can still be unfinished on 10-01.
         github = FakeGitHub([[]])
         budget.consumption(github, NOW)
-        self.assertIn('created=%3E%3D2026-09-30', github.queries[0])
+        self.assertIn('created=%3E%3D2026-09-29', github.queries[0])
 
     def test_run_completed_last_month_is_not_billed_this_month(self):
         github = FakeGitHub([[run_entry('completed', 600_000, updated_at='2026-09-30T23:59:59Z')]])
@@ -145,6 +147,13 @@ class ReportTest(unittest.TestCase):
                                              {'body': 'cloudflare-preview-budget:2026-10:75 ...'},
                                              {'body': 'cloudflare-preview-budget:2026-10:90 ...'}])
         self.assertEqual(github.posted, [])
+
+    def test_marker_scan_reads_only_this_months_comments(self):
+        # An operations Issue with years of comments must not reach the scan bound.
+        github = self.invoke(10.0)
+        scans = [query for query in github.queries if '/comments' in query]
+        self.assertEqual(len(scans), 1)
+        self.assertIn('since=2026-10-01T00:00:00Z', scans[0])
 
     def test_below_all_thresholds_posts_nothing(self):
         self.assertEqual(self.invoke(49.9).posted, [])
