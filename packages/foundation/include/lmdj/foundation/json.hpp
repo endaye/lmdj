@@ -21,9 +21,9 @@ inline constexpr int kMaximumJsonContainerDepth = 64;
 // kMaximumJsonContainerDepth. Returns nullopt for malformed input and for
 // input that exceeds the depth limit; never throws.
 //
-// Rejection prevents DOM construction, not parsing: the remaining input is
-// still scanned, so this is not a defense against oversized input. Bound the
-// byte length separately.
+// Stops at the first excessive container before scanning the remaining input.
+// A refused stream stays at that point. Bound byte length separately because
+// a wide or shallow document can still be oversized.
 std::optional<nlohmann::json> parse_bounded_json(std::string_view bytes);
 std::optional<nlohmann::json> parse_bounded_json(std::istream& stream);
 
