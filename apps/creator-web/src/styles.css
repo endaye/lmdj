@@ -683,6 +683,9 @@ button:disabled { color: var(--creator-muted); }
   grid-template-columns: repeat(3, minmax(3.5rem, 1fr));
   gap: .75rem;
 }
+.perform-live-faders.has-master {
+  grid-template-columns: repeat(4, minmax(3.5rem, 1fr));
+}
 .perform-fx-more-bank {
   display: grid;
   grid-template-columns: repeat(5, minmax(3.5rem, 1fr));
@@ -1736,9 +1739,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .hardware-workspace .sequence-touch-workspace h1 { font-size: 16px; }
 
-/* D04 Perform. The pictured MASTER fader, LP/HP/BP filter type, MUTE/SOLO and
-   the output meters have no Host action, so the skin covers only Launch, the
-   two named live faders, FX / MORE, HOLD and the existing panels. */
+/* D04 Perform. MASTER shares ENC4's device monitoring producer. Independent
+   LP/HP/BP parameters, live MUTE/SOLO and output meters still await their
+   producers; the existing FX, Launch and recording panels remain. */
 .hardware-workspace .perform-live-header {
   align-items: baseline;
 }
@@ -2024,12 +2027,20 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .hardware-workspace .perform-surface[data-page="live"] {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
 }
+/* Four 44-unit inputs, three 4-unit gaps and two 4-unit panel insets fit
+   inside the fixed touch screen without squeezing the input targets. */
+.hardware-workspace .perform-surface[data-page="live"]:has(.perform-live-faders.has-master) {
+  grid-template-columns: minmax(0, 1fr) minmax(196px, 1.4fr);
+}
+.hardware-workspace .perform-fx:has(.perform-live-faders.has-master) { padding-inline: 4px; }
 .hardware-workspace .perform-surface[data-page="live"] > * { grid-column: 1 / -1; }
 .hardware-workspace .perform-surface[data-page="live"] > .perform-patterns { grid-column: 1; }
 .hardware-workspace .perform-surface[data-page="live"] > .perform-fx { grid-column: 2; align-self: start; }
 .hardware-workspace .perform-launch-groups,
 .hardware-workspace .perform-pattern-slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .hardware-workspace .perform-live-faders { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.hardware-workspace .perform-live-faders.has-master { grid-template-columns: repeat(4, minmax(44px, 1fr)); }
+.hardware-workspace .perform-live-faders.has-master .perform-fader { padding-inline: 0; }
 .hardware-workspace .perform-fx-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .hardware-workspace .perform-fx-more-bank { grid-template-columns: minmax(0, 1fr); padding: 4px; }
 

@@ -17,7 +17,7 @@ import {
   type PerformController,
   type PerformState,
 } from "../state/perform_state";
-import {FxSliderBank} from "./fx_slider_bank";
+import {FxSliderBank, type MonitorVolumeControl} from "./fx_slider_bank";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
 
 export interface PerformSurfaceProps {
@@ -31,6 +31,7 @@ export interface PerformSurfaceProps {
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
   readonly onEncodersReady?: (encoders: ContextualEncoders | null) => void;
+  readonly monitorVolume?: MonitorVolumeControl | undefined;
   // #1958: without a Performance recording, a Launch slot selects its Pattern
   // through the app's Sequence selection path, which queues a transport switch
   // while playing and reloads the snapshot while stopped.
@@ -275,6 +276,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
       </dl></details> : null}
       <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
         onClick={() => controller.toggleHold()}>HOLD</button>} active={page === "live"} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
+        monitorVolume={props.monitorVolume}
         onGroupChange={setMoreEncoders}
         onEngage={(fx, value) => controller.engageFx(fx, value)}
         onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
