@@ -9,12 +9,14 @@ import importlib.util
 import json
 import os
 import random
+import select
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import threading
 import unittest
+from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1067,6 +1069,96 @@ class CreatorCatalogUpstreamFileTest(CreatorCatalogProxyTest):
                 catalog_upstream=self.catalog_upstream,
                 catalog_upstream_file=self.upstream_file,
             )
+
+
+class CreatorServeCommandTest(CreatorServerTest):
+    """Exercise the documented shell entry, not only the underlying proxy."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for relative in (
+            "scripts/creator-web.sh",
+            "tools/web-runtime/serve_distribution.py",
+            "apps/creator-web/tools/package.py",
+            "apps/web-runtime-host/tools/asset_roles.py",
+            "apps/creator-web/deploy/wrangler.json",
+        ):
+            target = self.repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO_ROOT / relative, target)
+        shutil.copytree(self.dist, self.repo / "build/web/creator/dist")
+
+        class Catalog(http.server.BaseHTTPRequestHandler):
+            def do_GET(handler) -> None:
+                handler.send_response(
+                    200 if handler.path == "/catalog/index.json" else 404
+                )
+                handler.end_headers()
+                handler.wfile.write(b'{"catalog":"serve-entry"}')
+
+            def log_message(handler, *_arguments) -> None:
+                pass
+
+        self.upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Catalog)
+        self.upstream_thread = threading.Thread(
+            target=self.upstream.serve_forever, daemon=True
+        )
+        self.upstream_thread.start()
+        host, port = self.upstream.server_address[:2]
+        self.upstream_url = f"http://{host}:{port}/"
+
+    def tearDown(self) -> None:
+        self.upstream.shutdown()
+        self.upstream.server_close()
+        self.upstream_thread.join(timeout=5)
+        super().tearDown()
+
+    def configure_catalog(self, upstream: str) -> None:
+        path = self.repo / "apps/creator-web/deploy/wrangler.json"
+        value = json.loads(path.read_text())
+        value["vars"]["CATALOG_UPSTREAM"] = upstream
+        path.write_text(json.dumps(value))
+
+    def served_catalog(self, *arguments: str) -> tuple[int, bytes]:
+        process = subprocess.Popen(
+            ["bash", str(self.repo / "scripts/creator-web.sh"), "serve", *arguments],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(ready, "Creator serve did not publish its listening origin")
+            origin = process.stdout.readline().strip()
+            self.assertTrue(
+                origin.startswith("http://127.0.0.1:"),
+                process.stderr.read() if process.poll() is not None else origin,
+            )
+            endpoint = urlsplit(origin)
+            connection = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=5)
+            try:
+                connection.request("GET", "/soundset-catalog/catalog/index.json")
+                response = connection.getresponse()
+                return response.status, response.read()
+            finally:
+                connection.close()
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+    def test_serve_uses_the_deployment_catalog_by_default(self) -> None:
+        self.configure_catalog(self.upstream_url)
+        status, body = self.served_catalog("--port", "0")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'{"catalog":"serve-entry"}')
+
+    def test_serve_accepts_an_explicit_local_catalog_override(self) -> None:
+        self.configure_catalog("https://example.invalid/")
+        status, body = self.served_catalog(
+            "--catalog-upstream", self.upstream_url, "--port", "0"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'{"catalog":"serve-entry"}')
 
 
 if __name__ == "__main__":
