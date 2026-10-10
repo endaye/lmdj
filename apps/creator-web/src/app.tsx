@@ -1875,6 +1875,9 @@ function Workspace({
         dispatchTransport({type: "observed", status: reconciled.status});
       } catch (error) {
         if (!ownsCurrent()) return;
+        const live = readCurrent();
+        const unresolved = live.pending ?? live.lastFailed;
+        if (unresolved?.commandId !== retained.commandId) return;
         dispatchTransport({
           type: "failed",
           command: retained,
