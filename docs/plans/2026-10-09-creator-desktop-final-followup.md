@@ -48,7 +48,7 @@
 | D2 | 400 ms 连续旋钮提交 | 已确认，包括 BPM 保持音乐位置；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；BPM 即时变速不重启 Pattern；Perform 保持效果并按 HOLD 离页释放。 |
 | D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | Assign 与精确数值编辑已批准；待独立实现 | 当前工程已有 Asset → 明确 A01–D16 目标，不移动来源、覆盖确认、取消不改 Truth；数值立即试听，Apply/Enter 一次保存/Undo，Esc/切目标取消。复用现有单位/边界与已批准旋钮细调，不改 touch slider 提交语义。 |
-| D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 四项边界已批准；补充设计与实施待完成 | MASTER 共用 ENC4；独立 LP/HP/BP、Cutoff、Resonance；64 Pad live Mute/Solo 随 Performance 录制/重放；Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器。新事件模型、优先级、生命周期和峰值保持等未由此次回答批准。 |
+| D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 四项边界与三项补充已批准；剩余设计与实施待完成 | MASTER 共用 ENC4；主效果 Cutoff/Delay/Reverb，新增 FILTER 类型/Cutoff/Resonance；独立滤波按实时 HOLD 规则并录制/重放全部参数；64 Pad live Mute/Solo 随 Performance 录制/重放，多个 Solo、Mute 优先；Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器。具体事件兼容模型、剩余生命周期和峰值保持未由此次回答批准。 |
 | I1–I5 | D1–D5 的对应实现 | I1b/I1c 已合并，原浏览器失败项及 BPM 可听预览仍未关闭；D4 待实现，D5 待补齐设计和实现 | #1936 → `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce` 交付 contextual consumer，不等于完整验收；每项追加精确 Task，独立实现和合并。 |
 | A1 | 四页自动化与视觉核对 | 待验收 | I1–I5 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
@@ -105,7 +105,7 @@ facts；实际实现的 Portal 更新仍由各 Task 交付。**Pitfall impact: n
 本次独立 docs Task 检查 fresh main：
 `314d1cadd8aab7504513b15a42cc96bb9c8742d8`。#1929 已真实合并为该 SHA，
 仅交付 BPM／D03 决定与计划更新，不交付 D04 产品能力。
-owner 对四项问答的批准记录在
+owner 对四项问答及 2026-10-11 三项补充的批准记录在
 [D04 实时控制与作品电平决定](../prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)：
 
 - MASTER 与 ENC4 共用本设备监听音量，不写工程、不改变录音／重采样／导出。
@@ -115,6 +115,13 @@ owner 对四项问答的批准记录在
   Project 内 Pad 的 `playback.muted`。
 - meter 显示效果后、监听音量前的立体声 dBFS 峰值，排除节拍器；设备
   监听音量变化不改变作品电平。
+- 2026-10-11 补充：主效果 ENC1=Cutoff／ENC2=Delay／ENC3=Reverb；新增
+  FILTER 组 ENC1=LP／HP／BP 类型／ENC2=Cutoff／ENC3=Resonance，ENC4
+  仍固定监听。两个组的 Cutoff 共用一个参数。
+- 独立滤波停转／切组保持、离页按 HOLD 释放，类型／Cutoff／Resonance
+  完整随 Performance 录制／重放，不写 Pad／工程音色参数。
+- 多个 Solo 可同时启用；任一 Solo 时仅放行被 Solo 的 Pad，Mute 优先，
+  Mute＋Solo 的 Pad 仍静音。
 
 **Premise dispositions:** 当前 `MonitorOutputSession`、Web monitor gain、App
 ENC4 与设备偏好存储已提供可复用的监听 producer；MASTER 只缺对应 consumer，
@@ -126,10 +133,11 @@ Domain Performance event variant、`MasterFxChain::process_filter` 及
 其实际文件范围没有上述 D04 producer，不把它视作对应能力已交付。
 
 **Remaining design and implementation:** MASTER consumer 可以基于已批准共享
-状态准备独立声明；滤波默认值／完整参数录制模型、新 ENC 映射、Mute/Solo
-优先级／生命周期和 meter 峰值窗口／保持／不可用表现仍须补齐设计。
-已有 Perform 停转／切参数组保持、离页 HOLD 规则和触屏 slider release／blur
-提交语义保持，不自动扩展到尚未定义的新状态。后续 producer／事件模型与
+状态准备独立声明；滤波默认值／参数范围／事件兼容模型、Mute/Solo
+初始化／恢复／离页生命周期和 meter 峰值窗口／保持／不可用表现仍须补齐设计。
+独立滤波已明确沿用 Perform 停转／切参数组保持、离页 HOLD 规则；触屏
+slider release／blur 提交语义保持，不自动扩展到尚未定义的新状态。
+后续 producer／事件模型与
 consumer 分 Task，开始前刷新实际源码、声明精确文件与最低层验证；
 真实听感、四页 A1/A2 和 V1 仍未完成。
 

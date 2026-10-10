@@ -1,8 +1,10 @@
 # 已确认：D04 共用监听音量、独立滤波、实时 Mute/Solo 与作品电平
 
 - 日期：2026-10-10
-- 来源：owner 分别确认 D04 MASTER、独立滤波、Mute/Solo 和电平表四项问答。
-- 结论：以下四项是批准的产品边界；产品实现、补充设计和验收仍待独立 Task。
+- 来源：owner 于 2026-10-10 分别确认 D04 MASTER、独立滤波、Mute/Solo 和
+  电平表四项问答；2026-10-11 又明确确认滤波旋钮分组、完整参数录制与
+  多个 Solo／Mute 优先。后续批准作为此次尚未合并决策 Task 的追加修改。
+- 结论：以下产品边界与三项补充已批准；产品实现、剩余设计和验收仍待独立 Task。
 
 ## MASTER 共用 ENC4 的设备监听音量
 
@@ -19,9 +21,21 @@ D04 增加真正独立的 LP／HP／BP 类型、Cutoff 和 Resonance。
 Sample Tone 也不能代替它们。
 
 本条扩展上述 2026-10-09 决定中「使用现有单值 FX、不增加独立滤波参数」
-的能力范围；历史决定保持原样。已批准的 Perform 停转／切参数组保持效果、
-离页按已有 HOLD 规则释放仍有效。新滤波模型所需的扩展边界须显式设计，
-不从该既有规则推导尚未批准的参数存储、默认值或完整录制模型。
+的能力范围；历史决定保持原样。owner 明确批准以下映射：
+
+| Perform 参数组 | ENC1 | ENC2 | ENC3 | ENC4 |
+| --- | --- | --- | --- | --- |
+| 主效果 | Cutoff | Delay | Reverb | 同一个设备监听音量 |
+| FILTER（新增） | LP／HP／BP 类型 | Cutoff | Resonance | 同一个设备监听音量 |
+
+已有「更多效果」组、SHIFT + ENC1–3 细调与其他页映射保持。
+主效果与 FILTER 的 Cutoff 读写同一个参数，不各存一份滤波值。
+
+独立滤波停转和切参数组保持效果，离开 Perform 时按已有 HOLD 规则释放。
+类型、Cutoff、Resonance 完整随 Performance 录制和重放，不写入 Pad／工程
+音色参数。不能只录制旧单值 Filter，或只重放其中一个新参数。
+本条确认该行为，不凭它选择默认值、参数范围／单位或具体事件编码和兼容策略；
+这些仍需显式补齐设计。
 
 ## 全部 64 个 Pad 的实时 Mute/Solo
 
@@ -29,8 +43,11 @@ Mute／Solo 作用于全部 64 个 Pad（A01–D16）的实时演奏状态，
 作为 Performance 事件录制和重放。不修改工程内 Pad 的 `playback.muted`
 参数，不把实时状态当作 authoring 保存／Undo。
 
-Solo 与 Mute 同时存在时的优先级、初始化／恢复状态、离页和 HOLD 扩展边界、
-具体事件与重放 Contract 仍须补齐；此次回答没有批准这些细节。
+允许多个 Pad 同时 Solo。只要有任一 Solo，仅放行被 Solo 的 Pad；
+Mute 优先，Mute 与 Solo 同时开启的 Pad 仍静音。
+
+初始化／恢复状态、离页和 HOLD 扩展边界、具体事件与重放 Contract 仍须补齐；
+此次回答没有批准这些细节。
 不能将既有 Sample 的持久化 mute 操作当作该实时能力已经交付。
 
 ## Post-FX／Pre-ENC4 的立体声作品电平
@@ -67,8 +84,9 @@ Inspected revision: `314d1cadd8aab7504513b15a42cc96bb9c8742d8`。
 先补齐尚未批准的产品／Contract 边界，再声明精确文件与最低层测试。
 独立滤波、实时 Mute／Solo 的 producer／事件模型和 meter producer 与
 Creator consumer 按实际依赖分 Task；MASTER consumer 复用已交付监听能力。
-不更改已批准 ENC1–4 映射或现有触屏 slider release／blur 提交语义。
-本决定部分解决 #1822；其他页方向键、新 SHIFT 组合键和上述设计细节仍未决定。
+仅以上述 owner 批准的主效果＋FILTER 表扩展 Perform ENC1–3，ENC4 固定监听；
+不改变其他已批准映射或现有触屏 slider release／blur 提交语义。
+本决定部分解决 #1822；其他页方向键、新 SHIFT 组合键和上述剩余设计仍未决定。
 
 ## Version Management
 
