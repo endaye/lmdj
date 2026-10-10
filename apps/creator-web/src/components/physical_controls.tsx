@@ -271,7 +271,7 @@ export function PhysicalControls({
           icon={modeIcon("perform", activeMode === "perform")}
           ariaLabel={performEnabled
             ? "Perform"
-            : "Perform — requires a playable Project, running audio, and capture storage"}
+            : "Perform — open a playable Project first"}
           current={activeMode === "perform"}
           disabled={!performEnabled}
           onClick={() => onSelectMode("perform")}
