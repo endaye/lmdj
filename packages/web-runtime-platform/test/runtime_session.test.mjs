@@ -6735,6 +6735,24 @@ test("Pattern transport switch sends the exact payload and validates the result"
   await session.close();
 });
 
+test("Pattern transport switch result refuses a zero activation frame", async () => {
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => envelope.operation === "pattern.transport.switch"
+      ? success(envelope, {pattern_id: envelope.payload.pattern_id, activation_frame: 0})
+      : success(envelope, defaultResult(envelope.operation)),
+  });
+  await session.start();
+  await assert.rejects(
+    session.requestTransportPatternSwitch({
+      patternId: TRANSPORT_PATTERN_ID,
+      requestId: TRANSPORT_COMMAND_ID,
+    }),
+    /Pattern transport switch result is invalid/,
+  );
+  await session.close();
+});
+
 test("Pattern transport switch result is exact and null means already playing", async () => {
   const {session} = fixture({
     patternTransport: true,

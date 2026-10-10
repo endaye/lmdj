@@ -9455,6 +9455,47 @@ void test_transport_stop_spends_a_deferred_switch_without_publishing() {
 // A tempo change republishes the current Pattern, which the engine refuses
 // over a queued switch; it is refused before any Truth commit, while a
 // swing-only update (no publication) still succeeds.
+// A tempo republication scheduled while playing owns the Engine's next
+// publication. A switch requested over it is refused like the sibling
+// authoring operations, and inspect does not report the republication as a
+// queued Pattern switch.
+void test_transport_switch_refuses_a_foreign_pending_publication() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  play_grid_transport(*runtime, 9870);
+  const auto revision = project_revision_of(*runtime);
+  const auto tempo = runtime->dispatch(
+      "sequence.settings.update",
+      {{"command_id", uuid(9871)},
+       {"expected_revision", revision},
+       {"session_id", nullptr},
+       {"bpm", 100},
+       {"quantize_enabled", nullptr},
+       {"swing_percent", nullptr}},
+      {});
+  check_success(tempo);
+  LMDJ_CHECK(!tempo.at("result").at("pattern_publication").is_null());
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation != 0);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId)
+                 .at("pending_switch")
+                 .is_null());
+
+  const auto refused = check_error(
+      runtime->dispatch(
+          "pattern.transport.switch",
+          transport_switch_request(kSwitchPatternB, 9872), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(
+      refused.at("details").at("reason") == "pattern_publication_pending");
+  // Truth keeps only the tempo commit and the runtime is not sealed.
+  LMDJ_CHECK(project_revision_of(*runtime) == revision + 1);
+  const auto inspected =
+      pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(inspected.at("pending_switch").is_null());
+  LMDJ_CHECK(inspected.at("playing") == true);
+}
+
 void test_sequence_settings_bpm_refuses_a_pending_transport_switch() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -9961,6 +10002,7 @@ int main() {
     test_transport_record_after_an_applied_switch_records_the_new_pattern();
     test_transport_switch_refused_while_recording_and_while_stopped();
     test_transport_stop_spends_a_deferred_switch_without_publishing();
+    test_transport_switch_refuses_a_foreign_pending_publication();
     test_sequence_settings_bpm_refuses_a_pending_transport_switch();
     test_pattern_events_edit_refuses_a_pending_transport_switch();
     test_transport_record_refuses_a_pending_transport_switch();

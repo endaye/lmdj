@@ -3712,7 +3712,8 @@ function createRuntimeSessionController(options = {}) {
         !exactKeys(value, ["pattern_id", "activation_frame"]) ||
         value.pattern_id !== patternId ||
         (value.activation_frame !== null &&
-          !isUnsignedInteger(value.activation_frame))
+          (!isUnsignedInteger(value.activation_frame) ||
+            value.activation_frame === 0))
       ) {
         throw protocolMismatch("Pattern transport switch result is invalid");
       }

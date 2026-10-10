@@ -2283,25 +2283,38 @@ struct ControlRuntime::Impl {
     return current.has_value() ? Json(current->value()) : Json(nullptr);
   }
 
-  // The switch a client waits on: the Host's queued record first — a
-  // deferred target outranks the audio-claimed publication it waits behind —
-  // then any publication the Engine itself still holds pending.
+  // The switch a client waits on: only the Host's queued record — a
+  // deferred target outranks the audio-claimed publication it waits behind.
+  // Other Engine publications (a tempo republication, a deferred edit) are
+  // not Pattern switches and are not reported here.
   Json pending_transport_switch_json() const {
-    if (pending_transport_switch.has_value()) {
-      return {
-          {"pattern_id", pending_transport_switch->pattern_id.value()},
-          {"activation_frame", pending_transport_switch->activation_frame},
-      };
-    }
-    const auto telemetry = engine.pattern_telemetry();
-    const auto pending = engine.pending_pattern_id();
-    if (telemetry.pending_generation == 0 || !pending.has_value()) {
+    if (!pending_transport_switch.has_value()) {
       return nullptr;
     }
     return {
-        {"pattern_id", pending->value()},
-        {"activation_frame", telemetry.pending_activation_frame},
+        {"pattern_id", pending_transport_switch->pattern_id.value()},
+        {"activation_frame", pending_transport_switch->activation_frame},
     };
+  }
+
+  // True when the Engine holds a pending Pattern publication, or the Host a
+  // deferred edit, that is not this Host's own queued transport switch.
+  bool foreign_pattern_publication_pending() const {
+    if (deferred_pattern_edit.has_value()) {
+      return true;
+    }
+    const auto telemetry = engine.pattern_telemetry();
+    if (telemetry.pending_generation == 0) {
+      return false;
+    }
+    if (!pending_transport_switch.has_value()) {
+      return true;
+    }
+    const auto& record = *pending_transport_switch;
+    const auto owned = record.generation.has_value()
+        ? *record.generation
+        : record.blocker->generation;
+    return telemetry.pending_generation != owned;
   }
 
   void retarget_transport_selection(const foundation::PatternId& applied) {
@@ -2382,8 +2395,10 @@ struct ControlRuntime::Impl {
         *pending == record.blocker->pattern_id) {
       return;
     }
-    // The blocker was cancelled at a command cutoff; so is the switch
-    // deferred behind it.
+    // The blocker was cancelled at a command cutoff (Stop), so the switch
+    // deferred behind it is spent too. This is intended: the transport no
+    // longer plays, and clients read the applied state from inspect
+    // (`current_pattern_id`, `pending_switch`), never from a promised frame.
     pending_transport_switch.reset();
   }
 
@@ -2412,8 +2427,12 @@ struct ControlRuntime::Impl {
       pending_transport_switch.reset();
       return true;
     }
+    // Cancel the blocker only while the Engine still holds that exact
+    // publication: same Pattern and same generation.
     if (engine.pending_pattern_id().has_value() &&
         *engine.pending_pattern_id() == record.blocker->pattern_id &&
+        engine.pattern_telemetry().pending_generation ==
+            record.blocker->generation &&
         !engine.cancel_pattern_publication(*record.blocker)) {
       return false;
     }
@@ -5387,6 +5406,16 @@ Json ControlRuntime::dispatch(
       // Host's selection, a cancelled one spends its record, and a deferred
       // one whose blocker landed publishes at the promised boundary.
       impl_->observe_transport_switch();
+      // Another scheduled publication (a tempo republication, a deferred
+      // edit) owns the Engine's next publication; refuse as the sibling
+      // authoring operations do instead of racing it.
+      if (impl_->foreign_pattern_publication_pending()) {
+        return host_error(
+            "HOST_STATE_INVALID",
+            "a scheduled Pattern publication must land before switching "
+            "Patterns; retry after it lands",
+            {{"reason", "pattern_publication_pending"}});
+      }
       const auto target = foundation::PatternId{selected_pattern};
       const auto current = impl_->engine.current_pattern_id();
       if (current.has_value() && *current == target) {
