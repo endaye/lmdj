@@ -1,11 +1,13 @@
 # 技术提案：Performance 实时控制的初始状态、顺序与确认边界
 
 - 日期：2026-10-11
-- 状态：D0 技术设计 review 完成；Root 已通读完整三文档，独立复核确认 R1–R6 的设计处置。产品约束沿用既有 owner 决定，尾音仍 pending；实施与运行验收未完成。
+- 状态：D0 技术设计 review 完成；Root 已通读完整三文档，独立复核确认 R1–R6 的设计处置。共享尾音产品选择已获 owner 批准；实施与运行验收未完成。
 - 产品依据：[D04 实时控制决定](2026-10-10-mixer-live-controls-and-meter.md)。
 - 实施拆分：[producer／consumer 计划](../../plans/2026-10-11-performance-live-control-producers.md)。
 - 复查 base：`4a2b26f03a1e628882e907c92a9b9411b48e110d`。
-- 尚待 owner 回答：Mute 的共享效果尾音语义，见下文；M1 不得先行实现。
+- 本次批准状态更新复查实际 main：`1e9a90c1055c8fc5c5df3fa878dda416b1d00a20`；
+  MASTER consumer 已合入，不构成 independent Filter／live masks 或其声音验收。
+- 后续批准：[三页导航与 live Mute/Solo 共享尾音](2026-10-11-creator-navigation-and-live-mute-tails.md) 解决尾音产品选择；M1 仍依赖 F1 实际合并、工程验证及独立 Task，不能把 96-frame ramp 当作批准的输入宽限。
 
 ## 已批准的产品约束
 
@@ -639,14 +641,17 @@ reset/neutral 是同队列的一个有界命令，包含旧 HOLD/FX neutral、in
 engine stopped 且 callback-drained 才可用 quiescence 证明完成。旧 “8 release 已 dequeue”
 计数不能证明新 Filter／mask 清理。新的 default parameters 不等于已 ACK neutral。
 
-## 生命周期与待答的尾音选择
+## 生命周期与已批准的共享尾音
 
 录制 Stop 仅停止记录，不清 live 控制；Pad 门控在 Bank／Pattern 切换仍保留。
 离 Perform 先确认两组 mask 清空，再执行既有 FX release／HOLD 和 transport／录制
 finalize。HOLD 可保留 Filter，但不能保留 mask。切工程／关闭 session／engine
 replacement 让旧 epoch 失效并在新 engine 初始 neutral，不把 live mask 写 localStorage。
 
-**Pending — owner 尚未选择 Mute 尾音语义。** 推荐在每个工程 Pad 声部进入共享
+**已批准 — 对应 Pad 当前／后续输入立即阻断，已进入共享 Delay／Reverb 的尾音
+自然衰减，其他 Pad 效果继续。** 来源见上述后续决定；不扩大到每 Pad 尾音隔离。
+以下保留原工程提案，具体 ramp／cursor 行为仍须 M1 技术审阅与实际声音验证，
+96 帧不是 owner 批准的输入宽限。原推荐在每个工程 Pad 声部进入共享
 Master FX 之前乘 live gate：96-frame gain ramp 到零，cursor／gate duration 继续前进；
 解除 Mute／Solo 恢复当时声部，不重触发。已进入共享 Delay／Reverb 的尾音自然衰减，
 不清共享 delay-line，也不删除别的 Pad 的效果尾音。
@@ -655,7 +660,7 @@ Master FX 之前乘 live gate：96-frame gain ramp 到零，cursor／gate durati
 如果 owner 要求每个 Pad 连其历史尾音立即单独静音，现有共用总线无法区分尾音来源；
 需要另立 per-Pad send／FX state 或 tail attribution 的架构、CPU／内存与 resample
 验证 Task。不能在 M1 静音整个 shared FX 或全局清 buffer 伪装实现，因为会伤其他 Pad。
-在实际回答到达前，推荐不构成批准，M1 和依赖其声音验收的 Task 不启动。
+原「等待尾音回答」卡点已解除；F1 合并、M1 的工程验证及声音验收仍未完成。
 
 ## 设计 review 的最小反例
 

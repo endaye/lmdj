@@ -21,6 +21,7 @@ source_paths:
   - docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md
   - docs/prd/decisions/2026-10-10-record-key-and-count-in.md
   - docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md
+  - docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md
   - docs/plans/2026-10-10-pattern-switch-and-count-in.md
   - docs/plans/2026-10-10-creator-interaction-map.md
   - docs/plans/2026-10-10-creator-interactions-refresh.md
@@ -783,4 +784,4 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 - “现有自动化证据”列是测试定位索引，不代表每次更新都运行了全部套件。具体执行项与通过数量记录在对应 Task 或 PR 中。
 - 源码、组件测试、打包浏览器旅程、真实设备和已部署构建之间的边界保持区分。
 - 核对基线和验证命令见[刷新 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interactions-refresh.md)；初版范围见[原文档 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interaction-map.md)。
-- 本页的 I1c 旋钮源码更新和验证见[后续计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-09-creator-desktop-final-followup.md)。可听 BPM、其他页方向映射、Assign／细调编辑器、Perform MASTER／滤波类型／Mute／Solo／电平表仍待后续决定或实现；不由已有旋钮批准推导语义。
+- 本页的 I1c 旋钮源码更新和验证见[后续计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-09-creator-desktop-final-followup.md)。其他三页方向映射及 live Mute/Solo 共享尾音已获[独立批准](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)，实现与验收仍待 K2／M1：导航只改变选择或编辑页，不触发 Pad、不写 Truth；立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减，其他 Pad 效果继续。MASTER consumer 已随 #2000 合入，完整 Creator 验证仍 pending；可听 BPM、Assign／细调、独立滤波／Mute／Solo／电平表仍按对应 Task 交付和验收。本页不把批准状态或 merge 推导为新增能力或验收全部完成。
