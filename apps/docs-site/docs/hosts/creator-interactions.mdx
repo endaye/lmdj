@@ -1,0 +1,783 @@
+---
+title: Creator 交互手册（按页面）
+area: hosts
+status: implemented
+owners: [product, hosts, web]
+source_paths:
+  - apps/creator-web/src/app.tsx
+  - apps/creator-web/src/components
+  - apps/creator-web/src/state
+  - apps/creator-web/src/styles.css
+  - apps/creator-web/src/runtime/input_controller.ts
+  - apps/creator-web/src/runtime/sample_actions.ts
+  - apps/creator-web/src/runtime/project_actions.ts
+  - apps/creator-web/src/capture/pad_capture.ts
+  - apps/creator-web/test
+  - packages/web-runtime-platform/web/input_adapters.mjs
+  - packages/application-facade/src/pattern_transport_controller.cpp
+  - packages/audio-runtime/src/master_fx.cpp
+  - packages/authoring-domain/src/command_handler.cpp
+  - docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md
+  - docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md
+  - docs/prd/decisions/2026-10-10-record-key-and-count-in.md
+  - docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md
+  - docs/plans/2026-10-10-pattern-switch-and-count-in.md
+  - docs/plans/2026-10-10-creator-interaction-map.md
+  - docs/plans/2026-10-10-creator-interactions-refresh.md
+  - docs/plans/2026-10-09-creator-desktop-final-followup.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+export const ConsoleDiagram = () => {
+  const keys = [['PRJ', 'SMP'], ['SEQ', 'PRF'], ['A', 'B'], ['C', 'D'], ['↑', '↓'], ['←', '→'], ['SHIFT'], ['●', '▶']];
+  const names = ['Project · Sample', 'Sequence · Perform', 'Bank A · B', 'Bank C · D', '↑ · ↓', '← · →', 'SHIFT', 'Record · Play/Stop'];
+  const line = {fill: 'none', stroke: 'currentColor', strokeWidth: 1.5};
+  return (
+    <figure style={{margin: '1rem 0', maxWidth: '760px'}}>
+      <svg viewBox="-170 0 1050 592" role="img" aria-label="Creator 控制台 880×592：左栏、上屏、16 个 Pad、触摸区"
+        style={{width: '100%', height: 'auto', color: 'var(--ifm-font-color-base)'}} fill="currentColor" textAnchor="middle">
+        <rect x="0" y="0" width="880" height="592" rx="16" {...line} strokeWidth="2" />
+        <rect x="16" y="16" width="80" height="80" rx="6" {...line} strokeDasharray="4 3" />
+        <text x="56" y="60" fontSize="13">Logo</text>
+        <text x="56" y="76" fontSize="11">= System</text>
+        {[1, 2, 3, 4].map((n) => {
+          const x = n % 2 ? 32 : 80, y = n < 3 ? 128 : 176;
+          return <g key={n}><circle cx={x} cy={y} r="15" {...line} /><text x={x} y={y + 4} fontSize="11">{n}</text></g>;
+        })}
+        {keys.map((row, r) => row.map((label, c) => {
+          const x = 16 + c * 48, y = 208 + r * 48, w = row.length === 1 ? 80 : 32;
+          return <g key={label}><rect x={x} y={y} width={w} height="32" rx="4" {...line} /><text x={x + w / 2} y={y + 20} fontSize="12">{label}</text></g>;
+        }))}
+        {names.map((name, r) => <text key={name} x="-12" y={229 + r * 48} fontSize="15" textAnchor="end">{name}</text>)}
+        <text x="-12" y="61" fontSize="15" textAnchor="end">System 入口</text>
+        <text x="-12" y="157" fontSize="15" textAnchor="end">ENC1–ENC4</text>
+        <rect x="112" y="16" width="752" height="176" rx="8" {...line} />
+        <text x="488" y="96" fontSize="20">上屏（只读反馈）</text>
+        <text x="488" y="124" fontSize="14">显示当前页的总览</text>
+        {'QWERTYUIASDFGHJK'.split('').map((key, i) => {
+          const x = 112 + (i % 4) * 96, y = 496 - Math.floor(i / 4) * 96;
+          return <g key={key}><rect x={x} y={y} width="80" height="80" rx="8" {...line} fillOpacity="0.08" fill="currentColor" /><text x={x + 40} y={y + 46} fontSize="15">{String(i + 1).padStart(2, '0')} · {key}</text></g>;
+        })}
+        <rect x="496" y="208" width="368" height="368" rx="8" {...line} />
+        <text x="680" y="384" fontSize="20">触摸区</text>
+        <text x="680" y="412" fontSize="14">内容随页面变化</text>
+      </svg>
+      <figcaption>880 × 592 控制台。左栏按键自上而下八行；Pad 标签为本 Bank 内序号与键盘键。</figcaption>
+    </figure>
+  );
+};
+
+<BuildIdentity />
+
+本手册按页面说明 Creator Web 当前已接线的交互。核对日期：2026-10-10。第 1 章写全页通用的规则，各页只引用；每页先给一张**控件速查卡**，再列触摸区控件。表中只写会改变内容的格子。已批准但还没实现的行为集中在[第 2 章](#planned)，其余章节只写当前行为。实现细节、精确条件、源码与测试索引放在[附录](#appendix)。
+
+本页依据当前源码和界面测试，不是硬件按键设计提案；实体设备、听感和线上部署需要各自的验收，见[附录 A.4](#evidence)。
+
+## 1. 整机与全局规则 \{#global\}
+
+### 1.1 控制台四区 \{#console\}
+
+<ConsoleDiagram />
+
+- **左栏**：Logo（即 System 入口）、2×2 的 ENC1–ENC4，以及八行按键：Project｜Sample、Sequence｜Perform、A｜B、C｜D、↑｜↓、←｜→、SHIFT（占一整行）、Record ●｜Play/Stop ▶。[布局参考](https://github.com/endaye/lmdj/blob/main/docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md)第 4 节的 −／+ 行目前不存在，方向键上移，SHIFT 占第 7 行。
+- **上屏**：只读反馈区。它没有可点击的音乐按钮、旋钮、波形拖拽点或网格编辑点。编辑都来自左栏、Pad 和触摸区。
+- **16 个 Pad**：当前 Bank 的 16 个声音槽，地址见 [1.8](#pads)。
+- **触摸区**：内容随当前页面变化，各页分别说明。
+
+### 1.2 页面键与 System 入口 \{#pages\}
+
+按任一页面键都会关闭 System、清除 SHIFT、未松开的按压和未提交旋钮草稿。普通换页不停止全局 Pattern 播放或录音。离开 Perform 或打开 System 时，旋钮拥有的效果手势按已有 HOLD 规则释放。
+
+| 按键 | 可用条件 | 结果 |
+| --- | --- | --- |
+| Project | 任意时候 | 进入 Project。 |
+| Sample | 任意时候 | 进入 Sample。普通重新进入时显示 Trim 子页。 |
+| Sequence | Project 已打开且支持 Sequence | 进入 Sequence，默认显示 EDIT。 |
+| Perform | Project 已打开 | 进入 Perform。缺少音频或录音存储时，触摸区说明还在等待什么。 |
+| 从 Perform 换到其他页 | 任意时候 | 先结束 Perform 的演出录制和 Replay，再换页。已停止、待保存的演出保留。 |
+| Logo（System） | 任意时候 | 打开 System，见[第 8 章](#system)。 |
+
+没有打开的 Project 时，上屏显示 NO PROJECT，Sequence 与 Perform 键不可用。
+
+### 1.3 播放与录音：Play/Stop 与 Record \{#transport\}
+
+左栏 Play/Stop 和 Record 在**每一页**都只控制全局 Pattern，不会变成采样或演出录音。
+
+| 状态 | Play 灯 | Record 灯 | 此时的限制 |
+| --- | --- | --- | --- |
+| 停止 | 灭 | 灭 | 只有此时能切 Pattern、改 Pattern 长度和结构。 |
+| 播放 | 亮 | 灭 | 可以打 Pad，可以改 Tempo／Swing；不能切 Pattern 或改长度。 |
+| 录音 | 亮 | 亮 | Pad 事件录入当前 Pattern；Sequence 网格编辑、Tempo／Swing／Quantize 和 Pad 改色不可用。 |
+| 命令处理中 | 等结果 | 等结果 | Play/Stop、Record 和相关设置暂不可用；以灯的最终状态为准。 |
+
+| 当前状态 | 按键 | 结果 |
+| --- | --- | --- |
+| 停止 | Play/Stop | 当前 Pattern 开始循环播放；需要时先唤醒音频。不改作者内容。 |
+| 播放 | Play/Stop | 停止 Pattern。不会关闭整个音频引擎；手打 Pad 仍按各自的触发模式发声。 |
+| 录音 | Play/Stop | 停止播放并保存本轮录入的事件；保存后网格显示这些事件。失败时保留提示和恢复入口。 |
+| 停止 | Record | 同时开始播放和录音。 |
+| 播放 | Record | 从当前位置开始叠录，不从头重新播放。 |
+| 录音 | Record | 结束录音并保存事件，Pattern 继续播放。 |
+| 没有 Project、音频未就绪、命令处理中或另一种录音进行中 | 任一键 | 按键不可用。Play 与 Record 的条件不完全相同，见[附录 A.2](#conditions)。 |
+
+- 录音中屏幕上即时出现的事件还没有保存；结束录音才保存。
+- 按 Play/Stop 或 Record 会清除 SHIFT。
+
+### 1.4 三种录音 \{#recordings\}
+
+| 入口 | 录什么 | 怎样保存 |
+| --- | --- | --- |
+| 左栏 Record ● | Pad 事件，录进当前 Pattern | 再按 Record 或按 Play/Stop 时保存。 |
+| 按住空 Pad（任意页） | 一段音频，录进这个 Pad；来源在 System 选麦克风或内部播放 | 正常松手后自动尝试保存，见 [1.9](#pad-capture)。 |
+| Sample 的 Record Sample | 麦克风音频，录进所选 Pad | Stop 后必须按 Commit，见 [4.7](#capture)。 |
+| Perform 的 Record Performance | 演出操作和主输出 WAV | Stop 后在 Takes 按 Save，见[第 6 章](#perform)。 |
+
+一种录音进行中时，其他录音入口不可用或不会开始。
+
+### 1.5 Bank 键与当前 Pad \{#bank\}
+
+Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16／C01–C16／D01–D16。
+
+- Bank 键不改 Pad 内容、Pattern 或作者内容。
+- Bank 键会清除 SHIFT、未松开的按压，以及 Sequence 中点 Bank 前的音符选区。
+- Pattern 播放或录音时也能切 Bank。
+- Project 未就绪、Runtime 未就绪或文件正在传输时，Bank 键仍显示，但不会切换。
+
+“当前 Pad”在不同页面含义不同：
+
+- **Sample**：所选 Pad，显示白边加绿点。按已分配的 Pad 会选中它，换 Bank 保留本 Bank 内序号（A03 → B03）。
+- **Sequence**：用 ↑↓ 移动的当前 Pad（A01–D16）。打 Pad 只演奏，不移动当前 Pad。
+- **Project／Sound Sets／Slice**：打 Pad 时 Sample 的所选 Pad 也跟着变，进入 Sample 后可以看到。
+
+### 1.6 SHIFT 与 Undo/Redo \{#history\}
+
+- SHIFT 是点一下开、再点一下关的锁存键。它本身不改任何内容。
+- SHIFT 打开时，← 是 Undo，→ 是 Redo，每次撤销或重做一次作者编辑。
+- ← → 的灯在有可撤销或可重做的编辑时亮。灯亮不代表不开 SHIFT 也能按。
+- SHIFT 关闭时，← → 在 Sequence 切 Pattern，在其他页不可用。
+- SHIFT 在换页、换 Bank、按 Play/Stop 或 Record、完成一次 Undo/Redo 后自动关闭。
+- Undo/Redo 恢复的是已保存的作者内容，例如 Pad 分配和颜色；它不撤销播放、下载或导出。
+- Undo/Redo 会清除 Sample 中未完成的参数草稿，并刷新各页显示。
+- 没有历史、采样或演出待处理、触摸参数草稿未完成或正在保存时，Undo/Redo 不可用。可取消的旋钮草稿先取消，再执行历史；不能用 Undo 绕过已经发出的作者操作。
+- Undo/Redo 执行期间，整个控制台暂时不接受操作。
+- SHIFT＋ENC1–3 使用细调；导航和整数 BPM 保留最小步长。ENC4 没有第二功能，也没有粗调层。
+
+### 1.7 旋钮与方向键 \{#encoders\}
+
+- 旋钮用滚轮、上下拖动，或聚焦后按方向键转动。向上、向右是增加，向下、向左是减少。
+- 单击旋钮没有额外动作。
+- ENC1–3 随页面和参数组变化，见 Project、Sample、Sequence 和 Perform 的控件速查卡。System／Sound Sets／Slice 的 ENC1–3 未分配。上屏持续显示四个当前功能和数值。
+- ENC4 在所有页面固定为 Output Volume：每格 1%，范围 0–100%，默认 100%，可恢复已记住的 0%。监听会话和偏好恢复就绪后才可转动。它立即改变本设备监听，包括节拍器；音量存 IndexedDB，不写 Project／Undo，也不改变录音、重采样或导出电平。
+- ↑↓ 只在 Sequence 导航当前 Pad；其他页面方向映射仍待批准。
+- ← → 不按 SHIFT 时只在 Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。
+- Sample 工程参数转动时立即预览，同一 Pad 的多参数停转 400 ms 后合并为一次保存／Undo。转回起点不保存。Sequence ENC3 的 BPM 当前只有即时读数预览，播放和节拍器仍等提交后发布；可听即时预览尚未实现。
+- Sample 作者锁定、Sequence 录音或传输结算时，相关工程参数旋钮不可用，未提交的预览作废；ENC4 保持监听职责。
+- 未提交的 Sample／BPM 旋钮草稿在离页、切 Pad／Project／Pattern、打开 System、Escape 或 Undo／Redo 前取消。下一轮从已保存的值开始；已经发出的请求保留真实结算结果。
+- Perform 旋钮停转或切 FX／MORE 组保持效果值；离开 Perform／打开 System 按 HOLD 释放拥有的手势，使用既有单值效果。
+
+这些映射、细调、监听记忆和 400 ms 生命周期遵循[已批准的旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)。Swing 保留在 Sequence SETUP 触摸区。可听 BPM 的播放位置决定与实现仍见 [I1c 后续验收](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-09-creator-desktop-final-followup.md)。
+
+### 1.8 16 个 Pad：地址、键盘与 MIDI \{#pads\}
+
+四个 Bank 共 64 个声音槽，每次显示 16 个。每个格子的行为相同，只是目标槽不同。
+
+屏幕按 MPC 方向排列：左下是 01，向右到 04，再向上逐行增加。Tab 焦点按屏幕从上到下、从左到右访问可用的 Pad。Sound Set 安装预览也用同一排列。位置排列不改变 Pad 地址、快捷键、MIDI 或 Pattern 引用。
+
+| 屏幕行（自上而下） | 左 1 | 左 2 | 左 3 | 左 4 |
+| --- | --- | --- | --- | --- |
+| 第一行 | 13 · G | 14 · H | 15 · J | 16 · K |
+| 第二行 | 09 · A | 10 · S | 11 · D | 12 · F |
+| 第三行 | 05 · T | 06 · Y | 07 · U | 08 · I |
+| 第四行 | 01 · Q | 02 · W | 03 · E | 04 · R |
+
+| 本 Bank 内序号 | Bank A／B／C／D 的地址 | 键盘 | MIDI note |
+| --- | --- | --- | --- |
+| 01 | A01／B01／C01／D01 | Q | 36 |
+| 02 | A02／B02／C02／D02 | W | 37 |
+| 03 | A03／B03／C03／D03 | E | 38 |
+| 04 | A04／B04／C04／D04 | R | 39 |
+| 05 | A05／B05／C05／D05 | T | 40 |
+| 06 | A06／B06／C06／D06 | Y | 41 |
+| 07 | A07／B07／C07／D07 | U | 42 |
+| 08 | A08／B08／C08／D08 | I | 43 |
+| 09 | A09／B09／C09／D09 | A | 44 |
+| 10 | A10／B10／C10／D10 | S | 45 |
+| 11 | A11／B11／C11／D11 | D | 46 |
+| 12 | A12／B12／C12／D12 | F | 47 |
+| 13 | A13／B13／C13／D13 | G | 48 |
+| 14 | A14／B14／C14／D14 | H | 49 |
+| 15 | A15／B15／C15／D15 | J | 50 |
+| 16 | A16／B16／C16／D16 | K | 51 |
+
+- 字母键按键盘的物理键位映射。
+- MIDI note 36–51 对应当前 Bank 的 16 个 Pad。
+- 按住键盘时的自动重复不会反复触发。
+- 在文本框、下拉框或可编辑内容中打字，不算 Pad 输入。
+- Pad 获得焦点后，Enter 或 Space 等同于按下和松开这个 Pad。
+- 鼠标和触摸的力度固定为 100；MIDI 使用输入力度。
+- 弹窗打开时，字母键并不会被统一屏蔽：焦点在弹窗按钮等非输入控件上时，字母键仍可能触发 Pad；能否发声仍取决于音频和 Project 状态。
+
+**按下和松开**取决于所选 Pad 的 Playback 设置：
+
+| 设置 | 按下 | 松开／再按 |
+| --- | --- | --- |
+| One Shot（Loop 关、One Shot 开） | 播放一次所选范围 | 松开不截断；再按重新触发。Release 不可用。声音播完，按压反馈才结束。 |
+| Gate（Loop 关、One Shot 关） | 开始播放 | 松开时释放声音，Release 影响尾音。 |
+| Loop Gate（Loop 开、Hold 关） | 开始循环 | 松开结束循环并进入释放。循环边界、Reverse、Crossfade 影响声音。 |
+| Loop Toggle（Loop 开、Hold 开） | 开始循环并锁住 | 松开继续循环；再按同一个 Pad 停止。 |
+| Mute 开 | 照常进入演奏和录音 | 没有声音。没有声音不代表没收到 Pad 事件。 |
+
+这里的 Hold 指循环锁存，和 Perform 的 FX HOLD 不是一回事。
+
+**任意页通用的 Pad 规则：**
+
+- Pattern 录音中，在任何一页按下和松开 Pad 都会录进当前 Pattern。
+- 默认声音正在加载、处理或失败时，该 Pad 显示 Loading／Processing／Failed，不能演奏；等声音准备好才能演奏。恢复入口见[第 9 章](#cross-page)。
+- 页面失焦或隐藏、触摸被取消、切 Bank 或换页时，未松开的按压会被清除。
+
+### 1.9 按住空 Pad 采样 \{#pad-capture\}
+
+| 情况 | 操作 | 结果 |
+| --- | --- | --- |
+| 可以采样，其他录音空闲 | 按住空 Pad，再松开 | 按住期间录 System 所选的输入；正常松开后自动尝试保存到这个 Pad。成功后 Pad 显示为已分配并带颜色。 |
+| 第一次使用，麦克风未授权 | 按一下或按住 | 只请求麦克风权限，这次不录音。授权后需要再按住一次。 |
+| MIDI 输入 | 发 note | 不会开始采样，也不能代替用户申请麦克风权限。 |
+| 另一种录音或状态挡住 | 按 Pad | 不开始采样，什么也不保存；按现有提示处理。 |
+| 当前环境不支持按住采样 | 在 Sample 点空 Pad | 只选中空槽，可以从这里打开文件选择。选文件后还要裁剪和确认才写入 Pad。 |
+
+- 同一时间只能有一个空 Pad 采样。
+- 录音时触摸区显示目标 Pad 和时长。
+- 录音开头严格为零的数字静音可以去掉。
+- 打开 System、页面失焦、隐藏或按压被取消时，这次采样不会自动保存，而是等待确认：Save Pad recording 或 Discard Pad recording，见[第 9 章](#cross-page)。
+- 这种待确认的录音没有裁剪手柄；和 Record Sample 的面板不同。
+
+### 1.10 弹窗与 Escape \{#modal\}
+
+- 弹窗打开时，Tab 和 Shift+Tab 只在弹窗内移动。
+- Escape 执行该弹窗的取消或关闭，关闭后焦点回到打开它的控件。
+- 点弹窗外的遮罩不会关闭弹窗。
+- 弹窗打开时，背景不能用鼠标或触摸操作。字母键例外，见 [1.8](#pads)。
+- Escape 和 Delete 在不同控件上含义不同：EQ 点、滑块、Capture 裁剪和网格各有规则，不能把一个规则套到所有控件。网格没有“Escape 删音符”。
+
+### 1.11 保存与“声音准备好” \{#saving\}
+
+- 作者内容自动保存，没有手动 Save 或 Save As 按钮。
+- 本手册说的“生效”，指操作成功并且屏幕已经显示新结果。等待、失败或“已保存、声音还没准备好”都不算完成。
+- 只改选中项、视图、草稿或设置表单，不产生新的作者编辑。
+- 有时内容已保存，但新声音还不能播放：Project 上屏显示 Sample saved · audio pending，触摸区显示 Retry Prepare 或 Retry audio preparation。重试只重新准备声音，不重新导入。
+
+### 1.12 全局状态速查 \{#states\}
+
+| 状态 | 能做什么 |
+| --- | --- |
+| 启动中，Project 列表读取中 | 等待。上屏显示状态，触摸区显示加载或错误，Pad 和播放键暂不可用。 |
+| 没有 Project | 只能新建、导入等。上屏显示 NO PROJECT。 |
+| 正在打开、导入或保存 | 相关编辑、选择和部分导航要等完成；完成前看到的仍是旧内容。 |
+| 音频未启动或已暂停 | 第一次有效的音乐操作会唤醒音频；部分按钮先唤醒再执行。触摸唤醒可能在松手时才完成。上屏显示音频状态，触摸区的试听提示随之变化。 |
+| 任一种录音进行中或待处理 | 不能开始另一种录音，见 [1.4](#recordings)。Record Sample 面板打开时只能在面板里操作。 |
+| System 打开 | 见[第 8 章](#system)。 |
+| 已保存但声音未准备好、有待恢复的录音、Project 被占用、Runtime 故障 | 见 [1.11](#saving) 和[第 9 章](#cross-page)。 |
+
+## 2. 已决定、待实现 \{#planned\}
+
+以下行为已获批准，但**当前版本还没有实现**。在实现之前，本手册其余章节描述的当前行为仍然有效。
+
+- **未实现** · 播放和录音中切换 Pattern（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)，[#1958](https://github.com/endaye/lmdj/issues/1958)）。播放或录音中可以用 ← →、GROOVE 和 Perform Launch 切 Pattern，在 SEQ SNAP 边界生效（OFF／1 BEAT／1 BAR 默认／SEQ END），录音不中断。Perform Launch 不再要求开着演奏录音。
+- **未实现** · 实体 ● 与 count-in（[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)，[#1959](https://github.com/endaye/lmdj/issues/1959)）。● 在每一页都只录 Pattern 事件，这一点与当前相同。新增 count-in：Off／1／2 小节，默认 Off，只在停止状态按 ● 时数拍。
+- **未实现** · 可听 BPM 即时预览。[旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)批准每格立即预览，但当前 ENC3 只更新读数。播放位置语义仍待 owner 决定，producer 与 consumer 仍见 [PR #1929](https://github.com/endaye/lmdj/pull/1929)；本页其他已接线旋钮不替代这项验收。
+- **未实现** · 上述前两项的[实施计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-pattern-switch-and-count-in.md)分为 S1–S7：S1–S2 先做播放中按 1 BAR 切换，S4 加 1 BEAT 和 SEQ END，S6–S7 做 count-in，S3 做录音中切换，S5 做 OFF。
+
+## 3. Project \{#project\}
+
+**控件速查卡**
+
+| 控件 | 在 Project 页的作用 |
+| --- | --- |
+| ENC1／ENC2 | 选择 Project／滚动本地列表，每格一个项目或列表项；只选择，不打开。ENC3 未分配。 |
+| 其余左栏 | ENC4 监听音量；↑↓ 和不按 SHIFT 的 ← → 不可用。SHIFT + ← →、Play/Stop、Record、Bank 见[第 1 章](#global)。 |
+| 16 个 Pad | 演奏；Sample 的所选 Pad 跟着变。空 Pad 可按住采样。 |
+| 上屏 | 已打开 Project 的短身份、保存方式、待处理状态、Pattern 与 Pad 数量、音频和 MIDI 状态。 |
+| 触摸区 | Project 卡片、新建、打开、导入、复制和 Sound Sets 入口。 |
+
+上屏补充：
+
+- 点卡片或转 ENC1 只改变选择；上屏项目身份仍是已打开的 Project，选择旋钮的读数随选择变化。
+- 名称只显示公开字段；没有名称时显示短 Project ID 或 Pad 地址和类别。
+- `LOCAL AUTOSAVE` 只表示保存方式，不表示所有草稿都已保存，也不显示虚构的时间。
+- 上屏的 Project 短身份可供读屏软件读取。
+- Project ID、修订号等技术信息在 System → Project and build details。
+
+**触摸区**
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 有本地 Project | 点 Project 卡片 | 只选中这张卡片。不打开、不换声音、不复制。 |
+| 已选中卡片 | OPEN PROJECT | 打开所选 Project，换成它的 Pad。拿到 Project 并加载成功才算完成。有中断的录音时会出现恢复提示，见[第 9 章](#cross-page)。 |
+| 已有 Project | Open local／Back to Project | 展开或收起本地 Project 列表，只改视图。 |
+| 可以新建 | + NEW PROJECT | 新建并打开一个 Project，自动进入 Sample。新 Project 保存在本地。 |
+| 已打开 Project | DUPLICATE | 复制**当前已打开**的 Project 并打开副本，副本有独立身份。不复制只是选中的卡片。被拒绝时显示原因。 |
+| 可以导入 | IMPORT | 选择 .lmdj 文件导入，显示进度。取消文件对话框不改任何内容。导入成功后才替换当前内容。身份重复时见[第 9 章](#cross-page)。 |
+| 任意 | Sound Sets | 进入 Sound Sets，不会因进入而安装。 |
+
+## 4. Sample \{#sample\}
+
+**控件速查卡**
+
+| 控件 | 在 Sample 页的作用 |
+| --- | --- |
+| ENC1／ENC2／ENC3 | Trim / Pitch 组为 Start／End／Pitch；Pad Sound 组为 Pad Volume／Pan／Tone。组键在触摸区，见 [4.1](#sample-rules)。 |
+| 其余左栏 | ENC4 监听音量；↑↓ 和不按 SHIFT 的 ← → 不可用。SHIFT + ← →、Play/Stop、Record 见[第 1 章](#global)。 |
+| Bank | 所选 Pad 保留本 Bank 内序号（A03 → B03），只选择不演奏。Record Sample 已开始时可以换 Bank 演奏，但采样目标仍是原来的 Pad，录音不会写到新 Bank。 |
+| 按已分配的 Pad | 选中它（白边加绿点）并按触发模式演奏。触摸区保持当前子页，显示新 Pad 的参数。选择本身不保存。 |
+| 按空 Pad | 按住采样，见 [1.9](#pad-capture)；不支持时只选中空槽。 |
+| 把音频文件拖到 Pad | 这个 Pad 成为导入目标；已有声音先确认替换。拖放本身不覆盖内容。 |
+| 上屏 | Pad 地址、类别或空态、声道、采样率、总时长、Start–End、完整波形和范围标记。 |
+| 触摸区 | Trim、Playback、Tone / EQ、Pad 四个子页，作用于同一个所选 Pad。 |
+
+- 触摸区可以缩放波形；上屏始终显示完整波形。
+- 裁剪草稿有效时，上屏的范围线和 Selection 立即跟着变，不等试听；取消后两边都回到已保存的范围。
+
+### 4.1 子页与编辑规则 \{#sample-rules\}
+
+- 第一次进入 Sample 显示 Trim。
+- 换 Pad、换 Bank 或从 System 按 Back to music 回来，保持当前子页。
+- 普通离开 Sample 再回来，回到 Trim。Record Sample 面板、Sequence 中的裁剪覆盖层等需要保持 Sample 状态的场合除外。
+- 切子页会取消还没完成的试听草稿；已经按失焦规则保存的数值保留。
+- 子页切换只改视图，不保存内容，也不演奏。
+- 拖动参数时预览，松手、键盘步进结束或失焦时保存一次。
+- 拖动中按 Escape 或手势被取消，放弃这次修改。
+- 音频未启动时，裁剪画面仍可预览，但听不到试听。
+- 预览被拒绝时草稿清除；之后晚到的松手不会保存。
+- Trim / Pitch 和 Pad Sound 按钮切换旋钮组，不改变 Pad 或新增保存。Start／End 每格 10 ms，SHIFT 一个源帧；Pitch 每格 1 半音，SHIFT 0.1 半音。Pad Volume 每格 1 dB，SHIFT 0.1 dB；Pan／Tone 每格 10 单位，SHIFT 1 单位。有效裁剪／循环范围沿用现有边界。
+- 同一 Pad 的旋钮参数共用 400 ms 合并保存，见 [1.7](#encoders)。触摸接管或切 Sample 子页先取消未提交旋钮草稿；触摸松手、键盘完成或失焦的提交规则保持。
+
+### 4.2 Trim \{#trim\}
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 已分配 | Start／End 手柄、范围滑块、秒数输入 | 改播放起止。范围始终有效且不为空。手势结束才保存。只改播放范围，不裁掉原音频。 |
+| Loop 开 | Loop start 秒数输入 | 改循环起点，限制在播放范围内。 |
+| Forward 循环 | Loop crossfade 毫秒输入 | 改循环接缝的交叉淡化。Ping-pong 没有这个输入。上屏不显示该值。 |
+| 已分配 | Zoom In／Zoom Out／Fit／Pan Left／Pan Right | 放大、缩小、看全部、左右移动触摸区的波形窗口。只改视图。 |
+
+### 4.3 Playback \{#playback\}
+
+| 操作 | 结果 |
+| --- | --- |
+| Loop／One Shot（Loop 开时此键叫 Hold） | 切换触发模式，组合见 [1.8](#pads)。之后的演奏按新模式。 |
+| Forward／Ping-pong（Loop 开时） | 单向循环或往返循环。选 Ping-pong 时 Crossfade 隐藏并清零。 |
+| Mute／Reverse | 静音或反向，立即保存。Mute 不删除已录入的事件。 |
+| Volume／Pitch／Pan | 音量 −60 至 +6 dB，音高 ±24 半音，左右声像。 |
+| Attack／Release | Attack 0–2000 ms，Release 0–4000 ms。最短 2 ms 防爆音：显示 0–2 ms 时都按 2 ms。One Shot 时 Release 不可用。 |
+
+### 4.4 Tone / EQ \{#tone\}
+
+| 操作 | 结果 |
+| --- | --- |
+| Tone | 负值低通，正值高通，−2 至 +2 为 Off。 |
+| 拖动 EQ 的三个点，或聚焦后按方向键 | 横向改频率，纵向改增益。低点和高点拖进 Cut 区时为切除。回到 0 dB 时该段不起作用。 |
+| 中段：双击或双指触后上下拖动；聚焦后 Shift+↑↓ | 调 Q。普通拖动仍改频率和增益。手势结束保存一次，Escape 取消。 |
+| 焦点在 EQ 点上时按 Delete／Backspace | 关闭这一段 EQ。不会删除 Pad。 |
+
+空 Pad 在 Tone / EQ 页显示 Add Sample。
+
+### 4.5 Pad 子页 \{#pad-page\}
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 空 Pad（任一子页） | Add Sample | 打开本地音频选择，选好后进入[长源裁剪](#long-source)。Commit 前不写入 Pad。 |
+| 已分配 | Replace Sample | 选好文件后先确认替换（Confirm replace／Cancel replace／Escape）。确认后仍要经过导入裁剪。 |
+| 已分配或有待导入数据 | Delete | 停止这个 Pad，清除待导入数据和试听，删除声音。Pad 变空、颜色回中性，仍保持选中。Pattern 中对这个 Pad 的引用不变。 |
+| 已分配 | Reset Pad to Defaults → Confirm reset | 保留声音和颜色，恢复完整范围和播放默认值。Cancel reset 或 Escape 不改内容。 |
+| 已分配且可以改色 | 五个 PAD COLOUR 色块 | 设置这个 Pad 的颜色。Pad 边框变色，Sequence 的上屏轨道、网格标签和音符随后也用这个颜色。不改声音。选同一颜色不产生编辑。 |
+| 有自定义颜色 | Restore category default | 回到类别默认颜色或中性色。可以 Undo。 |
+| 录音空闲 | Record Sample | 已分配时先确认替换；空 Pad 直接打开 [Record Sample 面板](#capture)。总是用麦克风，与 System 中空 Pad 采样的输入来源无关。 |
+| 任意 | Sample details 折叠项 | 只读：Asset ID、源格式、帧数、修订号；空 Pad 显示未分配。 |
+| 已保存、声音未准备好 | Retry Prepare | 重新准备已保存的声音，成功后 Pad 恢复可演奏。不重新导入。 |
+| 支持 Slice，且 Pattern 停止 | Slice | 进入 Slice，见 [7.2](#slice)。不自动分析或分配。 |
+
+- 真正替换声音时，播放参数恢复默认，自定义颜色保留。
+- Delete 清除颜色；Reset 保留颜色。
+- 录音中、命令处理中、参数草稿未完成或另一项保存进行中时，不能改颜色。
+
+### 4.6 文件导入：长源裁剪 \{#long-source\}
+
+文件入口接受 WAV、MP3、M4A、AAC、FLAC 等，实际能读的格式取决于浏览器。保存的是统一格式的音频。
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 已解码 | Selection start／length 滑块 | 在源音频里选一段。长度受目标 Pad 和 Bank 的容量限制。只改草稿。 |
+| 选段有效 | Preview selection／Stop preview | 本地试听或停止。不保存。 |
+| 可以提交 | Commit selection | 把选段写入目标 Pad。成功后面板关闭，上屏显示新波形；失败时面板保留并显示错误。颜色规则与普通替换相同。 |
+| 面板内 | Delete Pad | 删除所选 Pad 的声音，不只是取消这次文件选择。 |
+| 未提交 | Cancel／Escape | 放弃这次导入，回到 Sample，原内容不变。 |
+
+面板打开时背景不能操作。
+
+### 4.7 Record Sample 面板 \{#capture\}
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 空闲或权限被拒 | Record into Pad | 请求麦克风权限并开始录音，显示输入电平、波形和时长。其他录音进行中时不可用。 |
+| 录音中 | Stop | 停止录音，进入裁剪。不会自动保存。 |
+| 录音中 | Continue in Sequence | 进入 Sequence，面板在后台继续录音。按原目标 Pad 可停止，之后裁剪面板覆盖在 Sequence 上。 |
+| 裁剪中或保存失败 | Start／End 手柄、范围输入或方向键 | 选择要保存的片段，阴影、起止和时长同步。Escape 取消正在进行的拖动或按键修改。 |
+| 裁剪中或保存失败 | Crop to selection | 丢掉选区外的音频，只留选中部分。尚未写入 Pad。 |
+| 裁剪中或保存失败 | Commit | 把选段写入原目标 Pad。失败时录音保留，可以重试；“已保存但声音未准备好”与“保存失败”分开提示。 |
+| 裁剪中或保存失败 | Discard | 丢掉这次录音，原内容不变。 |
+| 任意 | Close／Escape | 停止麦克风并关闭面板，不保存。 |
+| 录音中失焦、隐藏、设备变化或达到容量上限 | 自动停止 | 保留已录片段并说明原因，可以 Commit 或 Discard。自动停止不等于保存。 |
+
+- 录音期间，所选 Pad 显示 Capturing。
+- 再按原目标 Pad 会停止录音，不会演奏它。
+- 按其他已分配的 Pad 照常演奏，不改变采样目标。
+- 面板是弹窗，背景不能操作；Continue in Sequence 是唯一离开面板而不停止录音的出口。
+- 这个面板没有试听已录片段的按钮。
+- 与[按住空 Pad](#pad-capture)不同：这里 Stop 后必须 Commit；按住空 Pad 正常松手会自动尝试保存。
+
+## 5. Sequence \{#sequence\}
+
+**控件速查卡**
+
+| 控件 | 在 Sequence 页的作用 |
+| --- | --- |
+| ENC1 | EDIT 中每格移动一个小节，到边界停住；轨道名称列不动。SETUP 中网格不显示，ENC1 不可用。只改视图。 |
+| ENC2 | 上屏的 8 行窗口每格移动一条轨道（A01–D16）。不换 Bank，不滚动触摸区网格。 |
+| ENC3 | Tempo，每格 1 BPM，40–240。规则见 [1.7](#encoders)。 |
+| ENC4 | 设备监听音量，包括节拍器；不改 Swing、录音或导出电平。规则见 [1.7](#encoders)。 |
+| ↑ ↓ | 当前 Pad 前移或后移，A01–D16，可跨 Bank，到两端不可用。只导航，不演奏、不加删音符。 |
+| ← →（SHIFT 关） | 停止时切到上一个或下一个 Pattern，到两端不可用。播放、录音或命令处理中不可用。 |
+| SHIFT + ← →、Play/Stop、Record | 见[第 1 章](#global)。 |
+| Bank | 当前 Pad 保留本 Bank 内序号，上屏窗口跳到该 Bank 第一行，网格换成该 Bank 的 16 条轨道，清除音符选区。不发声。 |
+| 16 个 Pad | 只演奏，不新增音符，也不移动当前 Pad。录音中会录入，见 [1.3](#transport)。 |
+| 上屏 | BPM、Swing、bar／beat、播放状态、8 条轨道（地址和类别）、视窗框、当前 Pad、所选音符与力度。 |
+| 触摸区 | EDIT（默认）和 SETUP 两层。 |
+
+联动规则：
+
+- ↑↓ 跨过 Bank 边界时自动换 Bank，上屏窗口移到能看见当前 Pad 的位置，已有的音符选区保留。
+- ENC1 和触摸网格的横向滚动是联动的；ENC2 只滚上屏。
+- 音符改动保存后，上屏和网格同时更新。
+- 拖动 SETUP 的 Tempo／Swing 时，上屏立即显示草稿值；取消后回到已保存值。
+- 打 Pad 的同时，播放头照常前进。
+
+### 5.1 EDIT \{#sequence-edit\}
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 停止 | GROOVE 标题 → Pattern 列表 | 直接选择任一 Pattern，网格换内容，原音符选区清空。播放、录音或命令处理中不可用。 |
+| Pattern 列表 | Cancel／Escape／点当前 Pattern | 关闭列表，焦点回到标题，不切换。 |
+| 任意 | EDIT／SETUP | 切换网格和设置卡片。只改视图；离开再回来默认 EDIT。 |
+| 没有进行中的音符手势 | Grid tools | 打开 Snap／NOTE／VEL 弹窗，显示当前设置。 |
+| Grid tools | Snap 1/4／1/8／1/16／1/32／off | 改网格吸附。不改已有音符；不是录音的 Quantize。 |
+| Grid tools | NOTE／VEL | 切换编辑位置或编辑力度。 |
+| Grid tools 或 Choose bar 弹窗 | Done／Escape | 关闭弹窗，焦点回到入口，所选设置保留。 |
+| NOTE | 轻点空白位置 | 新增一个该轨道的音符，起点和初始长度按 Snap。 |
+| NOTE | 轻点已有音符 | 删除这个音符，不是选中；若它在选区中，也从选区移除。 |
+| VEL | 轻点音符或空白处，不拖动 | 什么都不改。 |
+| NOTE | 拖音符主体 | 移动时间或轨道；属于多选时整组移动。松手保存一次，超出范围时停在边界。拖动中上屏不显示草稿，不会触发目标 Pad。 |
+| NOTE | 拖音符尾部 | 改长度。不影响 Sample 的裁剪。 |
+| NOTE | 从空白处拖框 | 框选同一 Bank 的音符，上屏显示选区和力度摘要，出现 Delete／Clear。 |
+| 有多选 | Delete／Clear | Delete 删除所有选中音符；Clear 只取消选择。 |
+| VEL | 在音符上下拖 | 改力度 1–127；之后新增的音符使用这个力度（初始 100）。 |
+| 没有进行中的音符手势 | 前／后小节、BAR 直接选择、ENC1 或横向滑动 | 查看其他小节。一屏显示一个小节，16 条轨道都可见，不用拖横向滚动条；BAR 显示实际范围，上屏视窗框只框出可见的时间范围。不清除音符选择。 |
+| 拖动中 | 手势被取消或编辑对象失效 | 放弃这次拖动。 |
+| 录音中或刷新中 | 网格编辑手势 | 不能开始编辑，提示 Recording 或等待刷新。Snap、NOTE、VEL 等视图设置仍可用。 |
+
+网格中的轨道名称不是演奏按钮。
+
+### 5.2 SETUP \{#sequence-setup\}
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 非录音、非命令处理中 | TEMPO 滑块、−／+ | 40–240 BPM。滑块松手保存；按钮每次 ±1。播放中也能改，按引擎的生效边界更新。 |
+| 同上 | SWING 滑块、−／+ | 50–75%。滑块松手保存；按钮每次 ±1。作用于整个 Pattern。 |
+| Tempo／Swing 拖动中 | Escape、手势取消、换编辑对象、打开 System、开始录音 | 放弃草稿，回到已保存值；之后晚到的松手不会保存。 |
+| 非录音、非命令处理中 | TAP | 按连续点按的间隔算 Tempo。第一次点按只是起点，有了有效间隔才保存。 |
+| 停止 | BARS 1／2／4／8 | 改**当前** Pattern 的长度。变长补空小节；变短删除或截短越界音符。点当前长度不改。 |
+| 停止，长度小于 8 | DOUBLE UP | 长度加倍并重复已有音符。到 8 小节时不可用。 |
+| 停止 | COPY | 复制当前 Pattern 并切到副本。不同于 Project 的 DUPLICATE。 |
+| 停止 | + NEW → 长度 1／2／4／8 → CREATE | 新建空 Pattern 并切过去。选长度不改旧 Pattern；CANCEL 只收起表单。 |
+| 非录音、非命令处理中 | QUANTIZE | 开关录音量化，Perform 上屏显示新设置。不重写已有音符。 |
+| 任意，包括录音中 | METRONOME | 开关节拍器。这是本设备的设置，不保存到 Project；只在 Pattern 播放时发声。 |
+| 任意 | Playback details → Refresh playback | 重新读取 Sequence、Project 和播放状态，核对未确定的命令，必要时恢复。不会再切一次 Play 或 Record。 |
+
+### 5.3 Pattern 录音恢复 \{#sequence-recovery\}
+
+有未保存的 Pattern 录音候选时，SETUP 中出现：
+
+| 操作 | 结果 |
+| --- | --- |
+| Recover original Pattern | 恢复到原 Pattern。被拒绝时候选保留。 |
+| More → Recovery destination 下拉 → Recover to selected Pattern | 恢复到选定的 Pattern。不会切换当前播放的 Pattern。 |
+| Discard | 丢掉候选。不改现有 Pattern，也不是撤销已保存的内容。 |
+
+## 6. Perform \{#perform\}
+
+**控件速查卡**
+
+| 控件 | 在 Perform 页的作用 |
+| --- | --- |
+| ENC1／ENC2／ENC3 | 主 FX 为 Filter／Delay／Reverb；FX／MORE 组为 Crush／Stutter／Gate。每格 10/1000，SHIFT 1/1000；停转和换组保持值。 |
+| 其余左栏 | ENC4 监听音量；↑↓ 和不按 SHIFT 的 ← → 不可用，其余见[第 1 章](#global)。演出录制中或待保存时 Record 不可用。Bank 键是本页唯一的 Bank 入口。 |
+| 16 个 Pad | 仍是声音 Pad，不是 Pattern Launch 键。演出录制中，按下和松开都会记录。 |
+| 上屏 | 当前与待切换的 Pattern 槽、全局播放状态、bar／beat、进度条、Bank、Quantize、已分配槽位数。 |
+| 触摸区 | Live、Slots、Takes、Replay 四个子页；缺少能力时显示还在等待音频或录音存储。 |
+
+- 上屏没有主输出电平表；演出录制、WAV 和 Replay 的状态在触摸区。
+- 页首提示和录制状态里重复的最近一次 Launch 文字已合并到上屏；Launch 键及分组旁的提示保留。
+- 离开 Perform 会结束演出录制和 Replay，见 [1.2](#pages)。
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 任意 | Live／Slots／Takes／Replay | 切子页并回到页顶。录制、回放、HOLD、表单和 More 展开都保留。FX 推子按住时暂不能切。 |
+| Live | 1–4／5–8／9–12／13–16 | 选择显示哪四个 Pattern 槽。不触发 Launch。其他组的槽仍显示 Queued／Playing。跨子页保留。 |
+| 演出录制中 | Pattern Launch 01–16 | 预约切到该 Pattern，状态 Queued → Playing。上屏在真正切换前仍显示原 Pattern。Launch 会被记录；空槽是一段静音。 |
+| 其他时候 | Pattern Launch | 不可用。只按了全局 Play 还不够。 |
+| 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；显示百分比。演出录制中同时记录；触摸与旋钮调同一 FX 时共用拥有的手势。 |
+| 可用时 | FX / MORE | 展开或收起 Stutter、Gate、Reverse、Crush、Cutter，同时切旋钮组。旋钮效果保持；收起时释放这些触摸推子上未结束的手势。 |
+| 可用时 | HOLD | 开关 FX 保持：松开推子后效果按规则保留。与 Sample 的循环 Hold 不同。 |
+| 可录制，其他录音空闲 | Record Performance | 开始记录演出操作和主输出 WAV；Launch 变为可用。准备失败时显示原因。 |
+| Takes，录制中 | Flush Performance | 立即写出本轮已记录的操作。不停止，也不另存音频。 |
+| 录制中 | Stop Performance | 结束录制，等待保存或丢弃。不停止全局 Pattern。Launch 不可用。 |
+| Live，已停止 | Review recording | 进入 Takes 处理录音。 |
+| Takes，已停止 | Performance name | 修改名称。保存或丢弃进行中时只读。名称为空时不能保存。 |
+| Takes，已停止且有名称 | Save Performance | 保存演出和 WAV，Replay 出现新条目。点 Save 前不算保存。WAV 关联失败时出现 Retry WAV bind。 |
+| Takes，已停止 | Discard Performance | 丢弃当前待保存的演出。不删除已保存的演出。 |
+| Takes，有 WAV | Export Performance WAV | 下载这次的 WAV。不产生作者编辑。 |
+| Takes，关联失败 | Retry WAV bind | 只重试关联 WAV，不用再演一次。 |
+| Replay 有条目，或任一子页回放中 | Replay／Stop Replay | 回放或停止。回放不会录进 Pattern；上屏仍显示全局 Pattern。 |
+| Replay，有演出恢复候选 | Apply recovery／Discard recovery | 恢复演出（自动收尾未松开的 Pad），或丢掉候选。丢候选不删除已保存的演出。 |
+| Live／Slots／Takes，有恢复候选 | Review recovery | 进入 Replay 查看。FX 推子按住时不可用。 |
+| Slots，演出录制空闲 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 选择要分配、清空或移动的槽。还没生效。 |
+| Slots，演出录制空闲 | Assign Pattern／Clear Pattern／Move Pattern | 把 Pattern 放进槽、清空槽或移动。源和目标相同时 Move 不可用。录制非空闲时这些编辑都不可用。 |
+| 任意 | Recording details 折叠项 | 只读：WAV 录制和关联状态，以及未结束的 Pad／FX 手势数和 HOLD。 |
+| Slots，或有 Replay 的任意子页 | Project details／Replay details 折叠项 | 只读：Project 修订号，或回放状态和 Neutral FX。 |
+
+## 7. Sound Sets 与 Slice \{#soundsets-slice\}
+
+**控件速查卡（两页相同）**
+
+| 控件 | 作用 |
+| --- | --- |
+| 左栏 | 同 Project 页。Bank 只换演奏 Bank，与 Sound Sets 的安装目标无关。 |
+| 16 个 Pad | 演奏；Sample 的所选 Pad 跟着变。不安装、不采用当前方案，不切页。 |
+| 上屏 | Sound Sets：已打开 Project 的身份和浏览、试听、选目标的说明，没有 Set 波形。Slice：源 Pad 身份和“预览后 Adopt”的说明，没有切片波形。 |
+
+### 7.1 Sound Sets \{#soundsets\}
+
+触摸区分为 **Browse / Details / Target / Review** 四步。
+
+- Browse 显示 Catalog、离线缓存和不可用的 Set。
+- Details 显示许可、16 个声音和试听。
+- Target 选择安装到哪个 Bank。
+- Review 显示只读的映射方案、冲突处理和确认。
+- 许可和署名在 Details、Target、Review 都可见。
+- 只有触摸区整体纵向滚动，步骤条始终可达。
+- 切步骤不重新读取详情、不安装、不停止试听。
+- 回到 Browse 时保留所选 Set，焦点和列表位置回到原来的 Inspect 按钮。
+- 换目标 Bank 会清除旧方案和冲突选择。
+- 预览或安装进行中，步骤、目标和冲突选择都锁定。
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 可以查询 | Refresh Catalog | 重新列出可用和不可用的 Set。离线时显示本设备缓存。 |
+| 有 Set | Inspect Set | 读取详情：名称、许可、16 个声音和 demo。 |
+| 未在请求中 | Browse／Details／Target／Review 步骤键 | 切步骤。没选 Set 时只有 Browse；没有方案或安装结果时 Review 不可用。 |
+| Details | Choose install target | 进入 Target。 |
+| 有 demo 或声音 | Audition set demo／声音名称按钮 | 试听，不需要先安装。再次试听替换上一次。没有持续的“正在播放”状态，出错时提示。 |
+| 任意 | Stop audition | 停止 Set 试听。不停止全局 Pattern。 |
+| Target | Install target Bank A–D | 只选安装目标，不改左栏的演奏 Bank。 |
+| 已选 Set 和目标 | Preview mapping | 显示目标 Bank 16 个槽的方案：Install／Occupied／Empty source／Unmapped。方案格不能演奏。空声音不会清掉 Pad。 |
+| Review，未在请求中 | Refresh mapping | 按当前目标和 Project 重新生成方案，冲突选择需要重新确认。不安装。 |
+| 方案有冲突 | Keep／Replace | 保留已有 Pad 或替换。不选就不能安装。 |
+| 方案可以提交 | Install into Bank | 按确认的方案安装，显示 Installed 或冲突、失败。若目标是当前 Bank，Pad 声音和颜色随即更新。空的 Set 槽不清除原 Pad；Replace 时颜色按普通替换的规则保留。 |
+| 详情或错误 | Browse／Dismiss | 返回列表或关闭错误。不撤销已完成的安装，不停止试听。 |
+| 任意 | Back to Project | 回到 Project，不安装未确认的方案。 |
+
+安装总是用预览时的目标和 Project 版本；如果 Project 之后变了，安装被拒绝，需要 Refresh mapping 后重新确认。
+
+### 7.2 Slice \{#slice\}
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 支持 Slice | Provider 下拉／Grant analysis permission | 选择分析服务、授予分析权限。这是本设备设置，不写入 Project。 |
+| 有源音频 | Source 下拉 | 选择要分析的音频，载入它的候选结果。不自动分析，不改原 Pad。 |
+| 可以分析 | public audio 复选框 | 声明这段音频可以做本地 public 分析。只勾选不保存。 |
+| 服务、权限、声明都就绪 | Analyze／Retry analysis | 开始一次分析，先停止候选试听。结果是候选，不是 Pad。 |
+| 分析中或中断 | Cancel analysis | 取消这次分析。之前的结果和已采用的 Pad 不受影响。 |
+| 有候选 | Preview／Stop preview | 试听或停止一个切片。不分配。音频未启动时提示先打一个 Pad。 |
+| 有候选 | Add target、Slice／Bank／Pad 下拉、Remove | 编辑“一个切片 → 一个目标 Pad”的列表。不换演奏 Bank，不保存。 |
+| 方案有效，没有结果不明的采用 | Adopt selected slices | 停止试听，把切片写入目标 Pad。替换目标原有声音，保留源音频和 Pattern；成功后目标列表清空。失败或结果不明时先 Refresh。 |
+| 有分析记录 | Refresh slices and Project | 重新读取 Project 和候选，解除已核对的不明状态。不自动重试 Adopt。 |
+| 有候选 | Discard slices | 停止试听，丢掉候选。不撤销已采用的 Pad。 |
+| 任意 | Back to Sample | 回到 Sample，停止候选试听，不采用未提交的方案。 |
+
+Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
+
+## 8. System \{#system\}
+
+**控件速查卡**
+
+| 控件 | System 打开时的作用 |
+| --- | --- |
+| 左栏 | ENC1–3 未分配，ENC4 保持监听音量；其他音乐键和灯依原页面／真实传输状态。页面键关闭 System 并进入该页。 |
+| Play/Stop、Record | 照常控制全局 Pattern；打开 System 不停止播放。 |
+| 16 个 Pad | 照常演奏；打开 System 时清除未松开的按压，正在进行的空 Pad 采样转为待确认。 |
+| 上屏 | 标题 SYSTEM；原音乐页事实继续更新，旋钮区显示未分配与监听音量。返回后恢复音乐页标题和绑定。 |
+| 触摸区 | 原页面隐藏，显示 System。临时录音和错误提示可以继续显示。 |
+
+打开 System 先取消未提交的 Sample／BPM 旋钮草稿，并按 HOLD 释放 Perform 旋钮拥有的效果手势。已经提交的作者内容保留。
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 任意 | Back to music | 关闭 System，回到原页面，焦点回到 Logo。 |
+| 音频运行中 | Suspend audio | 暂停音频并清除按压。上屏显示 Audio suspended，Pad 可用性随之改变。未完成的录音按各自规则收尾或恢复。 |
+| 未授权 MIDI | Enable MIDI | 唤醒音频并请求 Web MIDI。获准后 MIDI note 36–51 演奏当前 Bank。浏览器不支持或拒绝时不显示为可用。 |
+| Runtime 就绪 | Export report | 下载本地诊断报告。不保存作者编辑，不发送给他人。 |
+| 任意 | Project and build details 折叠项 | 只读：Project ID、修订号、Pad 与 Asset 数、Key、MIDI、Pattern 长度，以及构建身份说明。关闭 System 后保持展开状态。这里的构建身份不证明线上部署的版本。 |
+| 空 Pad 采样空闲 | Pad recording source：Microphone／Internal playback | 设置按住空 Pad 采样的来源，保存在本设备。不影响 Record Sample。 |
+| 有分析服务权限 | Revoke permission | 撤销权限，Slice 同步更新。不删除 Project；再次分析需要重新授权。 |
+| 有诊断记录 | Developer diagnostics 折叠项 | 只读：最近 100 条本次会话的错误（时间、操作、错误代码、细节）。只在内存中。 |
+
+## 9. 跨页的录音、恢复与错误 \{#cross-page\}
+
+这些控件出现在当前页面的触摸区里，与页面无关。
+
+| 状态 | 操作 | 结果 |
+| --- | --- | --- |
+| 空 Pad 采样待确认 | Save Pad recording／Discard Pad recording | 保存到原目标 Pad，或丢弃。没有声音的录音不保存。不会改存到别的 Pad，也不会覆盖之后新放入的声音。失败时回到待确认。 |
+| 某个默认声音失败 | Retry default sounds | 只重试失败的 Pad，其他 Pad 不变。 |
+| 默认声音已保存但不能播放 | Prepare default sounds | 重新准备声音，不重新写入。 |
+| 默认声音失败或不能播放 | System details | 打开 System 查看。不自动重试。 |
+| Slice 等内容已保存但不能播放 | Retry audio preparation | 重新准备已保存的内容，不重新采用切片。 |
+| Sample 或 Project 已保存但不能播放 | Sample playback details／Project playback details 折叠项 | 只读：保存与准备状态。重试仍用对应按钮。 |
+| 打开的 Project 有中断的录音 | Keep recording(s) | 逐份恢复到原来的位置，显示完成数和剩余数；被拒绝的继续等待处理。必要时提示 Open Sequence／Perform。 |
+| 同上 | Discard… → Discard | 确认后丢掉这些录音，不能 Undo。Cancel 回到询问。已有内容不变。 |
+| 同上 | More options／Open Sequence／Open Perform | 打开有候选的页面处理，不自动保留或丢弃。 |
+| 同上 | Decide later／Close | 只收起提示，候选仍保留在对应页面。 |
+| 导入的 .lmdj 身份重复 | Open local Project | 显示本地 Project 列表并刷新。不覆盖，也不自动打开。 |
+| Project 正被占用 | Retry project | 重试原来的读取或打开。不会强行占用。 |
+| Project 被另一标签页占用，或本页已让出 | Continue here | 请求另一标签页让出 Project，对方同意后在本页打开。对方正在播放、录音或保存时可以拒绝；没有回应不等于同意。 |
+| 等待对方回应 | Cancel | 取消请求。不会关闭对方。 |
+| Runtime 超时或需要重启 | Retry runtime | 重新启动 Runtime 并重新打开内容。未保存的草稿不保证保留。 |
+| Runtime 就绪且有错误 | Dismiss | 关闭错误提示。不重试，也不撤销已保存的内容。 |
+
+## 10. 当前没有的交互 \{#not-available\}
+
+- 上屏不能点按或拖拽编辑；Sequence 网格的轨道名称也不是演奏按钮。
+- 其他页面普通 ↑↓ 等方向映射仍待批准；SHIFT＋ENC1–3 已按批准表细调，没有粗调层。可听 BPM 即时预览尚未实现，见[第 2 章](#planned)。
+- Perform 没有 MASTER 推子、LP／HP／BP 类型选择、Mute／Solo 和主输出电平表；不能按视觉稿当作已可操作。
+- 下边 16 个声音 Pad 与 Perform 触摸区的 16 个 Pattern Launch 槽是两回事。当前 Launch 需要开着演奏录制。
+- Sample 没有单独的 Edit 按钮；Trim 直接编辑，其他参数分在四个子页。
+- Project 没有手动 Save／Save As；DUPLICATE 复制当前 Project。界面上没有的功能不算入口。
+- Record Sample 面板没有试听已录片段的按钮；只有文件导入的长源裁剪有 Preview selection。空 Pad 待确认的录音也没有裁剪手柄。
+
+## 附录：实现与验证 \{#appendix\}
+
+### A.1 术语对照 \{#terms\}
+
+正文用用户语言；对应的实现术语如下。
+
+| 正文说法 | 实现术语 |
+| --- | --- |
+| 生效、保存后显示 | 操作成功并完成**回读**（re-read）后的**投影**（projection）。等待、失败或 publication pending 都不算完成。 |
+| 作者编辑、保存 | 一次 authoring 提交，Project **修订号**（revision）加一。只改选中项、视窗、草稿或设置表单不加修订号。 |
+| 保存本轮录入的事件 | Pattern 事件录音的**结算**（settle）与回读。 |
+| 命令处理中 | 传输命令正在结算；灯与上屏等权威状态回读，可能显示 publication pending。 |
+| 已保存、声音未准备好 | 作者修订已保存，Runtime 尚未发布（prepare／cook 失败，stale runtime revision）。 |
+| 控制台暂时不接受操作 | Undo/Redo 执行时整个控制台 inert。 |
+| 背景不能操作 | 模态弹窗把背景设为 inert；它不屏蔽全局音乐键。 |
+| Bank 键不会切换 | 控件仍显示，但 reducer 拒绝 `bank-selected`。 |
+| System 覆盖音乐页 | `activeMode` 不变；标题 SYSTEM，ENC1–3 未分配，ENC4 保持设备监听音量。 |
+
+### A.2 精确条件与实现细节 \{#conditions\}
+
+**左栏与传输**（`app.tsx`）
+
+- Play/Stop 可用：`transportReady && !transportBusy`。`transportReady` 要求 Pattern transport 会话、Project ready、可开始手势，且音频 running，或 Runtime 处于 audio-suspended 且音频 inactive／suspended。
+- Record 可用：在 Play 条件之外，还要求空 Pad 采样空闲、Record Sample 面板为 idle／permission-error、演出阶段为 idle／saved／discarded。
+- Play/Stop 与 Record 在 audio 未运行时先 `activateAudio`，等唤醒成功且 Project、会话和手势 epoch 未变才提交意图。
+- 页面键：`selectMode` 关闭 System、`clearPressed()`、清 SHIFT；离开 Perform 时先 `performController.leave()`。
+- Sequence 键：`isSequenceSession && project ready && current !== null`。
+- Perform 键：只要求 `project ready && current !== null`（`app.tsx:2699`）。Perform 触摸区的能力就绪条件另行要求 performController 与 capture storage（`app.tsx:2491`）。
+- Bank：`selectBank` 先清按压与 SHIFT，再 dispatch；`isCreatorActionAllowed` 不允许时 reducer 拒绝。Runtime／Project 未就绪或 `transfer.phase !== "idle"` 时拒绝；播放／录音本身不拒绝。Sample 页未武装 Capture 时同步 `slot-selected`。
+- ↑↓ 与 Bank 使用同一允许条件（`padNavigationAvailable`）。
+- ← → 切 Pattern：`patternStepOpen` 要求 Sequence 页、`!playing`、未锁定设置、Pattern 索引有效。SHIFT 关且非 Sequence 时，Undo/Redo 键保持禁用。
+
+**旋钮**（`state/encoder_input.ts`、`sample_encoder.ts`、`monitor_volume_preference.ts`、`app.tsx`）
+
+- `ENCODER_IDLE_COMMIT_MS = 400`；Sample 同一 Pad 多参数与 Sequence BPM 停转后合并一次 authoring 提交／Undo。回到起点不提交。Perform 与设备监听不使用该作者保存计时。
+- 上一次提交还在路上时，新一轮从该请求值开始；提交失败后 `forget()`，下一轮从 Truth 开始。
+- 作者锁定／录音／传输结算、离页、打开 System、切 Pad／Project／所选 Pattern、Esc 或历史前，通过 `cancelPendingEncoders` 和各目标的 cleanup 取消尚未提交草稿；已发出请求保留真实结果。
+- 网页拖动每 8 px 一格，滚轮累计 50 px 一格（`physical_controls.tsx`）。
+- [2026-10-09 旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)已确认逐页映射、SHIFT 细调、设备监听记忆和 400 ms 生命周期；其他方向映射仍在 [#1822](https://github.com/endaye/lmdj/issues/1822)。BPM 可听预览未完成，不能用读数测试替代。
+- ENC4 在 `encoderBindings` 中独立于页面绑定，偏好恢复绑定 Runtime session，后续转动覆盖旧恢复；`metronome_click.ts` 使用同一监听节点，位于 capture tap 之后。
+
+**Pad 输入**（`pad_surface.tsx`、`input_controller.ts`、`input_adapters.mjs`）
+
+- 键盘按物理 `code` 映射；全局键盘过滤只识别可编辑目标，没有独立的“弹窗打开即屏蔽”判断。
+- 未完成的按压在 blur、hidden、pointercancel、切 Bank 或换页时清理。空 Pad 采样中断时封存为 review，而不是正常松手的自动提交；浏览器音频中断另有处理。
+- 默认声音种子状态 Loading／Processing／Failed／saved-unavailable 时禁用该 Pad；内容可能仍显示旧投影。
+- 空 Pad 采样的“待确认”在状态机中是 review → saving → idle，保存失败回到 review。
+
+**Sample**
+
+- 普通参数：移动时预览，pointerup、键盘步进结束或 blur 时提交一次；Escape 或 pointercancel 取消。预览被拒绝会清草稿，晚到的 pointerup 不提交。
+- Ping-pong 连带清 `loopCrossfadeFrames`。
+- 替换声音时恢复样本播放默认参数，Pad 颜色 override 保留；Delete 清除 Pad 播放与颜色信息；Pattern 引用 Pad Slot，不因 Delete 改为 Asset 引用。
+- 改色禁用条件（`padColourDisabledReason`）：录音中；传输结算中；Project 或 Runtime 未 ready；改色进行中、投影刷新中、Sample 有 pending action 或文件传输中；Sample 草稿未完成。相同 override 不提交。
+- 长源导入写入归一化音频；不能把旧的“仅 PCM16 WAV”错误提示当作入口的全部能力。
+
+**Sequence**
+
+- 写入类网格手势在录音或投影回读中禁止开始；音符改动松手一次提交，边界按有效范围钳制。
+- Refresh playback 按同一命令身份协调未确定的命令，不是再次反向切 Play/Record。
+
+**Perform**
+
+- Pattern Launch 仅在演出录制 recording／flushing 时可用（`perform_surface.tsx`、`perform_state.ts`），记录为演出 launch 操作，等待权威确认；上屏由全局 Pattern 投影驱动，不把 queued 当作立即换曲。
+- Filter／Delay 等推子是 engage → move → release 手势；非录制时走实时 FX，录制中同时记录演出 FX 操作。HOLD 按引擎 hold 规则保留。
+- Save Performance 后 `bindingStatus` 可能需要 Retry WAV bind；不假装 WAV 已绑定。
+- Replay 状态 playing／idle／neutral 与 resolved revision 独立回读；Stop Replay 请求停止并中和 replay 状态。
+
+**Sound Sets 与 Slice**
+
+- 安装使用预览时的 Bank 与 Project revision；Project 已变化时保留拒绝，Refresh mapping 后重新确认。安装后修订和 Asset 计数在 System 详情。
+- Provider 选择与权限是 Workspace 设置，不写 Project Truth；Slice 分析结果是候选，不写 Project Truth。
+- Adopt 结果不确定时先 Refresh，不自动重试。
+
+**System 与恢复**
+
+- Pad recording source 存在设备 `localStorage`。
+- Project 打开需取得项目锁；Retry project 不强制夺锁；Continue here 的对方可 refused 或 unanswered，未答复不是授权。
+
+### A.3 源码与测试对应 \{#sources\}
+
+每个控件都来自 `Workspace` 的实际挂载路径，不按未挂载组件或设计图推测。更新本页时应一起核对下面的来源。
+
+| 覆盖内容 | 主要源码（相对 apps/creator-web/src） | 现有自动化证据（相对 apps/creator-web/test） |
+| --- | --- | --- |
+| 1 控制台、换页、Bank、传输、SHIFT、旋钮 | app.tsx；components/hardware_console.tsx、physical_controls.tsx；state/creator_state.ts、encoder_input.ts；styles.css | hardware_console.test.tsx、workspace_shell.test.tsx、sequence_surface.test.tsx、encoder_input.test.ts |
+| 1 Pad、键盘／MIDI、触发模式、空 Pad | components/pad_surface.tsx；runtime/input_controller.ts；capture/pad_capture.ts；Web Runtime input_adapters.mjs | pad_surface_keyboard.test.tsx、input_controller.test.ts、pad_capture.test.ts |
+| 1 弹窗 | components/modal_dialog.tsx | long_source_editor.test.tsx、capture_panel.test.tsx |
+| 各页上屏 | components/overview_display.tsx、project_overview.tsx、sample_overview.tsx、sequence_overview.tsx、perform_overview.tsx | sample_overview.test.tsx、sequence_pattern_overview.test.tsx、perform_overview.test.tsx |
+| 3 Project | components/project_surface.tsx、project_touch_workspace.tsx；runtime/project_actions.ts；app.tsx | project_actions.test.ts、project_create.test.tsx、workspace_shell.test.tsx |
+| 4 Sample 参数、裁剪、重置、删除 | components/sample_surface.tsx、sample_controls.tsx、waveform_editor.tsx、parameter_slider.tsx、value_slider.tsx、eq_editor.tsx；runtime/sample_actions.ts | sample_controls.test.tsx、waveform_editor.test.tsx、eq_editor.test.tsx、sample_actions.test.ts |
+| 4.5 Pad 颜色 | components/pad_colour_controls.tsx；state/pad_colour.ts；app.tsx | pad_colour.test.tsx |
+| 4.6–4.7 长源与 Record Sample | components/long_source_editor.tsx、capture_panel.tsx | long_source_editor.test.tsx、capture_panel.test.tsx |
+| 5 Sequence | components/sequence_touch_workspace.tsx、sequence_grid.tsx；state/sequence_grid_model.ts；app.tsx | sequence_grid_edit.test.tsx、sequence_pattern_structure.test.tsx、sequence_surface.test.tsx |
+| 6 Perform | components/perform_surface.tsx、pattern_launch_strip.tsx、fx_slider_bank.tsx；state/perform_state.ts | perform_surface.test.tsx |
+| 7 Sound Sets／Slice、8 System | components/soundset_surface.tsx、candidate_surface.tsx、system_surface.tsx；state/provider_permissions.ts | soundset_surface.test.tsx、candidate_surface.test.tsx、system_surface.test.tsx |
+| 9 错误、接管、恢复、诊断 | components/error_panel.tsx、takeover_panel.tsx、recovery_prompt.tsx、diagnostics_log.tsx | recovery_prompt.test.tsx、diagnostics_log.test.tsx、project_takeover_workspace.test.tsx |
+| Record／Play 与 FX 引擎语义 | packages/application-facade/src/pattern_transport_controller.cpp；packages/audio-runtime/src/master_fx.cpp | 对应 Core 测试，以及 Creator 的 pattern_transport_state.test.ts、pattern_transport_actions.test.ts |
+
+### A.4 核对边界 \{#evidence\}
+
+- 本页依据当前源码的挂载条件、事件处理和现有界面测试。实体设备、听感、线上部署与本地源码是否一致，各自需要验收证据；源码核对不等于这些验收。
+- 页首身份由门户生成，代表门户的源码上下文，不代表线上 Creator 的部署身份。
+- “现有自动化证据”列是测试定位索引，不代表每次更新都运行了全部套件。具体执行项与通过数量记录在对应 Task 或 PR 中。
+- 源码、组件测试、打包浏览器旅程、真实设备和已部署构建之间的边界保持区分。
+- 核对基线和验证命令见[刷新 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interactions-refresh.md)；初版范围见[原文档 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interaction-map.md)。
+- 本页的 I1c 旋钮源码更新和验证见[后续计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-09-creator-desktop-final-followup.md)。可听 BPM、其他页方向映射、Assign／细调编辑器、Perform MASTER／滤波类型／Mute／Solo／电平表仍待后续决定或实现；不由已有旋钮批准推导语义。

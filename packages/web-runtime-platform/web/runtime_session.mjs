@@ -1474,6 +1474,10 @@ function createRuntimeSessionController(options = {}) {
   let runtime = null;
   let audioContext = null;
   let contextHandle = null;
+  // Host monitoring is downstream of capture and never enters Project Truth.
+  let monitorGain = null;
+  let monitorHandle = null;
+  let monitorLevel = 100;
   let performanceMasterTap = null;
   let activePerformanceMasterCapture = null;
   let tapProcessorFailed = false;
@@ -1757,7 +1761,7 @@ function createRuntimeSessionController(options = {}) {
       await stopActivePerformanceMasterCapture();
       let connected = false;
       try {
-        connected = runtime.connectAudioWorkletDirect(contextHandle) === true;
+        connected = runtime.connectAudioWorkletDirect(contextHandle, monitorHandle) === true;
       } catch {}
       if (!connected) {
         const pendingStart = audioWorkletStartPromise;
@@ -1766,14 +1770,14 @@ function createRuntimeSessionController(options = {}) {
             const result = await pendingStart;
             if (result?.ok !== false) {
               connected =
-                runtime.connectAudioWorkletDirect(contextHandle) === true;
+                runtime.connectAudioWorkletDirect(contextHandle, monitorHandle) === true;
             }
           } catch {}
         }
       }
       if (connected) {
         try {
-          tap.destinationNode.disconnect(audioContext.destination);
+          tap.destinationNode.disconnect(monitorGain);
         } catch {}
         return true;
       }
@@ -1922,6 +1926,8 @@ function createRuntimeSessionController(options = {}) {
     terminalCleanupPromise = closePerformanceMasterTap()
       .then(() => {
         diagnosticsListeners.clear();
+        try { monitorGain?.disconnect(); } catch {}
+        monitorGain = null;
         return runtimeTerminator({ runtime, audioContext });
       })
       .catch(() => {});
@@ -2900,16 +2906,27 @@ function createRuntimeSessionController(options = {}) {
         // most of it (#1696). Park the context while the graph loads so the
         // resume edge below starts the device once.
         await audioContext.suspend();
+        if (closing || terminalCleanupStarted) {
+          return false;
+        }
         lastContextState = audioContext.state;
         listen(audioContext, "statechange", observeContextState);
         contextHandle = runtime.registerAudioContext(audioContext);
-        let outputDestinationHandle = contextHandle;
+        monitorGain = audioContext.createGain();
+        monitorGain.gain.setValueAtTime(monitorLevel / 100, audioContext.currentTime);
+        monitorGain.connect(audioContext.destination);
+        monitorHandle = runtime.registerAudioNode(monitorGain);
+        if (!isPositiveInteger(monitorHandle)) {
+          throw typedError("HOST_STATE_INVALID", "Monitor output registration failed");
+        }
+        let outputDestinationHandle = monitorHandle;
         if (captureConfig !== null) {
           let localTap = null;
           try {
             localTap = await createPerformanceMasterTap({
               context: audioContext,
               processorUrl: tapUrl,
+              destination: monitorGain,
             });
             if (!graphBootstrapIsCurrent(reservation, "audio-suspended")) {
               try {
@@ -2943,7 +2960,7 @@ function createRuntimeSessionController(options = {}) {
             if (!graphBootstrapIsCurrent(reservation, "audio-suspended")) {
               return false;
             }
-            outputDestinationHandle = contextHandle;
+            outputDestinationHandle = monitorHandle;
             publishCaptureUnavailable(
               "tap-initialization-failed",
               "Reload the page and activate audio again before retrying Perform capture",
@@ -3538,6 +3555,8 @@ function createRuntimeSessionController(options = {}) {
         "command_id",
         "publication_pending",
         "error",
+        "current_pattern_id",
+        "pending_switch",
       ]) ||
       typeof value.engaged !== "boolean" ||
       typeof value.playing !== "boolean" ||
@@ -3549,6 +3568,13 @@ function createRuntimeSessionController(options = {}) {
       !isUnsignedInteger(value.runtime_frame) ||
       (value.command_id !== null && !UUID_PATTERN.test(value.command_id)) ||
       typeof value.publication_pending !== "boolean" ||
+      (value.current_pattern_id !== null &&
+        !UUID_PATTERN.test(value.current_pattern_id)) ||
+      (value.pending_switch !== null &&
+        (typeof value.pending_switch !== "object" ||
+          !exactKeys(value.pending_switch, ["pattern_id", "activation_frame"]) ||
+          !UUID_PATTERN.test(value.pending_switch.pattern_id) ||
+          !isUnsignedInteger(value.pending_switch.activation_frame))) ||
       (value.error !== null &&
         (typeof value.error !== "object" ||
           !exactKeys(value.error, ["code", "message", "details"]) ||
@@ -3575,6 +3601,13 @@ function createRuntimeSessionController(options = {}) {
       observedAtMilliseconds: monotonicNow(),
       commandId: value.command_id,
       publicationPending: value.publication_pending,
+      currentPatternId: value.current_pattern_id,
+      pendingSwitch: value.pending_switch === null
+        ? null
+        : Object.freeze({
+            patternId: value.pending_switch.pattern_id,
+            activationFrame: value.pending_switch.activation_frame,
+          }),
       error: value.error === null
         ? null
         : Object.freeze({
@@ -3656,6 +3689,41 @@ function createRuntimeSessionController(options = {}) {
       normalizePatternTransportStatus(
         await boundedRequest("pattern.transport.inspect", {session_id: id}),
       ));
+  }
+
+  /** @param {import("./runtime_types.d.ts").TransportPatternSwitchRequest} request */
+  function requestTransportPatternSwitch(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["patternId", "requestId"])
+    ) {
+      throw new TypeError("Pattern transport switch request is invalid");
+    }
+    requirePatternTransportOptIn();
+    const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    const requestId = requireSequenceIdentity(request.requestId, "requestId");
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("pattern.transport.switch", {
+        pattern_id: patternId,
+        request_id: requestId,
+      });
+      if (
+        !exactKeys(value, ["pattern_id", "activation_frame"]) ||
+        value.pattern_id !== patternId ||
+        (value.activation_frame !== null &&
+          (!isUnsignedInteger(value.activation_frame) ||
+            value.activation_frame === 0))
+      ) {
+        throw protocolMismatch("Pattern transport switch result is invalid");
+      }
+      return Object.freeze({
+        patternId: value.pattern_id,
+        // Null when the pressed Pattern already plays and any queued switch
+        // was withdrawn; otherwise the frame the new Pattern starts at.
+        activationFrame: value.activation_frame,
+      });
+    });
   }
 
   function createPattern(request) {
@@ -5938,6 +6006,7 @@ function createRuntimeSessionController(options = {}) {
     requestPatternSwitch,
     requestPatternTransport,
     inspectPatternTransport,
+    requestTransportPatternSwitch,
     createPattern,
     editPatternEvents,
     resizePattern,
@@ -5969,6 +6038,22 @@ function createRuntimeSessionController(options = {}) {
     stopSoundSetAudition,
     previewSoundSetMap,
     installSoundSet,
+    monitorVolume: () => monitorLevel,
+    monitorDestination: () => closing || terminalCleanupStarted ? null : monitorGain,
+    setMonitorVolume(value) {
+      if (closing || terminalCleanupStarted || machine.state === "closed" || machine.state === "failed") {
+        throw typedError("HOST_STATE_INVALID", "Monitor output is closed");
+      }
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+        throw new TypeError("Monitor volume must be a number from 0 to 100");
+      }
+      if (monitorGain !== null) {
+        const now = audioContext.currentTime;
+        monitorGain.gain.cancelAndHoldAtTime(now);
+        monitorGain.gain.linearRampToValueAtTime(value / 100, now + 0.02);
+      }
+      monitorLevel = value;
+    },
     activateAudio,
     suspendAudio,
     release,

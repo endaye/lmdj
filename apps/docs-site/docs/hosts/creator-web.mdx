@@ -40,6 +40,9 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 <BuildIdentity />
 
+逐页、逐控件类型的状态与四区连带变化见 [Creator 交互手册（按页面）](./creator-interactions.mdx)，
+覆盖左栏、只读上屏、16 个声音 Pad、触摸区和临时采样／恢复页面。
+
 Cloudflare 迁移使用固定入口 `https://creator.lmdj.workers.dev/`。
 部署版本来自独立验证的签名 Release，不由本页 current Assembly 推断；配置、
 平台响应差异与迁移验收见 [Creator 部署手册](https://github.com/endaye/lmdj/blob/main/docs/deploy/creator-web.md)。
@@ -53,11 +56,52 @@ Host 主版本协调升级；现有 favicon 主版本的七项清单不被追溯
 Native 清单门禁接受当前实际声明的完整资产图，不额外补入尚未发布的 worker；
 将来声明离线资产的主版本必须恰好携带一个 worker，缺失或重复都在创建 Runtime 前拒绝。
 
+## Graphite 控件与字体
+
+普通触摸操作统一使用随包加载的 Space Grotesk Medium 12px；对象身份、
+读数与顶屏继续使用 IBM Plex Mono。标题为 14px，关键参数读数为 18px。
+字体随样式离线提供，不依赖外部字体服务。Sequence 保留已确认的 Mono
+字体、44px 实心控件与网格密度。
+
+Project、Sample、Perform、Sound Sets 和 System 的普通按钮在 44 设计单位
+的命中框内绘制 36 单位的可见面；上下透明留白属于按钮本身的正常布局，
+不会伸到相邻按钮之上。Project 内容卡、Pattern 启动槽、Pad、网格、推子和
+波形手柄保留各自的内容或编辑尺寸。面板内距 16、普通分组间距 8。
+控制台仍按舞台等比缩放，因此这里的 44 不表示真实屏幕上恒定的 44 CSS
+像素，物理触摸命中与误触仍需设备验收。
+
+四个旋钮统一呈现相对编码器，移除旧绝对位置指针与刻度。禁用、焦点、
+按下反馈保持可见；具体参数由当前已实现的绑定决定，外观不宣称第四个
+旋钮已绑定全局音量。
+
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host 已进入当前 Product Assembly，并只依赖 Web Runtime Platform。U1 增加的硬件四区外壳（Figma 880×592：实体控制 80×560、只读上屏 752×176、Pad 区与触摸区各 368×368）自 2026-09-17 起是默认布局——这是 owner 在 U7 物理行仍为 deferred 时做出的决定，记录在 `docs/quality/2026-09-11-creator-ui-migration-acceptance.md` §7，不是验收通过。Desktop Final T2 起，控制台保持 880×592 的内部布局，按舞台（页眉与页脚之间）等比缩放到刚好放下并居中：窗口变大会放大，变矮或变窄会缩小，不再出现舞台滚动；窄竖屏下另外逆时针旋转 90°，且旋转时不放大。U8 随后（同日、同一 owner 决定）移除了旧 workspace 壳：`Existing workspace` / `Hardware layout` 开关、`?layout=` 查询参数与 `lmdj.creator.layout` 偏好一并退役，启动时清除残留的偏好键；模式栏、状态栏、旧 Sequence 包装与其专用样式删除，`CreatorMode`、`midiLabel`、`transportStatusLabel` 迁到独立模块继续为四区外壳服务。四区外壳是唯一布局；上屏同时给出 Pads 与 Assets 计数。上屏没有操作控件；音频/MIDI/报告在触摸区的 System 组。六个模式的 surface 都挂在触摸屏（Slice / Sound Sets 自 U5 起在触摸子工作区，没有专属实体键）。实体键可访问名仍是 Figma 名称（Project、Sample、Sequence、Perform、Record、Play），V1 把 Logo、旋钮外观和模式/录放键换成 Desktop Final D01–D04 导出图标；Pad 保持槽号/快捷键/Assigned·Empty·Capturing，没有类别数据时不画 DRUMS/BASS 图标。Sequence 触摸区用 Tempo/Swing 推子卡、Bars 分段、Quantize 与 Create Pattern，不增加 Grid/Copy（Desktop Final T8 起 SETUP 层另有 COPY，见下文）；#1672 T1 起 Tempo/Swing 是直接调节：拖动只本地预览、手势结束（松手/方向与 Home/End/Page 键抬起/blur）提交一次，Escape/pointercancel 取消，另有 ±1 步进与 Tap Tempo（最近至多 4 个间隔的中位数取整、夹取 40–240），不再有 Apply 按钮；录音中这些控件保持禁用并说明原因，control layer 同样以 HOST_STATE_INVALID 拒绝。同一设置行的 METRONOME 开关是设备级监听偏好（IndexedDB `lmdj.creator.host` 的 `metronome.v1`，默认关，重开恢复），不进 Project Truth，也不受 transport 录制禁用影响：click 由 Creator 侧 Web Audio 提前调度、直连 `AudioContext.destination`，绕过 Perform master tap，因此永不进入 Perform 录音或「主输出」重采样；拍点网格用引擎自己的 ceiling 公式在引擎帧上计算（播放中改 BPM 时在响应的 activation_frame 切换网格），经会话的 `sampleAudioClock()` 锚换算到 context 时间轴，常数误差 ≤ 约两个渲染量子（≈5 ms）、无逐拍漂移，每次音频中断恢复（新引擎帧纪元）重新取锚。实体 Play/Stop 与 Record 键已接入全局 Pattern transport（T3 的 `pattern.transport.request`/`inspect`）：Play/Stop 永远是 Pattern 播放/停止，Record 永远是当前 Pattern 的 overdub 录制，绝不表示 Sample capture 或 master recording；普通 mode 导航不再停止 transport。U2 把 Sequence 编序放进四区：上屏是只读 Quantize/Swing/Pattern/phase 投影，触摸区编辑 Tempo/Swing/Quantize、Pattern 选择与创建、恢复 apply/discard/retry；Play/Stop 与 Record 仍只走实体全局 transport，不是 journal stop、Sample capture 或 master WAV。U3 把 Project 列表/导入/打开和音频/MIDI/诊断/恢复留在触摸区：上屏是只读身份/加载/失败/运行时投影；选择不等于打开；New/Save As/完整工程导出保持缺席。V2 把该列表换成 D01 卡片（序号、短 ID、BPM、Pad/Asset 计数），每张卡片仍用 Open 打开，不增加 Save/New/Save As。U4 把 Sample 上屏做成只读波形/格式投影，裁切、试听、分配和采集留在触摸区；未提交 take 仍走现有失焦/中断保留路径。V3 把触摸波形编辑器换成 D03 外观（紫色谱、约 20 可见／40 命中的起止手柄、Start/End 读数卡），不改 trim 提交时机，也不把上屏变成编辑器。U5 把 Slice 与 Sound Sets 放进触摸子工作区，不为左栏增键；候选预览不写 Project Truth，只有明确 Adopt/Keep/Replace 才写入。U6 把 Perform Launch/HOLD/已确认八段 FX、演奏录音/保存/丢弃和回放/重采样留在触摸区；上屏只读；图中 LP/HP/BP 不是可执行控件。V4 把 Perform 换成 D04 外观：触摸区以 LIVE CONTROLS 开头，切换提示读的是真实的 queued/live 状态而不是写死的 NEXT BAR；Pattern 槽做成段落块，已确认实色、待切换描边，并各自带 Queued/Playing 文字，状态不只靠颜色；Filter 与 Delay 两段已有 FX 做成纵向推子卡并把 0–1000 的引擎值回读成百分比，其余六段收进 FX / MORE，折叠时连同未闭合手势一起释放；上屏改为只读的 Bank/Transport/Quantize/已分配 Slot 投影。图中的 MASTER 推子、LP/HP/BP 滤波类型与响应曲线、MUTE/SOLO 与输出电平表在 Host 没有对应动作或投影，一律不画（BAR/BEAT 计数自 T11 起按 transport 帧计算后画出，见下）。Desktop Final 对齐计划（`docs/plans/2026-10-06-creator-desktop-final-ui.md`）T1 起，样式里与 Desktop Final 同值的颜色统一改用 `--creator-*` token（按色相命名，不按页面命名，因为颜色表示页面还是参数仍未决定）；机身与上屏底色改为 Desktop Final 的 `#202321` 与 `#292d29`；机身字体栈以 IBM Plex Mono 开头。T1b 起这个字体随 Creator 打包：`@fontsource/ibm-plex-mono` 的 Latin 400 woff2（OFL-1.1，许可与版权保存在字体文件自身的元数据中）在构建时以 data: URL 内联进唯一的样式表，所以离线外壳无需新增资产角色或网络请求。Creator 的部署 CSP 为此在 `style-src` 后加上 `font-src data:`，除此之外与共享的 Web Runtime 策略相同；部署 smoke 同时接受这条策略与之前的策略，因为更早的 Creator 部署仍作为回滚锚点被校验。proof-only server 按 dist 的 `host_id` 选择策略，只对 Creator 加 `font-src data:`。T3 起 Pad 位置统一写作 Bank 字母加两位编号（`A01`–`D16`，2026-10-04 Sequence 硬件界面决策第 2 项）：Pad 矩阵的可访问名、Sequence 网格行名与音符、Sample/Long Source/Capture 标签、Sound Set 预览映射、Perform 重采样状态和配额错误文字都由同一个 `slotAddress` 生成；键帽提示不变。Pad 录音状态以前显示的是全局槽号（如 `Pad 17`），现在同样显示 `B01` 这种地址。更早的验收记录（如上文 M3 的 A1–A16）保留当时的写法。Desktop Final 计划 T9 起，Project 页按 D01 排版。上屏是一行摘要（BPM、Bank 数、已分配 Pad 数、Pattern 数）和 PROJECT／CONTENT／WORKSPACE 三栏，始终显示已打开的 Project，与 Sequence 页一样把 Creator／音频状态、Project 事实行与构建标签只留给辅助技术。触摸区标题为 YOUR PROJECTS 和 `NN LOCAL`；点按卡片只是选中（默认选中已打开的 Project，否则选第一个），只有蓝色 OPEN PROJECT 才打开选中的 Project（替代 V2 的每卡 Open）；下面两行是 DUPLICATE、+ NEW PROJECT 与 IMPORT。Save、Save As 与未保存提示仍没有 Host 动作，不画。T10 起 Sample 页上屏按 D03：右上角是 `PAD A01`，下面一行是格式、时长与当前裁切选区（秒），再下面是整段波形，选区外的部分压暗，选区两端有边线；上屏只读，同样只把共享状态与事实留给辅助技术。触摸区沿用现有 Sample 操作与名称（Replace、Edit、Delete、Record、Add），只换成触控套件样式与紫色强调；D03 画的 AUDITION、TRIM SELECTION、BROWSE 与 ASSIGN → Pad 与现有操作不是一一对应，也不新增流程，等产品决定后再映射。T11 起 Perform 页上屏按 D04：右上角是 transport 状态，下面是当前 Pattern 的 `BAR nn / nn · BEAT nn / 04` 计数和进度条，二者与 Sequence 页一样由 transport 帧计算播放头；再下面是 Bank、Transport、Quantize 与已分配 Slot。共享状态与事实同样只留给辅助技术。现在 Desktop Final 四页的上屏都是各自的版面。实体 Sequence 键与模式栏读同一个可达性判断：没有 Sequence 能力时两边同样禁用并给出同一条原因，不再挂出一个看着能用、每个动作却静默返回的 Sequence 编辑器；实体 Perform 键仍用较松的条件，因为它落到的是一个写明缺什么的占位页，不是假的可操作控件。六工作区可达性对照、上述缺陷与尚未取得的真机／听感／辅助技术证据记录在 `docs/quality/2026-09-11-creator-ui-migration-acceptance.md`。U7 的物理行仍为 deferred；默认切换与旧壳移除是 owner 决定，不是验收。Project Truth 的当前写出契约是 `lmdj.project.v5`（含 16 个 Pattern Slot 与 `performances`），v1/v2/v3/v4 仅作为只读迁移输入。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Sample Editor 以 Runtime Voice 的 `runtimeFrame`/`sourceFrame` 边缘和 browser monotonic clock 插值选中 Pad 的播放头：one-shot/gate 向 End 推进并在终点收束，loop 模式只在有效 Start/End 选区内回绕；最新开始的选中-Pad Voice 确定性拥有播放头，旧 Voice 的终止边缘不能清除新指示器。停止、完成、选择切换、音频挂起/恢复或 Runtime 替换都会清理临时 Voice/playhead state。播放头对辅助技术隐藏、不是可编辑的裁剪控件；reduced-motion 设置不冻结这个时间真值。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。本 Build 新增 Sound Set 目录与安装 surface：浏览 Catalog、检查单个 Set、预览映射，并以 `keep` 或 `replace` 安装到用户选定的 Bank；浏览器侧执行 `fetch` 并把字节交给 Core 暂存，Core 保留全部 Contract、哈希与准入判定。本 Build 起 Set 内音频可以试听：surface 上那两个自 Task 5 就写明的接入点现在各带一个控件——set 级 demo 与每个已占用槽——外加一个停止控件。Facade 解析、把关、解码后交回**已重采样**的 PCM，Host 只把它发布进引擎保留的双槽 audition 池并起声；浏览器侧从不触碰 Set Store 字节，跨边界的只有它播放了什么的几何信息。停止是幂等的 Host 操作，所以控件不判断此刻是否有声音在响——那个判断归引擎，而在渲染与点击之间声音结束时它一定会判错。试听对 Project Truth 是 query：不建 Asset、不动 Pad、不推进 revision，由原生验收 journey 第 10 腿在事情发生之后读回断言。
+Creator 的 4×4 Pad 矩阵采用 MPC 式排列：左下角 01、右下角 04、
+左上角 13、右上角 16；每行从左到右，再向上一行。Bank A–D 与
+Sound Set 安装预览使用相同的显示顺序。Pad 地址、素材绑定、Pattern
+引用及 MIDI 映射仍由稳定槽位决定；电脑快捷键跟随槽位（Q 对应当前
+Bank 的 01），Tab 按屏幕从上到下、从左到右访问可用 Pad。
+Sequence 的 ↑/↓ 仍按 A01–D16 选择当前 Pad。自动化验证显示位置和
+输入目标；真实触控、物理 MIDI 与听音验收仍须单独记录。
+
+<StatusBadge status="implemented" /> Creator Web Host 已进入当前 Product Assembly，并只依赖 Web Runtime Platform。U1 增加的硬件四区外壳（Figma 880×592：实体控制 80×560、只读上屏 752×176、Pad 区与触摸区各 368×368）自 2026-09-17 起是默认布局——这是 owner 在 U7 物理行仍为 deferred 时做出的决定，记录在 `docs/quality/2026-09-11-creator-ui-migration-acceptance.md` §7，不是验收通过。Desktop Final T2 起，控制台保持 880×592 的内部布局，按舞台（页眉与页脚之间）等比缩放到刚好放下并居中：窗口变大会放大，变矮或变窄会缩小，不再出现舞台滚动；窄竖屏下另外逆时针旋转 90°，且旋转时不放大。U8 随后（同日、同一 owner 决定）移除了旧 workspace 壳：`Existing workspace` / `Hardware layout` 开关、`?layout=` 查询参数与 `lmdj.creator.layout` 偏好一并退役，启动时清除残留的偏好键；模式栏、状态栏、旧 Sequence 包装与其专用样式删除，`CreatorMode`、`midiLabel`、`transportStatusLabel` 迁到独立模块继续为四区外壳服务。四区外壳是唯一布局；上屏同时给出 Pads 与 Assets 计数。上屏没有操作控件；音频/MIDI/报告在触摸区的 System 组。六个模式的 surface 都挂在触摸屏（Slice / Sound Sets 自 U5 起在触摸子工作区，没有专属实体键）。实体键可访问名仍是 Figma 名称（Project、Sample、Sequence、Perform、Record、Play），V1 把 Logo、旋钮外观和模式/录放键换成 Desktop Final D01–D04 导出图标；Pad 保持槽号/快捷键/Assigned·Empty·Capturing，没有类别数据时不画 DRUMS/BASS 图标。Sequence 触摸区用 Tempo/Swing 推子卡、Bars 分段、Quantize 与 Create Pattern，不增加 Grid/Copy（Desktop Final T8 起 SETUP 层另有 COPY，见下文）；#1672 T1 起 Tempo/Swing 是直接调节：拖动只本地预览、手势结束（松手/方向与 Home/End/Page 键抬起/blur）提交一次，Escape/pointercancel 取消，另有 ±1 步进与 Tap Tempo（最近至多 4 个间隔的中位数取整、夹取 40–240），不再有 Apply 按钮；录音中这些控件保持禁用并说明原因，control layer 同样以 HOST_STATE_INVALID 拒绝。同一设置行的 METRONOME 开关是设备级监听偏好（IndexedDB `lmdj.creator.host` 的 `metronome.v1`，默认关，重开恢复），不进 Project Truth，也不受 transport 录制禁用影响：click 由 Creator 侧 Web Audio 提前调度、连接 RuntimeSession 的监听 gain（ENC4 输出音量），绕过 Perform master tap，因此永不进入 Perform 录音或「主输出」重采样；拍点网格用引擎自己的 ceiling 公式在引擎帧上计算（播放中改 BPM 时在响应的 activation_frame 切换网格），经会话的 `sampleAudioClock()` 锚换算到 context 时间轴，常数误差 ≤ 约两个渲染量子（≈5 ms）、无逐拍漂移，每次音频中断恢复（新引擎帧纪元）重新取锚。实体 Play/Stop 与 Record 键已接入全局 Pattern transport（T3 的 `pattern.transport.request`/`inspect`）：Play/Stop 永远是 Pattern 播放/停止，Record 永远是当前 Pattern 的 overdub 录制，绝不表示 Sample capture 或 master recording；普通 mode 导航不再停止 transport。U2 把 Sequence 编序放进四区：上屏是只读 Quantize/Swing/Pattern/phase 投影，触摸区编辑 Tempo/Swing/Quantize、Pattern 选择与创建、恢复 apply/discard/retry；Play/Stop 与 Record 仍只走实体全局 transport，不是 journal stop、Sample capture 或 master WAV。U3 把 Project 列表/导入/打开和音频/MIDI/诊断/恢复留在触摸区：上屏是只读身份/加载/失败/运行时投影；选择不等于打开；New/Save As/完整工程导出保持缺席。V2 把该列表换成 D01 卡片（序号、短 ID、BPM、Pad/Asset 计数），每张卡片仍用 Open 打开，不增加 Save/New/Save As。U4 把 Sample 上屏做成只读波形/格式投影，裁切、试听、分配和采集留在触摸区；未提交 take 仍走现有失焦/中断保留路径。V3 把触摸波形编辑器换成 D03 外观（紫色谱、约 20 可见／40 命中的起止手柄、Start/End 读数卡），不改 trim 提交时机，也不把上屏变成编辑器。U5 把 Slice 与 Sound Sets 放进触摸子工作区，不为左栏增键；候选预览不写 Project Truth，只有明确 Adopt/Keep/Replace 才写入。U6 把 Perform Launch/HOLD/已确认八段 FX、演奏录音/保存/丢弃和回放/重采样留在触摸区；上屏只读；图中 LP/HP/BP 不是可执行控件。V4 把 Perform 换成 D04 外观：触摸区以 LIVE CONTROLS 开头，切换提示读的是真实的 queued/live 状态而不是写死的 NEXT BAR；Pattern 槽做成段落块，已确认实色、待切换描边，并各自带 Queued/Playing 文字，状态不只靠颜色；Filter 与 Delay 两段已有 FX 做成纵向推子卡并把 0–1000 的引擎值回读成百分比，其余六段收进 FX / MORE，折叠时连同未闭合手势一起释放；上屏改为只读的 Bank/Transport/Quantize/已分配 Slot 投影。图中的 MASTER 推子、LP/HP/BP 滤波类型与响应曲线、MUTE/SOLO 与输出电平表在 Host 没有对应动作或投影，一律不画（BAR/BEAT 计数自 T11 起按 transport 帧计算后画出，见下）。Desktop Final 对齐计划（`docs/plans/2026-10-06-creator-desktop-final-ui.md`）T1 起，样式里与 Desktop Final 同值的颜色统一改用 `--creator-*` token（按色相命名，不按页面命名，因为颜色表示页面还是参数仍未决定）；机身与上屏底色改为 Desktop Final 的 `#202321` 与 `#292d29`；机身字体栈以 IBM Plex Mono 开头。T1b 起这个字体随 Creator 打包：`@fontsource/ibm-plex-mono` 的 Latin 400 woff2（OFL-1.1，许可与版权保存在字体文件自身的元数据中）在构建时以 data: URL 内联进唯一的样式表，所以离线外壳无需新增资产角色或网络请求。Creator 的部署 CSP 为此在 `style-src` 后加上 `font-src data:`，除此之外与共享的 Web Runtime 策略相同；部署 smoke 同时接受这条策略与之前的策略，因为更早的 Creator 部署仍作为回滚锚点被校验。proof-only server 按 dist 的 `host_id` 选择策略，只对 Creator 加 `font-src data:`。T3 起 Pad 位置统一写作 Bank 字母加两位编号（`A01`–`D16`，2026-10-04 Sequence 硬件界面决策第 2 项）：Pad 矩阵的可访问名、Sequence 网格行名与音符、Sample/Long Source/Capture 标签、Sound Set 预览映射、Perform 重采样状态和配额错误文字都由同一个 `slotAddress` 生成；键帽提示不变。Pad 录音状态以前显示的是全局槽号（如 `Pad 17`），现在同样显示 `B01` 这种地址。更早的验收记录（如上文 M3 的 A1–A16）保留当时的写法。Desktop Final 计划 T9 起，Project 页按 D01 排版。上屏是一行摘要（BPM、Bank 数、已分配 Pad 数、Pattern 数）和 PROJECT／CONTENT／WORKSPACE 三栏，始终显示已打开的 Project，与 Sequence 页一样把 Creator／音频状态、Project 事实行与构建标签只留给辅助技术。触摸区标题为 YOUR PROJECTS 和 `NN LOCAL`；点按卡片只是选中（默认选中已打开的 Project，否则选第一个），只有蓝色 OPEN PROJECT 才打开选中的 Project（替代 V2 的每卡 Open）；下面两行是 DUPLICATE、+ NEW PROJECT 与 IMPORT。Save、Save As 与未保存提示仍没有 Host 动作，不画。T10 起 Sample 页上屏按 D03：右上角是 `PAD A01`，下面一行是格式、时长与当前裁切选区（秒），再下面是整段波形，选区外的部分压暗，选区两端有边线；上屏只读，同样只把共享状态与事实留给辅助技术。触摸区沿用现有 Sample 操作与名称（Replace、Edit、Delete、Record、Add），只换成触控套件样式与紫色强调；D03 画的 AUDITION、TRIM SELECTION、BROWSE 与 ASSIGN → Pad 与现有操作不是一一对应，也不新增流程，等产品决定后再映射。T11 起 Perform 页上屏按 D04：右上角是 transport 状态，下面是当前 Pattern 的 `BAR nn / nn · BEAT nn / 04` 计数和进度条，二者与 Sequence 页一样由 transport 帧计算播放头；再下面是 Bank、Transport、Quantize 与已分配 Slot。共享状态与事实同样只留给辅助技术。现在 Desktop Final 四页的上屏都是各自的版面。实体 Sequence 键与模式栏读同一个可达性判断：没有 Sequence 能力时两边同样禁用并给出同一条原因，不再挂出一个看着能用、每个动作却静默返回的 Sequence 编辑器；实体 Perform 键仍用较松的条件，因为它落到的是一个写明缺什么的占位页，不是假的可操作控件。六工作区可达性对照、上述缺陷与尚未取得的真机／听感／辅助技术证据记录在 `docs/quality/2026-09-11-creator-ui-migration-acceptance.md`。U7 的物理行仍为 deferred；默认切换与旧壳移除是 owner 决定，不是验收。Project Truth 的当前写出契约是 `lmdj.project.v5`（含 16 个 Pattern Slot 与 `performances`），v1/v2/v3/v4 仅作为只读迁移输入。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Sample Editor 以 Runtime Voice 的 `runtimeFrame`/`sourceFrame` 边缘和 browser monotonic clock 插值选中 Pad 的播放头：one-shot/gate 向 End 推进并在终点收束，loop 模式只在有效 Start/End 选区内回绕；最新开始的选中-Pad Voice 确定性拥有播放头，旧 Voice 的终止边缘不能清除新指示器。停止、完成、选择切换、音频挂起/恢复或 Runtime 替换都会清理临时 Voice/playhead state。播放头对辅助技术隐藏、不是可编辑的裁剪控件；reduced-motion 设置不冻结这个时间真值。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。本 Build 新增 Sound Set 目录与安装 surface：浏览 Catalog、检查单个 Set、预览映射，并以 `keep` 或 `replace` 安装到用户选定的 Bank；浏览器侧执行 `fetch` 并把字节交给 Core 暂存，Core 保留全部 Contract、哈希与准入判定。本 Build 起 Set 内音频可以试听：surface 上那两个自 Task 5 就写明的接入点现在各带一个控件——set 级 demo 与每个已占用槽——外加一个停止控件。Facade 解析、把关、解码后交回**已重采样**的 PCM，Host 只把它发布进引擎保留的双槽 audition 池并起声；浏览器侧从不触碰 Set Store 字节，跨边界的只有它播放了什么的几何信息。停止是幂等的 Host 操作，所以控件不判断此刻是否有声音在响——那个判断归引擎，而在渲染与点击之间声音结束时它一定会判错。试听对 Project Truth 是 query：不建 Asset、不动 Pad、不推进 revision，由原生验收 journey 第 10 腿在事情发生之后读回断言。
 
 阻断该 surface 的三个缺陷都已修复并合并。[#900](https://github.com/endaye/lmdj/issues/900) 曾使本 Build 产出的任何 Project 都无法导入——浏览器侧 Bundle reader 的枚举停在 `1.1.0` / v3，而导入 Bundle 是浏览器获得 Project 的唯一途径；[#901](https://github.com/endaye/lmdj/issues/901) 的 `connect-src 'self'` 曾拦截一切跨源 Catalog，Creator 现在通过同源前缀 `/soundset-catalog/` 取用，由 Host 转发到部署配置的上游，页面不再获得任何外部 origin，该指令对 OPFS 中 Project 与音频的外泄保护保持原样；[#902](https://github.com/endaye/lmdj/issues/902) 曾使 Workspace Set Store 在浏览器存储平台上从不发布。`tests/platform/web/creator/creator_web_soundset.spec.mjs` 的六腿 journey 现已无援转绿，并在两台独立搭建的环境上各跑通一次；其断言经逐条扰动验证，包括一次零写入 `keep` 安装不得推进 revision。
+
+### Sound Set 分步安装
+
+从 Project 进入 Sound Sets 后，通过 **Browse → Details → Target → Review** 操作。
+Browse 显示 Catalog、缓存和不可用 Set；Details 保留全部 16 槽与 demo／单槽试听、
+Stop audition；Target 选择安装 Bank；Review 显示只读映射和确认。
+步骤切换只改变视图，返回 Browse 恢复选中的 Inspect 按钮焦点与列表位置。
+许可和 attribution 在详情与安装确认中保持可见，内容仅沿外层触摸区纵向滚动。
+
+映射按 MPC 地址顺序排列，明确区分 Install、Occupied、Empty source（原 Pad 不变）
+与 Unmapped；没有可演奏 Pad 的外观或点击行为。目标 Bank 与左侧演奏 Bank 独立。
+改目标会作废旧映射及 Keep／Replace 选择；预览和安装期间锁住步骤、目标与策略。
+有冲突时仍需明确选择 Keep 或 Replace，未确认不会修改 Project。
+安装发送预览时的 Bank 与 revision；过期或失败时保留错误、Refresh mapping 和重试，
+不把当前 revision 偷换成已确认的版本。成功回执与原有保存重开行为保持不变。
 
 ## 创作边界
 
@@ -65,7 +109,16 @@ Native 清单门禁接受当前实际声明的完整资产图，不额外补入�
 
 Boot 直接进入一个 Project：本机没有 Project 时自动新建（与 New Project 相同的默认值）并进入 Sample；否则重开本设备上次打开的 Project。该记录只保存在 Host 本地存储（IndexedDB，打开即提交，浏览器崩溃后重启仍回到最后打开的 Project；Chromium 延迟且限频提交 localStorage，曾使崩溃前约一分钟内的记录丢失，#1726），不是 Project Truth；记录缺失、不可读或指向已不存在的 Project 时，Creator 停在 Local Projects 由用户选择，重开失败照常显示错误。Open local 在已有 Project 时仍保持可达；list/create/duplicate/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。ready Session 的 diagnostics 更新只同步 Runtime 呈现，不得重新进入 Project inventory/reopen；inventory 只随 Session、Runtime phase 或明确 list retry 变化。Suspend audio 进入显式 `suspending` 屏障：Runtime 发布 `audio-suspended` 只负责输入清理，Project actions 必须等 `session.suspendAudio()` 的 safety cleanup 与 transport response 全部 settle 后才重新开放；拒绝但 Runtime 仍 running 时恢复 running surface。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次敲击 Pad 或点击录音，以同一次真实手势唤醒音频。
 
-状态栏显示由生成的 Product Assembly identity 派生的 build 身份（Product Build、Host、Platform 与 protocol 版本），启动时同一身份写入浏览器 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`；该显示只做呈现，不替代 Runtime Session 对部署 manifest 的验证。状态栏同时显示 Project revision 与 MIDI 授权/输入数；Project Surface 显示 import 传输进度，Local Projects 列表可返回已打开的 Project；Runtime `ready` 时的 advisory 错误可被 Dismiss，`restart-required`、`unsupported`、`failed` 与 `closed` 的 Runtime 错误则保留到 Runtime 自身改变 phase。
+System 的 **Project and build details** 保留 Project 完整 ID、revision、Pad／Asset 计数、MIDI 与生成的 Product Assembly 构建身份；顶屏不再堆叠这些技术字段。构建身份启动时仍写入 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`，它不替代 Runtime Session 的 manifest 验证。Project Surface 保留 import 进度与本地列表；advisory 错误仍可 Dismiss，Runtime 的 `restart-required`、`unsupported`、`failed`、`closed` 错误保留到 phase 改变。
+
+### 模式相关的只读顶屏
+
+- **Project** 标题绑定实际打开的 Project，选中另一张卡片不会提前换标题。没有名称投影时显示短 ID。`LOCAL AUTOSAVE` 表达本地自动保存策略，不是所有独立草稿的保存回执；可观察的 Sample 更新、错误、未提交草稿以及“已保存但 audio pending”会覆盖该提示，不虚构保存时间。
+- **Sample** 标题是当前 Pad 地址；右侧显示真实类别，缺少类别但已分配时为 `SAMPLE`，空槽为 `EMPTY`。格式、总时长和已提交裁剪范围配合完整波形显示。切换 Pad 时不沿用上一 Pad 的 inspect。后台更新明确标出实际操作的 Pad；错误提示为 `CHECK LAST ACTION`，表示上一笔 Sample 操作，不能误认为当前 Pad 的错误。Asset ID、源格式／帧数和 revision 收进 **Pad → Sample details**，编辑控件仍保留本地参数值与必要 Pad 上下文。
+- **Sequence** 标题是选中 Pattern 序号；八条轨道显示地址与真实类别／空态，沿用 Project 投影颜色与当前 Pad 高亮。没有素材名称字段时不臆造 KICK／SNARE 等名称。
+- **Perform** 同时显示 `ACKNOWLEDGED SLOT` 和 `QUEUED SLOT`，分别来自同一个 Perform controller 的 `lastLaunchAck` 与 `pendingLaunch`；待切换不会覆盖已确认槽位。确认是 Runtime 回执，不是听感验收。全局 Pattern 的 bar／beat／进度仍来自独立的 Pattern transport，不能把它当作 Performance 录音时钟。触摸区保留启动键及分组的就地 Queued／Playing 高亮，重复的页首 cue 和录制 authority 中的 last-launch 段落移除。
+
+所有顶屏保持只读；Sample 裁剪和触摸 Tempo／Swing 的连续草稿同步由独立 #1921 跟进。加载、错误和缺失字段明确降级，完整错误与恢复动作仍在触摸区。未实现的 MASTER、电平表与滤波类型没有被图示代替。
 
 Sample 触摸工作区只保留编辑与采集；Bank 导航和可演奏 Pad 网格统一在左侧实体栏／
 Pad 区。该 Pad 区在 Sample mode 同时提供选中态、空槽选样、拖入／替换，以及原有
@@ -97,9 +150,20 @@ Gate／Loop Gate、取消、后台与 Session 替换会阻止迟到的发声。�
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
 
+Sample 触摸工作区按当前选中 Pad 分为四个子页：**Trim** 显示波形与裁切，
+**Playback** 放置播放模式、音量、音高、声像与包络，**Tone / EQ** 放置音色与
+均衡器，**Pad** 集中 Add/Replace、Record Sample、Delete、Reset 和颜色。
+空 Pad 的 Trim 页也提供直接 Add Sample；不再有只把焦点移到裁切框的 Edit 按钮。
+切换 Pad 或 Bank 时当前子页跟随新的目标，重新进入 Sample 默认打开 Trim。
+切子页时仍在进行的试听草稿取消，键盘手势仍按既有失焦规则完成，已经提交的修改
+保留；导入确认、长素材裁切和
+录音对话框仍由 Sample 工作区持有，不随子页拆分而转移目标。Record Sample
+继续区别于 Pattern Record 和 Record Performance。顶屏全局波形与 Trim 的局部
+编辑视窗各自保留。
+
 Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放与音色参数的缺省值。
 
-#1667 在同一列控件中加入 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone（−100…+100），同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
+Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页的 Tone（−100…+100）同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
 
 - 拖动极点时，极点按指针的位移移动，与按在命中圆的哪个位置无关；没有位移的按压不改变任何值。频率限于该段范围，增益 0.1 dB 步进，±0.5 dB 内吸附到 0。把低段或高段架式拖到底线以下的 Cut 区就变成 cut，cut 保留手势开始时该段的增益（已旁通的段保留底线），与拖动途中的采样无关。
 - 双击中段极点后上下拖动设定 Q。
@@ -108,7 +172,14 @@ Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，�
 - 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
 - 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
 
-Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。Pattern 槽与 Filter/Delay 并排，HOLD 和 More FX 位于推子下方。
+
+- **Live**：16 个 Pattern 启动槽、Filter/Delay、FX / MORE、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
+- **Slots**：Pattern Assign/Clear/Move 和 revision；选项在切页后保留。
+- **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
+- **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
+
+子页切换保留录制 session、回放轮询、HOLD、名称草稿和 FX / MORE 展开状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
 
 FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。折叠 FX / MORE 或卸载时强制释放未闭合手势。HOLD 是链路级开关，同样随时可切换。
 
@@ -470,25 +541,33 @@ Each of these failures is recorded in Developer diagnostics.
 The Sequence touch area follows the 2026-10-04 Sequence hardware UI decision
 (Desktop Final plan T5).
 
-**Header.** `‹ GROOVE / NN ›` with `current / total` replaces the Pattern
-dropdown. It steps to the previous or next Pattern, and is disabled while the
-transport plays, because a Pattern switch waits for Stop. To its right, EDIT
-and SETUP toggle the layer below. EDIT is the default, and a mode change
-returns to it.
+**Header.** `GROOVE / NN` with `current / total` opens a direct Pattern
+picker with touch buttons. The physical left/right keys retain sequential
+Pattern navigation. Both entries wait for Stop; playback, recording and busy
+transport phases lock selection. EDIT and SETUP share the header row. EDIT
+is the default, and a mode change returns to it.
 
-**EDIT** holds only the grid:
+**EDIT** keeps all sixteen grid rows at their existing size:
 
-- one toolbar row: snap 1/4, 1/8, 1/16, 1/32 or off, plus NOTE / VEL;
-- the grid fills the rest of the area. All sixteen rows show at once, and
-  each screen width is one bar, so longer Patterns scroll sideways. The Pad
-  column stays in place while they scroll.
+- previous/next bar buttons and the `BAR` range button reach every bar in
+  1/2/4/8-bar Patterns. The range button opens a direct bar picker. A partial
+  native scroll displays both intersected bars; choosing a bar aligns its start.
+- Grid tools (showing the current snap and NOTE/VEL) opens all five snap
+  choices and both editing modes. Done or Escape returns focus to the opener.
+- one bar fills the visible lane beside fixed Pad labels. The overview frame
+  follows this unobscured lane, excluding the label column. ENC1 and native
+  horizontal panning remain available; dragging a scrollbar is unnecessary.
+- bar navigation is disabled during an active note gesture. Changing view
+  never edits notes, changes the current Pad or clears a selection. Choosing
+  another Pattern starts its view at the first bar.
 - after a box selection, Delete and Clear float over the grid's bottom-right
-  corner.
+  corner. An actionable global error can still add vertical content above the
+  editor; its recovery control remains available.
 
 **SETUP** holds the settings that are set once and rarely touched:
 
-- **Tempo and Swing cards.** Each has a fader and −/+ steps, labelled with the
-  encoder that will drive it (ENC 3, ENC 4).
+- **Tempo and Swing cards.** Each has a fader and −/+ steps. Tempo also uses
+  ENC3; Swing remains on the touch surface because ENC4 controls monitoring.
 - **`BARS`.** A 1, 2, 4 or 8 segment on the selected Pattern's length
   (Desktop Final T8, the 2026-10-08 Pattern length and copy decision).
   Choosing a longer length adds empty bars. Choosing a shorter one deletes the
@@ -518,10 +597,10 @@ The physical column drives the same page (Desktop Final plan T6):
   either end. It is unavailable while the grid is hidden in SETUP.
 - **Encoder 2** scrolls the upper screen's eight rows one row per detent. A
   Bank key moves them to that Bank's first row.
-- **Encoder 3 and encoder 4** turn Tempo (±1 BPM) and Swing (±1%). A turn
+- **Encoder 3** turns Tempo (±1 BPM). A turn
   previews on the upper screen at once and commits once, 400 ms after the last
   detent, so a turn is one undo entry. Recording or a transport command in
-  flight locks both encoders and drops an unsettled turn.
+  flight locks the Tempo encoder and drops an unsettled turn. Swing remains the SETUP touch slider. **Encoder 4** always controls device monitoring output (0–100%), including metronome clicks, after the capture tap.
 - **`←` and `→`** without SHIFT step to the previous or next Pattern, only
   while stopped. With SHIFT they remain Undo and Redo.
 
@@ -529,8 +608,43 @@ An encoder turns by wheel (accumulated, 50 px of travel per detent, so a trackpa
 `↑` / `↓` select the current Pad in A01–D16 order and stop at the ends.
 Crossing a Bank updates the Bank and keeps the current Pad visible on the upper
 screen. The Pad, row label and overview highlight together; navigation neither
-triggers sound nor changes selected notes or Project Truth. Other pages' encoder
-and direction mappings remain open in #1822.
+triggers sound nor changes selected notes or Project Truth. Other pages' ordinary
+direction mappings remain open in #1822.
+
+The 2026-10-09 contextual encoder decision also binds the other pages:
+
+| Page / group | ENC1 | ENC2 | ENC3 | ENC4 |
+| --- | --- | --- | --- | --- |
+| Project | Select Project | Scroll Projects | Unassigned | Output Volume |
+| Sample trim | Start | End | Pitch | Output Volume |
+| Sample sound | Pad Volume | Pan | Tone | Output Volume |
+| Perform main FX | Filter | Delay | Reverb | Output Volume |
+| Perform more FX | Crush | Stutter | Gate | Output Volume |
+| System | Unassigned | Unassigned | Unassigned | Output Volume |
+
+Touch buttons switch Sample groups; FX / MORE switches Perform groups.
+SHIFT + ENC1–3 uses fine steps (one source frame, 0.1 semitone, 0.1 dB,
+1 Pan/Tone unit or 1/1000 FX unit); ordinary steps are 10 ms, one semitone,
+one dB, 10 Pan/Tone units or 10/1000 FX units. Navigation and integer BPM
+retain their minimum steps. ENC4 has no alternate layer.
+
+Project selection never opens a Project. Sample parameters preview immediately
+and share one 400 ms idle save/Undo per Pad. Page, Pad or Project changes,
+System, Esc and Undo/Redo cancel unsubmitted Sample/BPM previews; requests
+already sent retain their real result. Perform turns retain effects at rest and
+across groups; leaving Perform or opening System releases owned gestures under
+HOLD. The upper display continuously labels all four current functions and values.
+
+Output Volume defaults to 100% and restores the device's `monitor-volume.v1`
+IndexedDB preference before enabling audio activation. While a ready Runtime
+is still restoring this preference, the touch screen visibly reports
+`Restoring output volume…` and the musical Pads, Play/Record and keyboard input
+wait for that same session's read. Restoring 0% also enables input; a retired
+session's late read cannot enable its replacement. The next gesture after
+restoration is a new input; an earlier gesture is not queued for later audio
+activation. Other page and authoring controls keep their usual availability.
+Output Volume changes only monitoring:
+captured, resampled and exported PCM and authoring history are unchanged.
 
 Every control in the touch area is a 44 px button with an 8 px radius. There
 are no browser-native dropdowns or checkboxes.
@@ -589,10 +703,7 @@ draws three things:
 - **A status line:** `SEQUENCE / NN`, the BPM and the Swing, with the transport
   state and bar:beat position (for example `STOPPED / 001:01`) at its right
   edge.
-- **A context line:** the bar range, the step count at the current snap, the
-  visible track range (`TRACKS A01–A08 / 64`) and the Bank. While notes are
-  selected it adds their count and velocity (the shared value, or `mixed`).
-  It also shows a pending Pattern and a recovery count when present.
+- **An encoder readback line:** the scroll position, visible track range, BPM and output level. The former context facts remain in the accessibility tree.
 - **Eight track rows** over all 64 Pad rows. Each row is 10 px high with a
   3 px gap, behind a row-name column that shows only the address. Step cells
   follow the snap (1/16 when snap is off) and alternate shade per beat. A
@@ -604,7 +715,7 @@ The rows start at the active Bank's first row, so pressing a Bank key moves
 them to that Bank.
 
 When there is a status — the most severe of a transport error, a Sequence
-error and a pending publication — it takes the context line's place.
+error and a pending publication — it appears at the status line's right edge, while encoder readbacks and all eight rows remain visible.
 
 On the Sequence page the Creator and audio phase, the Project facts row
 (Project, Rev, Pads, Assets, Key, MIDI) and the build label are not drawn. They
@@ -632,3 +743,39 @@ moves, resizes, adjusts velocity, batch-deletes and batch-moves against
 swaps a playback edit in place without restarting playback, and reopens with
 the same Truth and an empty history. Physical touch and drag ergonomics on
 iPad or touch screens and audible in-place swaps are not claimed.
+
+
+### 上下屏的实时编辑反馈
+
+Sequence 的触摸 Tempo / Swing 在手势进行时同步显示于只读顶屏；Sample
+裁切的数值和顶屏选区跟随同一份当前 Pad 草稿，不等待较早的试听回执。
+预览不写入 Project Truth，不增加 revision 或 Undo。触摸释放仍按原协议提交
+一次；取消、失败、对象或模式切换以及录音锁定会清理对应草稿。旋钮仍采用
+最后一格之后 400 ms 的原有提交规则，离开编辑上下文会取消未结束的转动。
+
+音频尚未激活时，Sample 仍可进行视觉裁切并提交；此时不向停止的音频引擎
+请求试听。音频运行时若试听预览被拒绝，选区和触摸手势一起回到权威值，
+延迟到达的松手不能再提交已失效的草稿。顶屏保持只读。
+
+### Status and recovery
+
+Default sound loading uses one concise summary after the current workspace,
+while each Pad retains its loading or failure feedback. The recovery summary
+uses the outer touch scroller without displacing first-screen musical controls. Failed downloads can be retried directly; saved
+sounds awaiting playback preparation keep a separate preparation action.
+System details opens the diagnostic area without replacing the Project.
+Completed loading leaves the editing area clear and still updates the
+assistive status.
+
+Pad recording Save/Discard remains directly reachable while System is open.
+An active or stopped Performance has a notice outside its page: stop it there,
+or return directly to Takes to save or discard the retained recording.
+Opening System does not create a second recording owner. Workspace navigation
+returns with Back to music.
+
+Sequence offers **Retry playback** when an operation failed or publication is
+pending. Deliberate manual refresh remains in SETUP → **Playback details**.
+Sample/Project playback summaries distinguish saved changes from prepared
+audio; exact revisions are in their playback details. Perform recording,
+WAV binding, replay revision and gesture counts are available in details,
+with live assistive status retained.

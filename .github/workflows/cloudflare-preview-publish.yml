@@ -19,8 +19,7 @@ jobs:
   publish:
     if: >-
       github.repository == 'endaye/lmdj' &&
-      vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != '' &&
-      github.event.workflow_run.head_branch == vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH
+      vars.CLOUDFLARE_PREVIEW_ENABLED == '1'
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 30
     environment: portal-cloudflare-preview
@@ -41,7 +40,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           PREVIEW_RUN_ID: ${{ github.event.workflow_run.id }}
-          PREVIEW_PILOT_BRANCH: ${{ vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH }}
+          PREVIEW_ENABLED: ${{ vars.CLOUDFLARE_PREVIEW_ENABLED }}
           WRANGLER_JS: ${{ runner.temp }}/preview-cli-${{ github.run_id }}/node_modules/wrangler/bin/wrangler.js
           WRANGLER_SEND_METRICS: 'false'
         run: python3 scripts/ci/cloudflare_preview_publish.py

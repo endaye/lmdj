@@ -833,8 +833,11 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
   await screen.findByRole("heading", {name: "Project 11111111"});
   await act(async () => value.emit({state: "running", errorCode: null}));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await userEvent.click(screen.getByRole("button", {name: /^Pad$/}));
+  await userEvent.click(screen.getByText("Sample details", {exact: true}));
+  await screen.findByText("33333333-3333-4333-8333-333333333333");
   const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+  await userEvent.click(screen.getByRole("button", {name: "Playback"}));
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
   fireEvent.change(volume, {target: {value: "-6"}});
   await waitFor(() => expect((volume as HTMLInputElement).value).toBe("-6"));

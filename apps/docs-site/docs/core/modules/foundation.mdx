@@ -24,6 +24,11 @@ Core 团队所有；模块清单无下游依赖。
 字节/文件输入被包装为 Artifact，JSON 在 Contract 边界解析并返回 typed result。
 ## 5. API 与 Artifact 边界
 公开头文件位于 `packages/foundation/include`，实现不暴露可变产品对象。
+
+`parse_bounded_json` 最多构建 64 层 JSON 容器；遇到下一层时立即拒绝，
+返回 `std::nullopt`，内部拒绝信号不离开公共解析入口。被拒绝的流停在该位置。
+输入字节上限仍由调用边界负责，宽或浅的文档仍可能过大。Emscripten 为
+Foundation 启用所需的异常编译和链接支持，以保持同样的拒绝结果。
 ## 6. 状态、错误与生命周期
 错误采用 typed error；Artifact 身份在跨模块传递期间保持稳定。
 ## 7. 产品使用方

@@ -32,7 +32,7 @@ class StubNode extends EventTarget {
   }
 }
 
-async function fixture({controllerOptions, onPostMessage} = {}) {
+async function fixture({controllerOptions, onPostMessage, monitor = false} = {}) {
   const previousLocation = globalThis.location;
   const previousNode = globalThis.AudioWorkletNode;
   const modules = [];
@@ -41,6 +41,7 @@ async function fixture({controllerOptions, onPostMessage} = {}) {
     destination,
     audioWorklet: {async addModule(url) { modules.push(url); }},
   };
+  const monitorDestination = monitor ? {context, kind: "monitor-gain"} : undefined;
   let node = null;
   globalThis.location = new URL("https://example.test/creator/");
   globalThis.AudioWorkletNode = class extends StubNode {
@@ -58,10 +59,11 @@ async function fixture({controllerOptions, onPostMessage} = {}) {
       {
         context,
         processorUrl: "./perform-master-tap.js",
+        ...(monitorDestination === undefined ? {} : {destination: monitorDestination}),
       },
       controllerOptions,
     );
-    return {controller, context, destination, modules, node};
+    return {controller, context, destination: monitorDestination ?? destination, modules, node};
   } finally {
     if (previousLocation === undefined) delete globalThis.location;
     else globalThis.location = previousLocation;
@@ -149,6 +151,18 @@ test("creates one same-origin transparent stereo destination", async () => {
   assert.deepEqual(node.disconnected, [destination]);
 });
 
+test("capture connects downstream to monitor while batches retain their original PCM", async () => {
+  const {controller, destination, node} = await fixture({monitor: true});
+  assert.deepEqual(node.connected, [destination]);
+  const batches = [];
+  await controller.start({onBatch: (channels) => batches.push(channels), onStopped() {}, onFailure() {}});
+  const channels = [Float32Array.of(0.5, -0.25), Float32Array.of(-0.5, 0.25)];
+  node.port.onmessage({data: {type: "batch", generation: 1, sequence: 1, channels}});
+  assert.equal(batches[0], channels);
+  assert.deepEqual([...batches[0][0]], [0.5, -0.25]);
+  await controller.close();
+});
+
 test("rejects a cross-origin processor before module creation", async () => {
   const previousLocation = globalThis.location;
   globalThis.location = new URL("https://example.test/creator/");
@@ -164,6 +178,13 @@ test("rejects a cross-origin processor before module creation", async () => {
     if (previousLocation === undefined) delete globalThis.location;
     else globalThis.location = previousLocation;
   }
+});
+
+test("rejects a destination from another AudioContext before module creation", async () => {
+  const context = {destination: {}, audioWorklet: {addModule() { assert.fail(); }}};
+  await assert.rejects(createPerformanceMasterTap({context,
+    destination: {context: {}}, processorUrl: "https://example.test/tap.js"}),
+  {name: "TypeError", message: "Perform master tap destination must share its context"});
 });
 
 test("serializes generations, validates sequences, and contains sink errors", async () => {

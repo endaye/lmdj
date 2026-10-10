@@ -469,6 +469,20 @@ class CreatorPackageTest(unittest.TestCase):
         self.assertIn("lane: creator", workflow)
         self.assertIn("creator) scripts/creator-web.sh proof ;;", action)
 
+    def test_proof_fixtures_build_only_the_core_cli(self) -> None:
+        # #1965: the whole native dev tree spent ~6.5 minutes of the CI job's
+        # 35-minute budget on test binaries the proof never executes.
+        directives = "\n".join(
+            line
+            for line in CREATOR_SCRIPT.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        remedy = ("why: the Creator proof must not compile native test binaries it "
+                  "never executes; remedy: build only --target lmdj_core_cli")
+        self.assertTrue(
+            "cmake --build --preset dev --target lmdj_core_cli" in directives, remedy)
+        self.assertFalse("scripts/core.sh\" build dev" in directives, remedy)
+
     def test_cli_has_a_bounded_usage_failure(self) -> None:
         completed = subprocess.run(
             ["python3", str(PACKAGE_TOOL)], check=False, capture_output=True, text=True

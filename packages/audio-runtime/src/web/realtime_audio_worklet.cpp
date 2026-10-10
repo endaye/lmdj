@@ -235,8 +235,10 @@ struct RealtimeAudioWorklet::Impl {
     }
     emscripten_audio_node_connect(
         node, self.output_destination_handle, 0, 0);
-    self.direct_output_connected =
-        self.output_destination_handle == self.audio_context_handle;
+    self.direct_output_destination_handle =
+        self.output_destination_handle == self.audio_context_handle
+            ? self.audio_context_handle
+            : 0;
     self.node.store(node, std::memory_order_release);
     self.worklet_state.store(
         RealtimeAudioWorkletState::node_ready,
@@ -328,7 +330,7 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<std::int32_t> render_quantum{0};
   std::int32_t audio_context_handle = 0;
   std::int32_t output_destination_handle = 0;
-  bool direct_output_connected = false;
+  std::int32_t direct_output_destination_handle = 0;
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
   std::atomic<std::uint32_t> observed_quantum{0};
   std::atomic<std::uint32_t> render_count{0};
@@ -413,8 +415,13 @@ RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
 }
 
 bool RealtimeAudioWorklet::connect_direct_output_on_browser_main(
-    std::int32_t audio_context_handle) noexcept {
+    std::int32_t audio_context_handle,
+    std::int32_t output_destination_handle) noexcept {
+  if (output_destination_handle == 0) {
+    output_destination_handle = audio_context_handle;
+  }
   if (!emscripten_is_main_browser_thread() || audio_context_handle <= 0 ||
+      output_destination_handle <= 0 ||
       impl_->audio_context_handle != audio_context_handle) {
     return false;
   }
@@ -423,15 +430,19 @@ bool RealtimeAudioWorklet::connect_direct_output_on_browser_main(
       state != RealtimeAudioWorkletState::ready) {
     return false;
   }
-  if (impl_->direct_output_connected) {
+  if (impl_->direct_output_destination_handle != 0) {
+    return impl_->direct_output_destination_handle == output_destination_handle;
+  }
+  if (impl_->output_destination_handle == output_destination_handle) {
+    impl_->direct_output_destination_handle = output_destination_handle;
     return true;
   }
   const auto node = impl_->node.load(std::memory_order_acquire);
   if (node <= 0) {
     return false;
   }
-  emscripten_audio_node_connect(node, audio_context_handle, 0, 0);
-  impl_->direct_output_connected = true;
+  emscripten_audio_node_connect(node, output_destination_handle, 0, 0);
+  impl_->direct_output_destination_handle = output_destination_handle;
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
   impl_->direct_output_connect_calls.fetch_add(1, std::memory_order_relaxed);
 #endif

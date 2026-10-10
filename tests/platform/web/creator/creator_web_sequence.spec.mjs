@@ -1,3 +1,4 @@
+import {showPerformPage} from "./fixtures/creator_navigation.mjs";
 import {
   createSequencePattern,
   selectedSequencePatternId,
@@ -385,13 +386,13 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
   // to that Bank's first row, where these two Bank A notes are out of view,
   // and back.
   const rowNames = page.locator(".sequence-overview-names li");
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
   await page.getByRole("button", {name: "Bank B", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("B01");
-  await expect(rowNames.last()).toHaveText("B08");
+  await expect(rowNames.first()).toHaveText("B01 / SAMPLE");
+  await expect(rowNames.last()).toHaveText("B08 / SAMPLE");
   await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(0);
   await page.getByRole("button", {name: "Bank A", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
   await expect(overviewGrid.getByTestId("sequence-overview-note")).toHaveCount(2);
 
   await playStopKey(page).click();
@@ -492,8 +493,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   // Switching Pattern waits for Stop (2026-10-04 decision, item 7): while
   // playing, ‹ › are disabled, no Pattern reload is attempted and the playing
   // Pattern stays selected.
-  await expect(page.getByRole("button", {name: "Next Pattern", exact: true})).toBeDisabled();
-  await expect(page.getByRole("button", {name: "Previous Pattern", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true})).toBeDisabled();
   await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", patternId);
   expect(await page.evaluate(() => window.__snapshotReloadProof ?? [])).toEqual([]);
   await transportStatus(page, "playing");
@@ -732,12 +732,19 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   // Leg 1 — a drag previews locally and commits exactly once on release: one
   // settings command, one revision, Truth carries the dragged tempo.
   const direction = baseline.bpm <= 230 ? 1 : -1;
-  const dragged = baseline.bpm + 10 * direction;
-  await bpmFader.fill(String(dragged));
+  const dragged = baseline.bpm + direction;
+  const moveKey = direction > 0 ? "ArrowRight" : "ArrowLeft";
+  const historyBefore = await undoCount(page);
+  await bpmFader.focus();
+  await page.keyboard.down(moveKey);
+  await expect(page.locator(".overview-bpm")).toHaveText(`${dragged} BPM`);
+  expect(await undoCount(page)).toBe(historyBefore);
   expect((await inspectTruth(page)).bpm).toBe(baseline.bpm);
   expect(await settingsUpdates()).toHaveLength(0);
-  await bpmFader.dispatchEvent("pointerup");
+  await page.keyboard.up(moveKey);
   await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(dragged);
+  await expect(page.locator(".overview-bpm")).toHaveText(`${dragged} BPM`);
+  expect(await undoCount(page)).toBe(historyBefore + 1);
   let truth = await inspectTruth(page);
   expect(truth.revision).toBe(baseline.revision + 1);
   let updates = await settingsUpdates();
@@ -784,12 +791,17 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   // Leg 4 — Escape cancels a Swing draft: no command, no revision, and the
   // control falls back to the committed value.
   const baseSwing = baseline.sequence_settings.swing_percent;
-  const swung = baseSwing <= 65 ? baseSwing + 10 : baseSwing - 10;
-  await swingFader.fill(String(swung));
+  const swingKey = baseSwing < 75 ? "ArrowRight" : "ArrowLeft";
+  const swung = baseSwing + (baseSwing < 75 ? 1 : -1);
+  await swingFader.focus();
+  await page.keyboard.down(swingKey);
+  await expect(page.locator(".overview-swing")).toHaveText(`SWING ${swung}%`);
   expect((await inspectTruth(page)).sequence_settings.swing_percent)
     .toBe(baseSwing);
   await swingFader.press("Escape");
+  await page.keyboard.up(swingKey);
   await expect(swingFader).toHaveValue(String(baseSwing));
+  await expect(page.locator(".overview-swing")).toHaveText(`SWING ${baseSwing}%`);
   truth = await inspectTruth(page);
   expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
   expect(truth.revision).toBe(baseline.revision + 3);
@@ -820,6 +832,7 @@ test("direct Tempo and Swing controls commit once, cancel, fail honestly, and st
   expect(truth.sequence_settings.swing_percent).toBe(baseSwing);
   expect(truth.revision).toBe(baseline.revision + 3);
   await expect(swingFader).toHaveValue(String(baseSwing));
+  await expect(page.locator(".overview-swing")).toHaveText(`SWING ${baseSwing}%`);
   updates = await settingsUpdates();
   expect(updates).toHaveLength(4);
   expect(updates[3]).toMatchObject({ok: null, failed: true});
@@ -915,7 +928,7 @@ async function undoCount(page) {
   return response.result.undo_count;
 }
 
-test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns while stopped", async ({page, browserName}) => {
+test("Sequence encoders turn rows, Tempo and monitor volume, and ← → step Patterns while stopped", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await installTransportProofRecorder(page);
@@ -927,15 +940,15 @@ test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns wh
 
   // Encoder 2 scrolls the eight upper-screen rows one row per detent; a Bank
   // key moves the window back to that Bank's first row.
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
   await encoder("Encoder 2 — scroll track rows").focus();
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("ArrowUp");
-  await expect(rowNames.first()).toHaveText("A03");
+  await expect(rowNames.first()).toHaveText("A03 / SAMPLE");
   await page.getByRole("button", {name: "Bank B", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("B01");
+  await expect(rowNames.first()).toHaveText("B01 / SAMPLE");
   await page.getByRole("button", {name: "Bank A", exact: true}).click();
-  await expect(rowNames.first()).toHaveText("A01");
+  await expect(rowNames.first()).toHaveText("A01 / SAMPLE");
 
   // Three encoder 3 detents preview at once and commit once at rest: Truth
   // moves by +3 BPM in one revision and one undo entry.
@@ -953,13 +966,18 @@ test("Sequence encoders turn rows, Tempo and Swing, and ← → step Patterns wh
   expect(after.revision).toBe(before.revision + 1);
   expect(await undoCount(page)).toBe(undoBefore + 1);
 
-  // Encoder 4 is Swing, one percent per detent.
-  const swingBefore = after.sequence_settings.swing_percent;
-  const swingStep = swingBefore >= 75 ? -1 : 1;
-  await encoder("Encoder 4 — Swing").focus();
-  await page.keyboard.press(swingStep > 0 ? "ArrowUp" : "ArrowDown");
-  await expect.poll(async () => (await inspectTruth(page)).sequence_settings.swing_percent,
-    {timeout: 30_000}).toBe(swingBefore + swingStep);
+  // ENC4 changes only device monitoring; SHIFT cannot change its target or
+  // step. Swing remains on SETUP and Truth/history stay byte-for-byte equal.
+  const output = encoder("Encoder 4 — Output Volume");
+  await expect(output).toBeEnabled();
+  const outputValue = page.locator('.encoder-readbacks [data-encoder="4"] dd');
+  await expect(outputValue).toHaveText("100%");
+  const outputUndo = await undoCount(page);
+  await output.focus();
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(outputValue).toHaveText("99%");
+  expect(await inspectTruth(page)).toEqual(after);
+  expect(await undoCount(page)).toBe(outputUndo);
 
   // ← → step Patterns while stopped and wait for Stop while playing.
   const first = await selectedSequencePatternId(page);
@@ -1134,6 +1152,7 @@ test("SETUP changes, doubles and copies a Pattern, undoes exactly, and reopens w
   const copySlot = slots.findIndex((value, index) => index > sourceSlot && value === null);
   await openPerform(page);
   before = await inspectTruth(page);
+  await showPerformPage(page, "Slots");
   await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
   await page.getByRole("combobox", {name: "Pattern slot", exact: true})
     .selectOption(String(sourceSlot));

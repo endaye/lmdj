@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -15,6 +16,7 @@ import tempfile
 import time
 import unittest
 import urllib.request
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -346,6 +348,116 @@ class PackageTest(unittest.TestCase):
                 process.stdout.close()
             if process.stderr is not None:
                 process.stderr.close()
+
+    def test_proof_retains_each_invocations_evidence_after_webkit(self) -> None:
+        packaged = self.run_package()
+        self.assertEqual(packaged.returncode, 0, packaged.stderr)
+        web_root = REPO_ROOT / "tests/platform/web"
+        harness = self.root / "operator-harness.sh"
+        fake_bin = self.root / "artifact-bin"
+        fake_bin.mkdir()
+        config = self.root / "playwright.config.mjs"
+        spec = self.root / "retention.spec.mjs"
+        evidence_root = self.root / "evidence"
+        invocations = self.root / "invocations.jsonl"
+        # A shim that deletes directories itself could agree with a broken
+        # config. Use the locked runner's actual cleanup and production slot
+        # mapping; relocate only the parent to avoid touching real proof data.
+        config.write_text(
+            f"import base from {json.dumps((web_root / 'playwright.config.mjs').as_uri())};\n"
+            "import path from 'node:path';\n"
+            "export default {...base,\n"
+            f"  testDir: {json.dumps(str(self.root))}, testMatch: 'retention.spec.mjs',\n"
+            f"  outputDir: path.join({json.dumps(str(evidence_root))},\n"
+            f"    path.relative({json.dumps(str(web_root / 'test-results'))}, base.outputDir)),\n"
+            "  projects: base.projects.filter(p => ['chromium', 'webkit'].includes(p.name)),\n"
+            "};\n",
+            encoding="utf-8",
+        )
+        spec.write_text(
+            f"import {{test, expect}} from {json.dumps((web_root / 'node_modules/@playwright/test/index.mjs').as_uri())};\n"
+            "import fs from 'node:fs/promises';\n"
+            "test('retention oracle', async ({}, info) => {\n"
+            "  const phase = process.env.LMDJ_ARTIFACT_TEST_PHASE;\n"
+            "  await fs.writeFile(info.outputPath(`${phase}.txt`), `${phase} evidence\\n`);\n"
+            "  expect(phase, 'intentional Chromium failure').not.toBe('host-chromium');\n"
+            "});\n",
+            encoding="utf-8",
+        )
+        npm = fake_bin / "npm"
+        npm.write_text(
+            "#!/usr/bin/env python3\n"
+            "import argparse, hashlib, json, os, pathlib, subprocess, sys\n"
+            "args = sys.argv[1:]\n"
+            "args = args[args.index('--') + 1:]\n"
+            "parser = argparse.ArgumentParser()\n"
+            "parser.add_argument('--project', required=True)\n"
+            "selection, _ = parser.parse_known_args(args)\n"
+            "project = '--project=' + selection.project\n"
+            "phase = 'audio' if any(a.startswith('audio/') for a in args) else 'host-' + selection.project\n"
+            "env = {**os.environ, 'LMDJ_ARTIFACT_TEST_PHASE': phase}\n"
+            f"result = subprocess.run(['node', {str(web_root / 'node_modules/playwright/cli.js')!r},\n"
+            f"    'test', '--config', {str(config)!r}, project], env=env)\n"
+            "row = {'phase': phase, 'slot': os.environ.get('LMDJ_WEB_RESULTS_SLOT')}\n"
+            "if phase == 'host-chromium':\n"
+            f"    traces = list(pathlib.Path({str(evidence_root)!r}).rglob('trace.zip'))\n"
+            "    row['trace_sha256'] = hashlib.sha256(traces[0].read_bytes()).hexdigest() if len(traces) == 1 else None\n"
+            f"with open({str(invocations)!r}, 'a') as log:\n"
+            "    log.write(json.dumps(row) + '\\n')\n"
+            "sys.exit(result.returncode)\n",
+            encoding="utf-8",
+        )
+        npm.chmod(0o755)
+        prefix, separator, _ = OPERATOR_SCRIPT.read_text(encoding="utf-8").partition(
+            "\n[[ $# -ge 1 ]] ||"
+        )
+        self.assertTrue(separator)
+        # The harness lives outside scripts/. Bind only its repository lookup;
+        # the operator's owned server, health and cleanup functions stay real.
+        root_binding = 'repo_root="$(cd "$script_dir/.." && pwd -P)"'
+        self.assertEqual(prefix.count(root_binding), 1)
+        prefix = prefix.replace(root_binding, f"repo_root={shlex.quote(str(REPO_ROOT))}")
+        compilation = '"$repo_root/scripts/web-toolchain-conformance.sh" build-audio-runtime'
+        self.assertEqual(prefix.count(compilation), 1)
+        # No browser/audio claim: bypass compilation only. Keep the real
+        # conformance server/health probe and all operator runner invocations.
+        prefix = prefix.replace(compilation, 'mkdir -p "$repo_root/build/web/toolchain"')
+        harness.write_text(
+            prefix + '\nrun_audio_worklet_conformance\nrun_browser_gate "$1"\n',
+            encoding="utf-8",
+        )
+        harness.chmod(0o755)
+        env = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
+        env.pop("LMDJ_WEB_RESULTS_SLOT", None)
+        env.pop("LMDJ_WEB_HOST_BUILD_ROOT", None)
+        env.pop("LMDJ_WEB_HOST_PORT", None)
+        try:
+            completed = subprocess.run(
+                [str(harness), str(self.dist)], capture_output=True, text=True,
+                env=env, timeout=OPERATOR_START_TIMEOUT_SECONDS,
+            )
+            output = completed.stdout + completed.stderr
+            self.assertEqual(completed.returncode, 1, output)
+            observed = [json.loads(line) for line in invocations.read_text().splitlines()]
+            self.assertEqual([row['phase'] for row in observed],
+                             ['audio', 'host-chromium', 'host-webkit'], output)
+            for phase in ('host-chromium', 'audio', 'host-webkit'):
+                files = list(evidence_root.rglob(f'{phase}.txt'))
+                self.assertEqual(
+                    len(files), 1,
+                    f"why: later proof invocation erased {phase} evidence; "
+                    "remedy: give each invocation its own LMDJ_WEB_RESULTS_SLOT; " + output,
+                )
+                self.assertEqual(files[0].read_bytes(), f'{phase} evidence\n'.encode())
+            traces = list(evidence_root.rglob('trace.zip'))
+            self.assertEqual(len(traces), 1,
+                             'why: Chromium failure trace was lost; remedy: isolate runner output directories')
+            self.assertTrue(zipfile.is_zipfile(traces[0]))
+            self.assertEqual(hashlib.sha256(traces[0].read_bytes()).hexdigest(),
+                             observed[1]['trace_sha256'],
+                             'why: subsequent runner changed the failed trace; remedy: isolate output directories')
+        finally:
+            harness.unlink(missing_ok=True)
 
     def test_browser_gate_never_accepts_an_old_server_on_the_requested_port(self) -> None:
         packaged = self.run_package()

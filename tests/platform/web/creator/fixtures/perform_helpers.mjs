@@ -1,4 +1,5 @@
 import {readFile} from "node:fs/promises";
+import {showSampleDetails, showSamplePage, showPerformPage, showPatternLaunchGroup} from "./creator_navigation.mjs";
 
 import {expect} from "@playwright/test";
 
@@ -14,11 +15,20 @@ export async function openPerform(page) {
   await expect(perform).toBeEnabled({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await perform.click();
   await expect(page.getByRole("main", {name: "Perform"})).toBeVisible();
-  await expect(page.getByRole("button", {name: /^Launch Pattern /}))
-    .toHaveCount(16);
+  await showPerformPage(page, "Live");
+  const names = [];
+  for (const first of [1, 5, 9, 13]) {
+    await showPatternLaunchGroup(page, first);
+    const slots = page.getByRole("button", {name: /^Launch Pattern /});
+    await expect(slots).toHaveCount(4);
+    names.push(...await slots.evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))));
+  }
+  expect(names).toEqual(Array.from({length: 16}, (_, index) => `Launch Pattern ${index + 1}`));
+  await showPatternLaunchGroup(page, 1);
 }
 
 export async function beginRecording(page) {
+  await showPerformPage(page, "Live");
   await page.getByRole("button", {name: "Record Performance"}).click();
   const status = page.getByRole("status", {name: "Performance recording status"});
   await expect(status).toContainText("recording", {
@@ -28,6 +38,7 @@ export async function beginRecording(page) {
 }
 
 export async function stopRecording(page) {
+  await showPerformPage(page, "Live");
   await page.getByRole("button", {name: "Stop Performance"}).click();
   await expect(page.getByRole("status", {name: "WAV recording status"}))
     .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
@@ -93,6 +104,7 @@ export function firstSignalFrame(channel, from = 0) {
 }
 
 export async function exportPerformanceWav(page) {
+  await showPerformPage(page, "Takes");
   const pending = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export Performance WAV"}).click();
   return readFile(await (await pending).path());
@@ -105,6 +117,7 @@ export async function installPerformWitnessSample(page) {
   const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
+  await showSamplePage(page, "Pad");
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Replace Sample"}).click();
   await (await chooser).setFiles({
@@ -114,9 +127,16 @@ export async function installPerformWitnessSample(page) {
   });
   await expect(page.getByRole("dialog", {name: "Replace Pad A01?"})).toBeVisible();
   await page.getByRole("button", {name: "Confirm replace"}).click();
+  // Every import passes through the source-selection dialog. The previous
+  // fixture already has 4,800 frames, so format alone cannot witness this
+  // replacement: finish the dialog before inspecting or leaving Sample.
+  const source = page.getByRole("dialog", {name: "Pad A01 Long Source"});
+  await expect(source).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await source.getByRole("button", {name: "Commit selection"}).click();
+  await expect(source).toBeHidden({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(page.getByRole("button", {name: "Replace Sample"}))
     .toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(page.locator(".selected-sample"))
-    .toContainText("48 kHz · Mono · 4,800 frames");
+  await expect(await showSampleDetails(page))
+    .toContainText("48 kHz · Stereo · 4,800 frames");
   await openPerform(page);
 }

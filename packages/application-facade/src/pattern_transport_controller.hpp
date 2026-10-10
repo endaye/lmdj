@@ -66,6 +66,7 @@ class PatternTransportCoordinator {
       foundation::PatternId pattern, std::uint64_t runtime_generation);
 
   PatternTransportSubmit request(const PatternTransportRequest& request);
+  bool retains_command_id(const foundation::CommandId& command_id) const;
   PatternTransportStatus inspect() const;
   foundation::Result<void> continue_operation();
   foundation::Result<PatternAdmissionAdmit> admit(

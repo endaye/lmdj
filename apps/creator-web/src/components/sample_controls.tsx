@@ -9,7 +9,10 @@ import type {
   SampleTriggerMode,
 } from "../runtime/runtime_types";
 
+export type SampleControlPage = "playback" | "tone" | "pad";
+
 interface SampleControlsProps {
+  page: SampleControlPage;
   padLabel: string;
   playback: Readonly<PadPlayback>;
   audioSuspended: boolean;
@@ -95,6 +98,7 @@ function withLoopMode(
 }
 
 export function SampleControls({
+  page,
   padLabel,
   playback,
   audioSuspended,
@@ -119,6 +123,7 @@ export function SampleControls({
       {audioSuspended ? (
         <p className="audio-preview-copy" role="status">Tap a Pad to preview</p>
       ) : null}
+      {page === "playback" ? <>
       <div className="sample-toggle-row">
         <button
           type="button"
@@ -273,6 +278,8 @@ export function SampleControls({
         onCommit={onCommit}
         onCancel={onCancel}
       />
+      </> : null}
+      {page === "tone" ? <>
       <ParameterSlider
         label="Tone"
         ariaLabel={`${padLabel} Tone`}
@@ -299,7 +306,8 @@ export function SampleControls({
         onCommit={onCommit}
         onCancel={onCancel}
       />
-      <button
+      </> : null}
+      {page === "pad" ? <button
         ref={resetTrigger}
         type="button"
         className="reset-sample"
@@ -307,7 +315,7 @@ export function SampleControls({
         onClick={() => setConfirmingReset(true)}
       >
         Reset Pad to Defaults
-      </button>
+      </button> : null}
       {confirmingReset ? (
         <ConfirmationDialog
           labelledBy="reset-heading"

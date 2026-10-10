@@ -1,5 +1,7 @@
 import type {CreatorState} from "../state/creator_state";
-import {padAddress} from "../state/view_model";
+import {padContent} from "../state/overview_context";
+import {selectSampleEditingPlayback} from "../state/sample_state";
+import {slotAddress} from "../state/view_model";
 
 interface SampleOverviewProps {
   state: CreatorState;
@@ -17,9 +19,9 @@ function seconds(frames: number, sampleRate: number): string {
 // audition, assign and capture stay in the touch workspace.
 export function SampleOverview({state}: SampleOverviewProps) {
   const slot = state.sample.selectedSlot;
-  const inspect = state.sample.inspect;
+  const inspect = state.sample.inspect?.slot === slot ? state.sample.inspect : null;
   const metadata = inspect?.metadata ?? null;
-  const playback = inspect?.playback ?? null;
+  const playback = selectSampleEditingPlayback(state.sample) ?? null;
   const envelope = state.sample.waveform;
   const frames = metadata?.sourceFrames ?? 0;
   const clamp = (frame: number) => Math.min(Math.max(frame, 0), frames);
@@ -33,10 +35,18 @@ export function SampleOverview({state}: SampleOverviewProps) {
       const height = Math.max(1, Math.round(bucket.peakMagnitude * (HEIGHT - 8) / 32_768));
       return {x: x(bucket.startFrame), width: Math.max(1, x(bucket.endFrame) - x(bucket.startFrame)), height};
     });
+  const content = padContent(state.project.current, slot);
+  // lastError describes the last Sample action, not necessarily this Pad.
+  // Pending mutations retain their own slot even if selection moves away.
+  const pending = state.sample.pendingAction;
+  const status = state.sample.lastError !== null ? "CHECK LAST ACTION"
+    : pending !== null ? pending.slot === slot ? "UPDATING" : `UPDATING PAD ${slotAddress(pending.slot)}`
+    : slot !== null && inspect === null && content !== "EMPTY" && content !== "UNAVAILABLE"
+      ? "LOADING" : null;
   return (
     <div className="sample-overview" data-testid="sample-overview">
       <p className="sample-overview-pad">
-        {slot === null ? "NO PAD" : `PAD ${padAddress({slot, assetId: null})}`}
+        {content}{status === null ? "" : ` · ${status}`}
       </p>
       <dl className="sample-overview-facts">
         <div>

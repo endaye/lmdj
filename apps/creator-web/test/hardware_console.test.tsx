@@ -73,6 +73,19 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
   })).toHaveLength(4);
 });
 
+test("the disabled Perform key names only its real gate: a playable Project", () => {
+  render(<PhysicalControls
+    activeMode="project"
+    activeBank={0}
+    onSelectMode={() => {}}
+    onSelectBank={() => {}}
+  />);
+  const perform = screen.getByRole("button", {
+    name: "Perform — open a playable Project first",
+  });
+  expect(perform).toHaveProperty("disabled", true);
+});
+
 test("the rail SHIFT chord gates Undo/Redo behind the modifier with lamp availability", () => {
   const onUndo = vi.fn();
   const onRedo = vi.fn();
@@ -296,4 +309,19 @@ test("a narrow portrait stage turns the console and never enlarges it", () => {
 test("an unmeasured stage or console is not fitted", () => {
   expect(fitConsoleToStage({width: 0, height: 600}, {width: 880, height: 640}, false)).toBeNull();
   expect(fitConsoleToStage({width: 800, height: 600}, {width: 0, height: 0}, false)).toBeNull();
+});
+
+
+test("keyboard and rail SHIFT pass fine turns without changing detent navigation", () => {
+  const onTurn = vi.fn();
+  const history = {shifted: true, onToggleShift() {}, undoAvailable: false, redoAvailable: false,
+    onUndo() {}, onRedo() {}, undoTitle: "", redoTitle: ""};
+  const view = railWith({encoders: {1: {label: "Pitch", onTurn}}});
+  const encoder = screen.getByRole("button", {name: "Encoder 1 — Pitch"});
+  fireEvent.keyDown(encoder, {key: "ArrowUp", shiftKey: true});
+  expect(onTurn).toHaveBeenLastCalledWith(1, true);
+  view.rerender(<PhysicalControls activeMode="sample" activeBank={0} onSelectMode={() => {}}
+    onSelectBank={() => {}} history={history} encoders={{1: {label: "Pitch", onTurn}}} />);
+  fireEvent.wheel(encoder, {deltaY: -50});
+  expect(onTurn).toHaveBeenLastCalledWith(1, true);
 });

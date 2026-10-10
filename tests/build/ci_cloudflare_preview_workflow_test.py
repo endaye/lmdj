@@ -62,12 +62,28 @@ class BuildBoundaryTest(unittest.TestCase):
         self.raw = read_workflow('cloudflare-preview-build.yml')
         self.job = block(block(self.raw, 'jobs', 0), 'build', 2)
 
-    def test_only_pr_events_and_exact_opt_in_branch(self):
+    def test_only_pr_events_and_activation_flag(self):
         self.assertEqual(keys(block(self.raw, 'on', 0), 2), {'pull_request'})
+        self.assertIn('paths', keys(block(block(self.raw, 'on', 0), 'pull_request', 2), 4))
         condition = field(self.job, 'if', 4)
-        self.assertIn("vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != ''", condition)
-        self.assertIn('github.head_ref == vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH', condition)
+        self.assertIn("vars.CLOUDFLARE_PREVIEW_ENABLED == '1'", condition)
         self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', condition)
+
+    def test_budget_gate_is_trusted_and_first(self):
+        self.assertEqual(mapping(block(self.job, 'permissions', 4), 6),
+                         {'contents': 'read', 'actions': 'read'})
+        sequence = steps(self.job)
+        self.assertEqual(optional_field(sequence[0], 'name'), 'Check out only the trusted budget gate')
+        gate_checkout = block(sequence[0], 'with', 8)
+        self.assertEqual(field(gate_checkout, 'ref', 10), '${{ github.event.pull_request.base.sha }}')
+        self.assertEqual(field(gate_checkout, 'sparse-checkout', 10), 'scripts/ci')
+        self.assertEqual(optional_field(sequence[1], 'name'), 'Admit within the approved monthly budget')
+        gate_env = mapping(block(sequence[1], 'env', 8), 10)
+        self.assertEqual(gate_env['GITHUB_TOKEN'], '${{ github.token }}')
+        self.assertEqual(gate_env['CLOUDFLARE_PREVIEW_BUDGET_MINUTES'],
+                         '${{ vars.CLOUDFLARE_PREVIEW_BUDGET_MINUTES }}')
+        self.assertEqual(field(sequence[1], 'run', 8),
+                         'python3 gate/scripts/ci/cloudflare_preview_budget.py --gate')
 
     def test_untrusted_build_cannot_reuse_privileged_runner(self):
         self.assertEqual(field(self.job, 'runs-on', 4), 'ubuntu-24.04')
@@ -78,10 +94,10 @@ class BuildBoundaryTest(unittest.TestCase):
 
     def test_no_persistent_checkout_credentials(self):
         checkouts = [s for s in steps(self.job) if optional_field(s, 'uses').startswith('actions/checkout@')]
-        self.assertEqual(len(checkouts), 2)
+        self.assertEqual(len(checkouts), 3)
         for checkout in checkouts:
             self.assertEqual(field(block(checkout, 'with', 8), 'persist-credentials', 10), 'false')
-        self.assertEqual(field(block(checkouts[1], 'with', 8), 'ref', 10), '${{ github.event.pull_request.head.sha }}')
+        self.assertEqual(field(block(checkouts[2], 'with', 8), 'ref', 10), '${{ github.event.pull_request.head.sha }}')
 
     def test_artifact_identity_matches_consumer_contract(self):
         uploads = [s for s in steps(self.job) if optional_field(s, 'uses').startswith('actions/upload-artifact@')]
@@ -104,7 +120,7 @@ class PublisherBoundaryTest(unittest.TestCase):
         settings = block(checkouts[0], 'with', 8)
         self.assertEqual(field(settings, 'ref', 10), '${{ github.workflow_sha }}')
         self.assertEqual(field(settings, 'persist-credentials', 10), 'false')
-        self.assertIn("vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != ''", field(self.job, 'if', 4))
+        self.assertIn("vars.CLOUDFLARE_PREVIEW_ENABLED == '1'", field(self.job, 'if', 4))
 
     def test_deploy_secret_only_enters_trusted_publish_step(self):
         holders = [s for s in steps(self.job) if 'env' in keys(s, 8)
@@ -116,6 +132,33 @@ class PublisherBoundaryTest(unittest.TestCase):
         self.assertEqual(len(installs), 1)
         self.assertNotIn('env', keys(installs[0], 8))
         self.assertEqual(field(block(self.raw, 'concurrency', 0), 'cancel-in-progress', 2), 'false')
+
+
+class BudgetMonitorBoundaryTest(unittest.TestCase):
+    def setUp(self):
+        self.raw = read_workflow('cloudflare-preview-budget.yml')
+        self.job = block(block(self.raw, 'jobs', 0), 'report', 2)
+
+    def test_only_scheduled_or_manual_trusted_control(self):
+        self.assertEqual(keys(block(self.raw, 'on', 0), 2), {'schedule', 'workflow_dispatch'})
+        checkouts = [s for s in steps(self.job) if optional_field(s, 'uses').startswith('actions/checkout@')]
+        self.assertEqual(len(checkouts), 1)
+        settings = block(checkouts[0], 'with', 8)
+        self.assertEqual(field(settings, 'sparse-checkout', 10), 'scripts/ci')
+        self.assertEqual(field(settings, 'persist-credentials', 10), 'false')
+        self.assertNotIn('ref', keys(settings, 10))
+
+    def test_least_privilege_and_no_deployment_credential(self):
+        self.assertEqual(mapping(block(self.raw, 'permissions', 0), 2), {'contents': 'read'})
+        self.assertEqual(mapping(block(self.job, 'permissions', 4), 6),
+                         {'contents': 'read', 'actions': 'read', 'issues': 'write'})
+        self.assertNotIn('secrets.', directives(self.raw))
+        self.assertNotIn('CLOUDFLARE_API_TOKEN', directives(self.raw))
+
+    def test_activation_flag_and_cron_off_herd_marks(self):
+        self.assertIn("vars.CLOUDFLARE_PREVIEW_ENABLED == '1'", field(self.job, 'if', 4))
+        minute = re.search(r"- cron: '(\d+) \d+ \* \* \*'", self.raw).group(1)
+        self.assertNotIn(minute, {'0', '30'})
 
 
 class ContractRegressionTest(unittest.TestCase):
@@ -131,7 +174,7 @@ class ContractRegressionTest(unittest.TestCase):
 
     def test_wrong_build_permission_is_rejected(self):
         self.rejects(BuildBoundaryTest, 'test_untrusted_build_cannot_reuse_privileged_runner',
-                     'cloudflare-preview-build.yml', '  contents: read', '  contents: write')
+                     'cloudflare-preview-build.yml', '\n  contents: read\n', '\n  contents: write\n')
 
     def test_wrong_exact_source_checkout_is_rejected(self):
         self.rejects(BuildBoundaryTest, 'test_no_persistent_checkout_credentials',
@@ -158,14 +201,14 @@ class ContractRegressionTest(unittest.TestCase):
                      '      - name: Install trusted tools without deployment credentials\n'
                      '        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n')
 
-    def test_six_security_contracts_need_no_ambient_site_packages(self):
+    def test_security_contracts_need_no_ambient_site_packages(self):
         # Explicit class selection prevents recursively spawning this boundary test.
         result = subprocess.run([sys.executable, '-I', '-S', str(Path(__file__).resolve()),
-                                 'BuildBoundaryTest', 'PublisherBoundaryTest'],
+                                 'BuildBoundaryTest', 'PublisherBoundaryTest', 'BudgetMonitorBoundaryTest'],
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0,
                          'why: workflow contracts require ambient packages; remedy: keep this test stdlib-only\n' + result.stderr)
-        self.assertIn('Ran 6 tests', result.stderr)
+        self.assertIn('Ran 10 tests', result.stderr)
         self.assertNotIn('skipped', result.stderr)
 
 

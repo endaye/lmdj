@@ -1,3 +1,4 @@
+import {showPerformPage} from "./fixtures/creator_navigation.mjs";
 import {selectedSequencePatternId, showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
@@ -230,6 +231,7 @@ test("metronome never enters the Perform capture; the witness sample proves the 
   for (const sample of silentWav.right) peak = Math.max(peak, Math.abs(sample));
   expect(peak).toBeLessThanOrEqual(2);
 
+  await showPerformPage(page, "Takes");
   await page.getByRole("button", {name: "Discard Performance"}).click();
   await expect(page.getByRole("status", {name: "WAV recording status"}))
     .toContainText("temporary removed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});

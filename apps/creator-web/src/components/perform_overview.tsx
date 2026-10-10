@@ -1,4 +1,6 @@
+import {useSyncExternalStore} from "react";
 import type {CreatorState} from "../state/creator_state";
+import type {PerformController} from "../state/perform_state";
 import type {PatternTransportState} from "../state/pattern_transport_state";
 import {SEQUENCE_TICKS_PER_BAR, SEQUENCE_TICKS_PER_BEAT} from "../state/sequence_grid_model";
 import {transportStatusLabel} from "./transport_status";
@@ -9,7 +11,11 @@ const BANK_LABELS = ["A", "B", "C", "D"] as const;
 interface PerformOverviewProps {
   state: CreatorState;
   transport?: PatternTransportState;
+  controller?: Pick<PerformController, "subscribe" | "getState"> | null;
 }
+
+const noSubscription = () => () => {};
+const noPerformance = () => null;
 
 const two = (value: number) => String(value).padStart(2, "0");
 
@@ -26,7 +32,11 @@ export function performPosition(tick: number | null, lengthTicks: number | null)
   return Math.min(Math.max(tick, 0), lengthTicks - 1);
 }
 
-export function PerformOverview({state, transport}: PerformOverviewProps) {
+export function PerformOverview({state, transport, controller}: PerformOverviewProps) {
+  // Observes the same producer as the touch surface. Read-only displays never
+  // connect, stop or leave a Performance session.
+  const performance = useSyncExternalStore(controller?.subscribe ?? noSubscription,
+    controller?.getState ?? noPerformance, controller?.getState ?? noPerformance);
   const project = state.project.current;
   const assigned = project === null
     ? null
@@ -44,6 +54,12 @@ export function PerformOverview({state, transport}: PerformOverviewProps) {
       <p className="perform-overview-state">
         {label.toUpperCase()}
       </p>
+      <output className="perform-overview-launch" aria-label="Pattern launch cue" aria-live="polite">
+        {performance?.lastLaunchAck == null ? "LAST LAUNCH —" :
+          `ACKNOWLEDGED SLOT ${two(performance.lastLaunchAck.patternSlot + 1)}`}
+        {performance?.pendingLaunch == null ? " · NOTHING QUEUED" :
+          ` → QUEUED SLOT ${two(performance.pendingLaunch.patternSlot + 1)}`}
+      </output>
       <p className="perform-overview-counter" data-testid="perform-counter">
         BAR {two(bar)} / {two(bars)} · BEAT {two(beat)} / 04
       </p>
@@ -57,8 +73,8 @@ export function PerformOverview({state, transport}: PerformOverviewProps) {
           <dd>{BANK_LABELS[state.activeBank]}</dd>
         </div>
         <div>
-          <dt>Transport</dt>
-          <dd>{label}</dd>
+          <dt>Performance</dt>
+          <dd>{performance?.recording.phase ?? "unavailable"}</dd>
         </div>
         <div>
           <dt>Quantize</dt>

@@ -80,6 +80,12 @@ project_io::SequenceAdmissionFence PatternTransportCoordinator::fence_from(
           switch_outcome(receipt.switch_decision), receipt.switch_applied_frame};
 }
 
+bool PatternTransportCoordinator::retains_command_id(
+    const foundation::CommandId& command_id) const {
+  return (pending_ && pending_->command_id == command_id) ||
+         retained_.contains(command_id);
+}
+
 PatternTransportSubmit PatternTransportCoordinator::request(
     const PatternTransportRequest& request) {
   if (request.runtime_generation != runtime_generation_ ||
@@ -171,9 +177,20 @@ PatternTransportSubmit PatternTransportCoordinator::request(
   audio::PatternTransportCommand command{
       runtime_generation_, request.expected_epoch, last_pattern_generation_,
       audio_action(request.intent), {}};
+  // Read the current generation before the pending switch, so a switch that
+  // applies between the two reads is seen as current rather than as stale.
+  const auto current_generation = audio_.pattern_generation();
   if (playing_) command.pending_switch = audio_.pending_switch();
   if (!command.pending_switch) {
     command.expected_pattern_generation = audio_.pattern_generation();
+  } else if (unlanded_overlay_generation_ == 0 &&
+             command.pending_switch->generation != current_generation) {
+    // A named successor fences against the Pattern that plays now. A Host
+    // republication outside this coordinator (a Record-off completion) can
+    // have advanced it past the last receipt, and the engine refuses a
+    // command whose expected generation is neither current nor the
+    // acknowledged predecessor of an applied switch (#1958).
+    command.expected_pattern_generation = current_generation;
   } else if (unlanded_overlay_generation_ != 0 &&
              command.pending_switch->generation ==
                  unlanded_overlay_generation_) {
@@ -238,6 +255,20 @@ foundation::Result<void> PatternTransportCoordinator::apply_receipt(
     recording_ = true;
   }
   if (closing) {
+    // The render boundary can land our overlay before the next idle control
+    // tick records it. Once a close is pending that tick cannot run; retain
+    // the exact generation the closing receipt proves applied before cutoff.
+    // Keep the marker on IO failure so the same unacknowledged receipt retries
+    // the idempotent record, never substituting a merely queued publication.
+    if (unlanded_overlay_generation_ != 0 &&
+        receipt.pattern_generation == unlanded_overlay_generation_ &&
+        receipt.switch_decision == audio::PatternCutoffDecision::none) {
+      const auto recorded = owner_.retain_overlay_publication(
+          unlanded_overlay_generation_);
+      if (!recorded.has_value()) return recorded;
+      published_generation_ = unlanded_overlay_generation_;
+      unlanded_overlay_generation_ = 0;
+    }
     if (receipt.switch_decision ==
         audio::PatternCutoffDecision::applied_before_cutoff) {
       if (!receipt.switch_authority || !receipt.switch_applied_frame) {

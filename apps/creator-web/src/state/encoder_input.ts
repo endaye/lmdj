@@ -1,8 +1,8 @@
 // One encoder turn over a committed value. Each detent previews at once; the
 // turn commits once, after it has rested for idleMs, so one turn is one
 // Authoring commit and one undo entry. A turn that ends where it started
-// commits nothing. The 400 ms rest is the Desktop Final plan's proposed rule
-// (T6), pending owner confirmation.
+// commits nothing. The owner confirmed the 400 ms rest and cancel boundaries
+// in the 2026-10-09 contextual encoder decision.
 export const ENCODER_IDLE_COMMIT_MS = 400;
 
 export interface EncoderTurnOptions {

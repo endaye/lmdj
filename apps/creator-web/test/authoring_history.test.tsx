@@ -286,3 +286,17 @@ test("a failed Undo records its raw failure in Developer diagnostics (#1680)", a
   expect(screen.queryByText(/history journal locked/)).toBeNull();
   expect(reportFailure).toHaveBeenCalledWith("Undo", raw);
 });
+
+
+test("history waits for pending preview cancellation before issuing Undo", async () => {
+  const {props, history} = fixture();
+  let resolve!: () => void;
+  const beforeRestore = vi.fn(() => new Promise<void>((done) => {resolve = done;}));
+  render(<Harness {...props} beforeRestore={beforeRestore} />);
+  await waitFor(() => expect(lit(undoKey())).toBe(true));
+  fireEvent.keyDown(window, {code: "KeyZ", ctrlKey: true});
+  expect(beforeRestore).toHaveBeenCalledTimes(1);
+  expect(history.undoAuthoring).not.toHaveBeenCalled();
+  await act(async () => resolve());
+  await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(1));
+});

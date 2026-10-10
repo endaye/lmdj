@@ -26,6 +26,7 @@ test("default Bank A plays on the first native touch while the next object waits
   let release;
   const gate = new Promise(resolve => {release = resolve;});
   let blocked = false;
+  let failedObject = null;
   const blobs = [];
   const server = createServer(async (request, response) => {
     try {
@@ -33,6 +34,10 @@ test("default Bank A plays on the first native touch while the next object waits
       if (url.pathname.startsWith("/object/blob/")) {
         blobs.push(url.pathname);
         if (blobs.length === 2) {blocked = true; await gate;}
+        if (blobs.length === 3) {
+          failedObject = url.pathname;
+          response.writeHead(503); response.end("temporary fixture failure"); return;
+        }
       }
       const result = await worker.fetch(new Request(url, {method: request.method}), {
         ASSETS: {fetch: async request => {
@@ -132,6 +137,24 @@ test("default Bank A plays on the first native touch while the next object waits
     expect(blocked).toBe(true);
     expect(blobs).toHaveLength(2);
     release();
+    const defaultStatus = page.getByRole("region", {name: "Default sounds", exact: true});
+    await expect(defaultStatus.getByRole("status")).toContainText("1 unavailable", {timeout:60_000});
+    await expect(page.getByRole("button", {name:/^Pad A\d+ — failed/i})).toBeDisabled();
+    for (const viewport of [{width:1440,height:900},{width:1280,height:600},{width:768,height:600}]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(() => defaultStatus.evaluate(element => {
+        const touch = element.closest('[data-testid="touch-workspace"]');
+        const buttons = [...element.querySelectorAll('button')].map(button => button.getBoundingClientRect());
+        return {fits: touch.scrollWidth <= touch.clientWidth + 1,
+          sameRow: Math.abs(buttons[0].top - buttons[1].top) <= 1,
+          separate: buttons[0].right <= buttons[1].left,
+          bodyFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1};
+      })).toEqual({fits:true,sameRow:true,separate:true,bodyFits:true});
+    }
+    await defaultStatus.getByRole("button", {name:"System details",exact:true}).click();
+    await expect(page.getByRole("heading", {name:"System",exact:true})).toBeVisible();
+    await expect(page.getByRole("navigation", {name:"Workspace navigation"})).toHaveCount(0);
+    await defaultStatus.getByRole("button", {name:"Retry default sounds",exact:true}).click();
     try {
       await expect(page.getByRole("button", {name:/^Pad A16 — assigned/})).toBeEnabled({timeout:120_000});
     } catch (error) {
@@ -146,12 +169,15 @@ test("default Bank A plays on the first native touch while the next object waits
       throw new Error(`${error.message}\nProgressive completion evidence: ${JSON.stringify(observed)}`);
     }
     expect(new Set(blobs).size).toBe(16);
+    expect(blobs.filter(path => path === failedObject)).toHaveLength(2);
+    await expect(defaultStatus).toHaveCount(0);
+    await page.getByRole("button", {name:"Back to music",exact:true}).click();
     const ownedId = await projectIdentity(page);
     await page.reload();
     await waitForBootProject(page);
     await expect(page.getByRole("button", {name:/^Pad A16 — assigned/})).toBeEnabled({timeout:60_000});
     expect(await projectIdentity(page)).toBe(ownedId);
-    expect(blobs).toHaveLength(16);
+    expect(blobs).toHaveLength(17);
     await page.getByRole("button", {name:"Project",exact:true}).click();
     await page.getByRole("button", {name:"New Project",exact:true}).click();
     await waitForBootProject(page);
@@ -159,14 +185,14 @@ test("default Bank A plays on the first native touch while the next object waits
     const manualId = await projectIdentity(page);
     expect(manualId).not.toBe(ownedId);
     expect(JSON.parse(await page.evaluate(() => localStorage.getItem("lmdj.creator.default-seed.v1"))).projectId).toBe(ownedId);
-    expect(blobs).toHaveLength(16);
+    expect(blobs).toHaveLength(17);
     // The native identity, rather than a volatile legacy cache, owns the
     // remembered Project. Reload the manual Project and assert its far side.
     await page.reload();
     await waitForBootProject(page);
     expect(await projectIdentity(page)).toBe(manualId);
     await expect(page.getByRole("button", {name:/^Pad A01 — empty/})).toBeVisible();
-    expect(blobs).toHaveLength(16);
+    expect(blobs).toHaveLength(17);
   } finally {
     release(); await writeFile(upstreamFile, "");
     await new Promise(yes => {server.close(yes);server.closeAllConnections();});

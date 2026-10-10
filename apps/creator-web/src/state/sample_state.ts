@@ -20,6 +20,27 @@ import type {
   WaveformWindow,
 } from "../runtime/runtime_types";
 
+// Keep trim, loop start and crossfade inside the same valid source range.
+export function fitPlaybackLoop(
+  playback: Readonly<PadPlayback>,
+  sourceFrames: number,
+): Readonly<PadPlayback> {
+  const end = playback.trimEndFrame ?? sourceFrames;
+  const loopStartFrame = playback.loopStartFrame === null
+    ? null
+    : Math.min(end - 1, Math.max(playback.trimStartFrame, playback.loopStartFrame));
+  const loopStart = loopStartFrame ?? playback.trimStartFrame;
+  const maxCrossfade = playback.loopMode === "ping_pong"
+    ? 0
+    : Math.floor((end - loopStart) / 2);
+  const loopCrossfadeFrames = Math.min(playback.loopCrossfadeFrames, maxCrossfade);
+  return loopStartFrame === playback.loopStartFrame &&
+      loopCrossfadeFrames === playback.loopCrossfadeFrames
+    ? playback
+    : {...playback, loopStartFrame, loopCrossfadeFrames};
+}
+
+
 export interface SampleViewport {
   sourceFrames: number;
   startFrame: number;
@@ -102,6 +123,17 @@ export interface SampleState {
   readonly lastError: Readonly<SampleLastError> | null;
   readonly savedRevision: number | null;
   readonly runtimeRevision: number | null;
+}
+
+// Visual editing follows the latest synchronous draft, not an older audible
+// preview acknowledgement. Once its owner settles/cancels the draft, both
+// displays return to inspect immediately, even if clearing audio is pending.
+export function selectSampleEditingPlayback(state: SampleState): Readonly<PadPlayback> | undefined {
+  const inspect = state.inspect;
+  if (inspect === null || inspect.slot !== state.selectedSlot) return undefined;
+  return state.draft?.baseRevision === inspect.projectRevision
+    ? state.draft.proposed
+    : inspect.playback;
 }
 
 export type SampleStateAction =

@@ -48,6 +48,7 @@ function mockGridGeometry(container: HTMLElement) {
 }
 
 function renderGrid(options: {
+  bars?: 1 | 2 | 4 | 8;
   bank?: 0 | 1;
   editMode?: SequenceGridEditMode;
   editing?: {enabled: boolean; reason: string | null};
@@ -55,6 +56,7 @@ function renderGrid(options: {
   defaultVelocity?: number;
 } = {}) {
   const callbacks = {
+    onScrollReady: vi.fn(),
     onSnapChange: vi.fn(),
     onEditModeChange: vi.fn(),
     onViewportChange: vi.fn(),
@@ -63,7 +65,7 @@ function renderGrid(options: {
     onVelocityChange: vi.fn(),
   };
   const gridProps = {
-    pattern,
+    pattern: {...pattern, bars: options.bars ?? pattern.bars},
     bank: options.bank ?? 0 as 0 | 1,
     snap: "1/16" as const,
     editMode: options.editMode ?? "note" as SequenceGridEditMode,
@@ -115,6 +117,7 @@ test("follows Bank switching to the other Bank's Pads and notes", () => {
 
 test("the snap selector marks the current snap and reports a change", () => {
   const {callbacks} = renderGrid({bank: 0});
+  fireEvent.click(screen.getByRole("button", {name: "Grid tools"}));
   const group = screen.getByRole("group", {name: "Snap"});
   expect(within(group).getByRole("button", {name: "Snap 1/16"})
     .getAttribute("aria-pressed")).toBe("true");
@@ -299,4 +302,93 @@ test("a disabled grid shows the reason and admits no gesture", () => {
   expect(callbacks.onSelectionChange).not.toHaveBeenCalled();
   expect(within(screen.getByRole("group", {name: "Note selection"}))
     .getByRole("button", {name: "Delete"})).toHaveProperty("disabled", true);
+});
+
+// These independent rectangles include the 36px sticky label/gap at scale 0.5.
+// Comparing two viewport consumers alone would miss their shared occlusion bug.
+function mockBarNavigation(container: HTMLElement, bars: number) {
+  const scroller = container.querySelector(".sequence-grid-scroll") as HTMLElement;
+  Object.defineProperties(scroller, {
+    clientWidth: {configurable: true, value: 420},
+    scrollWidth: {configurable: true, value: bars * 384 + 36},
+    getBoundingClientRect: {configurable: true, value: () =>
+      ({left: 0, right: 210, width: 210, top: 0, bottom: 176})},
+  });
+  container.querySelectorAll(".sequence-grid-lane").forEach((element) => {
+    Object.defineProperties(element, {
+      clientWidth: {configurable: true, value: bars * 384},
+      getBoundingClientRect: {configurable: true, value: () =>
+        ({left: 18 - scroller.scrollLeft / 2, right: 18 + bars * 192 - scroller.scrollLeft / 2,
+          width: bars * 192, top: 0, bottom: 10})},
+    });
+  });
+  fireEvent.scroll(scroller);
+  return scroller;
+}
+
+test.each([1, 2, 4, 8] as const)("bar buttons and picker reach every bar of a %s-bar Pattern without edits", (bars) => {
+  const {callbacks, view} = renderGrid({bars});
+  const scroller = mockBarNavigation(view.container, bars);
+  const previous = () => screen.getByRole("button", {name: "Previous bar"});
+  const next = () => screen.getByRole("button", {name: "Next bar"});
+  expect(previous().hasAttribute("disabled")).toBe(true);
+  for (let bar = 1; bar <= bars; bar += 1) {
+    expect(scroller.scrollLeft).toBe((bar - 1) * 384);
+    expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: (bar - 1) * 3840, endTick: bar * 3840});
+    expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain(`BAR ${bar} / ${bars}`);
+    fireEvent.click(next());
+  }
+  expect(next().hasAttribute("disabled")).toBe(true);
+  expect(scroller.scrollLeft).toBe((bars - 1) * 384);
+  for (let bar = bars; bar >= 1; bar -= 1) {
+    fireEvent.click(screen.getByRole("button", {name: "Choose bar"}));
+    const dialog = screen.getByRole("dialog", {name: "Choose bar"});
+    expect(within(dialog).getAllByRole("button", {name: /^Bar /})).toHaveLength(bars);
+    fireEvent.click(within(dialog).getByRole("button", {name: `Bar ${bar}`}));
+    expect(scroller.scrollLeft).toBe((bar - 1) * 384);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  }
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+  expect(callbacks.onSelectionChange).not.toHaveBeenCalled();
+});
+
+test("bar navigation waits for the active note gesture and restores after cancellation", () => {
+  const {callbacks, view} = renderGrid({bars: 4});
+  const scroller = mockBarNavigation(view.container, 4);
+  fireEvent.pointerDown(lane(2), {pointerId: 80, clientX: 60, clientY: 54, button: 0});
+  for (const name of ["Next bar", "Choose bar", "Grid tools"]) {
+    expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(true);
+  }
+  fireEvent.click(screen.getByRole("button", {name: "Next bar"}));
+  expect(scroller.scrollLeft).toBe(0);
+  callbacks.onScrollReady.mock.calls.at(-1)![0](1);
+  expect(scroller.scrollLeft).toBe(0);
+  fireEvent.pointerCancel(window, {pointerId: 80});
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "Next bar"}));
+  expect(scroller.scrollLeft).toBe(384);
+});
+
+test("partial native scroll reports its true unobscured range before a direct bar selection", () => {
+  const {callbacks, view} = renderGrid({bars: 4});
+  const scroller = mockBarNavigation(view.container, 4);
+  scroller.scrollLeft = 96;
+  fireEvent.scroll(scroller);
+  expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: 960, endTick: 4800});
+  expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain("BAR 1–2 / 4");
+  fireEvent.click(screen.getByRole("button", {name: "Choose bar"}));
+  fireEvent.click(screen.getByRole("button", {name: "Bar 4"}));
+  expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick: 11520, endTick: 15360});
+});
+
+test("transformed rectangle rounding cannot turn an aligned bar into a two-bar range", () => {
+  const {callbacks, view} = renderGrid({bars: 2});
+  const scroller = mockBarNavigation(view.container, 2);
+  view.container.querySelectorAll(".sequence-grid-lane").forEach((element) => {
+    Object.defineProperty(element, "getBoundingClientRect", {configurable: true,
+      value: () => ({left: 17.99997, right: 401.99997, width: 384, top:0, bottom:10})});
+  });
+  fireEvent.scroll(scroller);
+  expect(callbacks.onViewportChange).toHaveBeenLastCalledWith({startTick:0, endTick:3840});
+  expect(screen.getByRole("button", {name: "Choose bar"}).textContent).toContain("BAR 1 / 2");
 });

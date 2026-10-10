@@ -114,6 +114,26 @@
       "y": 260,
       "width": 210,
       "height": 80
+    },
+    {
+      "id": "monitor",
+      "label": "Monitor Gain",
+      "detail": "Session state · after capture",
+      "kind": "core",
+      "x": 340,
+      "y": 410,
+      "width": 220,
+      "height": 92
+    },
+    {
+      "id": "output",
+      "label": "Physical Output",
+      "detail": "speaker / headphones",
+      "kind": "host",
+      "x": 40,
+      "y": 490,
+      "width": 210,
+      "height": 60
     }
   ],
   "connections": [
@@ -166,6 +186,21 @@
       "from": "creator",
       "to": "offline",
       "label": "verified build cache"
+    },
+    {
+      "from": "tap",
+      "to": "monitor",
+      "label": "transparent output"
+    },
+    {
+      "from": "audio",
+      "to": "monitor",
+      "label": "tap failure recovery"
+    },
+    {
+      "from": "monitor",
+      "to": "output",
+      "label": "monitor volume"
     }
   ],
   "cards": [
@@ -179,7 +214,7 @@
     },
     {
       "title": "Master tap",
-      "body": "Platform 自有 master tap worklet；capture 状态沿 unconfigured → configured → ready 前进，失败为 unavailable，capture 只能从 ready 启动，每条消息逐键校验。"
+      "body": "Platform 自有 master tap worklet；capture 状态沿 unconfigured → configured → ready 前进，失败为 unavailable，capture 只能从 ready 启动，每条消息逐键校验。 Capture precedes Session monitor gain. Normal and failed-tap recovery share the same gain; its 0–100 level never changes captured PCM or Project Truth."
     },
     {
       "title": "Forbidden boundary",

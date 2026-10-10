@@ -108,3 +108,18 @@ test('build checker requires the rendered homepage for every metadata version', 
     await rm(root, {recursive: true, force: true});
   }
 });
+
+test('build checker treats absolute links to the current origin as internal', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portal-build-origin-'));
+  try {
+    await writeRenderedPage(root, '/', '<a href="https://docs.lmdj.workers.dev/missing/">internal</a> <a href="https://netlify.example/missing/">external</a> Product Build 1.0.13.0 abcdef1');
+    const errors = await checkBuild({
+      buildRoot: root,
+      requiredRoutes: ['/'],
+      expectedIdentity: {productBuild: '1.0.13.0', revision: 'abcdef1'},
+    });
+    assert.deepEqual(errors, ['broken internal link /missing/ from /index.html']);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});

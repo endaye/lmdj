@@ -40,6 +40,7 @@ interface UseAuthoringHistoryOptions {
   revision: number | null;
   refreshKey: string;
   disabledReason: string;
+  beforeRestore?(): void | Promise<void>;
   onChanged(mutation: AuthoringHistoryMutation): Promise<void>;
   onBusy(busy: boolean): void;
 }
@@ -160,6 +161,8 @@ export function useAuthoringHistory(props: UseAuthoringHistoryOptions): Authorin
       : {sessionId: snapshot.sessionId, commandId: crypto.randomUUID(), expectedRevision: snapshot.projectRevision};
     retained.current = {direction, request};
     try {
+      await current.beforeRestore?.();
+      if (!stillCurrent()) { retained.current = null; return; }
       const mutation = await (direction === "undo" ? session.undoAuthoring(request) : session.redoAuthoring(request));
       retained.current = null;
       if (!stillCurrent()) return;

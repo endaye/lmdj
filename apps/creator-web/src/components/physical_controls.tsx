@@ -14,6 +14,7 @@ import {
   SequenceIcon,
 } from "./hardware_icons";
 import type {EncoderPosition} from "./hardware_icons";
+export type {EncoderPosition} from "./hardware_icons";
 
 const ENCODER_POSITIONS: readonly EncoderPosition[] = [1, 2, 3, 4];
 
@@ -35,8 +36,15 @@ export interface RailHistoryChord {
 // detents (positive is clockwise).
 export interface EncoderBinding {
   label: string;
+  value?: string;
   disabled?: boolean;
-  onTurn(detents: number): void;
+  onTurn(detents: number, fine?: boolean): void;
+}
+
+export interface ContextualEncoders {
+  bindings: Readonly<Partial<Record<EncoderPosition, EncoderBinding>>>;
+  pending?: boolean;
+  cancel?(): void;
 }
 
 // The direction keys' page action without SHIFT (the Sequence page steps
@@ -82,7 +90,7 @@ const ENCODER_WHEEL_STEP = 50;
 
 // An encoder on a web console: the wheel, a vertical drag or the arrow keys
 // (while focused) each turn it one detent; up and right are clockwise.
-function Encoder({position, binding}: {position: EncoderPosition; binding: EncoderBinding | undefined}) {
+function Encoder({position, binding, shifted}: {position: EncoderPosition; binding: EncoderBinding | undefined; shifted: boolean}) {
   const drag = useRef<{pointerId: number; lastY: number} | null>(null);
   const wheel = useRef(0);
   const available = binding !== undefined && !binding.disabled;
@@ -100,8 +108,8 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
       </button>
     );
   }
-  const turn = (detents: number) => {
-    if (!binding.disabled && detents !== 0) binding.onTurn(detents);
+  const turn = (detents: number, fine: boolean) => {
+    if (!binding.disabled && detents !== 0) binding.onTurn(detents, fine);
   };
   return (
     <button
@@ -113,7 +121,7 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
         const detents = {ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1}[event.key];
         if (detents === undefined) return;
         event.preventDefault();
-        turn(detents);
+        turn(detents, shifted || event.shiftKey);
       }}
       onWheel={(event) => {
         if (!available) return;
@@ -123,7 +131,7 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
         const detents = Math.trunc(wheel.current / ENCODER_WHEEL_STEP);
         if (detents === 0) return;
         wheel.current -= detents * ENCODER_WHEEL_STEP;
-        turn(detents);
+        turn(detents, shifted || event.shiftKey);
       }}
       onPointerDown={(event) => {
         if (!available) return;
@@ -136,7 +144,7 @@ function Encoder({position, binding}: {position: EncoderPosition; binding: Encod
         const detents = Math.trunc((active.lastY - event.clientY) / ENCODER_DRAG_STEP);
         if (detents === 0) return;
         active.lastY -= detents * ENCODER_DRAG_STEP;
-        turn(detents);
+        turn(detents, shifted || event.shiftKey);
       }}
       onPointerUp={() => { drag.current = null; }}
       onPointerCancel={() => { drag.current = null; }}
@@ -234,7 +242,7 @@ export function PhysicalControls({
       )}
       <div className="physical-encoders" role="group" aria-label="Encoders" data-testid="physical-encoders">
         {ENCODER_POSITIONS.map((position) => (
-          <Encoder key={position} position={position} binding={encoders?.[position]} />
+          <Encoder key={position} position={position} binding={encoders?.[position]} shifted={history?.shifted === true} />
         ))}
       </div>
       <div className="physical-keys" data-testid="physical-keys">
@@ -263,7 +271,7 @@ export function PhysicalControls({
           icon={modeIcon("perform", activeMode === "perform")}
           ariaLabel={performEnabled
             ? "Perform"
-            : "Perform — requires a playable Project, running audio, and capture storage"}
+            : "Perform — open a playable Project first"}
           current={activeMode === "perform"}
           disabled={!performEnabled}
           onClick={() => onSelectMode("perform")}

@@ -1,14 +1,8 @@
-# 旋钮 1、`↑` `↓`，以及 Sample、Perform、Project 页的旋钮和方向键怎么分配？
+# 各页剩余方向键与扩展控件怎样分配？
 
 - 范围：Creator
 - GitHub Issue: #1822
-- 来源：[Sequence 硬件界面修订](../decisions/2026-10-04-sequence-hardware-ui-revision.md)。该决策只分配了 Sequence 页的旋钮 2–4 和 `←` `→`。评审中提出的统一方案尚未确认：
-  - 旋钮调数值，方向键做导航。
-  - 上排旋钮管视图：旋钮 1 横向，旋钮 2 纵向。下排旋钮 3、4 管当前页的两个主要数值。
-  - `←` `→` 是同一层级的上一个、下一个；`↑` `↓` 是上一个、下一个 Pad。
-  - SHIFT 是唯一的修饰键，SHIFT + 旋钮是大步调节。
-  - 拧旋钮时上屏短暂显示 `ENC n · 参数 值`。
-- 为什么重要：
-  - 每页的分配需要一致，用户才能形成手部记忆。
-  - "当前 Pad"出现在 D02 里（`PAD A03`），但 Sequence 页还没有这个概念。
-- 处理时点：在任何 Task 分配旋钮 1、`↑` `↓`，或 Sequence 以外页面的旋钮和方向键之前。
+- 已确认：[2026-10-09 上下文旋钮和监听音量](../decisions/2026-10-09-contextual-encoders-and-monitor-volume.md) 分配了 Project、Sample、Sequence、Perform 和 System 的四个旋钮。ENC4 固定为设备监听输出音量；SHIFT + ENC1–3 细调；上屏持续显示当前功能和值。原来的「旋钮 1/2 管视图、3/4 管数值、SHIFT 粗调」提案已被该决定替代。
+- Sequence 的 ENC1 横向小节滚动、↑/↓ 当前 Pad 导航，以及既有 ←/→ Pattern 导航已交付；跨 Bank 导航保留音符选择，不发声、不改 Project Truth。
+- 仍待决定：Project、Sample、Perform 页的普通方向键行为，以及 Assign、独立滤波类型/细调、Mute/Solo 等扩展控制。SHIFT + ←/→ 沿用全局撤销/重做。
+- 处理时点：在给这些剩余控件分配新行为前，由 owner 确认。不重复实现已确认的旋钮或 Sequence 导航。

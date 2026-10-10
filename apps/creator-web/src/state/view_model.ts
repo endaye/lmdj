@@ -2,6 +2,15 @@ import type {Bank, ProjectPadView} from "./creator_state";
 
 export const BANK_NAMES = ["A", "B", "C", "D"] as const;
 
+// Display traversal only: local Pad identity and input mappings stay stable.
+// DOM order follows the rows so keyboard focus follows the visible matrix.
+export const PAD_MATRIX_ORDER = Object.freeze([
+  12, 13, 14, 15,
+  8, 9, 10, 11,
+  4, 5, 6, 7,
+  0, 1, 2, 3,
+] as const);
+
 export function bankName(bank: Bank): (typeof BANK_NAMES)[Bank] {
   return BANK_NAMES[bank];
 }

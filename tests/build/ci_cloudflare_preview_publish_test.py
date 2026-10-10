@@ -53,7 +53,7 @@ class PublisherTest(unittest.TestCase):
         self.unknown_status_receipt = False
         self.env = {'GITHUB_EVENT_NAME': 'workflow_run', 'GITHUB_REF': 'refs/heads/main',
                     'GITHUB_TOKEN': 'read-token', 'CLOUDFLARE_API_TOKEN': 'deploy-token',
-                    'PREVIEW_RUN_ID': '2', 'PREVIEW_PILOT_BRANCH': 'pilot',
+                    'PREVIEW_RUN_ID': '2', 'PREVIEW_ENABLED': '1',
                     'RUNNER_TEMP': self.temp.name, 'GITHUB_RUN_ID': '10', 'WRANGLER_JS': '/trusted/cli.js'}
 
     def open(self, request, timeout):
@@ -167,6 +167,14 @@ class PublisherTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
             self.invoke()
         self.assertEqual(self.commands, [])
+
+    def test_inactive_preview_does_not_touch_cloudflare(self):
+        self.env['PREVIEW_ENABLED'] = ''
+        with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
+            self.invoke()
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.statuses, [])
 
     def test_failed_build_does_not_touch_cloudflare(self):
         self.github.run['conclusion'] = 'failure'

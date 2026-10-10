@@ -63,7 +63,7 @@
       "workflow": "cloudflare-preview-build.yml",
       "job": "build",
       "category": "platform",
-      "reason": "Untrusted PR build code must not persist on reusable privileged self-hosted runners. A fresh standard Linux runner provides the isolated build boundary. Disabled unless an exact pilot branch variable is explicitly configured after budget approval; no broad activation or paid upgrade is authorized by this entry."
+      "reason": "Untrusted PR build code must not persist on reusable privileged self-hosted runners. A fresh standard Linux runner provides the isolated build boundary. Runs only while CLOUDFLARE_PREVIEW_ENABLED is set, path-filtered to Preview inputs, behind a fail-closed gate at 90% of the owner-approved CLOUDFLARE_PREVIEW_BUDGET_MINUTES (2,000/month, approved 2026-10-10). Standard hosted runners are free for this public repository, so the budget caps runaway use; it remains the spending stop if the repository becomes private."
     },
     {
       "workflow": "deploy-default-assets.yml",

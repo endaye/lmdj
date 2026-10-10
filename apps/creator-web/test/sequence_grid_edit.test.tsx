@@ -1,10 +1,10 @@
-import {fireEvent, render, screen, waitFor, within} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {initialCreatorState, type Bank} from "../src/state/creator_state";
-import type {CreatorRuntimeSession} from "../src/runtime/runtime_types";
+import type {CreatorRuntimeSession, CreatorSequenceRuntimeSession} from "../src/runtime/runtime_types";
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const PATTERN_ID = "22222222-2222-4222-8222-222222222222";
@@ -260,6 +260,61 @@ async function tapEmptyCell(pad: number, clientX: number, clientY: number) {
 const gridNote = () =>
   within(screen.getByTestId("sequence-grid")).queryByTestId("sequence-grid-note");
 
+test("touch timing previews reach the upper screen and cancel without a Truth write", async () => {
+  const fixture = gridFixture();
+  const commit = vi.spyOn(fixture.session as CreatorSequenceRuntimeSession, "updateSequenceSettings");
+  await openSequenceGrid(fixture);
+  fireEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  const bpm = screen.getByRole("slider", {name: "BPM"});
+  const swing = screen.getByRole("slider", {name: "Swing"});
+  fireEvent.pointerDown(bpm, {pointerId: 53});
+  fireEvent.change(bpm, {target: {value: "132"}});
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("132 BPM");
+  expect(document.querySelector('.encoder-readbacks [data-encoder="3"] dd')?.textContent)
+    .toBe("132 BPM");
+  expect(commit).not.toHaveBeenCalled();
+  expect(fixture.truth.revision).toBe(0);
+  fireEvent.keyDown(bpm, {key: "Escape"});
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM");
+  expect(document.querySelector('.encoder-readbacks [data-encoder="3"] dd')?.textContent)
+    .toBe("120 BPM");
+  fireEvent.pointerUp(window, {pointerId: 53});
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.pointerDown(swing, {pointerId: 54});
+  fireEvent.change(swing, {target: {value: "61"}});
+  expect(document.querySelector(".overview-swing")?.textContent).toBe("SWING 61%");
+  fireEvent.click(screen.getByRole("button", {name: "Project"}));
+  fireEvent.pointerUp(window, {pointerId: 54});
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(document.querySelector(".overview-swing")?.textContent).toBe("SWING 50%");
+  fireEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  const again = screen.getByRole("slider", {name: "BPM"});
+  fireEvent.change(again, {target: {value: "134"}});
+  fireEvent.pointerUp(again);
+  await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+  // This fixture refuses settings writes; both displays return to Truth.
+  await waitFor(() => expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM"));
+  expect(document.querySelector('.encoder-readbacks [data-encoder="3"] dd')?.textContent)
+    .toBe("120 BPM");
+  expect((again as HTMLInputElement).value).toBe("120");
+  expect(fixture.truth.revision).toBe(0);
+});
+
+test("leaving Sequence drops an unsettled encoder turn before its 400 ms commit", async () => {
+  const fixture = gridFixture();
+  const commit = vi.spyOn(fixture.session as CreatorSequenceRuntimeSession, "updateSequenceSettings");
+  await openSequenceGrid(fixture);
+  fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Tempo"}), {key: "ArrowUp"});
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("121 BPM");
+  fireEvent.click(screen.getByRole("button", {name: "Project"}));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+  expect(commit).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  expect(document.querySelector(".overview-bpm")?.textContent).toBe("120 BPM");
+  expect(fixture.truth.revision).toBe(0);
+});
+
 test("one gesture commits one flat-slot pattern events edit and both grids follow Truth", async () => {
   const fixture = gridFixture();
   await openSequenceGrid(fixture);
@@ -301,6 +356,34 @@ test("a refused edit restores the projection from Truth and shows the reason", a
     ".sequence-grid-row[data-pad='1']") as HTMLElement)
     .getByTestId("sequence-grid-note").getAttribute("data-onset-tick")).toBe("240");
   expect(fixture.truth.events).toHaveLength(1);
+});
+
+// A VEL-mode tap that never crosses the drag threshold is a touch landing,
+// not a delete command (#1962): the vertical velocity drag is the only VEL
+// edit gesture, so a moveless press must leave Truth and the revision alone.
+test("a moveless VEL-mode tap on a note sends no edit and keeps the note", async () => {
+  const fixture = gridFixture({events: [
+    {slot: {bank: 0, pad: 1}, onset_tick: 240, duration_tick: 240, velocity: 100},
+  ]});
+  await openSequenceGrid(fixture);
+  await userEvent.click(screen.getByRole("button", {name: "Grid tools"}));
+  await userEvent.click(screen.getByRole("button", {name: "Velocity mode"}));
+  await userEvent.click(screen.getByRole("button", {name: "Done"}));
+  const note = within(document.querySelector(
+    ".sequence-grid-row[data-pad='1']") as HTMLElement)
+    .getByTestId("sequence-grid-note");
+  fireEvent.pointerDown(note, {pointerId: 45, clientX: 30, clientY: 32, button: 0});
+  fireEvent.pointerUp(window, {pointerId: 45});
+  // The edit command is an async chain; absence can only be read after it
+  // had its turn. A delete here would reach editPatternEvents well inside
+  // this window (the refused-edit test above sees its alert immediately).
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+  expect(fixture.editPatternEvents).not.toHaveBeenCalled();
+  expect(fixture.truth.revision).toBe(0);
+  expect(fixture.truth.events).toHaveLength(1);
+  expect(within(document.querySelector(
+    ".sequence-grid-row[data-pad='1']") as HTMLElement)
+    .getByTestId("sequence-grid-note").getAttribute("data-onset-tick")).toBe("240");
 });
 
 test("a transport-busy refusal is retried before commit and never shown as a conflict", async () => {
@@ -496,7 +579,7 @@ test("ENC1 scrolls whole bars, clamps both ends and is unavailable off EDIT", as
   fireEvent.keyDown(encoder, {key: "ArrowUp"});
   expect(scroller.scrollLeft).toBe(384);
   expect(screen.getByTestId("sequence-pattern-overview").querySelector(".sequence-overview-frame")
-    ?.getAttribute("x")).toBe("3480");
+    ?.getAttribute("x")).toBe("3840");
   // A native partial scroll is the next turn's starting position.
   scroller.scrollLeft = 500;
   fireEvent.keyDown(encoder, {key: "ArrowUp"});
@@ -549,7 +632,7 @@ test.each([false, true])("Pad navigation crosses Banks without edits or triggers
   for (let step = 0; step < 16; step += 1) await userEvent.click(down);
   expect(currentPad()).toBe("B01");
   expect(screen.getByRole("button", {name: "Bank B"}).getAttribute("aria-current")).toBe("page");
-  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("B01");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("B01 / EMPTY");
   expect(document.querySelector('.sequence-grid-row[data-current-pad] .sequence-grid-pad')?.textContent).toBe("B01");
   expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("B01");
   expect(selectedCount()).toBe("1");
@@ -561,7 +644,7 @@ test.each([false, true])("Pad navigation crosses Banks without edits or triggers
   for (let step = 15; step < 63; step += 1) await userEvent.click(down);
   expect(currentPad()).toBe("D16");
   expect(down.hasAttribute("disabled")).toBe(true);
-  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("D16");
+  expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent).toBe("D16 / EMPTY");
   expect(fixture.truth).toEqual(before);
   expect(fixture.editPatternEvents).not.toHaveBeenCalled();
   expect(fixture.session.trigger).not.toHaveBeenCalled();
@@ -575,6 +658,6 @@ test("current Pad and overview start in the initial Bank", async () => {
   await openSequenceGrid(gridFixture(), 3);
   const overview = screen.getByTestId("sequence-overview");
   expect(within(overview).getByText("Pad").nextElementSibling?.textContent).toBe("D01");
-  expect(overview.querySelector(".sequence-overview-names li")?.textContent).toBe("D01");
+  expect(overview.querySelector(".sequence-overview-names li")?.textContent).toBe("D01 / EMPTY");
   expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("D01");
 });

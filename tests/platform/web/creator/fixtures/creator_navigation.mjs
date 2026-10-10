@@ -22,26 +22,18 @@ export async function showSequenceLayer(page, layer) {
   await toggle.and(page.locator("[aria-pressed='true']")).waitFor();
 }
 
-// `‹ GROOVE / NN ›` carries the selected Pattern and the Pattern count.
+// The direct Pattern picker carries the selected Pattern and the Pattern count.
 export const sequencePattern = (page) => page.getByTestId("sequence-pattern");
 export const selectedSequencePatternId = (page) =>
   sequencePattern(page).getAttribute("data-pattern-id");
 
-// Steps ‹ › to the Pattern with this id; stepping waits for Stop.
+// Direct touch selection waits for Stop, like the physical direction keys.
 export async function selectSequencePattern(page, patternId) {
-  const previous = page.getByRole("button", {name: "Previous Pattern", exact: true});
-  const next = page.getByRole("button", {name: "Next Pattern", exact: true});
-  while (await previous.isEnabled() && await selectedSequencePatternId(page) !== patternId) {
-    const before = await selectedSequencePatternId(page);
-    await previous.click();
-    await sequencePattern(page).and(page.locator(`:not([data-pattern-id='${before}'])`)).waitFor();
-  }
-  while (await selectedSequencePatternId(page) !== patternId) {
-    if (!await next.isEnabled()) throw new Error(`Pattern ${patternId} is not in the Project`);
-    const before = await selectedSequencePatternId(page);
-    await next.click();
-    await sequencePattern(page).and(page.locator(`:not([data-pattern-id='${before}'])`)).waitFor();
-  }
+  if (await selectedSequencePatternId(page) === patternId) return;
+  await page.getByRole("button", {name: "Choose Pattern", exact: true}).click();
+  await page.getByRole("dialog", {name: "Choose Pattern", exact: true})
+    .locator(`[data-pattern-choice="${patternId}"]`).click();
+  await sequencePattern(page).and(page.locator(`[data-pattern-id="${patternId}"]`)).waitFor();
 }
 
 // + NEW, then the new Pattern's length, then CREATE (SETUP layer).
@@ -50,4 +42,44 @@ export async function createSequencePattern(page, bars = null) {
   await page.getByRole("button", {name: "New Pattern", exact: true}).click();
   if (bars !== null) await page.getByRole("button", {name: `${bars} bars`, exact: true}).click();
   await page.getByRole("button", {name: "Create Pattern", exact: true}).click();
+}
+
+// Only the selected Sample page renders its controls. Selecting an already
+// current page leaves focus and any in-progress gesture untouched.
+export async function showSamplePage(page, name) {
+  const button = page.getByRole("navigation", {name: "Sample pages"})
+    .getByRole("button", {name, exact: true});
+  if (await button.getAttribute("aria-current") !== "page") await button.click();
+  await button.and(page.locator("[aria-current='page']")).waitFor();
+}
+
+export async function showSampleDetails(page) {
+  await showSamplePage(page, "Pad");
+  const details = page.locator(".sample-details");
+  if (!(await details.evaluate(element => element.open))) await details.locator("summary").click();
+  return details;
+}
+
+// Perform controller ownership outlives its visible subpage. An already active
+// page is a no-op, preserving an in-progress native gesture and focus.
+export async function showPerformPage(page, name) {
+  const button = page.getByRole("navigation", {name: "Perform pages"})
+    .getByRole("button", {name, exact: true});
+  if (await button.getAttribute("aria-current") !== "page") await button.click();
+  await button.and(page.locator("[aria-current='page']")).waitFor();
+}
+
+export async function showPatternLaunchGroup(page, slot) {
+  const first = Math.floor((slot - 1) / 4) * 4 + 1;
+  const button = page.getByRole("button", {name: `Pattern slots ${first} to ${first + 3}`, exact: true});
+  if (await button.getAttribute("aria-pressed") !== "true") await button.click();
+  await button.and(page.locator("[aria-pressed='true']")).waitFor();
+}
+
+// Each Sound Set step owns its visible controls while preserving one reducer.
+export async function showSoundSetStep(page, name) {
+  const button = page.getByRole("navigation", {name:"Sound Set steps"})
+    .getByRole("button", {name, exact:true});
+  if (await button.getAttribute("aria-current") !== "step") await button.click();
+  await button.and(page.locator('[aria-current="step"]')).waitFor();
 }

@@ -21,7 +21,7 @@ import {
 } from "../state/pattern_transport_state";
 import {padColourOf} from "../state/pad_colour";
 import {SequenceGrid} from "./sequence_grid";
-import {PatternStepper, TouchSegment, type TouchSegmentOption} from "./touch_kit";
+import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
 const BAR_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
@@ -34,7 +34,6 @@ const LAYER_OPTIONS: readonly TouchSegmentOption<SequenceLayer>[] = [
   {value: "edit", label: "EDIT"},
   {value: "setup", label: "SETUP"},
 ];
-const NOOP = () => {};
 
 interface SequenceTouchWorkspaceProps {
   project: ProjectView;
@@ -50,6 +49,7 @@ interface SequenceTouchWorkspaceProps {
   // True while the projection is being re-read from Truth after a commit; the
   // grid's model can be behind Truth in that window, so no gesture starts.
   projectionRefreshing: boolean;
+  settingsActive?: boolean;
   metronomeOn: boolean;
   onToggleMetronome(): void;
   showRefresh?: boolean;
@@ -72,6 +72,10 @@ interface SequenceTouchWorkspaceProps {
     quantizeEnabled?: boolean;
     swingPercent?: number;
   }>): void;
+  onSettingsPreview?(changes: Readonly<{
+    bpm?: number | null;
+    swingPercent?: number | null;
+  }>): void;
   onRecover(candidate: SequenceRecoveryCandidate, destinationPatternId: string | null): void;
   onDiscard(candidate: SequenceRecoveryCandidate): void;
 }
@@ -91,7 +95,8 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   // failed commit resyncs the base to the committed truth.
   const requestedBpmRef = useRef<number | null>(null);
   const requestedSwingRef = useRef<number | null>(null);
-  const disabled = selectTransportBusy(transport) || selectTransportRecording(transport);
+  const disabled = selectTransportBusy(transport) || selectTransportRecording(transport) ||
+    props.settingsActive === false;
   // Grid editing is refused while the transport records (the Core refuses it
   // too); a busy transport holds the commit instead, and the app retries it.
   const editReason = selectTransportRecording(transport)
@@ -103,6 +108,10 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   const patternIndex = project.patterns.findIndex((item) => item.patternId === selectedPatternId) + 1;
   const bpm = project.bpm;
   const swing = project.sequenceSettings.swingPercent;
+  useEffect(() => {
+    requestedBpmRef.current = null;
+    requestedSwingRef.current = null;
+  }, [project.projectId, selectedPatternId]);
   useEffect(() => {
     if (requestedBpmRef.current === project.bpm) requestedBpmRef.current = null;
   }, [project.bpm]);
@@ -116,10 +125,12 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     }
   }, [state.errorCode]);
   const requestBpm = (next: number) => {
+    props.onSettingsPreview?.({bpm: null});
     requestedBpmRef.current = next;
     props.onSettingsChange({bpm: next});
   };
   const requestSwing = (next: number) => {
+    props.onSettingsPreview?.({swingPercent: null});
     requestedSwingRef.current = next;
     props.onSettingsChange({swingPercent: next});
   };
@@ -139,18 +150,14 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     if (selectedPattern === undefined || next === selectedPattern.bars) return;
     props.onResizePattern?.(next);
   };
-  const stepPattern = (offset: -1 | 1) => {
-    const next = project.patterns[patternIndex - 1 + offset];
-    if (next !== undefined) props.onSwitch(next.patternId);
-  };
   return (
     <section className="sequence-touch-workspace" aria-label="Sequence editor"
       data-layer={layer}>
       <header className="sequence-editor-header">
         {/* Switching Pattern waits for Stop, as the ← → keys do. */}
-        <PatternStepper index={patternIndex} count={project.patterns.length}
+        <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
           patternId={selectedPatternId} disabled={disabled || playing}
-          onStep={stepPattern} />
+          onSelect={props.onSwitch} />
         <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
           value={layer} onChange={setLayer} />
       </header>
@@ -159,6 +166,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         : <p role="status">committed, publication pending</p>}
       {layer === "edit" ? (selectedPattern === undefined ? null : (
         <SequenceGrid
+          key={selectedPatternId}
           pattern={selectedPattern}
           bank={props.bank}
           {...(props.currentPad === undefined ? {} : {currentPad: props.currentPad})}
@@ -181,7 +189,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
         />
       )) : (
       <section aria-label="Sequence settings" className="sequence-settings">
-        <div className="sequence-param-row">
+        <div className="sequence-param-row" key={`${project.projectId}:${selectedPatternId}`}>
           <div className="sequence-param-card sequence-param-tempo">
             <ValueSlider
               label="TEMPO"
@@ -193,9 +201,9 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               step={1}
               format={(value) => `${value} BPM`}
               disabled={disabled}
-              onPreview={NOOP}
+              onPreview={(bpm) => props.onSettingsPreview?.({bpm})}
               onCommit={requestBpm}
-              onCancel={NOOP}
+              onCancel={() => props.onSettingsPreview?.({bpm: null})}
             />
             <div className="sequence-param-actions" role="group" aria-label="Tempo actions">
               <button type="button" aria-label="Decrease BPM"
@@ -218,15 +226,15 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               step={1}
               format={(value) => `${value}%`}
               disabled={disabled}
-              onPreview={NOOP}
+              onPreview={(swingPercent) => props.onSettingsPreview?.({swingPercent})}
               onCommit={requestSwing}
-              onCancel={NOOP}
+              onCancel={() => props.onSettingsPreview?.({swingPercent: null})}
             />
             <div className="sequence-param-actions" role="group" aria-label="Swing actions">
               <button type="button" aria-label="Decrease Swing"
                 disabled={disabled || (requestedSwingRef.current ?? swing) <= 50}
                 onClick={() => requestSwing((requestedSwingRef.current ?? swing) - 1)}>−</button>
-              <span className="sequence-param-encoder">ENC 4</span>
+              <span className="sequence-param-encoder" aria-hidden="true" />
               <button type="button" aria-label="Increase Swing"
                 disabled={disabled || (requestedSwingRef.current ?? swing) >= 75}
                 onClick={() => requestSwing((requestedSwingRef.current ?? swing) + 1)}>+</button>
@@ -308,17 +316,12 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           </div>
         )}
         {props.showRefresh === false ? null : (
-          <>
+          <details className="sequence-details">
+            <summary>Playback details</summary>
             <button type="button" className="touch-control" onClick={props.onRefresh}>
-              Refresh authority
+              Refresh playback
             </button>
-            {transport.lastFailed !== null ? (
-              <p className="transport-hint">
-                Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"}
-                {" "}command failed; retry reconciles the same command.
-              </p>
-            ) : null}
-          </>
+          </details>
         )}
       </section>
       )}
@@ -361,6 +364,16 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           ))}
         </section>
       ) : null}
+      {props.showRefresh !== false && (state.errorCode !== null ||
+        transport.errorCode !== null || transport.lastFailed !== null ||
+        transport.status?.publicationPending === true) && <section className="workspace-status"
+          aria-label="Playback recovery">
+        <button type="button" onClick={props.onRefresh}>Retry playback</button>
+        {transport.lastFailed !== null && <p role="status">
+          Last {transport.lastFailed.intent === "record" ? "Record" : "Play/Stop"} failed.
+          Retry checks the result of the same action.
+        </p>}
+      </section>}
       {state.errorCode !== null ? (
         <p role="alert" className="sequence-error">
           {userMessage(state.errorCode).message} {userMessage(state.errorCode).nextStep}

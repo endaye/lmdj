@@ -1,10 +1,16 @@
+import {IDBFactory, IDBObjectStore} from "fake-indexeddb";
+import {readMonitorVolumePreference, writeMonitorVolumePreference} from "../src/state/monitor_volume_preference";
 import {readFileSync} from "node:fs";
 
 import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
-import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
+import type {
+  PatternTransportRequest,
+  PatternTransportStatus,
+  PatternTransportTicket,
+} from "@lmdj/web-runtime-platform/runtime_types";
 
 import {App} from "../src/app";
 import {encodePcm16Wav} from "../src/capture/wav_encoder";
@@ -62,6 +68,27 @@ function wavFile(name: string): File {
   return new File([
     encodePcm16Wav([Float32Array.from([0, 0.25, -0.25, 0.5, -0.5, 0, 0.125, 0])], 48_000),
   ], name, {type: "audio/wav"});
+}
+
+function selectSamplePage(name: "Trim" | "Playback" | "Tone / EQ" | "Pad") {
+  const button = within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name});
+  if (button.getAttribute("aria-current") !== "page") fireEvent.click(button);
+  expect(button.getAttribute("aria-current")).toBe("page");
+}
+
+// The technical identity moved to Pad > Sample details. Preserve the complete
+// identity assertion and return to the original editor page before its journey.
+async function expectSelectedAsset(assetId: string): Promise<void> {
+  const pages = screen.getByRole("navigation", {name: "Sample pages"});
+  const previous = pages.querySelector('[aria-current="page"]')!.textContent as
+    "Trim" | "Playback" | "Tone / EQ" | "Pad";
+  selectSamplePage("Pad");
+  const summary = screen.getByText("Sample details", {selector: "summary"});
+  const details = summary.parentElement as HTMLDetailsElement;
+  if (!details.open) await userEvent.click(summary);
+  await within(details).findByText(assetId, {exact: true});
+  selectSamplePage(previous);
 }
 
 async function commitLongSourceSelection(): Promise<void> {
@@ -134,7 +161,8 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
     })).toBeTruthy();
   }
   expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
-    .toEqual(keys);
+    .toEqual(["G", "H", "J", "K", "A", "S", "D", "F",
+      "T", "Y", "U", "I", "Q", "W", "E", "R"]);
 
   expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
   // The brand mark is the System entry and the rail's first stop.
@@ -221,9 +249,8 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
   render(<App initialState={sampleReady} />);
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
 
-  const metadata = screen.getByText("Asset 33333333").closest(".selected-sample")!;
+  const selectedPad = document.querySelector(".selected-sample")!;
   const waveform = screen.getByRole("region", {name: "Pad A01 waveform editor"});
-  const controls = screen.getByRole("region", {name: "Pad A01 Sample controls"});
   const pads = screen.getByRole("region", {name: "Pad matrix"});
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).queryByLabelText("Playable Pads")).toBeNull();
@@ -234,16 +261,34 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
     expect(screen.getAllByRole("button", {name: `Bank ${bank}`})).toHaveLength(1);
     expect(within(rail).getByRole("button", {name: `Bank ${bank}`})).toBeTruthy();
   }
-  expect(metadata.compareDocumentPosition(waveform) & Node.DOCUMENT_POSITION_FOLLOWING)
+  expect(selectedPad.compareDocumentPosition(waveform) & Node.DOCUMENT_POSITION_FOLLOWING)
     .not.toBe(0);
-  expect(waveform.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING)
-    .not.toBe(0);
-  expect(touch.contains(metadata)).toBe(true);
+  expect(touch.contains(selectedPad)).toBe(true);
+  expect(selectedPad.textContent).toBe("Pad A01");
+  expect(document.querySelector(".overview-context")?.textContent).toBe("SAMPLE / PAD A01");
+  expect(within(touch).queryByText(/frames$/)).toBeNull();
   expect(touch.contains(waveform)).toBe(true);
-  expect(touch.contains(controls)).toBe(true);
+  expect(screen.queryByRole("region", {name: "Pad A01 Sample controls"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Edit Pad A01"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Replace Sample"})).toBeNull();
+  const pages = screen.getByRole("navigation", {name: "Sample pages"});
+  await userEvent.click(within(pages).getByRole("button", {name: "Playback"}));
+  expect(screen.queryByRole("region", {name: "Pad A01 waveform editor"})).toBeNull();
+  expect(within(touch).getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
+  expect(screen.queryByRole("slider", {name: "Pad A01 Tone"})).toBeNull();
+  await userEvent.click(within(pages).getByRole("button", {name: "Tone / EQ"}));
+  expect(within(touch).getByRole("slider", {name: "Pad A01 Tone"})).toBeTruthy();
+  expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
+  await userEvent.click(within(pages).getByRole("button", {name: "Pad"}));
+  await userEvent.click(screen.getByText("Sample details", {selector: "summary"}));
+  const details = screen.getByText("Sample details", {selector: "summary"}).parentElement!;
+  expect(within(details).getByText(sampleReady.sample.inspect!.assetId!)).toBeTruthy();
+  expect(within(details).getByText("48 kHz · Mono · 8 frames")).toBeTruthy();
+  expect(within(details).getByText("Revision").nextElementSibling?.textContent).toBe("4");
   expect(screen.getByRole("button", {name: "Replace Sample"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Record Sample"})).toBeTruthy();
-  expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
+  expect(within(screen.getByRole("region", {name: "Pad A01 management"}))
+    .getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   const visiblePads = screen.getAllByRole("button", {
     name: /^Pad A(?:0[1-9]|1[0-6]) — (?:assigned|empty) — Key [QWERTYUIASDFGHJK]$/,
@@ -417,10 +462,11 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
   // S8-D12: recording onto an assigned Pad is a replacement, so the existing
   // confirmation runs before the microphone is ever requested (S8B-D2).
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   expect(screen.queryByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeNull();
   const dialog = screen.getByRole("dialog", {name: "Replace Pad A01?"});
@@ -431,6 +477,7 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
   await userEvent.click(screen.getByRole("button", {name: "Cancel replace"}));
   expect(screen.queryByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeNull();
 
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
   expect(screen.getByRole("dialog", {name: "Pad A01 Pad Capture"})).toBeTruthy();
@@ -444,6 +491,7 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
 
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   expect(screen.queryByRole("dialog", {name: "Replace Pad A02?"})).toBeNull();
   expect(screen.getByRole("dialog", {name: "Pad A02 Pad Capture"})).toBeTruthy();
@@ -478,6 +526,7 @@ test("audio recovery keeps an open capture panel instead of discarding it", asyn
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   const dialog = screen.getByRole("dialog", {name: "Pad A02 Pad Capture"});
 
@@ -600,6 +649,18 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
 function setRunningAudioFixture(session: CreatorRuntimeSession) {
   const diagnostics = session.diagnostics;
   session.diagnostics = () => ({...diagnostics(), state: "running"});
+}
+
+// Component-only Host state seam. Publishing running after Project open keeps
+// the visual audio state aligned with diagnostics; this is not trusted browser
+// activation or physical audio evidence.
+function controlledSampleAudio(session: CreatorRuntimeSession) {
+  let publish!: (state: RuntimeHostState) => void;
+  session.subscribeHostState = (listener) => { publish = listener; return () => {}; };
+  return () => act(() => {
+    setRunningAudioFixture(session);
+    publish({state: "running", errorCode: null, errorDetails: {}});
+  });
 }
 
 function sampleRuntimeFixture(
@@ -844,6 +905,9 @@ test.each([
     await flushAsyncTurns();
     expect(source === "master" ? stopMaster.mock.calls.length : contexts).toBe(1);
     expect(recording.textContent).toContain("review · Pad A02");
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    expect(within(recording).getByRole("button", {name: "Save Pad recording"})).toBeTruthy();
+    expect(within(recording).getByRole("button", {name: "Discard Pad recording"})).toBeTruthy();
     if (resolution === "occupied-target refusal") {
       // A concurrent authoring result never becomes an implicit replacement.
       fixture.assigned.set(1, "55555555-5555-4555-8555-555555555555");
@@ -875,6 +939,8 @@ test.each([
     await waitFor(() =>
       expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull());
     expect(originalImport).not.toHaveBeenCalled();
+    // System never hid the decision; return before starting the next take.
+    fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
     // After the deliberate resolution the successor can own a new take.
     fireEvent.mouseDown(screen.getByRole("button", {name: /^Pad A03 — empty/}), {button: 0});
     const next = () => screen.getByRole("region", {name: "Pad recording"});
@@ -1106,7 +1172,9 @@ test("Candidate publication failure retains one commit and retries only preparat
     snapshotError: {code: "COOK_FAILED", message: "Runtime preparation failed", details: {}}}));
   await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
   expect(await screen.findByText("Adopted 1 slices.")).toBeTruthy();
-  expect(screen.getByText("Saved at revision 4; audio is not ready.")).toBeTruthy();
+  expect(screen.getByText("Changes saved · playback needs preparation.")).toBeTruthy();
+  expect((screen.getByText("Saved at revision 4; audio is not ready.")
+    .closest("details") as HTMLDetailsElement).open).toBe(false);
   expect(fixture.adopt).toHaveBeenCalledTimes(1);
   expect(fixture.revision).toBe(4);
   await userEvent.click(screen.getByRole("button", {name: "Retry audio preparation"}));
@@ -1232,6 +1300,7 @@ function busyProjectionFixture(
 
 test("commits composed controlled Volume once per pointer and keyboard completion", async () => {
   const fixture = mutableSampleRuntimeFixture();
+  const runAudio = controlledSampleAudio(fixture.session);
   let previewCount = 0;
   let updateCount = 0;
   fixture.session.setSamplePreview = async () => {
@@ -1252,9 +1321,12 @@ test("commits composed controlled Volume once per pointer and keyboard completio
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Playback");
   const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
 
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
   fireEvent.pointerDown(volume, {pointerId: 31});
   fireEvent.change(volume, {target: {value: "-3.2"}});
   await waitFor(() => expect(previewCount).toBe(1));
@@ -1295,12 +1367,14 @@ test.each(["update", "reset"] as const)(
     );
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     const selectedAfter = 1;
     if (kind === "update") {
+      selectSamplePage("Playback");
       await userEvent.click(screen.getByRole("button", {name: "Mute"}));
     } else {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
       await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
     }
@@ -1362,7 +1436,8 @@ test("atomically refreshes full Project truth on a real mutation conflict", asyn
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Playback");
   await userEvent.click(screen.getByRole("button", {name: "Mute"}));
 
   expect((await screen.findByRole("alert")).textContent).toBe(
@@ -1425,14 +1500,14 @@ test("converges committed Sample and Project truth across interleaved revisions"
   }));
   await screen.findByText("Audio running");
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   await userEvent.upload(input, wavFile("interleaved.wav"));
   await commitLongSourceSelection();
 
-  await screen.findByText("Asset 44444444");
+  await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.getByRole("button", {name: "Pad A04 — assigned — Key R"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A05 — assigned — Key T"})).toBeTruthy();
@@ -1480,10 +1555,11 @@ test.each([
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     vi.useFakeTimers();
     try {
+      selectSamplePage("Playback");
       fireEvent.click(screen.getByRole("button", {name: "Mute"}));
       await flushAsyncTurns();
 
@@ -1525,9 +1601,11 @@ test.each([
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+    selectSamplePage("Playback");
     await userEvent.click(screen.getByRole("button", {name: "Mute"}));
 
+    selectSamplePage("Pad");
     await waitFor(() => expect(screen.getByRole("button", {
       name: "Reset Pad to Defaults",
     }).hasAttribute("disabled")).toBe(false));
@@ -1546,10 +1624,11 @@ test.each(["project", "sample"] as const)(
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     vi.useFakeTimers();
     try {
+      selectSamplePage("Playback");
       fireEvent.click(screen.getByRole("button", {name: "Mute"}));
       await flushAsyncTurns();
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -1627,13 +1706,15 @@ test.each(["update", "reset"] as const)(
     render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
     vi.useFakeTimers();
     try {
       if (kind === "update") {
+        selectSamplePage("Playback");
         fireEvent.click(screen.getByRole("button", {name: "Mute"}));
       } else {
+        selectSamplePage("Pad");
         fireEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
         fireEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
       }
@@ -1648,6 +1729,7 @@ test.each(["update", "reset"] as const)(
 
       expect(mutationCount).toBe(1);
       expect(screen.queryByRole("alert")).toBeNull();
+      selectSamplePage("Pad");
       expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})
         .hasAttribute("disabled")).toBe(false);
       fireEvent.click(screen.getByRole("button", {name: "Project"}));
@@ -1676,7 +1758,7 @@ test("keeps pre-commit Sample import abort ownership on unmount", async () => {
   );
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
@@ -1754,7 +1836,7 @@ test.each([
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
   pad.focus();
 
@@ -1940,7 +2022,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   }));
   await screen.findByText("Audio running");
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
@@ -1952,7 +2034,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
     wavFile("import.wav"),
   );
   await commitLongSourceSelection();
-  await screen.findByText("Asset 44444444");
+  await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
 
   await userEvent.click(screen.getByRole("button", {name: "Pad A03 — empty — Key E"}));
   const importedPad = await screen.findByRole("button", {
@@ -1992,7 +2074,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   );
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
 
@@ -2133,7 +2215,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     await screen.findByText("Audio running");
     setRunningAudioFixture(fixture.session);
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
     fireEvent.keyDown(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"}), {
       key: "Enter",
       code: "Enter",
@@ -2142,13 +2224,17 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     await waitFor(() => expect(triggerCount).toBe(1));
 
     if (kind === "mute") {
+      selectSamplePage("Playback");
       await userEvent.click(screen.getByRole("button", {name: "Mute"}));
     } else if (kind === "reset") {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
       await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
     } else if (kind === "delete") {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
     } else {
+      selectSamplePage("Pad");
       await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
       const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
       await userEvent.upload(input, wavFile("replace.wav"));
@@ -2160,7 +2246,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     expect(fixture.revision).toBe(4);
     if (kind === "delete") {
       await screen.findByRole("button", {name: "Pad A01 — empty — Key Q"});
-      expect(screen.queryByText("Asset 33333333")).toBeNull();
+      expect(screen.queryByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeNull();
       expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
     }
   },
@@ -2237,9 +2323,11 @@ test("shows saved and stale Runtime revisions and retries Prepare explicitly", a
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Playback");
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
 
+  selectSamplePage("Playback");
   await userEvent.click(screen.getByRole("button", {name: "Mute"}));
   expect(await screen.findByText(
     "Saved at revision 4; Runtime is still revision 3",
@@ -2590,7 +2678,7 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
   expect(within(display).queryAllByRole("button")).toHaveLength(0);
   expect(within(display).queryByRole("button", {name: "New"})).toBeNull();
   expect(within(display).getByTestId("project-overview").textContent ?? "")
-    .toMatch(/Projects save automatically/);
+    .toContain("LOCAL AUTOSAVE");
 
   const touch = screen.getByRole("region", {name: "Touch workspace"});
   expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
@@ -2607,6 +2695,12 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
     .getByRole("button", {name: "System"}));
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Export report"})).toBeTruthy();
+  await user.click(screen.getByText("Project and build details", {selector: "summary"}));
+  const details = screen.getByText("Project and build details", {selector: "summary"}).parentElement!;
+  expect(within(details).getByText("Rev").nextElementSibling?.textContent).toBe("4");
+  expect(within(details).getByText("Project ID").nextElementSibling?.textContent)
+    .toBe(ready.project.current!.projectId);
+  expect(within(display).queryByText("Rev")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(within(touch).getByRole("button", {name: "New Project"})).toBeTruthy();
   expect(within(touch).queryByRole("button", {name: "Save As"})).toBeNull();
@@ -2665,7 +2759,7 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SAMPLE");
   // D03: the upper screen names the Pad and draws the whole waveform, read-only.
   const sampleOverview = screen.getByTestId("sample-overview");
-  expect(sampleOverview.textContent ?? "").toMatch(/^PAD A01/);
+  expect(document.querySelector(".overview-context")?.textContent).toBe("SAMPLE / PAD A01");
   expect(within(sampleOverview).getByRole("img", {name: /waveform/})).toBeTruthy();
   expect(within(sampleOverview).queryAllByRole("button")).toHaveLength(0);
   expect(within(screen.getByRole("region", {name: "Overview display"}))
@@ -2676,8 +2770,8 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   await user.click(screen.getByRole("button", {name: "Sequence"}));
   expect(screen.getByTestId("overview-display").textContent ?? "").toContain("SEQUENCE");
   expect(padA1()).toBeTruthy();
-  expect(within(touch()).getByRole("heading", {name: /GROOVE \//})).toBeTruthy();
-  expect(within(touch()).getByRole("button", {name: "Next Pattern"})).toBeTruthy();
+  expect(within(touch()).getByRole("button", {name: "Choose Pattern"}).textContent).toContain("GROOVE /");
+  expect(within(touch()).getByRole("button", {name: "Choose Pattern"})).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
 
   await user.click(screen.getByRole("button", {name: "Perform"}));
@@ -2733,6 +2827,7 @@ const engagedTransportStatus = (
   observedAtMilliseconds: 0,
   commandId: null,
   publicationPending: false,
+  currentPatternId: null, pendingSwitch: null,
   error: null,
   ...overrides,
 });
@@ -2766,6 +2861,238 @@ const sequenceStatusStub = () => ({
   pendingEventCount: 0,
   effectiveRuntimeFrame: null,
 });
+
+test("a late Stop retry failure keeps the newer Record command pending", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const publishRunning = controlledSampleAudio(fixture.session);
+  const retryTicket = deferred<PatternTransportTicket>();
+  const retryInspection = deferred<PatternTransportStatus>();
+  const recordTicket = deferred<PatternTransportTicket>();
+  const requests: PatternTransportRequest[] = [];
+  const wire: string[] = [];
+  let runtimeTail = Promise.resolve();
+  // RuntimeSession serializes request and inspect on the same action tail.
+  // In particular, a poll queued during the retry submit runs before that
+  // retry's trailing inspect; the new Record is queued behind that inspect.
+  const serialize = <T,>(action: () => Promise<T>): Promise<T> => {
+    const pending = runtimeTail.then(action);
+    runtimeTail = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
+  let stopSettled = false;
+  let retryInspectionStarted = false;
+  let recordSettled = false;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: (request: PatternTransportRequest) => {
+      requests.push(request);
+      const submission = requests.length;
+      return serialize(async () => {
+        wire.push(`request:${request.intent}:${submission}`);
+        if (submission === 1) {
+          throw Object.assign(new Error("Stop submit timed out"), {code: "HOST_TIMEOUT"});
+        }
+        if (submission === 2) return retryTicket.promise;
+        return recordTicket.promise;
+      });
+    },
+    inspectPatternTransport: () => serialize(async () => {
+      if (requests.length < 2) return engagedTransportStatus();
+      const stop = requests[1]!;
+      if (!stopSettled) {
+        stopSettled = true;
+        wire.push("inspect:Stop settled");
+        return engagedTransportStatus({
+          playing: false, transportEpoch: stop.expectedEpoch, commandId: stop.commandId,
+        });
+      }
+      if (!retryInspectionStarted) {
+        retryInspectionStarted = true;
+        wire.push("inspect:Stop retry tail");
+        return retryInspection.promise;
+      }
+      const record = requests[2];
+      return engagedTransportStatus({
+        playing: false,
+        recording: recordSettled,
+        transportEpoch: recordSettled ? record!.expectedEpoch : stop.expectedEpoch,
+        commandId: recordSettled ? record!.commandId : stop.commandId,
+      });
+    }),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await publishRunning();
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+
+  vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
+  try {
+    fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+    await flushAsyncTurns();
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    await flushAsyncTurns();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[0]!.intent).toBe("play_stop");
+
+    // Queue a second reconciliation while the identical Stop retry submit is
+    // still unresolved. Its inspection will settle Stop before the older
+    // reconciliation's trailing inspection can complete.
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    await act(async () => retryTicket.resolve({
+      sessionId: requests[1]!.sessionId,
+      commandId: requests[1]!.commandId,
+      submit: "accepted",
+      status: engagedTransportStatus({
+        phase: "awaiting_audio", transportEpoch: requests[1]!.expectedEpoch,
+        commandId: requests[1]!.commandId,
+      }),
+    }));
+    await flushAsyncTurns();
+    expect(retryInspectionStarted).toBe(true);
+    expect(transportPhase()).toBe("stopped");
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", {name: "Record"}));
+    await flushAsyncTurns();
+    expect(requests).toHaveLength(3);
+    expect(requests[2]!.intent).toBe("record");
+    expect(requests[2]!.commandId).not.toBe(requests[0]!.commandId);
+    expect(requests[2]!.expectedEpoch).toBe(requests[0]!.expectedEpoch + 1);
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    expect(wire).toEqual([
+      "request:play_stop:1", "request:play_stop:2",
+      "inspect:Stop settled", "inspect:Stop retry tail",
+    ]);
+
+    await act(async () => retryInspection.reject(Object.assign(
+      new Error("Old Stop inspection timed out"), {code: "HOST_TIMEOUT"},
+    )));
+    await flushAsyncTurns();
+    expect(wire.at(-1)).toBe("request:record:3");
+    // Record's own request is still unresolved. An error from the retired
+    // Stop must not remove its busy state or admit another transport command.
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", {name: /^Play\/Stop/}).hasAttribute("disabled")).toBe(true);
+
+    await act(async () => recordTicket.resolve({
+      sessionId: requests[2]!.sessionId,
+      commandId: requests[2]!.commandId,
+      submit: "accepted",
+      status: engagedTransportStatus({
+        playing: false, phase: "awaiting_audio", transportEpoch: requests[2]!.expectedEpoch,
+        commandId: requests[2]!.commandId,
+      }),
+    }));
+    await flushAsyncTurns();
+    expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    recordSettled = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    await flushAsyncTurns();
+    expect(transportPhase()).toBe("recording");
+    expect(screen.getByRole("button", {name: /^Record/}).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    fireEvent.click(screen.getByText("Developer diagnostics (1)"));
+    expect(within(screen.getByRole("region", {name: "Developer diagnostics"}))
+      .queryByText("Old Stop inspection timed out")).toBeNull();
+  } finally {
+    rendered.unmount();
+    vi.useRealTimers();
+  }
+});
+
+test.each(["submission", "inspection"] as const)(
+  "a still-current Stop retry %s failure reports and retains that command",
+  async (stage) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const publishRunning = controlledSampleAudio(fixture.session);
+    const retryTicket = deferred<PatternTransportTicket>();
+    const retryInspection = deferred<PatternTransportStatus>();
+    const followingRetry = deferred<PatternTransportTicket>();
+    const requests: PatternTransportRequest[] = [];
+    let runtimeTail = Promise.resolve();
+    const serialize = <T,>(action: () => Promise<T>): Promise<T> => {
+      const pending = runtimeTail.then(action);
+      runtimeTail = pending.then(() => undefined, () => undefined);
+      return pending;
+    };
+    let inspectRetry = false;
+    const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+      requestPatternTransport: (request: PatternTransportRequest) => {
+        requests.push(request);
+        const submission = requests.length;
+        return serialize(async () => {
+          if (submission === 1) {
+            throw Object.assign(new Error("Stop submit timed out"), {code: "HOST_TIMEOUT"});
+          }
+          return submission === 2 ? retryTicket.promise : followingRetry.promise;
+        });
+      },
+      inspectPatternTransport: () => serialize(async () => {
+        if (inspectRetry) {
+          inspectRetry = false;
+          return retryInspection.promise;
+        }
+        return engagedTransportStatus();
+      }),
+    });
+    const rendered = render(<App initialState={ready} runtimeFactory={() => session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await publishRunning();
+    await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+    await waitFor(() => expect(transportPhase()).toBe("playing"));
+
+    vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
+    try {
+      fireEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+      await flushAsyncTurns();
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      await flushAsyncTurns();
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]);
+      expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+
+      const message = `Still-current Stop retry failed during ${stage}`;
+      const error = Object.assign(new Error(message), {code: "HOST_TIMEOUT"});
+      if (stage === "submission") {
+        await act(async () => retryTicket.reject(error));
+      } else {
+        inspectRetry = true;
+        await act(async () => retryTicket.resolve({
+          sessionId: requests[1]!.sessionId,
+          commandId: requests[1]!.commandId,
+          submit: "accepted",
+          status: engagedTransportStatus({
+            phase: "awaiting_audio", transportEpoch: requests[1]!.expectedEpoch,
+            commandId: requests[1]!.commandId,
+          }),
+        }));
+        await flushAsyncTurns();
+        await act(async () => retryInspection.reject(error));
+      }
+      await flushAsyncTurns();
+      expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(false);
+      fireEvent.click(screen.getByRole("button", {name: "System"}));
+      fireEvent.click(screen.getByText("Developer diagnostics (2)"));
+      const log = screen.getByRole("region", {name: "Developer diagnostics"});
+      expect(within(log).getByText("Reconcile transport play_stop")).toBeTruthy();
+      expect(within(log).getByText(message)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
+
+      // The command remains the current failed identity. Inspection proving
+      // its epoch still absent retries that exact identity, rather than
+      // swallowing the error or inventing another toggle.
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      await flushAsyncTurns();
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toEqual(requests[0]);
+      expect(screen.getByRole("button", {name: "Record"}).hasAttribute("disabled")).toBe(true);
+    } finally {
+      rendered.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
 
 test("disengages the Pattern transport projection when the Runtime leaves ready", async () => {
   const fixture = mutableSampleRuntimeFixture();
@@ -2964,7 +3291,7 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A01 — assigned — Key Q"});
   const pointer = (type: string) => {
@@ -3062,9 +3389,10 @@ test("a Project that opens with an interrupted recording asks once whether to ke
   await userEvent.click(within(region).getByRole("button", {name: "Close"}));
   // A revision change within the same open never asks again.
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   await flushAsyncTurns();
   expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
 });
@@ -3089,9 +3417,10 @@ test("Decide later leaves the recording in the Sequence recovery list", async ()
   await userEvent.click(within(region).getByRole("button", {name: "Decide later"}));
   expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
   expect(apply).not.toHaveBeenCalled();
   expect(discard).not.toHaveBeenCalled();
@@ -3252,9 +3581,10 @@ test("recovery refusal retains its full diagnostic envelope across mode navigati
   render(<App initialState={ready} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  // Refresh authority lives in the Sequence SETUP layer.
+  // Manual refresh is available in SETUP > Playback details.
   await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
-  await userEvent.click(screen.getByRole("button", {name: "Refresh authority"}));
+  await userEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  await userEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
   await userEvent.click(await screen.findByRole("button", {name: "Recover original Pattern"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toBe("Creator could not apply that request. Try again. Details are in Developer diagnostics."));
@@ -3310,17 +3640,20 @@ test("Sample mode sets and restores the selected Pad's colour through Truth", as
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const padA01 = () => screen.getByRole("button", {name: /^Pad A01 /});
   expect(padA01().getAttribute("data-pad-colour")).toBe("1");
+  selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   expect(controls.getByTestId("pad-colour-source").textContent).toBe("BASS default");
 
+  selectSamplePage("Pad");
   await userEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
   await waitFor(() => expect(padA01().getAttribute("data-pad-colour")).toBe("2"));
   expect(requests).toEqual([{slot: 0, colour: 2, expectedRevision: 3}]);
   expect(controls.getByTestId("pad-colour-source").textContent).toBe("Custom colour");
   // The stored override is not sent again.
+  selectSamplePage("Pad");
   await userEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
   expect(requests).toHaveLength(1);
 
@@ -3357,9 +3690,11 @@ test("a Pad colour queued behind another names the revision that commit left", a
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   // Two choices before either renders: the second queues behind the first.
+  selectSamplePage("Pad");
   fireEvent.click(controls.getByRole("button", {name: "MELODIC colour"}));
   fireEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
   await waitFor(() => expect(requests).toHaveLength(2));
@@ -3419,9 +3754,10 @@ test("a grid edit queued behind a Pad colour shows both committed changes", asyn
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   // Queue both before the first commit renders. Pointer events drive the
   // component's gesture mapping; this does not claim native input acceptance.
+  selectSamplePage("Pad");
   fireEvent.click(screen.getByRole("button", {name: "MELODIC colour"}));
   fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
   const lane = document.querySelector('.sequence-grid-row[data-pad="0"] .sequence-grid-lane')!;
@@ -3450,7 +3786,8 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
   render(<App initialState={readyAtFixtureRevision} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Pad");
   const controls = within(screen.getByRole("region", {name: "Pad colour"}));
   await userEvent.click(controls.getByRole("button", {name: "VOCAL colour"}));
   await controls.findByRole("alert");
@@ -3459,9 +3796,11 @@ test("a refused Pad colour is reported and the Pad keeps its Truth colour", asyn
   expect(fixture.revision).toBe(3);
   // The refusal belongs to A01: it is not shown under another Pad's controls.
   await userEvent.click(screen.getByRole("button", {name: /^Pad A02 /}));
+  selectSamplePage("Pad");
   expect(within(screen.getByRole("region", {name: "Pad colour"})).queryByRole("alert"))
     .toBeNull();
   await userEvent.click(screen.getByRole("button", {name: /^Pad A01 /}));
+  selectSamplePage("Pad");
   expect(within(screen.getByRole("region", {name: "Pad colour"})).getByRole("alert"))
     .toBeTruthy();
 });
@@ -3486,19 +3825,22 @@ test("Delete cancels a pending import and ignores its late completion", async ()
   const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
   await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("pending.wav"));
   await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
   await commitLongSourceSelection();
   await waitFor(() => expect(importSignal).toBeDefined());
+  // Delete here belongs to the retained long-source dialog; the pages are inert.
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   await screen.findByRole("button", {name: "Pad A01 — empty — Key Q"});
   expect(requests).toEqual([{slot: 0, expectedRevision: 3}]);
   await act(async () => lateImport.resolve({committedRevision: 5,
     runtimeRevision: 5, runtimePublished: true, snapshotError: null}));
   expect(fixture.revision).toBe(4);
-  expect(screen.queryByText("Asset 33333333")).toBeNull();
+  expect(screen.queryByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeNull();
+  selectSamplePage("Pad");
   expect(screen.getByRole("button", {name: "Delete Pad A01"}).hasAttribute("disabled")).toBe(true);
 });
 
@@ -3510,7 +3852,8 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   await screen.findByText("Creator could not save the sound on this device.", {selector: "[role=alert] p"});
   // #1680: the alert names no code; Developer diagnostics keeps it.
@@ -3522,7 +3865,7 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   expect(deleteLog.getByText("Delete Pad")).toBeTruthy();
   expect(deleteLog.getByText("IO_ERROR")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
-  expect(screen.getByText("Asset 33333333")).toBeTruthy();
+  expect(screen.getByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
 });
@@ -3570,13 +3913,17 @@ function preStopFixture(order: string[]) {
 
 async function performPadMutation(kind: PreStopMutation, container: HTMLElement) {
   if (kind === "delete") {
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
   } else if (kind === "reset") {
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
     await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
   } else if (kind === "mute") {
+    selectSamplePage("Playback");
     await userEvent.click(screen.getByRole("button", {name: "Mute"}));
   } else {
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("replace.wav"));
     await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
@@ -3590,7 +3937,7 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio stopped commits without a Runtime s
   const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual([kind]));
   expect(screen.queryByText("That can't be done right now.")).toBeNull();
@@ -3603,19 +3950,20 @@ test.each(PRE_STOP_MUTATIONS)("%s with audio running stops the voice before comm
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await runAudio();
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   await performPadMutation(kind, container);
   await waitFor(() => expect(order).toEqual(["stop", kind]));
 });
 
 
-test("Edit beside Delete moves focus into the selected Pad's controls", async () => {
+test("Trim exposes the selected Pad inputs directly without a redundant Edit button", async () => {
   const fixture = sampleRuntimeFixture();
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await screen.findByText("Asset 33333333");
-  await userEvent.click(screen.getByRole("button", {name: "Edit Pad A01"}));
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  expect(screen.queryByRole("button", {name: "Edit Pad A01"})).toBeNull();
+  await userEvent.click(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}));
   expect(document.activeElement).toBe(screen.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}));
 });
 
@@ -3635,12 +3983,13 @@ test("Delete invalidates a decoding source and discards its eventual result", as
     const {container} = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-    await screen.findByText("Asset 33333333");
+    await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
     await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("decoding.wav"));
     await waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
     await screen.findByText("Decoding long source…");
+    selectSamplePage("Pad");
     await userEvent.click(screen.getByRole("button", {name: "Delete Pad A02"}));
     await waitFor(() => expect(fixture.revision).toBe(4));
     expect(screen.queryByText("Decoding long source…")).toBeNull();
@@ -3662,6 +4011,7 @@ test("Delete waits for the selected Pad inspection to match the current Project 
   };
   const props = {session: fixture.session, filePickIntent: {current: () => {}}, dispatch: vi.fn()};
   const view = render(<SampleSurface {...props} state={state} />);
+  selectSamplePage("Pad");
   const remove = screen.getByRole("button", {name: "Delete Pad A01"});
   expect(remove.hasAttribute("disabled")).toBe(true);
   await userEvent.click(remove);
@@ -3753,4 +4103,372 @@ test("recovery Open Sequence after a refused Keep leaves System with the take re
   expect(await screen.findByRole("button", {name: "Recover original Pattern"})).toBeTruthy();
   expect(apply).toHaveBeenCalledExactlyOnceWith({sessionId: "interrupted-session", destinationPatternId: null});
   expect(discard).not.toHaveBeenCalled();
+});
+
+
+test("Sample pages keep their selection across Pad, Bank and System changes", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Playback");
+  expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: /^Pad A02 /}));
+  await screen.findByRole("button", {name: "Add Sample to Pad A02"});
+  expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
+  expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name: "Playback"}).getAttribute("aria-current")).toBe("page");
+  await userEvent.click(screen.getByRole("button", {name: "Bank B"}));
+  await screen.findByRole("button", {name: "Add Sample to Pad B02"});
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  expect(screen.queryByRole("navigation", {name: "Sample pages"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+  expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name: "Playback"}).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("button", {name: "Add Sample to Pad B02"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name: "Trim"}).getAttribute("aria-current")).toBe("page");
+});
+
+test("changing Sample page cancels an unfinished pointer preview without committing it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const runAudio = controlledSampleAudio(fixture.session);
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  const clear = vi.spyOn(fixture.session, "clearSamplePreview");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
+  selectSamplePage("Playback");
+  const volume = screen.getByRole("slider", {name: "Pad A01 Volume"});
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+  fireEvent.pointerDown(volume, {pointerId: 31});
+  fireEvent.change(volume, {target: {value: "-3.2"}});
+  await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+  // A second input changes page before the first pointer is released.
+  selectSamplePage("Tone / EQ");
+  await waitFor(() => expect(clear).toHaveBeenCalledWith(0));
+  expect(update).not.toHaveBeenCalled();
+  expect(screen.getByRole("slider", {name: "Pad A01 Tone"})).toBeTruthy();
+  fireEvent.pointerUp(window, {pointerId: 31});
+  expect(update).not.toHaveBeenCalled();
+  selectSamplePage("Playback");
+  expect((screen.getByRole("slider", {name: "Pad A01 Volume"}) as HTMLInputElement).value).toBe("0");
+});
+
+test("trim editing before audio activation previews visually without a refused Host audition", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  const start = await screen.findByRole("slider", {name: /^Pad A01 Start —/});
+  fireEvent.pointerDown(start, {pointerId: 55});
+  fireEvent.change(start, {target: {value: "2"}});
+  expect((start as HTMLInputElement).value).toBe("2");
+  expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("180");
+  expect(preview).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  fireEvent.keyDown(start, {key: "Escape"});
+  fireEvent.pointerUp(window, {pointerId: 55});
+  expect((start as HTMLInputElement).value).toBe("0");
+  expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("0");
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.revision).toBe(3);
+});
+
+test("a rejected trim preview restores both screens and cannot commit on late release", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const runAudio = controlledSampleAudio(fixture.session);
+  const preview = vi.spyOn(fixture.session, "setSamplePreview")
+    .mockRejectedValueOnce(new Error("preview refused"));
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  const start = await screen.findByRole("slider", {name: /^Pad A01 Start —/});
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+  fireEvent.pointerDown(start, {pointerId: 52});
+  fireEvent.change(start, {target: {value: "2"}});
+  expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("180");
+  await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByTestId("sample-overview-outside").getAttribute("width")).toBe("0"));
+  expect((start as HTMLInputElement).value).toBe("0");
+  fireEvent.pointerUp(window, {pointerId: 52});
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.revision).toBe(3);
+});
+
+async function enterEncoderSample(fixture: ReturnType<typeof mutableSampleRuntimeFixture>) {
+  const runAudio = controlledSampleAudio(fixture.session);
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await userEvent.click(screen.getByRole("button", {name: /^Pad A01 —/}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Encoder 3 — Pitch"})).toHaveProperty("disabled", false));
+  runAudio();
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+}
+
+test("Sample encoders preview together, fine-adjust and save one Pad change after rest", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const update = vi.fn(async (request: Parameters<CreatorSampleRuntimeSession["updatePad"]>[0]) => {
+    fixture.playbacks.set(request.slot, {...request.playback});
+    fixture.revision += 1;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  });
+  fixture.session.updatePad = update;
+  await enterEncoderSample(fixture);
+  vi.useFakeTimers();
+  try {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp", shiftKey: true});
+    await act(async () => {await Promise.resolve();});
+    expect(document.querySelector('.encoder-readbacks [data-encoder="3"]')?.textContent).toContain("0.1 st");
+    fireEvent.click(screen.getByRole("button", {name: "Pad Sound"}));
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 1 — Pad Volume"}), {key: "ArrowDown"});
+    await act(async () => {vi.advanceTimersByTime(399);});
+    expect(update).not.toHaveBeenCalled();
+    await act(async () => {vi.advanceTimersByTime(1); for (let i = 0; i < 40; i++) await Promise.resolve();});
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0]![0].playback).toMatchObject({pitchCents: 10, gainMillidb: -1000});
+    expect(fixture.playbacks.get(0)).toMatchObject({pitchCents: 10, gainMillidb: -1000});
+  } finally {vi.useRealTimers();}
+});
+
+test.each(["page", "Sample subpage", "Pad", "System", "Esc", "blur"])("%s navigation cancels unsubmitted Sample encoder edits", async (boundary) => {
+  const fixture = mutableSampleRuntimeFixture();
+  const update = vi.fn(fixture.session.updatePad);
+  fixture.session.updatePad = update;
+  const clear = vi.fn(fixture.session.clearSamplePreview);
+  fixture.session.clearSamplePreview = clear;
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  await enterEncoderSample(fixture);
+  vi.useFakeTimers();
+  try {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp"});
+    await act(async () => {await Promise.resolve();});
+    expect(preview).toHaveBeenCalledTimes(1);
+    if (boundary === "page") fireEvent.click(screen.getByRole("button", {name: "Project"}));
+    else if (boundary === "Sample subpage") selectSamplePage("Tone / EQ");
+    else if (boundary === "Pad") fireEvent.click(screen.getByRole("button", {name: /^Pad A02 —/}));
+    else if (boundary === "System") fireEvent.click(screen.getByRole("button", {name: "System"}));
+    else if (boundary === "Esc") fireEvent.keyDown(window, {key: "Escape"});
+    else fireEvent.blur(window);
+    await act(async () => {vi.advanceTimersByTime(400); for (let i = 0; i < 40; i++) await Promise.resolve();});
+    expect(update).not.toHaveBeenCalled();
+    expect(clear).toHaveBeenCalledWith(0);
+    expect(fixture.playbacks.get(0)!.pitchCents).toBe(0);
+  } finally {vi.useRealTimers();}
+});
+
+// Real IndexedDB requests read the stored value; only their success delivery
+// to the consumer is deferred. Other Host settings keep their normal reads.
+function deferMonitorPreferenceReads() {
+  const pending: (() => void)[] = [];
+  const get = IDBObjectStore.prototype.get;
+  const spy = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementation(function (this: IDBObjectStore, key) {
+    const request = get.call(this, key);
+    if (key !== "monitor-volume.v1") return request;
+    let notify: typeof request.onsuccess = null;
+    Object.defineProperty(request, "onsuccess", {
+      configurable: true,
+      get: () => notify === null ? null : (event: Event) => {
+        const callback = notify!;
+        pending.push(() => callback.call(request, event));
+      },
+      set: (callback: typeof request.onsuccess) => {notify = callback;},
+    });
+    return request;
+  });
+  return {pending, restore: () => spy.mockRestore()};
+}
+
+test("output-volume restore visibly gates musical input until the same session restores zero", async () => {
+  const factory = new IDBFactory();
+  await writeMonitorVolumePreference(0, factory);
+  const reads = deferMonitorPreferenceReads();
+  vi.stubGlobal("indexedDB", factory);
+  const fixture = mutableSampleRuntimeFixture();
+  const publishRunning = controlledSampleAudio(fixture.session);
+  const activate = vi.spyOn(fixture.session, "activateAudio");
+  const trigger = vi.spyOn(fixture.session, "trigger").mockImplementation(async (slot, velocity, source) =>
+    ({sequence: 1, slot, velocity, source}));
+  const setMonitorVolume = vi.fn();
+  const requestTransport = vi.fn();
+  Object.assign(fixture.session, sequenceSessionStubs(), {
+    monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume,
+    requestPatternTransport: requestTransport,
+    inspectPatternTransport: async () => engagedTransportStatus({playing: false}),
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(reads.pending).toHaveLength(1));
+    const pad = screen.getByRole("button", {name: /^Pad A01 —/});
+    // This fails on the previous consumer: the musical Pad looks available
+    // even though activateAudio will silently refuse its first gesture.
+    expect(pad).toHaveProperty("disabled", true);
+    expect(screen.getByRole("status", {name: "Output volume restore status"}).textContent)
+      .toBe("Restoring output volume…");
+    expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
+    expect(screen.getByRole("button", {name: /^Play\/Stop/})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Record"})).toHaveProperty("disabled", true);
+    fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+    fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    expect(activate).not.toHaveBeenCalled();
+    expect(trigger).not.toHaveBeenCalled();
+    expect(requestTransport).not.toHaveBeenCalled();
+    expect(setMonitorVolume).not.toHaveBeenCalled();
+
+    await act(async () => {reads.pending.shift()!();});
+    await waitFor(() => expect(setMonitorVolume).toHaveBeenCalledExactlyOnceWith(0));
+    expect(screen.queryByRole("status", {name: "Output volume restore status"})).toBeNull();
+    expect(pad).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: /^Play\/Stop/})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "Record"})).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", {name: "Encoder 4 — Output Volume"})).toHaveProperty("disabled", false);
+
+    // jsdom cannot provide browser-trusted activation. Use the established
+    // running-audio seam for the far-side musical admission after restore.
+    publishRunning();
+    fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+    await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
+    expect(trigger.mock.calls[0]![0]).toBe(0);
+    expect(trigger.mock.calls[0]![2]).toBe("keyboard");
+    expect(pad.getAttribute("data-outcome")).toBe("admitted");
+    fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    expect(fixture.revision).toBe(3);
+  } finally {
+    rendered.unmount();
+    await act(async () => {for (const notify of reads.pending.splice(0)) notify();});
+    reads.restore();
+    vi.unstubAllGlobals();
+  }
+});
+
+test("output-volume restore from a retired session cannot unlock its replacement", async () => {
+  const factory = new IDBFactory();
+  await writeMonitorVolumePreference(30, factory);
+  const reads = deferMonitorPreferenceReads();
+  vi.stubGlobal("indexedDB", factory);
+  const first = mutableSampleRuntimeFixture();
+  const second = mutableSampleRuntimeFixture();
+  const firstVolume = vi.fn();
+  const secondVolume = vi.fn();
+  Object.assign(first.session, {monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume: firstVolume});
+  Object.assign(second.session, {monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume: secondVolume});
+  let restart!: (state: RuntimeHostState) => void;
+  first.session.subscribeHostState = (listener) => {restart = listener; return () => {};};
+  const sessions = [first.session, second.session];
+  let created = 0;
+  const rendered = render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  try {
+    await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(reads.pending).toHaveLength(1));
+    await writeMonitorVolumePreference(0, factory);
+    await act(async () => restart({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+    await waitFor(() => expect(created).toBe(2));
+    await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(reads.pending).toHaveLength(2));
+    await act(async () => {reads.pending.shift()!();});
+    expect(firstVolume).not.toHaveBeenCalled();
+    expect(secondVolume).not.toHaveBeenCalled();
+    expect(screen.getByRole("status", {name: "Output volume restore status"}).textContent)
+      .toBe("Restoring output volume…");
+    expect(screen.getByRole("button", {name: /^Pad A01 —/})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Encoder 4 — Output Volume"})).toHaveProperty("disabled", true);
+    await act(async () => {reads.pending.shift()!();});
+    await waitFor(() => expect(secondVolume).toHaveBeenCalledExactlyOnceWith(0));
+    expect(firstVolume).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status", {name: "Output volume restore status"})).toBeNull();
+    expect(screen.getByRole("button", {name: /^Pad A01 —/})).toHaveProperty("disabled", false);
+  } finally {
+    rendered.unmount();
+    await act(async () => {for (const notify of reads.pending.splice(0)) notify();});
+    reads.restore();
+    vi.unstubAllGlobals();
+  }
+});
+
+test("ENC4 restores device volume, remains available in System and changes no Project Truth", async () => {
+  const factory = new IDBFactory();
+  vi.stubGlobal("indexedDB", factory);
+  try {
+    await writeMonitorVolumePreference(24, factory);
+    const fixture = mutableSampleRuntimeFixture();
+    const setMonitorVolume = vi.fn();
+    Object.assign(fixture.session, {monitorVolume: () => 24, monitorDestination: () => null, setMonitorVolume});
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(setMonitorVolume).toHaveBeenCalledWith(24));
+    const output = screen.getByRole("button", {name: "Encoder 4 — Output Volume"});
+    await waitFor(() => expect(output).toHaveProperty("disabled", false));
+    fireEvent.keyDown(output, {key: "ArrowDown", shiftKey: true});
+    expect(setMonitorVolume).toHaveBeenLastCalledWith(23);
+    await userEvent.click(screen.getByRole("button", {name: "System"}));
+    expect(screen.getByRole("button", {name: /^Encoder 1 — unassigned/})).toHaveProperty("disabled", true);
+    fireEvent.keyDown(output, {key: "ArrowDown"});
+    expect(setMonitorVolume).toHaveBeenLastCalledWith(22);
+    expect(await readMonitorVolumePreference(factory)).toBe(22);
+    expect(fixture.revision).toBe(3);
+    expect(fixture.playbacks.get(0)!.gainMillidb).toBe(0);
+  } finally {vi.unstubAllGlobals();}
+});
+
+
+test("Undo cancels the Sample turn before restoring history instead of saving the preview", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const order: string[] = [];
+  const update = vi.fn(fixture.session.updatePad);
+  fixture.session.updatePad = update;
+  fixture.session.clearSamplePreview = async () => {order.push("cancel"); return true;};
+  const undo = vi.fn(async () => {
+    order.push("undo"); fixture.revision += 1;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  });
+  Object.assign(fixture.session, {inspectAuthoringHistory: async () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
+    undoLabel: "Import sample", redoLabel: "", disabledReason: ""}), undoAuthoring: undo, redoAuthoring: vi.fn()});
+  await enterEncoderSample(fixture);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"}).classList.contains("is-lit")).toBe(true));
+  vi.useFakeTimers();
+  try {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp"});
+    await act(async () => {for (let i = 0; i < 10; i++) await Promise.resolve();});
+    fireEvent.keyDown(window, {code: "KeyZ", ctrlKey: true});
+    await act(async () => {for (let i = 0; i < 40; i++) await Promise.resolve(); vi.advanceTimersByTime(400);});
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(order.indexOf("cancel")).toBeLessThan(order.indexOf("undo"));
+    expect(update).not.toHaveBeenCalled();
+    expect(fixture.revision).toBe(4);
+  } finally {vi.useRealTimers();}
+});
+
+test("Project encoder selection does not open a Project until explicit OPEN", async () => {
+  const summaries = [listedSummary, {...listedSummary, projectId: "44444444-4444-4444-8444-444444444444"},
+    {...listedSummary, projectId: "55555555-5555-4555-8555-555555555555"}];
+  const open = vi.fn(async () => ({}));
+  const fixture = runtimeFixture({listLocalProjects: async () => summaries, openProject: open});
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Open Project 11111111"})).toHaveProperty("disabled", false));
+  const before = open.mock.calls.length;
+  const select = screen.getByRole("button", {name: "Encoder 1 — Select Project"});
+  await waitFor(() => expect(select).toHaveProperty("disabled", false));
+  await act(async () => {
+    fireEvent.keyDown(select, {key: "ArrowUp"});
+    fireEvent.keyDown(select, {key: "ArrowUp"});
+  });
+  expect(Array.from(document.querySelectorAll(".project-card"), (card) => [card.getAttribute("aria-label"), card.getAttribute("aria-pressed")])).toEqual([["Select Project 11111111", "false"], ["Select Project 44444444", "false"], ["Select Project 55555555", "true"]]);
+  expect(open).toHaveBeenCalledTimes(before);
+  await userEvent.click(screen.getByRole("button", {name: "Open Project 55555555"}));
+  await waitFor(() => expect(open).toHaveBeenCalledTimes(before + 1));
 });

@@ -40,7 +40,7 @@ function renderSurface(recovery = false, options: {
 } = {}) {
   const callbacks = {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
-    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(),
+    onCreatePattern: vi.fn(), onSettingsChange: vi.fn(), onSettingsPreview: vi.fn(),
     onResizePattern: vi.fn(), onDoubleUpPattern: vi.fn(), onCopyPattern: vi.fn(),
     onToggleMetronome: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
@@ -48,21 +48,43 @@ function renderSurface(recovery = false, options: {
     onEditModeChange: vi.fn(), onEdit: vi.fn(),
     onSelectionChange: vi.fn(), onVelocityChange: vi.fn(),
   };
-  render(<SequenceTouchWorkspace project={project}
-    transport={options.transport ?? initialPatternTransportState}
-    bank={0} snap="1/16"
-    editMode="note" selection={[]} defaultVelocity={100}
-    projectionRefreshing={options.projectionRefreshing ?? false}
-    metronomeOn={false}
-    state={{
+  const props: Parameters<typeof SequenceTouchWorkspace>[0] = {
+    project, transport: options.transport ?? initialPatternTransportState,
+    bank: 0, snap: "1/16", editMode: "note", selection: [], defaultVelocity: 100,
+    projectionRefreshing: options.projectionRefreshing ?? false, metronomeOn: false,
+    state: {
       ...initialSequenceState,
       recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
         bars: 1, reason: "interrupted", eventCount: 3}] : [],
       phase: recovery ? "recovery" : "stopped",
       ...options.state,
-    }} {...callbacks} />);
-  return callbacks;
+    }, ...callbacks,
+  };
+  const view = render(<SequenceTouchWorkspace {...props} />);
+  return {...callbacks,
+    update: (changes: Partial<typeof props>) => view.rerender(<SequenceTouchWorkspace {...props} {...changes} />),
+  };
 }
+
+test.each([{name: "BPM", field: "bpm", value: "132"},
+  {name: "Swing", field: "swingPercent", value: "61"}])(
+  "$name shares a draft, cancels it, and clears it before committing once", ({name, field, value}) => {
+    const callbacks = renderSurface();
+    openSetup();
+    const slider = screen.getByRole("slider", {name});
+    fireEvent.pointerDown(slider, {pointerId: 1});
+    fireEvent.change(slider, {target: {value}});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({[field]: Number(value)});
+    expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(slider, {key: "Escape"});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({[field]: null});
+    fireEvent.pointerUp(window, {pointerId: 1});
+    expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+    fireEvent.change(slider, {target: {value}});
+    fireEvent.pointerUp(slider);
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({[field]: null});
+    expect(callbacks.onSettingsChange).toHaveBeenCalledExactlyOnceWith({[field]: Number(value)});
+  });
 
 test("hardware Sequence overview is read-only and the touch workspace owns editing", () => {
   const onRecord = vi.fn();
@@ -174,7 +196,8 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
   expect(onRecover).toHaveBeenCalledWith(expect.anything(), null);
   fireEvent.click(within(touch).getByRole("button", {name: "Discard"}));
   expect(onDiscard).toHaveBeenCalledTimes(1);
-  fireEvent.click(within(touch).getByRole("button", {name: "Refresh authority"}));
+  fireEvent.click(within(touch).getByText("Playback details", {selector: "summary"}));
+  fireEvent.click(within(touch).getByRole("button", {name: "Refresh playback"}));
   expect(onRefresh).toHaveBeenCalledTimes(1);
 
   fireEvent.click(screen.getByRole("button", {name: "Record"}));
@@ -277,6 +300,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
         runtimeGeneration: 1, transportEpoch: 1, originFrame: 0,
         runtimeFrame: 0, observedAtMilliseconds: 0,
         commandId: "command-1", publicationPending: false, error: null,
+        currentPatternId: null, pendingSwitch: null,
       },
     }}
     state={initialSequenceState}
@@ -357,6 +381,7 @@ const transportStatus = (overrides: Partial<PatternTransportStatus>): PatternTra
     observedAtMilliseconds: 0,
     commandId: null,
     publicationPending: false,
+    currentPatternId: null, pendingSwitch: null,
     error: null,
     ...overrides,
   },
@@ -410,18 +435,18 @@ test("EDIT is the default layer and SETUP swaps the grid for the settings", () =
   expect(sequence.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
 });
 
-test("‹ › step through the Patterns and wait for Stop", () => {
+test("the touch picker directly selects a Pattern and preserves its identity/count", () => {
   const stopped = renderSurface(false, {state: {selectedPatternId: project.patterns[1]!.patternId}});
   const stepper = screen.getByTestId("sequence-pattern");
   expect(stepper.getAttribute("data-pattern-id")).toBe(project.patterns[1]!.patternId);
   expect(stepper.textContent).toContain("GROOVE / 02");
   expect(stepper.textContent).toContain("2/2");
-  expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
-  fireEvent.click(screen.getByRole("button", {name: "Previous Pattern"}));
+  fireEvent.click(screen.getByRole("button", {name: "Choose Pattern"}));
+  fireEvent.click(screen.getByRole("button", {name: "GROOVE / 01"}));
   expect(stopped.onSwitch).toHaveBeenCalledWith(project.patterns[0]!.patternId);
 });
 
-test("the Pattern stepper is disabled while the transport plays", () => {
+test("the Pattern picker is disabled while the transport plays", () => {
   renderSurface(false, {transport: {
     ...initialPatternTransportState,
     sessionId: "session-1",
@@ -429,10 +454,10 @@ test("the Pattern stepper is disabled while the transport plays", () => {
       engaged: true, playing: true, recording: false, phase: "idle",
       runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
       observedAtMilliseconds: 0, commandId: null, publicationPending: false, error: null,
+      currentPatternId: null, pendingSwitch: null,
     } satisfies PatternTransportStatus,
   }});
-  expect(screen.getByRole("button", {name: "Next Pattern"}).hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("button", {name: "Previous Pattern"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", {name: "Choose Pattern"}).hasAttribute("disabled")).toBe(true);
 });
 
 // #1823: BARS, DOUBLE UP and COPY act on the selected Pattern in SETUP.
@@ -500,4 +525,62 @@ test("BARS, DOUBLE UP and COPY are disabled while recording", () => {
   for (const name of ["Length 2 bars", "Double Up Pattern", "Copy Pattern"]) {
     expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(true);
   }
+});
+
+
+test("Pattern picker cancellation and selecting the current Pattern preserve the view", () => {
+  const callbacks = renderSurface();
+  const trigger = screen.getByRole("button", {name: "Choose Pattern"});
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", {name: "Choose Pattern"});
+  expect(dialog.querySelectorAll("select, input[type='checkbox']")).toHaveLength(0);
+  fireEvent.keyDown(dialog, {key:"Escape"});
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(callbacks.onSwitch).not.toHaveBeenCalled();
+  fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("button", {name: "GROOVE / 01"}));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(callbacks.onSwitch).not.toHaveBeenCalled();
+});
+
+
+test.each(["Project", "Pattern", "recording"] as const)(
+  "%s transition cancels a held timing draft before a late release", (change) => {
+    const callbacks = renderSurface();
+    openSetup();
+    const slider = screen.getByRole("slider", {name: "BPM"});
+    fireEvent.pointerDown(slider, {pointerId: 88});
+    fireEvent.change(slider, {target: {value: "132"}});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({bpm: 132});
+    if (change === "Project") callbacks.update({project: {...project,
+      projectId: "44444444-4444-4444-8444-444444444444", bpm: 88}});
+    else if (change === "Pattern") callbacks.update({state: {...initialSequenceState,
+      selectedPatternId: project.patterns[1]!.patternId}});
+    else callbacks.update({transport: transportStatus({playing: true, recording: true})});
+    expect(callbacks.onSettingsPreview).toHaveBeenLastCalledWith({bpm: null});
+    expect((screen.getByRole("slider", {name: "BPM"}) as HTMLInputElement).value)
+      .toBe(change === "Project" ? "88" : "120");
+    fireEvent.pointerUp(window, {pointerId: 88});
+    expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+  });
+
+test("normal Sequence setup keeps manual playback refresh in details", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  // jsdom does not model closed-details accessibility visibility; assert
+  // disclosure ownership here and actual visibility in the browser journey.
+  expect((screen.getByRole("button", {name: "Refresh playback"})
+    .closest("details") as HTMLDetailsElement).open).toBe(false);
+  expect(screen.queryByRole("button", {name: "Retry playback"})).toBeNull();
+  fireEvent.click(screen.getByText("Playback details", {selector: "summary"}));
+  fireEvent.click(screen.getByRole("button", {name: "Refresh playback"}));
+  expect(callbacks.onRefresh).toHaveBeenCalledTimes(1);
+});
+
+test("failed Sequence offers playback recovery directly even in the editing page", () => {
+  const callbacks = renderSurface(false, {state: {errorCode: "IO_ERROR"}});
+  fireEvent.click(screen.getByRole("button", {name: "Retry playback"}));
+  expect(callbacks.onRefresh).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("alert")).toBeTruthy();
 });

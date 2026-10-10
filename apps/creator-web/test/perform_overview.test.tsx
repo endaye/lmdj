@@ -1,10 +1,11 @@
-import {render, screen} from "@testing-library/react";
+import {act, render, screen} from "@testing-library/react";
 import {expect, test, vi} from "vitest";
 
 import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
 import {PerformOverview, performPosition} from "../src/components/perform_overview";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import {initialPatternTransportState} from "../src/state/pattern_transport_state";
+import {initialPerformState, reducePerform, type PerformAction, type PerformState} from "../src/state/perform_state";
 
 const project = {
   projectId: "11111111-1111-4111-8111-111111111111",
@@ -41,6 +42,7 @@ test("playing, the counter and progress follow the transport frames", () => {
         engaged: true, playing: true, recording: false, phase: "idle",
         runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
         observedAtMilliseconds: 1_000, commandId: null, publicationPending: false, error: null,
+        currentPatternId: null, pendingSwitch: null,
       } satisfies PatternTransportStatus,
     }} />);
     expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 02 · BEAT 02 / 04");
@@ -58,4 +60,38 @@ test("a tick from a longer Pattern is held inside the new length", () => {
   expect(performPosition(null, 384)).toBe(0);
   expect(performPosition(200, 384)).toBe(200);
   expect(performPosition(1_500, 384)).toBe(383);
+});
+
+test("a pending launch preserves the acknowledged slot and clears on failure or session reset", () => {
+  let value: PerformState = {...initialPerformState({state: "unconfigured", config: null, error: null}),
+    lastLaunchAck: {requestId: "first", patternSlot: 0, effectiveTick: 1920}};
+  const listeners = new Set<() => void>();
+  const controller = {
+    getState: () => value,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    connect: vi.fn(), leave: vi.fn(),
+  };
+  const update = (action: PerformAction) => act(() => {
+    value = reducePerform(value, action);
+    for (const listener of listeners) listener();
+  });
+  const view = render(<PerformOverview state={state} controller={controller} />);
+  const cue = () => screen.getByLabelText("Pattern launch cue").textContent;
+  expect(cue()).toBe("ACKNOWLEDGED SLOT 01 · NOTHING QUEUED");
+  update({type: "pending-launch", pending: {requestId: "next", patternSlot: 1,
+    targetTick: 3840, claimed: false}});
+  expect(cue()).toBe("ACKNOWLEDGED SLOT 01 → QUEUED SLOT 02");
+  update({type: "error", message: "Launch was refused"});
+  update({type: "pending-launch", pending: null});
+  expect(cue()).toBe("ACKNOWLEDGED SLOT 01 · NOTHING QUEUED");
+  update({type: "session-neutral"});
+  expect(cue()).toBe("LAST LAUNCH — · NOTHING QUEUED");
+  expect(view.container.querySelector("button,input,select,[tabindex]" )).toBeNull();
+  view.unmount();
+  expect(listeners.size).toBe(0);
+  expect(controller.connect).not.toHaveBeenCalled();
+  expect(controller.leave).not.toHaveBeenCalled();
 });

@@ -41,7 +41,8 @@ Creator Web Host 与 Web Runtime Host 各自的 ZIP、checksum 和 detached chec
 总计六项资产。两个 Host 保持独立 SemVer；一个 Product Release 不把它们合并成同一 Host。
 
 Release assets 是签名交付输入，部署状态属于外部 Host Site。Creator 固定目标
-`https://lmdj-creator.netlify.app/`，Runtime 固定目标 `https://lmdj-runtime.netlify.app/`；两条
+`https://creator.lmdj.workers.dev/`，Runtime 固定目标 `https://lab.lmdj.workers.dev/`（旧
+`lmdj-creator` / `lmdj-runtime` Netlify 站点已于 2026-09-08 获授权删除）；两条
 manual-only workflow 的授权、Environment、Site、凭据、evidence 与 exact prior rollback 独立。
 Release publication 不自动触发任一部署，一个 Host 的部署也不证明另一个 Host 已部署。
 历史 `1.0.40.0` tag、Release 与部署保持不可变；新六资产 profile 只适用于后续分配的 Build。

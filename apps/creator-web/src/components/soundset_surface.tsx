@@ -1,10 +1,10 @@
 import {userMessage} from "../state/error_messages";
 import {useReportFailure} from "../runtime/diagnostics_context";
-import {useCallback, useEffect, useReducer} from "react";
+import {useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState} from "react";
 
 import {BankSelector} from "./bank_selector";
 import type {Bank} from "../state/creator_state";
-import {bankName, slotAddress} from "../state/view_model";
+import {PAD_MATRIX_ORDER, bankName, slotAddress} from "../state/view_model";
 import {
   initialSoundSetState,
   reduceSoundSet,
@@ -99,30 +99,10 @@ function slotIsEmpty(slot: Readonly<SoundSetSlot>): boolean {
   return slot.artifact === null;
 }
 
-// AUDITION ATTACHMENT POINT (S11-D5, issue #773 phase 2, byte path #799).
-//
-// This surface plays nothing. Auditioning a Sound Set needs a Facade path that
-// carries Set Store bytes to the audio engine, and there is none: the four
-// operations this surface uses carry no audio, `soundset.audition` resolves and
-// gates a playable Artifact but hands back an envelope with no samples, and
-// `sample.preview.set` addresses a Project Pad, which an uninstalled Set slot
-// is not. Reaching into Set Store bytes from the Host would put playback
-// outside the Application Facade, so this surface deliberately stops at
-// metadata.
-//
-// When that path exists, an audition control attaches at exactly two places and
-// needs no restructuring:
-//
-//   1. the set-level demo, at the `soundset-demo` paragraph in the inspect
-//      panel below — `selected.demo` already carries the Artifact reference,
-//      and `selected.hasDemo` is on every listing summary;
-//   2. one occupied slot, at the `soundset-slot-sound` span in the slots list —
-//      `slot.artifact` and `slot.audio` are already there, and `slotIsEmpty`
-//      already decides which rows may carry a control at all.
-//
-// Both sites render a bare `<span>` today precisely so that adding a `<button>`
-// is the whole change. Add the control to those two spans; do not add a third
-// surface, and do not reach past the Facade for bytes.
+// Audition uses the existing Facade-backed Host byte path; installing remains
+// an independent authoring operation with an explicit target and confirmation.
+type SoundSetStep = "browse" | "details" | "target" | "review";
+const STEPS: readonly SoundSetStep[] = ["browse", "details", "target", "review"];
 
 export function SoundSetSurface({
   session,
@@ -141,6 +121,28 @@ export function SoundSetSurface({
     targetBank: activeBank,
   });
   const busy = selectBusy(state);
+  const [step, setStep] = useState<SoundSetStep>(
+    initialState.preview !== null ? "review" : initialState.selected !== null ? "details" : "browse");
+  const surfaceRef = useRef<HTMLElement | null>(null);
+  const previousStep = useRef(step);
+  const listReturn = useRef<{identity: string; scrollTop: number} | null>(null);
+  useLayoutEffect(() => {
+    if (previousStep.current === step) return;
+    previousStep.current = step;
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    if (step === "browse" && listReturn.current !== null) {
+      const saved = listReturn.current;
+      const control = Array.from(surface.querySelectorAll<HTMLButtonElement>("[data-inspect-set]"))
+        .find((item) => item.dataset.inspectSet === saved.identity);
+      control?.focus({preventScroll:true});
+      const touch = surface.closest<HTMLElement>('[data-testid="touch-workspace"]');
+      if (touch !== null) touch.scrollTop = saved.scrollTop;
+    } else {
+      surface.scrollIntoView?.({block:"start", inline:"nearest"});
+      surface.querySelector<HTMLElement>('[aria-current="step"]')?.focus({preventScroll:true});
+    }
+  }, [step]);
 
   const refresh = useCallback(async () => {
     if (session === undefined) return;
@@ -158,12 +160,15 @@ export function SoundSetSurface({
 
   const inspect = async (summary: Readonly<SoundSetSummary>) => {
     if (session === undefined) return;
+    listReturn.current = {identity:summary.manifestSha256,
+      scrollTop:surfaceRef.current?.closest<HTMLElement>('[data-testid="touch-workspace"]')?.scrollTop ?? 0};
     dispatch({type: "inspecting"});
     try {
       dispatch({
         type: "inspected",
         inspect: await session.inspectSoundSet(identityOf(summary)),
       });
+      setStep("details");
     } catch (error) {
       dispatch({type: "failed", error: recordedFailure(error)});
     }
@@ -183,7 +188,7 @@ export function SoundSetSurface({
           : {...identityOf(state.selected), slotIndex},
       );
     } catch (error) {
-      dispatch({type: "failed", error: recordedFailure(error)});
+      dispatch({type: "audition-failed", error: recordedFailure(error)});
     }
   };
 
@@ -196,7 +201,7 @@ export function SoundSetSurface({
     try {
       await session.stopSoundSetAudition();
     } catch (error) {
-      dispatch({type: "failed", error: recordedFailure(error)});
+      dispatch({type: "audition-failed", error: recordedFailure(error)});
     }
   };
 
@@ -211,6 +216,7 @@ export function SoundSetSurface({
           bankId: state.targetBank,
         }),
       });
+      setStep("review");
     } catch (error) {
       dispatch({type: "failed", error: recordedFailure(error)});
     }
@@ -252,17 +258,24 @@ export function SoundSetSurface({
   const collisions = state.preview?.collisions ?? [];
 
   return (
-    <section className="soundset-surface" aria-label="Sound Sets">
+    <section ref={surfaceRef} className="soundset-surface" aria-label="Sound Sets" data-step={step}>
       <header className="soundset-header">
         <h2>Sound Sets</h2>
-        <button
+        {step === "browse" ? <button
           type="button"
           disabled={session === undefined || busy}
           onClick={() => { void refresh(); }}
         >
           Refresh Catalog
-        </button>
+        </button> : <span className="soundset-step-label">{step.toUpperCase()}</span>}
       </header>
+      <nav className="soundset-steps" aria-label="Sound Set steps">
+        {STEPS.map((value) => <button type="button" key={value}
+          aria-current={step === value ? "step" : undefined}
+          disabled={busy || (value !== "browse" && state.selected === null) ||
+            (value === "review" && state.preview === null && state.receipt === null)}
+          onClick={() => setStep(value)}>{value[0]!.toUpperCase() + value.slice(1)}</button>)}
+      </nav>
 
       {state.catalogAvailable === false ? (
         <p className="soundset-offline" role="status">
@@ -284,9 +297,10 @@ export function SoundSetSurface({
         </div>
       )}
 
+      {step === "browse" ? <>
       <ul className="soundset-list" aria-label="Catalog Sound Sets">
         {state.sets.map((summary) => (
-          <li key={summary.manifestSha256}>
+          <li key={summary.manifestSha256} data-selected={state.selected?.manifestSha256 === summary.manifestSha256 ? "true" : undefined}>
             <h3>{summary.name}</h3>
             <dl>
               <dt>Publisher</dt>
@@ -311,6 +325,7 @@ export function SoundSetSurface({
             <button
               type="button"
               disabled={busy}
+              data-inspect-set={summary.manifestSha256}
               onClick={() => { void inspect(summary); }}
             >
               Inspect {summary.name}
@@ -341,13 +356,12 @@ export function SoundSetSurface({
         </ul>
       )}
 
-      {selected === null ? null : (
+      </> : null}
+
+      {selected === null || step === "browse" ? null : (
         <section className="soundset-inspect" aria-label={`Sound Set ${selected.name}`}>
           <header>
             <h3>{selected.name}</h3>
-            <button type="button" onClick={() => dispatch({type: "closed"})}>
-              Close
-            </button>
           </header>
           <p>{selected.publisher} · {selected.license.spdxId}</p>
           {selected.license.attribution === "" ? null : (
@@ -355,7 +369,8 @@ export function SoundSetSurface({
               Attribution: {selected.license.attribution}
             </p>
           )}
-          {/* Audition attachment point 1 of 2: the set-level demo. */}
+          {step === "details" ? <>
+          <button type="button" disabled={busy} onClick={() => setStep("target")}>Choose install target</button>
           {selected.demo === null ? null : (
             <p className="soundset-demo">
               <button
@@ -378,7 +393,7 @@ export function SoundSetSurface({
                   // action the user can take on the target Pad.
                   <span className="soundset-slot-empty">Empty in this Set</span>
                 ) : (
-                  /* Audition attachment point 2 of 2: one occupied slot. */
+                  /* Empty slots deliberately have no audition control. */
                   <span className="soundset-slot-sound">
                     <button
                       type="button"
@@ -403,9 +418,10 @@ export function SoundSetSurface({
           >
             Stop audition
           </button>
+          </> : null}
 
-          <div className="soundset-target">
-            <h4 id="soundset-target-bank">Install target Bank</h4>
+          {step === "target" ? <fieldset className="soundset-target" disabled={busy} aria-labelledby="soundset-target-bank">
+            <legend id="soundset-target-bank">Installation destination</legend>
             <p>Choose where to install. This does not change the playing Bank.</p>
             <BankSelector
               purpose="install"
@@ -424,9 +440,9 @@ export function SoundSetSurface({
             {projectRevision === null ? (
               <p role="status">Open a Project to install a Sound Set.</p>
             ) : null}
-          </div>
+          </fieldset> : null}
 
-          {state.preview === null ? null : (
+          {step !== "review" || state.preview === null ? null : (
             <div className="soundset-preview">
               <p role="status">
                 {state.preview.proposed.length} of 16 slots map into Bank{" "}
@@ -434,10 +450,12 @@ export function SoundSetSurface({
                 {collisions.length} occupied{" "}
                 {collisions.length === 1 ? "Pad" : "Pads"} in the way
               </p>
-              <div className="pad-grid" aria-label="Proposed Bank mapping">
-                {padPlan.map((outcome) => (
+              <figure className="soundset-map" aria-label="Proposed Bank mapping">
+                <figcaption>READ-ONLY · Bank {bankName(state.preview.bankId as Bank)}</figcaption>
+                <div className="soundset-map-cells">
+                {PAD_MATRIX_ORDER.map((localPad) => padPlan[localPad]!).map((outcome) => (
                   <div
-                    className="pad"
+                    className="soundset-map-cell"
                     key={outcome.pad}
                     data-plan={outcome.plan}
                   >
@@ -450,15 +468,17 @@ export function SoundSetSurface({
                         : outcome.plan === "collision"
                           ? "Occupied"
                           : outcome.plan === "empty-in-set"
-                            ? "Empty in Set — Pad unchanged"
-                            : "Not in this mapping"}
+                            ? "Empty source"
+                            : "Unmapped"}
                     </span>
                   </div>
                 ))}
-              </div>
+                </div>
+                <p className="soundset-map-legend">Install · Occupied · Empty source — Pad unchanged · Unmapped — not in this mapping</p>
+              </figure>
 
               {collisions.length === 0 ? null : (
-                <fieldset className="soundset-policy">
+                <fieldset className="soundset-policy" disabled={busy}>
                   <legend>Occupied Pads</legend>
                   {(["keep", "replace"] as const).map((policy) => (
                     <label key={policy}>
@@ -481,6 +501,9 @@ export function SoundSetSurface({
                 </fieldset>
               )}
 
+              <button type="button" disabled={busy} onClick={() => { void preview(); }}>
+                Refresh mapping
+              </button>
               <button
                 type="button"
                 disabled={!selectCanInstall(state) || projectRevision === null}
@@ -494,7 +517,7 @@ export function SoundSetSurface({
             </div>
           )}
 
-          {state.receipt === null ? null : (
+          {step !== "review" || state.receipt === null ? null : (
             <p className="soundset-receipt" role="status">
               Installed {state.receipt.installed.length}{" "}
               {state.receipt.installed.length === 1 ? "Pad" : "Pads"} into Bank{" "}

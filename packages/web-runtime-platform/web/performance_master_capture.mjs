@@ -233,9 +233,12 @@ function createPerformanceMasterCaptureController({
 }
 
 export async function createPerformanceMasterTap(
-  {context, processorUrl},
+  {context, processorUrl, destination = context.destination},
   internal = {},
 ) {
+  if (destination !== context.destination && destination?.context !== context) {
+    throw new TypeError("Perform master tap destination must share its context");
+  }
   const url = new URL(processorUrl, globalThis.location?.href);
   if (globalThis.location && url.origin !== globalThis.location.origin) {
     throw new TypeError("Perform master tap URL must be same-origin");
@@ -249,10 +252,10 @@ export async function createPerformanceMasterTap(
     channelCountMode: "explicit",
     channelInterpretation: "discrete",
   });
-  node.connect(context.destination);
+  node.connect(destination);
   return createPerformanceMasterCaptureController({
     node,
-    destination: context.destination,
+    destination,
     timers: internal.timers ?? globalThis,
     stopAckTimeoutMs:
       internal.stopAckTimeoutMs ?? STOP_ACK_TIMEOUT_MS,

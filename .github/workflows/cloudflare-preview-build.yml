@@ -4,6 +4,49 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
+    # Canonical copy with per-entry evidence: scripts/ci/cloudflare_preview_paths.json
+    # (tests/build/ci_cloudflare_preview_paths_test.py proves set equality).
+    paths:
+      - apps/docs-site/**
+      - products/lmdj/**
+      - packages/*/module.json
+      - apps/*/module.json
+      - providers/**
+      - contracts/**
+      - apps/creator-web/CHANGELOG.md
+      - apps/web-runtime-host/CHANGELOG.md
+      - docs/release-evidence/release-intents.json
+      - docs/release-evidence/changelog-publications.json
+      - docs/governance/version-management.md
+      - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+      - docs/quality/2026-08-07-stage7-creator-editor-acceptance.md
+      - docs/quality/2026-08-12-stage7-creator-editor-review.md
+      - docs/plans/2026-08-07-lmdj-stage7-creator-editor.md
+      - docs/plans/2026-08-13-lmdj-stage7-review-remediation.md
+      - docs/design/2026-08-07-lmdj-stage7-creator-editor-design.md
+      - docs/design/2026-08-13-lmdj-stage7-review-remediation-design.md
+      - docs/release-evidence/2026-08-13-stage7-remediation-canary.md
+      - docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md
+      - tools/release/**
+      - tools/canary/preparation.py
+      - tools/canary/records.py
+      - tests/build/release_changelog_site_test.py
+      - scripts/docs-site.sh
+      - scripts/architecture-portal.sh
+      - .github/workflows/cloudflare-preview-build.yml
+      - .github/workflows/cloudflare-preview-publish.yml
+      - .github/workflows/cloudflare-preview-budget.yml
+      - scripts/ci/cloudflare_preview_artifact.py
+      - scripts/ci/cloudflare_preview_download.py
+      - scripts/ci/cloudflare_preview_publish.py
+      - scripts/ci/cloudflare_preview_budget.py
+      - scripts/ci/cloudflare_preview_paths.json
+      - tests/build/ci_cloudflare_preview_artifact_test.py
+      - tests/build/ci_cloudflare_preview_download_test.py
+      - tests/build/ci_cloudflare_preview_publish_test.py
+      - tests/build/ci_cloudflare_preview_workflow_test.py
+      - tests/build/ci_cloudflare_preview_paths_test.py
+      - tests/build/ci_cloudflare_preview_budget_test.py
 
 permissions:
   contents: read
@@ -14,16 +57,32 @@ concurrency:
 
 jobs:
   build:
-    # Empty by default. Setting this repository variable is a separately
-    # budgeted pilot activation, not an effect of merging this workflow.
+    # Empty by default. Setting this repository variable plus an approved
+    # monthly budget is a separately authorized activation, not an effect of
+    # merging this workflow.
     if: >-
       github.repository == 'endaye/lmdj' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != '' &&
-      github.head_ref == vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH
+      vars.CLOUDFLARE_PREVIEW_ENABLED == '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      # Read-only run metadata for the fail-closed monthly budget gate.
+      actions: read
     steps:
+      - name: Check out only the trusted budget gate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: gate
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Admit within the approved monthly budget
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_PREVIEW_BUDGET_MINUTES: ${{ vars.CLOUDFLARE_PREVIEW_BUDGET_MINUTES }}
+        run: python3 gate/scripts/ci/cloudflare_preview_budget.py --gate
       - name: Check out trusted artifact tooling
         uses: actions/checkout@v6
         with:

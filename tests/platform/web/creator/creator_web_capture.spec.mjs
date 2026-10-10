@@ -1,3 +1,4 @@
+import {showSampleDetails, showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {clickCreatorSystemAction, selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {readFile} from "node:fs/promises";
@@ -21,7 +22,7 @@ const GRANTED = "creator-capture-chromium";
 const DENIED = "creator-capture-denied-chromium";
 
 // Read the revision from the exported report, the same way the Sample Editor
-// spec does: the upper screen's .overview-facts carries Rev in every mode, so a DOM probe
+// spec does: System's persistent .creator-details-facts carries Rev in every mode, so a DOM probe
 // cannot verify a commit made from the Sample surface.
 async function expectProjectRevision(page, expectedRevision) {
   const downloadPromise = page.waitForEvent("download");
@@ -141,7 +142,7 @@ async function importV1SampleProject(page) {
   await (await chooserPromise).setFiles(sampleBundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".overview-display > .overview-facts"))
+  await expect(page.locator(".creator-details-facts"))
     .toContainText("Rev46", {timeout: 120_000});
 }
 
@@ -173,6 +174,7 @@ async function selectPadWithoutPress(page, label) {
 // the panel's own elapsed readout is what makes this deterministic rather than
 // sleeping for a wall-clock duration.
 async function recordAtLeast(page, padLabel, seconds) {
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: `${padLabel} Pad Capture`});
   await expect(panel).toBeVisible();
@@ -210,6 +212,7 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await enterSampleEditor(page);
 
   await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A01 Pad Capture"});
   await expect(panel).toBeVisible();
@@ -320,7 +323,9 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
-  // the Pad reads assigned and the Sample Editor renders its waveform.
+  // the Pad reads assigned; Trim exposes the saved waveform after returning
+  // from the Pad management page that opened capture.
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   const truth = await inspectProjectTruth(page);
@@ -329,7 +334,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   // Chromium exposes the deterministic mono fake-capture file to the
   // AudioWorklet as a stereo MediaStream. Assert that far-side observation
   // before using the resulting two-channel PCM width in the artifact check.
-  await expect(page.locator(".selected-sample"))
+  await expect(await showSampleDetails(page))
     .toContainText(`48 kHz · Stereo · ${selectedFrames.toLocaleString("en-US")} frames`);
   expect(truth.project.assets[assignedAsset].artifact.byte_length)
     .toBe(44 + selectedFrames * 2 * 2);
@@ -483,9 +488,9 @@ test("armed Pad capture excludes the transport journal and never stops playback"
     .toBeVisible({timeout: 30_000});
 
   // The report's revision pair settles once the Stop's authority refresh has
-  // landed; the upper screen's Rev is that refresh's far side.
+  // landed; System details' Rev is that refresh's far side.
   const settledTruth = await inspectProjectTruth(page);
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText(
+  await expect(page.locator(".creator-details-facts")).toContainText(
     `Rev${settledTruth.project_revision}`, {timeout: 30_000});
 
   const evidence = await report(page);
@@ -598,6 +603,7 @@ test("a denied microphone permission is explicit and retryable", async ({page}, 
   await enterSampleEditor(page);
 
   await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A01 Pad Capture"});
   await expect(panel).toBeVisible();

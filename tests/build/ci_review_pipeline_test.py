@@ -509,6 +509,53 @@ class PipelineTests(unittest.TestCase):
             coverages=pipeline.coverage_inventory(self.directory), changed_paths=paths,
             collector=collector, trusted_config=trusted))
 
+    def test_t2_review_scope_is_the_deterministic_path_floor(self):
+        # Mapping every T2 review to test:full made each main batch run every
+        # suite (#1955). T2 adds nothing; the path floor decides alone.
+        result, identity, paths, collector, trusted = self.t2_fallback_fixture()
+        history, _ = pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths,
+                                              collector=collector, trusted_config=trusted)
+        review = history["attempts"][-1]["review"]
+        policy = test_scope.load_policy(ROOT)
+        identity = dict(identity, backend="glm", run_id=1, run_attempt=1)
+        expected = {("docs/plans/x.md",): ["test:none"],
+                    ("apps/creator-web/src/app.ts",): ["test:creator", "test:portal"],
+                    ("scripts/ci/review_pipeline.py",): ["test:full"]}
+        for changed, labels in expected.items():
+            with self.subTest(paths=changed):
+                publication = review_scope.prepare_publication(policy, identity, changed_paths=list(changed),
+                                                               review=review)
+                self.assertEqual(publication["labels"], labels)
+
+    def test_capture_maps_engine_internal_error_to_runtime_failure(self):
+        # Regression for production run 37971385452: the engine reported its
+        # native internal_error for an unclassified provider fault, the
+        # adaptation map lacked the class, and capture voided a completed GLM
+        # fallback review as a pipeline failure.
+        result, identity, paths, collector, trusted = self.t2_fallback_fixture()
+        result["attempts"][0]["error_class"] = "internal_error"
+        pipeline.save(self.directory / "context.json", {"identity": identity, "changed_paths": paths})
+        pipeline.save(self.directory / "t2-result.json", result)
+        (self.directory / "t2-input.json").write_text(
+            (ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text(encoding="utf-8"), encoding="utf-8")
+        with mock.patch.object(pipeline, "trusted_collector", return_value=collector), \
+                mock.patch.object(pipeline, "trusted_config", return_value=trusted):
+            self.capture("deepseek")
+        history = pipeline.read(self.directory / "history.json")
+        self.assertEqual([(a["backend"], a["status"], a["error_class"]) for a in history["attempts"]],
+                         [("deepseek", "failed", "runtime_failure"), ("glm", "reviewed", None)])
+        self.assertEqual(pipeline.read(self.directory / "review.json")["summary"], "Reviewed.")
+
+    def test_every_engine_error_class_maps_into_the_v2_vocabulary(self):
+        # The adaptation and the engine-failure path share one table; any
+        # engine class left unmapped must fail closed, never void a chain.
+        for engine_class in sorted(t2._SAFE_ERROR_CLASSES):
+            with self.subTest(engine_class=engine_class):
+                mapped = pipeline.ENGINE_FAILURE_CLASSES.get(engine_class, engine_class)
+                self.assertIn(mapped, review_scope.ERRORS,
+                              f"why: engine class {engine_class} has no v2 history mapping; "
+                              "remedy: extend ENGINE_FAILURE_CLASSES")
+
     def test_capture_provider_warnings_show_finite_categories_and_exact_attempt(self):
         result, identity, paths, collector, trusted = self.t2_warning_fixture()
         result["attempts"][0]["provider_warnings"] = sorted(t2.PROVIDER_WARNING_CATEGORIES)
@@ -666,7 +713,7 @@ class PipelineTests(unittest.TestCase):
                     assert history["schema"] == review_scope.HISTORY_SCHEMA_V2
                     assert collector == pipeline.collector_witness(document)
                     assert persisted_config == trusted and coverage["complete"] is True
-                    assert review["test_scope"]["labels"] == ["test:full"]
+                    assert review["test_scope"]["labels"] == ["test:none"]
                     assert publication["status"] == "reviewed" and publication["publication"]["review"] == {{"summary": review["summary"], "findings": review["findings"]}}
                 marker = codec.encode_history(history)
                 assert codec.decode_history(marker) == history

@@ -27,8 +27,8 @@
 | #1905 连续提交刷新丢失 | 已交付：#1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`，Issue closed。旧代码从滞后 render ref 取刷新 revision，现由 grid/structure/colour 成功路径传入已提交 revision；回归测试检查最终画面，不重复修复。 |
 | #1868 导入偶发停在 0 B | Issue open；尚未建立原因。R2 是条件调查，只有验收受阻时才启用，不把一次重跑通过当作修复。 |
 | #1873 测试问题仍未修 | 已反证：Issue closed，相关修复已合并；本 Goal 不重做。 |
-| #1822 其余控件映射已有决定 | 部分批准：owner 已批准下文 I1a 的 Sequence ENC1/↑/↓；原 T6 的 ENC2–4/左右键已交付。其余页与粗调步长仍待决定；Issue open。 |
-| 400 ms 规则已正式确认 | 原计划 T6 仍记录为待 owner 确认的提案。D2 需正式决定，不把实现存在当作产品批准。 |
+| #1822 其余控件映射已有决定 | 部分批准：I1a 的 Sequence 导航已交付；owner 进一步批准 I1b/I1c 的逐页 ENC1–3 与固定 ENC4 监听音量、SHIFT 细调。其他页方向键仍待决；Issue open。 |
+| 400 ms 规则已正式确认 | 本计划初始调查时尚未确认；owner 现已批准立即预览、400 ms 合并 authoring 保存及明确的取消边界，见 I1b/I1c。 |
 | D01/D03/D04 图示能力均可直接接线 | 部分反证：下文 C0 核实了可复用的复制与 Sample 编辑；MASTER、独立滤波参数、live Mute/Solo 及电平投影仍需 producer 工作。D01 自动保存/复制语义已有决定，不重新设计。 |
 | 合并/自动化可代替人工验收 | 不成立。原验收台账保留真实输入、听感、辅助技术和生命周期缺口；A1/A2 分开记录。 |
 
@@ -38,18 +38,18 @@
 
 ## Progress and order
 
-| ID | 工作 | 初始状态 | 依赖/完成条件 |
+| ID | 工作 | 当前状态 | 依赖/完成条件 |
 | --- | --- | --- | --- |
 | P0 | 本后续计划 | 已合并 | #1906 → `cd5fbf9290fba820139bfdc9d41b9166a7fe333b`；独立接管评审及修订已验证。 |
 | R1 | #1905 连续 authoring 提交刷新 | 已合并 | #1907 → `0b333d3bd5c1a935a6c481551fb4d885abc78dc8`；red/green、完整 Creator lane、Portal 与当前头独立评审通过；不代表 A2 人工验收。 |
 | C0 | D2–D5 当前能力及决定边界调查 | 调查已记录 | 绑定下文 inspected revision；只更新本计划，不批准产品提案或实现 I Task。 |
 | R2 | #1868 导入稳定性条件调查 | 待调查（条件项） | 若阻碍本计划验收，保留 trace 并定位请求/读取/提交边界；证实原因后独立修复。 |
-| D1 | #1822 统一原则及逐页映射 | 原则与 Sequence 已确认；其余页待决 | owner 已选统一原则；再逐页确定具体参数、当前 Pad、边界/播放/录音/SHIFT 行为。 |
-| D2 | 400 ms 连续旋钮提交 | 待 owner 决策 | 确认预览、提交、取消、离页、锁定、Undo 语义。 |
-| D3 | D01 Save / Save As / 未保存提示 | 语义已有决定；界面待确认 | 保留自动保存、复制新身份并打开副本的已交付流程；确认 D01 命名/入口，不能引入虚构的未保存状态。 |
+| D1 | #1822 统一原则及逐页映射 | 全页旋钮已确认；其余方向键待决 | 执行 I1b/I1c；固定 ENC4 监听音量，ENC1–3 随页/组变化，SHIFT 细调。 |
+| D2 | 400 ms 连续旋钮提交 | 已确认；待完成实现验收 | Sample/BPM 立即预览、停转 400 ms 合并一次保存/Undo，脱离目标或取消时丢弃未提交预览；Perform 保持效果并按 HOLD 离页释放。 |
+| D3 | D01 Save / Save As / 未保存提示 | 已确认 DUPLICATE；现有入口符合 | owner 于 2026-10-10 选择 DUPLICATE；现有按钮复制新身份并打开副本，继续自动保存；整体 A1/A2 验收仍待完成。 |
 | D4 | D03 audition/trim/browse/assign 与细调 | 能力已调查；待 owner 决策 | 区分已实现的导入/替换/trim 与新 Assign、参数细调入口；明确目标、单位/步长、Undo/Redo、取消/失败。 |
 | D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 能力已调查；待 owner 决策 | 明确作用域、Truth 与 live 状态归属、真实投影及 DSP 能力；producer 与 consumer 分 Task。 |
-| I1–I5 | D1–D5 的对应实现 | 等待相应决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
+| I1–I5 | D1–D5 的对应实现 | I1b 已合并；I1c 适配中；其他范围等决定 | 每项批准后追加精确 Task，再实施和合并；不得以此编号捆成一个大 PR。 |
 | A1 | 四页自动化与视觉核对 | 待验收 | I1–I5 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
 | V1 | 协调版本结算与 snapshot | 待实施 | 读取最终 manifests 和版本政策；独立 version Task、Portal snapshot 及合并后 provenance。 |
@@ -132,6 +132,525 @@ committed head 的完整 Creator lane；最终头仍重新执行该 lane。
 **Version Management:** Creator 新交互积累 MINOR debt，留待本计划 V1 协调
 结算；本 Task 不分配 Product Build。**Documentation impact: required** —
 `/hosts/creator-web/`、`/platform/input/`，同时记录新的产品决定。
+
+## I1b — Web monitoring output producer
+
+Owner 已批准 [三个页面旋钮与固定监听音量](../prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)，
+并分别确认 400 ms 取消边界、本设备音量记忆和 Perform 效果保持。
+该决定替代 D1 原则中上排统一视图/SHIFT 粗调；D2 的产品语义已确认，
+实现与验收尚未完成。其他页方向键、D3/D4/D5 其余问题不从此推导。
+
+**Premise dispositions before implementation:** fresh main 与 Task base 为
+`502932e345b621abc5533431e61adf0d0253a189`。#1909 已交付 Sequence 导航，
+不重做；#1822 open，唯一开放 PR #1904 为 audition 计划。检查 Runtime Session
+的实际 bootstrap、capture factory 与 processor-failure 分支：正常路径直达
+AudioContext destination，失败恢复调用固定直连 destination 的 bridge；同一
+注册表中 `registerAudioNode`/`startAudioWorklet` 已接入 tap，为正向控制。
+Session 完整公开返回对象无监听音量/目标接口；Creator metronome 同样直达
+destination。故监听 gain producer 仍缺失，须同步保持恢复路径和 capture 边界。
+
+**Behaviour:** Session 提供 0–100 的监听音量（默认 100）、读取值与 Host
+监听目标。可在 activation 前设置，AudioContext 创建时先应用，再连接任何
+发声路径；运行中短 ramp 平滑调节。master capture 位于 gain 前，tap 故障
+恢复也进入同一 gain；跨 context/无效目的地拒绝，重复恢复不叠加连接。
+关闭后拒绝修改并断开 gain。设备记忆、metronome 路由与旋钮 UI 属于 I1c。
+
+**Declared files:**
+
+- `packages/audio-runtime/include/lmdj/audio/web/realtime_audio_worklet.hpp`
+- `packages/audio-runtime/src/web/realtime_audio_worklet.cpp`
+- `packages/web-runtime-platform/src/bridge.cpp`
+- `packages/web-runtime-platform/src/web-runtime-pre.js`
+- `packages/web-runtime-platform/web/runtime_session.mjs`
+- `packages/web-runtime-platform/web/runtime_types.d.ts`
+- `packages/web-runtime-platform/web/performance_master_capture.mjs`
+- `packages/web-runtime-platform/test/runtime_session.test.mjs`
+- `packages/web-runtime-platform/test/performance_master_capture.test.mjs`
+- `tests/platform/web/audio/realtime_audio_worklet.spec.mjs`
+- `tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs`
+- `apps/docs-site/docs/platform/web-runtime.mdx`
+- `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`
+- `apps/docs-site/diagrams/web-runtime-platform.architecture.json`
+- `apps/docs-site/static/diagrams/web-runtime-platform.html`
+- `apps/docs-site/static/diagrams/web-runtime-platform.svg`
+- `docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md`
+- 本计划。
+
+**Lowest-tier tests and journeys:** Node Session tests bind pre-activation volume,
+normal graph, tap initialization/processor failure, repeat connections, invalid
+input and terminal cleanup to actual producer calls; master-tap controller tests
+assert gain is downstream and batch bytes unchanged. Real rebuilt AudioWorklet
+conformance exercises alternate same-context monitor destination, zero/half/full
+output energy, rejection of cross-context nodes, idempotent fallback and audible
+continuation. Existing activation/recovery/capture journeys remain intact. Run
+Portal check and exact clean-head selected batch-only lanes under issue-done;
+record platform-not-runnable and unperformed physical hearing honestly.
+
+**Version Management:** additive Web Session capability and Web Audio routing
+accumulate Web Platform/Audio Runtime MINOR debt for V1; no Product Build or
+persisted Contract change. **Documentation impact: required** — `/platform/web-runtime/`,
+`/core/modules/web-runtime-platform/`; update the source diagram in the same Task.
+
+**Source-shell fixture correction:** the full Web Host proof reaches the existing
+source-shell activation journey, whose injected AudioContext predates monitoring
+and has no `createGain`, destination or node registration. This fails activation
+at the newly required browser capability, before any lifecycle assertion. Keep
+the failed trace and update only that fake's Web Audio surface; preserve every
+activation, interruption, recovery and cleanup leg and the existing deadlines.
+
+## I1c — Creator contextual encoders (dependent on I1b)
+
+Deliver the approved per-page table, touch parameter groups and visible readback,
+SHIFT fine steps, device-local ENC4 memory, and metronome monitoring routing.
+Sample/BPM follow the approved 400 ms cancel/commit lifecycle; Perform uses owned
+live gestures retained through rest and group switches and released on page exit
+under HOLD. Consumer development base is `deebae1c3c99de1081e71647689bfebff7b83afc`, the
+implemented I1b producer, while fresh main remains
+`502932e345b621abc5533431e61adf0d0253a189`. I1b is independently source-reviewed
+but not merged yet: this dependent branch must be based on its actual squash
+before shipping. Inspection confirms the existing Sample preview/update and
+Perform live/journal operations are reusable; current bindings only serve
+Sequence, ENC4 is Swing, Project selection and FX groups are touch-only, and
+metronome bypasses capture directly to destination. This Task adds consumers;
+it does not reimplement those producer operations or the merged I1a navigation.
+
+**Steps and state boundaries:** trim Start/End use 10 ms per detent (SHIFT one
+source frame), Pitch 1 st (SHIFT 0.1 st), gain 1 dB (SHIFT 0.1 dB), Pan/Tone
+10 units (SHIFT 1), FX 10/1000 (SHIFT 1/1000). BPM remains integer 1 BPM;
+view/list navigation retains one bar/row/item. ENC4 is always one percentage
+point. Bounds reuse Core-valid playback/loop limits; no new units or DSP.
+Sample turns across parameters of the same Pad merge into one 400 ms update;
+no-change turns save nothing. Touch slider commit semantics remain intact.
+Target loss, System, Esc, history and recording/mutation locks cancel rotary
+work before it can submit; sent authoring results retain normal acknowledgement
+and refresh semantics. The current BPM consumer previews readback then uses existing publication on
+save; this is an unfinished acceptance item until the audible preview producer
+and consumer in PR #1929 are implemented. Perform rotary ownership persists through group/rest, shares the existing
+FX gesture when touch and rotary target the same FX, and releases before leave
+through existing HOLD semantics. Host preference restore precedes enabling
+ENC4; later turns win, storage refusal cannot stop monitoring. Metronome enters
+monitor downstream of capture. No alternate ENC4 or undeclared direction keys.
+
+**Declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/runtime/runtime_types.ts`
+- `apps/creator-web/src/runtime/metronome_click.ts`
+- `apps/creator-web/src/state/sample_state.ts`
+- `apps/creator-web/src/state/encoder_input.ts`
+- `apps/creator-web/src/state/sample_encoder.ts` (new)
+- `apps/creator-web/src/state/monitor_volume_preference.ts` (new)
+- `apps/creator-web/src/state/perform_state.ts`
+- `apps/creator-web/src/components/physical_controls.tsx`
+- `apps/creator-web/src/components/pad_surface.tsx`
+- `apps/creator-web/src/components/sample_surface.tsx`
+- `apps/creator-web/src/components/project_surface.tsx`
+- `apps/creator-web/src/components/perform_surface.tsx`
+- `apps/creator-web/src/components/fx_slider_bank.tsx`
+- `apps/creator-web/src/components/overview_display.tsx`
+- `apps/creator-web/src/components/sequence_overview.tsx`
+- `apps/creator-web/src/components/sequence_touch_workspace.tsx`
+- `apps/creator-web/src/components/waveform_editor.tsx`
+- `apps/creator-web/src/components/authoring_history.tsx`
+- `apps/creator-web/src/styles.css`
+- `apps/creator-web/test/hardware_console.test.tsx`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `apps/creator-web/test/sequence_grid_edit.test.tsx`
+- `apps/creator-web/test/sample_encoder.test.ts` (new)
+- `apps/creator-web/test/monitor_volume_preference.test.ts` (new)
+- `apps/creator-web/test/metronome_click.test.ts`
+- `apps/creator-web/test/perform_surface.test.tsx`
+- `apps/creator-web/test/authoring_history.test.tsx`
+- `tests/platform/web/creator/creator_web_sample_editor.spec.mjs`
+- `tests/platform/web/creator/creator_web_sequence_grid.spec.mjs`
+- `tests/platform/web/creator/creator_web_perform.spec.mjs`
+- `tests/platform/web/creator/creator_web_sequence.spec.mjs`
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`
+- `tests/platform/web/creator/creator_web_touch_fit.spec.mjs`
+- `apps/docs-site/docs/hosts/creator-web.mdx`
+- `apps/docs-site/docs/hosts/creator-interactions.mdx`
+- `apps/docs-site/docs/platform/input.mdx`
+- `docs/prd/questions/hardware-control-mapping.md`
+- 本计划。
+
+**Lowest-tier verification:** typed helper tests pin per-parameter bounds,
+fine steps, loop fitting, one merged save, no-change/cancel and stale target
+refusal; IndexedDB tests pin default/corruption, serialized writes and bounded
+restore. Component/controller tests exercise real registration, Project
+selection-only/scroll, Sample cancel boundaries, all six FX/group persistence,
+HOLD-aware leave, SHIFT events, monitor independence and history cancellation.
+Metronome tests assert its actual downstream destination. Packaged browser
+journeys use the real current bindings, explicit OPEN, Sample far-side Truth/
+Undo and cancellation, and monitor preference reload; preserve all existing
+journey legs including SETUP Swing. Check readback/8-row fit at console sizes.
+Recording also covers rotary-to-touch takeover of one FX and verifies Core's
+open-FX count returns to zero before the stopped recording is saved/reopened.
+Run TypeScript, ownership on the staged new files, Portal and the exact clean
+head selected batch lanes; independent full-diff/current-head review remains
+required before squash. Physical knobs/hearing and Safari/iPad remain A2.
+
+**Precommit refresh (2026-10-09):** fresh `origin/main` remains
+`502932e345b621abc5533431e61adf0d0253a189`; no successor delivered the remaining
+I1c bindings. New staged-file ownership tests pass (77), TypeScript passes,
+and the independent new App/Perform group passes (15). The reverse FX handoff
+regression fails before the fix at the second engagement, then passes with
+one matching gesture; the prior grouped Project-selection timing failure is
+retained and corrected by waiting for its actual enabled encoder. Portal passes its 175 tests and 50-route build. All 69 Creator test files / 1,164 tests and TypeScript pass. The clean build/package pass. Packaged Chromium passes the new hardware, Sequence binding, Sample merge/cancel/Undo/preference-reopen and rotary-to-touch Perform recording journeys. The status containment regression passes against the real rendered console and packaged CSS. Earlier browser failures are retained: report export entered System and correctly cancelled a pending turn; default seed Pad targets were unavailable; Truth acknowledgement preceded the history input unlock; zero playback fields are omitted by Core. Tests now observe the actual target, committed Truth, restored full playback and input availability without removing journey legs. Perform save also waits for its WAV binding before inspecting the artifact. The complete exact-head Creator lane is still pending; targeted passes do not replace that shipping obligation.
+
+**Open acceptance finding (independent review, 2026-10-09):** the implemented
+BPM preview updates readback only; playback tempo and metronome follow committed
+Truth after 400 ms. The approved decision did not limit immediate preview to
+readback. D2 is therefore not fully accepted: retain this finding until the
+approved audible runtime tempo preview/clear producer is implemented and
+consumed. The owner's pending playback-position choice is recorded in the
+supplemental plan in PR #1929; it does not narrow the immediate-preview decision. No passing UI test proves
+pre-commit audible tempo preview. The remaining contextual bindings and
+monitoring work continue independently; this finding is not silently excluded.
+
+**Version Management:** Creator MINOR debt and monitoring preference are Host
+state, deferred to V1; no persisted Contract or Product Build allocation.
+**Documentation impact: required** — `/hosts/creator-web/`,
+`/hosts/creator-interactions/`, `/platform/input/`.
+No corresponding Creator/input source diagram exists; update their current
+control tables and retain I1b's shared audio graph. Other product questions
+remain in #1822 and D3–D5.
+
+2026-10-10 consumer integration refresh: monitoring producer #1910 is merged
+as `9119a7f90262e1c8ada92ac6b894f5014a5c0cab`; strict fixture #1915 is merged
+as `864c0f061033a7f0c3488f1908a8817516cd3b62`. Rebase the single consumer Task
+onto that actual main, retaining the newly merged MPC Pad arrangement and
+touch-panel layout. The only textual conflict is in the Creator Portal page:
+retain main's Pad-order paragraph and the consumer's metronome gain routing.
+The refreshed source passes all 69 Vitest files / 1,169 tests and TypeScript.
+Full packaged/browser and physical acceptance remains outstanding. The BPM
+readback still does not preview engine timing; the audible-tempo supplement
+PR #1929 and the owner's playback-position choice remain required.
+
+2026-10-10 Sample integration: rebase onto `1992e258b066152e7d08cf5382bf94d21f1d95d1`,
+including the Sample contextual pages in #1930 and the owner's DUPLICATE decision
+in #1932. Keep all four touch pages and Pad colour management; retain the approved
+independent Trim / Pitch and Pad Sound encoder groups. Touch parameter takeover
+cancels the rotary draft before the touch edit. Switching Sample subpages cancels
+the pending rotary timer and its owned runtime preview before showing the new
+page. A component regression first fails because the old timer saves Pitch after
+leaving Trim; it must pass with no update and restored playback after the full
+400 ms interval. This integration does not implement Assign, new numeric editing,
+or the outstanding audible BPM preview. The integrated tree passes all 69
+Creator test files / 1,174 tests, TypeScript, and the 50-route Portal check.
+The expanded packaged journey retains the original commit, Pad cancellation,
+Undo and device-volume reopen legs and adds the Sample subpage cancellation leg;
+its browser execution and the complete selected Creator lane remain pending.
+A later main refresh is `46df56797265942f760afb253c3e4ad2b3a13c80` (#1934),
+a documentation-only interaction map; it does not implement contextual encoders
+or the remaining audible BPM preview.
+
+## D3 — record the approved DUPLICATE name
+
+Owner 于 2026-10-10 选择「DUPLICATE（推荐，明确表示复制工程）」，保留
+自动保存、复制新身份并打开副本的已有语义。决定见
+[D01 DUPLICATE](../prd/decisions/2026-10-10-creator-project-duplicate-label.md)。
+
+**Refreshed premise:** Task base 与 inspected main 均为
+`864c0f061033a7f0c3488f1908a8817516cd3b62`。D01 的
+`project_surface.tsx` 已显示 DUPLICATE，并用 `onDuplicate` 调用 App 的
+`duplicateProject`：经现有 journey 复制，再打开副本；复制/打开失败保留
+真实结果与可重试入口。9 月 29 日 workflow baseline 已批准自动保存与复制。
+因此没有新的产品实现缺口，不重复修改按钮、存储或失败处理。
+该判断不声称完成整体四页、真机或听感验收。
+
+**Declared files:** 本计划；
+`docs/prd/decisions/2026-10-10-creator-project-duplicate-label.md`。
+**Lowest-tier verification:** 相对链接、源码/回调链与已有决定核对；stage 后
+77-case ownership suite；staged diff check；committed-head docs_static；
+PR body lint、declaration-only 与无 batch lane 的 evidence check。
+**Version Management:** Version impact: none — 产品行为已存在，只记录命名决定。
+**Documentation impact: none** — 只新增产品决策并更新计划，Portal 页面与事实不变。
+
+2026-10-10 Perform integration: refresh onto `08c216647138ef9e1f7824a4a2624f82eef86cce`,
+which includes #1935's Live / Slots / Takes / Replay pages and #1931's Host proof
+result slots. Preserve page state, native pointer capture, navigation refusal
+while a touch FX gesture is open, and recording/replay continuity. Keep the
+approved three main FX and three more encoder mappings, HOLD semantics and
+rotary/touch ownership. Extend the existing touch geometry journey to all
+three main faders without removing any page, hit-area or first-screen assertion.
+The previous complete lane on 4d558259 was stopped for this integration after
+two failures (old-generation window listener retained; final project.inspect
+request timeout in the full Perform capture journey). Logs and traces are
+retained outside the worktree; no full pass or cause of the latter is claimed.
+The encoder cancellation listener must be owned by the Runtime session and
+rebound on replacement, verified by the unchanged packaged recovery journey.
+The resolved integration passes 69 Creator test files / 1,179 tests, including
+FX value retention through Live / Slots / Takes / Replay, TypeScript build,
+77 staged ownership tests, and the 50-route Portal check. The three primary
+faders share one row, preserving their original 44 px hit areas and 80 px
+vertical travel. Packaged geometry, recovery and the complete lane remain
+pending; these component passes do not settle those obligations or audible BPM.
+
+2026-10-10 overview integration: refresh the single consumer Task onto actual
+main `ec15f9adf3ca7c3fd09c06d61b53e0bcdf189fe6`, including #1938 Sequence
+touch controls, #1940 Sound Set navigation and #1942 mode-specific overview.
+Resolve the overview conflict by retaining the opened Project / selected Sample /
+selected Sequence identity, qualified Perform feedback and the System details
+boundary from main, alongside the four approved encoder function/value readbacks.
+Keep the SYSTEM title while its overlay is open and the opened Project identity
+available to assistive technology. Do not restore the removed generic Project
+facts or build metadata to the editor screen. Every existing navigation, history,
+capture and refusal journey remains in the consumer range. The original b07
+complete Creator failure and its 14-view static/Figma comparison remain retained
+outside this worktree; neither is a pass on this integration. This refresh does
+not settle the audible BPM playback-position question, Assign, fine numeric
+editing or the other pending product decisions. Exact integrated verification
+and the original complete Creator lane remain required. The conflict-resolved
+integration passes TypeScript, all 71 Creator component/helper files / 1,209
+tests (173.96 s), and the staged 77-case ownership suite. Portal and the
+committed-head complete Creator obligations still require their own results;
+these component passes do not replace them.
+
+2026-10-10 touch-preview integration: later main
+`4281d5f54dd01ad73c18e876c2119a35b0229e0b` adds #1946's synchronous shared
+touch drafts and rejected-gesture cleanup. Preserve its Project/Pattern/mode
+and recording-lock boundaries, the Sample editor's controlled preview-active
+signal and both sets of existing lifecycle regressions. Keep ENC4 assigned to
+monitoring; do not restore the superseded Swing encoder. Extend the existing
+touch timing journey in the declared `sequence_grid_edit.test.tsx` to verify
+that ENC3's displayed value follows the same touch draft and cancellation as
+the upper screen, without a Truth write. The Sample encoder cancellation
+fixture publishes the running Host state after Project open, rather than only
+changing diagnostics, and asserts that an audible preview actually begins
+before each existing cancellation boundary. Keep the inactive-audio visual
+preview and rejected-preview journeys from main unchanged. This refresh does not provide the
+still-missing audible BPM producer. Retain the preceding ec15 integration
+results as dated evidence; new source verification remains required.
+
+2026-10-10 status/recovery integration: refreshed main
+`42d86bfdf3c74785810ebaa0c5fe3e0e11e6e19f` includes #1947. Preserve its compact
+default-sound recovery, recording ownership notice across modes/System, and
+return-to-Takes Save/Discard workflow alongside I1c's contextual encoders and
+FX gesture ownership. Both sets of existing Perform regressions and both CSS
+blocks remain. Integrate in a separate short-lived worktree while the original
+`bbd4433` complete proof retains its frozen source. That proof is evidence only
+for its original head, and neither #1947's pass nor a clean merge substitutes
+for fresh integrated-head verification. BPM audible preview and outstanding
+product choices remain pending.
+
+2026-10-10 Graphite/font integration: refreshed main
+`d5554ed55f7ebc2d800285715cef79dcfed57c9a` includes #1948. Apply the prepared
+#1947 integration in another isolated worktree, preserving its original frozen
+verification inputs. Resolve the one overlapping CSS append by retaining both
+#1948's compact action/font rules and I1c's encoder readbacks/group controls.
+Keep main's neutral encoder icon, locked Space Grotesk dependency, stage clip,
+font/geometry assertions and late-recovery layout observation unchanged. Preserve
+#1947's recovery/recording workflows and all contextual encoder regressions.
+The original 37-file declaration still bounds this Task; no mapping, DSP,
+deadline, tolerance or unresolved product choice changes. TypeScript, complete
+components at their original timeout, ownership, portal and fresh committed
+Creator evidence remain required on this integrated input. Earlier runs on
+`bbd4433` or `42d86bf` do not establish verification of this tree.
+The integrated source now passes all 72 Creator test files / 1,230 tests at the
+original 20-second case bounds (132.87 seconds), TypeScript, 77 staged ownership
+tests, and the complete 50-route Portal check (82.27 seconds). The product and
+test sources remain identical to those verified inputs; this paragraph records
+terminal results only. Commit and replace the owned draft PR head with an exact
+expected-head lease, retaining the earlier frozen branches and evidence. Fresh
+committed-head browser proof and review, audible BPM preview and the outstanding
+product choices remain incomplete; none of these component/Portal results is
+complete Creator or device acceptance.
+
+2026-10-10 producer integration: refreshed main
+`a2a43cc088ab35e40297e80eecb7ef048923a154` includes the landed-overlay cutoff
+(#1941), Candidate typed-byte proof (#1943), retained transport replay (#1950)
+and matched-frame monitoring proof (#1949). Live PR metadata confirms each
+merged source and introducing SHA. Carry I1c's same 36-file diff into another
+isolated worktree; it applies without conflicts. Preserve all four producer
+deliveries, #1947 recovery/recording and #1948 font/geometry behavior. The
+Foundation immediate-depth-refusal repair remains a separate PR (#1956).
+The earlier e74 Creator entry failed before tests because this owned checkout
+lacked its locked Web test npm dependencies; retain that failed attempt and
+provision each required package from its lockfile before fresh verification.
+No mapping, product decision, deadline or assertion changes. Frozen earlier
+results remain evidence for their own inputs. Verify this integrated source
+before replacing the owned Draft PR head; audible BPM and the unanswered
+product decisions remain pending.
+
+This integrated input passed TypeScript, all 77 staged ownership checks, all
+72 Creator test files / 1,230 cases at their original case bounds (159.87
+seconds), and the complete 50-route Portal check (79.35 seconds). The source
+and tests remain identical to the frozen verified inputs; only this results
+paragraph was appended afterward. Commit the same 36 declared files and update
+the owned Draft PR with an expected-head lease. Original complete Creator
+browser proof, audible BPM preview, current-head review and the unanswered
+product choices remain incomplete.
+
+2026-10-10 stopped-Pattern producer integration: refreshed main is
+`e14084f602448ee2046a9cd64e7dd3bf3bd2e7ea`, containing #1978's native
+stopped-Pattern transport authority repair, #1956's Foundation depth refusal,
+#1966's executable Creator proof build and #1977's VEL-tap regression. Merge
+that actual main into the existing I1c consumer branch without conflicts;
+retain all three shared touch/ENC3 BPM assertions alongside the new VEL test.
+No contextual mapping, commit/cancellation boundary, HOLD rule, bound or
+journey leg changes. The previous complete Creator result on `65b237cd`
+was 112 passed, two failed and 11 skipped; retain its hardware-profile timing
+failure and stopped-Record reconciliation trace as failed evidence. The
+frontend reconciliation repair in #1970 remains an independent unmerged Task,
+so this integration alone does not close that browser failure. Run the
+unchanged complete consumer verification on the new input after coordinating
+the browser/Portal build schedule. Audible BPM preview, physical acceptance,
+current-head review and pending product decisions remain unfinished.
+The newly refreshed interaction manual in main still describes ENC4 as Swing,
+other pages' encoders as unassigned and rotary drafts as surviving page exit.
+Add that existing Portal page to I1c's declaration and correct those current
+source facts in this Task; retain the open audible-BPM finding and the existing
+direction-key decisions. #1980 reorganizes the same handbook by page; retain its
+new layout and anchors while updating the relevant control cards and appendix.
+The earlier 03a integration and both successful Portal checks are retained as
+dated evidence; fresh handbook verification is required. This adds one
+documentation path, no product scope.
+
+The integrated product/test inputs pass all 72 Creator files / 1,231 cases at
+the original 20-second bounds (58.09 s) and TypeScript (1.54 s); all 32 owning
+input hashes remain unchanged through the later handbook-only refresh.
+Staged ownership passes 77 tests (6.03 s), official document validation passes,
+and the final page-organized handbook passes the complete 50-route Portal check
+(51.26 s). Its ConsoleDiagram and 39 anchors remain identical to #1980.
+The final diff contains 37 of 38 declared paths. Record these results and push
+the existing Draft PR; fresh committed-head Creator and independent review are
+still pending. The separate frontend reconciliation repair must be integrated
+before the consumer's complete browser acceptance; its predecessor's passing
+Creator lane is not evidence for this consumer head. Audible BPM and the other
+open product and physical acceptance obligations remain unfinished.
+
+### 2026-10-10 — integrate the merged current-command repair
+
+Fresh protected main is `4dde8e5e6b511c3ae2bd9c310f607f7d6148d2dc`, the actual
+#1970 squash at 09:08:21 UTC. Its authenticated review and complete Creator
+receipt belong to the repair's `46f6877b` input. They are not a pass key for
+this contextual consumer. The preceding #1970-unmerged note is historical.
+
+Merge that main normally into the clean pushed consumer `f2593fd...`; retain
+its live Runtime/Project/session/command guards and all three mounted-App
+late-error/current-error regressions alongside the approved ENC1–3 bindings,
+global ENC4, Sample 400 ms cancellation and Perform HOLD/gesture ownership.
+The merge has no conflicts; it imports the existing repair rather than
+reimplementing it. Main's #1980 page-organized handbook, SVG, anchors and the
+approved contextual-control corrections remain unchanged.
+
+**Integration Task declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/runtime/pattern_transport_actions.ts`
+- `apps/creator-web/test/pattern_transport_actions.test.ts`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `docs/plans/2026-10-10-creator-transport-current-observation.md` (exact main)
+- This plan.
+
+The three additional imported-main paths are already #1970's declared and
+merged files; the consumer diff relative to actual main retains I1c's own
+38-file declaration. Verify the combined full component set at its original
+20-second bounds, TypeScript, exact staged ownership and committed docs_static.
+Current Portal pages, diagrams, projected identities and source-facing facts
+are byte-identical to the completed `f2593fd` Portal inputs; this internal
+current-command repair restores existing semantics, so it adds no new Portal
+fact or fresh full Portal build obligation. Record that comparison explicitly.
+The I1c documentation-impact declaration remains required.
+
+**Version impact:** no new identity allocation; retain the existing Creator
+compatible MINOR debt, absorbing #1970's PATCH repair at Goal V1.
+**Acceptance:** preserve the 65b complete failed run and original bounds.
+After the Conventional integration commit and normal push of the same Draft
+PR, run this consumer's own complete Creator lane when the parent's heavy-run
+window is available. Audible BPM preview, open product choices, current-head
+review, A1 visual comparison and A2 physical/hearing acceptance stay unfinished.
+
+The combined staged source passed all 72 component files / 1,248 tests
+(`npm --prefix apps/creator-web test -- --run`, 61.50 seconds including the
+wrapper, 60.33 seconds reported by Vitest). TypeScript passed in 3.82 seconds;
+the staged scope passed 77 ownership checks in 9.61 seconds. Source and test
+hashes are retained with the staged-tree receipt in
+`encoder-consumer-main-4dde8e5e` outside the worktree. The final plan-only
+results update leaves those tested product inputs unchanged. Committed-head
+docs_static and this consumer's complete Creator proof remain separate
+verification boundaries; the earlier repair's receipt does not satisfy them.
+
+### 2026-10-10 — expose device-volume restore readiness
+
+**Premises:** PR #1936's authenticated exact-head review of
+`367a14daa980e7106789d346023cdfb31837f0e9` found that musical controls can look
+available while device-volume restoration is pending. Fresh main is
+`785d36db27dc44fde7cceb4f6cb6da0956a795e1`; its changes after #1970 are
+documentation reconciliation, not this consumer repair. The old session's
+restore is already fenced by effect cleanup, but the current session's
+`activateAudio` returns false until its preference arrives. Pad and transport
+reachability omit that prerequisite and show no visible pending reason. This
+remaining refusal is confirmed from the actual consumer source. Preserve the
+original 367 complete Creator PASS and its seven browser groups as dated
+evidence; it is not evidence for this subsequent repair.
+
+**Declared files:**
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/components/pad_surface.tsx`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `apps/docs-site/docs/hosts/creator-web.mdx`
+- This plan.
+
+**State boundaries:** show a visible and accessible `Restoring output volume…`
+status. Pad, Play/Record and keyboard/pointer input share the current Runtime
+session's monitor-readiness prerequisite. Temporarily disable musical Pad
+input; other page and authoring controls retain their existing reachability.
+Keep the Runtime's actual phase, restore-before-first-audio, bounded storage
+fallback, remembered zero volume and stale-session cleanup. Do not queue or
+replay a gesture after its browser activation window has expired.
+
+**Lowest-tier verification:** a mounted App regression delays actual
+IndexedDB read-success delivery after storing a device preference. While its
+Runtime/Project are ready, pending status and musical disabled state must be
+observable and a keyboard gesture must not activate or trigger audio. Release
+the same session's read, verify restored zero, restored input reachability and
+a positive musical input through the existing running-audio component seam.
+A replacement-session case releases the old read first and verifies that it
+cannot set the replacement's volume or clear its pending state. Record an
+actual RED failure on unchanged product source before the fix, then GREEN;
+keep the original case bounds. Run affected components, TypeScript, staged
+ownership, Portal and fresh committed-head selected Creator evidence when the
+coordinated resource window allows them. No old pass key satisfies the new
+head's verification or authenticated review.
+
+**Version Management:** compatible Creator PATCH repair absorbed by the
+existing I1c MINOR debt at V1; no manifest or Product Build allocation.
+**Documentation impact: required** — `/hosts/creator-web/`; document the
+visible restoration/input boundary. The existing input diagram does not
+describe this Host preference read, so no new diagram is required. Audible
+BPM, D03/D04, S1 and A1/A2/V1 remain incomplete.
+
+The mounted deferred-IndexedDB regressions first fail on the unchanged 367
+product: the first case reports `disabled` false instead of true at
+`workspace_shell.test.tsx:4317`, and the replacement case cannot find the
+restore status. The first fixed-source attempt passes replacement but fails
+the other case's mistaken `Play` locator; retain that fixture failure. Correct
+the name to the existing `Play/Stop`, restore only the two owned old product
+blobs, and rerun the corrected test: actual RED exit 1 (1.96 s). Restore the
+fixed source with fresh mtimes; the identical corrected test then passes both
+cases (1.98 s). The other 124 cases are unselected by this reduced command,
+not a full component result. Receipts, source/test hashes and all logs remain
+in `consumer-monitor-readiness-repair` outside the worktree. The deferred
+events belong to actual stored `monitor-volume.v1` read requests, not a mock
+preference function. The positive musical admission uses the existing running
+component seam; it does not establish browser-trusted activation or hearing.
+TypeScript first reports TS2683 for the new IndexedDB spy's untyped `this`.
+Add only the erased `this: IDBObjectStore` annotation; TypeScript then passes
+(1.73 s), and both reduced regressions pass again (2.40 s). Keep the original
+type failure and the final test hash alongside the earlier RED/GREEN receipts.
+The repaired input passes all 72 Creator component/helper files and 1,250
+cases (53.56 s wrapper / 53.18 s Vitest) at the original 20-second case bounds.
+All five declared input hashes remain unchanged during that run. Portal also
+passes all 176 checks, current page/diagram validation and the 50-route build
+with internal links (52.33 s); its source guards remain unchanged. The final
+I1c declaration contains 39 unique paths, of which 38 change in the actual PR
+merge-base range. This five-file repair preserves the earlier 367 complete
+Creator result as dated evidence and allocates no identity. The final
+results-only plan update does not change tested product, test or Portal page
+inputs. Staged ownership, committed docs_static, this repair's fresh complete
+Creator and authenticated current-head review remain separate boundaries.
 
 ## P0 — ship this bounded plan
 

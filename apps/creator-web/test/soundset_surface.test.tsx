@@ -200,6 +200,12 @@ function renderSurface(
   );
 }
 
+async function showStep(name: "Browse" | "Details" | "Target" | "Review") {
+  const button = within(screen.getByRole("navigation", {name:"Sound Set steps"})).getByRole("button", {name});
+  await userEvent.click(button);
+  await waitFor(() => expect(button.getAttribute("aria-current")).toBe("step"));
+}
+
 test("the CC-BY-4.0 attribution string is shown on listing and on inspect", async () => {
   const session = fakeSession();
   renderSurface(session);
@@ -249,6 +255,7 @@ test("listing a cached Set with the Catalog unreachable still offers inspect and
   });
 
   // And so is install: the mapping previews and the confirmation is live.
+  await showStep("Target");
   await userEvent.click(
     within(panel).getByRole("button", {name: /Preview mapping into Bank A/}),
   );
@@ -272,6 +279,7 @@ test("a collision cannot be submitted without keep or replace", async () => {
   await userEvent.click(
     await screen.findByRole("button", {name: "Inspect Fixture Foundry CC0"}),
   );
+  await showStep("Target");
   await userEvent.click(
     await screen.findByRole("button", {name: /Preview mapping into Bank A/}),
   );
@@ -315,6 +323,7 @@ test("a mapping with no collision carries no occupied Pad policy at all", async 
   await userEvent.click(
     await screen.findByRole("button", {name: "Inspect Fixture Foundry CC0"}),
   );
+  await showStep("Target");
   await userEvent.click(
     await screen.findByRole("button", {name: /Preview mapping into Bank A/}),
   );
@@ -351,14 +360,41 @@ test("an empty Set slot is never presented as a clear-Pad action", async () => {
   }
   expect(within(slots).queryByText(/clear/i)).toBeNull();
 
+  await showStep("Target");
   await userEvent.click(
     await screen.findByRole("button", {name: /Preview mapping into Bank A/}),
   );
   const matrix = await screen.findByLabelText("Proposed Bank mapping");
+  // Independent absolute order, rather than agreement with the playing grid.
+  expect([...matrix.querySelectorAll("strong")].map(label => label.textContent)).toEqual([
+    "A13", "A14", "A15", "A16", "A09", "A10", "A11", "A12",
+    "A05", "A06", "A07", "A08", "A01", "A02", "A03", "A04",
+  ]);
+  expect(within(matrix).getByText("A01").closest(".soundset-map-cell")?.getAttribute("data-plan"))
+    .toBe("install");
   const untouched = within(matrix)
-    .getAllByText("Empty in Set — Pad unchanged");
+    .getAllByText("Empty source");
   expect(untouched).toHaveLength(15);
+  expect(within(matrix).getByText(/Empty source — Pad unchanged/)).toBeTruthy();
+  expect(matrix.querySelectorAll(".pad, button, input, a, [tabindex]")).toHaveLength(0);
   expect(within(matrix).queryByRole("button")).toBeNull();
+});
+
+test("an unclassified mapping slot is not labelled as an empty source that preserves its Pad", async () => {
+  const session = fakeSession({previewSoundSetMap:vi.fn(async () => ({
+    ...mapPreview(summary(FOUNDRY),[0,1],[1]), kept:[2],
+  }))});
+  renderSurface(session);
+  await userEvent.click(await screen.findByRole("button", {name:"Inspect Fixture Foundry CC0"}));
+  await showStep("Target");
+  await userEvent.click(screen.getByRole("button", {name:"Preview mapping into Bank A"}));
+  const matrix = await screen.findByRole("figure", {name:"Proposed Bank mapping"});
+  for (const [address,label] of [["A01","Install"],["A02","Occupied"],["A03","Empty source"],["A04","Unmapped"]]) {
+    const cell=within(matrix).getByText(address!).closest(".soundset-map-cell") as HTMLElement;
+    expect(within(cell).getByText(label!)).toBeTruthy();
+  }
+  expect(within(matrix).getAllByText("Unmapped")).toHaveLength(13);
+  expect(within(matrix).getAllByText("Empty source")).toHaveLength(1);
 });
 
 test("a refused Set names its public reason instead of vanishing", async () => {
@@ -404,6 +440,7 @@ test("an install refusal is reported with the locked reason and no Project chang
   await userEvent.click(
     await screen.findByRole("button", {name: "Inspect Fixture Foundry CC0"}),
   );
+  await showStep("Target");
   await userEvent.click(
     await screen.findByRole("button", {name: /Preview mapping into Bank A/}),
   );
@@ -424,6 +461,7 @@ test("a Set cannot be installed before a Project is open", async () => {
   await userEvent.click(
     await screen.findByRole("button", {name: "Inspect Fixture Foundry CC0"}),
   );
+  await showStep("Target");
   expect(((await screen.findByRole("button", {
     name: /Preview mapping into Bank A/,
   })) as HTMLButtonElement).disabled).toBe(true);
@@ -511,6 +549,7 @@ test("install target is explicit and independent of the playing Bank", async () 
   const session = fakeSession();
   const view = renderSurface(session);
   await userEvent.click(await screen.findByRole("button", {name: "Inspect Fixture Foundry CC0"}));
+  await showStep("Target");
   expect(await screen.findByText("Choose where to install. This does not change the playing Bank.")).toBeTruthy();
   const targets = screen.getByRole("group", {name: "Install target Bank"});
   await userEvent.click(within(targets).getByRole("button", {name: "Install target Bank C"}));
@@ -558,4 +597,114 @@ test("a refused Set without specific guidance says it cannot be installed (#1680
   expect(row.textContent).toBe("88888888-8888-4888-8888-888888888888 1.0.0 — This Set cannot be installed.");
   expect(row.getAttribute("data-code")).toBe("NOT_FOUND");
   expect(row.getAttribute("data-reason")).toBe("soundset_object_missing");
+});
+
+
+test("returning to Browse retains the selected Set and restores its list control focus", async () => {
+  const session = fakeSession();
+  const {container} = renderSurface(session);
+  await userEvent.click(await screen.findByRole("button", {name:"Inspect Fixture Attribution Kit"}));
+  expect(screen.queryByRole("list", {name:"Catalog Sound Sets"})).toBeNull();
+  await showStep("Target");
+  expect(screen.queryByRole("list", {name:"Sound Set slots"})).toBeNull();
+  await showStep("Browse");
+  const returned = screen.getByRole("button", {name:"Inspect Fixture Attribution Kit"});
+  expect(document.activeElement).toBe(returned);
+  expect(returned.closest("li")?.dataset.selected).toBe("true");
+  expect(session.installSoundSet).not.toHaveBeenCalled();
+  await showStep("Details");
+  expect(screen.getByRole("region", {name:"Sound Set Fixture Attribution Kit"})).toBeTruthy();
+  expect(container.querySelector('[data-step="details"]')).toBeTruthy();
+  expect(session.inspectSoundSet).toHaveBeenCalledTimes(1);
+});
+
+test("a pending preview owns its target even if a prior audition fails", async () => {
+  let resolvePreview!: (value:SoundSetMapPreview) => void;
+  let rejectAudition!: (error:Error) => void;
+  const session = fakeSession({
+    auditionSoundSet:vi.fn(() => new Promise<never>((_resolve,reject) => { rejectAudition = reject; })),
+    previewSoundSetMap:vi.fn(() => new Promise<SoundSetMapPreview>(resolve => { resolvePreview = resolve; })),
+  });
+  renderSurface(session);
+  await userEvent.click(await screen.findByRole("button", {name:"Inspect Fixture Foundry CC0"}));
+  await userEvent.click(screen.getByRole("button", {name:"Audition set demo"}));
+  await showStep("Target");
+  await userEvent.click(screen.getByRole("button", {name:"Install target Bank B"}));
+  await userEvent.click(screen.getByRole("button", {name:"Preview mapping into Bank B"}));
+  rejectAudition(new Error("audition failed"));
+  await screen.findByRole("alert");
+  const target = screen.getByRole("button", {name:"Install target Bank C"});
+  expect(target.matches(":disabled")).toBe(true);
+  await userEvent.click(target);
+  expect(screen.getByRole("button", {name:"Install target Bank B"}).getAttribute("aria-pressed")).toBe("true");
+  expect(within(screen.getByRole("navigation", {name:"Sound Set steps"})).getByRole("button", {name:"Browse"}).matches(":disabled")).toBe(true);
+  resolvePreview(mapPreview(summary(FOUNDRY), [0], [], 1));
+  await screen.findByRole("figure", {name:"Proposed Bank mapping"});
+  await userEvent.click(screen.getByRole("button", {name:"Install 1 of 16 into Bank B"}));
+  await waitFor(() => expect(session.installSoundSet).toHaveBeenCalledWith(expect.objectContaining({bankId:1,expectedRevision:4})));
+});
+
+test("changing the target clears the old mapping and policy before another confirmation", async () => {
+  const session = fakeSession({previewSoundSetMap:vi.fn(async request =>
+    mapPreview(summary(FOUNDRY),[0],[0],request.bankId))});
+  renderSurface(session);
+  await userEvent.click(await screen.findByRole("button", {name:"Inspect Fixture Foundry CC0"}));
+  await showStep("Target");
+  await userEvent.click(screen.getByRole("button", {name:"Preview mapping into Bank A"}));
+  await userEvent.click(await screen.findByRole("radio", {name:"Replace them with this Set"}));
+  await showStep("Target");
+  await userEvent.click(screen.getByRole("button", {name:"Install target Bank C"}));
+  expect(screen.queryByRole("figure", {name:"Proposed Bank mapping"})).toBeNull();
+  expect(within(screen.getByRole("navigation", {name:"Sound Set steps"})).getByRole("button", {name:"Review"}).matches(":disabled")).toBe(true);
+  await userEvent.click(screen.getByRole("button", {name:"Preview mapping into Bank C"}));
+  const install = await screen.findByRole("button", {name:"Install into Bank C"});
+  expect(install.matches(":disabled")).toBe(true);
+  await userEvent.click(screen.getByRole("radio", {name:"Keep the Pads I already have"}));
+  await userEvent.click(screen.getByRole("button", {name:"Install 0 of 16 into Bank C"}));
+  await waitFor(() => expect(session.installSoundSet).toHaveBeenCalledWith(expect.objectContaining({bankId:2,expectedRevision:4,occupiedPadPolicy:"keep"})));
+});
+
+test("a pending install keeps its visible conflict policy and target fixed", async () => {
+  let rejectInstall!: (error:Error) => void;
+  const session = fakeSession({
+    previewSoundSetMap:vi.fn(async () => mapPreview(summary(FOUNDRY),[0],[0])),
+    installSoundSet:vi.fn(() => new Promise<never>((_resolve,reject) => { rejectInstall=reject; })),
+  });
+  renderSurface(session);
+  await userEvent.click(await screen.findByRole("button", {name:"Inspect Fixture Foundry CC0"}));
+  await showStep("Target");
+  await userEvent.click(screen.getByRole("button", {name:"Preview mapping into Bank A"}));
+  const replace = await screen.findByRole("radio", {name:"Replace them with this Set"});
+  await userEvent.click(replace);
+  await userEvent.click(screen.getByRole("button", {name:"Install 1 of 16 into Bank A"}));
+  const keep = screen.getByRole("radio", {name:"Keep the Pads I already have"});
+  expect(keep.matches(":disabled")).toBe(true);
+  await userEvent.click(keep);
+  expect((replace as HTMLInputElement).checked).toBe(true);
+  expect(within(screen.getByRole("navigation", {name:"Sound Set steps"})).getByRole("button", {name:"Target"}).matches(":disabled")).toBe(true);
+  expect(session.installSoundSet).toHaveBeenCalledWith(expect.objectContaining({bankId:0,expectedRevision:4,occupiedPadPolicy:"replace"}));
+  rejectInstall(new Error("install failed"));
+  await screen.findByRole("alert");
+  expect(keep.matches(":disabled")).toBe(false);
+});
+
+test("a refused install retains Review for refresh and explicit retry, then reports its receipt", async () => {
+  const installed = vi.fn();
+  const session = fakeSession({installSoundSet:vi.fn()
+    .mockRejectedValueOnce(Object.assign(new Error("revision changed"),{code:"REVISION_CONFLICT"}))
+    .mockResolvedValueOnce({...FOUNDRY,bankId:0,committedRevision:10,replayed:false,
+      installed:[{slotIndex:0,pad:0}],collisions:[],kept:[]})});
+  render(<SoundSetSurface session={session} projectRevision={9} activeBank={0} onInstalled={installed} />);
+  await userEvent.click(await screen.findByRole("button", {name:"Inspect Fixture Foundry CC0"}));
+  await showStep("Target");
+  await userEvent.click(screen.getByRole("button", {name:"Preview mapping into Bank A"}));
+  await userEvent.click(await screen.findByRole("button", {name:"Install 1 of 16 into Bank A"}));
+  await screen.findByRole("alert");
+  expect(installed).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name:"Refresh mapping"}));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  await userEvent.click(screen.getByRole("button", {name:"Install 1 of 16 into Bank A"}));
+  await waitFor(() => expect(installed).toHaveBeenCalledWith(10));
+  expect(screen.getByText("Installed 1 Pad into Bank A at revision 10")).toBeTruthy();
+  expect(session.installSoundSet).toHaveBeenCalledTimes(2);
 });

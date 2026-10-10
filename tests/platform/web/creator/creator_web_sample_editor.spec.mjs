@@ -1,5 +1,7 @@
+import {showSampleDetails} from "./fixtures/creator_navigation.mjs";
 import {
   clickCreatorSystemAction,
+  showSamplePage,
   createSequencePattern,
   openCreatorSystem,
   sequencePattern,
@@ -213,8 +215,8 @@ async function importV1SampleProject(page) {
   await (await chooserPromise).setFiles(sampleBundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("44 / 64", {exact: true})).toBeVisible();
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev46");
+  await expect(page.getByText("44 / 64 Pads used", {exact: true})).toBeVisible();
+  await expect(page.locator(".creator-details-facts")).toContainText("Rev46");
   await expectProjectRevision(page, 46);
 }
 
@@ -248,6 +250,7 @@ async function waitForControlMutation(page, control, action, expectedRevision) {
 }
 
 async function chooseSampleFile(page, buttonName, name, buffer) {
+  await showSamplePage(page, "Pad");
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: buttonName}).click();
   await (await chooserPromise).setFiles({
@@ -271,15 +274,21 @@ async function selectPadWithoutPress(page, label) {
 }
 
 async function expectDefaultPlaybackUi(page) {
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "Loop"}))
     .toHaveAttribute("aria-pressed", "false");
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "One Shot"}))
     .toHaveAttribute("aria-pressed", "true");
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "Mute"}))
     .toHaveAttribute("aria-pressed", "false");
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("slider", {name: "Pad A01 Volume"})).toHaveValue("0");
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"}))
     .toHaveValue("0");
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("spinbutton", {name: "Pad A01 End time (seconds)"}))
     .toHaveValue("2");
 }
@@ -374,10 +383,13 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await commitLongSourceSelection(page);
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
+  await showSampleDetails(page);
   await expect(page.getByText("48 kHz · Mono · 96,000 frames")).toBeVisible();
+  await showSamplePage(page, "Trim");
   await expectDefaultPlaybackUi(page);
 
   const waveformPath = page.locator("path[data-waveform]");
@@ -385,12 +397,14 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   const editor = page.locator("[data-waveform-viewport]");
   expect(await editor.getAttribute("data-viewport-start")).toBe("0");
   expect(await editor.getAttribute("data-viewport-end")).toBe("96000");
+  await showSamplePage(page, "Trim");
   await page.getByRole("button", {name: "Zoom In"}).click();
   await expect(editor).not.toHaveAttribute("data-viewport-end", "96000");
   await page.getByRole("button", {name: "Fit waveform"}).click();
   await expect(editor).toHaveAttribute("data-viewport-start", "0");
   await expect(editor).toHaveAttribute("data-viewport-end", "96000");
 
+  await showSamplePage(page, "Trim");
   const startTime = page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
   await startTime.focus();
   await startTime.fill("0.01");
@@ -442,13 +456,16 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await waitForVoiceStates(page, playheadOffset, ["started", "completed"]);
   await expect(playhead).toHaveCount(0);
 
+  await showSamplePage(page, "Playback");
   const loop = page.getByRole("button", {name: "Loop"});
+  await showSamplePage(page, "Playback");
   const oneShot = page.getByRole("button", {name: "One Shot"});
   await waitForControlMutation(page, oneShot, () => oneShot.click(), 49);
   await expect(oneShot).toHaveAttribute("aria-pressed", "false");
   await heldPadGesture(page, padA1, ["started", "stopped"]);
 
   await waitForControlMutation(page, loop, () => loop.click(), 50);
+  await showSamplePage(page, "Playback");
   const hold = page.getByRole("button", {name: "Hold"});
   await expect(hold).toHaveAttribute("aria-pressed", "false");
   await heldPadGesture(page, padA1, ["started", "stopped"]);
@@ -461,6 +478,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     window.__sampleVoiceStates.slice(offset).map(({state}) => state), loopToggleOffset)))
     .toEqual(["started", "stopped"]);
 
+  await showSamplePage(page, "Playback");
   const volume = page.getByRole("slider", {name: "Pad A01 Volume"});
   await volume.focus();
   await page.keyboard.press("ArrowLeft");
@@ -469,9 +487,11 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expectProjectRevision(page, 52);
   await expect(volume).toHaveValue("-0.1");
 
+  await showSamplePage(page, "Playback");
   const mute = page.getByRole("button", {name: "Mute"});
   await waitForControlMutation(page, mute, () => mute.click(), 53);
   await expect(mute).toHaveAttribute("aria-pressed", "true");
+  await showSamplePage(page, "Pad");
   const reset = page.getByRole("button", {name: "Reset Pad to Defaults"});
   await reset.click();
   await expect(page.getByRole("dialog", {name: "Reset Pad A01?"})).toBeVisible();
@@ -500,6 +520,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   );
   await page.getByRole("button", {name: "Confirm replace"}).click();
   await commitLongSourceSelection(page);
+  await showSamplePage(page, "Pad");
   await expect(page.getByRole("button", {name: "Replace Sample"}))
     .toBeEnabled({timeout: 120_000});
   await expectProjectRevision(page, 55);
@@ -553,17 +574,23 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     }));
 
   await selectPadWithoutPress(page, "Pad A02 — assigned — Key W");
-  await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
+  await showSampleDetails(page);
+  await expect(page.locator(".sample-details div").filter({
+    has: page.locator("dt", {hasText: /^Asset ID$/}),
+  }).locator("dd")).toHaveText(/^[0-9a-f-]{36}$/, {timeout: 30_000});
+  await showSamplePage(page, "Playback");
   const a2Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a2Loop, () => a2Loop.click(), 56);
   const padA2 = page.getByRole("button", {name: "Pad A02 — assigned — Key W", exact: true});
   await heldPadGesture(page, padA2, ["started"]);
 
   await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
+  await showSamplePage(page, "Playback");
   const a1Mute = page.getByRole("button", {name: "Mute"});
   await waitForControlMutation(page, a1Mute, () => a1Mute.click(), 57);
 
   await selectPadWithoutPress(page, "Pad A03 — assigned — Key E");
+  await showSamplePage(page, "Playback");
   const a3Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a3Loop, () => a3Loop.click(), 58);
   await heldPadGesture(
@@ -573,6 +600,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   );
 
   await selectPadWithoutPress(page, "Pad A04 — assigned — Key R");
+  await showSamplePage(page, "Playback");
   const a4Loop = page.getByRole("button", {name: "Loop"});
   await waitForControlMutation(page, a4Loop, () => a4Loop.click(), 59);
   await heldPadGesture(
@@ -603,6 +631,8 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
       },
     }),
   }));
+  await expect(page.getByText("Sample saved · playback needs preparation.")).toBeVisible();
+  await page.getByText("Sample playback details", {exact: true}).click();
   await expect(page.getByText(
     "Saved at revision 60; Runtime is still revision 59",
   )).toBeVisible(
@@ -642,8 +672,8 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev60");
-  await expect(page.getByText("45 / 64", {exact: true})).toBeVisible();
+  await expect(page.locator(".creator-details-facts")).toContainText("Rev60");
+  await expect(page.getByText("45 / 64 Pads used", {exact: true})).toBeVisible();
   await enterSampleEditor(page);
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true})).toBeVisible();
   await expectProjectRevision(page, 60);
@@ -655,15 +685,19 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   // retired invisible range bands grabbed the wrong handle or jumped the
   // trim point to the pressed track position.
   await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("img", {name: "Pad A01 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
+  await showSamplePage(page, "Trim");
   const trimStart = page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
+  await showSamplePage(page, "Trim");
   const trimEnd = page.getByRole("spinbutton", {name: "Pad A01 End time (seconds)"});
   await expect(trimStart).toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
-  const dragGrip = async (grip, deltaX) => {
+  const dragGrip = async (grip, deltaX, beforeRelease) => {
     // The touch workspace is a fixed 368 × 368 region that scrolls; the mouse
     // must be aimed at where the grip actually is, not where it was laid out.
+    await expect(grip).toBeVisible();
     await grip.scrollIntoViewIfNeeded();
     const box = await grip.boundingBox();
     expect(box).not.toBeNull();
@@ -672,10 +706,19 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     await page.mouse.move(pressX, pressY);
     await page.mouse.down();
     await page.mouse.move(pressX + deltaX, pressY, {steps: 4});
+    await beforeRelease?.();
     await page.mouse.up();
   };
   await waitForControlMutation(page, trimStart, async () => {
-    await dragGrip(page.locator('[data-grip-zone="start"]'), 40);
+    await dragGrip(page.locator('[data-grip-zone="start"]'), 40, async () => {
+      const startSeconds = Number(await trimStart.inputValue());
+      expect(startSeconds).toBeGreaterThan(0);
+      await expect(page.locator(".sample-overview-facts")).toContainText(
+        `${startSeconds.toFixed(3)} – 2.000 s`);
+      const truth = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+      expect(truth.result.project_revision).toBe(60);
+      expect(truth.result.playback.trim_start_frame).toBe(0);
+    });
   }, 61);
   await expect(trimStart).not.toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
@@ -715,6 +758,7 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
 
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
     .toBeVisible({timeout: 120_000});
+  await showSampleDetails(page);
   await expect(page.getByText(
     `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
   )).toBeVisible();
@@ -809,7 +853,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   await page.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".overview-display > .overview-facts")).toContainText("Rev47");
+  await expect(page.locator(".creator-details-facts")).toContainText("Rev47");
 });
 
 test("Creator history preserves sound identity across modes, cancelled edits and persisted reopen", async ({page, browserName}) => {
@@ -829,6 +873,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await expectProjectRevision(page, 1);
   const imported = (await rawRequest(page, "project.inspect", {})).result.project;
   await expect(undo).toHaveClass(RAIL_LIT);
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Mute", exact: true}).click();
   await expectProjectRevision(page, 2);
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(true);
@@ -875,7 +920,9 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.muted).toBe(true);
   await pressRailUndo(page);
   await expectProjectRevision(page, 7);
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "Mute", exact: true})).toHaveAttribute("aria-pressed", "false");
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 8);
   await expect(redo).not.toHaveClass(RAIL_LIT);
@@ -929,19 +976,25 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
     ["gain_millidb", "muted", "trigger_mode", "trim_end_frame", "trim_start_frame"]);
 
   // normal: every parity control commits one revision.
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Reverse", exact: true}).click();
   await expectProjectRevision(page, 2);
+  await showSamplePage(page, "Playback");
   await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Pitch"}), "3.5");
   await expectProjectRevision(page, 3);
+  await showSamplePage(page, "Playback");
   await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Pan"}), "-100");
   await expectProjectRevision(page, 4);
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 5);
   // Reverse is on, so the card edits the mirrored boundary: 0.025 s is frame
   // 1 200 from Start, stored as 0 + 4 800 - 1 200 = 3 600.
+  await showSamplePage(page, "Trim");
   await editValueCard(
     page.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"}), "0.025");
   await expectProjectRevision(page, 6);
+  await showSamplePage(page, "Trim");
   await editValueCard(
     page.getByRole("spinbutton", {name: "Pad A01 Loop crossfade (milliseconds)"}), "5");
   await expectProjectRevision(page, 7);
@@ -955,6 +1008,7 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
     loop_crossfade_frames: 240,
   });
   // Ping-pong has no seam to blend, so choosing it clears the crossfade.
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Ping-pong", exact: true}).click();
   await expectProjectRevision(page, 8);
   const committed = {
@@ -967,10 +1021,12 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
     loop_start_frame: 3_600,
   };
   expect(await inspectedPlayback(page)).toEqual(committed);
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("spinbutton", {name: "Pad A01 Loop crossfade (milliseconds)"}))
     .toHaveCount(0);
 
   // cancelled: Escape mid-gesture previews, then restores without a commit.
+  await showSamplePage(page, "Playback");
   const pan = page.getByRole("slider", {name: "Pad A01 Pan"});
   const panReadout = page.locator(".pan-control output");
   const cancelOffset = await page.evaluate(() => window.__sampleProofOperations.length);
@@ -1017,6 +1073,7 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   expect(await inspectedPlayback(page)).toEqual(committed);
 
   // failed: a failed commit reports, and the control keeps committed truth.
+  await showSamplePage(page, "Playback");
   const reverse = page.getByRole("button", {name: "Reverse", exact: true});
   await page.evaluate(() => { window.__failNextSampleUpdate = true; });
   await reverse.click();
@@ -1033,12 +1090,15 @@ test("Sample playback parity commits, cancels, refuses, fails and reopens throug
   expect(await inspectedPlayback(page)).toEqual(committed);
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "Reverse", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".pitch-control output")).toHaveText("+3.5 st");
   await expect(page.locator(".pan-control output")).toHaveText("L100");
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "Ping-pong", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
+  await showSamplePage(page, "Trim");
   await expect(page.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"}))
     .toHaveValue("0.025");
   noErrors();
@@ -1065,23 +1125,30 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await expectProjectRevision(page, 1);
   const base = await inspectedPlayback(page);
   // Release applies once the Pad stops being a one-shot.
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "One Shot", exact: true}).click();
   await expectProjectRevision(page, 2);
 
   // normal: each control commits one revision.
+  await showSamplePage(page, "Playback");
   await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Attack"}), "120");
   await expectProjectRevision(page, 3);
+  await showSamplePage(page, "Playback");
   await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Release"}), "900");
   await expectProjectRevision(page, 4);
+  await showSamplePage(page, "Tone / EQ");
   await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Tone"}), "-40");
   await expectProjectRevision(page, 5);
+  await showSamplePage(page, "Tone / EQ");
   await holdKeySteps(page, page.getByRole("slider", {name: "Pad A01 EQ High"}), "ArrowUp", 2);
   await expectProjectRevision(page, 6);
   // 36 half-dB steps reach the floor; one more makes the low shelf a cut.
+  await showSamplePage(page, "Tone / EQ");
   await holdKeySteps(page, page.getByRole("slider", {name: "Pad A01 EQ Low"}), "ArrowDown", 37);
   await expectProjectRevision(page, 7);
   // A real mouse drag up and right turns the mid band on, through the
   // browser's own hit-testing, focus and pointer capture.
+  await showSamplePage(page, "Tone / EQ");
   const mid = page.getByRole("slider", {name: "Pad A01 EQ Mid"});
   const poleCentre = async () => {
     await mid.scrollIntoViewIfNeeded();
@@ -1112,6 +1179,7 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
 
   // cancelled: Escape mid-gesture previews, then restores without a commit,
   // on a slider and on the EQ.
+  await showSamplePage(page, "Tone / EQ");
   const tone = page.getByRole("slider", {name: "Pad A01 Tone"});
   const toneReadout = page.locator(".tone-control output");
   const cancelOffset = await page.evaluate(() => window.__sampleProofOperations.length);
@@ -1120,8 +1188,10 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   await tone.fill("60");
   await expect(toneReadout).toHaveText("HP 60");
   await tone.press("Escape");
+  await showSamplePage(page, "Tone / EQ");
   await expect(toneReadout).toHaveText("LP 40");
   await tone.dispatchEvent("pointerup", {pointerId, isPrimary: true, button: 0});
+  await showSamplePage(page, "Tone / EQ");
   const high = page.getByRole("slider", {name: "Pad A01 EQ High"});
   await high.focus();
   await page.keyboard.down("ArrowUp");
@@ -1183,6 +1253,7 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   // failed: a failed commit reports, and the control keeps committed truth.
   const attackReadout = page.locator(".attack-control output");
   await page.evaluate(() => { window.__failNextSampleUpdate = true; });
+  await showSamplePage(page, "Playback");
   await slideAndRelease(page.getByRole("slider", {name: "Pad A01 Attack"}), "500");
   await expect(page.getByRole("alert")).toContainText("Creator could not change this sound.");
   await expect(attackReadout).toHaveText("120 ms");
@@ -1197,13 +1268,18 @@ test("Sample tone parity commits, cancels, refuses, fails and reopens through th
   expect(await inspectedPlayback(page)).toEqual(committed);
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await selectPadWithoutPress(page, "Pad A01 — assigned — Key Q");
+  await showSamplePage(page, "Playback");
   await expect(attackReadout).toHaveText("120 ms");
   await expect(page.locator(".release-control output")).toHaveText("900 ms");
+  await showSamplePage(page, "Tone / EQ");
   await expect(toneReadout).toHaveText("LP 40");
+  await showSamplePage(page, "Tone / EQ");
   await expect(page.getByRole("slider", {name: "Pad A01 EQ Low"}))
     .toHaveAttribute("aria-valuetext", "Low cut 100 Hz");
+  await showSamplePage(page, "Tone / EQ");
   await expect(page.getByRole("slider", {name: "Pad A01 EQ High"}))
     .toHaveAttribute("aria-valuetext", "High shelf 8.00 kHz +1.0 dB");
+  await showSamplePage(page, "Tone / EQ");
   await expect(page.getByRole("slider", {name: "Pad A01 EQ Mid"}))
     .not.toHaveAttribute("aria-valuetext", "Mid off");
   noErrors();
@@ -1271,7 +1347,9 @@ test("Pad Delete commits while audio is inactive after a reopen", async ({page, 
   // match a loose name, so the mode key is named exactly.
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await showSamplePage(page, "Pad");
   await expect(page.getByRole("button", {name: "Delete Pad A01", exact: true})).toBeEnabled();
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Delete Pad A01", exact: true}).click();
   await expectProjectRevision(page, 2);
   await expect(page.getByRole("button", {name: "Pad A01 — empty — Key Q", exact: true})).toBeVisible();
@@ -1323,7 +1401,9 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   await enterSampleEditor(page);
   // The surface remounts with the prior cached inspect while its authoritative
   // refresh is pending. Delete stays unavailable until the new revision lands.
+  await showSamplePage(page, "Pad");
   await expect(page.getByRole("button", {name: "Delete Pad A01", exact: true})).toBeEnabled();
+  await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 3);
   const before = (await rawRequest(page, "project.inspect", {})).result.project;
@@ -1333,6 +1413,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(oldArtifact.byte_length).toBeGreaterThan(44);
   const {redo} = railHistoryKeys(page);
 
+  await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Delete Pad A01", exact: true}).click();
   await expectProjectRevision(page, 4);
   await expect(page.getByRole("button", {name: "Pad A01 — empty — Key Q", exact: true})).toBeVisible();
@@ -1357,6 +1438,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(restored.banks).toEqual(before.banks);
   expect(restored.patterns).toEqual(before.patterns);
   expect(restored.assets[oldAsset].artifact).toEqual(oldArtifact);
+  await showSamplePage(page, "Playback");
   await expect(page.getByRole("button", {name: "Loop", exact: true})).toHaveAttribute("aria-pressed", "true");
   await pressRailRedo(page);
   await expectProjectRevision(page, 6);
@@ -1376,4 +1458,112 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(reopened.undo_count).toBe(0);
   expect(reopened.redo_count).toBe(0);
   noErrors();
+});
+
+
+test("contextual Sample encoders merge one save, cancel old targets and restore monitoring level", async ({page, browserName}) => {
+  // Boot/import, two authoring transitions, Undo and persisted reopen each
+  // retain their existing bounded transition budgets within this journey.
+  test.setTimeout(300_000);
+  test.skip(browserName !== "chromium");
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  // The real Native fixture has ready assigned Pads; default seed slots
+  // may be loading/failed and cannot receive a target-change gesture.
+  const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
+  if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", {name: "Import .lmdj"}).click();
+  await (await chooser).setFiles(bundle);
+  await expect(page.getByRole("heading", {name: "Project 00000000"})).toBeVisible({timeout: 120_000});
+  const baseRevision = (await rawRequest(page, "project.inspect", {})).result.project.revision;
+  // The report helper opens System, which intentionally cancels an idle
+  // turn. Inspect committed Truth directly while waiting for the timer.
+  const expectEncoderRevision = async (revision) => {
+    await expect.poll(async () => (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.project_revision,
+      {timeout: REPORT_REVISION_TIMEOUT_MS}).toBe(revision);
+  };
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await activateAudio(page);
+  await chooseSampleFile(page, "Replace Sample", "encoder.wav", pcm16Wav({frames: 4800}));
+  await page.getByRole("button", {name: "Confirm replace", exact: true}).click();
+  await commitLongSourceSelection(page);
+  await expectEncoderRevision(baseRevision + 1);
+  const rail = page.getByTestId("physical-controls");
+  const knob = (name) => rail.getByRole("button", {name, exact: true});
+  await expect(knob("Encoder 3 — Pitch")).toBeEnabled();
+  const playbackBeforeTurn = (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback;
+  const savesBefore = await page.evaluate(() => (window.__sampleProofOperations ?? []).filter(op => op === "sample.update_pad").length);
+  await knob("Encoder 3 — Pitch").focus();
+  await page.keyboard.press("Shift+ArrowUp");
+  await expect(page.locator('.encoder-readbacks [data-encoder="3"]')).toContainText("0.1 st");
+  await expectEncoderRevision(baseRevision + 2);
+  const changed = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+  expect(changed.result.playback.pitch_cents).toBe(10);
+  expect(await page.evaluate(() => (window.__sampleProofOperations ?? []).filter(op => op === "sample.update_pad").length)).toBe(savesBefore + 1);
+  const history = await rawRequest(page, "history.inspect", {});
+  expect(history.result.undo_count).toBe(2);
+
+  // A Sample subpage switch also retires the old rotary preview. Keep the
+  // turn and navigation in one task so driver latency cannot commit it first.
+  await showSamplePage(page, "Trim");
+  await knob("Encoder 3 — Pitch").evaluate((element) => {
+    const navigation = document.querySelector('.sample-page-nav');
+    const playback = [...(navigation?.querySelectorAll('button') ?? [])]
+      .find((candidate) => candidate.textContent === 'Playback');
+    if (playback === undefined) throw new Error("Playback page is unavailable");
+    element.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowUp", bubbles: true}));
+    playback.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1}));
+  });
+  await expect(page.getByRole("slider", {name: "Pad A01 Volume", exact: true})).toBeVisible();
+  await page.waitForTimeout(450);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.pitch_cents).toBe(10);
+  await expectEncoderRevision(baseRevision + 2);
+  expect(await page.evaluate(() => (window.__sampleProofOperations ?? [])
+    .filter(op => op === "sample.update_pad").length)).toBe(savesBefore + 1);
+
+  // Start a second preview and change its Pad before its 400 ms save.
+  const nextPadLabel = await page.getByRole("button", {name: /^Pad A02 —/}).getAttribute("aria-label");
+  await knob("Encoder 3 — Pitch").focus();
+  // Dispatch both inputs in one browser task so driver round trips cannot
+  // consume the idle interval before the target actually changes.
+  await knob("Encoder 3 — Pitch").evaluate((element, label) => {
+    const pad = [...document.querySelectorAll(".pad")].find((candidate) => candidate.getAttribute("aria-label") === label);
+    if (pad === undefined) throw new Error("The next Pad is unavailable");
+    element.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowUp", bubbles: true}));
+    pad.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1}));
+  }, nextPadLabel);
+  await expect(page.getByRole("button", {name: nextPadLabel, exact: true})).toHaveAttribute("aria-pressed", "true");
+  // An observation after the complete idle interval proves the old timer cannot save.
+  await expect.poll(async () => {
+    const result = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+    return {revision: result.result.project_revision, pitch: result.result.playback.pitch_cents};
+  }).toEqual({revision: baseRevision + 2, pitch: 10});
+  await page.waitForTimeout(450);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback.pitch_cents).toBe(10);
+  await expectEncoderRevision(baseRevision + 2);
+  await pressRailUndo(page);
+  await expectEncoderRevision(baseRevision + 3);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result.playback).toEqual(playbackBeforeTurn);
+
+  const truth = (await rawRequest(page, "project.inspect", {})).result;
+  // Truth acknowledgement precedes the history controller finishing its
+  // refresh; wait for its actual input lock before sending keyboard turns.
+  await expect(page.locator(".creator-console-frame")).not.toHaveAttribute("inert", "");
+  await knob("Encoder 4 — Output Volume").focus();
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.locator('.encoder-readbacks [data-encoder="4"]')).toContainText("95%");
+  expect((await rawRequest(page, "project.inspect", {})).result).toEqual(truth);
+  await openCreatorSystem(page);
+  await expect(knob("Encoder 4 — Output Volume")).toBeEnabled();
+  await expect(knob("Encoder 1 — unassigned until hardware mapping is approved")).toBeDisabled();
+  await page.reload();
+  await waitForProjectReopen(page, truth.project.project_id.slice(0, 8));
+  await expect(knob("Encoder 4 — Output Volume")).toBeEnabled();
+  await expect(page.locator('.encoder-readbacks [data-encoder="4"]')).toContainText("95%");
+  expect((await rawRequest(page, "project.inspect", {})).result).toEqual(truth);
+  await noErrors();
 });

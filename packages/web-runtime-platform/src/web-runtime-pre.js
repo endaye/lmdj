@@ -234,16 +234,21 @@ if (typeof globalThis.window !== "undefined") {
     return promise;
   }
 
-  function connectAudioWorkletDirect(contextHandle) {
+  function connectAudioWorkletDirect(contextHandle, outputDestinationHandle = contextHandle) {
     if (
       !Number.isInteger(contextHandle) ||
       contextHandle <= 0 ||
       !contexts.has(contextHandle) ||
-      startRecord?.contextHandle !== contextHandle
+      startRecord?.contextHandle !== contextHandle ||
+      !Number.isInteger(outputDestinationHandle) ||
+      outputDestinationHandle <= 0 ||
+      (outputDestinationHandle !== contextHandle &&
+        audioNodes.get(outputDestinationHandle)?.contextHandle !== contextHandle)
     ) {
       return false;
     }
-    return Module["_lmdj_web_audio_connect_direct"](contextHandle) === 1;
+    return Module["_lmdj_web_audio_connect_direct"](
+      contextHandle, outputDestinationHandle) === 1;
   }
 
   const transportEncoder = new TextEncoder();
