@@ -62,6 +62,30 @@ test("a tick from a longer Pattern is held inside the new length", () => {
   expect(performPosition(1_500, 384)).toBe(383);
 });
 
+test("the Perform counter uses the actually playing Pattern's length", () => {
+  const nextPatternId = "33333333-3333-4333-8333-333333333333";
+  const switchedState: CreatorState = {
+    ...state,
+    project: {...state.project, current: {...project, patterns: [
+      {...project.patterns[0]!, bars: 1},
+      {patternId: nextPatternId, bars: 2, events: []},
+    ]}},
+  };
+  render(<PerformOverview state={switchedState} transport={{
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: performance.now(), commandId: null,
+      publicationPending: false, error: null,
+      currentPatternId: nextPatternId, pendingSwitch: null,
+    },
+  }} />);
+  expect(screen.getByTestId("perform-counter").textContent)
+    .toBe("BAR 01 / 02 · BEAT 01 / 04");
+});
+
 test("a pending launch preserves the acknowledged slot and clears on failure or session reset", () => {
   let value: PerformState = {...initialPerformState({state: "unconfigured", config: null, error: null}),
     lastLaunchAck: {requestId: "first", patternSlot: 0, effectiveTick: 1920}};
@@ -128,4 +152,20 @@ test("the transport's queued switch names its slot when no Performance launch is
   }} />);
   expect(screen.getByLabelText("Pattern launch cue").textContent)
     .toBe("LAST LAUNCH — → QUEUED SLOT 02");
+});
+
+test("a queued transport Pattern without a Launch slot is still named in the cue", () => {
+  render(<PerformOverview state={state} transport={{
+    ...initialPatternTransportState,
+    sessionId: "session-1",
+    status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: 0, commandId: null, publicationPending: false,
+      error: null, currentPatternId: null,
+      pendingSwitch: {patternId: project.patternId, activationFrame: 96_000},
+    },
+  }} />);
+  expect(screen.getByLabelText("Pattern launch cue").textContent)
+    .toBe("LAST LAUNCH — → QUEUED PATTERN 01");
 });

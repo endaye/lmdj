@@ -1,4 +1,5 @@
-import {showSamplePage, showPerformPage, showPatternLaunchGroup} from "./fixtures/creator_navigation.mjs";
+import {createSequencePattern, selectSequencePattern, sequencePattern,
+  showSamplePage, showPerformPage, showPatternLaunchGroup} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
@@ -1009,6 +1010,149 @@ async function recordShortPerformance(
   await stopRecording(page);
   await savePerformanceWithBusyRetry(page, name);
 }
+
+test("Perform Launch selects while stopped and queues, withdraws and applies without Performance recording", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  // Observe the real app traffic without replacing responses or the engine.
+  await page.addInitScript(() => {
+    let exposed;
+    window.__launchTransportProof = [];
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get: () => exposed,
+      set(host) {
+        const native = host.transport;
+        host.transport = Object.freeze({
+          async send(...args) {
+            const response = await native.send(...args);
+            const [request] = args;
+            if (["snapshot.reload", "pattern.transport.request", "pattern.transport.switch",
+              "performance.record.begin", "performance.record.launch-request"]
+              .includes(request.operation)) {
+              window.__launchTransportProof.push({
+                operation: request.operation, payload: structuredClone(request.payload),
+                ok: response.ok,
+              });
+            }
+            return response;
+          },
+          subscribe: (...args) => native.subscribe(...args),
+          subscribeFailure: (...args) => native.subscribeFailure(...args),
+          terminate: (...args) => native.terminate(...args),
+          get terminated() { return native.terminated; },
+          get terminalOwnerReleased() { return native.terminalOwnerReleased; },
+        });
+        exposed = host;
+      },
+    });
+  });
+  await importActivateAndPerform(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await createSequencePattern(page, 2);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
+  const secondPattern = Object.keys((await inspectProjectTruth(page)).project.patterns)
+    .find((id) => id !== PATTERN_ID);
+  expect(secondPattern).toBeTruthy();
+  await selectSequencePattern(page, PATTERN_ID);
+  await openPerform(page);
+  await showPerformPage(page, "Slots");
+  for (const [slot, patternId] of [[0, PATTERN_ID], [1, secondPattern]]) {
+    const revision = await projectRevision(page);
+    await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
+    await page.getByRole("combobox", {name: "Pattern slot", exact: true})
+      .selectOption(String(slot));
+    await page.getByRole("button", {name: "Assign Pattern"}).click();
+    await expectRevisionAfter(page, revision);
+  }
+  await showPerformPage(page, "Live");
+  const first = page.getByRole("button", {name: "Launch Pattern 1", exact: true});
+  const second = page.getByRole("button", {name: "Launch Pattern 2", exact: true});
+  const empty = page.getByRole("button", {name: "Launch Pattern 3", exact: true});
+  const cue = page.getByRole("status", {name: "Pattern launch cue"});
+  const playStop = page.getByTestId("physical-controls")
+    .getByRole("button", {name: /^Play\/Stop/});
+  const proof = () => page.evaluate(() => window.__launchTransportProof);
+  await expect(second).toHaveAttribute("data-pattern-id", secondPattern);
+  await expect(second).toBeEnabled();
+  const beforeEmpty = await proof();
+  await empty.click();
+  expect(await proof()).toEqual(beforeEmpty);
+  // Stopped slots select through the app's snapshot reload path.
+  await second.click();
+  await expect.poll(async () => (await proof()).filter(({operation, ok}) =>
+    operation === "snapshot.reload" && ok).at(-1)?.payload.pattern_id)
+    .toBe(secondPattern);
+  await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
+  await first.click();
+  await expect.poll(async () => (await proof()).filter(({operation, ok}) =>
+    operation === "snapshot.reload" && ok).at(-1)?.payload.pattern_id)
+    .toBe(PATTERN_ID);
+  await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
+  const truth = (await inspectProjectTruth(page)).project;
+  await page.evaluate(() => { window.__launchTransportProof = []; });
+  await playStop.click();
+  await expect(first).toHaveAttribute("data-launch", "acknowledged", {
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+  });
+  const sessionId = (await proof()).find(({operation}) =>
+    operation === "pattern.transport.request").payload.session_id;
+  const inspect = async () => {
+    const response = await page.evaluate((session) =>
+      window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
+        request_id: crypto.randomUUID(), operation: "pattern.transport.inspect",
+        payload: {session_id: session}}), sessionId);
+    expect(response.ok).toBe(true);
+    return response.result;
+  };
+  const earlyBar = async () => {
+    const barFrames = 48_000 * 4 * 60 / truth.bpm;
+    await expect.poll(async () => {
+      const status = await inspect();
+      const position = (status.runtime_frame - status.origin_frame) % barFrames;
+      return status.playing && status.pending_switch == null &&
+        position >= 0 && position < barFrames / 5;
+    }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+  };
+  await earlyBar();
+  await second.click();
+  await expect(second).toHaveAttribute("data-launch", "pending");
+  await expect(cue).toHaveText("LAST LAUNCH — → QUEUED SLOT 02");
+  expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
+  await expect(first).toHaveAttribute("data-launch", "acknowledged");
+  await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
+  // Pressing the currently playing slot withdraws the unclaimed target.
+  await first.click();
+  await expect.poll(async () => (await inspect()).pending_switch).toBe(null);
+  await expect(second).toHaveAttribute("data-launch", "idle");
+  expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
+  await earlyBar();
+  await second.click();
+  await expect(second).toHaveAttribute("data-launch", "pending");
+  await expect.poll(async () => {
+    const status = await inspect();
+    return status.playing && !status.recording && status.pending_switch == null &&
+      status.current_pattern_id === secondPattern;
+  }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+  await expect(second).toHaveAttribute("data-launch", "acknowledged");
+  await expect(first).toHaveAttribute("data-launch", "idle");
+  await expect(cue).toHaveText("LAST LAUNCH — · NOTHING QUEUED");
+  await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
+  await playStop.click();
+  await expect.poll(async () => (await inspect()).playing).toBe(false);
+  await expect(second).toHaveAttribute("data-launch", "idle");
+  const traffic = await proof();
+  expect(traffic.filter(({operation}) => operation === "pattern.transport.switch")
+    .map(({payload, ok}) => ({patternId: payload.pattern_id, ok}))).toEqual([
+    {patternId: secondPattern, ok: true}, {patternId: PATTERN_ID, ok: true},
+    {patternId: secondPattern, ok: true},
+  ]);
+  expect(traffic.filter(({operation}) => operation === "snapshot.reload" ||
+    operation.startsWith("performance.record."))).toEqual([]);
+  expect((await inspectProjectTruth(page)).project).toEqual(truth);
+  await expect(page.getByRole("status", {name: "Performance recording status"}))
+    .toContainText("idle");
+});
 
 test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");

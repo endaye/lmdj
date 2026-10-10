@@ -173,6 +173,7 @@ export function OverviewDisplay({
       ) : activeMode === "perform" ? (
         <PerformOverview
           state={state}
+          selectedPatternId={selectedPatternId}
           {...(performController === undefined ? {} : {controller: performController})}
           {...(transport === undefined ? {} : {transport})}
         />

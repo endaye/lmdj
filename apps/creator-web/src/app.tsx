@@ -2033,25 +2033,15 @@ function Workspace({
   }, [session, transport.sessionId, transportBusy, transport.lastFailed,
     transportSwitchPending]);
 
-  // #1958: when an inspection reports the queued switch applied — the target
-  // now plays and nothing is queued — the selection follows the playing
-  // Pattern. A cancelled switch (Stop before the boundary, a withdrawal)
-  // clears the remembered target and leaves the selection where it was.
-  const transportSwitchTargetRef = useRef<string | null>(null);
+  // #1958: follow the authoritative current Pattern even when a switch lands
+  // before the first inspection, or another target is already queued. Stop
+  // cancellation leaves the current Pattern unchanged; a stopped selection
+  // reload retires the engagement instead of changing this authority.
   useEffect(() => {
     const status = transport.status;
-    if (status === null) return;
-    // `!= null` also tolerates a projection that omits the S1 field.
-    if (status.pendingSwitch != null) {
-      transportSwitchTargetRef.current = status.pendingSwitch.patternId;
-      return;
-    }
-    const target = transportSwitchTargetRef.current;
-    if (target === null) return;
-    transportSwitchTargetRef.current = null;
-    if (status.currentPatternId === target &&
-        sequenceRef.current.selectedPatternId !== target) {
-      dispatchSequence({type: "selected", patternId: target});
+    if (status?.engaged !== true || status.currentPatternId == null) return;
+    if (sequenceRef.current.selectedPatternId !== status.currentPatternId) {
+      dispatchSequence({type: "selected", patternId: status.currentPatternId});
     }
   }, [transport.status]);
 

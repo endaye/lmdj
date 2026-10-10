@@ -535,7 +535,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 任意 | Live／Slots／Takes／Replay | 切子页并回到页顶。录制、回放、HOLD、表单和 More 展开都保留。FX 推子按住时暂不能切。 |
 | Live | 1–4／5–8／9–12／13–16 | 选择显示哪四个 Pattern 槽。不触发 Launch。其他组的槽仍显示 Queued／Playing。跨子页保留。 |
 | 演出录制中 | Pattern Launch 01–16 | 预约切到该 Pattern，状态 Queued → Playing。上屏在真正切换前仍显示原 Pattern。Launch 会被记录；空槽是一段静音。 |
-| 播放且未录音 | Pattern Launch 01–16 | 预约在下一小节边界切到该槽的 Pattern，槽位显示 Queued，正在播的 Pattern 显示 Playing；上屏的 QUEUED SLOT 同步显示排队目标。空槽不做任何事。 |
+| 播放且未录音 | Pattern Launch 01–16 | 预约在下一小节边界切到该槽的 Pattern，槽位显示 Queued，正在播的 Pattern 显示 Playing；上屏的 QUEUED SLOT 同步显示排队目标。Sequence 排队到未分配槽的 Pattern 时，上屏显示 QUEUED PATTERN NN。bar／beat／进度使用正在播放的 Pattern 长度。空槽不做任何事。 |
 | 停止 | Pattern Launch 01–16 | 直接选中该槽的 Pattern，之后按 Play 从它开始。空槽不做任何事。 |
 | 录音但没有演出录制，或命令处理中 | Pattern Launch | 不可用（录音中切换是 S3）。 |
 | 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；显示百分比。演出录制中同时记录；触摸与旋钮调同一 FX 时共用拥有的手势。 |

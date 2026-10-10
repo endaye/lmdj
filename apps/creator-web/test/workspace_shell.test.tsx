@@ -3174,10 +3174,12 @@ const secondPatternReady: CreatorState = {
 };
 // The projection refresh must keep listing the second Pattern these journeys
 // step to, so inspectProject augments the fixture's single-Pattern Truth.
-function withSecondPatternInspect(fixture: ReturnType<typeof mutableSampleRuntimeFixture>) {
+function withSecondPatternInspect(
+  fixture: ReturnType<typeof mutableSampleRuntimeFixture>, bars = 1,
+) {
   return async () => {
     const value = fixture.inspectProject();
-    value.project.patterns[secondSwitchPattern] = {bars: 1, events: []};
+    value.project.patterns[secondSwitchPattern] = {bars, events: []};
     return value;
   };
 }
@@ -3272,6 +3274,58 @@ test("a playing transport routes Pattern presses to the queued switch and follow
     .toBe(listedSummary.patternId);
 });
 
+test("a switch applied before the first inspection still updates the Sequence selection", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const switchRequests: {patternId: string; requestId: string}[] = [];
+  let currentPattern = listedSummary.patternId;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture, 2),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      currentPatternId: currentPattern,
+      runtimeFrame: currentPattern === secondSwitchPattern ? 96_000 : 0,
+    }),
+    requestTransportPatternSwitch: async (request: {patternId: string; requestId: string}) => {
+      switchRequests.push({...request});
+      // The audio boundary lands before the request's following inspection;
+      // no inspection ever observes the transient pending switch.
+      currentPattern = request.patternId;
+      return {patternId: request.patternId, activationFrame: 96_000};
+    },
+  });
+  const initialState: CreatorState = {
+    ...secondPatternReady,
+    project: {
+      ...secondPatternReady.project,
+      current: {
+        ...secondPatternReady.project.current!,
+        patterns: secondPatternReady.project.current!.patterns.map((pattern) =>
+          pattern.patternId === secondSwitchPattern ? {...pattern, bars: 2} : pattern),
+      },
+    },
+  };
+  render(<App initialState={initialState} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  const reloadsBefore = fixture.calls.filter((call) => call === "reloadSnapshot").length;
+
+  await userEvent.click(forward);
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  // The upper display already reads currentPatternId directly. The grid's
+  // two-bar length independently proves the underlying selection followed.
+  await waitFor(() => expect(screen.getByRole("button", {name: "Choose bar"})
+    .textContent).toMatch(/\/ 2$/));
+  expect(screen.getByRole("button", {name: "Choose Pattern"}).textContent)
+    .not.toContain("→");
+  expect(fixture.calls.filter((call) => call === "reloadSnapshot").length)
+    .toBe(reloadsBefore);
+});
+
 // #1958: a refused switch is reported through the failure path, not thrown;
 // the selection stays put.
 test("a refused playing Pattern switch is reported and changes nothing", async () => {
@@ -3289,7 +3343,7 @@ test("a refused playing Pattern switch is reported and changes nothing", async (
       switchRequests.push({...request});
       throw Object.assign(
         new Error("Pattern transport is recording"),
-        {code: "PATTERN_TRANSPORT_RECORDING"},
+        {code: "HOST_STATE_INVALID", details: {reason: "pattern_transport_recording"}},
       );
     },
   });
@@ -3315,7 +3369,7 @@ test("a refused playing Pattern switch is reported and changes nothing", async (
   await userEvent.click(summary);
   const diagnostics = screen.getByRole("region", {name: "Developer diagnostics"});
   expect(within(diagnostics).getByText("Switch Pattern")).toBeTruthy();
-  expect(within(diagnostics).getByText("PATTERN_TRANSPORT_RECORDING")).toBeTruthy();
+  expect(within(diagnostics).getByText("HOST_STATE_INVALID")).toBeTruthy();
 });
 
 // #1958: playing opens the switch controls, recording keeps them closed
