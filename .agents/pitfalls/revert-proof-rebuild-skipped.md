@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-10-02
     occurrence: https://github.com/endaye/lmdj/pull/1766
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-10
+    occurrence: https://github.com/endaye/lmdj/issues/1983
+    observed_by: Codex (GPT-6)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -110,3 +113,19 @@ at least one second (two to be safe) before writing or touching the restored
 file. Then confirm the rebuild log names the restored translation unit as
 compiled before the run counts. `issue-done` §1 and the Minimization
 principle's Tests habit now say so.
+
+## Fifth occurrence, 2026-10-10: the freshness guard rejected the skipped restore
+
+The Core Pattern-switch prerequisite mutation restored its source with a fresh
+mtime, but the restore and mutant product still fell in the same second. GNU
+Make 3.81 exited zero without compiling the restored translation unit. The
+verification's artifact mtime check rejected that result before the restored
+test ran: source was newer than the unchanged mutant binary. It was retained
+as terminal failure, not GREEN evidence, with original log/hash and restored
+source bytes. [The Task record](https://github.com/endaye/lmdj/issues/1983)
+contains the receipt coordinates and exact timestamps.
+
+The repeated proof waited over one second before writing restoration, checked
+the actual source compile line plus new artifact hash/mtime, and then passed
+the original test. The absorbed skill exit already prescribes this procedure;
+no gate, timeout, stress budget or test selection changed.

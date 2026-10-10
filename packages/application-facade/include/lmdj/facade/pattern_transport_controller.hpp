@@ -39,6 +39,12 @@ class PatternTransportAudioPort {
   virtual std::uint64_t pattern_generation() const = 0;
   virtual std::optional<audio::PatternReplacementAuthority> pending_switch()
       const = 0;
+  // Explicit opt-in: a pending switch may cross Record opening. The
+  // coordinator binds a new journal to the retained native cutoff receipt.
+  // Accepted cutoff effects remain real if later journal IO fails.
+  virtual bool supports_receipt_bound_opening() const { return false; }
+  virtual std::optional<audio::PatternTransportObservation> observe_transport()
+      const { return std::nullopt; }
   // The engine's current Pattern identity on the same control lane.
   // `std::nullopt` means no retarget information: the engine has no current
   // Pattern or the port does not know it, and the coordinator keeps its

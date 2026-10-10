@@ -37,6 +37,13 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
       const override {
     return port_.pending_switch();
   }
+  bool supports_receipt_bound_opening() const override {
+    return port_.supports_receipt_bound_opening();
+  }
+  std::optional<audio::PatternTransportObservation> observe_transport()
+      const override {
+    return port_.observe_transport();
+  }
   std::optional<foundation::PatternId> current_pattern() const override {
     return port_.current_pattern();
   }

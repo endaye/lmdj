@@ -29,6 +29,8 @@ enum class RealtimeHookPoint : std::size_t {
   before_pattern_claim,
   pattern_admission_closed,
   control_pattern_admission_retry,
+  control_pattern_timing_captured,
+  control_pattern_before_publication,
   observation_read,
   capture_event_published,
   capture_idle_published,

@@ -34,7 +34,7 @@ Cardputer 构建定义 `LMDJ_VOICE_DSP=0`（`apps/cardputer-host/main/CMakeLists
 
 - `ResolvedVoiceDsp` 为空、不占字节，内核被编译掉。`voice_dsp.hpp` 的内联替身让引擎与离线渲染器无需改动即可编译；每个 voice 的内核状态与滤波器内存为空，包络固定为 declick。
 - 原因：Runtime Content v1 不承载 voice DSP 块，而 #1667 的逐 voice 状态在 Xtensa 目标 ABI 上把 `sizeof(RealtimeEngine)` 从 54 848 推到 83 008 字节，admission 超出设备内存。
-- 关闭后，admission 模型读取的每个尺寸都与 #1666 之前一致：Engine 42 304、三条队列合计 20 592、Bank 2 608、`ResolvedPad` 96、`PreparedPatternEvent` 64 字节。admission 为 304 239 字节，比设备实测上限 328 664 字节低 24 425 字节。
+- #1667 当时关闭 DSP 后，admission 模型读取的尺寸恢复为：Engine 42 304、三条队列合计 20 592、Bank 2 608、`ResolvedPad` 96、`PreparedPatternEvent` 64 字节；当时 admission 为 304 239 字节，比设备实测上限 328 664 字节低 24 425 字节。这是该次 Xtensa probe 的历史记录。后续双 authority transport 改变 Engine/command/receipt 布局，当前尺寸须由 exact-source probe 重新测量；设备边界与 admission 预算没有放宽。
 ## 3. 所有权与依赖
 当前开发源码在 Pattern 与本地 Pad 的实际 voice 激活处维护每次 start 的峰值。
 `peak_voices_audio()` 只允许唯一音频 owner 或已排空回调的调用方读取；不通过该接口
@@ -78,6 +78,10 @@ replay 使用原 scheduled release。fence 保持 playing 和 origin。
 
 串行控制 owner 提交 `PatternTransportCommand`，携带 runtime generation、epoch、
 expected Pattern generation、start/stop/fence，以及可选精确 pending-switch authority。
+`pending_switch_predecessor` 可再命名一个 audio-owned predecessor：有界集合最多两项，
+每项仍精确核对 generation、Pattern identity 和 activation frame。第二项必须伴随
+第一项且 generation 不重复；每个真实 Q/A 或尚未退役 pending slot 都必须被命名。
+当前 Pattern 不能作为自己的 switch，未确认的 zero predecessor 仍拒绝。
 首个 epoch 为 1，随后严格递增，耗尽拒绝。重复 start、stale identity 与非法 action
 拒绝，不解释成 toggle。单个 outstanding command 与单个 retained receipt 使用
 固定 SPSC cell；`PatternTransportCommandCell`/`PatternTransportReceiptCell` 均为 POD，
@@ -89,7 +93,31 @@ owner 对命令命名的 switch 作出决定：实际应用 S&lt;F 保留，未�
 已越过本 callback 消费点的命令取下一 callback 的实际 F；不会倒填 requested frame。
 `inspect_pattern_transport_receipt(generation, epoch)` 返回不可变历史值：F、origin、
 Pattern identity/generation/BPM、playing、完整 switch authority、cutoff decision，
-以及已经应用时的实际 S。延迟读取不改写决定。
+以及已经应用时的实际 S。`switch_outcomes` 保留至多两项完整 authority/decision/实际 S；
+B 已应用、随后被 C 变为 retiring 时仍报告 B 的实际 applied outcome，不误取消其声音或回收其槽。
+实际 S 由音频 owner 写入并绑定 publication generation；reclaimable 状态、未应用槽的默认 0
+或槽复用前的历史 S 都不能证明新 generation 已播放。控制取消后旧 callback 跨过该帧、
+下一 callback 才消费 cutoff 时仍报告 canceled，不伪造 applied。
+原单项字段保留兼容投影；只有一项时语义不变。延迟读取不改写决定。
+
+`pattern_transport_observation()` 在串行控制 lane 返回真实 current Pattern/generation/origin
+与 audio-owned、queued 两项精确 authority。origin 与 generation 来自同一 tagged transport
+交接；不把新 current 与旧 origin 或 telemetry 拼接，竞态返回 unavailable。
+`outstanding_cancellation` 单独命名 token 已为零但 audio-local 尚未退役的已取消槽，
+它不属于可播放 pending。所有 outstanding authority 合计最多两项。
+
+`publish_pattern_switch_view(view, replacement_authority)` 是显式选择的 1-BAR switch 路径。
+尚未 claim 的替换保持原 boundary；已 claim 的 B 即使还未到其 future frame，C 也排在
+B 的 strictly following Bar，使用 B 的 BPM/Bar anchor，并在 Q→A CAS 竞态后重新推导。
+返回的是 native publication 的实际 activation frame。B 应用后音频线程可在同一 callback
+中接管已排队 C，保证跨两个 boundary 的长 callback 也按返回帧应用，无需 Host tick。
+控制线程先在同一 lock-free uint32 Q mailbox 保留 publication admission，再读取时间与
+authority 并提交 payload。音频 claim 用固定 RMW 标记该 admission 失效，包括空 Q；
+该标记跨空交接保留到控制清理或重新保留，最终 CAS 不能把旧时间观察当成有效提交。
+控制被暂停直到 callback 越过原 following-Bar 后须重新观察并推导，返回帧仍是实际应用帧；
+不依赖有限 epoch 回绕、控制调度时限或新 64 位 atomic。
+普通 publication 与 overlay 保留原 callback-start claim 行为；音频每次交接只执行固定有界
+mailbox 操作，不等待或重试，没有控制影子队列、逐帧空轮询或新实时分配。
 
 调用者须先保存完整回执，再 `acknowledge_pattern_transport_receipt` 释放 reservation。
 该 API 只转移 RAM 保留责任，不提供 crash durability；录制 coordinator 必须先持久保留
