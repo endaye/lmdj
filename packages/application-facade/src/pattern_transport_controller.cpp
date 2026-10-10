@@ -80,6 +80,12 @@ project_io::SequenceAdmissionFence PatternTransportCoordinator::fence_from(
           switch_outcome(receipt.switch_decision), receipt.switch_applied_frame};
 }
 
+bool PatternTransportCoordinator::retains_command_id(
+    const foundation::CommandId& command_id) const {
+  return (pending_ && pending_->command_id == command_id) ||
+         retained_.contains(command_id);
+}
+
 PatternTransportSubmit PatternTransportCoordinator::request(
     const PatternTransportRequest& request) {
   if (request.runtime_generation != runtime_generation_ ||

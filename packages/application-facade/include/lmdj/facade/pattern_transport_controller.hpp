@@ -160,6 +160,11 @@ class PatternTransportController {
       delete;
 
   PatternTransportSubmit request(const PatternTransportRequest& request);
+  // Pure control-lane lookup, serialized like `request`. Identifies pending
+  // or completed command IDs so a Host can defer replay validation to this
+  // controller before applying a new-command admission guard. This is not an
+  // authority verdict: `request` still validates the complete request.
+  bool retains_command_id(const foundation::CommandId& command_id) const;
   PatternTransportStatus inspect() const;
   foundation::Result<void> continue_operation();
   // Offers one post-enqueue candidate to the recording admission. Fails while

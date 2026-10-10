@@ -105,6 +105,11 @@ PatternTransportSubmit PatternTransportController::request(
   return impl_->coordinator.request(request);
 }
 
+bool PatternTransportController::retains_command_id(
+    const foundation::CommandId& command_id) const {
+  return impl_->coordinator.retains_command_id(command_id);
+}
+
 PatternTransportStatus PatternTransportController::inspect() const {
   return impl_->coordinator.inspect();
 }
