@@ -201,12 +201,13 @@ async function inspectTransport(page, sessionId) {
 // Pattern stays current until the boundary" is observed instead of raced.
 async function awaitEarlyBar(page, sessionId, bpm) {
   const barFrames = 48_000 * 4 * 60 / bpm;
+  // A steady one-second poll can phase-lock outside this sub-bar window.
   await expect.poll(async () => {
     const status = await inspectTransport(page, sessionId);
     if (status.playing !== true || status.pending_switch != null) return false;
     const position = (status.runtime_frame - status.origin_frame) % barFrames;
     return position >= 0 && position < barFrames / 5;
-  }, {timeout: 30_000}).toBe(true);
+  }, {timeout: 30_000, intervals: [100]}).toBe(true);
 }
 
 async function transportRequests(page) {
