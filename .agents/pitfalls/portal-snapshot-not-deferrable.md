@@ -1,51 +1,41 @@
 ---
 id: portal-snapshot-not-deferrable
 area: docs-governance
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/issues/436
     observed_by: claude-opus-5
-exit: none
+  - date: 2026-10-10
+    occurrence: https://github.com/endaye/lmdj/issues/1822
+    observed_by: codex
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
-# An immutable Portal snapshot cannot be scheduled after the Product Build integration merges, because the Core `full` tier and the Portal check both read the snapshot for whatever Product Build the manifests already name.
+# A new Product Build allocation and its matching immutable snapshot must ship in the same PR.
 
 ## Why
 
-The obligation is triggered by the allocation, not by the merge. The moment
-`products/lmdj/version.json` names a new Product Build,
-`apps/architecture-portal/scripts/check-release-docs.mjs` requires a matching
-snapshot unconditionally, `.github/workflows/ci.yml` runs the full
-`scripts/architecture-portal.sh check`, and six `build.release_*` tests in the
-Core `full` tier read
-`apps/architecture-portal/versioned_metadata/version-<build>.json` directly.
-
-So an implementation plan that allocates the Build in one Task and defers the
-snapshot to a later post-merge Task describes an unshippable sequence: the
-first Task cannot go green on its own, locally or in CI. The Stage 10 plan
-split #436 (integration) from #438 (snapshot) exactly that way, and the gap was
-only visible after the version bump was already written.
-
-This is not the same failure as
-[`squash-witness-provenance`](squash-witness-provenance.md). That entry covers
-provenance *after* the two land in one squash; this one is about a plan that
-never lets them land together in the first place.
+The current Build's Portal check compares actual identities and lock facts with
+its immutable snapshot. Freezing requires a clean committed source, so deferring
+it to a later PR leaves an unshippable allocation. This recurred while planning
+Project live-control syntax: schema, selected Contract and lock cannot change
+under the old Build/snapshot. The generic identity-cut source/snapshot bootstrap
+also has to support already-merged Module/Host/Provider identity settlement.
+The 2026-10-10 UTC observation belongs to the still-open #1822 follow-up Goal;
+[the bootstrap plan](../../docs/plans/2026-10-11-product-cut-snapshot-bootstrap.md)
+records the concrete source/tool premises and the independently reviewed cut.
 
 ## How to apply
 
-Write the plan so the immutable snapshot lands in the **same Pull Request** as
-the Product Build allocation. Keep them as two commits if the plan wants
-separate reviewable units — Product Build `1.0.41.0` (#520) and `1.0.40.0`
-(#420) both did this — but never as two Pull Requests.
-
-The snapshot freeze requires a clean worktree and binds the current `HEAD`, so
-the order inside the branch is fixed: commit the integration, then run
-`scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL`, then commit the
-snapshot. Any later amendment of the integration commit changes its SHA and
-invalidates the frozen revision, so delete the snapshot artifacts and refreeze
-rather than editing them.
-
-A follow-up Task then retains only what genuinely cannot exist before the
-merge: the post-squash source-tree witness, the merged revision, and the remote
-CI run IDs.
+Follow the source/snapshot mechanism in
+[`issue-done` §1](../skills/issue-done/SKILL.md#1-prerequisites--verification-check),
+which references [canonical S0/S1](../../docs/governance/git-workflow.md#product-cut-source-and-snapshot-phases).
+S0 retains real nonzero missing-snapshot evidence and complete source/current
+PASS; it is only a local clean freeze checkpoint. S1 must pass the original
+complete checks before both atomic Tasks ship together in one PR. Snapshot-only
+Tasks retain the canonical direct-parent preference. Keep real baseline/source/
+squash identities distinct; preserve interrupted bytes for official resume and
+verify actual postmerge provenance. Never delete/refreeze generically, hand-edit
+metadata or use historical two-commit examples as an exemption. This mechanism
+adds no release or cleanup authority.

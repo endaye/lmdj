@@ -8,6 +8,10 @@ source_paths:
   - docs/design/2026-08-03-lmdj-architecture-portal-design.md
   - docs/plans/2026-08-04-lmdj-architecture-portal.md
   - docs/governance/architecture-portal.md
+  - docs/governance/git-workflow.md
+  - docs/governance/version-management.md
+  - apps/docs-site/scripts/lib/version-docs.mjs
+  - apps/docs-site/scripts/lib/snapshot-provenance.mjs
   - docs/governance/pitfall-ledger.md
   - .github/workflows/architecture-portal.yml
   - .github/workflows/deploy-cloudflare-portal.yml
@@ -37,7 +41,31 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 任何改变产品能力、Module/Host/Provider/Contract/Assembly/平台/发布流程的版本 Task，都必须同步对应页面和图；Product Build 或 Assembly 变化不能声明文档无影响。
 ## 快照规则
 本地构建、普通 CI 和 PR Preview 只校验 current 页面，不创建永久快照。任何已分配并交付团队测试的 `canary`、`dev`、`beta` Product Build，以及 `stable` 发布，都必须冻结匹配的不可变快照；current main 始终标明非正式快照。
-schema-2 快照把 37 页 current source、versioned sidebar、十张图的 20 个 HTML/SVG 资产和自认证 Git/source projection 元数据作为一个生成边界。版本页的卡片按 active doc ID 解析，图表按版本资产根解析；缺失、重复、越界、符号链接或哈希漂移都 fail closed。已有 schema-1 快照保持只读兼容，不回写为 schema 2。若 squash introducing tree 还包含冻结后的 mutable current/non-projection 更新，必须用 `scripts/docs-site.sh witness PRODUCT_BUILD INTRODUCING_REVISION` 生成反向差异；验证器只在临时 Git index 精确重建 raw source commit 已认证的 tree/commit 后才接受，不能重建、身份不匹配或被篡改的 witness 继续 fail closed，且不能改写不可变快照。
+schema-2 快照把 52 页 current source、versioned sidebar、十张图的 20 个 HTML/SVG 资产和自认证 Git/source projection 元数据作为一个生成边界。版本页的卡片按 active doc ID 解析，图表按版本资产根解析；缺失、重复、越界、符号链接或哈希漂移都 fail closed。已有 schema-1 快照保持只读兼容，不回写为 schema 2。若 squash introducing tree 还包含冻结后的 mutable current/non-projection 更新，必须用 `scripts/docs-site.sh witness PRODUCT_BUILD INTRODUCING_REVISION` 生成反向差异；验证器只在临时 Git index 精确重建 raw source commit 已认证的 tree/commit 后才接受，不能重建、身份不匹配或被篡改的 witness 继续 fail closed，且不能改写不可变快照。
+## 新 Build cut 的 source 与 snapshot
+
+已合入、已验证的 `main` implementation baseline 上，identity-only allocation cut
+声明 S0/S1 两个 linked Task，各一个 Conventional Commit，在同一 PR 完整 shipping。
+已有 registered Contract 的兼容 schema formalization 是显式附加范围；它不证明
+producer、DSP 或 Replay 已支持新语法。cut 不能夹带未合入实现或修改保护、生成器、
+验证器。baseline、clean allocation/freeze source 和实际 squash main target 分别记录。
+
+S0 完成全部源/版本/conformance 与整个 `check:current`，并实际运行完整
+`scripts/docs-site.sh check`。只有实际新 Build 的 versions entry、snapshot source、
+metadata 三项均不存在时，才按 canonical 精确错误集合保留非零的生成前置结果；
+它不是 PASS 或独立 shipping 资格。完整 check 会在 release-docs 提前停止，因此
+必须另有 entire check:current 的 type/build/route far-side 证据。S1 只冻结 unchanged
+clean S0 HEAD 的官方精确生成边界，原完整 check 通过后才能提交并一起进入正常
+current-head review、batch-only evidence、冲突/对话保护和 squash。不能用旧 snapshot、
+accepted-risk 或 current-only 代替最后完整检查。
+
+Build/BOM 已在 main 的 snapshot-only Task 优先首个/唯一提交的 direct-parent；新 cut
+实际核验 squash projection 与 postmerge introducing SHA，需要时仅用官方 witness。
+中断保留原 source 与生成字节，`scripts/docs-site.sh resume-version` 只验证完整的原
+freeze，不补生成；部分或不匹配结果停止并显式核对。retention 需独立明确范围和适用
+授权，必须在 S0 source checkpoint 前完成，不能夹进 S1 生成边界。具体错误、命令与
+来源规则见 `docs/governance/architecture-portal.md` 和 `docs/governance/git-workflow.md`。
+
 ## 发布规则
 正式入口为 [产品说明书](https://docs.lmdj.workers.dev)。页面 canonical、Open Graph
 地址及 sitemap 使用该固定入口；版本 Preview 仍引用正式 canonical。此变更不修改
@@ -45,7 +73,7 @@ schema-2 快照把 37 页 current source、versioned sidebar、十张图的 20 �
 Git 合入 main 触发 Cloudflare 构建；先通过完整 Portal check，再验证同一 Git SHA 的版本 Preview，发布同一个 version ID 并验证生产 smoke。手工本地上传不能替代 Git 生产流程。
 
 ## CI 影响检查
-Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；只改 Product 身份再生成文件并冻结当前 Product Build 快照的纯候选 cut 除外，因为 current 页面身份全部由 manifest 派生；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 source revision、source-rebuilt Product/Assembly facts、37 页清单、sidebar、版本图表、Channel、freeze time 和 introducing commit 一致；来源关系只接受 direct-parent、byte-identical squash projection，或能精确重建已认证 source tree/commit 的显式 squash witness。
+Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；只改 Product 身份再生成文件并冻结当前 Product Build 快照的纯候选 cut 除外，因为 current 页面身份全部由 manifest 派生；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 source revision、source-rebuilt Product/Assembly facts、52 页清单、sidebar、版本图表、Channel、freeze time 和 introducing commit 一致；来源关系只接受 direct-parent、byte-identical squash projection，或能精确重建已认证 source tree/commit 的显式 squash witness。
 
 ## Cloudflare 迁移试点
 
