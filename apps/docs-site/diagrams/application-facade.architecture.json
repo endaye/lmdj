@@ -154,7 +154,7 @@
     },
     {
       "title": "Performance authority",
-      "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending."
+      "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. Replay is legacy-only: no header, no input_sequence, locked kinds 0-6. Application and Reference reject unsupported profiles before Replay bookkeeping/native effects. P0 data read/Cook does not enable new-profile Replay; full P1 header ACK, typed Filter and 64-Pad gates remain pending. Staged transport tickets bind generation/epoch/command/step; Worker owns work/leases, Control never waits for IO. Reconcile before consume; unknown never authorizes retry. Global integration pending."
     },
     {
       "title": "Runtime boundary",

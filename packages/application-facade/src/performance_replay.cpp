@@ -1,5 +1,6 @@
 #include <lmdj/facade/performance_replay.hpp>
 
+#include <algorithm>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -179,6 +180,34 @@ ReferencePerformanceReplayController::begin(
     return foundation::Result<ReplayRuntimeStatus>::failure(replay_error(
         foundation::ErrorCode::invalid_argument,
         "Performance replay begin request is invalid"));
+  }
+  const auto legacy_boundary = [](const cooker::PerformanceReplayBoundary&
+                                      boundary) {
+    if (boundary.event.input_sequence.has_value()) {
+      return false;
+    }
+    switch (domain::performance_event_kind(boundary.event)) {
+      case domain::PerformanceEventKind::pad_hit:
+      case domain::PerformanceEventKind::pattern_launch:
+      case domain::PerformanceEventKind::fx_engage:
+      case domain::PerformanceEventKind::fx_move:
+      case domain::PerformanceEventKind::fx_release:
+      case domain::PerformanceEventKind::hold_on:
+      case domain::PerformanceEventKind::hold_off:
+        return true;
+      default:
+        return false;
+    }
+  };
+  if (projection->initial_live_state.has_value() ||
+      !std::all_of(projection->boundaries.begin(), projection->boundaries.end(),
+                   legacy_boundary)) {
+    return foundation::Result<ReplayRuntimeStatus>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Performance replay Runtime does not support header, "
+        "input_sequence or live-control profiles",
+        {{"reason", "performance_replay_profile_unsupported"}},
+    });
   }
   for (std::size_t index = 1; index < projection->boundaries.size(); ++index) {
     if (projection->boundaries.at(index - 1).offset_tick >
