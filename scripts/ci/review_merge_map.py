@@ -78,11 +78,11 @@ def review_record(body):
     return codec.decode(body)
 
 
-def policy_at(control):
+def policy_at(control, *, allow_retired_lanes=False):
     documents = [json.loads(pipeline.git("show", control + ":scripts/ci/" + name),
                             object_pairs_hook=change_scope.reject_duplicates)
                  for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")]
-    return test_scope.parse_policy(*documents)
+    return test_scope.parse_policy(*documents, allow_retired_lanes=allow_retired_lanes)
 
 
 def authenticated_record(record, *, repository_id, workflow_id, download):
@@ -119,7 +119,7 @@ def authenticated_record(record, *, repository_id, workflow_id, download):
             "historical control is not main ancestry")
     require(pipeline.git("show", run["head_sha"] + ":.github/workflows/pr-review.yml")
             == pipeline.git("show", record["control_sha"] + ":.github/workflows/pr-review.yml"), "historical workflow source differs from trusted control")
-    test_scope.validate_record(record, policy_at(record["control_sha"]), identity)
+    test_scope.validate_record(record, policy_at(record["control_sha"], allow_retired_lanes=True), identity)
     name = f"pr-test-scope-{record['head_sha']}-{run_id}-{attempt}"
     artifacts = [a for a in pipeline.pages(f"/repos/{repo}/actions/runs/{run_id}/artifacts", "artifacts") if a.get("name") == name]
     require(len(artifacts) == 1 and artifacts[0].get("expired") is False, "historical scope artifact is missing or expired")

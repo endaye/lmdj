@@ -90,7 +90,7 @@ class Inputs:
     def verify_target(self, target):
         batch.require(target in self.policies, "missing complete target history")
 
-    def policy_at(self, sha):
+    def policy_at(self, sha, *, allow_retired_lanes=False):
         batch.require(sha in self.policies, "missing historical policy")
         return self.policies[sha]
 
@@ -596,6 +596,117 @@ class RealGitTests(unittest.TestCase):
         self.inputs.refresh()
         with self.assertRaisesRegex(batch.BatchError, "Git input"):
             self.inputs.policy_at(self.tip)
+
+
+class RetiredEraReplayTests(unittest.TestCase):
+    """Journal replay over a pre-#1997 control must not fail closed.
+
+    Defect: #1997 retired the chameleon_lab lane from the closed canonical
+    registry, so every later strict parse of an era policy document raised
+    "lanes do not match the closed v1 allowlist" and the scheduler/report
+    controllers stopped at the first historical request. Read-only replay is
+    tolerant; current admission reads of the same control stay strict.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.git("init", "-q")
+        self.git("config", "user.name", "Fixture")
+        self.git("config", "user.email", "fixture@example.invalid")
+        self.write_documents(self.era_documents())
+        self.base = self.commit()
+        self.write_documents([json.loads((ROOT / "scripts/ci" / name).read_text())
+                              for name in ("scope_policy.json", "self_test_policy.json",
+                                           "test_scope_policy.json")])
+        self.tip = self.commit()
+        self.inputs = controller.GitInputs(self.root, self.tip, lambda: self.tip)
+        self.inputs.refresh()
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True).stdout.decode().strip()
+
+    def commit(self):
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture")
+        return self.git("rev-parse", "HEAD")
+
+    def write_documents(self, documents):
+        for name, document in zip(("scope_policy.json", "self_test_policy.json", "test_scope_policy.json"),
+                                  documents):
+            target = self.root / "scripts/ci" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(document, indent=2) + "\n")
+
+    def era_documents(self):
+        """Current documents plus exactly the verified `git show 305b76608^` deltas."""
+        routing = json.loads((ROOT / "scripts/ci/scope_policy.json").read_text())
+        routing["lanes"].insert(routing["lanes"].index("package"), "chameleon_lab")
+        routing["lane_jobs"]["chameleon_lab"] = ["chameleon-lab"]
+        hosted = routing["self_hosted_jobs"]
+        hosted.insert(hosted.index("package"), "chameleon-lab")
+        routing["rules"].extend([
+            {"match": {"kind": "prefix", "value": "demos/chameleon-lab/"},
+             "lanes": ["portal", "chameleon_lab"]},
+            {"match": {"kind": "prefix", "value": "apps/chameleon-lab/"},
+             "lanes": ["portal", "chameleon_lab"],
+             "note": "Retain ownership for the old side of migration/deletion ranges"},
+            {"match": {"kind": "exact", "value": "scripts/chameleon-lab.sh"},
+             "lanes": ["chameleon_lab"]},
+        ])
+        inventory = json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())
+        position = [suite["id"] for suite in inventory["suites"]].index("package")
+        inventory["suites"].insert(position, {
+            "id": "chameleon_lab",
+            "origin": {"kind": "scope_lane", "lane": "chameleon_lab"},
+            "jobs": ["chameleon-lab"], "required": True,
+        })
+        config = json.loads((ROOT / "scripts/ci/test_scope_policy.json").read_text())
+        return [routing, inventory, config]
+
+    def replay(self, events):
+        return controller.Controller(None, self.inputs, {"run_id": 2, "attempt": 1},
+            run_state=None, result_for=None, old_runs_terminal=None,
+            lock_held=None, epoch="epoch")._replay(events)
+
+    def test_replay_accepts_history_under_a_retired_era_control(self):
+        era_policy = self.inputs.policy_at(self.base, allow_retired_lanes=True)
+        request = batch.make_request(era_policy, request_id="batch:epoch:0", kind="bootstrap",
+            base_sha=None, target_sha=self.base, control_sha=self.base,
+            selection=test_scope._selection(era_policy, era_policy.suite_ids,
+                                            ["bootstrap requires full"]),
+            origin_run={"run_id": 1, "attempt": 1})
+        self.assertIn("chameleon_lab", request["selection"]["suites"],
+                      "why: the fixture lost the retired suite; remedy: restore the era selection")
+        events = [
+            {"id": "epoch:0", "epoch": "epoch", "generation": 0, "type": "observe",
+             "data": {"target": self.base, "descends_pending": True}},
+            {"id": "epoch:1", "epoch": "epoch", "generation": 1, "type": "admit",
+             "data": {"request": request, "executor_run": {"run_id": 1, "attempt": 1},
+                      "history_complete": True, "ancestor": True, "old_runs_terminal": True}},
+            {"id": "epoch:2", "epoch": "epoch", "generation": 2, "type": "claim",
+             "data": {"request_id": "batch:epoch:0", "run": {"run_id": 1, "attempt": 1}}},
+            {"id": "epoch:3", "epoch": "epoch", "generation": 3, "type": "result",
+             "data": {"request_id": "batch:epoch:0", "run": {"run_id": 1, "attempt": 1},
+                      "target": self.base, "policy": era_policy.digest,
+                      "outcomes": {suite: "passed" for suite in request["selection"]["suites"]},
+                      "reference": "durable:batch:epoch:0", "terminal": True}},
+            {"id": "epoch:4", "epoch": "epoch", "generation": 4, "type": "advance",
+             "data": {"request_id": "batch:epoch:0"}},
+        ]
+        state = self.replay(events)
+        self.assertEqual(state["processed"], self.base,
+                         "why: replay over a retired-era control failed; remedy: tolerate the recorded retired lanes")
+
+    def test_current_admission_read_of_the_era_control_stays_strict(self):
+        with self.assertRaisesRegex(test_scope.ScopeError, "lanes do not match the closed v1 allowlist"):
+            self.inputs.policy_at(self.base)
+        # A tolerant replay parse must not satisfy a later strict admission
+        # read of the same control from the cache.
+        self.inputs.policy_at(self.base, allow_retired_lanes=True)
+        with self.assertRaisesRegex(test_scope.ScopeError, "lanes do not match the closed v1 allowlist"):
+            self.inputs.policy_at(self.base)
 
 
 if __name__ == "__main__":

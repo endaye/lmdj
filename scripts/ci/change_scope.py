@@ -116,6 +116,37 @@ _CANONICAL_SELF_HOSTED_JOBS = (
 # The exact reason recorded on a `push` whose event-supplied base range cannot
 # be verified; it is a full-mode upgrade reason, never a lane input.
 UNVERIFIABLE_PUSH_BASE = "unverifiable push base"
+# Closed registry of lanes retired from the canonical tuple. Each entry pins
+# the exact pre-retirement facts historical policy documents still carry: the
+# current canonical lane before which the retired lane stood, its lane jobs,
+# and the subset of those jobs the canonical self-hosted set held. Only
+# opt-in historical-replay parsing may accept them; current admission never
+# does. chameleon_lab facts recovered from `git show 305b76608^` (PR #1997).
+_RETIRED_LANES = {
+    "chameleon_lab": {
+        "before": "package",
+        "jobs": ("chameleon-lab",),
+        "self_hosted": ("chameleon-lab",),
+    },
+}
+
+
+def _historical_lanes() -> tuple[str, ...]:
+    anchors = [record["before"] for record in _RETIRED_LANES.values()]
+    if len(set(anchors)) != len(anchors) or not set(anchors) <= set(_CANONICAL_LANES):
+        raise ValueError("retired lane anchors must name distinct current canonical lanes")
+    order: list[str] = []
+    for lane in _CANONICAL_LANES:
+        order.extend(retired for retired, record in _RETIRED_LANES.items()
+                     if record["before"] == lane)
+        order.append(lane)
+    return tuple(order)
+
+
+# The canonical tuple with every retired lane at its recorded historical
+# position; a tolerated era document names exactly this order restricted to
+# the lanes it carries.
+_HISTORICAL_LANES = _historical_lanes()
 _MANDATORY_FULL_MATCHES = {
     ("exact", ".github/workflows/ci.yml"),
     ("prefix", "scripts/ci/"),
@@ -321,22 +352,46 @@ def _validate_match(match: object) -> None:
         raise ValueError("match value must be a nonempty string")
 
 
-def _validate_policy(policy: Mapping[str, object]) -> None:
+def _validate_policy(
+    policy: Mapping[str, object], *, allow_retired_lanes: bool = False
+) -> None:
     if set(policy) != _POLICY_KEYS:
         raise ValueError("policy schema is not closed")
     if policy["schema"] != "lmdj.ci-scope-policy.v1" or policy["manifest_schema"] != "lmdj.ci-scope.v2":
         raise ValueError("unknown policy schema")
     lanes = policy["lanes"]
-    if not isinstance(lanes, list) or tuple(lanes) != _CANONICAL_LANES:
-        raise ValueError("lanes do not match the closed v1 allowlist")
+    if allow_retired_lanes:
+        # Historical-replay mode: the current canonical tuple plus any subset
+        # of the closed retired-lane registry, each retired lane only at its
+        # recorded historical position. Current admission never passes this.
+        lane_set = set(lanes) if isinstance(lanes, list) else set()
+        retired = lane_set & set(_RETIRED_LANES)
+        if (not isinstance(lanes, list)
+                or not set(_CANONICAL_LANES) <= lane_set
+                or tuple(lanes) != tuple(lane for lane in _HISTORICAL_LANES if lane in lane_set)):
+            raise ValueError(
+                "lanes do not match the closed v1 allowlist or a recorded retired-lane era")
+        expected_lane_jobs = {
+            lane: (_RETIRED_LANES[lane]["jobs"] if lane in retired
+                   else _CANONICAL_LANE_JOBS[lane])
+            for lane in lanes
+        }
+        expected_self_hosted = set(_CANONICAL_SELF_HOSTED_JOBS) | {
+            job for lane in retired for job in _RETIRED_LANES[lane]["self_hosted"]
+        }
+    else:
+        if not isinstance(lanes, list) or tuple(lanes) != _CANONICAL_LANES:
+            raise ValueError("lanes do not match the closed v1 allowlist")
+        expected_lane_jobs = _CANONICAL_LANE_JOBS
+        expected_self_hosted = set(_CANONICAL_SELF_HOSTED_JOBS)
     lane_set = set(lanes)
     lane_jobs = policy["lane_jobs"]
     if not isinstance(lane_jobs, dict) or {
         lane: tuple(jobs) if isinstance(jobs, list) else jobs
         for lane, jobs in lane_jobs.items()
-    } != _CANONICAL_LANE_JOBS:
+    } != expected_lane_jobs:
         raise ValueError("lane jobs do not match the closed v1 mapping")
-    formal_jobs = {job for jobs in _CANONICAL_LANE_JOBS.values() for job in jobs}
+    formal_jobs = {job for jobs in expected_lane_jobs.values() for job in jobs}
     self_hosted = policy["self_hosted_jobs"]
     if not isinstance(self_hosted, list) or not all(
         isinstance(job, str) for job in self_hosted
@@ -350,9 +405,9 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
             "self-hosted jobs reference non-formal job(s): "
             + ", ".join(non_formal)
         )
-    if set(self_hosted) != set(_CANONICAL_SELF_HOSTED_JOBS):
-        missing = sorted(set(_CANONICAL_SELF_HOSTED_JOBS) - set(self_hosted))
-        extra = sorted(set(self_hosted) - set(_CANONICAL_SELF_HOSTED_JOBS))
+    if set(self_hosted) != expected_self_hosted:
+        missing = sorted(expected_self_hosted - set(self_hosted))
+        extra = sorted(set(self_hosted) - expected_self_hosted)
         details = []
         if missing:
             details.append("missing " + ", ".join(missing))

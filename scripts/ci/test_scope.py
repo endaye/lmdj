@@ -65,11 +65,11 @@ class ScopePolicy:
         return tuple(suite.id for suite in self.inventory.suites)
 
 
-def parse_policy(routing, inventory, config):
+def parse_policy(routing, inventory, config, *, allow_retired_lanes=False):
     require(isinstance(routing, dict) and isinstance(inventory, dict),
             "canonical policies must be objects")
     try:
-        change_scope._validate_policy(routing)
+        change_scope._validate_policy(routing, allow_retired_lanes=allow_retired_lanes)
         inventory_policy = self_test.parse_policy(inventory)
     except (ValueError, TypeError, KeyError) as error:
         raise ScopeError(f"why: invalid upstream policy: {error}; remedy: restore the trusted canonical policies") from error

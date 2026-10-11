@@ -330,7 +330,8 @@ def collect(api, repository, run_id, attempt):
             "review PR event does not bind actual head")
     policy = test_scope.parse_policy(*[json.loads(_source(api, repository, control, "scripts/ci/" + name),
                                                object_pairs_hook=change_scope.reject_duplicates)
-        for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")])
+        for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")],
+        allow_retired_lanes=True)
     history = documents["history.json"]
     coverages = {review_scope.coverage_digest(documents[name]): documents[name] for name in coverage_names}
     collector_witness = documents.get("collector.json") if isinstance(history, dict) else None

@@ -781,7 +781,7 @@ class RuntimeTests(unittest.TestCase):
             self.api.runs[19].update(status="completed", conclusion="failure")
             self.api.jobs[19][0].update(status="completed", conclusion="success")
         original = instance.inputs.policy_at
-        def unavailable(revision):
+        def unavailable(revision, **kwargs):
             if revision == self.api.sha:
                 raise OSError("policy read unavailable")
             return original(revision)

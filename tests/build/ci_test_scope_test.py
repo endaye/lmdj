@@ -487,5 +487,78 @@ class BoundedReasonsTests(unittest.TestCase):
                 incremental_batch._request(policy, request)
 
 
+class RetiredLanePolicyTests(unittest.TestCase):
+    """Pre-#1997 policy documents parse only under opt-in retired-lane tolerance.
+
+    The era documents are the current documents plus exactly the verified
+    `git show 305b76608^` deltas: the chameleon_lab lane between
+    deploy_contract and package, its lane job and self-hosted entry, its three
+    routing rules, and its inventory suite between deploy_contract and
+    package. test_scope_policy.json is byte-identical across the removal.
+    """
+
+    def era_documents(self):
+        routing = json.loads((ROOT / "scripts/ci/scope_policy.json").read_text())
+        routing["lanes"].insert(routing["lanes"].index("package"), "chameleon_lab")
+        routing["lane_jobs"]["chameleon_lab"] = ["chameleon-lab"]
+        hosted = routing["self_hosted_jobs"]
+        hosted.insert(hosted.index("package"), "chameleon-lab")
+        routing["rules"].extend([
+            {"match": {"kind": "prefix", "value": "demos/chameleon-lab/"},
+             "lanes": ["portal", "chameleon_lab"]},
+            {"match": {"kind": "prefix", "value": "apps/chameleon-lab/"},
+             "lanes": ["portal", "chameleon_lab"],
+             "note": "Retain ownership for the old side of migration/deletion ranges"},
+            {"match": {"kind": "exact", "value": "scripts/chameleon-lab.sh"},
+             "lanes": ["chameleon_lab"]},
+        ])
+        inventory = json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())
+        position = [suite["id"] for suite in inventory["suites"]].index("package")
+        inventory["suites"].insert(position, {
+            "id": "chameleon_lab",
+            "origin": {"kind": "scope_lane", "lane": "chameleon_lab"},
+            "jobs": ["chameleon-lab"], "required": True,
+        })
+        config = json.loads((ROOT / "scripts/ci/test_scope_policy.json").read_text())
+        return routing, inventory, config
+
+    def test_retired_era_policy_parses_only_with_opt_in_tolerance(self):
+        routing, inventory, config = self.era_documents()
+        with self.assertRaisesRegex(scope.ScopeError, "lanes do not match the closed v1 allowlist"):
+            scope.parse_policy(routing, inventory, config)
+        policy = scope.parse_policy(routing, inventory, config, allow_retired_lanes=True)
+        self.assertIn("chameleon_lab", policy.suite_ids)
+
+    def test_tolerant_parse_preserves_the_raw_document_digest(self):
+        routing, inventory, config = self.era_documents()
+        policy = scope.parse_policy(routing, inventory, config, allow_retired_lanes=True)
+        self.assertEqual(policy.digest, scope.self_test.digest_of(
+            {"routing": routing, "inventory": inventory, "scope": config}),
+            "why: tolerant parsing changed the policy digest; "
+            "remedy: keep the digest over the raw documents so historical digest comparisons still match")
+
+    def test_tolerant_mode_rejects_non_registry_variations(self):
+        for name, mutate in {
+            "wrong retired jobs": lambda routing: routing["lane_jobs"].__setitem__(
+                "chameleon_lab", ["other-job"]),
+            "unknown extra lane": lambda routing: routing["lanes"].append("staging_lab"),
+        }.items():
+            with self.subTest(name=name):
+                routing, inventory, config = self.era_documents()
+                mutate(routing)
+                with self.assertRaisesRegex(scope.ScopeError, "invalid upstream policy"):
+                    scope.parse_policy(routing, inventory, config, allow_retired_lanes=True)
+
+    def test_era_selection_naming_the_retired_suite_round_trips(self):
+        policy = scope.parse_policy(*self.era_documents(), allow_retired_lanes=True)
+        selection = scope._selection(policy, ["chameleon_lab"], ["historical chameleon-lab change"])
+        request = incremental_batch.make_request(
+            policy, request_id="batch:era:0", kind="auto", base_sha="a" * 40,
+            target_sha="b" * 40, control_sha="c" * 40, selection=selection,
+            origin_run={"run_id": 1, "attempt": 1})
+        self.assertEqual(request["policy"], policy.digest)
+        incremental_batch._request(policy, request)
+
+
 if __name__ == "__main__":
     unittest.main()

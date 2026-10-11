@@ -121,7 +121,7 @@ def plan_batch_reports(repository, state, inputs):
     for order, request_id in enumerate(ordered, 1):
         result = state["results"][request_id]
         request = state["requests"][request_id]
-        policy = inputs.policy_at(request["control"])
+        policy = inputs.policy_at(request["control"], allow_retired_lanes=True)
         run = result["run"]
         identity = dict(request_id=request_id, request_kind=request["kind"], base_sha=request["base"],
             target_sha=request["target"], control_sha=request["control"], policy_digest=request["policy"],
@@ -253,7 +253,7 @@ def plan_bucket_recoveries(state, inputs):
         reference = result["reference"]
         if reference.startswith("missing:") or reference.startswith("not-required:"):
             continue
-        policy = inputs.policy_at(request["control"])
+        policy = inputs.policy_at(request["control"], allow_retired_lanes=True)
         identity = dict(request_id=request_id, request_kind=request["kind"], base_sha=request["base"],
                         target_sha=request["target"], control_sha=request["control"], policy_digest=request["policy"],
                         run_id=result["run"]["run_id"], run_attempt=result["run"]["attempt"])
@@ -292,7 +292,7 @@ def causal_floor(state, inputs):
         request = state["requests"][request_id]
         if request["kind"] not in {"auto", "bootstrap"}:
             continue
-        policy = inputs.policy_at(request["control"])
+        policy = inputs.policy_at(request["control"], allow_retired_lanes=True)
         for suite, outcome in state["results"][request_id]["outcomes"].items():
             if outcome == "passed":
                 continue

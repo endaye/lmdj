@@ -255,6 +255,30 @@ def changed(module, *paths):
     return tuple(module.ChangedFile("A", (path,)) for path in paths)
 
 
+def retired_era_policy(policy):
+    """The pre-#1997 document: current policy plus exactly the retired deltas.
+
+    The three rules and the lane/job/self-hosted insertions are the verified
+    `git show 305b76608^:scripts/ci/scope_policy.json` content.
+    """
+    era = copy.deepcopy(policy)
+    era["lanes"].insert(era["lanes"].index("package"), "chameleon_lab")
+    era["lane_jobs"]["chameleon_lab"] = ["chameleon-lab"]
+    era["self_hosted_jobs"].insert(
+        era["self_hosted_jobs"].index("package"), "chameleon-lab"
+    )
+    era["rules"].extend([
+        {"match": {"kind": "prefix", "value": "demos/chameleon-lab/"},
+         "lanes": ["portal", "chameleon_lab"]},
+        {"match": {"kind": "prefix", "value": "apps/chameleon-lab/"},
+         "lanes": ["portal", "chameleon_lab"],
+         "note": "Retain ownership for the old side of migration/deletion ranges"},
+        {"match": {"kind": "exact", "value": "scripts/chameleon-lab.sh"},
+         "lanes": ["chameleon_lab"]},
+    ])
+    return era
+
+
 def policy_match(match, path):
     kind, value = match["kind"], match["value"]
     if kind == "exact":
@@ -777,6 +801,62 @@ class ChangeScopeTest(unittest.TestCase):
                         base_sha="a" * 40, head_sha="b" * 40,
                         event_name="pull_request", draft=False, labels=(),
                     )
+
+    def test_retired_lane_registry_records_the_exact_chameleon_lab_history(self):
+        # Pinned against `git show 305b76608^:scripts/ci/scope_policy.json`:
+        # chameleon_lab stood between deploy_contract and package, ran the
+        # chameleon-lab job, and that job was in the canonical self-hosted set.
+        registry = self.module._RETIRED_LANES
+        self.assertEqual(set(registry), {"chameleon_lab"})
+        self.assertEqual(registry["chameleon_lab"], {
+            "before": "package",
+            "jobs": ("chameleon-lab",),
+            "self_hosted": ("chameleon-lab",),
+        })
+        historical = self.module._HISTORICAL_LANES
+        self.assertEqual(len(historical), len(self.module._CANONICAL_LANES) + 1)
+        self.assertEqual(historical[:12], self.module._CANONICAL_LANES[:12])
+        self.assertEqual(historical[12], "chameleon_lab")
+        self.assertEqual(historical[13:], ("package",))
+
+    def test_strict_policy_validation_still_rejects_the_retired_era_document(self):
+        era = retired_era_policy(self.policy)
+        with self.assertRaisesRegex(ValueError, "lanes do not match the closed v1 allowlist"):
+            self.module._validate_policy(era)
+
+    def test_tolerant_policy_validation_accepts_exactly_the_retired_era(self):
+        self.module._validate_policy(retired_era_policy(self.policy), allow_retired_lanes=True)
+        # The current-era document remains valid under tolerant mode.
+        self.module._validate_policy(copy.deepcopy(self.policy), allow_retired_lanes=True)
+        mutations = {
+            "wrong retired jobs": lambda policy: policy["lane_jobs"].__setitem__(
+                "chameleon_lab", ["other-job"]
+            ),
+            "retired lane at the wrong position": lambda policy: (
+                policy["lanes"].remove("chameleon_lab"),
+                policy["lanes"].append("chameleon_lab"),
+            ),
+            "unknown extra lane": lambda policy: (
+                policy["lanes"].insert(0, "staging_lab"),
+                policy["lane_jobs"].__setitem__("staging_lab", ["staging-lab"]),
+            ),
+            "missing current lane": lambda policy: (
+                policy["lanes"].remove("portal"),
+                policy["lane_jobs"].pop("portal"),
+            ),
+            "missing retired self-hosted job": lambda policy: policy[
+                "self_hosted_jobs"
+            ].remove("chameleon-lab"),
+            "shared lane jobs drift": lambda policy: policy["lane_jobs"].__setitem__(
+                "core_asan", ["different-asan-job"]
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                policy = retired_era_policy(self.policy)
+                mutate(policy)
+                with self.assertRaises(ValueError):
+                    self.module._validate_policy(policy, allow_retired_lanes=True)
 
     def test_rule_note_is_an_optional_annotation_and_never_a_lane_input(self):
         # A rule whose lane set depends on coverage owned elsewhere says so

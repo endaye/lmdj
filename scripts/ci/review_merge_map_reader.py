@@ -93,7 +93,7 @@ class MergeMapReader:
         current = self.inputs.policy_at(self.inputs.control_sha)
         for item in document["scope_records"]:
             record = item["record"]
-            policy = self.inputs.policy_at(record["control_sha"])
+            policy = self.inputs.policy_at(record["control_sha"], allow_retired_lanes=True)
             test_scope.validate_record(record, policy, {key: record[key] for key in test_scope.IDENTITY_KEYS})
             # Preserve historical policy closure as explicit suite labels; the
             # current floor cannot discard a formerly required consumer.

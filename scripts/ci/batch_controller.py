@@ -60,17 +60,18 @@ is incomplete. Complete paths and trusted policies still define the floor.
         batch.require(self.main is not None and self.ancestor(target, self.main),
                       "target is not verified main history")
 
-    def policy_at(self, control):
+    def policy_at(self, control, *, allow_retired_lanes=False):
         batch.exact_sha(control)
         batch.require(self.main is not None and self.ancestor(control, self.main),
                       "historical control is not verified main history")
-        if control in self._policies:
-            return self._policies[control]
+        key = (control, bool(allow_retired_lanes))
+        if key in self._policies:
+            return self._policies[key]
         documents = [json.loads(self._git("show", f"{control}:scripts/ci/{name}"),
                                 object_pairs_hook=change_scope.reject_duplicates)
                      for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")]
-        self._policies[control] = test_scope.parse_policy(*documents)
-        return self._policies[control]
+        self._policies[key] = test_scope.parse_policy(*documents, allow_retired_lanes=allow_retired_lanes)
+        return self._policies[key]
 
     def interval_selection(self, base, target, policy):
         interval = test_scope.collect_interval(self.repository, base, target)
@@ -131,7 +132,9 @@ All methods must be invoked inside the SAME externally managed short lock.
             policy = self.policy
             if event.get("type") in {"enqueue", "admit"}:
                 request = event["data"] if event["type"] == "enqueue" else event["data"]["request"]
-                policy = self.inputs.policy_at(request["control"])
+                # Replay reconstructs history; an era whose lanes were later
+                # retired still parses under the recorded retired-lane registry.
+                policy = self.inputs.policy_at(request["control"], allow_retired_lanes=True)
             state = batch.reduce(state, event, policy)
         return state
 
