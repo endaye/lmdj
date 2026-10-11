@@ -1701,6 +1701,8 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   test.setTimeout(300_000);
   await importActivateAndPerform(page);
   await assignThenMovePattern(page);
+  const monitor = page.getByRole("slider", {name: "MASTER", exact: true});
+  const monitorValue = await monitor.inputValue();
   // The replay must still be playing when Stop Replay is clicked, otherwise
   // the run races natural completion and observes "complete · neutral"
   // instead of the abort path this test owns.
@@ -1719,9 +1721,10 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     timeout: 30_000,
   });
   await showPerformPage(page, "Live");
-  for (const slider of await page.getByRole("slider").all()) {
-    await expect(slider).toHaveValue("500");
+  for (const name of ["Filter", "Delay", "Reverb"]) {
+    await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("500");
   }
+  await expect(monitor).toHaveValue(monitorValue);
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))

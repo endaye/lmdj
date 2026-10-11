@@ -262,6 +262,37 @@ Final focused execution includes the two new inventory tests: 330 tests pass
 in 14.073 s (n=1). Precommit main is still
 `deb95de722b845d708371e90bcac138ae5e25e01`.
 
+### T2c — Repair the updated MASTER boundary in browser verification
+
+The first real T2a quick run on `2395f7b3` retained two failing Chromium tests,
+not a passing complete journey. Main remains `deb95de722b845d708371e90bcac138ae5e25e01`.
+One failure is a stale test assumption after #2000 (`116280f9`): Perform now has
+three 0–1000 FX sliders and a separate 0–100 device MASTER slider. The replay
+stop test applies FX neutral 500 to every slider, including MASTER=100.
+The new product behavior is already implemented and its component tests pass;
+change only this browser assertion, not product code or the slider ranges.
+
+Declared files: `tests/platform/web/creator/creator_web_perform.spec.mjs` and
+this plan. Require each of Filter/Delay/Reverb to return to 500 after Stop
+Replay, retain the HOLD and Pattern-idle assertions, and separately require
+MASTER to preserve its pre-recording value. The existing failed run is the
+negative control against a freshly built artifact. Verify the corrected full
+replay-stop journey on that unchanged product artifact with a fresh Playwright
+process before commit. Version impact: none. Documentation impact: none — the
+current product/verification contract is unchanged; this repairs its test.
+
+T2c verification: the complete corrected replay-stop journey passes in a fresh
+Chromium process (1 test, 32.6 s) against the unchanged `2395f7b3` product
+distribution. The original new-slider failure remains in the T2a log. The
+remaining T2a browser groups (Catalog, Sample, WebKit capability, Capture and
+deployment) passed; the overall T2a run exited 1 and is not a full quick pass.
+No new pitfall qualifies: this assertion boundary is derivable from product code.
+Precommit main still resolves to `deb95de722b845d708371e90bcac138ae5e25e01`.
+
+The independent overview timeout remains outstanding. Its viewport/layout
+matrix and state/recovery journey need separate tests without dropping any
+assertion, viewport, reload leg or widening the existing budgets (T2d).
+
 ### T3 — Switch daily defaults and merge/main consumers together
 
 Primary files: `AGENTS.md`, `CLAUDE.md`,
