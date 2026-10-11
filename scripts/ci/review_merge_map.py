@@ -82,7 +82,7 @@ def policy_at(control):
     documents = [json.loads(pipeline.git("show", control + ":scripts/ci/" + name),
                             object_pairs_hook=change_scope.reject_duplicates)
                  for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")]
-    return test_scope.parse_policy(*documents)
+    return test_scope.parse_policy(*documents, historical=True)
 
 
 def authenticated_record(record, *, repository_id, workflow_id, download):

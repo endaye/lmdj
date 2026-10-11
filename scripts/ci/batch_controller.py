@@ -62,24 +62,31 @@ is incomplete. Complete paths and trusted policies still define the floor.
         batch.require(self.main is not None and self.ancestor(target, self.main),
                       "target is not verified main history")
 
-    def policy_at(self, control):
+    def policy_at(self, control, *, historical=False):
+        """Parse the trusted policy recorded at one verified main revision.
+
+        ``historical=True`` tolerates lanes retired after that revision and is
+        for replay/authentication of frozen records; the current admission
+        policy (``control_sha``) always parses in the default strict mode.
+        """
         batch.exact_sha(control)
         batch.require(self.main is not None and self.ancestor(control, self.main),
                       "historical control is not verified main history")
-        if control in self._policies:
-            return self._policies[control]
+        key = (control, historical)
+        if key in self._policies:
+            return self._policies[key]
         documents = [json.loads(self._git("show", f"{control}:scripts/ci/{name}"),
                                 object_pairs_hook=change_scope.reject_duplicates)
                      for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")]
-        self._policies[control] = test_scope.parse_policy(*documents)
-        return self._policies[control]
+        self._policies[key] = test_scope.parse_policy(*documents, historical=historical)
+        return self._policies[key]
 
     def interval_selection(self, base, target, policy):
         interval = test_scope.collect_interval(self.repository, base, target)
         policies = [policy]
         for sha in dict.fromkeys([base] + [c["sha"] for c in interval["commits"]]):
             try:
-                policies.append(self.policy_at(sha))
+                policies.append(self.policy_at(sha, historical=True))
             except (batch.BatchError, test_scope.ScopeError, ValueError):
                 policies.append(None)
         advice = self.advice(deepcopy(interval)) if self.advice else {"complete": False, "labels": []}
@@ -147,7 +154,7 @@ All methods must be invoked inside the SAME externally managed short lock.
             policy = self.policy
             if event.get("type") in {"enqueue", "admit"}:
                 request = event["data"] if event["type"] == "enqueue" else event["data"]["request"]
-                policy = self.inputs.policy_at(request["control"])
+                policy = self.inputs.policy_at(request["control"], historical=True)
             state = batch.reduce(state, event, policy)
         return state
 
@@ -230,7 +237,7 @@ same-run claim into execution, not just creating new admissions.
         if explicit is not None:
             batch.require(isinstance(explicit, dict) and "control" in explicit,
                           "explicit request lacks a frozen control identity")
-            policy = self.inputs.policy_at(explicit["control"])
+            policy = self.inputs.policy_at(explicit["control"], historical=True)
             self._persist("enqueue", explicit, policy)
         if resume is not None:
             batch.require(isinstance(resume, dict) and set(resume) == {"id", "suites", "reason"}
@@ -260,7 +267,7 @@ same-run claim into execution, not just creating new admissions.
                                       "descends_pending": self.inputs.ancestor(self.state["pending"], latest)})
         if self.state["queue"]:
             request = self.state["requests"][self.state["queue"][0]]
-            policy = self.inputs.policy_at(request["control"])
+            policy = self.inputs.policy_at(request["control"], historical=True)
         else:
             base = self.state["processed"]
             if base == latest and not self.state["recovery_requested"]:
