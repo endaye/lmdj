@@ -65,7 +65,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "5.3.0" if name == "project_v5" else
+        "5.4.0" if name == "project_v5" else
         "2.0.0"
         if name in {"project_bundle", "assembly", "capability_v2"}
         else (
@@ -235,12 +235,14 @@ event_definitions_v5 = [
     "performance_fx_release_event",
     "performance_hold_on_event",
     "performance_hold_off_event",
+    "performance_filter_change_event",
+    "performance_pad_gates_set_event",
 ]
 assert project_v5["$defs"]["performance_event"]["oneOf"] == [
     {"$ref": f"#/$defs/{name}"} for name in event_definitions_v5
 ], (
     "why: the event union and kind ordinals follow the locked vocabulary; "
-    "remedy: restore the seven per-kind references in ordinal order"
+    "remedy: restore the nine per-kind references in ordinal order"
 )
 assert [
     project_v5["$defs"][name]["properties"]["kind"]["const"]
@@ -253,9 +255,11 @@ assert [
     "fx_release",
     "hold_on",
     "hold_off",
+    "filter_change",
+    "pad_gates_set",
 ], (
     "why: the Performance kind vocabulary is a cross-language Contract; "
-    "remedy: use the approved seven kind strings in ordinal order"
+    "remedy: use the approved nine kind strings in ordinal order"
 )
 for fx_event_name in (
     "performance_fx_engage_event",
@@ -1303,8 +1307,278 @@ for name, earlier in (
     ("project-v5-valid", valid_project_v5),
     ("project-v5-playback-parity-valid", parity_project_v5),
     ("project-v5-tone-parity-valid", tone_project_v5),
+    ("project-v5-pad-colour-valid", colour_project_v5),
 ):
-    json_schema.check(earlier, project_v5, f"{name} stays legal under 5.3.0")
+    json_schema.check(earlier, project_v5, f"{name} stays legal under 5.4.0")
+
+# 5.4.0 (decisions 2026-10-10 and 2026-10-11, #1822): a Performance gains an
+# optional `initial_live_state` header, two new event kinds (`filter_change`,
+# `pad_gates_set`) appended to the locked union as ordinals 7 and 8, and an
+# optional per-event `input_sequence`. The header selects the new recording
+# profile: a Performance carries the header exactly when every one of its
+# events carries an `input_sequence`, so a legacy stream cannot mix sequenced
+# and unsequenced events. Every earlier valid v5 document remains valid, and a
+# 5.3.0 reader rejects the new keys by design.
+assert performance_v5["required"] == [
+    "performance_id",
+    "name",
+    "created_bpm",
+    "recording_revision",
+    "recording_artifact",
+    "events",
+], (
+    "why: initial_live_state became required; remedy: the header stays an "
+    "optional key so every legal 5.3.0 Project remains legal"
+)
+assert list(performance_v5["properties"]) == [
+    "performance_id", "name", "created_bpm", "recording_revision",
+    "recording_artifact", "events", "initial_live_state",
+], "why: a performance key was added or dropped outside a Contract cut; remedy: pin it here"
+assert performance_v5["properties"]["initial_live_state"] == {
+    "$ref": "#/$defs/performance_initial_live_state"
+}
+assert performance_v5["additionalProperties"] is False
+
+input_sequence_v5 = project_v5["$defs"]["input_sequence"]
+assert input_sequence_v5 == {
+    "type": "string",
+    "pattern": "^[1-9][0-9]{0,19}$",
+}, (
+    "why: input_sequence is an opaque canonical decimal string from 1 with no "
+    "sign, leading zero or fraction; remedy: restore the strict pattern"
+)
+# The schema pins the string shape and a 20-digit ceiling; the exact
+# uint64 upper bound is the Domain reader's rule, as with every other
+# cross-field constraint the Schema cannot express.
+for old_event_name in event_definitions_v5[:7]:
+    old_event_schema = project_v5["$defs"][old_event_name]
+    assert "input_sequence" not in old_event_schema["required"], (
+        "why: a legacy event grew a required sequence; remedy: the old "
+        "profile keeps its exact field set, input_sequence stays optional"
+    )
+    assert old_event_schema["properties"]["input_sequence"] == {
+        "$ref": "#/$defs/input_sequence"
+    }
+
+initial_state_v5 = project_v5["$defs"]["performance_initial_live_state"]
+assert initial_state_v5["required"] == [
+    "hold", "filter", "other_fx", "muted_slots", "solo_slots",
+]
+assert initial_state_v5["additionalProperties"] is False
+assert initial_state_v5["properties"]["hold"] == {"type": "boolean"}
+assert initial_state_v5["properties"]["filter"] == {
+    "oneOf": [
+        {"$ref": "#/$defs/performance_live_filter_independent"},
+        {"$ref": "#/$defs/performance_live_filter_legacy"},
+    ]
+}, (
+    "why: the header Filter is a strict oneOf of the independent and legacy "
+    "shapes; remedy: never mix the two parameter sets on one Filter"
+)
+assert initial_state_v5["properties"]["muted_slots"] == {
+    "$ref": "#/$defs/pad_slot_array"
+}
+assert initial_state_v5["properties"]["solo_slots"] == {
+    "$ref": "#/$defs/pad_slot_array"
+}
+independent_filter_v5 = project_v5["$defs"]["performance_live_filter_independent"]
+assert independent_filter_v5["required"] == [
+    "mode", "engaged", "frozen", "type", "cutoff_hz", "resonance_milli",
+]
+assert independent_filter_v5["properties"]["mode"] == {"const": "independent"}
+assert independent_filter_v5["properties"]["type"] == {"enum": ["lp", "hp", "bp"]}
+assert independent_filter_v5["properties"]["cutoff_hz"] == {
+    "type": "integer", "minimum": 20, "maximum": 20000,
+}
+assert independent_filter_v5["properties"]["resonance_milli"] == {
+    "type": "integer", "minimum": 0, "maximum": 1000,
+}
+assert independent_filter_v5["additionalProperties"] is False
+legacy_filter_v5 = project_v5["$defs"]["performance_live_filter_legacy"]
+assert legacy_filter_v5["required"] == ["mode", "engaged", "frozen", "value"]
+assert legacy_filter_v5["properties"]["mode"] == {"const": "legacy"}
+assert legacy_filter_v5["properties"]["value"] == {
+    "type": "integer", "minimum": 0, "maximum": 1000,
+}
+assert legacy_filter_v5["additionalProperties"] is False
+fx_gate_v5 = project_v5["$defs"]["performance_live_fx_gate_state"]
+assert fx_gate_v5["required"] == ["engaged", "frozen", "value"]
+assert fx_gate_v5["properties"]["value"] == {
+    "type": "integer", "minimum": 0, "maximum": 1000,
+}
+assert fx_gate_v5["additionalProperties"] is False
+other_fx_v5 = initial_state_v5["properties"]["other_fx"]
+assert other_fx_v5["required"] == [
+    "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter",
+], (
+    "why: the header captures exactly the seven existing non-Filter FX; "
+    "remedy: restore the fixed key set"
+)
+assert other_fx_v5["additionalProperties"] is False
+assert all(
+    other_fx_v5["properties"][name] == {"$ref": "#/$defs/performance_live_fx_gate_state"}
+    for name in other_fx_v5["required"]
+)
+pad_slot_array_v5 = project_v5["$defs"]["pad_slot_array"]
+assert pad_slot_array_v5 == {
+    "type": "array",
+    "items": {"type": "integer", "minimum": 0, "maximum": 63},
+    "uniqueItems": True,
+}, (
+    "why: live masks are unique 0..63 slot sets on the wire; remedy: keep the "
+    "closed integer array (ascending order is the Domain reader's rule)"
+)
+# A frozen control exists only under HOLD: one if/then per state carrier.
+assert len(initial_state_v5["allOf"]) == 8, (
+    "why: a frozen Filter or FX state without HOLD must fail; remedy: keep one "
+    "frozen-implies-hold rule per carrier (filter plus seven other_fx keys)"
+)
+
+filter_change_v5 = project_v5["$defs"]["performance_filter_change_event"]
+assert filter_change_v5["required"] == [
+    "kind", "tick", "input_sequence", "phase", "type", "cutoff_hz",
+    "resonance_milli",
+]
+assert filter_change_v5["properties"]["phase"] == {
+    "enum": ["engage", "move", "release"]
+}
+assert filter_change_v5["properties"]["type"] == {"enum": ["lp", "hp", "bp"]}
+assert filter_change_v5["properties"]["cutoff_hz"] == {
+    "type": "integer", "minimum": 20, "maximum": 20000,
+}
+assert filter_change_v5["properties"]["resonance_milli"] == {
+    "type": "integer", "minimum": 0, "maximum": 1000,
+}
+pad_gates_set_v5 = project_v5["$defs"]["performance_pad_gates_set_event"]
+assert pad_gates_set_v5["required"] == [
+    "kind", "tick", "input_sequence", "muted_slots", "solo_slots",
+]
+assert pad_gates_set_v5["properties"]["muted_slots"] == {
+    "$ref": "#/$defs/pad_slot_array"
+}
+assert pad_gates_set_v5["properties"]["solo_slots"] == {
+    "$ref": "#/$defs/pad_slot_array"
+}
+
+# The header selects the recording profile in both directions.
+performance_rules_v5 = performance_v5["allOf"]
+assert len(performance_rules_v5) == 2, (
+    "why: profile mixing must fail closed in both directions; remedy: keep "
+    "sequenced-events-require-header and header-requires-sequenced-events"
+)
+
+live_controls_v5 = load_json(
+    fixture_root / "project-v5-live-controls-valid.json"
+)
+json_schema.check(live_controls_v5, project_v5, "project-v5-live-controls-valid")
+live_take = ["performances", 0]
+live_header = live_take + ["initial_live_state"]
+live_events = live_take + ["events"]
+# The fixture's live take covers: a HOLD header seeding hold_off, an engaged
+# independent HP Filter, a frozen Reverb, an engaged Delay, a muted Pad,
+# both new event kinds, a legacy event carrying input_sequence, and a
+# reserved Pattern whose request sequence (9) precedes earlier-tick controls.
+assert live_controls_v5["performances"][0]["initial_live_state"]["hold"] is True
+assert live_controls_v5["performances"][0]["events"][4] == {
+    "kind": "pattern_launch",
+    "pattern_slot": 0,
+    "effective_tick": 3840,
+    "input_sequence": "9",
+}
+# The neutral take covers the legacy-mode Filter shape with zero events.
+assert live_controls_v5["performances"][1]["events"] == []
+assert (
+    live_controls_v5["performances"][1]["initial_live_state"]["filter"]["mode"]
+    == "legacy"
+)
+for pointer, key, bad in [
+    (live_header + ["filter"], "type", "notch"),
+    (live_header + ["filter"], "cutoff_hz", 19),
+    (live_header + ["filter"], "cutoff_hz", 20001),
+    (live_header + ["filter"], "cutoff_hz", 799.5),
+    (live_header + ["filter"], "resonance_milli", 1001),
+    (live_header + ["filter"], "resonance_milli", -1),
+    (live_header + ["filter"], "mode", "legacy"),
+    (live_header + ["filter"], "engaged", "true"),
+    (live_header, "hold", _DELETE),
+    (live_header + ["other_fx"], "cutter", _DELETE),
+    (live_header + ["other_fx"], "filter", {"engaged": False, "frozen": False, "value": 0}),
+    (live_header + ["other_fx", "delay"], "value", 1001),
+    (live_header, "muted_slots", [0, 0]),
+    (live_header, "muted_slots", [64]),
+    (live_header, "solo_slots", [-1]),
+    (live_header, "solo_slots", [1.5]),
+    (live_header, "solo_slots", ["8"]),
+    (live_events + [0], "input_sequence", "0"),
+    (live_events + [0], "input_sequence", "01"),
+    (live_events + [0], "input_sequence", "+1"),
+    (live_events + [0], "input_sequence", "1.5"),
+    (live_events + [0], "input_sequence", 10),
+    (live_events + [1], "phase", "hold"),
+    (live_events + [1], "cutoff_hz", 20001),
+    (live_events + [1], "extra", True),
+    (live_events + [3], "muted_slots", [0, 63, 63]),
+    (live_events + [3], "solo_slots", _DELETE),
+    (live_events + [7], "type", "bp9"),
+]:
+    changed = mutated(live_controls_v5, pointer + [key], bad)
+    assert json_schema.validate(changed, project_v5), (pointer, key, bad)
+# A frozen state without HOLD is rejected on the Filter and on any other FX.
+frozen_filter = mutated(live_controls_v5, live_header + ["hold"], False)
+frozen_filter["performances"][0]["initial_live_state"]["filter"]["frozen"] = True
+assert json_schema.validate(frozen_filter, project_v5)
+frozen_delay = mutated(live_controls_v5, live_header + ["hold"], False)
+frozen_delay["performances"][0]["initial_live_state"]["other_fx"]["delay"]["frozen"] = True
+assert json_schema.validate(frozen_delay, project_v5)
+# The legacy-mode header rejects the independent parameter keys outright.
+legacy_mixed = mutated(
+    live_controls_v5, ["performances", 1, "initial_live_state", "filter", "cutoff_hz"], 800,
+)
+assert json_schema.validate(legacy_mixed, project_v5)
+# Profile mixing fails in both directions: sequenced events without a header,
+# and a header whose events dropped one sequence.
+no_header = mutated(live_controls_v5, live_take + ["initial_live_state"], _DELETE)
+assert json_schema.validate(no_header, project_v5)
+one_unsequenced = mutated(live_controls_v5, live_events + [2, "input_sequence"], _DELETE)
+assert json_schema.validate(one_unsequenced, project_v5)
+legacy_sequenced = mutated(
+    valid_project_v5, ["performances", 0, "events", 0, "input_sequence"], "1",
+)
+assert json_schema.validate(legacy_sequenced, project_v5), (
+    "why: a legacy Performance cannot adopt one sequenced event; remedy: the "
+    "new profile requires the header and per-event sequences together"
+)
+# Boundaries that must pass: Cutoff endpoints, Resonance endpoints, slot 63,
+# empty masks, sequence 1 and the uint64 ceiling's 20-digit width.
+for pointer, key, value, why in [
+    (live_header + ["filter"], "cutoff_hz", 20, "cutoff floor"),
+    (live_header + ["filter"], "cutoff_hz", 20000, "cutoff ceiling"),
+    (live_header + ["filter"], "resonance_milli", 0, "resonance floor"),
+    (live_header + ["filter"], "resonance_milli", 1000, "resonance ceiling"),
+    (live_header, "muted_slots", [0, 63], "mask endpoints"),
+    (live_header, "solo_slots", [], "empty mask"),
+    (live_events + [0], "input_sequence", "1", "first sequence"),
+    (live_events + [0], "input_sequence", "18446744073709551615", "uint64 ceiling"),
+]:
+    changed = mutated(live_controls_v5, pointer + [key], value)
+    json_schema.check(changed, project_v5, f"project-v5-live-controls {why}")
+# A legacy-mode Filter header carries its own closed shape.
+legacy_header = mutated(
+    live_controls_v5,
+    ["performances", 1, "initial_live_state", "filter"],
+    {"mode": "legacy", "engaged": True, "frozen": False, "value": 500},
+)
+json_schema.check(legacy_header, project_v5, "engaged legacy-mode Filter header")
+
+invalid_live_controls_v5 = load_json(
+    fixture_root / "project-v5-live-controls-invalid.json"
+)
+assert json_schema.validate(invalid_live_controls_v5, project_v5), (
+    "why: the bundled invalid fixture must fail the Contract; remedy: it "
+    "mixes one violation per new rule (frozen without HOLD, mixed Filter "
+    "shape, missing other_fx key, duplicate and out-of-range slots, Cutoff "
+    "below range, malformed sequence, unknown Filter type, mixed profile)"
+)
 
 lineage_v5 = valid_project_v5["assets"][0]["lineage"]
 for path in ((), ("source",), ("derivation",), ("derivation", "capability"),

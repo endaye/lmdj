@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lmdj.dev/contracts/project/lmdj.project.v5.schema.json",
-  "x-lmdj-contract-version": "5.3.0",
+  "x-lmdj-contract-version": "5.4.0",
   "title": "LMDJ Project Truth v5",
   "type": "object",
   "required": [
@@ -838,6 +838,9 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 127
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
         }
       },
       "additionalProperties": false
@@ -861,6 +864,9 @@
         "effective_tick": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
         }
       },
       "additionalProperties": false
@@ -890,6 +896,9 @@
         "tick": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
         }
       },
       "additionalProperties": false
@@ -919,6 +928,9 @@
         "tick": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
         }
       },
       "additionalProperties": false
@@ -942,6 +954,9 @@
         "tick": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
         }
       },
       "additionalProperties": false
@@ -959,6 +974,9 @@
         "tick": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
         }
       },
       "additionalProperties": false
@@ -976,6 +994,515 @@
         "tick": {
           "type": "integer",
           "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
+        }
+      },
+      "additionalProperties": false
+    },
+    "input_sequence": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "pad_slot_array": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 63
+      },
+      "uniqueItems": true
+    },
+    "performance_live_fx_gate_state": {
+      "type": "object",
+      "required": [
+        "engaged",
+        "frozen",
+        "value"
+      ],
+      "properties": {
+        "engaged": {
+          "type": "boolean"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    },
+    "performance_live_filter_legacy": {
+      "type": "object",
+      "required": [
+        "mode",
+        "engaged",
+        "frozen",
+        "value"
+      ],
+      "properties": {
+        "mode": {
+          "const": "legacy"
+        },
+        "engaged": {
+          "type": "boolean"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    },
+    "performance_live_filter_independent": {
+      "type": "object",
+      "required": [
+        "mode",
+        "engaged",
+        "frozen",
+        "type",
+        "cutoff_hz",
+        "resonance_milli"
+      ],
+      "properties": {
+        "mode": {
+          "const": "independent"
+        },
+        "engaged": {
+          "type": "boolean"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "type": {
+          "enum": [
+            "lp",
+            "hp",
+            "bp"
+          ]
+        },
+        "cutoff_hz": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 20000
+        },
+        "resonance_milli": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    },
+    "performance_initial_live_state": {
+      "type": "object",
+      "required": [
+        "hold",
+        "filter",
+        "other_fx",
+        "muted_slots",
+        "solo_slots"
+      ],
+      "properties": {
+        "hold": {
+          "type": "boolean"
+        },
+        "filter": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/performance_live_filter_independent"
+            },
+            {
+              "$ref": "#/$defs/performance_live_filter_legacy"
+            }
+          ]
+        },
+        "other_fx": {
+          "type": "object",
+          "required": [
+            "delay",
+            "reverb",
+            "stutter",
+            "gate",
+            "reverse",
+            "crush",
+            "cutter"
+          ],
+          "properties": {
+            "delay": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            },
+            "reverb": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            },
+            "stutter": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            },
+            "gate": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            },
+            "reverse": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            },
+            "crush": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            },
+            "cutter": {
+              "$ref": "#/$defs/performance_live_fx_gate_state"
+            }
+          },
+          "additionalProperties": false
+        },
+        "muted_slots": {
+          "$ref": "#/$defs/pad_slot_array"
+        },
+        "solo_slots": {
+          "$ref": "#/$defs/pad_slot_array"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "filter": {
+                "properties": {
+                  "frozen": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "frozen"
+                ]
+              }
+            },
+            "required": [
+              "filter"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "delay": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "delay"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "reverb": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "reverb"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "stutter": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "stutter"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "gate": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "gate"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "reverse": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "reverse"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "crush": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "crush"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "other_fx": {
+                "properties": {
+                  "cutter": {
+                    "properties": {
+                      "frozen": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "frozen"
+                    ]
+                  }
+                },
+                "required": [
+                  "cutter"
+                ]
+              }
+            },
+            "required": [
+              "other_fx"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hold": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "performance_filter_change_event": {
+      "type": "object",
+      "required": [
+        "kind",
+        "tick",
+        "input_sequence",
+        "phase",
+        "type",
+        "cutoff_hz",
+        "resonance_milli"
+      ],
+      "properties": {
+        "kind": {
+          "const": "filter_change"
+        },
+        "tick": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
+        },
+        "phase": {
+          "enum": [
+            "engage",
+            "move",
+            "release"
+          ]
+        },
+        "type": {
+          "enum": [
+            "lp",
+            "hp",
+            "bp"
+          ]
+        },
+        "cutoff_hz": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 20000
+        },
+        "resonance_milli": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    },
+    "performance_pad_gates_set_event": {
+      "type": "object",
+      "required": [
+        "kind",
+        "tick",
+        "input_sequence",
+        "muted_slots",
+        "solo_slots"
+      ],
+      "properties": {
+        "kind": {
+          "const": "pad_gates_set"
+        },
+        "tick": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_sequence": {
+          "$ref": "#/$defs/input_sequence"
+        },
+        "muted_slots": {
+          "$ref": "#/$defs/pad_slot_array"
+        },
+        "solo_slots": {
+          "$ref": "#/$defs/pad_slot_array"
         }
       },
       "additionalProperties": false
@@ -1002,6 +1529,12 @@
         },
         {
           "$ref": "#/$defs/performance_hold_off_event"
+        },
+        {
+          "$ref": "#/$defs/performance_filter_change_event"
+        },
+        {
+          "$ref": "#/$defs/performance_pad_gates_set_event"
         }
       ]
     },
@@ -1048,9 +1581,59 @@
           "items": {
             "$ref": "#/$defs/performance_event"
           }
+        },
+        "initial_live_state": {
+          "$ref": "#/$defs/performance_initial_live_state"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "events": {
+                "contains": {
+                  "required": [
+                    "input_sequence"
+                  ]
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "initial_live_state"
+            ],
+            "properties": {
+              "events": {
+                "items": {
+                  "required": [
+                    "input_sequence"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "initial_live_state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "required": [
+                    "input_sequence"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "capability_lineage_identity": {
       "type": "object",
