@@ -706,6 +706,19 @@ class RuntimeTests(unittest.TestCase):
         self.api.sha = self.git("rev-parse", "HEAD")
         self.env["GITHUB_SHA"] = self.api.sha
 
+    def test_daily_result_binds_the_target_action_but_full_keeps_target_owned_scripts(self):
+        action = self.root / ".github/actions/web-ci-proof/action.yml"
+        action.write_text("name: New target action\n")
+        self.git("add", str(action))
+        self.git("commit", "-qm", "target moved after control checkout")
+        target = self.git("rev-parse", "HEAD")
+        for lane, mode in (("creator", "quick"), ("creator", "journey"), ("web_runtime_host", "journey")):
+            self.assertFalse(runtime.compatible_sources(self.git, self.sha, self.sha,
+                target=target, verification={lane: mode}))
+        self.assertTrue(runtime.compatible_sources(self.git, self.sha, self.sha,
+            target=target, verification={"creator": "full"}))
+        self.assertTrue(runtime.compatible_sources(self.git, self.sha, self.sha, target=target))
+
     def test_queued_old_control_executes_and_settles_on_compatible_new_main(self):
         start = self.start()
         self.api.add_run(18)

@@ -409,6 +409,21 @@ class WorkflowScripts(unittest.TestCase):
                                BATCH_EXECUTOR='{"run_id":51,"run_id":51,"attempt":1}')
         self.assertNotEqual(result.returncode, 0)
 
+    def test_daily_web_action_must_match_frozen_control_on_target_checkout(self):
+        action = self.root / ".github/actions/web-ci-proof/action.yml"
+        action.write_text(action.read_text() + "\n# changed target action\n")
+        self.git("add", str(action))
+        self.git("commit", "-qm", "target action changed after controller checkout")
+        self.target = self.git("rev-parse", "HEAD")
+        result, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        request = self.request(["creator"], {"creator": "quick"})
+        result, outputs = self.invoke("change-scope", "Prepare the admitted fixed-target execution",
+            GITHUB_SHA=self.control, BATCH_REQUEST=json.dumps(request),
+            BATCH_EXECUTOR=json.dumps({"run_id": 51, "attempt": 1}))
+        self.assertNotEqual(result.returncode, 0, "daily mode used an unbound target composite action")
+        self.assertEqual(outputs, {})
+
     def test_actual_daily_prepare_and_judge_preserve_deferred_evidence(self):
         modes = {"creator": "quick", "core_coverage": "deferred"}
         execution = self.prepare(modes, verification=modes)

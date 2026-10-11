@@ -150,6 +150,16 @@ jobs:
                       raise ValueError('missing source blob')
                   if git('cat-file', 'blob', old) != git('cat-file', 'blob', current):
                       raise ValueError('source changed')
+              # Local actions come from the target checkout, not the reusable
+              # workflow ref. Bind daily dispatch to that actual source too.
+              if any(request.get('verification', {}).get(lane) in {'quick', 'journey'}
+                     for lane in ('creator', 'web_runtime_host')):
+                  target = request['target']
+                  if not isinstance(target, str) or len(target) != 40 or any(char not in '0123456789abcdef' for char in target):
+                      raise ValueError('invalid target source')
+                  action = '.github/actions/web-ci-proof/action.yml'
+                  if git('cat-file', 'blob', request['control'] + ':' + action) != git('cat-file', 'blob', target + ':' + action):
+                      raise ValueError('daily target action changed')
           except (KeyError, ValueError, subprocess.CalledProcessError):
               raise SystemExit('why: batch workflow sources are incompatible or unavailable; remedy: retain verification debt and enqueue a request under compatible trusted control')
           # Candidate acceptance already requires the executor's current

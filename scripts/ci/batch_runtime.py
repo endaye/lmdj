@@ -46,7 +46,7 @@ MAX_REFERENCE = 40000
 ARTIFACT_RETENTION = timedelta(days=30)
 
 
-def compatible_sources(git, frozen_control, executor_control):
+def compatible_sources(git, frozen_control, executor_control, *, target=None, verification=None):
     """Compare immutable workflow data, never execute historical Python.
 
 Caller independently proves both controls belong to actual main history. The
@@ -54,6 +54,12 @@ closed source set covers this caller and every reusable product workflow.
 """
     batch.exact_sha(frozen_control)
     batch.exact_sha(executor_control)
+    if any((verification or {}).get(lane) in {"quick", "journey"}
+           for lane in ("creator", "web_runtime_host")):
+        batch.exact_sha(target)
+        action = ".github/actions/web-ci-proof/action.yml"
+        if git("show", f"{frozen_control}:{action}") != git("show", f"{target}:{action}"):
+            return False
     return all(git("show", f"{frozen_control}:{path}") == git("show", f"{executor_control}:{path}")
                for path in EXECUTION_SOURCES)
 
@@ -365,7 +371,8 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         if run.get("status") != "completed":
             return {"status": "pending"}
         self.inputs.verify_target(run["head_sha"])
-        if not compatible_sources(self.git, request["control"], run["head_sha"]):
+        if not compatible_sources(self.git, request["control"], run["head_sha"],
+                                  target=request["target"], verification=request.get("verification")):
             # The callee rejects this before heavy jobs. A genuinely terminal
             # incompatible request has no accepted coverage, but must release
             # its queue slot; it is not an API-unknown infinite wait.

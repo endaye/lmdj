@@ -605,3 +605,43 @@ flat selector inventory, both rename paths, intentional control-plane workloads,
 explicit deferred/quick evidence, retained full debt, fresh atomic Web packaging,
 and conservative missing seam output. The compiler finding remains unresolved
 for the new-head automatic repair recheck, not manually cleared.
+
+### T3f — Bind the checked-out Web action for daily workloads
+
+Final source-binding inspection found that local composite actions are loaded
+from the target checkout, while reusable workflows come from executor control.
+When main advances after a controller starts, comparing only the two control
+revisions does not bind the actual daily Web dispatch. Declare
+`.github/workflows/ci.yml`, `scripts/ci/batch_runtime.py`,
+`tests/build/ci_batch_execution_workflow_test.py`,
+`tests/build/ci_batch_runtime_test.py` and this plan. For a frozen quick/journey
+Web mode, require the target Web action to match frozen control before heavy
+outputs and when authenticating a result. Complete/legacy requests retain their
+existing target-owned full scripts. Test the changed target with unchanged
+controls, retain full compatibility, then run both owning suites. Documentation
+impact: none; this repairs the already documented exact-source evidence boundary.
+Version impact: none. Main still `82c010d0`; no new trigger or gate is introduced.
+
+T3f verification: the actual inline preparation script admitted the mismatched
+target action before the fix (the named real-Git regression failed at its
+nonzero-exit assertion); after repair, all 40 workflow execution tests and 82
+runtime tests pass. Candidate/legacy full compatibility remains covered.
+Pinned actionlint passes. No product test selection, timeout or retry changed.
+
+Final complete Creator quick on committed source `27622dd2` exited 0:
+1,277 UI tests and offline checks, main Chromium 91 passed/1 conditional skip,
+Catalog 4 passed, Sample 10 passed/1 skip, WebKit 1 passed, capture 8 passed/1
+skip, denied-permission 1 passed/8 inapplicable skips, Sample WebKit 1 passed,
+and the durable deployment journey 1 passed. The log window is 1,830 s, versus
+140 s for the previously recorded smoke on the same committed source and warm
+worktree (n=1 each; not a normalized workday savings estimate). Two-build byte
+reproducibility is not part of quick and is not claimed. The older failed runs
+remain retained. Independent review of `a8958e15` produced no new findings;
+T3f requires review on its own final head.
+
+Shipping refresh: main advanced to `98f8ba113e7cb4c619ad0d34b69d66ea29058f1c`
+via #2013. Its two Creator native-monitor observation documents change no
+verification producer, consumer, policy or tested source; no premise or test
+result above is superseded. The current-head compiler repair model review is
+clean, but its separate repair adapter refused the old finding's inconsistent
+source quote/anchor. Preserve that refusal; it is not an automatic resolution.
