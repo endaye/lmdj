@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1469,6 +1470,184 @@ class ExecutionTest(unittest.TestCase):
             self.assertEqual(results[0].verdict, self.preflight.PASS)
 
 
+class VerificationProfileTest(unittest.TestCase):
+    def setUp(self):
+        self.preflight = load_module("local_preflight_profiles", PREFLIGHT_PATH)
+        self.repository = TemporaryRepository()
+        self.addCleanup(self.repository.close)
+        self.repository.write("apps/creator-web/src/app.tsx", "// changed UI\n")
+
+    def test_quick_creator_uses_build_units_offline_and_durable_browser_smoke(self):
+        table = self.preflight.load_lane_commands(profile="quick")
+        self.assertEqual(table["creator"]["commands"], ["scripts/creator-web.sh smoke"])
+        self.assertTrue(table["creator"]["requires"]["clean_worktree"])
+        self.assertEqual(self.preflight.load_lane_commands(profile="journey")["creator"]["commands"],
+                         ["scripts/creator-web.sh quick"])
+
+    def test_cli_defaults_to_daily_but_explicit_full_retains_complete_work(self):
+        for args, profile in [([], "quick"), (["--profile", "full"], "full")]:
+            output = io.StringIO()
+            with mock.patch.object(self.preflight, "ROOT", self.repository.path), contextlib.redirect_stdout(output):
+                code = self.preflight.main(["--list", "--base-ref", self.repository.base_sha, *args])
+            self.assertEqual(code, 0, output.getvalue())
+            document = json.loads(output.getvalue())
+            self.assertEqual(document["profile"], profile)
+            self.assertEqual(document["commands"]["creator"],
+                             ["scripts/creator-web.sh quick" if profile == "quick" else "scripts/creator-web.sh proof"])
+
+    def test_ci_only_change_retains_ownership_but_defers_product_work(self):
+        (self.repository.path / "apps/creator-web/src/app.tsx").unlink()
+        self.repository.write("scripts/ci/known_control.py", "# changed\n")
+        plan = self.preflight.build_plan(self.repository.path, self.repository.base_sha, profile="quick")
+        self.assertEqual(set(plan["selected"]), LANES)
+        self.assertEqual({lane: mode for lane, mode in plan["verification"].items() if mode != "deferred"},
+                         {"ci_contract": "quick"})
+        self.assertEqual(set(plan["cache_keys"]), {"ci_contract"})
+
+    def test_deferred_lane_does_not_probe_tools_execute_or_cache_a_pass(self):
+        plan = {"profile": "quick", "base_sha": "a", "head_sha": "b", "selected": ["core_coverage"],
+                "verification": {"core_coverage": "deferred"}}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(self.preflight, "check_requirements", side_effect=AssertionError("no probe")), \
+                mock.patch.object(self.preflight, "run_lane", side_effect=AssertionError("no execution")):
+            results = self.preflight.execute(self.repository.path, plan, cache_dir=Path(directory), use_cache=True, echo=False)
+            self.assertEqual(results[0].verdict, "deferred")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+            self.assertEqual(self.preflight.batch_evidence_block(plan, results), [])
+
+    def test_full_creator_still_runs_complete_proof(self):
+        self.assertEqual(self.preflight.load_lane_commands(profile="full")["creator"]["commands"],
+                         ["scripts/creator-web.sh proof"])
+
+    def test_quick_native_feedback_builds_before_testing(self):
+        commands = self.preflight.load_lane_commands(profile="quick")["core_ubuntu"]["commands"]
+        self.assertEqual(commands[-3:], ["scripts/core.sh configure dev",
+                                        "scripts/core.sh build dev", "scripts/core.sh test dev fast"])
+
+    def test_unknown_profile_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "unknown verification profile"):
+            self.preflight.load_lane_commands(profile="fastest")
+
+    def test_profile_does_not_change_path_ownership(self):
+        # Both profiles share the classifier: agreement alone could omit
+        # Creator from both. The final absolute oracle catches that omission.
+        full = self.preflight.build_plan(self.repository.path, self.repository.base_sha)
+        quick = self.preflight.build_plan(self.repository.path, self.repository.base_sha, profile="quick")
+        self.assertEqual(quick["ci_lanes"], full["ci_lanes"])
+        self.assertEqual(quick["ci_batch_only"], full["ci_batch_only"])
+        self.assertEqual(quick["ci_lanes"], ["creator", "portal"])
+
+    def test_quick_and_full_have_distinct_cache_keys_even_for_identical_commands(self):
+        key = self.preflight.execution_cache_key
+        self.assertNotEqual(key("same-source-and-commands", "quick", "tools"),
+                            key("same-source-and-commands", "full", "tools"))
+
+    def test_toolchain_change_invalidates_execution_cache(self):
+        key = self.preflight.execution_cache_key
+        self.assertNotEqual(key("source", "quick", "toolchain-before"),
+                            key("source", "quick", "toolchain-after"))
+
+    def test_resolved_tool_replacement_changes_toolchain_identity(self):
+        # Same advertised version, different binary: a version-string-only
+        # identity would incorrectly reuse a pass from the old executable.
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "profile-test-tool"
+            tool.write_text("#!/bin/sh\necho v1\n")
+            tool.chmod(0o755)
+            entry = {"requires": {"commands": [tool.name]}}
+            with mock.patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"]}):
+                before = self.preflight.toolchain_identity("docs_static", entry)
+                tool.write_text("#!/bin/sh\n# replacement with the same version\necho v1\n")
+                after = self.preflight.toolchain_identity("docs_static", entry)
+            self.assertNotEqual(before, after)
+
+    def test_tool_replacement_with_preserved_size_mtime_and_version_invalidates_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "profile-test-tool"
+            tool.write_text('#!/bin/sh\n# build A\necho v1\n')
+            tool.chmod(0o755)
+            original = tool.stat()
+            entry = {"requires": {"commands": [str(tool)]}}
+            before = self.preflight.toolchain_identity("docs_static", entry)
+            tool.write_text('#!/bin/sh\n# build B\necho v1\n')
+            os.utime(tool, ns=(original.st_atime_ns, original.st_mtime_ns))
+            self.assertEqual(tool.stat().st_size, original.st_size)
+            self.assertEqual(tool.stat().st_mtime_ns, original.st_mtime_ns)
+            after = self.preflight.toolchain_identity("docs_static", entry)
+            self.assertNotEqual(before, after)
+
+    def test_same_version_compiler_behind_wrapper_invalidates_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrapper, compiler = root / "cache-wrapper", root / "actual-compiler"
+            wrapper.write_text('#!/bin/sh\nexec "$@"\n')
+            compiler.write_text('#!/bin/sh\necho compiler-v1\n')
+            wrapper.chmod(0o755)
+            compiler.chmod(0o755)
+            entry = {"requires": {}, "commands": []}
+            with mock.patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"],
+                                              "CC": "cache-wrapper actual-compiler"}):
+                before = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+                compiler.write_text('#!/bin/sh\n# changed binary with same version\necho compiler-v1\n')
+                after = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+            self.assertNotEqual(before, after)
+
+    def test_configured_compiler_replacement_invalidates_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            compiler = root / "configured-cxx"
+            compiler.write_text('#!/bin/sh\necho compiler-v1\n')
+            compiler.chmod(0o755)
+            cache = root / "build/core/dev/CMakeCache.txt"
+            cache.parent.mkdir(parents=True)
+            cache.write_text(f"CMAKE_CXX_COMPILER:FILEPATH={compiler}\n")
+            entry = {"requires": {}, "commands": []}
+            before = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+            compiler.write_text('#!/bin/sh\n# replaced cached compiler\necho compiler-v1\n')
+            after = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+            self.assertNotEqual(before, after)
+
+    def test_quick_run_and_cache_hit_are_not_full_passes(self):
+        plan = {"profile": "quick", "base_sha": self.repository.base_sha,
+                "head_sha": self.repository.base_sha, "selected": ["docs_static"],
+                "cache_keys": {"docs_static": "quick-key"},
+                "lane_commands": {"docs_static": {"requires": {}, "commands": ["true"]}}}
+        with tempfile.TemporaryDirectory() as directory:
+            first = self.preflight.execute(self.repository.path, plan,
+                                           cache_dir=Path(directory), use_cache=True, echo=False)
+            second = self.preflight.execute(self.repository.path, plan,
+                                            cache_dir=Path(directory), use_cache=True, echo=False)
+        self.assertEqual(first[0].verdict, self.preflight.QUICK_PASS)
+        self.assertEqual(second[0].verdict, self.preflight.CACHED_QUICK_PASS)
+        self.assertEqual(second[0].commands, ())
+
+    def test_sdk_activated_inside_web_script_is_part_of_cache_identity(self):
+        entry = {"requires": {}}
+        self.repository.write("build/toolchains/emsdk/.emscripten", "LLVM_ROOT = 'first'\n")
+        with mock.patch.dict(os.environ, {"EMSDK": ""}):
+            before = self.preflight.toolchain_identity("web_runtime_host", entry,
+                                                       root=self.repository.path)
+            self.repository.write("build/toolchains/emsdk/.emscripten", "LLVM_ROOT = 'second'\n")
+            after = self.preflight.toolchain_identity("web_runtime_host", entry,
+                                                      root=self.repository.path)
+        self.assertNotEqual(before, after)
+
+    def test_quick_cannot_print_or_validate_full_batch_evidence(self):
+        plan = self.preflight.build_plan(self.repository.path, self.repository.base_sha, profile="quick")
+        result = self.preflight.LaneResult("creator", self.preflight.QUICK_PASS)
+        self.assertEqual(self.preflight.batch_evidence_block(plan, [result]), [])
+        checked = self.preflight.check_batch_evidence(self.repository.path, plan, "")
+        self.assertEqual(checked.verdict, self.preflight.FAIL)
+        self.assertIn("quick is not full", checked.detail)
+
+    def test_each_executed_command_has_an_exit_code_and_duration(self):
+        result = self.preflight.run_lane(self.repository.path, "docs_static",
+                                        ["true", "exit 3", "false"], {}, echo=False)
+        self.assertEqual([c["exit_code"] for c in result.commands], [0, 3])
+        self.assertTrue(all(c["duration_seconds"] >= 0 for c in result.commands))
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+
+
 class DeclarationCheckTest(unittest.TestCase):
     """The PR body declaration check must answer what CI will answer.
 
@@ -1746,7 +1925,7 @@ class AdvisoryBoundaryTest(unittest.TestCase):
     def test_default_hook_does_no_work_and_opt_in_propagates_failure(self) -> None:
         repository = TemporaryRepository()
         self.addCleanup(repository.close)
-        repository.write("scripts/local-ci.sh", "#!/bin/sh\necho invoked > hook-observation\nexit 7\n")
+        repository.write("scripts/local-ci.sh", '#!/bin/sh\nprintf "%s\\n" "$*" > hook-observation\nexit 7\n')
         (repository.path / "scripts/local-ci.sh").chmod(0o755)
         hook = self.preflight.install_hook(repository.path)
         environment = dict(os.environ, **GIT_ENV)
@@ -1757,7 +1936,18 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         environment["LMDJ_PRE_PUSH_FULL"] = "1"
         result = subprocess.run([str(hook)], cwd=repository.path, env=environment, capture_output=True)
         self.assertEqual(result.returncode, 7)
-        self.assertEqual((repository.path / "hook-observation").read_text().strip(), "invoked")
+        self.assertEqual((repository.path / "hook-observation").read_text().strip(), "--profile full")
+
+    def test_previous_opt_in_hook_migrates_without_losing_the_full_request(self):
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        hook = self.preflight.install_hook(repository.path)
+        hook.write_text(self.preflight.PREVIOUS_HOOK_TEMPLATE)
+        self.preflight.install_hook(repository.path)
+        self.assertEqual(hook.with_name("pre-push.lmdj-before-quick-default").read_text(),
+                         self.preflight.PREVIOUS_HOOK_TEMPLATE)
+        self.assertEqual(hook.read_text(), self.preflight.HOOK_TEMPLATE)
+        self.assertIn("--profile full", hook.read_text())
 
     def test_exact_legacy_hook_is_migrated_with_a_recoverable_backup(self) -> None:
         repository = TemporaryRepository()

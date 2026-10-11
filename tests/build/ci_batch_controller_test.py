@@ -18,6 +18,7 @@ import batch_controller as controller
 import batch_github_journal as github
 import incremental_batch as batch
 from incremental_batch_journal import Journal, JournalBlocked
+import self_test
 import test_scope
 
 A, B, C, D = (c * 40 for c in "abcd")
@@ -90,7 +91,7 @@ class Inputs:
     def verify_target(self, target):
         batch.require(target in self.policies, "missing complete target history")
 
-    def policy_at(self, sha):
+    def policy_at(self, sha, historical=False):
         batch.require(sha in self.policies, "missing historical policy")
         return self.policies[sha]
 
@@ -125,6 +126,27 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(done["state"]["processed"], B,
                          "why: bootstrap did not persist progress; remedy: settle result then advance")
         return done
+
+    def test_auto_freezes_daily_work_and_bootstrap_stays_complete(self):
+        self.inputs.interval_verification = lambda base, target, policy, selected: {s: "quick" for s in selected}
+        first = self.make().reconcile()
+        self.assertNotIn("verification", first["request"])
+        self.settle(first, 1)
+        self.make(2).reconcile()
+        self.inputs.main = C
+        action = self.make(2).reconcile()
+        self.assertEqual(action["request"]["verification"], {"creator": "quick"})
+
+    def test_unpaused_debt_overrides_daily_quick_with_complete_work(self):
+        self.baseline()
+        self.inputs.main = C
+        first = self.make(2).reconcile()
+        self.settle(first, 2, "infrastructure")
+        self.make(3).reconcile()
+        self.inputs.main = D
+        self.inputs.interval_verification = lambda base, target, policy, selected: {s: "quick" for s in selected}
+        action = self.make(3).reconcile()
+        self.assertEqual(action["request"]["verification"], {"creator": "full"})
 
     def test_bootstrap_claim_then_completion_then_idle(self):
         start = self.make().reconcile()
@@ -473,6 +495,27 @@ class RealGitTests(unittest.TestCase):
         self.git("commit", "-qm", "fixture")
         return self.git("rev-parse", "HEAD")
 
+    def daily_change(self, labels=()):
+        target = self.root / "apps/creator-web/src/components/overview_display.tsx"
+        target.parent.mkdir(parents=True)
+        target.write_text("// presentation fixture")
+        self.tip = self.commit()
+        self.inputs.advice = lambda interval: {"complete": True, "labels": list(labels)}
+        self.inputs.refresh()
+        selected = self.inputs.interval_selection(self.base, self.tip, POLICY)
+        return self.inputs.interval_verification(self.base, self.tip, POLICY, selected["suites"])
+
+    def test_real_interval_selects_durable_smoke(self):
+        self.assertEqual(self.daily_change()["creator"], "quick")
+
+    def test_authenticated_review_can_restore_complete_work(self):
+        self.assertEqual(self.daily_change(["test:creator"])["creator"], "full")
+
+    def test_missing_historical_policy_never_enables_quick(self):
+        self.inputs.policy_at = lambda sha: None
+        result = self.daily_change()
+        self.assertEqual(result, {suite: "full" for suite in POLICY.suite_ids})
+
     def test_revert_retains_actual_interval_paths(self):
         contract = self.root / "contracts/new.json"
         contract.parent.mkdir()
@@ -536,7 +579,7 @@ class RealGitTests(unittest.TestCase):
     def test_missing_policy_with_incomplete_advice_still_requires_full(self):
         self.inputs.advice = None
         self.inputs.refresh()
-        self.inputs.policy_at = lambda sha: (_ for _ in ()).throw(batch.BatchError("fixture missing policy"))
+        self.inputs.policy_at = lambda sha, historical=False: (_ for _ in ()).throw(batch.BatchError("fixture missing policy"))
         self.assertEqual(self.inputs.interval_selection(self.base, self.base, POLICY)["kind"], "full")
 
     def test_long_backlog_explanation_is_bounded_and_the_admit_record_fits_the_journal(self):
@@ -596,6 +639,77 @@ class RealGitTests(unittest.TestCase):
         self.inputs.refresh()
         with self.assertRaisesRegex(batch.BatchError, "Git input"):
             self.inputs.policy_at(self.tip)
+
+    @staticmethod
+    def retired_lane_documents():
+        """Current policy documents plus one retired lane, as recorded pre-retirement."""
+        files = ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")
+        docs = [json.loads((ROOT / "scripts/ci" / name).read_text()) for name in files]
+        routing, inventory = docs[0], docs[1]
+        routing["lanes"].append("chameleon_lab")
+        routing["lane_jobs"]["chameleon_lab"] = ["chameleon-lab"]
+        routing["self_hosted_jobs"].append("chameleon-lab")
+        routing["rules"].append({"match": {"kind": "prefix", "value": "demos/chameleon-lab/"},
+                                 "lanes": ["chameleon_lab"]})
+        inventory["suites"].append({"id": "chameleon_lab",
+                                    "origin": {"kind": "scope_lane", "lane": "chameleon_lab"},
+                                    "jobs": ["chameleon-lab"], "required": True})
+        return docs
+
+    def write_policies(self, docs):
+        names = ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")
+        for name, document in zip(names, docs):
+            (self.root / "scripts/ci" / name).write_text(json.dumps(document, indent=2) + "\n",
+                                                         encoding="utf-8")
+
+    def test_replay_tolerates_a_lane_retired_after_the_journal_recording(self):
+        """Defect #2022: after the chameleon_lab lane retirement, every tick failed
+        closed in _replay (ScopeError: lanes do not match the closed v1 allowlist)
+        because pre-retirement controls carry the old inventory; main batch
+        execution and report delivery stopped. Replay accepts the historical
+        superset; the frozen request's bound digest is reproduced exactly."""
+        historical_docs = self.retired_lane_documents()
+        current_docs = [json.loads((ROOT / "scripts/ci" / name).read_text())
+                        for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")]
+        self.write_policies(historical_docs)
+        old = self.commit()
+        self.write_policies(current_docs)
+        self.tip = self.commit()
+        # The policy object the pre-retirement era parsed and froze into its
+        # requests: identical content, identical digest, no replay-era flag.
+        historical = test_scope.ScopePolicy(
+            historical_docs[0], self_test.parse_policy(historical_docs[1]), historical_docs[2],
+            self_test.digest_of({"routing": historical_docs[0], "inventory": historical_docs[1],
+                                 "scope": historical_docs[2]}))
+        run = {"run_id": 7, "attempt": 1}
+        selection = test_scope._selection(historical, historical.suite_ids, ["bootstrap requires full"])
+        request = batch.make_request(historical, request_id="batch:epoch:1", kind="bootstrap",
+                                     base_sha=None, target_sha=old, control_sha=old,
+                                     selection=selection, origin_run=run)
+        memory = Memory()
+        previous = None
+        for event in ({"id": "epoch:0", "epoch": "epoch", "generation": 0, "type": "observe",
+                       "data": {"target": old, "descends_pending": True}},
+                      {"id": "epoch:1", "epoch": "epoch", "generation": 1, "type": "admit",
+                       "data": {"request": request, "executor_run": run, "history_complete": True,
+                                "ancestor": True, "old_runs_terminal": True}}):
+            envelope = {"previous": previous, "event": event}
+            envelope["digest"] = batch.digest(envelope)
+            memory.comments.append({"id": len(memory.comments) + 1, "edited": False,
+                                    "envelope": envelope, "provenance": {}})
+            previous = envelope["digest"]
+        memory.checkpoint = {"head": previous, "pending": None}
+        inputs = controller.GitInputs(self.root, self.tip, lambda: self.tip)
+        replay = controller.Controller(memory.journal(), inputs, {"run_id": 9, "attempt": 1},
+            run_state=lambda run: "running",
+            result_for=lambda request, run: {"status": "pending"},
+            old_runs_terminal=lambda: True, lock_held=lambda: memory.lock, epoch="epoch")
+        answer = replay.reconcile(allow_execution=False)
+        self.assertEqual(answer["action"], "waiting")
+        frozen = answer["state"]["requests"]["batch:epoch:1"]
+        self.assertEqual(frozen["control"], old)
+        self.assertEqual(frozen["policy"], historical.digest)
+        self.assertEqual(answer["state"]["pending"], self.tip)
 
 
 if __name__ == "__main__":

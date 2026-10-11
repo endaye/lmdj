@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 把 Project Truth 和 Artifact 确定性派生为 Runtime Snapshot；不保存 Project 或执行实时输出。
 ## 2. 当前实现状态
-Project Cooker 可从 Project v5 tick-native Pattern、Pad playback 与 PCM16 Artifact 确定性生成 Runtime Snapshot；WAV inspect/decode、真实 peak waveform、44.1→48 kHz resample 与确定性矩阵已实现。本版新增一条纯附加的 Performance replay 投影：`cook_performance_replay(project, performance_id, resolve)` 返回不可变的 `PerformanceReplayProjection`，字段恰为 `performance_id`、`resolved_revision`、`bpm`、`quantize_enabled`、`swing_percent`、`pads[64]`（resolved Pad）、`patterns[16]`（每个 Pattern Slot 一份 Runtime Snapshot）、`boundaries`（`offset_tick` + `PerformanceEvent`）与 `event_count`。既有 Cook surface 的形状与语义不变。
+Project Cooker 可从 Project v5 tick-native Pattern、Pad playback 与 PCM16 Artifact 确定性生成 Runtime Snapshot；WAV inspect/decode、真实 peak waveform、44.1→48 kHz resample 与确定性矩阵已实现。本版新增一条纯附加的 Performance replay 投影：`cook_performance_replay(project, performance_id, resolve)` 返回不可变的 `PerformanceReplayProjection`，字段恰为 `performance_id`、`resolved_revision`、`bpm`、`quantize_enabled`、`swing_percent`、`pads[64]`（resolved Pad）、`patterns[16]`（每个 Pattern Slot 一份 Runtime Snapshot）、`boundaries`（`offset_tick` + `PerformanceEvent`）、`event_count` 与 `initial_live_state`（`5.4.1` headered profile 的录音起点，缺席即旧 profile）。header 随投影原样携带：零事件的 Performance 同样恢复起点，且它不随首事件 tick 归一化移动。headered profile 的 boundary 按 `(tick, input_sequence)` 展开，旧 profile 的排序不变。既有 Cook surface 的形状与语义不变。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain，不依赖 Host 或 Product Assembly。
 ## 4. 架构与数据流
@@ -49,7 +49,7 @@ Runtime Facade，真实设备内存仍须测量。
 ## 7. 产品使用方
 Audio Runtime 与 Application Facade 消费 Cook 结果。
 ## 8. 测试与证据
-`project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出；`performance_replay_projection_test.cpp` 覆盖 replay 投影的字段解析、Pattern Slot 解析与 boundary 展开，`wav_selection_test.cpp` 覆盖选区语义。
+`project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出；`performance_replay_projection_test.cpp` 覆盖 replay 投影的字段解析、Pattern Slot 解析与 boundary 展开，并覆盖 `5.4.1` header：零事件存活、独立于首事件 tick、revision 与素材身份固定。`wav_selection_test.cpp` 覆盖选区语义。
 ## 9. 限制与下一门禁
 `runtime_content_test.cpp` 和独立 `runtime_content_contract_test.py` 覆盖固定字节、
 跨实现读取、exact/+1 限额、异常字段与分配失败。新 Contract 尚未选择到 desktop

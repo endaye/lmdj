@@ -121,6 +121,7 @@ cook_performance_replay(
       {},
       {},
       0,
+      performance->second.initial_live_state,
   };
   for (const auto& pad : pad_snapshot.value()->pads) {
     const auto index = static_cast<std::size_t>(pad.slot.bank) * 16U +
@@ -146,8 +147,9 @@ cook_performance_replay(
     projection.patterns.at(slot) = snapshot.value();
   }
 
-  const auto canonical =
-      domain::canonical_performance_events(performance->second.events);
+  const auto canonical = domain::canonical_performance_events(
+      performance->second.events,
+      domain::performance_event_profile(performance->second));
   projection.event_count = static_cast<std::uint64_t>(canonical.size());
   projection.boundaries.reserve(canonical.size());
   const auto first_tick = canonical.empty()

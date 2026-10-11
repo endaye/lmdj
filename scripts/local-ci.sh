@@ -8,13 +8,15 @@
 # authorizes no push, Pull Request, merge, or later state transition.
 #
 # Usage:
-#   scripts/local-ci.sh                     # run every selected lane
+#   scripts/local-ci.sh                     # daily work; report deferred full lanes
+#   scripts/local-ci.sh --profile quick     # daily default; no full evidence
+#   scripts/local-ci.sh --profile full      # complete selected lanes
 #   scripts/local-ci.sh --list              # resolve the plan without running
 #   scripts/local-ci.sh --lanes docs_static # restrict to named lanes
 #   scripts/local-ci.sh --no-cache          # ignore cached lane verdicts
 #   scripts/local-ci.sh --pr-body body.md   # also check the PR body declaration
 #   scripts/local-ci.sh --declaration-only --pr-body body.md # no lane execution
-#   scripts/local-ci.sh --batch-evidence-only --pr-body body.md # merge check (#1619)
+#   scripts/local-ci.sh --batch-evidence-only --pr-body body.md # optional strict full receipt audit
 #   scripts/local-ci.sh --install-hook      # install an opt-in pre-push hook
 #   LMDJ_PRE_PUSH_FULL=1 git push           # explicitly run selected lanes
 #
@@ -29,8 +31,8 @@
 # --batch-evidence-only checks the body's `## Batch-only Lanes` section on a
 # clean checkout of the exact head: it must name exactly the selected lanes no
 # Pull Request runs, each with the input-bound `pass key=` a passing
-# `--lanes` run prints (or an owner-accepted `accepted-risk key=<k> — <reason>`). It
-# executes no lane; the merge procedure treats its `fail` as a failed check.
+# `--profile full --lanes` run prints (or an owner-accepted `accepted-risk key=<k> — <reason>`). It
+# executes no lane; it is a strict optional audit, not a blanket merge gate.
 #
 # Before classifying, the entry point compares the local `origin/main` ref to
 # the remote's `main`. The classifier resolves its merge base against the

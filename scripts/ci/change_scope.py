@@ -321,22 +321,53 @@ def _validate_match(match: object) -> None:
         raise ValueError("match value must be a nonempty string")
 
 
-def _validate_policy(policy: Mapping[str, object]) -> None:
+def _validate_policy(policy: Mapping[str, object], *, historical: bool = False) -> None:
+    """Validate one scope policy document against the closed canonical sets.
+
+    ``historical=True`` is only for replaying or authenticating trusted history:
+    a policy recorded before a lane retirement is accepted when it is a superset
+    of the current canonical lanes, with every still-current lane's jobs
+    unchanged. It never accepts a document missing or drifting on a current
+    lane; current admission (the default) keeps requiring the exact closed sets.
+    """
     if set(policy) != _POLICY_KEYS:
         raise ValueError("policy schema is not closed")
     if policy["schema"] != "lmdj.ci-scope-policy.v1" or policy["manifest_schema"] != "lmdj.ci-scope.v2":
         raise ValueError("unknown policy schema")
     lanes = policy["lanes"]
-    if not isinstance(lanes, list) or tuple(lanes) != _CANONICAL_LANES:
+    if not isinstance(lanes, list) or not all(isinstance(lane, str) for lane in lanes) \
+            or len(set(lanes)) != len(lanes):
+        raise ValueError("lanes do not match the closed v1 allowlist")
+    if historical:
+        missing_lanes = [lane for lane in _CANONICAL_LANES if lane not in lanes]
+        if missing_lanes:
+            raise ValueError("historical policy is missing current lane(s): " + ", ".join(missing_lanes))
+    elif tuple(lanes) != _CANONICAL_LANES:
         raise ValueError("lanes do not match the closed v1 allowlist")
     lane_set = set(lanes)
     lane_jobs = policy["lane_jobs"]
-    if not isinstance(lane_jobs, dict) or {
+    if not isinstance(lane_jobs, dict):
+        raise ValueError("lane jobs do not match the closed v1 mapping")
+    normalized_jobs = {
         lane: tuple(jobs) if isinstance(jobs, list) else jobs
         for lane, jobs in lane_jobs.items()
-    } != _CANONICAL_LANE_JOBS:
+    }
+    if historical:
+        if any(not isinstance(lane, str) or not isinstance(jobs, tuple) or not jobs
+               or not all(isinstance(job, str) for job in jobs)
+               for lane, jobs in normalized_jobs.items()):
+            raise ValueError("lane jobs do not match the closed v1 mapping")
+        drifted = [lane for lane in _CANONICAL_LANES
+                   if normalized_jobs.get(lane) != _CANONICAL_LANE_JOBS[lane]]
+        if drifted:
+            raise ValueError("historical policy drifts on current lane job(s): " + ", ".join(drifted))
+        orphaned = sorted(lane for lane in normalized_jobs if lane not in lane_set)
+        if orphaned:
+            raise ValueError("lane jobs reference lane(s) absent from the policy: " + ", ".join(orphaned))
+    elif normalized_jobs != _CANONICAL_LANE_JOBS:
         raise ValueError("lane jobs do not match the closed v1 mapping")
-    formal_jobs = {job for jobs in _CANONICAL_LANE_JOBS.values() for job in jobs}
+    formal_source = normalized_jobs if historical else _CANONICAL_LANE_JOBS
+    formal_jobs = {job for jobs in formal_source.values() for job in jobs}
     self_hosted = policy["self_hosted_jobs"]
     if not isinstance(self_hosted, list) or not all(
         isinstance(job, str) for job in self_hosted
@@ -350,7 +381,14 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
             "self-hosted jobs reference non-formal job(s): "
             + ", ".join(non_formal)
         )
-    if set(self_hosted) != set(_CANONICAL_SELF_HOSTED_JOBS):
+    if historical:
+        missing_hosted = sorted(set(_CANONICAL_SELF_HOSTED_JOBS) - set(self_hosted))
+        if missing_hosted:
+            raise ValueError(
+                "historical policy is missing current self-hosted job(s): "
+                + ", ".join(missing_hosted)
+            )
+    elif set(self_hosted) != set(_CANONICAL_SELF_HOSTED_JOBS):
         missing = sorted(set(_CANONICAL_SELF_HOSTED_JOBS) - set(self_hosted))
         extra = sorted(set(self_hosted) - set(_CANONICAL_SELF_HOSTED_JOBS))
         details = []

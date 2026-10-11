@@ -353,11 +353,27 @@ a reviewed act with a written reason rather than the path of least resistance.
 ### Local Pre-Flight
 
 `scripts/local-ci.sh` uses `local_preflight.py`, `local_lanes.json` and the
-canonical classifier. It is explicitly invoked advisory verification, not
-merge/release evidence and not an automatic all-PR gate. Use `--lanes` for
-Task-relevant work; `--list --json` only classifies. Four lane verdicts are
-`pass`, `cached-pass`, `fail` and `not-runnable-here`; unavailable platform,
-toolchain or clean-tree packaging preconditions cannot become a pass.
+canonical classifier. The default `--profile quick` shares daily workloads with
+automatic main batches; `--profile full` runs every selected complete lane.
+`--lanes` limits Task-relevant work and `--list --json` reports ownership, workload
+and commands without running. Selection remains conservative: unknown paths,
+foundational/Contract/shared-build changes retain complete checks. Audited UI
+changes run UI unit/offline tests and the durable Creator smoke; mutation and
+recovery paths keep browser journeys. Native persistence keeps full native
+integration/platform coverage; concurrent runtime changes keep the full stress
+inventory. Cross-platform repeats, coverage, packaging and reproducible clean
+builds deferred by a known low-risk change remain in explicit full verification.
+
+A deferred lane executes nothing and produces no pass or cache receipt. Quick
+passes have separate profile/source/toolchain-bound cache identities and cannot
+satisfy complete lane receipts. Per-command timings distinguish actual execution
+from cache hits. Unavailable platforms, tools or clean-tree prerequisites remain
+`not-runnable-here`. Local results are advisory, never release authorization.
+Automatic requests freeze workloads from every first-parent delta; authenticated
+review advice can add complete work, missing historical policies fall back to
+full, and executable verification debt requires full work. Quick success cannot
+clear earlier full debt. Candidate, node and bootstrap requests retain complete
+semantics and the full fifteen-suite inventory.
 
 The installed pre-push hook is idle unless `LMDJ_PRE_PUSH_FULL=1` explicitly
 requests heavy execution. Migration preserves an exact legacy generated hook

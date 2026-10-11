@@ -19,12 +19,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import argparse
 import hashlib
+import functools
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -49,6 +51,8 @@ _ANY_OF_KEYS = {"path", "env"}
 
 PASS = "pass"
 CACHED_PASS = "cached-pass"
+QUICK_PASS = "quick-pass"
+CACHED_QUICK_PASS = "cached-quick-pass"
 FAIL = "fail"
 NOT_RUNNABLE = "not-runnable-here"
 NOT_APPLICABLE = "not-applicable"
@@ -139,10 +143,23 @@ def load_classifier():
     return module
 
 
+def daily_workloads(classifier, policy, lanes, paths):
+    path = Path(__file__).with_name("daily_verification.py")
+    spec = importlib.util.spec_from_file_location("lmdj_daily_verification", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load daily verification policy")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.select(policy, lanes, paths, classifier=classifier)
+
+
 def load_lane_commands(
-    path: str | Path = LANE_COMMANDS_PATH, *, policy: Mapping[str, object] | None = None
+    path: str | Path = LANE_COMMANDS_PATH, *, policy: Mapping[str, object] | None = None,
+    profile: str = "full",
 ) -> dict[str, dict[str, object]]:
     """Load and validate the lane-to-local-command table."""
+    if profile not in {"quick", "journey", "full"}:
+        raise ValueError("why: unknown verification profile; remedy: choose quick or full")
     classifier = load_classifier()
     with Path(path).open(encoding="utf-8") as table_file:
         table = json.load(table_file, object_pairs_hook=classifier.reject_duplicates)
@@ -160,20 +177,116 @@ def load_lane_commands(
             "lane command table does not cover the policy lanes: "
             f"missing {missing}, extra {extra}"
         )
+    selected = {}
     for lane, entry in lanes.items():
-        if not isinstance(entry, dict) or set(entry) != _LANE_KEYS:
+        if not isinstance(entry, dict) or not _LANE_KEYS <= set(entry) or set(entry) - _LANE_KEYS - {"quick", "journey"}:
             raise ValueError(f"lane entry schema is not closed: {lane}")
-        commands = entry["commands"]
-        if not isinstance(commands, list) or not commands or not all(
-            isinstance(command, str) and command for command in commands
-        ):
-            raise ValueError(f"lane must declare nonempty commands: {lane}")
-        if not isinstance(entry["ci_only"], list) or not all(
-            isinstance(note, str) and note for note in entry["ci_only"]
-        ):
-            raise ValueError(f"invalid ci_only notes: {lane}")
-        _validate_requires(lane, entry["requires"])
-    return lanes
+        full = {key: entry[key] for key in _LANE_KEYS}
+        for variant in [full, *(entry[key] for key in ("quick", "journey") if key in entry)]:
+            _validate_lane_entry(lane, variant)
+        selected[lane] = entry.get(profile, full) if profile != "full" else full
+    return selected
+
+
+def _validate_lane_entry(lane: str, entry: object) -> None:
+    if not isinstance(entry, dict) or set(entry) != _LANE_KEYS:
+        raise ValueError(f"lane profile schema is not closed: {lane}")
+    commands = entry["commands"]
+    if not isinstance(commands, list) or not commands or not all(
+        isinstance(command, str) and command for command in commands
+    ):
+        raise ValueError(f"lane must declare nonempty commands: {lane}")
+    if not isinstance(entry["ci_only"], list) or not all(
+        isinstance(note, str) and note for note in entry["ci_only"]
+    ):
+        raise ValueError(f"invalid ci_only notes: {lane}")
+    _validate_requires(lane, entry["requires"])
+
+
+@functools.lru_cache(maxsize=128)
+def _tool_content(executable: str, revision: tuple[int, ...]) -> str:
+    """Read large shared tools once per process and observed filesystem revision."""
+    digest = hashlib.sha256()
+    with open(executable, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=128)
+def _tool_version(command: tuple[str, ...], executable: str, content_digest: str) -> str:
+    """Probe once per executable revision; missing/broken tools never look installed."""
+    try:
+        result = subprocess.run([executable, *command[1:], "--version"],
+                                capture_output=True, timeout=5, check=False)
+        return hashlib.sha256(str(result.returncode).encode() + result.stdout + result.stderr).hexdigest()
+    except (OSError, subprocess.SubprocessError) as error:
+        return type(error).__name__
+
+
+def toolchain_identity(lane: str, entry: Mapping[str, object], *, root: Path = ROOT) -> str:
+    tools = {"git", "bash", "python3", *entry["requires"].get("commands", [])}
+    if lane == "ci_contract":
+        # Quick only needs this runtime when the dependency plan selects the
+        # real handler seam, but a later installation must invalidate its cache.
+        tools.update({"curl", os.environ.get("PR_AGENT_TEST_PREP_PYTHON") or "python3.12"})
+    if lane.startswith("core_") or lane in {"package", "creator", "web_runtime_host", "web_toolchain"}:
+        tools.update({"cmake", os.environ.get("CC", "cc"), os.environ.get("CXX", "c++")})
+    if lane in {"creator", "web_runtime_host", "web_toolchain"}:
+        tools.add("emcc")
+    observed = {"platform": sys.platform, "python": [sys.executable, sys.version],
+                "build_flags": {key: os.environ.get(key, "")
+                                for key in ("CFLAGS", "CXXFLAGS", "LDFLAGS", "EMSDK")}}
+    if lane.startswith("core_") or lane in {"package", "creator", "web_runtime_host", "web_toolchain"}:
+        # CMake can retain a compiler chosen before the current CC/CXX env.
+        # Read compiler fields only; unrelated build-output churn is not an input.
+        configured = {}
+        for cache in sorted(root.glob("build/core/*/CMakeCache.txt")):
+            fields = {}
+            for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+                match = re.fullmatch(r"(CMAKE_(?:C|CXX)_COMPILER(?:_ARG1|_LAUNCHER)?):[^=]+=(.*)", line)
+                if match:
+                    name, value = match.groups()
+                    fields[name] = value
+                    tools.add(shlex.quote(value) if name.endswith("_COMPILER")
+                              else value.replace(";", " "))
+            configured[str(cache.relative_to(root))] = fields
+        observed["configured_compilers"] = configured
+    # Web entry points activate this SDK themselves: emcc need not be on the
+    # caller's PATH. Bind that installation too, including its active config.
+    if lane in {"creator", "web_runtime_host", "web_toolchain"}:
+        sdk = Path(os.environ.get("EMSDK") or root / "build/toolchains/emsdk").resolve()
+        observed["sdk_root"] = str(sdk)
+        observed["sdk_files"] = {}
+        for relative in ("emsdk_env.sh", ".emscripten", "emscripten-releases-tags.json",
+                         "upstream/emscripten/emscripten-version.txt"):
+            path = sdk / relative
+            observed["sdk_files"][relative] = (
+                hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "not-found")
+        tools.update(str(sdk / relative) for relative in
+                     ("upstream/emscripten/emcc", "upstream/bin/clang", "upstream/bin/wasm-ld"))
+    # A stable launcher/version string is insufficient when its delegated
+    # executable is replaced. Preserve argv and bind each resolvable delegate.
+    for tool in tuple(tools):
+        tools.update(shlex.quote(part) for part in shlex.split(tool)[1:]
+                     if not part.startswith("-") and shutil.which(part))
+    for tool in sorted(tools):
+        command = tuple(shlex.split(tool))
+        executable = shutil.which(command[0]) if command else None
+        if executable:
+            path = Path(executable).resolve()
+            stat = path.stat()
+            content = _tool_content(str(path), (stat.st_dev, stat.st_ino, stat.st_size,
+                                                stat.st_mtime_ns, stat.st_ctime_ns))
+            observed[tool] = [str(path), stat.st_mtime_ns, stat.st_size, content,
+                              _tool_version(command, str(path), content)]
+        else:
+            observed[tool] = "not-found"
+    return hashlib.sha256(json.dumps(observed, sort_keys=True).encode()).hexdigest()
+
+
+def execution_cache_key(source_key: str, profile: str, toolchain: str) -> str:
+    return hashlib.sha256(json.dumps([source_key, profile, toolchain]).encode()).hexdigest()
 
 
 def _validate_requires(lane: str, requires: object) -> None:
@@ -450,6 +563,7 @@ class LaneResult:
     verdict: str
     detail: str = ""
     duration_seconds: float = 0.0
+    commands: tuple[dict[str, object], ...] = ()
 
 
 @dataclass
@@ -543,6 +657,8 @@ def batch_evidence_block(
     still owed, left for another run, another host, or an owner's explicit
     risk acceptance.
     """
+    if plan.get("profile", "full") != "full":
+        return []
     passed = {result.lane for result in results if result.verdict in (PASS, CACHED_PASS)}
     batch = plan["ci_batch_only"]
     lines = [BATCH_EVIDENCE_HEADING, "",
@@ -587,6 +703,8 @@ def check_batch_evidence(
     def refuse(why: str, remedy: str) -> BatchEvidenceResult:
         return BatchEvidenceResult(FAIL, f"why: {why}; remedy: {remedy}")
 
+    if plan.get("profile", "full") != "full":
+        return refuse("quick is not full batch evidence", "run and check --profile full")
     if not worktree_is_clean(root):
         return refuse("the working tree has uncommitted changes, so its keys "
                       "do not describe the Pull Request head",
@@ -594,7 +712,7 @@ def check_batch_evidence(
     section = _evidence_section(body)
     if section is None:
         return refuse(f"the body needs exactly one `{BATCH_EVIDENCE_HEADING}` section",
-                      "paste the block `scripts/local-ci.sh --lanes <lane>` prints, "
+                      "paste the block `scripts/local-ci.sh --profile full --lanes <lane>` prints, "
                       "or `Batch-only lanes: none`")
     declarations = [match for line in section
                     if (match := _BATCH_DECLARATION.match(line))]
@@ -660,7 +778,7 @@ def check_batch_evidence(
     if problems:
         rerun = " ".join(missing + stale + malformed)
         return refuse("; ".join(problems),
-                      f"run `scripts/local-ci.sh --lanes {rerun.replace(' ', ',')}` on this head "
+                      f"run `scripts/local-ci.sh --profile full --lanes {rerun.replace(' ', ',')}` on this head "
                       "and paste its lines, or record `accepted-risk key=<current key> — <reason>` "
                       "only for a lane the owner explicitly accepted for these inputs")
     detail = ""
@@ -676,28 +794,37 @@ def run_lane(
 ) -> LaneResult:
     """Run a lane's checked-in commands in order, stopping at the first failure."""
     started = time.monotonic()
+    timings = []
     for command in commands:
         resolved = command.format(**substitutions)
         if echo:
             print(f"    $ {resolved}", flush=True)
         # The command table is checked-in repository content, not user input.
+        command_started = time.monotonic()
         completed = subprocess.run(resolved, cwd=root, shell=True, check=False)
+        duration = time.monotonic() - command_started
+        timings.append({"command": resolved, "exit_code": completed.returncode,
+                        "duration_seconds": round(duration, 3)})
+        if echo:
+            print(f"      exit={completed.returncode} [{duration:.3f}s]", flush=True)
         if completed.returncode != 0:
             return LaneResult(
                 lane, FAIL, f"`{resolved}` exited {completed.returncode}",
-                time.monotonic() - started,
+                time.monotonic() - started, tuple(timings),
             )
-    return LaneResult(lane, PASS, "", time.monotonic() - started)
+    return LaneResult(lane, PASS, "", time.monotonic() - started, tuple(timings))
 
 
 def build_plan(
     root: Path, base_ref: str, *, only: Sequence[str] | None = None,
     pr_body_path: str | Path | None = None,
+    profile: str = "full",
 ) -> dict[str, object]:
     """Resolve the manifest CI would produce and the local inputs per lane."""
     classifier = load_classifier()
     policy = classifier.load_policy(POLICY_PATH)
-    lane_commands = load_lane_commands(policy=policy)
+    full_commands = load_lane_commands(policy=policy)
+    lane_commands = load_lane_commands(policy=policy, profile=profile)
 
     base_sha = resolve_base_sha(root, base_ref)
     head_sha = _git(root, "rev-parse", "HEAD").decode().strip()
@@ -740,6 +867,14 @@ def build_plan(
     # lanes to execute here, never which lanes CI would select, and the
     # declaration's applicability mirrors CI rather than this invocation.
     ci_lanes = list(selected)
+    workloads = (daily_workloads(classifier, policy, ci_lanes, changed_paths(inventory))
+                 if profile == "quick" else {lane: "full" for lane in ci_lanes})
+    journeys = load_lane_commands(policy=policy, profile="journey")
+    for lane, mode in workloads.items():
+        if mode == "full":
+            lane_commands[lane] = full_commands[lane]
+        elif mode == "journey":
+            lane_commands[lane] = journeys[lane]
     if only:
         unknown = sorted(set(only) - set(policy["lanes"]))
         if unknown:
@@ -751,13 +886,15 @@ def build_plan(
     grouped = lane_input_paths(policy, blobs, classifier)
     keys = {
         lane: lane_cache_key(
-            lane, lane_commands[lane]["commands"], grouped[lane], blobs
+            lane, full_commands[lane]["commands"], grouped[lane], blobs
         )
         for lane in sorted(set(selected) | set(ci_lanes))
     }
     # Evidence obligations follow what CI selects, never a local `--lanes`.
     ci_batch_only = [lane for lane in ci_lanes if lane not in verified_by_pull_request]
     return {
+        "profile": profile,
+        "verification": workloads,
         "base_sha": base_sha,
         "head_sha": head_sha,
         "mode": manifest["mode"],
@@ -773,7 +910,12 @@ def build_plan(
         "ci_batch_only": ci_batch_only,
         "batch_only_keys": {lane: keys[lane] for lane in ci_batch_only},
         "lane_commands": lane_commands,
-        "cache_keys": {lane: keys[lane] for lane in selected},
+        "cache_keys": {
+            lane: execution_cache_key(
+                lane_cache_key(lane, lane_commands[lane]["commands"], grouped[lane], blobs),
+                profile, toolchain_identity(lane, lane_commands[lane], root=root))
+            for lane in selected if workloads[lane] != "deferred"
+        },
         "input_counts": {lane: len(grouped[lane]) for lane in selected},
         # The declaration check reuses the inventory that selected the lanes,
         # so the two cannot disagree about what changed. It is deliberately a
@@ -857,8 +999,15 @@ def execute(
     echo: bool = True,
 ) -> list[LaneResult]:
     results: list[LaneResult] = []
+    quick = plan.get("profile", "full") == "quick"
     substitutions = {"base": plan["base_sha"], "head": plan["head_sha"]}
     for lane in plan["selected"]:
+        if plan.get("verification", {}).get(lane) == "deferred":
+            result = LaneResult(lane, "deferred", "complete verification deferred; not executed and not a pass")
+            results.append(result)
+            if echo:
+                print(f"  {lane}: deferred ({result.detail})", flush=True)
+            continue
         entry = plan["lane_commands"][lane]
         runnable, why_not = check_requirements(root, entry["requires"])
         if not runnable:
@@ -868,15 +1017,18 @@ def execute(
             continue
         key = plan["cache_keys"][lane]
         if use_cache and has_cached_pass(cache_dir, lane, key):
-            results.append(LaneResult(lane, CACHED_PASS, "inputs unchanged"))
+            verdict = CACHED_QUICK_PASS if quick else CACHED_PASS
+            results.append(LaneResult(lane, verdict, "inputs and toolchain unchanged"))
             if echo:
-                print(f"  {lane}: {CACHED_PASS} (inputs unchanged)", flush=True)
+                print(f"  {lane}: {verdict} (inputs and toolchain unchanged)", flush=True)
             continue
         if echo:
             print(f"  {lane}: running", flush=True)
         result = run_lane(root, lane, entry["commands"], substitutions, echo=echo)
         if result.verdict == PASS:
             write_cached_pass(cache_dir, lane, key)
+            if quick:
+                result.verdict = QUICK_PASS
         results.append(result)
         if echo:
             suffix = f" ({result.detail})" if result.detail else ""
@@ -897,7 +1049,7 @@ exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
 """
 
 
-HOOK_TEMPLATE = """#!/usr/bin/env bash
+PREVIOUS_HOOK_TEMPLATE = """#!/usr/bin/env bash
 # Installed by scripts/ci/local_preflight.py --install-hook (optimistic v1).
 # Local verification is advisory; it authorizes no push, merge or release.
 # Opt in to the complete selected lane set: LMDJ_PRE_PUSH_FULL=1 git push.
@@ -909,6 +1061,10 @@ if [[ "${LMDJ_PRE_PUSH_FULL:-0}" != "1" ]]; then
 fi
 exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
 """
+
+
+HOOK_TEMPLATE = PREVIOUS_HOOK_TEMPLATE.replace("(optimistic v1)", "(optimistic v2)").replace(
+    '/scripts/local-ci.sh"\n', '/scripts/local-ci.sh" --profile full\n')
 
 
 def install_hook(root: Path, *, force: bool = False) -> Path:
@@ -926,13 +1082,14 @@ def install_hook(root: Path, *, force: bool = False) -> Path:
         raise RuntimeError(f"why: hook is not a regular owned file: {hook}; remedy: inspect it manually; it was not changed")
     if hook.exists():
         existing = hook.read_text(encoding="utf-8", errors="replace")
-        if existing not in {HOOK_TEMPLATE, LEGACY_HOOK_TEMPLATE}:
+        if existing not in {HOOK_TEMPLATE, PREVIOUS_HOOK_TEMPLATE, LEGACY_HOOK_TEMPLATE}:
             raise RuntimeError(
                 f"why: refusing to overwrite a personal or modified hook: {hook}; "
                 "remedy: integrate the opt-in manually; --force does not override ownership"
             )
-        if existing == LEGACY_HOOK_TEMPLATE:
-            backup = hook.with_name("pre-push.lmdj-before-optimistic")
+        if existing in {LEGACY_HOOK_TEMPLATE, PREVIOUS_HOOK_TEMPLATE}:
+            backup = hook.with_name("pre-push.lmdj-before-optimistic" if existing == LEGACY_HOOK_TEMPLATE
+                                    else "pre-push.lmdj-before-quick-default")
             if backup.is_symlink() or (backup.exists() and
                     (not backup.is_file() or backup.read_text(encoding="utf-8", errors="replace") != existing)):
                 raise RuntimeError(f"why: migration backup already differs: {backup}; remedy: inspect and preserve it manually")
@@ -969,7 +1126,7 @@ def _render(
         summary = summary or "nothing selected"
     lines = [
         "",
-        f"pre-flight: mode={plan['mode']} lanes={len(plan['selected'])} "
+        f"pre-flight: profile={plan.get('profile', 'full')} mode={plan['mode']} lanes={len(plan['selected'])} "
         f"({summary})",
     ]
     blocked = [result for result in results if result.verdict == FAIL]
@@ -1002,6 +1159,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Run the CI lanes this change selects, locally.",
     )
     parser.add_argument("--base-ref", default="origin/main")
+    parser.add_argument("--profile", choices=("quick", "full"), default=None,
+                        help="daily verification (default: quick) or complete lanes; batch evidence audit defaults to full")
     parser.add_argument("--lanes", default="")
     parser.add_argument("--cache-dir", default=str(default_cache_dir()))
     parser.add_argument("--no-cache", action="store_true")
@@ -1028,6 +1187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
               "exact clean head and exit without executing any lane"),
     )
     args = parser.parse_args(argv)
+    if args.profile is None:
+        args.profile = "full" if args.batch_evidence_only else "quick"
 
     root = ROOT
     try:
@@ -1037,12 +1198,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "why: --batch-evidence-only needs --pr-body FILE and checks every lane "
                 "CI selects; remedy: pass the body file and drop --lanes")
+        if args.batch_evidence_only and args.profile != "full":
+            raise ValueError("why: quick is not full batch evidence; remedy: use --profile full")
         if args.install_hook:
             print(f"installed {install_hook(root, force=args.force)}")
             return 0
         only = [lane for lane in args.lanes.split(",") if lane]
         plan = build_plan(
-            root, args.base_ref, only=only, pr_body_path=args.pr_body
+            root, args.base_ref, only=only, pr_body_path=args.pr_body, profile=args.profile
         )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"pre-flight failed closed: {error}", file=sys.stderr)
@@ -1062,19 +1225,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.list:
         payload = {
+            "profile": plan.get("profile", "full"),
             "mode": plan["mode"],
             "reasons": plan["reasons"],
             "selected": plan["selected"],
             "pull_request_verified": plan["pull_request_verified"],
             "batch_only": plan["batch_only"],
             "input_counts": plan["input_counts"],
+            "verification": plan.get("verification", {}),
+            "commands": {lane: ([] if plan.get("verification", {}).get(lane) == "deferred"
+                                else plan["lane_commands"][lane]["commands"])
+                         for lane in plan["selected"]},
             "declaration": _declaration_plan(plan),
         }
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     print(
-        f"pre-flight: {plan['mode']} mode, "
+        f"pre-flight: {plan.get('profile', 'full')} profile, {plan['mode']} mode, "
         f"{len(plan['selected'])} lane(s): {', '.join(plan['selected']) or 'none'}"
     )
     if plan["batch_only"]:
@@ -1084,7 +1252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "  not run by a Pull Request: "
             f"{', '.join(plan['batch_only'])}"
-            " -- run them here (--lanes) or they reach main unverified"
+            " -- ownership only; complete checks use --profile full --lanes"
         )
     try:
         # Report the uncached declaration before lanes; declaration-only never
@@ -1108,12 +1276,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.json:
         payload = {
+            "profile": plan.get("profile", "full"),
             "mode": plan["mode"],
             "results": [
                 {
                     "lane": result.lane, "verdict": result.verdict,
                     "detail": result.detail,
                     "duration_seconds": round(result.duration_seconds, 3),
+                    "commands": list(result.commands),
                 }
                 for result in results
             ],
@@ -1125,9 +1295,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(_render(plan, results, declaration))
-        if results and plan["ci_batch_only"]:
+        if results and plan["ci_batch_only"] and plan.get("profile", "full") == "full":
             print("\n  batch-only evidence for the Pull Request body "
-                  "(checked before merge with --batch-evidence-only):")
+                  "(optional strict audit with --batch-evidence-only):")
             for line in batch_evidence_block(plan, results):
                 print(f"    {line}" if line else "")
 

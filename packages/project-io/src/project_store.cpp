@@ -557,8 +557,9 @@ void canonicalize(domain::ProjectState& projected) {
   }
   for (auto& [id, performance] : projected.performances) {
     (void)id;
-    performance.events =
-        domain::canonical_performance_events(performance.events);
+    performance.events = domain::canonical_performance_events(
+        performance.events,
+        domain::performance_event_profile(performance));
   }
 }
 
@@ -591,7 +592,7 @@ nlohmann::json performance_value_json(
   for (const auto& event : performance.events) {
     events.push_back(domain::performance_event_json(event));
   }
-  return {
+  auto encoded = nlohmann::json{
       {"created_bpm", performance.created_bpm},
       {"events", std::move(events)},
       {"name", performance.name},
@@ -601,6 +602,14 @@ nlohmann::json performance_value_json(
            ? nlohmann::json(*performance.recording_artifact)
            : nlohmann::json(nullptr)},
   };
+  // The header binds only when present, so a legacy Performance keeps its
+  // exact historical bytes.
+  if (performance.initial_live_state.has_value()) {
+    encoded["initial_live_state"] =
+        domain::performance_initial_live_state_json(
+            *performance.initial_live_state);
+  }
+  return encoded;
 }
 
 nlohmann::json project_json(const domain::ProjectState& state) {
@@ -1123,14 +1132,25 @@ foundation::Result<domain::Performance> parse_performance(
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
-    if (!exact_object_keys(
-            input,
-            {"created_bpm",
-             "events",
-             "name",
-             "performance_id",
-             "recording_revision",
-             "recording_artifact"}) ||
+    const bool has_header = input.is_object() &&
+                            input.contains("initial_live_state");
+    if ((!exact_object_keys(
+             input,
+             {"created_bpm",
+              "events",
+              "name",
+              "performance_id",
+              "recording_revision",
+              "recording_artifact"}) &&
+         !exact_object_keys(
+             input,
+             {"created_bpm",
+              "events",
+              "initial_live_state",
+              "name",
+              "performance_id",
+              "recording_revision",
+              "recording_artifact"})) ||
         !input.at("performance_id").is_string() ||
         !input.at("name").is_string() ||
         !nonnegative_integer(input.at("created_bpm")) ||
@@ -1152,6 +1172,19 @@ foundation::Result<domain::Performance> parse_performance(
       recording_artifact =
           input.at("recording_artifact").get<foundation::ArtifactRef>();
     }
+    std::optional<domain::PerformanceInitialLiveState> initial_live_state;
+    if (has_header) {
+      auto header = domain::performance_initial_live_state_from_json(
+          input.at("initial_live_state"));
+      if (!header.has_value()) {
+        return foundation::Result<domain::Performance>::failure(
+            invalid_project(
+                "project Performance initial live state is invalid",
+                path,
+                header.error().message));
+      }
+      initial_live_state = std::move(header.value());
+    }
     domain::Performance performance{
         domain::PerformanceId{
             input.at("performance_id").get<std::string>()},
@@ -1160,6 +1193,7 @@ foundation::Result<domain::Performance> parse_performance(
         *recording_revision,
         std::move(recording_artifact),
         {},
+        std::move(initial_live_state),
     };
     for (const auto& encoded : input.at("events")) {
       auto event = domain::performance_event_from_json(encoded);
@@ -1173,7 +1207,9 @@ foundation::Result<domain::Performance> parse_performance(
       performance.events.push_back(std::move(event.value()));
     }
     if (performance.events !=
-        domain::canonical_performance_events(performance.events)) {
+        domain::canonical_performance_events(
+            performance.events,
+            domain::performance_event_profile(performance))) {
       return foundation::Result<domain::Performance>::failure(
           invalid_project(
               "project Performance events are not canonical", path));
@@ -1825,6 +1861,24 @@ const domain::CommandMeta& command_meta(const PersistedCommand& command) {
       command);
 }
 
+// Transaction events self-describe their recording profile: every event
+// sequenced is the headered ordering, none sequenced is the legacy one; a
+// mixture is not a coherent stream and fails closed.
+std::optional<std::vector<domain::PerformanceEvent>>
+canonical_transaction_events(std::vector<domain::PerformanceEvent> events) {
+  const auto any_sequenced = std::ranges::any_of(
+      events, [](const auto& event) { return event.input_sequence.has_value(); });
+  const auto all_sequenced = std::ranges::all_of(
+      events, [](const auto& event) { return event.input_sequence.has_value(); });
+  if (any_sequenced && !all_sequenced) {
+    return std::nullopt;
+  }
+  return domain::canonical_performance_events(
+      std::move(events),
+      all_sequenced ? domain::PerformanceEventProfile::header_input_sequence
+                    : domain::PerformanceEventProfile::legacy);
+}
+
 nlohmann::json command_json(const PersistedCommand& command) {
   return std::visit(
       [](const auto& value) -> nlohmann::json {
@@ -2004,12 +2058,20 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"type", "AppendPerformanceEvents"},
           };
         } else if constexpr (std::is_same_v<Type, CreatePerformance>) {
-          return {
+          auto encoded = nlohmann::json{
               {"meta", meta_json(value.meta)},
               {"name", value.name},
               {"performance_id", value.performance_id.value()},
               {"type", "CreatePerformance"},
           };
+          // The header rides the create only when present, so legacy drafts
+          // keep their exact historical transaction bytes.
+          if (value.initial_live_state.has_value()) {
+            encoded["initial_live_state"] =
+                domain::performance_initial_live_state_json(
+                    *value.initial_live_state);
+          }
+          return encoded;
         } else if constexpr (std::is_same_v<Type, RenamePerformance>) {
           return {
               {"meta", meta_json(value.meta)},
@@ -2625,10 +2687,17 @@ foundation::Result<PersistedCommand> parse_command(
           }});
     }
     if (type == "CreatePerformance" || type == "RenamePerformance") {
-      if (!exact_object_keys(
-              input, {"meta", "name", "performance_id", "type"}) ||
+      const auto has_header = input.is_object() &&
+                              input.contains("initial_live_state");
+      if ((!exact_object_keys(
+               input, {"meta", "name", "performance_id", "type"}) &&
+           !exact_object_keys(
+               input,
+               {"initial_live_state", "meta", "name", "performance_id",
+                "type"})) ||
           !input.at("name").is_string() ||
-          !input.at("performance_id").is_string()) {
+          !input.at("performance_id").is_string() ||
+          (has_header && type != "CreatePerformance")) {
         return foundation::Result<PersistedCommand>::failure(
             invalid_project(
                 type + " transaction shape is invalid", path));
@@ -2641,11 +2710,25 @@ foundation::Result<PersistedCommand> parse_command(
                 type + " Performance id is invalid", path));
       }
       if (type == "CreatePerformance") {
+        std::optional<domain::PerformanceInitialLiveState> header;
+        if (has_header) {
+          auto parsed_header =
+              domain::performance_initial_live_state_from_json(
+                  input.at("initial_live_state"));
+          if (!parsed_header.has_value()) {
+            return foundation::Result<PersistedCommand>::failure(
+                invalid_project(
+                    "CreatePerformance initial live state is invalid", path,
+                    parsed_header.error().message));
+          }
+          header = std::move(parsed_header.value());
+        }
         return foundation::Result<PersistedCommand>::success(
             PersistedCommand{CreatePerformance{
                 std::move(meta.value()),
                 domain::PerformanceId{performance_id},
                 input.at("name").get<std::string>(),
+                std::move(header),
             }});
       }
       return foundation::Result<PersistedCommand>::success(
@@ -2699,7 +2782,9 @@ foundation::Result<PersistedCommand> parse_command(
         }
         events.push_back(std::move(parsed.value()));
       }
-      if (events != domain::canonical_performance_events(events)) {
+      const auto canonical = canonical_transaction_events(
+          std::vector<domain::PerformanceEvent>{events.begin(), events.end()});
+      if (!canonical.has_value() || events != *canonical) {
         return foundation::Result<PersistedCommand>::failure(
             invalid_project(
                 "FinalizePerformanceDraft events are not canonical", path));
@@ -2777,8 +2862,9 @@ foundation::Result<PersistedCommand> parse_command(
         }
         events.push_back(std::move(parsed.value()));
       }
-      if (events.empty() ||
-          events != domain::canonical_performance_events(events)) {
+      const auto canonical = canonical_transaction_events(
+          std::vector<domain::PerformanceEvent>{events.begin(), events.end()});
+      if (events.empty() || !canonical.has_value() || events != *canonical) {
         return foundation::Result<PersistedCommand>::failure(
             invalid_project(
                 "AppendPerformanceEvents events are invalid", path));
@@ -2847,6 +2933,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
                 value.meta.expected_revision,
                 std::nullopt,
                 {},
+                value.initial_live_state,
             };
             auto validated = domain::validate_performance(performance);
             if (!validated.has_value()) {
@@ -2881,8 +2968,8 @@ foundation::Result<domain::AppliedCommand> apply_command(
                   target.events.end(),
                   value.events.begin(),
                   value.events.end());
-              target.events =
-                  domain::canonical_performance_events(target.events);
+              target.events = domain::canonical_performance_events(
+                  target.events, domain::performance_event_profile(target));
               auto validated = domain::validate_performance(target);
               if (!validated.has_value()) {
                 return foundation::Result<domain::AppliedCommand>::failure(
@@ -2902,8 +2989,8 @@ foundation::Result<domain::AppliedCommand> apply_command(
               auto& target = found->second;
               target.events.insert(
                   target.events.end(), value.events.begin(), value.events.end());
-              target.events =
-                  domain::canonical_performance_events(target.events);
+              target.events = domain::canonical_performance_events(
+                  target.events, domain::performance_event_profile(target));
               target.name = value.name;
               if (value.artifact.has_value()) {
                 if (target.recording_artifact.has_value() &&
@@ -5394,6 +5481,7 @@ ProjectStore::begin_performance_draft(
       request.meta,
       request.performance_id,
       "Untitled Performance",
+      request.initial_live_state,
   };
   const domain::Performance intended{
       request.performance_id,
@@ -5402,6 +5490,7 @@ ProjectStore::begin_performance_draft(
       request.meta.expected_revision,
       std::nullopt,
       {},
+      request.initial_live_state,
   };
   auto valid = domain::validate_performance(intended);
   if (!valid.has_value()) {
@@ -5428,10 +5517,17 @@ ProjectStore::begin_performance_draft(
   SequenceJournal journal{platform_};
   auto active = journal.read_active_performance(bundle);
   if (active.has_value()) {
+    // The receipt lookup above precedes profile selection; the profile is
+    // part of the begin identity, so a retry with a different profile
+    // collides instead of silently switching the durable grammar.
+    const bool profile_matches =
+        active.value().initial_live_state.has_value() ==
+        request.initial_live_state.has_value();
     if (!active.value().begin_command_id.has_value() ||
         *active.value().begin_command_id != request.meta.command_id ||
         active.value().session_id != request.session_id ||
-        active.value().performance_id != request.performance_id) {
+        active.value().performance_id != request.performance_id ||
+        !profile_matches) {
       return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
           ErrorCode::invalid_argument,
           "Performance begin collides with the active recording session",
@@ -5472,7 +5568,9 @@ ProjectStore::begin_performance_draft(
         request.session_id,
         request.performance_id,
         performance_fingerprint(intended),
-        request.meta.expected_revision);
+        request.meta.expected_revision,
+        request.initial_live_state,
+        request.initial_checkpoint);
     if (!begun.has_value()) {
       return foundation::Result<PerformanceLifecycleReceipt>::failure(
           begun.error());

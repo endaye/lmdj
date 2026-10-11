@@ -10,6 +10,17 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
 
+## 日常 Creator 冒烟检查
+
+`scripts/creator-web.sh smoke` 增量构建并打包一次，运行全部 Creator UI 单元测试
+和 offline 测试，再执行既有的完整编辑、播放、保存与重新打开浏览器冒烟流程。
+它验证当前打包身份，使用独占的临时端口和音频输出包装器；任一步失败均失败。
+该入口需要已安装的锁定工具链和干净、已提交的源码。
+
+`smoke` 不代表完整浏览器矩阵或双次干净构建的字节可复现性。
+`scripts/creator-web.sh quick` 保留完整浏览器流程，`proof` 另外验证可复现性。
+日常执行策略尚未切换，现有合并证据义务仍适用。
+
 ## PR-Agent 评审引擎（生产路径）
 
 `pr-review.yml` 的 `Review fallback` job 运行一个模型步骤：固定版本
@@ -175,8 +186,12 @@ setup-python toolcache 的 `LD_LIBRARY_PATH`。失败需修复主机 Python，�
 `pr-contract.yml` 是 PR 的 advisory contract：只有非 Draft、同仓库的 PR 才会在受信
 self-hosted `ci-general` 上运行。它在每个 job checkout 并核验事件提供的完整 head SHA；
 Change Scope 按确定性规则选择 `ci_contract` 与 `docs_static`，AI 只能增加建议，不能缩小
-这个下限，也不会展开完整产品 DAG 或 Creator parity。选中的 `ci_contract` 运行完整
-`ci_*_test.py` discovery 和 SHA 固定的 actionlint 1.7.12，`docs_static` 检查 exact
+这个下限，也不会展开完整产品 DAG 或 Creator parity。选中的 `ci_contract` 使用
+`scripts/ci/contract_selection.py`：已审计的 local preflight 改动运行模块及其消费者
+contract；新消费者、未知 CI 依赖及 PR-Agent 边界改动回到完整 `ci_*_test.py` 和真实
+handler seam。仅需要模块测试时，不安装 seam 的 Python 3.12 环境。显式 local quick
+消费同一选择器；full 保留完整 discovery 与 seam。SHA 固定的 actionlint 1.7.12
+仍执行，`docs_static` 检查 exact
 three-dot revision range；Documentation impact 则使用 API 读取的实际 PR body、正确的
 base/head 和现有 checker。Fork 与 Draft 在 runner 分配前跳过，不是通过证据；该 workflow
 不新增 required check、不修改 branch protection，也没有 hosted fallback。仅编辑 PR 标题或
@@ -467,7 +482,7 @@ Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_n
 
 `apps/creator-web/test/server_test.py` 的 `CatalogUpstreamParityTest` 将相同 accepted/refused corpus、固定种子的生成 corpus 与 ASCII host/path 字符样本交给 Python proof server 和独立 Worker 模块，比较接受、拒绝、崩溃及最终 base。Catalog 字符准入由显式共同 grammar 决定，保留两端的规范 URL 检查；全仓库统一到唯一 Node 26 运行时后，完整 parity 测试在 Node 26 下运行；literal `^` 均被拒绝。唯一预期差异是 proof-only loopback HTTP；生产 Worker 保持 HTTPS。此测试验证源码语义，不是线上 workerd 部署收据。
 
-`scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
+`scripts/web-runtime-host.sh configure|build|test|quick|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
 
 三次 Playwright 调用分别使用 `host-audio-chromium`、`host-chromium` 和
 `host-webkit` 结果目录，位于 `tests/platform/web/test-results/` 下。
@@ -489,7 +504,7 @@ Runtime smoke 独立选择 Runtime triplet。两套自动化和 manual-only work
 `https://lmdj-creator.netlify.app/` 与 `https://lmdj-runtime.netlify.app/`，具有独立 evidence 与
 exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证据不可变，新六资产
 测试也不自动证明 Creator 或 Runtime 已部署、promoted 或完成物理验收。
-`scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
+`scripts/creator-web.sh configure|build|test|quick|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
 Creator 的普通 Chromium 打包旅程使用两个隔离的 Playwright worker，各 spec 内仍串行。
 Sound Set 与默认流式下载 spec 会改写 Proof server 共用的 Catalog upstream 文件，
@@ -749,6 +764,33 @@ Hosted 用量是预算目标，不是未经验证的保证。观察周必须按 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 target 的完整自测或发布证据。
 
 本地 `scripts/local-ci.sh --list --json` 只分类，`--lanes` 选择 Task 需要执行的 lanes。
+Web 边界需要浏览器验证时，可显式运行 `scripts/creator-web.sh quick` 或
+`scripts/web-runtime-host.sh quick`：一次增量构建，继续运行原有全部旅程与浏览器检查，
+包括 Creator 的部署 fixture 兼容性检查。Creator 仍要求已提交的干净源码树。
+这两个 Web `quick` 入口不验证两次干净构建的字节可复现性，也不输出完整 Proof 通过；
+`scripts/creator-web.sh proof` / `scripts/web-runtime-host.sh proof` 保留原有完整语义。
+Runtime Host 的 native seam 只编译它实际执行的三个测试目标。
+本地默认 `--profile quick` 与自动 main 批次共享日常工作量规则；
+`--profile full` 显式执行全部选中 lane。`--list --json` 同时保留归属与执行模式，
+`deferred` 表示本次未验证，不生成通过或缓存证据。
+
+已审计的界面改动使用 `scripts/creator-web.sh smoke`：一次增量构建、全部 UI 单测和
+离线测试，以及编辑、播放、保存、重开的浏览器旅程。状态变更与恢复路径仍运行完整
+浏览器旅程；原生持久化保留完整原生集成及平台验证，并发 Runtime 改动保留 stress。
+Core 快速模式编译 Dev 并运行 unit/component；CI contract 按依赖选择，未知依赖回退全量。
+未知路径、基础模块、Contract 或共享构建改动保守回退完整验证。
+重复平台矩阵、coverage、打包和两次干净构建可复现性留在显式完整验证中。
+
+自动批次按整个 first-parent 提交区间冻结工作量，包括已被撤销的改动；
+受信 review 建议只能增加完整验证，缺失历史策略回退完整工作量。
+可执行的历史验证债务继续要求完整检查；quick 成功不能清除旧 full 失败或债务。
+candidate、node、bootstrap 请求保留完整语义。quick 的
+`quick-pass` / `cached-quick-pass` 不生成完整 lane 的 `pass key=`，也不能传给
+`--batch-evidence-only`。这些结果不构成完整发版证据。成功的日常结果与原有 focused 结果一样，只能唤醒 Canary
+计划计算；计划独立重算各站点区间与测试下限，不授予 admission、部署或版本进度。
+执行缓存额外绑定 profile 与实际本地工具链；每条实际执行的命令记录退出码和耗时，
+缓存命中不伪造执行时间。跨平台的完整 batch 证据仍使用源文件与命令绑定的 key，
+不会要求 Linux 验证者安装 macOS 工具链才能检查证据。
 `pass`、`cached-pass`、`fail`、`not-runnable-here` 明确区分；平台、toolchain、
 clean-tree package 前提不满足不能算 pass。缓存绑定命令与所有输入内容，位于工作树外，
 full-risk 路径是每条 lane 的输入，避免共享改动留下 stale cached pass。

@@ -145,8 +145,9 @@ class RuntimeTests(unittest.TestCase):
             (self.root / "scripts/ci" / filename).write_bytes((ROOT / "scripts/ci" / filename).read_bytes())
         (self.root / ".github/workflows").mkdir(parents=True)
         for path in runtime.EXECUTION_SOURCES:
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
             (self.root / path).write_text("name: Frozen trusted workflow\n")
-        git("add", "scripts/ci", ".github/workflows")
+        git("add", "scripts/ci", ".github")
         git("commit", "-qm", "fixture policy")
         self.sha = git("rev-parse", "HEAD")
         git("remote", "add", "origin", str(self.root))
@@ -294,15 +295,19 @@ class RuntimeTests(unittest.TestCase):
                           for job in runtime.JOB_NAMES})
             needs["macos-fallback"] = {"result": "skipped", "outputs": {}}
         else:
-            needs = {runtime.ALIASES.get(job, job): {"result": "success"} for job in runtime.JOB_NAMES}
+            owners = dict(self.policy.inventory.job_owner)
+            for suite in self.policy.inventory.suites:
+                for alternatives in suite.alternatives.values():
+                    owners.update({job: suite.id for job in alternatives})
+            needs = {runtime.ALIASES.get(job, job): {"result": "success" if prepared["suites"][owners[job]] else "skipped"} for job in runtime.JOB_NAMES}
             if missing_job:
                 del needs[runtime.ALIASES.get(missing_job, missing_job)]
             if failed_job:
                 needs[runtime.ALIASES.get(failed_job, failed_job)] = {"result": "failure"}
         verdict = batch_execution.from_needs(self.policy, prepared["identity"], request["selection"], needs,
                                             aliases=runtime.ALIASES, dependencies=runtime.dependencies(self.policy),
-                                            emit_common_events=emit_common_events)
-        self.api.runs[run].update(status="completed", conclusion="success" if verdict["status"] == "passed" else "failure")
+                                            emit_common_events=emit_common_events, verification=request.get("verification"))
+        self.api.runs[run].update(status="completed", conclusion="failure" if verdict["status"] == "failed" else "success")
         self.api.jobs[run][0].update(status="completed", conclusion="success")
         for index, (job, name) in enumerate(runtime.JOB_NAMES.items()):
             entry = needs.get(runtime.ALIASES.get(job, job))
@@ -700,6 +705,19 @@ class RuntimeTests(unittest.TestCase):
         self.git("commit", "-qm", "advance main fixture")
         self.api.sha = self.git("rev-parse", "HEAD")
         self.env["GITHUB_SHA"] = self.api.sha
+
+    def test_daily_result_binds_the_target_action_but_full_keeps_target_owned_scripts(self):
+        action = self.root / ".github/actions/web-ci-proof/action.yml"
+        action.write_text("name: New target action\n")
+        self.git("add", str(action))
+        self.git("commit", "-qm", "target moved after control checkout")
+        target = self.git("rev-parse", "HEAD")
+        for lane, mode in (("creator", "quick"), ("creator", "journey"), ("web_runtime_host", "journey")):
+            self.assertFalse(runtime.compatible_sources(self.git, self.sha, self.sha,
+                target=target, verification={lane: mode}))
+        self.assertTrue(runtime.compatible_sources(self.git, self.sha, self.sha,
+            target=target, verification={"creator": "full"}))
+        self.assertTrue(runtime.compatible_sources(self.git, self.sha, self.sha, target=target))
 
     def test_queued_old_control_executes_and_settles_on_compatible_new_main(self):
         start = self.start()

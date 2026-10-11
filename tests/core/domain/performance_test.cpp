@@ -112,6 +112,31 @@ void test_locked_event_and_fx_vocabularies_have_stable_ordinals() {
   LMDJ_CHECK(static_cast<std::uint8_t>(PerformanceEventKind::hold_on) == 5);
   LMDJ_CHECK(static_cast<std::uint8_t>(PerformanceEventKind::hold_off) == 6);
 
+  // lmdj.project.v5 5.4.1 appends two kinds after the locked vocabulary.
+  LMDJ_CHECK(
+      static_cast<std::uint8_t>(PerformanceEventKind::filter_change) == 7);
+  LMDJ_CHECK(
+      static_cast<std::uint8_t>(PerformanceEventKind::pad_gates_set) == 8);
+  LMDJ_CHECK(
+      static_cast<std::uint8_t>(PerformanceEventKind::pad_hit) ==
+      static_cast<std::uint8_t>(
+          lmdj::domain::performance_event_kind(
+              PerformanceEvent{lmdj::domain::PadHitPerformanceEvent{0, 0, 1, 1}})));
+  LMDJ_CHECK(
+      static_cast<std::uint8_t>(
+          lmdj::domain::performance_event_kind(
+              PerformanceEvent{lmdj::domain::FilterChangePerformanceEvent{
+                  lmdj::domain::PerformanceFilterPhase::move,
+                  lmdj::domain::PerformanceFilterType::hp,
+                  800,
+                  250,
+                  0}})) == 7);
+  LMDJ_CHECK(
+      static_cast<std::uint8_t>(
+          lmdj::domain::performance_event_kind(
+              PerformanceEvent{lmdj::domain::PadGatesSetPerformanceEvent{
+                  0, 0, 0}})) == 8);
+
   LMDJ_CHECK(static_cast<std::uint8_t>(PerformanceFx::filter) == 0);
   LMDJ_CHECK(static_cast<std::uint8_t>(PerformanceFx::delay) == 1);
   LMDJ_CHECK(static_cast<std::uint8_t>(PerformanceFx::reverb) == 2);
@@ -652,6 +677,380 @@ void test_asset_pattern_id_and_bank_references_are_rejected() {
   check_rejected(bank_reference);
 }
 
+// ---- lmdj.project.v5 5.4.1 headered live-control profile ----
+
+using lmdj::domain::FilterChangePerformanceEvent;
+using lmdj::domain::IndependentFilterLiveState;
+using lmdj::domain::LegacyFilterLiveState;
+using lmdj::domain::PadGatesSetPerformanceEvent;
+using lmdj::domain::PerformanceFilterPhase;
+using lmdj::domain::PerformanceFilterType;
+using lmdj::domain::PerformanceInitialLiveState;
+
+PerformanceInitialLiveState neutral_live_state() {
+  return PerformanceInitialLiveState{};
+}
+
+PerformanceInitialLiveState live_header() {
+  PerformanceInitialLiveState header;
+  header.hold = true;
+  header.filter = IndependentFilterLiveState{
+      true, false, PerformanceFilterType::hp, 800, 250};
+  header.other_fx.at(0) = {true, false, 500};   // delay
+  header.other_fx.at(1) = {false, true, 700};   // reverb frozen under HOLD
+  header.muted_mask = std::uint64_t{1};
+  return header;
+}
+
+PerformanceEvent sequenced(PerformanceEvent event, std::uint64_t sequence) {
+  event.input_sequence = sequence;
+  return event;
+}
+
+void test_live_control_event_shapes_round_trip_exactly() {
+  const std::vector<Json> encoded{
+      {{"kind", "filter_change"},
+       {"tick", 16},
+       {"input_sequence", "11"},
+       {"phase", "move"},
+       {"type", "hp"},
+       {"cutoff_hz", 1200},
+       {"resonance_milli", 250}},
+      {{"kind", "pad_gates_set"},
+       {"tick", 48},
+       {"input_sequence", "13"},
+       {"muted_slots", Json::array({0, 63})},
+       {"solo_slots", Json::array({8, 9})}},
+      {{"kind", "fx_move"},
+       {"fx", 1},
+       {"value", 600},
+       {"tick", 16},
+       {"input_sequence", "10"}},
+      {{"kind", "pad_hit"},
+       {"slot", 0},
+       {"onset_tick", 32},
+       {"duration_tick", 240},
+       {"velocity", 100},
+       {"input_sequence", "12"}},
+      {{"kind", "pattern_launch"},
+       {"pattern_slot", 0},
+       {"effective_tick", 3840},
+       {"input_sequence", "9"}},
+      {{"kind", "hold_off"}, {"tick", 3900}, {"input_sequence", "14"}},
+  };
+  for (const auto& event : encoded) {
+    const auto parsed = parse_event(event);
+    LMDJ_CHECK(parsed.input_sequence.has_value());
+    LMDJ_CHECK(lmdj::domain::performance_event_json(parsed) == event);
+  }
+  const auto gates = parse_event(encoded.at(1));
+  const auto& set = std::get<PadGatesSetPerformanceEvent>(gates.payload);
+  LMDJ_CHECK(set.muted_mask == (std::uint64_t{1} | (std::uint64_t{1} << 63)));
+  LMDJ_CHECK(set.solo_mask ==
+             ((std::uint64_t{1} << 8) | (std::uint64_t{1} << 9)));
+}
+
+void test_live_control_event_shapes_fail_closed() {
+  const std::vector<Json> malformed{
+      // unknown phase / type, out-of-range values
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "1"},
+       {"phase", "hold"}, {"type", "hp"}, {"cutoff_hz", 800},
+       {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "1"},
+       {"phase", "engage"}, {"type", "notch"}, {"cutoff_hz", 800},
+       {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "1"},
+       {"phase", "engage"}, {"type", "lp"}, {"cutoff_hz", 19},
+       {"resonance_milli", 0}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "1"},
+       {"phase", "engage"}, {"type", "lp"}, {"cutoff_hz", 20001},
+       {"resonance_milli", 0}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "1"},
+       {"phase", "engage"}, {"type", "lp"}, {"cutoff_hz", 20000},
+       {"resonance_milli", 1001}},
+      // malformed or absent sequences
+      {{"kind", "filter_change"}, {"tick", 0}, {"phase", "move"},
+       {"type", "hp"}, {"cutoff_hz", 1200}, {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "01"},
+       {"phase", "move"}, {"type", "hp"}, {"cutoff_hz", 1200},
+       {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "10\n"},
+       {"phase", "move"}, {"type", "hp"}, {"cutoff_hz", 1200},
+       {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "0"},
+       {"phase", "move"}, {"type", "hp"}, {"cutoff_hz", 1200},
+       {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0},
+       {"input_sequence", "18446744073709551616"},
+       {"phase", "move"}, {"type", "hp"}, {"cutoff_hz", 1200},
+       {"resonance_milli", 250}},
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", 11},
+       {"phase", "move"}, {"type", "hp"}, {"cutoff_hz", 1200},
+       {"resonance_milli", 250}},
+      // mask order/duplicates/range
+      {{"kind", "pad_gates_set"}, {"tick", 0}, {"input_sequence", "2"},
+       {"muted_slots", Json::array({3, 3})}, {"solo_slots", Json::array()}},
+      {{"kind", "pad_gates_set"}, {"tick", 0}, {"input_sequence", "2"},
+       {"muted_slots", Json::array({3, 1})}, {"solo_slots", Json::array()}},
+      {{"kind", "pad_gates_set"}, {"tick", 0}, {"input_sequence", "2"},
+       {"muted_slots", Json::array({64})}, {"solo_slots", Json::array()}},
+      {{"kind", "pad_gates_set"}, {"tick", 0}, {"input_sequence", "2"},
+       {"muted_slots", Json::array({-1})}, {"solo_slots", Json::array()}},
+      // extra keys are refused on the new kinds
+      {{"kind", "filter_change"}, {"tick", 0}, {"input_sequence", "1"},
+       {"phase", "move"}, {"type", "hp"}, {"cutoff_hz", 1200},
+       {"resonance_milli", 250}, {"extra", true}},
+      {{"kind", "pad_gates_set"}, {"tick", 0}, {"input_sequence", "2"},
+       {"muted_slots", Json::array()}, {"solo_slots", Json::array()},
+       {"delta", true}},
+  };
+  for (const auto& input : malformed) {
+    check_rejected(input);
+  }
+  // The uint64 ceiling remains legal.
+  LMDJ_CHECK(parse_event({{"kind", "filter_change"},
+                          {"tick", 0},
+                          {"input_sequence", "18446744073709551615"},
+                          {"phase", "move"},
+                          {"type", "hp"},
+                          {"cutoff_hz", 1200},
+                          {"resonance_milli", 250}})
+                 .input_sequence == std::numeric_limits<std::uint64_t>::max());
+}
+
+void test_live_header_round_trips_and_validates() {
+  const auto header = live_header();
+  const auto encoded =
+      lmdj::domain::performance_initial_live_state_json(header);
+  const auto decoded =
+      lmdj::domain::performance_initial_live_state_from_json(encoded);
+  LMDJ_CHECK(decoded.has_value());
+  LMDJ_CHECK(decoded.value() == header);
+  // The wire shape is the closed Contract shape.
+  LMDJ_CHECK(encoded.at("filter").at("mode") == "independent");
+  LMDJ_CHECK(encoded.at("other_fx").size() == 7);
+  LMDJ_CHECK(encoded.at("muted_slots") == Json::array({0}));
+  LMDJ_CHECK(encoded.at("solo_slots").empty());
+
+  const auto neutral = neutral_live_state();
+  LMDJ_CHECK(std::holds_alternative<LegacyFilterLiveState>(neutral.filter));
+  LMDJ_CHECK(
+      lmdj::domain::performance_initial_live_state_from_json(
+          lmdj::domain::performance_initial_live_state_json(neutral))
+          .value() == neutral);
+
+  auto malformed = encoded;
+  malformed["filter"]["mode"] = "legacy";  // legacy shape must not carry Hz
+  LMDJ_CHECK(!lmdj::domain::performance_initial_live_state_from_json(malformed)
+                  .has_value());
+  malformed = encoded;
+  malformed["other_fx"].erase("cutter");
+  LMDJ_CHECK(!lmdj::domain::performance_initial_live_state_from_json(malformed)
+                  .has_value());
+  malformed = encoded;
+  malformed["muted_slots"] = Json::array({0, 0});
+  LMDJ_CHECK(!lmdj::domain::performance_initial_live_state_from_json(malformed)
+                  .has_value());
+
+  // A frozen state is legal only under HOLD.
+  auto invalid = header;
+  invalid.hold = false;
+  auto performance = valid_performance();
+  performance.initial_live_state = invalid;
+  check_performance_rejected(performance);
+  auto valid = header;
+  valid.hold = true;
+  performance.initial_live_state = valid;
+  LMDJ_CHECK(lmdj::domain::validate_performance(performance).has_value());
+}
+
+void test_headered_profile_orders_by_tick_then_input_sequence() {
+  // A reserved Pattern keeps its original request sequence; it does not
+  // force the whole sorted list to be sequence-monotone.
+  std::vector<PerformanceEvent> events{
+      sequenced(PerformanceEvent{lmdj::domain::FxMovePerformanceEvent{
+                    PerformanceFx::delay, 600, 16}},
+                10),
+      sequenced(PerformanceEvent{FilterChangePerformanceEvent{
+                    PerformanceFilterPhase::move,
+                    PerformanceFilterType::hp, 1200, 250, 16}},
+                11),
+      sequenced(PerformanceEvent{lmdj::domain::PadHitPerformanceEvent{
+                    0, 32, 240, 100}},
+                12),
+      sequenced(PerformanceEvent{lmdj::domain::PatternLaunchPerformanceEvent{
+                    0, 3840}},
+                9),
+  };
+  const auto ordered = lmdj::domain::canonical_performance_events(
+      events, lmdj::domain::PerformanceEventProfile::header_input_sequence);
+  LMDJ_CHECK(ordered == events);  // already canonical: (16,10) (16,11) (32,12) (3840,9)
+  const auto shuffled = std::vector<PerformanceEvent>{
+      events.at(3), events.at(2), events.at(1), events.at(0)};
+  LMDJ_CHECK(lmdj::domain::canonical_performance_events(
+                 shuffled,
+                 lmdj::domain::PerformanceEventProfile::header_input_sequence) ==
+             events);
+  // The legacy ordering keeps its own (tick, kind ordinal, slot) tuple: the
+  // same-tick Pad precedes the control regardless of sequence, while the
+  // headered profile preserves reception order. This is the D0 same-tick
+  // counterexample in both directions.
+  std::vector<PerformanceEvent> same_tick{
+      sequenced(PerformanceEvent{lmdj::domain::PadHitPerformanceEvent{
+                    0, 100, 10, 100}},
+                20),
+      sequenced(PerformanceEvent{FilterChangePerformanceEvent{
+                    PerformanceFilterPhase::move,
+                    PerformanceFilterType::hp, 900, 250, 100}},
+                5),
+  };
+  const auto legacy = lmdj::domain::canonical_performance_events(same_tick);
+  LMDJ_CHECK(
+      lmdj::domain::performance_event_kind(legacy.at(0)) ==
+      PerformanceEventKind::pad_hit);
+  const auto received = lmdj::domain::canonical_performance_events(
+      same_tick, lmdj::domain::PerformanceEventProfile::header_input_sequence);
+  LMDJ_CHECK(
+      lmdj::domain::performance_event_kind(received.at(0)) ==
+      PerformanceEventKind::filter_change);
+  LMDJ_CHECK(
+      lmdj::domain::performance_event_kind(received.at(1)) ==
+      PerformanceEventKind::pad_hit);
+}
+
+void test_headered_profile_sequence_and_profile_rules() {
+  const auto header = live_header();
+  auto performance = valid_performance();
+  performance.initial_live_state = header;
+  performance.events = {
+      sequenced(PerformanceEvent{lmdj::domain::FxMovePerformanceEvent{
+                    PerformanceFx::delay, 600, 16}},
+                1),
+  };
+  // The header's engaged Delay seeds the move; no in-stream engage needed.
+  LMDJ_CHECK(lmdj::domain::validate_performance(performance).has_value());
+
+  // Duplicate sequences within one Performance are rejected.
+  performance.events.push_back(performance.events.front());
+  check_performance_rejected(performance);
+  performance.events.pop_back();
+
+  // An unsequenced event in the headered profile is rejected.
+  performance.events.push_back(
+      PerformanceEvent{lmdj::domain::HoldOffPerformanceEvent{3900}});
+  check_performance_rejected(performance);
+  performance.events.pop_back();
+
+  // Legacy profiles reject sequenced events and the new kinds.
+  auto legacy = valid_performance();
+  legacy.events = {sequenced(PerformanceEvent{
+                               lmdj::domain::HoldOffPerformanceEvent{3900}},
+                             1)};
+  check_performance_rejected(legacy);
+  legacy.events = {PerformanceEvent{FilterChangePerformanceEvent{
+      PerformanceFilterPhase::engage, PerformanceFilterType::lp, 20000, 0, 0}}};
+  check_performance_rejected(legacy);
+  legacy.events = {PerformanceEvent{PadGatesSetPerformanceEvent{1, 0, 0}}};
+  check_performance_rejected(legacy);
+}
+
+void test_headered_live_control_state_machine() {
+  const auto header = live_header();
+  const auto validate = [&header](std::vector<PerformanceEvent> events) {
+    return lmdj::domain::validate_performance_events(
+        lmdj::domain::canonical_performance_events(
+            events,
+            lmdj::domain::PerformanceEventProfile::header_input_sequence),
+        header);
+  };
+  // HOLD seeds hold_off; engaged Delay seeds move/release; frozen Reverb
+  // stays active without an open gesture requirement.
+  LMDJ_CHECK(validate({
+                 sequenced(PerformanceEvent{lmdj::domain::HoldOffPerformanceEvent{100}}, 1),
+             })
+                 .has_value());
+  LMDJ_CHECK(validate({
+                 sequenced(PerformanceEvent{lmdj::domain::FxMovePerformanceEvent{PerformanceFx::delay, 600, 10}}, 1),
+                 sequenced(PerformanceEvent{lmdj::domain::FxReleasePerformanceEvent{PerformanceFx::delay, 20}}, 2),
+             })
+                 .has_value());
+  // A release of a disengaged FX (crush is off in the header) still fails.
+  LMDJ_CHECK(!validate({
+                 sequenced(PerformanceEvent{lmdj::domain::FxReleasePerformanceEvent{PerformanceFx::crush, 20}}, 1),
+             })
+                  .has_value());
+  // Independent Filter lifecycle: move requires the seeded gesture, release
+  // closes it, a second release fails, re-engage starts a new gesture.
+  LMDJ_CHECK(validate({
+                 sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::move, PerformanceFilterType::hp, 900, 250, 10}}, 1),
+                 sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::release, PerformanceFilterType::hp, 900, 250, 20}}, 2),
+             })
+                 .has_value());
+  LMDJ_CHECK(!validate({
+                  sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::move, PerformanceFilterType::hp, 900, 250, 10}}, 1),
+                  sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::release, PerformanceFilterType::hp, 900, 250, 20}}, 2),
+                  sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::release, PerformanceFilterType::hp, 900, 250, 30}}, 3),
+              })
+                  .has_value());
+  LMDJ_CHECK(validate({
+                 sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::release, PerformanceFilterType::hp, 800, 250, 10}}, 1),
+                 sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::engage, PerformanceFilterType::lp, 20000, 0, 20}}, 2),
+             })
+                 .has_value());
+  // Engage while the seeded gesture is still active fails.
+  LMDJ_CHECK(!validate({
+                  sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::engage, PerformanceFilterType::lp, 20000, 0, 10}}, 1),
+              })
+                  .has_value());
+  // A legacy Filter engage takes over the single stage; after that, a typed
+  // move has no independent gesture to pair with.
+  LMDJ_CHECK(validate({
+                 sequenced(PerformanceEvent{lmdj::domain::FxEngagePerformanceEvent{PerformanceFx::filter, 500, 10}}, 1),
+             })
+                 .has_value());
+  LMDJ_CHECK(!validate({
+                  sequenced(PerformanceEvent{lmdj::domain::FxEngagePerformanceEvent{PerformanceFx::filter, 500, 10}}, 1),
+                  sequenced(PerformanceEvent{FilterChangePerformanceEvent{PerformanceFilterPhase::move, PerformanceFilterType::hp, 900, 250, 20}}, 2),
+              })
+                  .has_value());
+  // A legacy release with no legacy gesture cannot touch the independent
+  // Filter.
+  LMDJ_CHECK(!validate({
+                  sequenced(PerformanceEvent{lmdj::domain::FxReleasePerformanceEvent{PerformanceFx::filter, 10}}, 1),
+              })
+                  .has_value());
+  // pad_gates_set is free-standing state, always admissible.
+  LMDJ_CHECK(validate({
+                 sequenced(PerformanceEvent{PadGatesSetPerformanceEvent{3, 0, 10}}, 1),
+             })
+                 .has_value());
+}
+
+void test_headered_validation_round_trips_through_json() {
+  // The full D04 fixture shape: move before Pad before second move, reserved
+  // Pattern, HOLD-seeded release, all sequenced.
+  auto performance = valid_performance();
+  performance.initial_live_state = live_header();
+  performance.events = {
+      sequenced(PerformanceEvent{lmdj::domain::FxMovePerformanceEvent{PerformanceFx::delay, 500, 16}}, 10),
+      sequenced(PerformanceEvent{lmdj::domain::PadHitPerformanceEvent{0, 32, 240, 100}}, 11),
+      sequenced(PerformanceEvent{lmdj::domain::FxMovePerformanceEvent{PerformanceFx::delay, 900, 64}}, 12),
+      sequenced(PerformanceEvent{lmdj::domain::PatternLaunchPerformanceEvent{0, 3840}}, 9),
+      sequenced(PerformanceEvent{lmdj::domain::HoldOffPerformanceEvent{3900}}, 13),
+  };
+  LMDJ_CHECK(lmdj::domain::validate_performance(performance).has_value());
+  auto encoded = Json::array();
+  for (const auto& event : performance.events) {
+    encoded.push_back(lmdj::domain::performance_event_json(event));
+  }
+  std::vector<PerformanceEvent> decoded;
+  for (const auto& event : encoded) {
+    decoded.push_back(parse_event(event));
+  }
+  LMDJ_CHECK(decoded == performance.events);
+}
+
+
 Json capability_lineage_json() {
   return Json::parse(R"JSON(
 {
@@ -792,6 +1191,13 @@ int main() {
     test_performance_metadata_artifact_and_ordering_are_validated();
     test_event_json_rejects_malformed_shapes_and_values();
     test_asset_pattern_id_and_bank_references_are_rejected();
+    test_live_control_event_shapes_round_trip_exactly();
+    test_live_control_event_shapes_fail_closed();
+    test_live_header_round_trips_and_validates();
+    test_headered_profile_orders_by_tick_then_input_sequence();
+    test_headered_profile_sequence_and_profile_rules();
+    test_headered_live_control_state_machine();
+    test_headered_validation_round_trips_through_json();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

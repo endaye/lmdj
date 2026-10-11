@@ -65,11 +65,17 @@ class ScopePolicy:
         return tuple(suite.id for suite in self.inventory.suites)
 
 
-def parse_policy(routing, inventory, config):
+def parse_policy(routing, inventory, config, *, historical=False):
+    """Parse the three canonical policy documents.
+
+    ``historical=True`` widens only the routing allowlist checks for read-only
+    replay/authentication of policies recorded before a lane retirement; the
+    parsed object and digest are identical, and current admission stays exact.
+    """
     require(isinstance(routing, dict) and isinstance(inventory, dict),
             "canonical policies must be objects")
     try:
-        change_scope._validate_policy(routing)
+        change_scope._validate_policy(routing, historical=historical)
         inventory_policy = self_test.parse_policy(inventory)
     except (ValueError, TypeError, KeyError) as error:
         raise ScopeError(f"why: invalid upstream policy: {error}; remedy: restore the trusted canonical policies") from error

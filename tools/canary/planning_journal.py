@@ -134,7 +134,7 @@ def validate_decision(intent, value):
               and type(source['run_id']) is int and source['run_id'] > 0
               and type(source['run_attempt']) is int and source['run_attempt'] == 1,
               'planning source request or run identity is invalid')
-    r.require(source['status'] in ('passed', 'failed', 'missing', 'not-required'),
+    r.require(source['status'] in ('passed', 'quick-passed', 'failed', 'missing', 'not-required'),
               'planning source status is unknown')
     if source['status'] == 'missing':
         r.require(source['evidence_digest'] is None, 'absent verdict claims an evidence digest')
@@ -142,7 +142,7 @@ def validate_decision(intent, value):
         # not-required can be a special receipt (None) or an authenticated
         # retained verdict with zero selected suites (its real digest).
         r.exact_digest(source['evidence_digest'])
-    eligible = source['status'] == 'passed' and source['request_kind'] in ('auto', 'bootstrap')
+    eligible = source['status'] in ('passed', 'quick-passed') and source['request_kind'] in ('auto', 'bootstrap')
     if value['action'] == 'historical':
         r.require(eligible and intent['progress'] == initial_baseline_progress(value['baseline_receipt'])
                   and source['target_sha'] != value['baseline_receipt']['approval']['revision'],

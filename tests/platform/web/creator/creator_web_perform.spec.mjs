@@ -4,7 +4,7 @@ import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {createServer} from "node:http";
 import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
@@ -1011,12 +1011,66 @@ async function recordShortPerformance(
   await savePerformanceWithBusyRetry(page, name);
 }
 
-test("Perform Launch selects while stopped and queues, withdraws and applies without Performance recording", async ({page, browserName}) => {
+test("Perform Launch selects while stopped and queues, withdraws and applies without Performance recording", async ({page, browserName}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
   // Observe the real app traffic without replacing responses or the engine.
   await page.addInitScript(() => {
     let exposed;
+    const diagnostics = [];
+    const captureLosses = [];
+    let captureLossCount = 0;
+    window.__readLaunchTransportDiagnostics = () => {
+      const events = structuredClone(diagnostics);
+      const settled = new Set(events.filter(({phase}) => phase !== "entered")
+        .map(({request}) => request.request_id));
+      return {
+        capture_status: captureLossCount === 0 ? "available" : "incomplete",
+        time_origin_ms: performance.timeOrigin,
+        events,
+        // No recorded outcome is unknown, not proof of a refused request.
+        unobserved_outcomes: events.filter(({phase, request}) =>
+          phase === "entered" && !settled.has(request.request_id))
+          .map(({request}) => ({request_id: request.request_id, status: "unknown"})),
+        capture_loss: {count: captureLossCount, details: structuredClone(captureLosses)},
+      };
+    };
+    const recordDiagnostic = (phase, args, value) => {
+      try {
+        const [request, options] = args;
+        if (!["pattern.transport.switch", "pattern.transport.inspect"]
+          .includes(request.operation)) return;
+        const deadlineMs = options?.deadlineMs;
+        const entry = {
+          phase, monotonic_ms: performance.now(),
+          request: structuredClone(request),
+          options: {
+            argumentPresent: args.length > 1,
+            deadlineMsPresent: options != null && Object.hasOwn(options, "deadlineMs"),
+            deadlineMs: typeof deadlineMs === "number" && !Number.isFinite(deadlineMs)
+              ? String(deadlineMs) : deadlineMs,
+            deadlineMsType: typeof deadlineMs,
+          },
+        };
+        if (phase === "settled") entry.response = structuredClone(value);
+        if (phase === "rejected") entry.rejection = {
+          type: typeof value, value: structuredClone(value),
+          name: value?.name, code: value?.code, message: value?.message,
+          details: structuredClone(value?.details),
+        };
+        diagnostics.push(entry);
+      } catch (error) {
+        // Evidence capture must not change the real transport's outcome.
+        captureLossCount += 1;
+        try {
+          captureLosses.push({phase, monotonic_ms: performance.now(),
+            request_id: args[0]?.request_id, operation: args[0]?.operation,
+            reason: String(error), name: error?.name, code: error?.code});
+        } catch {
+          // The loss count remains even if its detail cannot be recorded.
+        }
+      }
+    };
     window.__launchTransportProof = [];
     Object.defineProperty(window, "lmdjWebRuntimeHost", {
       configurable: true,
@@ -1025,7 +1079,15 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
         const native = host.transport;
         host.transport = Object.freeze({
           async send(...args) {
-            const response = await native.send(...args);
+            recordDiagnostic("entered", args);
+            let response;
+            try {
+              response = await native.send(...args);
+            } catch (error) {
+              recordDiagnostic("rejected", args, error);
+              throw error;
+            }
+            recordDiagnostic("settled", args, response);
             const [request] = args;
             if (["snapshot.reload", "pattern.transport.request", "pattern.transport.switch",
               "performance.record.begin", "performance.record.launch-request"]
@@ -1047,116 +1109,142 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
       },
     });
   });
-  await importActivateAndPerform(page);
-  await page.getByRole("button", {name: "Sequence", exact: true}).click();
-  await createSequencePattern(page, 2);
-  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
-  const secondPattern = Object.keys((await inspectProjectTruth(page)).project.patterns)
-    .find((id) => id !== PATTERN_ID);
-  expect(secondPattern).toBeTruthy();
-  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", secondPattern);
-  await selectSequencePattern(page, PATTERN_ID);
-  await openPerform(page);
-  await showPerformPage(page, "Slots");
-  for (const [slot, patternId] of [[0, PATTERN_ID], [1, secondPattern]]) {
-    const revision = await projectRevision(page);
-    await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
-    await page.getByRole("combobox", {name: "Pattern slot", exact: true})
-      .selectOption({value: String(slot)});
-    await expect(page.getByRole("combobox", {name: "Pattern slot", exact: true}))
-      .toHaveValue(String(slot));
-    await page.getByRole("button", {name: "Assign Pattern"}).click();
-    await expectRevisionAfter(page, revision);
-  }
-  await showPerformPage(page, "Live");
-  const first = page.getByRole("button", {name: "Launch Pattern 1", exact: true});
-  const second = page.getByRole("button", {name: "Launch Pattern 2", exact: true});
-  const empty = page.getByRole("button", {name: "Launch Pattern 3", exact: true});
-  const cue = page.getByRole("status", {name: "Pattern launch cue"});
-  const playStop = page.getByTestId("physical-controls")
-    .getByRole("button", {name: /^Play\/Stop/});
-  const proof = () => page.evaluate(() => window.__launchTransportProof);
-  await expect(second).toHaveAttribute("data-pattern-id", secondPattern);
-  await expect(second).toBeEnabled();
-  const beforeEmpty = await proof();
-  await empty.click();
-  expect(await proof()).toEqual(beforeEmpty);
-  // Stopped slots select through the app's snapshot reload path.
-  await second.click();
-  await expect.poll(async () => (await proof()).filter(({operation, ok}) =>
-    operation === "snapshot.reload" && ok).at(-1)?.payload.pattern_id)
-    .toBe(secondPattern);
-  await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
-  await first.click();
-  await expect.poll(async () => (await proof()).filter(({operation, ok}) =>
-    operation === "snapshot.reload" && ok).at(-1)?.payload.pattern_id)
-    .toBe(PATTERN_ID);
-  await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
-  const truth = (await inspectProjectTruth(page)).project;
-  await page.evaluate(() => { window.__launchTransportProof = []; });
-  await playStop.click();
-  await expect(first).toHaveAttribute("data-launch", "acknowledged", {
-    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
-  });
-  const sessionId = (await proof()).find(({operation}) =>
-    operation === "pattern.transport.request").payload.session_id;
-  const inspect = async () => {
-    const response = await page.evaluate((session) =>
-      window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
-        request_id: crypto.randomUUID(), operation: "pattern.transport.inspect",
-        payload: {session_id: session}}), sessionId);
-    expect(response.ok).toBe(true);
-    return response.result;
-  };
-  const earlyBar = async () => {
-    const barFrames = 48_000 * 4 * 60 / truth.bpm;
-    // Default polling settles at 1 s and can keep missing a 400 ms bar window.
-    // Sample more often without widening the phase window or its deadline.
+  try {
+    await importActivateAndPerform(page);
+    await page.getByRole("button", {name: "Sequence", exact: true}).click();
+    await createSequencePattern(page, 2);
+    await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
+    const secondPattern = Object.keys((await inspectProjectTruth(page)).project.patterns)
+      .find((id) => id !== PATTERN_ID);
+    expect(secondPattern).toBeTruthy();
+    await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", secondPattern);
+    await selectSequencePattern(page, PATTERN_ID);
+    await openPerform(page);
+    await showPerformPage(page, "Slots");
+    for (const [slot, patternId] of [[0, PATTERN_ID], [1, secondPattern]]) {
+      const revision = await projectRevision(page);
+      await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
+      await page.getByRole("combobox", {name: "Pattern slot", exact: true})
+        .selectOption({value: String(slot)});
+      await expect(page.getByRole("combobox", {name: "Pattern slot", exact: true}))
+        .toHaveValue(String(slot));
+      await page.getByRole("button", {name: "Assign Pattern"}).click();
+      await expectRevisionAfter(page, revision);
+    }
+    await showPerformPage(page, "Live");
+    const first = page.getByRole("button", {name: "Launch Pattern 1", exact: true});
+    const second = page.getByRole("button", {name: "Launch Pattern 2", exact: true});
+    const empty = page.getByRole("button", {name: "Launch Pattern 3", exact: true});
+    const cue = page.getByRole("status", {name: "Pattern launch cue"});
+    const playStop = page.getByTestId("physical-controls")
+      .getByRole("button", {name: /^Play\/Stop/});
+    const proof = () => page.evaluate(() => window.__launchTransportProof);
+    await expect(second).toHaveAttribute("data-pattern-id", secondPattern);
+    await expect(second).toBeEnabled();
+    const beforeEmpty = await proof();
+    await empty.click();
+    expect(await proof()).toEqual(beforeEmpty);
+    // Stopped slots select through the app's snapshot reload path.
+    await second.click();
+    await expect.poll(async () => (await proof()).filter(({operation, ok}) =>
+      operation === "snapshot.reload" && ok).at(-1)?.payload.pattern_id)
+      .toBe(secondPattern);
+    await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
+    await first.click();
+    await expect.poll(async () => (await proof()).filter(({operation, ok}) =>
+      operation === "snapshot.reload" && ok).at(-1)?.payload.pattern_id)
+      .toBe(PATTERN_ID);
+    await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
+    const truth = (await inspectProjectTruth(page)).project;
+    await page.evaluate(() => { window.__launchTransportProof = []; });
+    await playStop.click();
+    await expect(first).toHaveAttribute("data-launch", "acknowledged", {
+      timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+    });
+    const sessionId = (await proof()).find(({operation}) =>
+      operation === "pattern.transport.request").payload.session_id;
+    const inspect = async () => {
+      const response = await page.evaluate((session) =>
+        window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
+          request_id: crypto.randomUUID(), operation: "pattern.transport.inspect",
+          payload: {session_id: session}}), sessionId);
+      expect(response.ok).toBe(true);
+      return response.result;
+    };
+    const earlyBar = async () => {
+      const barFrames = 48_000 * 4 * 60 / truth.bpm;
+      // Default polling settles at 1 s and can keep missing a 400 ms bar window.
+      // Sample more often without widening the phase window or its deadline.
+      await expect.poll(async () => {
+        const status = await inspect();
+        const position = (status.runtime_frame - status.origin_frame) % barFrames;
+        return status.playing && status.pending_switch == null &&
+          position >= 0 && position < barFrames / 5;
+      }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS, intervals: [50]}).toBe(true);
+    };
+    await earlyBar();
+    await second.click();
+    await expect.poll(() => second.evaluateAll((elements) =>
+      elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
+      {timeout: 5_000, intervals: [50]}).toBe("pending");
+    await expect(cue).toHaveText("LAST LAUNCH — → QUEUED SLOT 02");
+    expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
+    await expect(first).toHaveAttribute("data-launch", "acknowledged");
+    await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
+    // Pressing the currently playing slot withdraws the unclaimed target.
+    await first.click();
+    await expect.poll(async () => (await inspect()).pending_switch).toBe(null);
+    await expect(second).toHaveAttribute("data-launch", "idle");
+    expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
+    await earlyBar();
+    await second.click();
+    await expect.poll(() => second.evaluateAll((elements) =>
+      elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
+      {timeout: 5_000, intervals: [50]}).toBe("pending");
     await expect.poll(async () => {
       const status = await inspect();
-      const position = (status.runtime_frame - status.origin_frame) % barFrames;
-      return status.playing && status.pending_switch == null &&
-        position >= 0 && position < barFrames / 5;
-    }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS, intervals: [50]}).toBe(true);
-  };
-  await earlyBar();
-  await second.click();
-  await expect(second).toHaveAttribute("data-launch", "pending");
-  await expect(cue).toHaveText("LAST LAUNCH — → QUEUED SLOT 02");
-  expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
-  await expect(first).toHaveAttribute("data-launch", "acknowledged");
-  await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
-  // Pressing the currently playing slot withdraws the unclaimed target.
-  await first.click();
-  await expect.poll(async () => (await inspect()).pending_switch).toBe(null);
-  await expect(second).toHaveAttribute("data-launch", "idle");
-  expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
-  await earlyBar();
-  await second.click();
-  await expect(second).toHaveAttribute("data-launch", "pending");
-  await expect.poll(async () => {
-    const status = await inspect();
-    return status.playing && !status.recording && status.pending_switch == null &&
-      status.current_pattern_id === secondPattern;
-  }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
-  await expect(second).toHaveAttribute("data-launch", "acknowledged");
-  await expect(first).toHaveAttribute("data-launch", "idle");
-  await expect(cue).toHaveText("LAST LAUNCH — · NOTHING QUEUED");
-  await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
-  await playStop.click();
-  await expect.poll(async () => (await inspect()).playing).toBe(false);
-  await expect(second).toHaveAttribute("data-launch", "idle");
-  const traffic = await proof();
-  expect(traffic.filter(({operation}) => operation === "pattern.transport.switch")
-    .map(({payload, ok}) => ({patternId: payload.pattern_id, ok}))).toEqual([
-    {patternId: secondPattern, ok: true}, {patternId: PATTERN_ID, ok: true},
-    {patternId: secondPattern, ok: true},
-  ]);
-  expect(traffic.filter(({operation}) => operation === "snapshot.reload" ||
-    operation.startsWith("performance.record."))).toEqual([]);
-  expect((await inspectProjectTruth(page)).project).toEqual(truth);
-  await expect(page.getByRole("status", {name: "Performance recording status"}))
-    .toContainText("idle");
+      return status.playing && !status.recording && status.pending_switch == null &&
+        status.current_pattern_id === secondPattern;
+    }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+    await expect(second).toHaveAttribute("data-launch", "acknowledged");
+    await expect(first).toHaveAttribute("data-launch", "idle");
+    await expect(cue).toHaveText("LAST LAUNCH — · NOTHING QUEUED");
+    await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
+    await playStop.click();
+    await expect.poll(async () => (await inspect()).playing).toBe(false);
+    await expect(second).toHaveAttribute("data-launch", "idle");
+    const traffic = await proof();
+    expect(traffic.filter(({operation}) => operation === "pattern.transport.switch")
+      .map(({payload, ok}) => ({patternId: payload.pattern_id, ok}))).toEqual([
+      {patternId: secondPattern, ok: true}, {patternId: PATTERN_ID, ok: true},
+      {patternId: secondPattern, ok: true},
+    ]);
+    expect(traffic.filter(({operation}) => operation === "snapshot.reload" ||
+      operation.startsWith("performance.record."))).toEqual([]);
+    expect((await inspectProjectTruth(page)).project).toEqual(truth);
+    await expect(page.getByRole("status", {name: "Performance recording status"}))
+      .toContainText("idle");
+  } finally {
+    try {
+      const diagnostics = JSON.stringify(await page.evaluate(() =>
+        window.__readLaunchTransportDiagnostics()), null, 2);
+      const diagnosticsPath = testInfo.outputPath("launch-transport-diagnostics.json");
+      await writeFile(diagnosticsPath, diagnostics);
+      await testInfo.attach("launch-transport-diagnostics.json", {
+        path: diagnosticsPath,
+        contentType: "application/json",
+      });
+    } catch (error) {
+      // A missing attachment must not mask the original assertion failure.
+      try {
+        console.warn("launch-transport-diagnostics unavailable", {
+          reason: String(error), name: error?.name, code: error?.code,
+        });
+      } catch {
+        // Reporting an unavailable artifact is also best effort.
+      }
+    }
+  }
 });
 
 // Records the real transport traffic without replacing responses or the
@@ -1892,10 +1980,11 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
   await importActivateAndPerform(page);
-  await assignThenMovePattern(page);
   const master = page.getByRole("slider", {name: "MASTER", exact: true});
-  await master.fill("42");
-  await expect(master).toHaveValue("42");
+  await expect(master).toBeEnabled({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await master.fill("37");
+  await expect(master).toHaveValue("37");
+  await assignThenMovePattern(page);
   // The replay must still be playing when Stop Replay is clicked, otherwise
   // the run races natural completion and observes "complete · neutral"
   // instead of the abort path this test owns.
@@ -1914,10 +2003,12 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     timeout: 30_000,
   });
   await showPerformPage(page, "Live");
+  // Replay neutralizes these FX; device monitoring has its own 0–100 range
+  // and must retain the accepted nondefault value rather than reset with FX.
   for (const name of ["Filter", "Delay", "Reverb"]) {
     await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("500");
   }
-  await expect(master).toHaveValue("42");
+  await expect(master).toHaveValue("37");
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))

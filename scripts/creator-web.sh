@@ -31,6 +31,8 @@ usage:
   scripts/creator-web.sh build
   scripts/creator-web.sh test
   scripts/creator-web.sh proof
+  scripts/creator-web.sh quick
+  scripts/creator-web.sh smoke
   scripts/creator-web.sh package
   scripts/creator-web.sh serve [--port PORT] [--catalog-upstream URL]
   scripts/creator-web.sh clean
@@ -176,12 +178,16 @@ package_creator() {
     --dist-root "$dist_root"
 }
 
+test_creator_ui() {
+  npm --prefix "$creator_root" test -- --run
+  node --test "$creator_root"/offline/*.node-test.mjs
+}
+
 test_creator() {
   activate_toolchain
   require_dependencies
   "$repo_root/scripts/asset-server.sh" check
-  npm --prefix "$creator_root" test -- --run
-  node --test "$creator_root"/offline/*.node-test.mjs
+  test_creator_ui
   python3 "$creator_root/test/package_test.py"
   python3 "$creator_root/test/server_test.py"
   python3 "$creator_root/test/deployment_smoke_test.py"
@@ -204,6 +210,11 @@ clean_creator() {
 
 generate_project_fixture() {
   local output="$1"
+  local layout="${2:-all}"
+  local fixture_root
+  case "$layout" in all|overview) ;; *) return 64 ;; esac
+  fixture_root="$(dirname "$output")"
+  mkdir -p "$fixture_root"
   "$repo_root/scripts/core.sh" configure dev
   # The fixtures execute only lmdj-core. The whole dev tree compiles every
   # native test binary, which the Core lanes own, and it alone cost ~6.5 of
@@ -213,13 +224,14 @@ generate_project_fixture() {
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
     "$repo_root/tests/fixtures/audio/kick.wav" \
-    "$proof_root" <<'PY'
+    "$fixture_root" "$layout" <<'PY'
 import json
 from pathlib import Path
 import subprocess
 import sys
 
-executable, assembly, audio, root = map(Path, sys.argv[1:])
+executable, assembly, audio, root = map(Path, sys.argv[1:5])
+slots = range(64) if sys.argv[5] == "all" else [18]
 workspace = root / "workspace"
 project = root / "creator-proof.lmdj"
 workspace.mkdir()
@@ -251,7 +263,7 @@ invoke("command", {
     "source_path": str(audio), "media_type": "audio/wav",
 }, 1)
 revision = 1
-for slot in range(64):
+for slot in slots:
     invoke("command", {
         "operation": "pad.assign", "project_path": str(project),
         "command_id": f"00000000-0000-4000-8000-{slot + 2:012d}",
@@ -267,11 +279,11 @@ invoke("command", {
 }, revision + 1)
 PY
   python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
-    --source "$proof_root/creator-proof.lmdj" --output "$proof_root/first.lmdj" >/dev/null
+    --source "$fixture_root/creator-proof.lmdj" --output "$fixture_root/first.lmdj" >/dev/null
   python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
-    --source "$proof_root/creator-proof.lmdj" --output "$proof_root/second.lmdj" >/dev/null
-  cmp "$proof_root/first.lmdj" "$proof_root/second.lmdj"
-  cmake -E copy "$proof_root/first.lmdj" "$output"
+    --source "$fixture_root/creator-proof.lmdj" --output "$fixture_root/second.lmdj" >/dev/null
+  cmp "$fixture_root/first.lmdj" "$fixture_root/second.lmdj"
+  cmake -E copy "$fixture_root/first.lmdj" "$output"
   echo "Creator Web Project fixture reproducibility: PASS"
 }
 
@@ -361,6 +373,7 @@ run_browser_gate() {
   local bundle="$1"
   local sample_bundle="$2"
   local candidate_bundle="$3"
+  local mode="${4:-journey}"
   export LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE="$candidate_bundle"
   local requested_port="${LMDJ_CREATOR_WEB_PORT:-0}"
   local ready_file ready_nonce port="" status=0
@@ -445,6 +458,7 @@ PY
     echo "Creator Web error: proof server did not become ready" >&2
     return 2
   }
+  if [[ "$mode" != smoke ]]; then
   LMDJ_WEB_RESULTS_SLOT=chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
@@ -506,6 +520,7 @@ PY
     npm --prefix "$web_test_root" test -- \
       --project=creator-sample-webkit "$required_relative" \
       --grep "capability boundary" || status=$?
+  fi
   # The deployment journey's frozen import bundle and UI locators must stay
   # fresh against this build's writer and surface. Before this leg existed,
   # a Contract-level bump without regenerating the frozen fixture or a UI
@@ -555,6 +570,7 @@ PY
 }
 
 proof_creator() {
+  local mode="${1:-proof}"
   activate_toolchain
   require_dependencies
   if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]]; then
@@ -567,32 +583,48 @@ proof_creator() {
   unset NODE_PATH || true
   unset PYTHONPATH || true
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
+  if [[ "$mode" != smoke ]]; then
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
+  export LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE="$proof_root/overview/creator-overview-bundle.lmdj"
+  generate_project_fixture "$LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE" overview
   generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
   python3 "$web_test_root/creator/fixtures/make_candidate_fixture.py" \
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
-  clean_creator
+  fi
+  if [[ "$mode" == proof ]]; then clean_creator; fi
   configure_creator
   build_creator
   package_creator
-  cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
-  clean_creator
-  configure_creator
-  build_creator
-  package_creator
-  diff -qr "$proof_root/first-dist" "$dist_root" || {
-    echo "Creator Web error: two clean distributions are not byte reproducible" >&2
-    return 2
-  }
-  echo "Creator Web distribution reproducibility: PASS"
+  if [[ "$mode" == proof ]]; then
+    cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
+    clean_creator
+    configure_creator
+    build_creator
+    package_creator
+    diff -qr "$proof_root/first-dist" "$dist_root" || {
+      echo "Creator Web error: two clean distributions are not byte reproducible" >&2
+      return 2
+    }
+    echo "Creator Web distribution reproducibility: PASS"
+  fi
+  if [[ "$mode" == smoke ]]; then
+    test_creator_ui
+    run_browser_gate "" "" "" smoke
+    echo "Creator Web Smoke: PASS (authoring/playback/reload; complete proof not verified)"
+    return
+  fi
   test_creator
   run_browser_gate \
     "$proof_root/creator-proof-bundle.lmdj" \
     "$proof_root/creator-sample-proof-bundle.lmdj" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
-  echo "Creator Web Proof: PASS"
+  if [[ "$mode" == proof ]]; then
+    echo "Creator Web Proof: PASS"
+  else
+    echo "Creator Web Quick: PASS (incremental build; reproducibility not verified)"
+  fi
 }
 
 [[ $# -ge 1 ]] || { usage; exit 64; }
@@ -613,13 +645,13 @@ case "$command_name" in
     [[ $# -eq 0 ]] || { usage; exit 64; }
     test_creator
     ;;
-  proof)
+  proof|quick|smoke)
     [[ $# -eq 0 ]] || { usage; exit 64; }
     if [[ "${LMDJ_AUDIO_OUTPUT_WRAPPED:-}" != creator ]]; then
       exec python3 "$script_dir/local-audio-output.py" --lane creator -- \
-        bash "$script_dir/creator-web.sh" proof
+        bash "$script_dir/creator-web.sh" "$command_name"
     fi
-    proof_creator
+    proof_creator "$command_name"
     ;;
   package)
     [[ $# -eq 0 ]] || { usage; exit 64; }

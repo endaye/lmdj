@@ -46,7 +46,7 @@ MAX_REFERENCE = 40000
 ARTIFACT_RETENTION = timedelta(days=30)
 
 
-def compatible_sources(git, frozen_control, executor_control):
+def compatible_sources(git, frozen_control, executor_control, *, target=None, verification=None):
     """Compare immutable workflow data, never execute historical Python.
 
 Caller independently proves both controls belong to actual main history. The
@@ -54,6 +54,12 @@ closed source set covers this caller and every reusable product workflow.
 """
     batch.exact_sha(frozen_control)
     batch.exact_sha(executor_control)
+    if any((verification or {}).get(lane) in {"quick", "journey"}
+           for lane in ("creator", "web_runtime_host")):
+        batch.exact_sha(target)
+        action = ".github/actions/web-ci-proof/action.yml"
+        if git("show", f"{frozen_control}:{action}") != git("show", f"{target}:{action}"):
+            return False
     return all(git("show", f"{frozen_control}:{path}") == git("show", f"{executor_control}:{path}")
                for path in EXECUTION_SOURCES)
 
@@ -365,15 +371,16 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         if run.get("status") != "completed":
             return {"status": "pending"}
         self.inputs.verify_target(run["head_sha"])
-        if not compatible_sources(self.git, request["control"], run["head_sha"]):
+        if not compatible_sources(self.git, request["control"], run["head_sha"],
+                                  target=request["target"], verification=request.get("verification")):
             # The callee rejects this before heavy jobs. A genuinely terminal
             # incompatible request has no accepted coverage, but must release
             # its queue slot; it is not an API-unknown infinite wait.
             return {"status": "missing"}
         self.inputs.verify_target(request["target"])
-        policy = self.inputs.policy_at(request["control"])
+        policy = self.inputs.policy_at(request["control"], historical=True)
         if (request["kind"] == "candidate"
-                and self.inputs.policy_at(run["head_sha"]).digest != request["policy"]):
+                and self.inputs.policy_at(run["head_sha"], historical=True).digest != request["policy"]):
             # Same terminal missing/advance path as workflow incompatibility.
             # A policy read/authentication error remains an error, not missing.
             return {"status": "missing"}
@@ -407,7 +414,7 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
             return {"status": "missing"}
         validate_job_observations(checked, producers[0], jobs)
         reference = encode_reference(checked)
-        return {"status": "ready", "outcomes": batch_verdict.scheduler_outcomes(checked, policy, identity, request["selection"]),
+        return {"status": "ready", "outcomes": batch_verdict.scheduler_outcomes(checked, policy, identity, request["selection"], verification=request.get("verification")),
                 "reference": reference}
 
     def validate_bundle(self, bundle, request, run, policy):

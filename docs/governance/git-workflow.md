@@ -101,7 +101,8 @@ before pushing. Task-specific verification remains required.
 ```bash
 scripts/local-ci.sh --list --json          # classify without running lanes
 scripts/local-ci.sh --lanes core_ubuntu   # explicitly run relevant local lanes
-scripts/local-ci.sh                       # explicitly run all selected lanes
+scripts/local-ci.sh                       # daily quick verification; report deferred full checks
+scripts/local-ci.sh --profile full        # explicitly run all selected complete lanes
 scripts/local-ci.sh --declaration-only --pr-body <body-file>
 scripts/local-ci.sh --install-hook        # install/migrate this tool's hook
 LMDJ_PRE_PUSH_FULL=1 git push             # opt in to heavy pre-push verification

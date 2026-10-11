@@ -21,6 +21,15 @@
       ]
     },
     "ci_contract": {
+      "quick": {
+        "requires": {"commands": ["python3"]},
+        "commands": [
+          "python3 scripts/ci/contract_selection.py --base {base} --execute all"
+        ],
+        "ci_only": [
+          "PR CI also runs pinned actionlint; unknown or affected PR-Agent dependencies retain the Python 3.12 real-handler seam."
+        ]
+      },
       "requires": {
         "commands": ["curl", "python3.12"]
       },
@@ -34,8 +43,32 @@
       ]
     },
     "core_ubuntu": {
+      "quick": {
+        "requires": {
+          "os": [
+            "linux"
+          ],
+          "commands": [
+            "cmake",
+            "python3"
+          ]
+        },
+        "commands": [
+          "python3 tests/fixtures/audio/make_fixtures.py",
+          "python3 tests/fixtures/golden/reference_render.py",
+          "bash scripts/verify-core-dependencies.sh",
+          "scripts/core.sh configure dev",
+          "scripts/core.sh build dev",
+          "scripts/core.sh test dev fast"
+        ],
+        "ci_only": [
+          "Fast unit/component development feedback; the daily risk policy separately retains persistence, host, platform and concurrency checks."
+        ]
+      },
       "requires": {
-        "os": ["linux"]
+        "os": [
+          "linux"
+        ]
       },
       "commands": [
         "python3 tests/fixtures/audio/make_fixtures.py",
@@ -48,6 +81,7 @@
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
+
     "core_asan": {
       "requires": {
         "os": ["linux"]
@@ -82,8 +116,32 @@
       ]
     },
     "core_macos": {
+      "quick": {
+        "requires": {
+          "os": [
+            "darwin"
+          ],
+          "commands": [
+            "cmake",
+            "python3"
+          ]
+        },
+        "commands": [
+          "python3 tests/fixtures/audio/make_fixtures.py",
+          "python3 tests/fixtures/golden/reference_render.py",
+          "bash scripts/verify-core-dependencies.sh",
+          "scripts/core.sh configure dev",
+          "scripts/core.sh build dev",
+          "scripts/core.sh test dev fast"
+        ],
+        "ci_only": [
+          "Fast unit/component development feedback; the daily risk policy separately retains persistence, host, platform and concurrency checks."
+        ]
+      },
       "requires": {
-        "os": ["darwin"]
+        "os": [
+          "darwin"
+        ]
       },
       "commands": [
         "python3 tests/fixtures/audio/make_fixtures.py",
@@ -99,6 +157,7 @@
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
+
     "web_toolchain": {
       "requires": {
         "commands": ["cmake", "node", "npm"],
@@ -116,10 +175,18 @@
     },
     "web_runtime_host": {
       "requires": {
-        "commands": ["cmake", "node", "npm"],
+        "commands": [
+          "cmake",
+          "node",
+          "npm"
+        ],
         "any_of": [
-          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
-          {"env": "EMSDK"}
+          {
+            "path": "build/toolchains/emsdk/emsdk_env.sh"
+          },
+          {
+            "env": "EMSDK"
+          }
         ]
       },
       "commands": [
@@ -129,14 +196,71 @@
       "ci_only": [
         "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist",
         "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
-      ]
+      ],
+      "journey": {
+        "requires": {
+          "commands": [
+            "cmake",
+            "node",
+            "npm"
+          ],
+          "any_of": [
+            {
+              "path": "build/toolchains/emsdk/emsdk_env.sh"
+            },
+            {
+              "env": "EMSDK"
+            }
+          ]
+        },
+        "commands": [
+          "python3 tools/web-runtime/verify_emscripten.py",
+          "scripts/web-runtime-host.sh quick"
+        ],
+        "ci_only": [
+          "Complete Runtime browser journeys with one incremental build; release reproducibility remains unverified."
+        ]
+      }
     },
+
     "creator": {
+      "quick": {
+        "requires": {
+          "commands": [
+            "cmake",
+            "node",
+            "npm"
+          ],
+          "any_of": [
+            {
+              "path": "build/toolchains/emsdk/emsdk_env.sh"
+            },
+            {
+              "env": "EMSDK"
+            }
+          ],
+          "clean_worktree": true
+        },
+        "commands": [
+          "scripts/creator-web.sh smoke"
+        ],
+        "ci_only": [
+          "Daily build/unit/offline and complete authoring/playback/reload smoke; other browser cases and reproducibility remain unverified."
+        ]
+      },
       "requires": {
-        "commands": ["cmake", "node", "npm"],
+        "commands": [
+          "cmake",
+          "node",
+          "npm"
+        ],
         "any_of": [
-          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
-          {"env": "EMSDK"}
+          {
+            "path": "build/toolchains/emsdk/emsdk_env.sh"
+          },
+          {
+            "env": "EMSDK"
+          }
         ]
       },
       "commands": [
@@ -145,8 +269,33 @@
       "ci_only": [
         "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist",
         "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
-      ]
+      ],
+      "journey": {
+        "requires": {
+          "commands": [
+            "cmake",
+            "node",
+            "npm"
+          ],
+          "any_of": [
+            {
+              "path": "build/toolchains/emsdk/emsdk_env.sh"
+            },
+            {
+              "env": "EMSDK"
+            }
+          ],
+          "clean_worktree": true
+        },
+        "commands": [
+          "scripts/creator-web.sh quick"
+        ],
+        "ci_only": [
+          "Complete browser journeys with one incremental build; release reproducibility remains unverified."
+        ]
+      }
     },
+
     "web_runtime_lab": {
       "requires": {
         "commands": ["node", "npm"]

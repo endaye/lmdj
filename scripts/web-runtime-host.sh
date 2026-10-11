@@ -75,6 +75,7 @@ usage:
   scripts/web-runtime-host.sh build
   scripts/web-runtime-host.sh test
   scripts/web-runtime-host.sh proof
+  scripts/web-runtime-host.sh quick
   scripts/web-runtime-host.sh serve [--port PORT]
   scripts/web-runtime-host.sh clean
 EOF
@@ -322,7 +323,8 @@ run_nonbrowser_tests() {
   python3 "$repo_root/apps/web-runtime-host/test/server_test.py"
   node --test "$repo_root"/apps/web-runtime-host/test/*.test.mjs
   "$repo_root/scripts/core.sh" configure dev
-  "$repo_root/scripts/core.sh" build dev
+  cmake --build --preset dev --target \
+    lmdj_web_control_runtime_tests lmdj_web_realtime_session_tests lmdj_web_manifest_gate_tests
   ctest \
     --test-dir "$repo_root/build/core/dev" \
     --output-on-failure \
@@ -493,6 +495,7 @@ test_host() {
 }
 
 proof_host() {
+  local mode="${1:-proof}"
   activate_toolchain
   require_playwright
   verify_browser_fixture_generator
@@ -503,18 +506,20 @@ proof_host() {
   unset PYTHONPATH || true
   run_audio_worklet_conformance
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-proof.XXXXXX")"
-  clean_host
+  if [[ "$mode" == proof ]]; then clean_host; fi
   configure_host
   build_host
-  cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
-  clean_host
-  configure_host
-  build_host
-  if ! diff -qr "$proof_root/first-dist" "$dist_root"; then
-    echo "Web Runtime Host error: two clean builds are not byte reproducible" >&2
-    return 2
+  if [[ "$mode" == proof ]]; then
+    cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
+    clean_host
+    configure_host
+    build_host
+    if ! diff -qr "$proof_root/first-dist" "$dist_root"; then
+      echo "Web Runtime Host error: two clean builds are not byte reproducible" >&2
+      return 2
+    fi
+    echo "Web Runtime Host reproducibility: PASS"
   fi
-  echo "Web Runtime Host reproducibility: PASS"
   run_nonbrowser_tests
   cmake -E copy_directory "$dist_root" "$proof_root/dist"
   LMDJ_WEB_HOST_DIST_ROOT="$proof_root/dist" \
@@ -527,7 +532,11 @@ proof_host() {
     "$proof_root/fixtures"
   verify_proof_fixture_inventory "$proof_root/fixtures"
   run_browser_gate "$proof_root/dist" "$proof_root/fixtures" 1
-  echo "Web Runtime Host Proof: PASS"
+  if [[ "$mode" == proof ]]; then
+    echo "Web Runtime Host Proof: PASS"
+  else
+    echo "Web Runtime Host Quick: PASS (incremental build; reproducibility not verified)"
+  fi
 }
 
 clean_host() {
@@ -560,13 +569,13 @@ case "$command_name" in
     [[ $# -eq 0 ]] || { usage; exit 64; }
     test_host
     ;;
-  proof)
+  proof|quick)
     [[ $# -eq 0 ]] || { usage; exit 64; }
     if [[ "${LMDJ_AUDIO_OUTPUT_WRAPPED:-}" != web_runtime_host ]]; then
       exec python3 "$script_dir/local-audio-output.py" --lane web_runtime_host -- \
-        bash "$script_dir/web-runtime-host.sh" proof
+        bash "$script_dir/web-runtime-host.sh" "$command_name"
     fi
-    proof_host
+    proof_host "$command_name"
     ;;
   serve)
     if [[ $# -ne 0 && ( $# -ne 2 || "$1" != "--port" ) ]]; then
