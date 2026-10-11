@@ -9,7 +9,7 @@ The product decisions are:
 - [`2026-10-10-pattern-switch-while-playing.md`](../prd/decisions/2026-10-10-pattern-switch-while-playing.md) (#1958);
 - [`2026-10-10-record-key-and-count-in.md`](../prd/decisions/2026-10-10-record-key-and-count-in.md) (#1959).
 
-The plan ships as seven Tasks. Each Task is one Conventional Commit on its own short-lived branch, with verified commit, push, current-head review and squash merge. No Task releases, allocates a Product Build or cleans worktrees. An implementation Task may be drafted by a delegated coding agent; the shipping agent rebuilds and reruns every listed test itself before committing.
+The plan has seven product stages. Each implementation or declared preparatory Task is one Conventional Commit on its own short-lived branch, with verified commit, push, current-head review and squash merge. A preparatory design or partial capability does not complete its product stage. No Task releases, allocates a Product Build or cleans worktrees. An implementation Task may be drafted by a delegated coding agent; the shipping agent rebuilds and reruns every listed test itself before committing.
 
 Delivery order: S1 → S2 deliver switching while playing at 1 BAR; S4 adds 1 BEAT and SEQ END; S6 → S7 deliver count-in; S3 adds switching while recording; S5 adds OFF.
 
@@ -181,18 +181,63 @@ before shipping the follow-up.
 
 ## S5 — SEQ SNAP OFF
 
-OFF needs the engine to start a different Pattern at the current phase. S5 adds that publish mode to `audio-runtime` with its engine tests, exposes `snap: "off"` in the Host, and adds the option in Creator. It is last because it is the only Task that changes the audio thread's apply path.
+OFF needs the engine to start a different Pattern at the current phase. S5 adds that publish mode to `audio-runtime` with its engine tests, exposes `snap: "off"` in the Host, and adds the option in Creator. It is last because it changes the cross-Pattern publication phase; S6 separately adds the native scheduled-start path.
 
 ## S6 — scheduled transport start for count-in (Core)
 
-S6 starts with a design addendum that decides how Record from stopped starts exactly at the count-in end frame.
+The [scheduled Record design addendum](../design/2026-10-11-scheduled-pattern-record-count-in.md)
+selects the complete native, Facade, Host and SDK path before implementation.
+Its preparation Task declares only that addendum and this plan. Lowest-tier
+verification checks relative links, source/test ownership, decision traceability
+and the declared diff; the existing `ci_change_scope_test.py` covers admission
+of the new documentation path, and PR body/declaration checks cover shipping
+metadata. Version impact: none; Documentation impact: none, because the Task
+changes no source or current Portal behavior. No new gate or product proof is
+introduced by this preparation.
 
-- The likely shape is a future start frame on `PatternTransportCommand`, applied as the origin, with the engine silent before it.
-- The decision says no Journal is open during count-in, and cancelling writes nothing. If the Facade cannot meet that without opening the Journal at request time, the addendum raises an erratum to the decision for the owner instead of choosing silently.
-- Cancel before the start frame returns to stopped with nothing written.
-- Inspect reports `count_in {start_frame, bars}`, so Creator can schedule clicks before the origin.
+- A separate tagged native scheduled-start cell pins the prepared Pattern and
+  rounded Bar geometry. The first eligible native frame `C` starts four/eight
+  forced cues; `S = C + bars * bar_frames` starts Pattern playback exactly.
+  Existing command/receipt DTOs and ordinary behavior stay compatible.
+  Before Armed, audio makes an independent scalar/cue copy and acquires a
+  separate material borrow. Cancel/ack/rearm cannot reuse that copy or reclaim
+  borrowed material; tagged CAS is not protection for a later payload read.
+- Journal begin/preparation/writes occur only after acquiring the actual
+  Applied receipt at `S`, through the existing dedicated I/O executor. A
+  winning pre-start cancel leaves the transport stopped and writes nothing.
+  A lost cancel retains the actual start and later cutoff receipts. The hard
+  no-Journal rule is retained; an implementation unable to meet it must raise
+  the owner erratum rather than choose request-time opening.
+- Bounded original-frame ingress and separately reserved native FIFO and
+  metadata release credits keep live Pads,
+  Stop and inspect serviceable while I/O is held. Short Host tickets release
+  both SDK dispatch tails; public scheduled-record trigger completion requires
+  a total sequence-bound native operation completion and durable admission,
+  including muted presses, toggle-stop, release and invalidation. Original
+  opening and operation budgets remain. The opt-in input profile is negotiated
+  at quiescent activation before live input, with acceptance order preserved.
+  Press completion/ticket consumption does not retire a held press's future
+  native or recording release reservation. Each settles at its own real
+  release/owner boundary; saturated silent-held-input tests retain the complete
+  matching-release duration through Record-off/Stop, reconciliation and reopen.
+- Native cues use a second monitoring-only worklet output connected by Runtime
+  Session downstream of the product master tap. S6 includes that consumer and
+  real packaged OPFS/raw-PCM witnesses; telemetry or a native producer alone
+  is incomplete. S7 owns device preference/UI and the JS metronome handoff.
+- Separate strict count-in capability/request/inspect/cancel operations add a
+  `count_in` view with `start_frame: null` while arming, then the real scheduled
+  frame and lineage. Ordinary legacy responses/event streams remain unchanged;
+  unsupported probing leaves ordinary operations usable. Serial/epoch identity
+  uses exact decimal strings across JS. No Host timer invents an origin.
 
-Expected owners: `realtime_engine.cpp` and header, `pattern_transport_controller.cpp`, `control_runtime.cpp`, and their tests.
+**Refreshed premises.** At actual S4 merge
+`e220c98ca1b0f4a3c08646bfeb328ffa186a263d`, S1/S2/S4 are delivered; scheduled
+Record, production-controller I/O ownership and native cue/SDK wiring remain
+outstanding. Existing executor OPFS and ordinary recording journeys are
+retained. #1958/#1959 are decision-only closures. Refresh concurrent F1's actual
+main integration before overlapping Engine/Audio Portal edits. The addendum
+names the owning files, exact lifetime/receipt protocol and every lowest-tier
+test and far-side acceptance leg before code.
 
 ## S7 — count-in in Creator
 
@@ -219,9 +264,12 @@ results and explicit gaps in its Pull Request. Persistence and recovery retain
 their owning integration/restart tests; concurrent lifetime changes retain
 stress tests; every declared acceptance journey keeps all its transitions and
 far-side assertions. Resolve ownership with `scripts/local-ci.sh --list` on
-the final committed range. A selected batch-only lane does not by itself
-require its complete local execution under the current main policy; explicitly
-requested complete candidate/full evidence remains a separate obligation.
+the final committed range. For this Goal, the user's supplied AGENTS requires
+every selected `batch_only` lane on the committed head, with its `pass key=`
+recorded under `## Batch-only Lanes`, or an explicitly owner-accepted risk;
+the exact-head batch-evidence check is required before merge. That user
+requirement takes precedence over the general current-main Task policy above.
+Explicit complete candidate/full evidence remains a separate obligation.
 Unexecuted complete checks remain unverified, and historical failures remain
 visible. S1, S3, S5 and S6 own Core and Web Runtime; S2 and S7 own Creator and
 Portal. S4's native extension also owns Core and Web Runtime alongside Creator
@@ -230,14 +278,17 @@ batch-only lanes. This observation does not override the canonical selector.
 
 ## Version Management
 
-Version impact: none in the original planning Pull Request (documentation only). The implementation Tasks owe MINOR bumps at the next coordinated version settlement:
+Version impact: none in planning/design preparation Pull Requests (documentation only). The implementation Tasks owe the following debt at the next coordinated version settlement:
 
 - S1: `web-runtime-platform`;
 - S4: `web-runtime-platform`, `creator-web`, and the additive native boundary API in `audio-runtime` (retain old public symbols/layout; reassess MAJOR debt if that cannot be met);
 - S2, S7: `creator-web`;
 - S3: `application-facade`, `project-io`, `web-runtime-platform`;
 - S5: `audio-runtime`, `web-runtime-platform`;
-- S6: `audio-runtime`, `application-facade`, `web-runtime-platform`.
+- S6: `audio-runtime` MAJOR, because the selected inline schedule changes the
+  concrete Engine ABI; `application-facade` and `web-runtime-platform` MINOR
+  while companion APIs/Pimpl additions preserve old public layouts/vtables,
+  exact legacy wire schemas and unnegotiated event streams.
 
 S2's stopped-selection integration repair also owes `web-runtime-platform`
 PATCH debt. It uses an existing engine capability and changes no API, ABI,
