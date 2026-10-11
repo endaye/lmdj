@@ -4,7 +4,7 @@ import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {createServer} from "node:http";
 import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
@@ -1226,9 +1226,12 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
       .toContainText("idle");
   } finally {
     try {
+      const diagnostics = JSON.stringify(await page.evaluate(() =>
+        window.__readLaunchTransportDiagnostics()), null, 2);
+      const diagnosticsPath = testInfo.outputPath("launch-transport-diagnostics.json");
+      await writeFile(diagnosticsPath, diagnostics);
       await testInfo.attach("launch-transport-diagnostics.json", {
-        body: JSON.stringify(await page.evaluate(() =>
-          window.__readLaunchTransportDiagnostics()), null, 2),
+        path: diagnosticsPath,
         contentType: "application/json",
       });
     } catch (error) {
