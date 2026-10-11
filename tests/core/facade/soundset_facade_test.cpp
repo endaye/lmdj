@@ -1252,6 +1252,11 @@ GoldenWav read_golden_wav(const std::filesystem::path& path) {
       LMDJ_CHECK(read_le16(format + 14) == 16);  // bits per sample
       have_format = true;
     } else if (std::memcmp(header, "data", 4) == 0) {
+      // Local bound: the walk-level guard above already rejects an
+      // over-long chunk, but the sole gate on the oracle fixture keeps the
+      // bound structural next to the copy itself so no future reorder can
+      // reintroduce an out-of-bounds read.
+      LMDJ_CHECK(offset + size <= bytes.size());
       LMDJ_CHECK(size % 4 == 0);
       wav.frames = size / 4;
       wav.interleaved.resize(size / 2);
