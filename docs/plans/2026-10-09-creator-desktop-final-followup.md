@@ -1103,6 +1103,40 @@ Decision Task 声明自己的 `docs/prd/decisions/` 文件、decision-log/open-q
 明确写源码 revision，不用旧 Build 证明新功能。V1 的 snapshot 不能倒推
 此前人工验收绑定到新 Build；必要时在 V1 后复验身份敏感的验收。
 
+### 2026-10-11 — MASTER/ENC4 局部真实浏览器观察（独立文档 Task）
+
+Fresh main / isolated Task base 为
+`82c010d0391b956f871d34ecb40720f9a7e0a8d7`。#2000 的 MASTER consumer 已合并，
+无需重复实现。本 Task 将真实 native Chrome 观察登记到
+[验收台账](../quality/2026-10-09-creator-desktop-followup-acceptance.md#2026-10-11--masterenc4-局部真实浏览器观察)：
+实际 MASTER/ENC4 双向 UI 值同步、37% 跨页/System 保持，以及真实 Reload 在
+Runtime ready 后恢复 37%。使用自身原 968 canonical 的 distribution；没有新
+build，manifest 的既有 2.0.88.0 标签不消除 V1 版本债。原始 native 输入、AX、
+截图、失败 SetValue、初始化读数及临时服务正常退出均保留。
+
+**Task declared files:**
+
+- `docs/quality/2026-10-09-creator-desktop-followup-acceptance.md`。
+- 本计划。
+
+**Premise dispositions:** MASTER 已交付，仅补局部观察；完整 A1/A2、人工听感、
+录音/导出电平、Truth/Undo 语义、Safari/iPad 和 Figma 视觉仍未完成。本地无 Catalog
+upstream，实际 16 个默认声音 NOT_FOUND，因此本 Task 不声称可听输出。
+#2010 b62f 的原完整 Creator 已于 02:07 UTC 独立启动，结果另取真实终态；
+#2012 的日常验证规则调整未产生 full PASS，也不把局部观察升级为完整四页、
+最终来源或新 Build 证明。
+
+**Lowest-tier verification:** 对照冻结报告逐 leg 检查两文件事实、长度与 digest；
+检查完整 diff 与 Markdown/链接、两文件 ownership，运行 PR body lint 与
+declaration-only check，再由独立 reviewer 审完整 Task。没有新产品测试、阈值或
+gate；原完整 Creator、音频与设备验收另行完成。
+
+**Version Management:** Version impact: none — 只登记既有来源的部分 UI 观察，
+不更改 manifest、Contract、Build 或 version consumers。
+**Documentation impact: none** — 仅计划与验收台账，Portal 产品事实/页面/图未变。
+**Pitfall impact: none** — 遵循既有逐 leg、真实输入和来源边界，没有新的流程机制。
+本 Task 不启动 Release/部署，不授权或执行额外缓存、worktree 或分支清理。
+
 ## Version Management
 
 Version impact: none — P0 仅建立计划，不修改 active manifest、Build 或 Contract。
