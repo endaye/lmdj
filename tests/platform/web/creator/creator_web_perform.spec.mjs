@@ -1121,7 +1121,9 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
   };
   await earlyBar();
   await second.click();
-  await expect(second).toHaveAttribute("data-launch", "pending");
+  await expect.poll(() => second.evaluateAll((elements) =>
+    elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
+    {timeout: 5_000, intervals: [50]}).toBe("pending");
   await expect(cue).toHaveText("LAST LAUNCH — → QUEUED SLOT 02");
   expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
   await expect(first).toHaveAttribute("data-launch", "acknowledged");
@@ -1133,7 +1135,9 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
   expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
   await earlyBar();
   await second.click();
-  await expect(second).toHaveAttribute("data-launch", "pending");
+  await expect.poll(() => second.evaluateAll((elements) =>
+    elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
+    {timeout: 5_000, intervals: [50]}).toBe("pending");
   await expect.poll(async () => {
     const status = await inspect();
     return status.playing && !status.recording && status.pending_switch == null &&
@@ -1892,10 +1896,11 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
   await importActivateAndPerform(page);
-  await assignThenMovePattern(page);
   const master = page.getByRole("slider", {name: "MASTER", exact: true});
-  await master.fill("42");
-  await expect(master).toHaveValue("42");
+  await expect(master).toBeEnabled({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await master.fill("37");
+  await expect(master).toHaveValue("37");
+  await assignThenMovePattern(page);
   // The replay must still be playing when Stop Replay is clicked, otherwise
   // the run races natural completion and observes "complete · neutral"
   // instead of the abort path this test owns.
@@ -1914,10 +1919,12 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     timeout: 30_000,
   });
   await showPerformPage(page, "Live");
+  // Replay neutralizes these FX; device monitoring has its own 0–100 range
+  // and must retain the accepted nondefault value rather than reset with FX.
   for (const name of ["Filter", "Delay", "Reverb"]) {
     await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("500");
   }
-  await expect(master).toHaveValue("42");
+  await expect(master).toHaveValue("37");
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))
