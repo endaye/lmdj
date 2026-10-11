@@ -118,7 +118,7 @@ System 的 **Project and build details** 保留 Project 完整 ID、revision、P
 - **Sequence** 标题是选中 Pattern 序号；八条轨道显示地址与真实类别／空态，沿用 Project 投影颜色与当前 Pad 高亮。没有素材名称字段时不臆造 KICK／SNARE 等名称。
 - **Perform** 同时显示 `ACKNOWLEDGED SLOT` 和 `QUEUED SLOT`，分别来自同一个 Perform controller 的 `lastLaunchAck` 与 `pendingLaunch`；待切换不会覆盖已确认槽位。没有演奏 launch 排队时，`QUEUED SLOT` 改为命名 transport 待切换目标所在的槽；未分配到槽的目标显示 `QUEUED PATTERN NN`（[#1958](https://github.com/endaye/lmdj/issues/1958)）。确认是 Runtime 回执，不是听感验收。全局 Pattern 的 bar／beat／进度仍来自独立的 Pattern transport，长度取正在播放的 Pattern，停止时取所选 Pattern，不能把它当作 Performance 录音时钟。触摸区保留启动键及分组的就地 Queued／Playing 高亮，重复的页首 cue 和录制 authority 中的 last-launch 段落移除。
 
-所有顶屏保持只读；Sample 裁剪和触摸 Tempo／Swing 的连续草稿同步由独立 #1921 跟进。加载、错误和缺失字段明确降级，完整错误与恢复动作仍在触摸区。未实现的 MASTER、电平表与滤波类型没有被图示代替。
+所有顶屏保持只读；Sample 裁剪和触摸 Tempo／Swing 的连续草稿同步由独立 #1921 跟进。加载、错误和缺失字段明确降级，完整错误与恢复动作仍在触摸区。未实现的电平表与滤波类型没有被图示代替。
 
 Sample 触摸工作区只保留编辑与采集；Bank 导航和可演奏 Pad 网格统一在左侧实体栏／
 Pad 区。该 Pad 区在 Sample mode 同时提供选中态、空槽选样、拖入／替换，以及原有
@@ -660,7 +660,8 @@ Perform Live 的右侧第四个 **MASTER** 推子与 ENC4 的 **Output Volume** 
 会同步另一个控件及上屏读数；两者均在当前 Session 完成偏好恢复后才可用。
 Session 拒绝更新时，保留最后已接受的读数和偏好。MASTER 保留 44 个设计单位的
 输入命中宽度，不参与 FX engage/move/release、HOLD 或 Performance 事件录制；
-切 FX / MORE 或离开 Perform 不重置监听音量。监听响度包含节拍器，但录音、
+切 FX / MORE 或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
+Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍器，但录音、
 重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。此接线不交付
 已批准但仍待独立实现的 LP/HP/BP、live Mute/Solo 或作品电平表。
 

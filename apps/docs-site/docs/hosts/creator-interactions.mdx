@@ -544,6 +544,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；显示百分比。演出录制中同时记录；触摸与旋钮调同一 FX 时共用拥有的手势。 |
 | 可用时 | FX / MORE | 展开或收起 Stutter、Gate、Reverse、Crush、Cutter，同时切旋钮组。旋钮效果保持；收起时释放这些触摸推子上未结束的手势。 |
 | 可用时 | HOLD | 开关 FX 保持：松开推子后效果按规则保留。与 Sample 的循环 Hold 不同。 |
+| 监听音量已恢复且可用时 | MASTER | 0–100% 的本设备监听音量，与 ENC4 共用，下次打开恢复。不写工程，不改变录音、重采样或导出电平，也不随演出录制／回放变化。 |
 | 可录制，其他录音空闲 | Record Performance | 开始记录演出操作和主输出 WAV；Launch 变为可用。准备失败时显示原因。 |
 | Takes，录制中 | Flush Performance | 立即写出本轮已记录的操作。不停止，也不另存音频。 |
 | 录制中 | Stop Performance | 结束录制，等待保存或丢弃。不停止全局 Pattern。Launch 不可用。 |
@@ -553,7 +554,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | Takes，已停止 | Discard Performance | 丢弃当前待保存的演出。不删除已保存的演出。 |
 | Takes，有 WAV | Export Performance WAV | 下载这次的 WAV。不产生作者编辑。 |
 | Takes，关联失败 | Retry WAV bind | 只重试关联 WAV，不用再演一次。 |
-| Replay 有条目，或任一子页回放中 | Replay／Stop Replay | 回放或停止。回放不会录进 Pattern；上屏仍显示全局 Pattern。 |
+| Replay 有条目，或任一子页回放中 | Replay／Stop Replay | 回放或停止。回放不会录进 Pattern；上屏仍显示全局 Pattern。Stop Replay 将 FX 归中、关闭 HOLD 并清空演出 Launch 状态，监听音量保持。 |
 | Replay，有演出恢复候选 | Apply recovery／Discard recovery | 恢复演出（自动收尾未松开的 Pad），或丢掉候选。丢候选不删除已保存的演出。 |
 | Live／Slots／Takes，有恢复候选 | Review recovery | 进入 Replay 查看。FX 推子按住时不可用。 |
 | Slots，演出录制空闲 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 选择要分配、清空或移动的槽。还没生效。 |
@@ -674,7 +675,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 
 - 上屏不能点按或拖拽编辑；Sequence 网格的轨道名称也不是演奏按钮。
 - Project／Sample／Perform 的普通方向映射已批准，当前仍未接线；SHIFT＋ENC1–3 已按批准表细调，没有粗调层。新增方向导航与可听 BPM 即时预览的实施状态见[第 2 章](#planned)。
-- Perform 没有 MASTER 推子、LP／HP／BP 类型选择、Mute／Solo 和主输出电平表；不能按视觉稿当作已可操作。
+- Perform 没有 LP／HP／BP 类型选择、Mute／Solo 和主输出电平表；不能按视觉稿当作已可操作。
 - 下边 16 个声音 Pad 与 Perform 触摸区的 16 个 Pattern Launch 槽是两回事。没有演出录制时，Launch 按全局 transport 的状态工作：播放中预约切换、停止时选中（[#1958](https://github.com/endaye/lmdj/issues/1958)）。
 - Sample 没有单独的 Edit 按钮；Trim 直接编辑，其他参数分在四个子页。
 - Project 没有手动 Save／Save As；DUPLICATE 复制当前 Project。界面上没有的功能不算入口。
