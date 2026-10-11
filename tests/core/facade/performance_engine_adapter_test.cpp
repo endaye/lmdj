@@ -208,6 +208,23 @@ void prepare_running_engine(RealtimeEngine& engine) {
   LMDJ_CHECK(engine.start().has_value());
 }
 
+// The global transport's fixture: a current Pattern playing from origin 0,
+// so the Engine's Bar grid is 0, 96'000, 192'000 frames at 120 BPM.
+void prepare_transport_playing_engine(RealtimeEngine& engine) {
+  auto bank =
+      lmdj::audio::PreparedSampleBank::from_snapshot(*snapshot(kPatternA));
+  LMDJ_CHECK(bank.has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank.value())) ==
+             lmdj::audio::PublishResult::accepted);
+  auto view = lmdj::audio::PreparedPatternView::from_snapshot(
+      *snapshot(kPatternA));
+  LMDJ_CHECK(view.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(view.value()), 0).result ==
+             lmdj::audio::PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.prepare_master_fx(120).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+}
+
 void test_applied_boundary_and_clock_reanchor_are_exact() {
   RealtimeEngine engine;
   prepare_running_engine(engine);
@@ -242,6 +259,84 @@ void test_applied_boundary_and_clock_reanchor_are_exact() {
   LMDJ_CHECK(adapter.clock->read_tick().value() == kBarTick + 960);
   adapter.clock->anchor(240, kBarTick - 100);
   LMDJ_CHECK(adapter.clock->read_tick().value() >= kBarTick + 960);
+}
+
+// #1974: a Performance recording begun half a Bar into playback anchors its
+// clock mid-Bar, so the clock's own next Bar (tick 3840) would land at frame
+// 144'000, half a Bar past the transport's Bar line at 96'000. The launch
+// must reserve the transport's boundary and journal its tick (1920), not the
+// recording anchor's.
+void test_launch_boundary_follows_the_transport_origin_not_the_recording_anchor() {
+  RealtimeEngine engine;
+  prepare_transport_playing_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  render(engine, 48'000);
+  adapter.clock->anchor(120, 0);
+
+  const auto reservation = adapter.launch_acknowledger->reserve(
+      SequenceSessionId{kSession}, CommandId{kFirstRequest}, 1, kBarTick,
+      snapshot(kPatternB));
+  LMDJ_CHECK(reservation.has_value());
+  LMDJ_CHECK(!reservation.value().claimed);
+  LMDJ_CHECK(reservation.value().target_tick == 1'920);
+
+  render(engine, kBarFramesAt120Bpm - 48'000 - 1);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  render(engine, 2);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == kBarFramesAt120Bpm);
+
+  adapter.service();
+  const auto applied = outcomes_for(adapter);
+  LMDJ_CHECK(applied.size() == 1);
+  LMDJ_CHECK(applied.front().request_id == CommandId{kFirstRequest});
+  LMDJ_CHECK(applied.front().kind == PatternLaunchOutcomeKind::applied);
+  LMDJ_CHECK(applied.front().effective_tick == 1'920);
+}
+
+// #1974, P10-D22: an audio-claimed launch keeps its transport boundary, and
+// the successor defers to the following Bar on the same transport grid
+// (96'000 + one Bar = 192'000 frames, tick 5760 from the mid-Bar anchor),
+// not to a Bar counted from the recording anchor.
+void test_claimed_launch_defers_to_the_following_transport_bar() {
+  RealtimeEngine engine;
+  prepare_transport_playing_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  render(engine, 48'000);
+  adapter.clock->anchor(120, 0);
+
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->reserve(SequenceSessionId{kSession},
+                           CommandId{kFirstRequest}, 1, kBarTick,
+                           snapshot(kPatternB))
+                 .has_value());
+  render(engine, 1);
+  const auto deferred = adapter.launch_acknowledger->reserve(
+      SequenceSessionId{kSession}, CommandId{kSecondRequest}, 2, kBarTick * 2,
+      snapshot(kPatternC));
+  LMDJ_CHECK(deferred.has_value());
+  LMDJ_CHECK(deferred.value().claimed);
+  LMDJ_CHECK(deferred.value().target_tick == 5'760);
+
+  render(engine, kBarFramesAt120Bpm - 48'000);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == kBarFramesAt120Bpm);
+  render(engine, kBarFramesAt120Bpm);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternC});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() ==
+            kBarFramesAt120Bpm * 2);
+
+  adapter.service();
+  const auto applied = outcomes_for(adapter);
+  LMDJ_CHECK(applied.size() == 2);
+  LMDJ_CHECK(applied.at(0).request_id == CommandId{kFirstRequest});
+  LMDJ_CHECK(applied.at(0).effective_tick == 1'920);
+  LMDJ_CHECK(applied.at(0).kind == PatternLaunchOutcomeKind::applied);
+  LMDJ_CHECK(applied.at(1).request_id == CommandId{kSecondRequest});
+  LMDJ_CHECK(applied.at(1).effective_tick == 5'760);
+  LMDJ_CHECK(applied.at(1).kind == PatternLaunchOutcomeKind::applied);
 }
 
 void test_clock_reanchor_preserves_fractional_tick_progress() {
@@ -1003,6 +1098,8 @@ int main() {
   try {
     test_launch_outcomes_are_two_phase_ordered_and_session_isolated();
     test_applied_boundary_and_clock_reanchor_are_exact();
+    test_launch_boundary_follows_the_transport_origin_not_the_recording_anchor();
+    test_claimed_launch_defers_to_the_following_transport_bar();
     test_input_sequence_continues_after_the_seed();
     test_incomplete_pattern_gateway_is_rejected();
     test_latest_wins_and_claimed_boundary_defers();
