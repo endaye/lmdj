@@ -371,9 +371,9 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
             # its queue slot; it is not an API-unknown infinite wait.
             return {"status": "missing"}
         self.inputs.verify_target(request["target"])
-        policy = self.inputs.policy_at(request["control"])
+        policy = self.inputs.policy_at(request["control"], historical=True)
         if (request["kind"] == "candidate"
-                and self.inputs.policy_at(run["head_sha"]).digest != request["policy"]):
+                and self.inputs.policy_at(run["head_sha"], historical=True).digest != request["policy"]):
             # Same terminal missing/advance path as workflow incompatibility.
             # A policy read/authentication error remains an error, not missing.
             return {"status": "missing"}

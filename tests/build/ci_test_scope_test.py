@@ -12,6 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import incremental_batch
+import self_test
 import test_scope as scope
 
 
@@ -179,6 +180,50 @@ class ScopeTests(unittest.TestCase):
             else:
                 changed[position][key].append("docs/extra-notes/")
             self.assertNotEqual(scope.parse_policy(*changed).digest, self.policy.digest)
+
+    @staticmethod
+    def retired_lane_documents():
+        """The pre-retirement inventory: current documents plus one retired lane."""
+        files = ["scope_policy.json", "self_test_policy.json", "test_scope_policy.json"]
+        docs = [json.loads((ROOT / "scripts/ci" / name).read_text()) for name in files]
+        routing, inventory = docs[0], docs[1]
+        routing["lanes"].append("chameleon_lab")
+        routing["lane_jobs"]["chameleon_lab"] = ["chameleon-lab"]
+        routing["self_hosted_jobs"].append("chameleon-lab")
+        routing["rules"].append({"match": {"kind": "prefix", "value": "demos/chameleon-lab/"},
+                                 "lanes": ["chameleon_lab"]})
+        inventory["suites"].append({"id": "chameleon_lab",
+                                    "origin": {"kind": "scope_lane", "lane": "chameleon_lab"},
+                                    "jobs": ["chameleon-lab"], "required": True})
+        return docs
+
+    def test_historical_replay_accepts_a_retired_lane_superset(self):
+        """Replay must reconstruct a policy recorded before a lane retirement (#2022),
+        bound to the exact digest the recording era froze into its requests."""
+        docs = self.retired_lane_documents()
+        historical = scope.parse_policy(*docs, historical=True)
+        self.assertIn("chameleon_lab", historical.suite_ids)
+        self.assertEqual(historical.digest,
+                         self_test.digest_of({"routing": docs[0], "inventory": docs[1], "scope": docs[2]}))
+        self.assertEqual(scope.parse_policy(*docs, historical=True).digest, historical.digest)
+
+    def test_current_admission_still_rejects_the_retired_superset(self):
+        """Never narrow current admission: the same documents stay invalid by default."""
+        docs = self.retired_lane_documents()
+        with self.assertRaisesRegex(scope.ScopeError, "closed v1 allowlist"):
+            scope.parse_policy(*docs)
+
+    def test_historical_replay_never_narrows_current_lanes(self):
+        docs = self.retired_lane_documents()
+        docs[0]["lanes"].remove("portal")
+        with self.assertRaisesRegex(scope.ScopeError, "missing current lane"):
+            scope.parse_policy(*docs, historical=True)
+
+    def test_historical_replay_rejects_drifted_current_lane_jobs(self):
+        docs = self.retired_lane_documents()
+        docs[0]["lane_jobs"]["portal"] = ["portal-legacy"]
+        with self.assertRaisesRegex(scope.ScopeError, "drifts on current lane"):
+            scope.parse_policy(*docs, historical=True)
 
     def test_record_roundtrip(self):
         record = self.record(ai_labels=["test:creator"])
