@@ -20,6 +20,7 @@ import {
   type PatternTransportState,
 } from "../state/pattern_transport_state";
 import {padColourOf} from "../state/pad_colour";
+import type {SeqSnap} from "../state/seq_snap_preference";
 import {SequenceGrid} from "./sequence_grid";
 import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
 
@@ -33,6 +34,12 @@ type SequenceLayer = "edit" | "setup";
 const LAYER_OPTIONS: readonly TouchSegmentOption<SequenceLayer>[] = [
   {value: "edit", label: "EDIT"},
   {value: "setup", label: "SETUP"},
+];
+// #1958 S4: the SEQ SNAP boundary a playing-state Pattern switch queues at.
+const SEQ_SNAP_OPTIONS: readonly TouchSegmentOption<SeqSnap>[] = [
+  {value: "beat", label: "1 BEAT"},
+  {value: "bar", label: "1 BAR"},
+  {value: "pattern_end", label: "SEQ END"},
 ];
 
 interface SequenceTouchWorkspaceProps {
@@ -52,6 +59,13 @@ interface SequenceTouchWorkspaceProps {
   settingsActive?: boolean;
   metronomeOn: boolean;
   onToggleMetronome(): void;
+  // #1958 S4: the device's SEQ SNAP boundary. A per-device preference like
+  // the metronome — never a Transport setting, never Project Truth — so it
+  // stays reachable while recording (switches while recording are S3) and is
+  // available immediately at boot; the app guards any late stored-value read
+  // from overwriting an explicit choice.
+  seqSnap: SeqSnap;
+  onSeqSnapChange(snap: SeqSnap): void;
   showRefresh?: boolean;
   onRefresh(): void;
   onSwitch(patternId: string): void;
@@ -297,6 +311,17 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             onClick={props.onToggleMetronome}>
             METRONOME
           </button>
+        </div>
+        {/* #1958 S4: SEQ SNAP picks the boundary a playing-state Pattern
+            switch queues at. Like the metronome it is a per-device
+            preference, so it stays reachable while recording and is
+            choosable from the first paint; the app's touched guard keeps a
+            late boot read from overwriting an explicit choice. */}
+        <div className="sequence-setup-row sequence-setup-seq-snap">
+          <span>SEQ SNAP</span>
+          <TouchSegment<SeqSnap> label="Sequence snap" options={SEQ_SNAP_OPTIONS}
+            value={props.seqSnap}
+            onChange={props.onSeqSnapChange} />
         </div>
         {choosingLength ? (
           <form className="sequence-bars-form" onSubmit={(event) => {

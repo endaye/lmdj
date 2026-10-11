@@ -1325,6 +1325,11 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
   std::uint64_t pattern_generation() const override {
     return engine_.pattern_telemetry().current_generation;
   }
+  bool supports_receipt_bound_opening() const override { return true; }
+  std::optional<audio::PatternTransportObservation> observe_transport()
+      const override {
+    return engine_.pattern_transport_observation();
+  }
   std::optional<audio::PatternReplacementAuthority> pending_switch()
       const override {
     // The remembered overlay authority is reported only while the engine
@@ -1541,18 +1546,21 @@ struct ControlRuntime::Impl {
     std::optional<Json> error;
   };
 
-  // #1958. The playing-state Pattern switch this Host queued. While
-  // `generation` holds a value the Engine carries the publication; while it
-  // is absent the switch is deferred behind `blocker` — an audio-claimed
-  // earlier switch that can no longer be overridden — and publishes at
-  // `activation_frame` once that blocker lands.
+  struct RememberedTransportSwitch {
+    audio::PatternReplacementAuthority authority;
+    audio::PatternSwitchSnap snap = audio::PatternSwitchSnap::bar;
+  };
+
+  // Every selected boundary is already owned by the Engine, including a
+  // successor queued behind an audio-claimed predecessor. Retain exact
+  // predecessor authorities across a racing Q→A handoff; obsolete triples
+  // never authorize cancellation or replacement of a newer generation.
   struct PendingTransportSwitch {
     foundation::PatternId pattern_id;
     std::uint64_t activation_frame = 0;
-    std::uint64_t bar_frames = 0;
-    std::optional<std::uint64_t> generation;
-    std::optional<audio::PatternReplacementAuthority> blocker;
-    std::uint64_t blocker_bar_frames = 0;
+    std::uint64_t generation = 0;
+    audio::PatternSwitchSnap snap = audio::PatternSwitchSnap::bar;
+    std::array<std::optional<RememberedTransportSwitch>, 2> predecessors{};
   };
 
   static facade::Application compose_application(
@@ -1921,6 +1929,28 @@ struct ControlRuntime::Impl {
         std::move(replacement_authority));
   }
 
+  foundation::Result<audio::PatternPublication> publish_transport_pattern(
+      audio::PreparedPatternView&& pattern, audio::PatternSwitchSnap snap,
+      std::optional<audio::PatternReplacementAuthority> authority) {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    if (std::exchange(fail_next_pattern_publication, false)) {
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument, "injected runtime Pattern publication failure"});
+    }
+#endif
+    static_cast<void>(engine.reclaim_retired_patterns());
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    testing::invoke_sequence_switch_publication_hook();
+#endif
+    const auto publication = engine.publish_pattern_switch_view(
+        std::move(pattern), snap, std::move(authority));
+    if (publication.result != audio::PatternPublishResult::accepted) {
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument, "runtime Pattern publication is unavailable"});
+    }
+    return foundation::Result<audio::PatternPublication>::success(publication);
+  }
+
   // A grid edit changes only the current Pattern's events, so its view is
   // republished without a Bank. While the transport plays, the view swaps in
   // place: same origin, so playback neither restarts nor waits for a bar,
@@ -2260,181 +2290,98 @@ struct ControlRuntime::Impl {
 
   static audio::PatternReplacementAuthority transport_switch_authority(
       const PendingTransportSwitch& record) {
-    return audio::PatternReplacementAuthority{
-        *record.generation, record.pattern_id, record.activation_frame};
+    return {record.generation, record.pattern_id, record.activation_frame};
   }
 
-  // True while the Engine still holds the record's own publication pending.
-  bool transport_switch_live(const PendingTransportSwitch& record) const {
-    if (!record.generation.has_value()) {
-      return false;
-    }
-    const auto telemetry = engine.pattern_telemetry();
-    if (telemetry.pending_generation != *record.generation) {
-      return false;
-    }
-    const auto pending = engine.pending_pattern_id();
-    return pending.has_value() && *pending == record.pattern_id;
+  static bool same_switch_authority(
+      const audio::PatternReplacementAuthority& a,
+      const audio::PatternReplacementAuthority& b) {
+    return a.generation == b.generation && a.pattern_id == b.pattern_id &&
+        a.activation_frame == b.activation_frame;
   }
 
-  // The Engine's current Pattern, or null, as a protocol value.
+  static bool authority_pending(const audio::PatternTransportObservation& state,
+      const audio::PatternReplacementAuthority& authority) {
+    return std::any_of(state.pending_switches.begin(), state.pending_switches.end(),
+        [&](const auto& pending) {
+          return pending && same_switch_authority(*pending, authority);
+        });
+  }
+
+  bool owns_transport_switch(const audio::PatternReplacementAuthority& authority) const {
+    if (!pending_transport_switch) return false;
+    const auto& record = *pending_transport_switch;
+    if (same_switch_authority(authority, transport_switch_authority(record))) return true;
+    return std::any_of(record.predecessors.begin(), record.predecessors.end(),
+        [&](const auto& predecessor) {
+          return predecessor && same_switch_authority(authority, predecessor->authority);
+        });
+  }
+
   Json current_pattern_id_json() const {
     const auto current = engine.current_pattern_id();
     return current.has_value() ? Json(current->value()) : Json(nullptr);
   }
 
-  // The switch a client waits on: only the Host's queued record — a
-  // deferred target outranks the audio-claimed publication it waits behind.
-  // Other Engine publications (a tempo republication, a deferred edit) are
-  // not Pattern switches and are not reported here.
   Json pending_transport_switch_json() const {
-    if (!pending_transport_switch.has_value()) {
-      return nullptr;
-    }
-    return {
-        {"pattern_id", pending_transport_switch->pattern_id.value()},
-        {"activation_frame", pending_transport_switch->activation_frame},
-    };
+    if (!pending_transport_switch) return nullptr;
+    return {{"pattern_id", pending_transport_switch->pattern_id.value()},
+        {"activation_frame", pending_transport_switch->activation_frame}};
   }
 
-  // True when the Engine holds a pending Pattern publication, or the Host a
-  // deferred edit, that is not this Host's own queued transport switch.
   bool foreign_pattern_publication_pending() const {
-    if (deferred_pattern_edit.has_value()) {
-      return true;
-    }
-    const auto telemetry = engine.pattern_telemetry();
-    if (telemetry.pending_generation == 0) {
-      return false;
-    }
-    if (!pending_transport_switch.has_value()) {
-      return true;
-    }
-    const auto& record = *pending_transport_switch;
-    const auto owned = record.generation.has_value()
-        ? *record.generation
-        : record.blocker->generation;
-    return telemetry.pending_generation != owned;
+    if (deferred_pattern_edit) return true;
+    const auto state = engine.pattern_transport_observation();
+    if (!state || state->outstanding_cancellation) return true;
+    return std::any_of(state->pending_switches.begin(), state->pending_switches.end(),
+        [&](const auto& pending) { return pending && !owns_transport_switch(*pending); });
   }
 
   void retarget_transport_selection(const foundation::PatternId& applied) {
     pattern_id = applied.value();
-    if (transport != nullptr) {
-      transport->pattern = applied;
-    }
+    if (transport != nullptr) transport->pattern = applied;
   }
 
-  // Follows the queued playing-state Pattern switch (#1958). An applied one
-  // retargets this Host's selection and the engagement's Pattern binding; a
-  // cancelled one spends its record; a deferred one publishes at its promised
-  // boundary once the audio-claimed switch ahead of it lands, and only over a
-  // transport still playing, not recording and idle — a Stop or a Record that
-  // settled at the cutoff keeps the blocker's Pattern instead.
+  // Follow the exact current generation, including B becoming current while
+  // C remains queued. Publication and both apply points belong to native
+  // audio; observing here never secretly publishes a cadence-dependent C.
   void observe_transport_switch() {
-    if (!pending_transport_switch.has_value()) {
-      return;
-    }
-    auto& record = *pending_transport_switch;
-    const auto current = engine.current_pattern_id();
-    if (record.generation.has_value()) {
-      if (current.has_value() && *current == record.pattern_id) {
-        const auto telemetry = engine.pattern_telemetry();
-        if (telemetry.current_generation >= *record.generation ||
-            telemetry.pending_generation == 0) {
-          retarget_transport_selection(record.pattern_id);
-          pending_transport_switch.reset();
-        }
-        // Otherwise the apply is crossing this render quantum; the next
-        // observation settles it.
-        return;
-      }
-      if (transport_switch_live(record)) {
-        return;
-      }
-      // Cancelled at a command cutoff or superseded; the selection keeps
-      // naming the Pattern that plays.
+    if (!pending_transport_switch) return;
+    const auto state = engine.pattern_transport_observation();
+    if (!state) return; // Bounded read raced audio; retain authorities and retry.
+    const auto& record = *pending_transport_switch;
+    if (state->current_pattern) retarget_transport_selection(*state->current_pattern);
+    if (state->current_generation == record.generation ||
+        !authority_pending(*state, transport_switch_authority(record))) {
       pending_transport_switch.reset();
-      return;
     }
-    // Deferred behind an audio-claimed switch.
-    if (current.has_value() && *current == record.blocker->pattern_id) {
-      // The blocker landed and became the selection; the remembered target
-      // publishes now — the Engine derives the same following Bar from the
-      // fresh origin. A transient refusal retries on the next observation.
-      // A transport that stopped at the command cutoff, or began recording
-      // there, keeps the blocker's Pattern instead: its command owns the
-      // engine boundary the publication would cross.
-      retarget_transport_selection(record.blocker->pattern_id);
-      if (transport == nullptr) {
-        pending_transport_switch.reset();
-        return;
-      }
-      const auto status = transport->controller->inspect();
-      if (!status.playing || status.recording ||
-          status.phase != facade::PatternTransportPhase::idle) {
-        pending_transport_switch.reset();
-        return;
-      }
-      const auto target = record.pattern_id;
-      const auto target_bar_frames = record.bar_frames;
-      auto published = publish_project_pattern(target);
-      if (published.has_value()) {
-        pending_transport_switch = PendingTransportSwitch{
-            target,
-            published.value().activation_frame,
-            target_bar_frames,
-            published.value().generation,
-            std::nullopt,
-            0};
-      }
-      return;
-    }
-    const auto telemetry = engine.pattern_telemetry();
-    const auto pending = engine.pending_pattern_id();
-    if (telemetry.pending_generation != 0 && pending.has_value() &&
-        *pending == record.blocker->pattern_id) {
-      return;
-    }
-    // The blocker was cancelled at a command cutoff (Stop), so the switch
-    // deferred behind it is spent too. This is intended: the transport no
-    // longer plays, and clients read the applied state from inspect
-    // (`current_pattern_id`, `pending_switch`), never from a promised frame.
-    pending_transport_switch.reset();
   }
 
-  // True while a queued playing-state Pattern switch is still outstanding.
-  // Observing first settles one that has since applied or been cancelled, so
-  // a caller refuses only over a switch that genuinely still waits.
   bool transport_switch_pending() {
     observe_transport_switch();
     return pending_transport_switch.has_value();
   }
 
-  // Withdraws the queued playing-state switch for a press of the Pattern
-  // that already plays. False means the audio thread reached the apply point
-  // of an engine-held publication and that switch is landing.
+  // A press of the currently playing Pattern withdraws every still-live
+  // authority in this Host's chain, including B audio-owned and C in Q.
   bool withdraw_transport_switch() {
-    if (!pending_transport_switch.has_value()) {
-      return true;
-    }
-    const auto& record = *pending_transport_switch;
-    if (record.generation.has_value()) {
-      if (transport_switch_live(record) &&
-          !engine.cancel_pattern_publication(
-              transport_switch_authority(record))) {
+    if (!pending_transport_switch) return true;
+    const auto state = engine.pattern_transport_observation();
+    if (!state) return false;
+    auto& record = *pending_transport_switch;
+    if (authority_pending(*state, transport_switch_authority(record)) &&
+        !engine.cancel_pattern_publication(transport_switch_authority(record))) return false;
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    testing::invoke_cancel_pending_switch_hook();
+#endif
+    for (const auto& predecessor : record.predecessors) {
+      if (predecessor && authority_pending(*state, predecessor->authority) &&
+          !engine.cancel_pattern_publication(predecessor->authority)) {
+        record = PendingTransportSwitch{predecessor->authority.pattern_id,
+            predecessor->authority.activation_frame, predecessor->authority.generation,
+            predecessor->snap, {}};
         return false;
       }
-      pending_transport_switch.reset();
-      return true;
-    }
-    // Cancel the blocker only while the Engine still holds that exact
-    // publication: same Pattern and same generation.
-    if (engine.pending_pattern_id().has_value() &&
-        *engine.pending_pattern_id() == record.blocker->pattern_id &&
-        engine.pattern_telemetry().pending_generation ==
-            record.blocker->generation &&
-        !engine.cancel_pattern_publication(*record.blocker)) {
-      return false;
     }
     pending_transport_switch.reset();
     return true;
@@ -5374,8 +5321,18 @@ Json ControlRuntime::dispatch(
           impl_->pending_transport_switch_json()));
     }
     if (operation == "pattern.transport.switch") {
-      require(exact_keys(payload, {"pattern_id", "request_id"}));
+      require(exact_keys(payload, {"pattern_id", "request_id"}) ||
+          exact_keys(payload, {"pattern_id", "request_id", "snap"}));
       require(sidecar.empty());
+      auto snap = audio::PatternSwitchSnap::bar;
+      if (payload.contains("snap")) {
+        require(payload.at("snap").is_string());
+        const auto value = payload.at("snap").get<std::string>();
+        require(value == "beat" || value == "bar" || value == "pattern_end");
+        snap = value == "beat" ? audio::PatternSwitchSnap::beat
+            : value == "pattern_end" ? audio::PatternSwitchSnap::pattern_end
+                                    : audio::PatternSwitchSnap::bar;
+      }
       const auto selected_pattern = uuid_field(payload, "pattern_id");
       uuid_field(payload, "request_id");
       if (impl_->state != Impl::State::running ||
@@ -5418,8 +5375,8 @@ Json ControlRuntime::dispatch(
             {{"reason", "performance_replay_active"}});
       }
       // Settle the previous switch first: an applied one retargets this
-      // Host's selection, a cancelled one spends its record, and a deferred
-      // one whose blocker landed publishes at the promised boundary.
+      // Host's selection and a cancelled one spends its record. Native
+      // audio already carries both a claimed predecessor and its successor.
       impl_->observe_transport_switch();
       // Another scheduled publication (a tempo republication, a deferred
       // edit) owns the Engine's next publication; refuse as the sibling
@@ -5464,83 +5421,54 @@ Json ControlRuntime::dispatch(
              impl_->pending_transport_switch->activation_frame},
         });
       }
-      if (impl_->pending_transport_switch.has_value() &&
-          !impl_->pending_transport_switch->generation.has_value() &&
-          target == impl_->pending_transport_switch->blocker->pattern_id) {
-        // The pressed Pattern is the audio-claimed switch already landing;
-        // withdraw the deferred successor and let the claim stand.
-        const auto blocker =
-            *impl_->pending_transport_switch->blocker;
-        const auto blocker_bar_frames =
-            impl_->pending_transport_switch->blocker_bar_frames;
-        impl_->pending_transport_switch = Impl::PendingTransportSwitch{
-            target,
-            blocker.activation_frame,
-            blocker_bar_frames,
-            blocker.generation,
-            std::nullopt,
-            0};
-        return success({
-            {"pattern_id", selected_pattern},
-            {"activation_frame", blocker.activation_frame},
-        });
-      }
-      auto pattern = impl_->prepare_project_pattern(target);
-      if (!pattern.has_value()) {
-        return normalized_error(pattern.error());
-      }
-      const auto target_bar_frames = pattern.value().bar_frames();
-      if (impl_->pending_transport_switch.has_value()) {
-        auto& record = *impl_->pending_transport_switch;
-        if (record.generation.has_value()) {
-          // Latest-wins over the engine-held publication. An unclaimed one
-          // is withdrawn through its remembered authority and re-queued at
-          // the same boundary the Engine re-derives from the unchanged
-          // origin; an audio-claimed one can no longer be overridden, so
-          // the new target waits behind it for the following Bar.
-          if (!impl_->engine.cancel_unclaimed_pattern_publication(
+      const auto observed = impl_->engine.pattern_transport_observation();
+      if (!observed) return state_error("Pattern transport observation raced audio; retry");
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+      testing::invoke_cancel_pending_switch_hook();
+#endif
+      if (impl_->pending_transport_switch) {
+        const auto& record = *impl_->pending_transport_switch;
+        // Pressing the audio-owned predecessor withdraws only its unclaimed
+        // successor. If the handoff won, this is a new switch behind it.
+        for (const auto& predecessor : record.predecessors) {
+          if (predecessor && predecessor->authority.pattern_id == target &&
+              Impl::authority_pending(*observed, predecessor->authority) &&
+              impl_->engine.cancel_unclaimed_pattern_publication(
                   Impl::transport_switch_authority(record))) {
-            const auto blocker = Impl::transport_switch_authority(record);
-            const auto deferred_frame =
-                record.activation_frame + record.bar_frames;
-            const auto blocker_bar_frames = record.bar_frames;
-            impl_->pending_transport_switch =
-                Impl::PendingTransportSwitch{
-                    target,
-                    deferred_frame,
-                    target_bar_frames,
-                    std::nullopt,
-                    blocker,
-                    blocker_bar_frames};
-            return success({
-                {"pattern_id", selected_pattern},
-                {"activation_frame", deferred_frame},
-            });
+            const auto retained = *predecessor;
+            impl_->pending_transport_switch = Impl::PendingTransportSwitch{
+                target, retained.authority.activation_frame,
+                retained.authority.generation, retained.snap, {}};
+            return success({{"pattern_id", selected_pattern},
+                {"activation_frame", retained.authority.activation_frame}});
           }
-          impl_->pending_transport_switch.reset();
-        } else {
-          // A deferred switch swaps its target; the audio-claimed blocker
-          // and the promised boundary stay.
-          record.pattern_id = target;
-          record.bar_frames = target_bar_frames;
-          return success({
-              {"pattern_id", selected_pattern},
-              {"activation_frame", record.activation_frame},
-          });
         }
       }
-      auto published = impl_->publish_prepared_pattern(
-          std::move(pattern.value()));
-      if (!published.has_value()) {
-        return normalized_error(published.error());
+      auto pattern = impl_->prepare_project_pattern(target);
+      if (!pattern.has_value()) return normalized_error(pattern.error());
+      std::optional<audio::PatternReplacementAuthority> authority;
+      std::array<std::optional<Impl::RememberedTransportSwitch>, 2> predecessors{};
+      if (impl_->pending_transport_switch) {
+        const auto& record = *impl_->pending_transport_switch;
+        authority = Impl::transport_switch_authority(record);
+        predecessors[0] = Impl::RememberedTransportSwitch{*authority, record.snap};
+        // Keep the possible B/C handoff authorities until a strong native
+        // observation identifies which is still live. Both remain exact.
+        if (observed->pending_switches[0] &&
+            !Impl::same_switch_authority(*observed->pending_switches[0], *authority)) {
+          for (const auto& previous : record.predecessors) {
+            if (previous && Impl::same_switch_authority(previous->authority,
+                    *observed->pending_switches[0])) predecessors[1] = previous;
+          }
+        }
       }
+      auto published = impl_->publish_transport_pattern(
+          std::move(pattern.value()), snap, authority);
+      if (!published.has_value()) return normalized_error(published.error());
       impl_->pending_transport_switch = Impl::PendingTransportSwitch{
-          foundation::PatternId{selected_pattern},
-          published.value().activation_frame,
-          target_bar_frames,
-          published.value().generation,
-          std::nullopt,
-          0};
+          target, published.value().activation_frame, published.value().generation,
+          snap, std::move(predecessors)};
+      impl_->observe_transport_switch();
       return success({
           {"pattern_id", selected_pattern},
           {"activation_frame", published.value().activation_frame},
@@ -6230,9 +6158,8 @@ void ControlRuntime::service_pattern_transport() noexcept {
     }
     // An audio interruption retires the engagement but not a deferral.
     impl_->retry_deferred_pattern_edit();
-    // The queued playing-state switch settles on the same cadence: an
-    // applied boundary retargets the selection, a deferred target publishes
-    // once the audio-claimed switch ahead of it lands.
+    // The queued playing-state switch follows native apply on the same
+    // cadence; native audio already owns any claimed-safe successor.
     impl_->observe_transport_switch();
     if (impl_->transport == nullptr) {
       return;

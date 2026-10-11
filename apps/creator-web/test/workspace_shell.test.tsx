@@ -1,5 +1,6 @@
 import {IDBFactory, IDBObjectStore} from "fake-indexeddb";
 import {readMonitorVolumePreference, writeMonitorVolumePreference} from "../src/state/monitor_volume_preference";
+import {readSeqSnapPreference, writeSeqSnapPreference} from "../src/state/seq_snap_preference";
 import {readFileSync} from "node:fs";
 
 import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
@@ -3300,6 +3301,305 @@ test("a playing transport routes Pattern presses to the queued switch and follow
     .toBe(reloadsBefore + 1));
   expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
     .toBe(listedSummary.patternId);
+});
+
+// #1958 S4: the stored SEQ SNAP preference is a per-device setting, restored
+// at boot and offered in SETUP next to QUANTIZE; it never enters Project
+// Truth.
+test("boot restores the stored SEQ SNAP preference into SETUP", async () => {
+  await writeSeqSnapPreference("beat");
+  const fixture = mutableSampleRuntimeFixture();
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      playing: false,
+      currentPatternId: listedSummary.patternId,
+    }),
+  });
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  const group = screen.getByRole("group", {name: "Sequence snap"});
+  // The segment opens on the stored choice, not on the 1 BAR default.
+  await waitFor(() => expect(within(group).getByRole("button", {name: "1 BEAT"})
+    .getAttribute("aria-pressed")).toBe("true"));
+  expect(within(group).getByRole("button", {name: "1 BAR"})
+    .getAttribute("aria-pressed")).toBe("false");
+});
+
+// #1958 S4: a playing-state Pattern press queues at the device's SEQ SNAP
+// boundary, a SETUP change re-aims the next request, and the change persists
+// in the per-device store.
+test("a playing switch request carries the device's SEQ SNAP, and a SETUP change re-aims and persists it", async () => {
+  await writeSeqSnapPreference("beat");
+  const fixture = mutableSampleRuntimeFixture();
+  const switchRequests: {patternId: string; requestId: string; snap: string}[] = [];
+  let queued: string | null = null;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withChainedPatternInspect(fixture),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      currentPatternId: listedSummary.patternId,
+      ...(queued === null ? {} : {
+        pendingSwitch: {patternId: queued, activationFrame: 24_000},
+      }),
+    }),
+    requestTransportPatternSwitch: async (request: {
+      patternId: string; requestId: string; snap: string;
+    }) => {
+      switchRequests.push({...request});
+      queued = request.patternId;
+      return {patternId: request.patternId, activationFrame: 24_000};
+    },
+  });
+  render(<App initialState={chainedPatternsReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+
+  await userEvent.click(forward);
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  expect(switchRequests[0]!.patternId).toBe(secondSwitchPattern);
+  expect(switchRequests[0]!.snap).toBe("beat");
+
+  // A SETUP change of SEQ SNAP re-aims the next press and persists. The
+  // choice is available immediately; no waiting on a preference read.
+  await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+  const group = screen.getByRole("group", {name: "Sequence snap"});
+  await userEvent.click(within(group).getByRole("button", {name: "SEQ END"}));
+  await waitFor(() => expect(within(group).getByRole("button", {name: "SEQ END"})
+    .getAttribute("aria-pressed")).toBe("true"));
+  expect(await readSeqSnapPreference()).toBe("pattern_end");
+
+  // The queued target is the stepping base, so the next forward press queues
+  // the third Pattern at the newly chosen boundary.
+  await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Pattern forward — →"})
+    .hasAttribute("disabled")).toBe(false));
+  await userEvent.click(screen.getByRole("button", {name: "Pattern forward — →"}));
+  await waitFor(() => expect(switchRequests).toHaveLength(2));
+  expect(switchRequests[1]!.patternId).toBe(thirdSwitchPattern);
+  expect(switchRequests[1]!.snap).toBe("pattern_end");
+});
+
+// #1958 S4: the SEQ SNAP choice is available immediately; the boot read is
+// only allowed to fill a choice the user never made. The read is delayed at
+// its stored-value lookup: the `settings` store's get of `seq-snap.v1`
+// holds its result until released, while every other preference, write and
+// boot step runs for real. The stalled lookup answers with the value the
+// store held at boot (written before render), which differs from the
+// explicit choice made while it is in flight.
+function stallingSeqSnapRead() {
+  const original = IDBObjectStore.prototype.get;
+  const started = deferred<void>();
+  const released = deferred<void>();
+  let first = true;
+  const spy = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementation(
+    function(this: IDBObjectStore, query: IDBKeyRange | IDBValidKey) {
+      if (this.name !== "settings" || query !== "seq-snap.v1" || !first) {
+        return original.call(this, query);
+      }
+      first = false;
+      const stub = {onsuccess: null as ((event?: unknown) => void) | null,
+        onerror: null as ((event?: unknown) => void) | null,
+        result: null as unknown, error: null, source: this,
+        readyState: "pending" as const, transaction: this.transaction};
+      started.resolve();
+      void released.promise.then(() => {
+        stub.result = "beat";
+        stub.onsuccess?.();
+      });
+      return stub as unknown as IDBRequest;
+    });
+  return {started, released, restore: () => spy.mockRestore()};
+}
+
+test("an explicit SEQ SNAP choice wins over the late IndexedDB boot read", async () => {
+  await writeSeqSnapPreference("beat");
+  const stall = stallingSeqSnapRead();
+  const fixture = mutableSampleRuntimeFixture();
+  const switchRequests: {patternId: string; requestId: string; snap: string}[] = [];
+  let queued: string | null = null;
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withChainedPatternInspect(fixture),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      currentPatternId: listedSummary.patternId,
+      ...(queued === null ? {} : {
+        pendingSwitch: {patternId: queued, activationFrame: 24_000},
+      }),
+    }),
+    requestTransportPatternSwitch: async (request: {
+      patternId: string; requestId: string; snap: string;
+    }) => {
+      switchRequests.push({...request});
+      queued = request.patternId;
+      return {patternId: request.patternId, activationFrame: 24_000};
+    },
+  });
+  try {
+    render(<App initialState={chainedPatternsReady} runtimeFactory={() => session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+    await screen.findByTestId("sequence-grid");
+    await waitFor(() => expect(transportPhase()).toBe("playing"));
+    // The boot read has started and is still holding its result, yet the
+    // choice is already usable.
+    await stall.started.promise;
+
+    await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+    const group = screen.getByRole("group", {name: "Sequence snap"});
+    await userEvent.click(within(group).getByRole("button", {name: "SEQ END"}));
+    expect(within(group).getByRole("button", {name: "SEQ END"})
+      .getAttribute("aria-pressed")).toBe("true");
+
+    // A playing press while the read is still pending carries the explicit
+    // choice, not the stored value and not the 1 BAR default.
+    await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Pattern forward — →"})
+      .hasAttribute("disabled")).toBe(false));
+    await userEvent.click(screen.getByRole("button", {name: "Pattern forward — →"}));
+    await waitFor(() => expect(switchRequests).toHaveLength(1));
+    expect(switchRequests[0]!.snap).toBe("pattern_end");
+
+    // The stored 1 BEAT value arrives only now.
+    await act(async () => {
+      stall.released.resolve();
+    });
+    await flushAsyncTurns();
+    // The explicit choice is retained in the segment…
+    await userEvent.click(screen.getByRole("button", {name: "SETUP"}));
+    const reopened = screen.getByRole("group", {name: "Sequence snap"});
+    expect(within(reopened).getByRole("button", {name: "SEQ END"})
+      .getAttribute("aria-pressed")).toBe("true");
+    // …and in the next request; and the real write completed, so the store
+    // now holds the explicit choice.
+    await userEvent.click(screen.getByRole("button", {name: "EDIT"}));
+    await userEvent.click(screen.getByRole("button", {name: "Pattern forward — →"}));
+    await waitFor(() => expect(switchRequests).toHaveLength(2));
+    expect(switchRequests[1]!.snap).toBe("pattern_end");
+    expect(await readSeqSnapPreference()).toBe("pattern_end");
+  } finally {
+    stall.released.resolve();
+    stall.restore();
+  }
+});
+
+// #1958 S4: the GROOVE picker press queues a playing switch at the device's
+// SEQ SNAP boundary like the arrows do.
+test("the GROOVE picker queues a playing switch at the device's SEQ SNAP", async () => {
+  await writeSeqSnapPreference("beat");
+  const fixture = mutableSampleRuntimeFixture();
+  const switchRequests: {patternId: string; requestId: string; snap: string}[] = [];
+  const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectProject: withSecondPatternInspect(fixture),
+    requestPatternTransport: async () => {
+      throw new Error("no transport command is submitted in this test");
+    },
+    inspectPatternTransport: async () => engagedTransportStatus({
+      currentPatternId: listedSummary.patternId,
+    }),
+    requestTransportPatternSwitch: async (request: {
+      patternId: string; requestId: string; snap: string;
+    }) => {
+      switchRequests.push({...request});
+      return {patternId: request.patternId, activationFrame: 24_000};
+    },
+  });
+  render(<App initialState={secondPatternReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  await userEvent.click(screen.getByRole("button", {name: "Choose Pattern"}));
+  await userEvent.click(within(screen.getByRole("dialog", {name: "Choose Pattern"}))
+    .getByRole("button", {name: "GROOVE / 02"}));
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  expect(switchRequests[0]!.patternId).toBe(secondSwitchPattern);
+  expect(switchRequests[0]!.snap).toBe("beat");
+});
+
+// #1958 S4: outside a Performance recording, a Perform Launch slot drives the
+// global transport's queued switch and carries the device's SEQ SNAP; the
+// Performance-recording launch owner stays untouched.
+test("a Perform launch without a Performance recording queues the switch at the device's SEQ SNAP", async () => {
+  await writeSeqSnapPreference("beat");
+  const fixture = mutableSampleRuntimeFixture();
+  const performance = performanceSessionStubs([]);
+  const switchRequests: {patternId: string; requestId: string; snap: string}[] = [];
+  const session = Object.assign(fixture.session, sequenceSessionStubs(),
+    performance.stubs, {
+      performanceMasterCaptureStatus: () => ({state: "configured", error: null}),
+      subscribePerformanceMasterCaptureStatus: (listener: (status: {
+        state: string; error: unknown;
+      }) => void) => {
+        listener({state: "configured", error: null});
+        return () => {};
+      },
+      inspectProject: async () => {
+        const value = fixture.inspectProject();
+        // A v4 Project carries Pattern slots; Launch slot 1 holds the second
+        // Pattern these journeys switch to.
+        const project = value.project as typeof value.project & {
+          pattern_slots: Array<string | null>;
+        };
+        project.contract = "lmdj.project.v4";
+        project.patterns[secondSwitchPattern] = {bars: 1, events: []};
+        project.pattern_slots = [secondSwitchPattern,
+          ...Array<string | null>(15).fill(null)];
+        return value;
+      },
+      requestPatternTransport: async () => {
+        throw new Error("no transport command is submitted in this test");
+      },
+      inspectPatternTransport: async () => engagedTransportStatus({
+        currentPatternId: listedSummary.patternId,
+      }),
+      requestTransportPatternSwitch: async (request: {
+        patternId: string; requestId: string; snap: string;
+      }) => {
+        switchRequests.push({...request});
+        return {patternId: request.patternId, activationFrame: 24_000};
+      },
+    });
+  const performReady: CreatorState = {
+    ...ready,
+    project: {
+      ...ready.project,
+      current: {
+        ...ready.project.current!,
+        patterns: [
+          ...ready.project.current!.patterns,
+          {patternId: secondSwitchPattern, bars: 1, events: []},
+        ],
+        patternSlots: Object.freeze([secondSwitchPattern,
+          ...Array<string | null>(15).fill(null)]),
+      },
+    },
+  };
+  render(<App initialState={performReady} runtimeFactory={() => session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Perform"}));
+  const launch = await screen.findByRole("button", {name: "Launch Pattern 1"});
+  await waitFor(() => expect(launch.hasAttribute("disabled")).toBe(false));
+  await userEvent.click(launch);
+  await waitFor(() => expect(switchRequests).toHaveLength(1));
+  expect(switchRequests[0]!.patternId).toBe(secondSwitchPattern);
+  expect(switchRequests[0]!.snap).toBe("beat");
+  // No Performance recording exists, so the journaled launch owner was never
+  // asked; the transport switch is the whole effect.
+  expect(performance.stubs.requestPerformancePatternLaunch).not.toHaveBeenCalled();
 });
 
 test("a stopped transport inspection preserves the user's selected Pattern", async () => {

@@ -9,6 +9,7 @@ import {
   reducePatternTransport,
   type PatternTransportState,
 } from "../state/pattern_transport_state";
+import type {SeqSnap} from "../state/seq_snap_preference";
 
 // The Creator consumes only the global Pattern transport surface: intents go
 // in, projections come out. The runtime coordinator owns the journal, the
@@ -23,6 +24,17 @@ export interface CreatorPatternTransportSession {
   requestTransportPatternSwitch(
     request: TransportPatternSwitchRequest,
   ): Promise<TransportPatternSwitchResult>;
+}
+
+// #1958 S4: every playing-state Pattern switch the Creator queues names the
+// device's SEQ SNAP boundary, using the SDK request's own `snap` field (an
+// omitted snap keeps the Host's legacy next-Bar boundary; the Creator always
+// sends its device choice explicitly).
+export function createTransportPatternSwitchRequest(
+  patternId: string,
+  snap: SeqSnap,
+): TransportPatternSwitchRequest {
+  return {patternId, requestId: crypto.randomUUID(), snap};
 }
 
 // The request and inspection journeys below use only these two members, so

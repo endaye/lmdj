@@ -944,7 +944,10 @@ function requireSampleOperationPayload(operation, payload) {
       break;
     case "pattern.transport.switch":
       valid =
-        hasExactKeys(payload, ["pattern_id", "request_id"]) &&
+        (hasExactKeys(payload, ["pattern_id", "request_id"]) ||
+          (hasExactKeys(payload, ["pattern_id", "request_id", "snap"]) &&
+            (payload.snap === "beat" || payload.snap === "bar" ||
+              payload.snap === "pattern_end"))) &&
         UUID_PATTERN.test(payload.pattern_id) &&
         UUID_PATTERN.test(payload.request_id);
       break;
