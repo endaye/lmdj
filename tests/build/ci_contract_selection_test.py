@@ -58,6 +58,7 @@ class ContractSelectionTest(unittest.TestCase):
         self.assertEqual(result["tests"], sorted([
             "tests/build/ci_contract_selection_test.py",
             "tests/build/ci_local_preflight_test.py",
+            "tests/build/ci_daily_verification_test.py",
             "tests/build/ci_change_scope_test.py",
             "tests/build/ci_workflow_topology_test.py",
             "tests/build/ci_build_acceleration_test.py",

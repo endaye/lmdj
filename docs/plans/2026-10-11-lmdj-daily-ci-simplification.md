@@ -319,6 +319,40 @@ No new process pitfall applies. Precommit main remains
 
 ### T3 — Switch daily defaults and merge/main consumers together
 
+T3a freezes a shared daily workload policy before wiring its consumers.
+Current main is still `deb95de722b845d708371e90bcac138ae5e25e01`; implementation
+base is `3ab53cad`. Full lane ownership remains unchanged. Daily execution can
+report a selected lane as deferred to complete verification; it never reports
+that lane as passed. Unknown paths and foundational/Contract/build changes
+retain full fallback. Ordinary audited CI tooling changes run CI contracts;
+ordinary Creator UI changes run build/unit/offline plus the complete authoring,
+playback and durable-reload browser smoke. Persistence, Runtime, capture and
+concurrency boundaries retain their owning journeys or complete checks.
+
+T3a declared files: new `scripts/ci/daily_verification.py`, new
+`tests/build/ci_daily_verification_test.py`, `scripts/ci/contract_selection.py`,
+`tests/build/ci_contract_selection_test.py`, and this plan. The contract-selector
+consumer scan identified the new policy test's preflight-path fixture; retain
+that conservative consumer in its audited group and absolute inventory oracle. This commit only
+provides the pure shared policy; no default, scheduler or merge obligation
+changes until consumers are coordinated. Tests use independent absolute
+inventories for representative paths, unknown/deleted inputs, mixed changes,
+platform-specific risk, and explicit full requests. Version impact: none.
+Documentation impact: none — not yet a public execution path.
+
+T3a verification: 14 independent daily-policy cases and all 11 contract
+selector cases pass; all 77 staged ownership checks pass. New/unknown Creator
+components retain complete journeys; only the enumerated presentation
+components, CSS and unit-test family use smoke. Precommit main is unchanged.
+
+T3b will add Creator smoke using the existing complete deployment journey,
+and wire daily local execution and batch evidence together. Freeze its exact
+files after the pure policy checks. New automatic requests bind their workload
+map to the frozen request; historical requests retain complete semantics.
+Quick/deferred results cannot clear old full verification debt or close full
+failure buckets. Explicit candidate/node and bootstrap retain all 15 suites.
+
+
 Primary files: `AGENTS.md`, `CLAUDE.md`,
 `.agents/skills/issue-done/SKILL.md`, `docs/governance/git-workflow.md`,
 `docs/quality/core-test-policy.md`, `.github/pull_request_template.md`,
