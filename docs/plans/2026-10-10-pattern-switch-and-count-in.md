@@ -163,6 +163,22 @@ parent. Record that process finding, retain the initial failures, and run the
 existing ledger and staged-ownership checks. No new gate, shared-directory
 mutation, coverage-floor change or timeout adjustment belongs to this repair.
 
+**Diagram presentation follow-up.** On committed S4 head `680a86f5`, the
+independent review's A1 advisory was reduced with the actual generated HTML:
+the expanded Pattern Transport / Phase card needs 174 px inside its existing
+70 px hidden-overflow text box. This documentation-only Task declares this
+plan, `apps/docs-site/diagrams/audio-runtime.architecture.json`, and its official
+`static/diagrams/audio-runtime.html` / `.svg` outputs before editing. Condense
+that card's summary; the module page retains the complete phase, ownership and
+predecessor/successor rules. Do not change the shared renderer or other cards.
+Lowest-tier verification is the actual regenerated card's rendered text fitting
+its existing box and `scripts/docs-site.sh check`. Version impact: none;
+Documentation impact: required on `/core/modules/audio-runtime/`. No product,
+test, timeout or journey input changes. The completed original eight-group
+Creator proof remains bound to `680a86f5`; it is not a full-proof receipt for the
+documentation follow-up's new head. Refresh independent current-head review
+before shipping the follow-up.
+
 ## S5 — SEQ SNAP OFF
 
 OFF needs the engine to start a different Pattern at the current phase. S5 adds that publish mode to `audio-runtime` with its engine tests, exposes `snap: "off"` in the Host, and adds the option in Creator. It is last because it is the only Task that changes the audio thread's apply path.
