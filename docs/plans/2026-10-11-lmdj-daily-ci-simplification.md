@@ -217,6 +217,51 @@ for affected/unknown inputs, and a real selected journey. Prove full inventory
 retention independently of the new selector. Defects caught: omitted consumer
 tests, missing acceptance legs, stale bundles and incorrect proof labels.
 
+T2b implementation worktree starts from `2395f7b3`; refreshed integration main
+is `deb95de722b845d708371e90bcac138ae5e25e01`. The PR job still discovers every
+CI test and always installs/runs the pinned real-handler seam. The local full
+entry has the same behavior; neither includes dependency-focused selection.
+
+T2b declared files: new `scripts/ci/contract_selection.py`, new
+`tests/build/ci_contract_selection_test.py`, `scripts/ci/local_lanes.json`,
+`scripts/ci/local_preflight.py` (retain optional seam runtime in cache identity),
+`.github/workflows/pr-contract.yml`, `tests/build/ci_workflow_topology_test.py`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, and this plan.
+Use a small audited source/consumer group for local preflight tooling, including
+its direct local-lane, workflow, shipping-skill, policy-parity, toolchain and
+classification-input contracts. New/unmapped CI dependencies keep complete
+CI tests and the real-handler seam; full always retains both. Detect newly
+referencing consumers and fall back to full instead of trusting a stale group.
+Reuse canonical path ownership to disregard changed paths owned exclusively by
+other lanes. This changes tests within the CI lane, not lane ownership.
+The PR job and explicit local quick profile consume this same selector; existing
+main/full execution remains unchanged until T3. Missing Git inputs fail closed.
+
+Verify exact selected test inventories, an unmapped/new-consumer full fallback,
+PR-Agent source/config/lock/fixture positive controls, unchanged full discovery,
+CLI failure propagation and actual workflow conditions. The selector's own
+contract always runs. A low-cost module change must not allocate the unrelated
+Python 3.12 seam environment; affected or uncertain changes still do.
+
+T2b verification: the complete selector execution discovered 93 files and
+ran 2,650 tests in 227.540 s (72 existing environment-specific skips). The
+separate pinned real-handler integration passed: its parent ran 72 tests in
+78.897 s with one expected unavailable-in-parent dependency check; the real
+handler proxy uses the locked environment. Focused execution of the ten audited
+files passed 328 tests in 14.301 s (n=1; this is a workload sample, not a
+workday savings claim). Two subsequent real-Git inventory tests cover dirty/
+untracked paths and both sides of renames; the final selector suite passes all
+11 tests. The final missing-output seam fallback runs unless selection emits
+explicit `false`; its 61 topology tests and pinned actionlint pass. All 77
+staged ownership tests and the complete Portal check (50 routes) pass.
+The final source has these two added inventory tests and the conservative
+missing-output condition beyond the initial full-run sample; no full-head or
+strict before/after benchmark is claimed from that sample. Existing full lane
+commands and main batch execution remain unchanged. No new qualifying pitfall.
+Final focused execution includes the two new inventory tests: 330 tests pass
+in 14.073 s (n=1). Precommit main is still
+`deb95de722b845d708371e90bcac138ae5e25e01`.
+
 ### T3 — Switch daily defaults and merge/main consumers together
 
 Primary files: `AGENTS.md`, `CLAUDE.md`,

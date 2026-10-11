@@ -21,6 +21,15 @@
       ]
     },
     "ci_contract": {
+      "quick": {
+        "requires": {"commands": ["python3"]},
+        "commands": [
+          "python3 scripts/ci/contract_selection.py --base {base} --execute all"
+        ],
+        "ci_only": [
+          "PR CI also runs pinned actionlint; unknown or affected PR-Agent dependencies retain the Python 3.12 real-handler seam."
+        ]
+      },
       "requires": {
         "commands": ["curl", "python3.12"]
       },

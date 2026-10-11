@@ -208,6 +208,10 @@ def _tool_version(command: tuple[str, ...], executable: str, stat_key: tuple[int
 
 def toolchain_identity(lane: str, entry: Mapping[str, object], *, root: Path = ROOT) -> str:
     tools = {"git", "bash", "python3", *entry["requires"].get("commands", [])}
+    if lane == "ci_contract":
+        # Quick only needs this runtime when the dependency plan selects the
+        # real handler seam, but a later installation must invalidate its cache.
+        tools.update({"curl", os.environ.get("PR_AGENT_TEST_PREP_PYTHON") or "python3.12"})
     if lane.startswith("core_") or lane in {"package", "creator", "web_runtime_host", "web_toolchain"}:
         tools.update({"cmake", os.environ.get("CC", "cc"), os.environ.get("CXX", "c++")})
     if lane in {"creator", "web_runtime_host", "web_toolchain"}:

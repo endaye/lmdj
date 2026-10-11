@@ -402,11 +402,19 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertLess(install, check,
                         "why: docs-site check needs the locked dependencies; remedy: install before check")
 
-    def test_pr_contract_runs_complete_ci_contract_and_exact_impact_checker(self) -> None:
+    def test_pr_contract_runs_selected_contracts_and_exact_impact_checker(self) -> None:
         ci = self.pr_contract_job("ci-contract")
         self.assertIn("ACTIONLINT_VERSION: 1.7.12", self.pr_contract_source)
         self.assertIn("ACTIONLINT_SHA256:", self.pr_contract_source)
-        self.assertIn("python3 -m unittest discover -s tests/build -p 'ci_*_test.py'", ci)
+        self.assertIn("python3 scripts/ci/contract_selection.py", ci)
+        self.assertIn('--base "$BASE_SHA" --head "$HEAD_SHA" --execute tests', ci)
+        self.assertIn('BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}', ci)
+        self.assertIn('HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}', ci)
+        # Only an explicit false may omit the seam; missing/unknown output
+        # must not turn incomplete selection into a green partial contract.
+        self.assertEqual(ci.count("if: ${{ steps.contracts.outputs.seam != 'false' }}"), 2)
+        self.assertIn('python-version: "3.12"', ci)
+        self.assertIn('run: scripts/ci/pr-agent/integration-test.sh', ci)
         impact = self.pr_contract_job("documentation-impact")
         for text in (
             "PORTAL_PR_BODY: ${{ needs.change-scope.outputs.pull-request-body }}",

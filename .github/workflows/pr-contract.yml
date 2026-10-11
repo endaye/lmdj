@@ -128,12 +128,21 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "26"
-      - name: Run every CI-control contract
-        run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
+      - name: Run affected CI-control contracts
+        id: contracts
+        env:
+          BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}
+          HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}
+        run: >-
+          python3 scripts/ci/contract_selection.py
+          --base "$BASE_SHA" --head "$HEAD_SHA" --execute tests
+          --github-output "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v6
+        if: ${{ steps.contracts.outputs.seam != 'false' }}
         with:
           python-version: "3.12"
       - name: Run the pinned PR-Agent real-handler seam proof
+        if: ${{ steps.contracts.outputs.seam != 'false' }}
         run: scripts/ci/pr-agent/integration-test.sh
 
   docs-static:
