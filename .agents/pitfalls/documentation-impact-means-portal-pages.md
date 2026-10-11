@@ -27,6 +27,9 @@ recurrences:
   - date: 2026-10-08
     occurrence: https://github.com/endaye/lmdj/pull/1876
     observed_by: Codex
+  - date: 2026-10-11
+    occurrence: https://github.com/endaye/lmdj/issues/2031
+    observed_by: unknown
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -55,11 +58,11 @@ Request had just disproved.
 
 ## How to apply
 
-- `required` when a page under `apps/architecture-portal/docs/` changes, **or**
+- `required` when a page under `apps/docs-site/docs/` changes, **or**
   when Product Build / Assembly identity changes (`products/lmdj/version.json`,
   `assembly(.lock).json`, `CMakeLists.txt`, `src/`) — those cannot declare `none`.
 - Before settling on `none`:
-  `grep -rl "<changed path>" apps/architecture-portal/docs --include='*.mdx'`.
+  `rg -l --fixed-strings "<changed path>" apps/docs-site/docs -g '*.mdx'`.
   A hit whose text your change makes wrong must be updated in the same Task.
 - Routes go on `Affected portal pages:`, each starting with `/`. `Routes:` is
   not read.
@@ -67,7 +70,17 @@ Request had just disproved.
   has already answered itself. Never copy a block forward from another Pull
   Request.
 - Gate the body before `gh pr create`: `issue-done` §4 writes it to a file, runs
-  `scripts/local-ci.sh --pr-body`, then passes `--body-file`. The verdict prints
-  first, but `--pr-body` then runs every selected lane — interrupt if the verdict
-  is all you need. After a fix, a rerun replays the stale event; push or reopen.
+  `scripts/local-ci.sh --declaration-only --pr-body`, reads its actual terminal
+  exit, then passes `--body-file`. This command executes no lanes. Revalidate
+  a corrected or changed body before publishing it; preserve any earlier failure.
+- Read every required prerequisite's actual terminal result before its dependent
+  commit or PR operation. Nonzero, signal or missing terminal status stops that
+  operation; a returned tool receipt or later successful command cannot clear it.
+  Keep advisory checks advisory. `issue-done` §3–§4 owns this result ordering.
 - Do not merge past this gate by hand.
+
+The 2026-10-11 recurrence retained a missing-`Reason:` declaration failure and a
+precommit inspection failure, followed by a local commit. The author corrected
+both checks and preserved the preliminary object. The recorder propagated child
+exits correctly; the calling shell's outer verdict and original inspection
+expression were not retained. #2031 records the provenance and skill repair.
