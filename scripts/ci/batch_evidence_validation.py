@@ -23,6 +23,7 @@ JOB_NAMES = {
 EXECUTION_SOURCES = (
     ".github/workflows/self-test-report.yml", ".github/workflows/ci.yml",
     ".github/workflows/core-nightly.yml", ".github/workflows/architecture-portal.yml",
+    ".github/actions/web-ci-proof/action.yml",
 )
 
 

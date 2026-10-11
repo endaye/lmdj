@@ -143,12 +143,22 @@ def load_classifier():
     return module
 
 
+def daily_workloads(classifier, policy, lanes, paths):
+    path = Path(__file__).with_name("daily_verification.py")
+    spec = importlib.util.spec_from_file_location("lmdj_daily_verification", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load daily verification policy")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.select(policy, lanes, paths, classifier=classifier)
+
+
 def load_lane_commands(
     path: str | Path = LANE_COMMANDS_PATH, *, policy: Mapping[str, object] | None = None,
     profile: str = "full",
 ) -> dict[str, dict[str, object]]:
     """Load and validate the lane-to-local-command table."""
-    if profile not in {"quick", "full"}:
+    if profile not in {"quick", "journey", "full"}:
         raise ValueError("why: unknown verification profile; remedy: choose quick or full")
     classifier = load_classifier()
     with Path(path).open(encoding="utf-8") as table_file:
@@ -169,14 +179,12 @@ def load_lane_commands(
         )
     selected = {}
     for lane, entry in lanes.items():
-        if not isinstance(entry, dict) or set(entry) not in (_LANE_KEYS, _LANE_KEYS | {"quick"}):
+        if not isinstance(entry, dict) or not _LANE_KEYS <= set(entry) or set(entry) - _LANE_KEYS - {"quick", "journey"}:
             raise ValueError(f"lane entry schema is not closed: {lane}")
-        variants = [{key: entry[key] for key in _LANE_KEYS}]
-        if "quick" in entry:
-            variants.append(entry["quick"])
-        for variant in variants:
+        full = {key: entry[key] for key in _LANE_KEYS}
+        for variant in [full, *(entry[key] for key in ("quick", "journey") if key in entry)]:
             _validate_lane_entry(lane, variant)
-        selected[lane] = variants[-1] if profile == "quick" else variants[0]
+        selected[lane] = entry.get(profile, full) if profile != "full" else full
     return selected
 
 
@@ -672,7 +680,7 @@ def check_batch_evidence(
     section = _evidence_section(body)
     if section is None:
         return refuse(f"the body needs exactly one `{BATCH_EVIDENCE_HEADING}` section",
-                      "paste the block `scripts/local-ci.sh --lanes <lane>` prints, "
+                      "paste the block `scripts/local-ci.sh --profile full --lanes <lane>` prints, "
                       "or `Batch-only lanes: none`")
     declarations = [match for line in section
                     if (match := _BATCH_DECLARATION.match(line))]
@@ -738,7 +746,7 @@ def check_batch_evidence(
     if problems:
         rerun = " ".join(missing + stale + malformed)
         return refuse("; ".join(problems),
-                      f"run `scripts/local-ci.sh --lanes {rerun.replace(' ', ',')}` on this head "
+                      f"run `scripts/local-ci.sh --profile full --lanes {rerun.replace(' ', ',')}` on this head "
                       "and paste its lines, or record `accepted-risk key=<current key> — <reason>` "
                       "only for a lane the owner explicitly accepted for these inputs")
     detail = ""
@@ -827,6 +835,14 @@ def build_plan(
     # lanes to execute here, never which lanes CI would select, and the
     # declaration's applicability mirrors CI rather than this invocation.
     ci_lanes = list(selected)
+    workloads = (daily_workloads(classifier, policy, ci_lanes, changed_paths(inventory))
+                 if profile == "quick" else {lane: "full" for lane in ci_lanes})
+    journeys = load_lane_commands(policy=policy, profile="journey")
+    for lane, mode in workloads.items():
+        if mode == "full":
+            lane_commands[lane] = full_commands[lane]
+        elif mode == "journey":
+            lane_commands[lane] = journeys[lane]
     if only:
         unknown = sorted(set(only) - set(policy["lanes"]))
         if unknown:
@@ -846,6 +862,7 @@ def build_plan(
     ci_batch_only = [lane for lane in ci_lanes if lane not in verified_by_pull_request]
     return {
         "profile": profile,
+        "verification": workloads,
         "base_sha": base_sha,
         "head_sha": head_sha,
         "mode": manifest["mode"],
@@ -865,7 +882,7 @@ def build_plan(
             lane: execution_cache_key(
                 lane_cache_key(lane, lane_commands[lane]["commands"], grouped[lane], blobs),
                 profile, toolchain_identity(lane, lane_commands[lane], root=root))
-            for lane in selected
+            for lane in selected if workloads[lane] != "deferred"
         },
         "input_counts": {lane: len(grouped[lane]) for lane in selected},
         # The declaration check reuses the inventory that selected the lanes,
@@ -953,6 +970,12 @@ def execute(
     quick = plan.get("profile", "full") == "quick"
     substitutions = {"base": plan["base_sha"], "head": plan["head_sha"]}
     for lane in plan["selected"]:
+        if plan.get("verification", {}).get(lane) == "deferred":
+            result = LaneResult(lane, "deferred", "complete verification deferred; not executed and not a pass")
+            results.append(result)
+            if echo:
+                print(f"  {lane}: deferred ({result.detail})", flush=True)
+            continue
         entry = plan["lane_commands"][lane]
         runnable, why_not = check_requirements(root, entry["requires"])
         if not runnable:
@@ -994,7 +1017,7 @@ exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
 """
 
 
-HOOK_TEMPLATE = """#!/usr/bin/env bash
+PREVIOUS_HOOK_TEMPLATE = """#!/usr/bin/env bash
 # Installed by scripts/ci/local_preflight.py --install-hook (optimistic v1).
 # Local verification is advisory; it authorizes no push, merge or release.
 # Opt in to the complete selected lane set: LMDJ_PRE_PUSH_FULL=1 git push.
@@ -1006,6 +1029,10 @@ if [[ "${LMDJ_PRE_PUSH_FULL:-0}" != "1" ]]; then
 fi
 exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
 """
+
+
+HOOK_TEMPLATE = PREVIOUS_HOOK_TEMPLATE.replace("(optimistic v1)", "(optimistic v2)").replace(
+    '/scripts/local-ci.sh"\n', '/scripts/local-ci.sh" --profile full\n')
 
 
 def install_hook(root: Path, *, force: bool = False) -> Path:
@@ -1023,13 +1050,14 @@ def install_hook(root: Path, *, force: bool = False) -> Path:
         raise RuntimeError(f"why: hook is not a regular owned file: {hook}; remedy: inspect it manually; it was not changed")
     if hook.exists():
         existing = hook.read_text(encoding="utf-8", errors="replace")
-        if existing not in {HOOK_TEMPLATE, LEGACY_HOOK_TEMPLATE}:
+        if existing not in {HOOK_TEMPLATE, PREVIOUS_HOOK_TEMPLATE, LEGACY_HOOK_TEMPLATE}:
             raise RuntimeError(
                 f"why: refusing to overwrite a personal or modified hook: {hook}; "
                 "remedy: integrate the opt-in manually; --force does not override ownership"
             )
-        if existing == LEGACY_HOOK_TEMPLATE:
-            backup = hook.with_name("pre-push.lmdj-before-optimistic")
+        if existing in {LEGACY_HOOK_TEMPLATE, PREVIOUS_HOOK_TEMPLATE}:
+            backup = hook.with_name("pre-push.lmdj-before-optimistic" if existing == LEGACY_HOOK_TEMPLATE
+                                    else "pre-push.lmdj-before-quick-default")
             if backup.is_symlink() or (backup.exists() and
                     (not backup.is_file() or backup.read_text(encoding="utf-8", errors="replace") != existing)):
                 raise RuntimeError(f"why: migration backup already differs: {backup}; remedy: inspect and preserve it manually")
@@ -1099,8 +1127,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Run the CI lanes this change selects, locally.",
     )
     parser.add_argument("--base-ref", default="origin/main")
-    parser.add_argument("--profile", choices=("quick", "full"), default="full",
-                        help="quick development feedback or complete lanes (default: full)")
+    parser.add_argument("--profile", choices=("quick", "full"), default=None,
+                        help="daily verification (default: quick) or complete lanes; batch evidence audit defaults to full")
     parser.add_argument("--lanes", default="")
     parser.add_argument("--cache-dir", default=str(default_cache_dir()))
     parser.add_argument("--no-cache", action="store_true")
@@ -1127,6 +1155,8 @@ def main(argv: Sequence[str] | None = None) -> int:
               "exact clean head and exit without executing any lane"),
     )
     args = parser.parse_args(argv)
+    if args.profile is None:
+        args.profile = "full" if args.batch_evidence_only else "quick"
 
     root = ROOT
     try:
@@ -1170,7 +1200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pull_request_verified": plan["pull_request_verified"],
             "batch_only": plan["batch_only"],
             "input_counts": plan["input_counts"],
-            "commands": {lane: plan["lane_commands"][lane]["commands"]
+            "verification": plan.get("verification", {}),
+            "commands": {lane: ([] if plan.get("verification", {}).get(lane) == "deferred"
+                                else plan["lane_commands"][lane]["commands"])
                          for lane in plan["selected"]},
             "declaration": _declaration_plan(plan),
         }
@@ -1188,7 +1220,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "  not run by a Pull Request: "
             f"{', '.join(plan['batch_only'])}"
-            " -- run them here (--lanes) or they reach main unverified"
+            " -- ownership only; complete checks use --profile full --lanes"
         )
     try:
         # Report the uncached declaration before lanes; declaration-only never
@@ -1233,7 +1265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_render(plan, results, declaration))
         if results and plan["ci_batch_only"] and plan.get("profile", "full") == "full":
             print("\n  batch-only evidence for the Pull Request body "
-                  "(checked before merge with --batch-evidence-only):")
+                  "(optional strict audit with --batch-evidence-only):")
             for line in batch_evidence_block(plan, results):
                 print(f"    {line}" if line else "")
 

@@ -131,12 +131,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
     parser.add_argument("--head")
+    parser.add_argument("--interval", action="store_true", help="Classify every first-parent delta of a committed batch")
     parser.add_argument("--profile", choices=("quick", "full"), default="quick")
     parser.add_argument("--execute", choices=("none", "tests", "all"), default="none")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
     try:
-        plan = select(ROOT, changed_paths(ROOT, args.base, args.head), profile=args.profile)
+        if args.interval:
+            if not args.head:
+                raise ValueError("why: interval head is missing; remedy: supply the admitted base and head")
+            import test_scope
+            paths = test_scope.collect_interval(ROOT, args.base, args.head)["paths"]
+        else:
+            paths = changed_paths(ROOT, args.base, args.head)
+        plan = select(ROOT, paths, profile=args.profile)
         print(json.dumps(plan, indent=2), flush=True)
         if args.github_output:
             with args.github_output.open("a", encoding="utf-8") as output:

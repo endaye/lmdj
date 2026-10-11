@@ -8,6 +8,10 @@ inputs:
   install-system-deps:
     description: Whether Playwright may install host system dependencies.
     required: true
+  verification:
+    description: Admitted workload; explicit complete requests default to full.
+    required: false
+    default: "full"
   parallel-level:
     description: Maximum concurrent CMake build jobs.
     required: false
@@ -20,12 +24,17 @@ runs:
       shell: bash
       env:
         LANE: ${{ inputs.lane }}
+        VERIFICATION: ${{ inputs.verification }}
         INSTALL_SYSTEM_DEPS: ${{ inputs.install-system-deps }}
       run: |
         set -euo pipefail
         case "$LANE" in
           web_toolchain|web_runtime_host|creator) ;;
           *) echo "unsupported Web CI lane: $LANE" >&2; exit 64 ;;
+        esac
+        case "$LANE:$VERIFICATION" in
+          web_toolchain:full|web_runtime_host:full|creator:full|web_runtime_host:journey|creator:journey|creator:quick) ;;
+          *) echo 'why: unsupported Web workload; remedy: use the admitted lane and verification mode' >&2; exit 64 ;;
         esac
         case "$INSTALL_SYSTEM_DEPS" in
           true|false) ;;
@@ -204,14 +213,20 @@ runs:
 
     - name: Execute the selected Web proof
       shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        VERIFICATION: ${{ inputs.verification }}
       run: |
         set -euo pipefail
         source build/toolchains/emsdk/emsdk_env.sh
-        case "${{ inputs.lane }}" in
-          web_toolchain) scripts/web-toolchain-conformance.sh proof ;;
-          web_runtime_host) python3 tools/web-runtime/verify_emscripten.py && scripts/web-runtime-host.sh proof ;;
-          creator) scripts/creator-web.sh proof ;;
-          *) echo "unsupported Web CI lane" >&2; exit 2 ;;
+        case "$LANE:$VERIFICATION" in
+          web_toolchain:full) scripts/web-toolchain-conformance.sh proof ;;
+          web_runtime_host:full) python3 tools/web-runtime/verify_emscripten.py && scripts/web-runtime-host.sh proof ;;
+          web_runtime_host:journey) python3 tools/web-runtime/verify_emscripten.py && scripts/web-runtime-host.sh quick ;;
+          creator:full) scripts/creator-web.sh proof ;;
+          creator:journey) scripts/creator-web.sh quick ;;
+          creator:quick) scripts/creator-web.sh smoke ;;
+          *) echo 'why: unsupported Web workload; remedy: use the admitted lane and verification mode' >&2; exit 64 ;;
         esac
 
     # Every Web lane drives Playwright through one config whose outputDir is

@@ -233,8 +233,10 @@ scripts/web-runtime-host.sh proof
 scripts/creator-web.sh proof
 ```
 
-`scripts/local-ci.sh` runs the same CI lanes this working tree selects, on the
-local machine. It reuses `scripts/ci/change_scope.py`, so it cannot disagree
+`scripts/local-ci.sh` defaults to quick, change-related local verification;
+`--profile full` runs every selected complete lane. Its ownership and daily
+workload map match CI, and deferred lanes remain explicitly unverified. It reuses
+`scripts/ci/change_scope.py`, so it cannot disagree
 with CI lane selection, and it reports not-runnable-here for lanes this
 platform cannot execute. It is advisory only: a green local run authorizes no
 push, Pull Request, or later state transition. `--list` resolves the lane plan

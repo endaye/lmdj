@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 sys.path.insert(0, str(ROOT / "tests/build"))
 import batch_execution
+from batch_evidence_validation import EXECUTION_SOURCES
 import batch_verdict
 import incremental_batch
 import test_scope
@@ -48,7 +49,76 @@ def script(job, name):
     return "\n".join(lines) + "\n"
 
 
+def web_script(name):
+    source = (ROOT / ".github/actions/web-ci-proof/action.yml").read_text()
+    block = source.split("    - name: " + name + "\n", 1)[1].split("\n    - ", 1)[0]
+    lines = block.split("      run: |\n", 1)[1].splitlines()
+    return "\n".join(line[8:] for line in lines if line.startswith("        ")) + "\n"
+
+
+class WorkloadCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.log = self.root / "commands"
+        for name in ("scripts/core.sh", "scripts/creator-web.sh", "scripts/web-runtime-host.sh", "scripts/web-toolchain-conformance.sh"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('#!/bin/bash\nprintf "%s %s\\n" "$0" "$*" >> "$COMMAND_LOG"\nexit "${COMMAND_EXIT:-0}"\n')
+            path.chmod(0o755)
+        sdk = self.root / "build/toolchains/emsdk/emsdk_env.sh"
+        sdk.parent.mkdir(parents=True)
+        sdk.write_text(":\n")
+        verifier = self.root / "tools/web-runtime/verify_emscripten.py"
+        verifier.parent.mkdir(parents=True)
+        verifier.write_text("# identity verifier stand-in\n")
+
+    def run_script(self, source, **env):
+        self.log.write_text("")
+        result = subprocess.run(["bash", "-c", source], cwd=self.root,
+            env={**os.environ, "COMMAND_LOG": str(self.log), **env}, capture_output=True, text=True)
+        return result, self.log.read_text().splitlines()
+
+    def test_core_dispatch_preserves_full_and_propagates_failure(self):
+        source = script("core-ubuntu", "Execute the selected Core verification")
+        for mode, expected in (("quick", ["scripts/core.sh configure dev", "scripts/core.sh build dev", "scripts/core.sh test dev fast"]), ("full", ["scripts/core.sh proof"])):
+            result, commands = self.run_script(source, VERIFICATION=mode)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(commands, expected)
+        result, commands = self.run_script(source, VERIFICATION="quick", COMMAND_EXIT="7")
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(commands, ["scripts/core.sh configure dev"])
+
+    def test_web_dispatch_closed_inventory(self):
+        source = web_script("Execute the selected Web proof")
+        cases = [("creator", "quick", "scripts/creator-web.sh smoke"),
+                 ("creator", "journey", "scripts/creator-web.sh quick"),
+                 ("creator", "full", "scripts/creator-web.sh proof"),
+                 ("web_runtime_host", "journey", "scripts/web-runtime-host.sh quick"),
+                 ("web_runtime_host", "full", "scripts/web-runtime-host.sh proof"),
+                 ("web_toolchain", "full", "scripts/web-toolchain-conformance.sh proof")]
+        for lane, mode, expected in cases:
+            with self.subTest(lane=lane, mode=mode):
+                result, commands = self.run_script(source, LANE=lane, VERIFICATION=mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(commands, [expected])
+        for lane, mode in (("web_runtime_host", "quick"), ("creator", "deferred"), ("unknown", "full")):
+            result, commands = self.run_script(source, LANE=lane, VERIFICATION=mode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(commands, [])
+        result, _ = self.run_script(source, LANE="creator", VERIFICATION="quick", COMMAND_EXIT="9")
+        self.assertEqual(result.returncode, 9)
+
+
 class WorkflowContracts(unittest.TestCase):
+    def test_daily_web_executor_is_in_frozen_source_closure(self):
+        # An agreeing producer/validator pair could both omit the composite
+        # action that actually chooses smoke versus full. This explicit path
+        # is the independent oracle for that shared omission.
+        self.assertIn(".github/actions/web-ci-proof/action.yml", EXECUTION_SOURCES)
+        self.assertIn("'.github/actions/web-ci-proof/action.yml'", script("change-scope", "Prepare the admitted fixed-target execution"))
+
     def test_portal_main_interval_mode_is_selected_only_by_authenticated_preparation(self):
         portal = job_body(SOURCE, "portal")
         self.assertIn("snapshot_mode: ${{ needs.change-scope.outputs.self-test == 'true' && 'main-interval' || 'own-tree' }}", portal,
@@ -139,10 +209,10 @@ class WorkflowScripts(unittest.TestCase):
         self.git("config", "user.name", "Workflow fixture")
         self.git("config", "user.email", "fixture@example.invalid")
         self.git("remote", "add", "origin", str(self.root))
-        for name in ("self-test-report.yml", "ci.yml", "core-nightly.yml", "architecture-portal.yml"):
-            dest = self.root / ".github/workflows" / name
+        for name in EXECUTION_SOURCES:
+            dest = self.root / name
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / ".github/workflows" / name, dest)
+            shutil.copyfile(ROOT / name, dest)
         for name in ("batch_execution.py", "batch_verdict.py", "daily_verification.py", "incremental_batch.py", "test_scope.py",
                      "self_test.py", "change_scope.py", "scope_policy.json", "self_test_policy.json", "test_scope_policy.json"):
             dest = self.root / "scripts/ci" / name
@@ -168,10 +238,10 @@ class WorkflowScripts(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.root), *args], text=True, stderr=subprocess.DEVNULL).strip()
 
-    def request(self, suites):
+    def request(self, suites, verification=None):
         selection = test_scope.union_selections(POLICY, [test_scope._selection(POLICY, suites, ["fixture selection"])])
         return incremental_batch.make_request(POLICY, request_id="request-51", kind="auto", base_sha=self.control,
-            target_sha=self.target, control_sha=self.control, selection=selection, origin_run={"run_id": 51, "attempt": 1})
+            target_sha=self.target, control_sha=self.control, selection=selection, origin_run={"run_id": 51, "attempt": 1}, verification=verification)
 
     def invoke(self, job, name, **env):
         self.output.write_text("")
@@ -180,8 +250,8 @@ class WorkflowScripts(unittest.TestCase):
         values = dict(line.split("=", 1) for line in self.output.read_text().splitlines() if "=" in line)
         return result, values
 
-    def prepare(self, suites, *, poison_historical_code=False):
-        request = self.request(suites)
+    def prepare(self, suites, *, poison_historical_code=False, verification=None):
+        request = self.request(suites, verification)
         env = {"BATCH_REQUEST": json.dumps(request), "BATCH_EXECUTOR": json.dumps({"run_id": 51, "attempt": 1})}
         read_result, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
         self.assertEqual(read_result.returncode, 0, read_result.stderr)
@@ -234,9 +304,9 @@ class WorkflowScripts(unittest.TestCase):
     def test_changed_executor_workflow_blocks_before_heavy_outputs(self):
         read_result, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
         self.assertEqual(read_result.returncode, 0, read_result.stderr)
-        for name in ("self-test-report.yml", "ci.yml", "core-nightly.yml", "architecture-portal.yml"):
+        for name in EXECUTION_SOURCES:
             with self.subTest(workflow=name):
-                path = self.root / ".github/workflows" / name
+                path = self.root / name
                 original = path.read_text()
                 path.write_text(original + "\n# incompatible executor fixture\n")
                 self.git("add", str(path))
@@ -338,6 +408,17 @@ class WorkflowScripts(unittest.TestCase):
         result, _ = self.invoke("change-scope", "Resolve the execution entry", BATCH_REQUEST=json.dumps(self.request([])),
                                BATCH_EXECUTOR='{"run_id":51,"run_id":51,"attempt":1}')
         self.assertNotEqual(result.returncode, 0)
+
+    def test_actual_daily_prepare_and_judge_preserve_deferred_evidence(self):
+        modes = {"creator": "quick", "core_coverage": "deferred"}
+        execution = self.prepare(modes, verification=modes)
+        self.assertEqual(execution["verification"], modes)
+        self.assertFalse(execution["lanes"]["core_coverage"])
+        result, _, verdict, _ = self.judge(execution, {"core-coverage": {"result": "skipped", "outputs": {}}})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(verdict["status"], "quick-passed")
+        outcomes = batch_verdict.scheduler_outcomes(verdict, POLICY, execution["identity"], execution["selection"], verification=modes)
+        self.assertEqual(outcomes, {"creator": "quick-passed", "core_coverage": "deferred"})
 
     def test_real_prepare_and_judge_focused_does_not_execute_unselected_stress(self):
         execution = self.prepare(["creator"])

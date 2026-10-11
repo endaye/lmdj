@@ -50,6 +50,24 @@ class ContractSelectionTest(unittest.TestCase):
         self.assertEqual(selection.changed_paths(root, base, "HEAD"),
                          ["docs/plans/retired.md", "scripts/ci/local_preflight.py"])
 
+    def test_batch_interval_retains_reverted_control_changes(self):
+        root, git, base = self.git_fixture()
+        path = root / "scripts/ci/local_preflight.py"
+        for content in ("# changed\n", "# baseline\n"):
+            path.write_text(content)
+            git("add", ".")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "-m", "interval")
+        self.assertEqual(selection.changed_paths(root, base, "HEAD"), [])
+        observed = []
+        def select(repo, paths, **kwargs):
+            observed.extend(paths)
+            return {"tests": [], "seam": False}
+        with mock.patch.object(selection, "ROOT", root), mock.patch.object(selection, "select", side_effect=select), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(selection.main(["--base", base, "--head", git("rev-parse", "HEAD"), "--interval"]), 0)
+        self.assertEqual(observed, ["scripts/ci/local_preflight.py"])
+
     def test_preflight_change_selects_absolute_consumer_inventory_without_seam(self):
         result = selection.select(ROOT, ["scripts/ci/local_preflight.py",
                                          "docs/plans/2026-10-11-lmdj-daily-ci-simplification.md"])

@@ -731,7 +731,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         inputs.
         """
         self.assertIn(
-            "web_runtime_host) python3 tools/web-runtime/verify_emscripten.py"
+            "web_runtime_host:full) python3 tools/web-runtime/verify_emscripten.py"
             " && scripts/web-runtime-host.sh proof ;;",
             self.web_proof_source,
         )

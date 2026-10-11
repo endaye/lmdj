@@ -7,8 +7,6 @@ Callers must supply the complete changed-path union, including deleted paths.
 """
 from __future__ import annotations
 
-import change_scope
-
 MODES = frozenset({"deferred", "quick", "journey", "full"})
 ORDER = {"deferred": 0, "quick": 1, "journey": 2, "full": 3}
 SUITES = frozenset({
@@ -43,7 +41,7 @@ def validate(workloads, selected):
     return dict(sorted(workloads.items()))
 
 
-def select(routing, selected, paths, *, profile="quick", complete=True):
+def select(routing, selected, paths, *, profile="quick", complete=True, classifier=None):
     """Return every selected suite with an explicit, independently named mode.
 
 Full always executes all selected suites. Quick preserves canonical lanes but
@@ -51,6 +49,8 @@ moves repeated cross-platform, coverage, reproducibility and packaging work to
 full verification unless an owning risk below requires it now. Unknown paths,
 foundational code and shared build/Contract changes keep the full fallback.
 """
+    if classifier is None:
+        import change_scope as classifier
     selected = set(selected)
     if not selected <= SUITES or profile not in {"quick", "full"} or type(complete) is not bool:
         raise ValueError("why: invalid daily selection inputs; remedy: supply canonical suites and quick/full profile")
@@ -58,7 +58,7 @@ foundational code and shared build/Contract changes keep the full fallback.
         raise ValueError("why: changed paths are not a complete list; remedy: collect both sides of the Git interval")
     full = {suite: "full" for suite in sorted(selected)}
     for path in paths:
-        change_scope._validate_path(path)
+        classifier._validate_path(path)
     if profile == "full" or not complete:
         return full
     modes = {suite: "deferred" for suite in sorted(selected)}
@@ -73,7 +73,7 @@ foundational code and shared build/Contract changes keep the full fallback.
         require(["web_runtime_host", "creator"], "journey")
 
     for path in paths:
-        lanes, reasons = change_scope.path_classification(routing, path)
+        lanes, reasons = classifier.path_classification(routing, path)
         if not lanes and not reasons:
             return full
         # These are verification implementations, not product source. Their

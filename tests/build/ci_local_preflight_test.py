@@ -1477,13 +1477,43 @@ class VerificationProfileTest(unittest.TestCase):
         self.addCleanup(self.repository.close)
         self.repository.write("apps/creator-web/src/app.tsx", "// changed UI\n")
 
-    def test_quick_creator_compiles_ui_and_runs_unit_and_offline_checks(self):
+    def test_quick_creator_uses_build_units_offline_and_durable_browser_smoke(self):
         table = self.preflight.load_lane_commands(profile="quick")
-        self.assertEqual(table["creator"]["commands"], [
-            "npm --prefix apps/creator-web run build",
-            "npm --prefix apps/creator-web test -- --run",
-            "node --test apps/creator-web/offline/*.node-test.mjs",
-        ])
+        self.assertEqual(table["creator"]["commands"], ["scripts/creator-web.sh smoke"])
+        self.assertTrue(table["creator"]["requires"]["clean_worktree"])
+        self.assertEqual(self.preflight.load_lane_commands(profile="journey")["creator"]["commands"],
+                         ["scripts/creator-web.sh quick"])
+
+    def test_cli_defaults_to_daily_but_explicit_full_retains_complete_work(self):
+        for args, profile in [([], "quick"), (["--profile", "full"], "full")]:
+            output = io.StringIO()
+            with mock.patch.object(self.preflight, "ROOT", self.repository.path), contextlib.redirect_stdout(output):
+                code = self.preflight.main(["--list", "--base-ref", self.repository.base_sha, *args])
+            self.assertEqual(code, 0, output.getvalue())
+            document = json.loads(output.getvalue())
+            self.assertEqual(document["profile"], profile)
+            self.assertEqual(document["commands"]["creator"],
+                             ["scripts/creator-web.sh quick" if profile == "quick" else "scripts/creator-web.sh proof"])
+
+    def test_ci_only_change_retains_ownership_but_defers_product_work(self):
+        (self.repository.path / "apps/creator-web/src/app.tsx").unlink()
+        self.repository.write("scripts/ci/known_control.py", "# changed\n")
+        plan = self.preflight.build_plan(self.repository.path, self.repository.base_sha, profile="quick")
+        self.assertEqual(set(plan["selected"]), LANES)
+        self.assertEqual({lane: mode for lane, mode in plan["verification"].items() if mode != "deferred"},
+                         {"ci_contract": "quick"})
+        self.assertEqual(set(plan["cache_keys"]), {"ci_contract"})
+
+    def test_deferred_lane_does_not_probe_tools_execute_or_cache_a_pass(self):
+        plan = {"profile": "quick", "base_sha": "a", "head_sha": "b", "selected": ["core_coverage"],
+                "verification": {"core_coverage": "deferred"}}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(self.preflight, "check_requirements", side_effect=AssertionError("no probe")), \
+                mock.patch.object(self.preflight, "run_lane", side_effect=AssertionError("no execution")):
+            results = self.preflight.execute(self.repository.path, plan, cache_dir=Path(directory), use_cache=True, echo=False)
+            self.assertEqual(results[0].verdict, "deferred")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+            self.assertEqual(self.preflight.batch_evidence_block(plan, results), [])
 
     def test_full_creator_still_runs_complete_proof(self):
         self.assertEqual(self.preflight.load_lane_commands(profile="full")["creator"]["commands"],
@@ -1849,7 +1879,7 @@ class AdvisoryBoundaryTest(unittest.TestCase):
     def test_default_hook_does_no_work_and_opt_in_propagates_failure(self) -> None:
         repository = TemporaryRepository()
         self.addCleanup(repository.close)
-        repository.write("scripts/local-ci.sh", "#!/bin/sh\necho invoked > hook-observation\nexit 7\n")
+        repository.write("scripts/local-ci.sh", '#!/bin/sh\nprintf "%s\\n" "$*" > hook-observation\nexit 7\n')
         (repository.path / "scripts/local-ci.sh").chmod(0o755)
         hook = self.preflight.install_hook(repository.path)
         environment = dict(os.environ, **GIT_ENV)
@@ -1860,7 +1890,18 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         environment["LMDJ_PRE_PUSH_FULL"] = "1"
         result = subprocess.run([str(hook)], cwd=repository.path, env=environment, capture_output=True)
         self.assertEqual(result.returncode, 7)
-        self.assertEqual((repository.path / "hook-observation").read_text().strip(), "invoked")
+        self.assertEqual((repository.path / "hook-observation").read_text().strip(), "--profile full")
+
+    def test_previous_opt_in_hook_migrates_without_losing_the_full_request(self):
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        hook = self.preflight.install_hook(repository.path)
+        hook.write_text(self.preflight.PREVIOUS_HOOK_TEMPLATE)
+        self.preflight.install_hook(repository.path)
+        self.assertEqual(hook.with_name("pre-push.lmdj-before-quick-default").read_text(),
+                         self.preflight.PREVIOUS_HOOK_TEMPLATE)
+        self.assertEqual(hook.read_text(), self.preflight.HOOK_TEMPLATE)
+        self.assertIn("--profile full", hook.read_text())
 
     def test_exact_legacy_hook_is_migrated_with_a_recoverable_backup(self) -> None:
         repository = TemporaryRepository()

@@ -62,11 +62,13 @@
           "scripts/core.sh test dev fast"
         ],
         "ci_only": [
-          "Quick development feedback only; host, persistence, sanitizer and complete proof obligations remain separate until the coordinated daily cutover."
+          "Fast unit/component development feedback; the daily risk policy separately retains persistence, host, platform and concurrency checks."
         ]
       },
       "requires": {
-        "os": ["linux"]
+        "os": [
+          "linux"
+        ]
       },
       "commands": [
         "python3 tests/fixtures/audio/make_fixtures.py",
@@ -79,6 +81,7 @@
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
+
     "core_asan": {
       "requires": {
         "os": ["linux"]
@@ -132,11 +135,13 @@
           "scripts/core.sh test dev fast"
         ],
         "ci_only": [
-          "Quick development feedback only; host, persistence, sanitizer and complete proof obligations remain separate until the coordinated daily cutover."
+          "Fast unit/component development feedback; the daily risk policy separately retains persistence, host, platform and concurrency checks."
         ]
       },
       "requires": {
-        "os": ["darwin"]
+        "os": [
+          "darwin"
+        ]
       },
       "commands": [
         "python3 tests/fixtures/audio/make_fixtures.py",
@@ -152,6 +157,7 @@
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
+
     "web_toolchain": {
       "requires": {
         "commands": ["cmake", "node", "npm"],
@@ -169,10 +175,18 @@
     },
     "web_runtime_host": {
       "requires": {
-        "commands": ["cmake", "node", "npm"],
+        "commands": [
+          "cmake",
+          "node",
+          "npm"
+        ],
         "any_of": [
-          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
-          {"env": "EMSDK"}
+          {
+            "path": "build/toolchains/emsdk/emsdk_env.sh"
+          },
+          {
+            "env": "EMSDK"
+          }
         ]
       },
       "commands": [
@@ -182,30 +196,71 @@
       "ci_only": [
         "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist",
         "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
-      ]
+      ],
+      "journey": {
+        "requires": {
+          "commands": [
+            "cmake",
+            "node",
+            "npm"
+          ],
+          "any_of": [
+            {
+              "path": "build/toolchains/emsdk/emsdk_env.sh"
+            },
+            {
+              "env": "EMSDK"
+            }
+          ]
+        },
+        "commands": [
+          "python3 tools/web-runtime/verify_emscripten.py",
+          "scripts/web-runtime-host.sh quick"
+        ],
+        "ci_only": [
+          "Complete Runtime browser journeys with one incremental build; release reproducibility remains unverified."
+        ]
+      }
     },
+
     "creator": {
       "quick": {
         "requires": {
           "commands": [
+            "cmake",
             "node",
             "npm"
-          ]
+          ],
+          "any_of": [
+            {
+              "path": "build/toolchains/emsdk/emsdk_env.sh"
+            },
+            {
+              "env": "EMSDK"
+            }
+          ],
+          "clean_worktree": true
         },
         "commands": [
-          "npm --prefix apps/creator-web run build",
-          "npm --prefix apps/creator-web test -- --run",
-          "node --test apps/creator-web/offline/*.node-test.mjs"
+          "scripts/creator-web.sh smoke"
         ],
         "ci_only": [
-          "Quick UI build/unit/offline feedback only; this does not establish WebAssembly, browser journeys or release reproducibility."
+          "Daily build/unit/offline and complete authoring/playback/reload smoke; other browser cases and reproducibility remain unverified."
         ]
       },
       "requires": {
-        "commands": ["cmake", "node", "npm"],
+        "commands": [
+          "cmake",
+          "node",
+          "npm"
+        ],
         "any_of": [
-          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
-          {"env": "EMSDK"}
+          {
+            "path": "build/toolchains/emsdk/emsdk_env.sh"
+          },
+          {
+            "env": "EMSDK"
+          }
         ]
       },
       "commands": [
@@ -214,8 +269,33 @@
       "ci_only": [
         "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist",
         "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
-      ]
+      ],
+      "journey": {
+        "requires": {
+          "commands": [
+            "cmake",
+            "node",
+            "npm"
+          ],
+          "any_of": [
+            {
+              "path": "build/toolchains/emsdk/emsdk_env.sh"
+            },
+            {
+              "env": "EMSDK"
+            }
+          ],
+          "clean_worktree": true
+        },
+        "commands": [
+          "scripts/creator-web.sh quick"
+        ],
+        "ci_only": [
+          "Complete browser journeys with one incremental build; release reproducibility remains unverified."
+        ]
+      }
     },
+
     "web_runtime_lab": {
       "requires": {
         "commands": ["node", "npm"]

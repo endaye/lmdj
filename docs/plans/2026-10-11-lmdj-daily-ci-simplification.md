@@ -441,6 +441,41 @@ its only selected batch-only lane (Deploy Contract) under the live old rule
 before shipping. Once merged, the execution PR follows the new Task-specific
 obligation; a draft never waives its own current live checks.
 
+T3d coordinates actual execution defaults and automatic admission.
+Base `27622dd2`, integration main still `deb95de722b845d708371e90bcac138ae5e25e01`.
+Declared files: `scripts/local-ci.sh`, `scripts/ci/local_preflight.py`,
+`scripts/ci/local_lanes.json`, `scripts/ci/daily_verification.py`,
+`scripts/ci/batch_controller.py`, `scripts/ci/batch_evidence_validation.py`,
+`.github/workflows/ci.yml`, `.github/actions/web-ci-proof/action.yml`,
+`tests/build/ci_local_preflight_test.py`, `tests/build/ci_batch_controller_test.py`,
+`tests/build/ci_batch_execution_workflow_test.py`,
+`tests/build/ci_workflow_topology_test.py`,
+`tests/build/ci_build_acceleration_test.py`,
+`tests/build/ci_classification_inputs_test.py`,
+`docs/quality/core-test-policy.md`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, and this plan.
+
+Local CLI defaults to quick, retaining explicit full and strict legacy receipt
+audits. Deferred lanes remain in ownership output, execute no commands and emit
+no pass/cache receipt. Hook full opt-in explicitly chooses full; migrate only
+exact generated hooks with separate preserved backups. Automatic admission
+freezes daily workloads from the complete interval and historical policy union.
+Authenticated review suggestions can add full work; missing historical policy
+keeps full fallback. Executable debt uses complete work, paused debt survives
+quick success, and explicit candidate/node/bootstrap remain complete.
+The existing admitted DAG uses the frozen map for Core fast, CI selector and
+Web smoke/journeys; full commands remain. Shared Web action source joins the
+frozen control-source compatibility closure. No new controller, trigger, reset,
+branch protection change or automatic release.
+
+Tests: real-Git local plans (including dirty/deleted/unknown paths), actual CLI
+and hook execution, complete interval/debt/advice admission, actual workflow
+prepare/judge and Web action commands, source-compatibility rejection, full
+inventory retention and all owning CI regressions. Run pinned actionlint and
+Portal. Representative real Core/Creator checks remain bound to their recorded
+source revisions; no unmeasured platform or workday savings claim.
+Documentation impact: required; /operations/testing-and-proof.
+
 Primary files: `AGENTS.md`, `CLAUDE.md`,
 `.agents/skills/issue-done/SKILL.md`, `docs/governance/git-workflow.md`,
 `docs/quality/core-test-policy.md`, `.github/pull_request_template.md`,
@@ -485,3 +520,61 @@ Affected portal pages: /operations/testing-and-proof
 Update the current page with each shipped behavior, not future defaults.
 T3 must enumerate additional affected pages from its final consumer inventory.
 Run `scripts/docs-site.sh check` for each Portal-affecting task.
+
+T3d interval inventory correction: also declare `scripts/ci/contract_selection.py`
+and `tests/build/ci_contract_selection_test.py`. Batch quick CI must classify
+every first-parent delta, including reverted files; endpoint diff is insufficient.
+The local working-tree selector keeps its existing dirty/untracked behavior.
+
+T3d fixture/consumer closure: also declare `tests/build/ci_batch_runtime_test.py`
+and `tests/build/ci_change_scope_test.py`. The runtime fixture must create and
+commit the newly bound action path; every derived report/discovery fixture uses
+that same producer. The existing executor-route oracle must name the retained
+`creator:full` dispatch after introducing workload modes. The first complete
+2,703-test run retained 401 fixture setup errors and two old route expectations;
+these are corrected at their owning fixture/assertion, never skipped.
+
+T3d downstream planning consumer: declare `tools/canary/planning.py`,
+`tools/canary/planning_journal.py`, and `tests/build/ci_canary_planning_entry_test.py`.
+The complete regression exposed a missed consumer outside scripts/ci: its retained
+verdict validator must bind the frozen daily map and its closed source-status
+codec must retain quick-passed. A successful daily result remains only a planning
+wakeup, as a focused full result already was; planning independently recomputes
+site/version intervals and test floors and grants no admission or deployment.
+Missing daily evidence must preserve intentional deferred outcomes. Keep every
+existing planning recovery leg and add an actual daily-source proof of unchanged
+null delivery progress and recomputed full site-bootstrap floors. No new trigger,
+planner authority or execution gate is introduced.
+
+T3d documentation closure: also declare `AGENTS.md`, its byte-identical
+`CLAUDE.md`, and `docs/governance/git-workflow.md` for the actual quick default
+and explicit full command. Refreshed main is now
+`82c010d0391b956f871d34ecb40720f9a7e0a8d7`: #2012 merged after its complete
+Deploy Contract pass (504.3 s), authentic exact-head review run 38103277676
+with no findings, clean conversations and live protected expected-head squash.
+Its Task-specific merge obligation is live; no feature draft self-waiver applies.
+No intervening product or execution change supersedes the remaining work.
+
+Actual committed-source Creator smoke on `27622dd2` passed: all 1,277 UI tests,
+offline checks and the complete deployment authoring/playback/durable-reload
+journey (16.4 s). The UI unit suite took 80.15 s; both n=1. The corrected whole
+hardware spec passed 7/7. The second pre-fixture complete quick run on `3ab53cad`
+retains its Overview timeout; a fresh complete quick on `27622dd2` is in progress.
+
+The final fixture repair preserves actual daily mode in generated verdicts and
+marks genuinely deferred jobs skipped. Runtime 81, Canary planning/recovery 119,
+and report progress 8 tests pass; this includes the previously failing consumer.
+An in-memory shared-omission mutation removed the Web action from both executor
+and validator lists: they still agreed, while the independent action-path oracle
+failed. A fresh normal oracle run passed; no source/test artifact was replaced.
+All thirteen full lane entries compare structurally identical to the prior head.
+
+Final T3d complete CI-control regression: **2,705 tests, 251.093 s, PASS**
+(72 pre-existing environment skips; the separately run pinned real-handler seam
+remains its own evidence). Complete Portal: 50 routes/internal links PASS.
+Release batch-evidence boundary: 79/79 PASS. Pinned actionlint PASS. CLI default
+and real body-declaration checks PASS; this broad workflow-changing Task correctly
+falls back to full work despite the quick default. Final message-only fixes name
+`--profile full --lanes` in full-receipt remedies; local regression rerun follows.
+The JSON table's unaffected entries keep their prior formatting; resolved data
+and all full commands remain identical.

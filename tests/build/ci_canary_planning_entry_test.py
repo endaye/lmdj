@@ -160,6 +160,19 @@ class JourneyTests(unittest.TestCase):
         self.env.update(GITHUB_SHA=target, GITHUB_RUN_ID=str(observer))
         return request
 
+    def test_daily_result_wakes_planning_without_delivery_or_test_coverage(self):
+        request = self.next_batch('apps/creator-web/src/components/overview_display.tsx')
+        self.assertEqual(request['verification']['creator'], 'quick')
+        before = deepcopy((self.api.scheduler.issue, self.api.scheduler.comments))
+        result = self.control('observe-result', {'source_request_id': request['id']})
+        self.assertEqual(result['action'], 'planned')
+        self.assertEqual(result['decision']['source']['status'], 'quick-passed')
+        self.assertEqual(result['decision']['source_role'], 'wakeup-only')
+        self.assertEqual(self.planning_state()['progress'], r.initial_progress('endaye/lmdj'))
+        for site in r.SITES:
+            self.assertEqual(result['decision']['plan']['site_test_floors'][site]['kind'], 'full')
+        self.assertEqual(before, (self.api.scheduler.issue, self.api.scheduler.comments))
+
     def test_real_scheduler_to_plan_and_reopen_preserves_complete_bytes_without_source_reread(self):
         before = deepcopy((self.api.scheduler.issue, self.api.scheduler.comments))
         first = self.control()
@@ -231,11 +244,11 @@ class JourneyTests(unittest.TestCase):
     def test_discovery_in_stable_admission_order_retains_ignored_sources_and_newer_pending(self):
         none = self.next_batch('docs/notes/no-test.md')
         self.assertEqual(none['selection']['suites'], [])
-        failed = self.next_batch('scripts/ci/failure.py', failed_job='core-ubuntu')
+        failed = self.next_batch('contracts/failure.json', failed_job='core-ubuntu')
         missing = self.next_batch('scripts/ci/missing.py', missing_verdict=True)
         newer = self.next_batch('apps/creator-web/src/newer.ts')
         expected = [(self.request, 'planned', 'passed'), (none, 'ignored', 'not-required'),
-                    (failed, 'ignored', 'failed'), (missing, 'ignored', 'missing'), (newer, 'planned', 'passed')]
+                    (failed, 'ignored', 'failed'), (missing, 'ignored', 'missing'), (newer, 'planned', 'quick-passed')]
         # Late callback does not select itself or change scheduler ordering.
         self.automatic(callback=17)
         for request, action, status in expected:
@@ -522,7 +535,7 @@ print(json.dumps({'pid': os.getpid(), 'original': original, 'next': next_result,
         self.assertEqual(before, self.api.planner.comments)
 
     def test_failed_product_result_is_retained_as_ignored_not_a_plan(self):
-        request = self.next_batch('scripts/ci/changed.py', failed_job='core-ubuntu')
+        request = self.next_batch('contracts/changed.json', failed_job='core-ubuntu')
         result = self.control(request={'source_request_id': request['id']})
         self.assertEqual(result['action'], 'ignored')
         self.assertEqual(result['decision']['source']['status'], 'failed')
@@ -712,7 +725,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_actual_cli_adoption_restart_and_real_result_plan_keep_independent_baselines(self):
         j = self.journey
-        j.next_batch('scripts/ci/pre-adoption-failure.py', failed_job='core-ubuntu')
+        j.next_batch('contracts/pre-adoption-failure.json', failed_job='core-ubuntu')
         missing = j.next_batch('apps/creator-web/src/before-adoption.ts', missing_verdict=True)
         before = self.scheduler_bytes()
         self.assertTrue(json.loads(before)['state']['debts'])
@@ -873,7 +886,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_historical_restart_then_later_plan_preserves_full_bootstrap_and_all_version_commits(self):
         j = self.journey
-        failed = j.next_batch('scripts/ci/historical-journey-failure.py', failed_job='core-ubuntu')
+        failed = j.next_batch('contracts/historical-journey-failure.json', failed_job='core-ubuntu')
         missing = j.next_batch('apps/creator-web/src/historical-journey-missing.ts', missing_verdict=True)
         adopted = self.cli_process()['answer']
         before = self.scheduler_bytes()

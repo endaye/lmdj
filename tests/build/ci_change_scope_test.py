@@ -677,7 +677,7 @@ class ChangeScopeTest(unittest.TestCase):
                             )
                 lane_source = metadata[0]
             action = (ROOT / lane_source).read_text(encoding="utf-8")
-            self.assertRegex(action, r"creator\) scripts/creator-web\.sh proof",
+            self.assertRegex(action, r"creator:full\) scripts/creator-web\.sh proof",
                              f"{lane_source} no longer connects creator to {runner}")
         self.assertEqual(
             glob_gaps, [],
