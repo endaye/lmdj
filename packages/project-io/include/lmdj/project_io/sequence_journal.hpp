@@ -131,10 +131,26 @@ struct PerformanceRebaseComplete {
 };
 
 struct PerformanceOpenPadTransient {
+  PerformanceOpenPadTransient() = default;
+  PerformanceOpenPadTransient(
+      std::string gesture_id_value,
+      std::uint8_t slot_value,
+      std::uint64_t onset_tick_value,
+      std::uint8_t velocity_value,
+      std::optional<std::uint64_t> input_sequence_value = std::nullopt)
+      : gesture_id(std::move(gesture_id_value)),
+        slot(slot_value),
+        onset_tick(onset_tick_value),
+        velocity(velocity_value),
+        input_sequence(input_sequence_value) {}
+
   std::string gesture_id;
   std::uint8_t slot{};
   std::uint64_t onset_tick{};
   std::uint8_t velocity{};
+  // The original press's durable input sequence (headered profile only);
+  // owner-loss closure reuses it for the completed PadHit.
+  std::optional<std::uint64_t> input_sequence;
 
   bool operator==(const PerformanceOpenPadTransient&) const = default;
 };
@@ -148,11 +164,46 @@ struct PerformanceOpenFxTransient {
   bool operator==(const PerformanceOpenFxTransient&) const = default;
 };
 
+// Headered profile only: the logical recording gesture of an engaged
+// independent Filter. A frozen-only Filter is live state, never an open
+// gesture; a legacy-mode engaged Filter stays in `open_fx`, so a checkpoint
+// never carries two Filter bindings.
+struct PerformanceOpenFilterTransient {
+  std::string gesture_id;
+  domain::PerformanceFilterType type{domain::PerformanceFilterType::lp};
+  std::uint16_t cutoff_hz{domain::kFilterCutoffHzMax};
+  std::uint16_t resonance_milli{};
+
+  bool operator==(const PerformanceOpenFilterTransient&) const = default;
+};
+
 struct PerformanceTransientCheckpoint {
+  PerformanceTransientCheckpoint() = default;
+  PerformanceTransientCheckpoint(
+      std::vector<PerformanceOpenPadTransient> open_pads_value,
+      std::vector<PerformanceOpenFxTransient> open_fx_value,
+      bool hold_value,
+      std::uint64_t last_accepted_tick_value,
+      std::optional<PerformanceOpenFilterTransient> open_filter_value =
+          std::nullopt,
+      std::optional<domain::PerformanceInitialLiveState> live_state_value =
+          std::nullopt)
+      : open_pads(std::move(open_pads_value)),
+        open_fx(std::move(open_fx_value)),
+        hold(hold_value),
+        last_accepted_tick(last_accepted_tick_value),
+        open_filter(std::move(open_filter_value)),
+        live_state(std::move(live_state_value)) {}
+
   std::vector<PerformanceOpenPadTransient> open_pads;
   std::vector<PerformanceOpenFxTransient> open_fx;
   bool hold{};
   std::uint64_t last_accepted_tick{};
+  // Headered profile extensions: the current independent-Filter gesture and
+  // the complete current live control state, so durable recovery never has
+  // to reconstruct it from the begin header after later changes.
+  std::optional<PerformanceOpenFilterTransient> open_filter;
+  std::optional<domain::PerformanceInitialLiveState> live_state;
 
   bool operator==(const PerformanceTransientCheckpoint&) const = default;
 };
@@ -163,6 +214,53 @@ struct PerformanceLaunchAck {
   std::uint64_t effective_tick{};
 
   bool operator==(const PerformanceLaunchAck&) const = default;
+};
+
+// The headered profile's durable admission ledger (lmdj.project.v5 5.4.1):
+// per session at most one pending plus the most recent completed admission.
+// `expected_recording_sequence` is Core-issued; a receipt binds the original
+// request id, the raw-request SHA-256, the frozen tick and input sequence,
+// the phase/result and the durable events' sequence list.
+enum class PerformanceAdmissionPhase : std::uint8_t {
+  prepared,
+  completed,
+};
+
+enum class PerformanceAdmissionResult : std::uint8_t {
+  not_published,
+  published,
+  no_audio,
+};
+
+struct PerformanceAdmissionBinding {
+  domain::PerformanceFx fx{domain::PerformanceFx::filter};
+  // The logical recording gesture id; runtime generations are never durable.
+  std::string recording_gesture_id;
+
+  bool operator==(const PerformanceAdmissionBinding&) const = default;
+};
+
+struct PerformanceAdmissionReceipt {
+  foundation::CommandId request_id{""};
+  std::uint64_t expected_recording_sequence{};
+  std::string request_fingerprint;
+  std::uint64_t accepted_tick{};
+  std::uint64_t input_sequence{};
+  PerformanceAdmissionPhase phase{PerformanceAdmissionPhase::prepared};
+  PerformanceAdmissionResult result{
+      PerformanceAdmissionResult::not_published};
+  std::vector<std::uint64_t> event_input_sequences;
+  std::optional<PerformanceAdmissionBinding> binding_result;
+
+  bool operator==(const PerformanceAdmissionReceipt&) const = default;
+};
+
+struct PerformanceAdmissionLedger {
+  std::uint64_t next_recording_sequence{};
+  std::optional<PerformanceAdmissionReceipt> pending;
+  std::optional<PerformanceAdmissionReceipt> completed;
+
+  bool operator==(const PerformanceAdmissionLedger&) const = default;
 };
 
 struct PerformanceTransientClosurePreview {
@@ -190,6 +288,11 @@ struct ActivePerformanceJournal {
   std::vector<PerformanceRebaseRecord> rebases;
   std::optional<PerformanceTransientCheckpoint> transient_checkpoint;
   std::optional<PerformanceLaunchAck> last_launch_ack;
+  // Headered recording profile (lmdj.project.v5 5.4.1): the immutable begin
+  // header and the bounded durable admission ledger. Both are present exactly
+  // in the new profile; a legacy v1 Journal never gains them.
+  std::optional<domain::PerformanceInitialLiveState> initial_live_state;
+  std::optional<PerformanceAdmissionLedger> admission_ledger;
 
   bool operator==(const ActivePerformanceJournal&) const = default;
 };
@@ -214,6 +317,31 @@ std::string sequence_admission_candidates_sha256(
 std::string performance_fingerprint(const domain::Performance& performance);
 foundation::Result<PerformanceTransientClosurePreview>
 preview_performance_owner_loss(const ActivePerformanceJournal& journal);
+
+// The reattach read of the durable admission window: the original identity
+// (session, expected sequence, request id) plus the raw-request fingerprint.
+enum class PerformanceAdmissionLookupStatus : std::uint8_t {
+  exact,          // window hit with the original payload; receipt returned
+  collision,      // window hit with a different payload
+  retry_expired,  // expected sequence is older than the retained window
+  out_of_order,   // expected sequence is newer than the next admission
+  occupied,       // the pending slot belongs to another admission identity
+  fresh,          // expected sequence is next and no pending occupies it
+  unavailable,    // legacy profile: no durable ledger exists
+};
+
+struct PerformanceAdmissionLookup {
+  PerformanceAdmissionLookupStatus status{};
+  std::optional<PerformanceAdmissionReceipt> receipt;
+
+  bool operator==(const PerformanceAdmissionLookup&) const = default;
+};
+
+PerformanceAdmissionLookup lookup_performance_admission(
+    const ActivePerformanceJournal& journal,
+    const foundation::CommandId& request_id,
+    std::uint64_t expected_recording_sequence,
+    std::string_view request_fingerprint);
 
 class SequenceJournal {
  public:
@@ -340,7 +468,11 @@ class SequenceJournal {
       foundation::SequenceSessionId session_id,
       domain::PerformanceId performance_id,
       std::string performance_fingerprint,
-      std::uint64_t expected_revision);
+      std::uint64_t expected_revision,
+      std::optional<domain::PerformanceInitialLiveState> initial_live_state =
+          std::nullopt,
+      std::optional<PerformanceTransientCheckpoint> initial_checkpoint =
+          std::nullopt);
   foundation::Result<ActivePerformanceJournal> read_active_performance(
       const std::filesystem::path& bundle) const;
   foundation::Result<void> append_performance_tail(
@@ -352,7 +484,16 @@ class SequenceJournal {
       std::span<const domain::PerformanceEvent> events,
       std::optional<PerformanceTransientCheckpoint> transient_checkpoint =
           std::nullopt,
-      std::optional<PerformanceLaunchAck> last_launch_ack = std::nullopt);
+      std::optional<PerformanceLaunchAck> last_launch_ack = std::nullopt,
+      std::optional<PerformanceAdmissionReceipt> pending_receipt =
+          std::nullopt);
+  // Writes the headered profile's `admission_complete` metadata record: it
+  // matches the unique pending identity and fingerprint, advances
+  // `next_recording_sequence` by one and allocates no musical sequence.
+  foundation::Result<void> complete_performance_admission(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      const PerformanceAdmissionReceipt& receipt);
   foundation::Result<void> close_performance_transients_for_owner_loss(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id);
@@ -389,7 +530,11 @@ class SequenceJournal {
       foundation::SequenceSessionId session_id,
       domain::PerformanceId performance_id,
       std::string performance_fingerprint,
-      std::uint64_t from_revision);
+      std::uint64_t from_revision,
+      std::optional<domain::PerformanceInitialLiveState> initial_live_state =
+          std::nullopt,
+      std::optional<PerformanceTransientCheckpoint> initial_checkpoint =
+          std::nullopt);
   foundation::Result<void> complete_performance_begin_locked(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
@@ -414,6 +559,17 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       bool require_stopped);
+  foundation::Result<void> append_performance_tail_internal(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      domain::PerformanceId performance_id,
+      std::uint64_t expected_revision,
+      std::uint64_t input_sequence,
+      std::span<const domain::PerformanceEvent> events,
+      std::optional<PerformanceTransientCheckpoint> transient_checkpoint,
+      std::optional<PerformanceLaunchAck> last_launch_ack,
+      std::optional<PerformanceAdmissionReceipt> pending_receipt,
+      bool allow_ledger_carryover);
   foundation::Result<void> restore_stopped_performance_locked(
       const std::filesystem::path& bundle,
       const PerformanceRecoveryCandidate& candidate,

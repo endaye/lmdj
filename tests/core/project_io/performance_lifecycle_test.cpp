@@ -1242,6 +1242,385 @@ void test_recovery_cleanup_faults_reconcile_exactly_once() {
 
 }  // namespace
 
+namespace {
+
+// ---- lmdj.project.v5 5.4.1 headered live-control profile ----
+
+using lmdj::domain::FilterChangePerformanceEvent;
+using lmdj::domain::IndependentFilterLiveState;
+using lmdj::domain::PerformanceFilterPhase;
+using lmdj::domain::PerformanceFilterType;
+using lmdj::domain::PerformanceInitialLiveState;
+using lmdj::project_io::PerformanceAdmissionPhase;
+using lmdj::project_io::PerformanceAdmissionReceipt;
+using lmdj::project_io::PerformanceAdmissionResult;
+using lmdj::project_io::PerformanceOpenFilterTransient;
+
+constexpr std::string_view kAdmissionRequestId =
+    "60000000-0000-4000-8000-000000000001";
+constexpr std::string_view kFilterGestureId =
+    "70000000-0000-4000-8000-000000000001";
+
+PerformanceInitialLiveState lifecycle_header() {
+  PerformanceInitialLiveState header;
+  header.filter = IndependentFilterLiveState{
+      true, false, PerformanceFilterType::hp, 800, 250};
+  return header;
+}
+
+PerformanceInitialLiveState header_with_cutoff(
+    PerformanceInitialLiveState header,
+    std::uint16_t cutoff_hz,
+    bool engaged) {
+  auto& filter = std::get<IndependentFilterLiveState>(header.filter);
+  filter.cutoff_hz = cutoff_hz;
+  filter.engaged = engaged;
+  return header;
+}
+
+lmdj::project_io::PerformanceTransientCheckpoint lifecycle_checkpoint(
+    const PerformanceInitialLiveState& header,
+    std::uint64_t last_accepted_tick,
+    bool filter_open) {
+  return {
+      {},
+      {},
+      header.hold,
+      last_accepted_tick,
+      filter_open
+          ? std::optional<PerformanceOpenFilterTransient>(
+                PerformanceOpenFilterTransient{
+                    std::string{kFilterGestureId},
+                    std::get<IndependentFilterLiveState>(header.filter).type,
+                    std::get<IndependentFilterLiveState>(header.filter)
+                        .cutoff_hz,
+                    std::get<IndependentFilterLiveState>(header.filter)
+                        .resonance_milli})
+          : std::nullopt,
+      header,
+  };
+}
+
+PerformanceAdmissionReceipt lifecycle_receipt(
+    std::uint64_t expected,
+    std::uint64_t tick,
+    std::uint64_t sequence,
+    std::vector<std::uint64_t> event_sequences,
+    bool completed) {
+  return PerformanceAdmissionReceipt{
+      CommandId{std::string{kAdmissionRequestId}},
+      expected,
+      std::string(64, 'a'),
+      tick,
+      sequence,
+      completed ? PerformanceAdmissionPhase::completed
+                : PerformanceAdmissionPhase::prepared,
+      completed ? PerformanceAdmissionResult::published
+                : PerformanceAdmissionResult::not_published,
+      std::move(event_sequences),
+      std::nullopt,
+  };
+}
+
+PerformanceEvent sequenced_move(
+    std::uint16_t cutoff_hz,
+    std::uint64_t tick,
+    std::uint64_t sequence) {
+  auto event = PerformanceEvent{FilterChangePerformanceEvent{
+      PerformanceFilterPhase::move,
+      PerformanceFilterType::hp,
+      cutoff_hz,
+      250,
+      tick,
+  }};
+  event.input_sequence = sequence;
+  return event;
+}
+
+void test_live_control_draft_lifecycle_persists_header_and_window() {
+  TempDirectory temp("live-lifecycle");
+  ProjectStore store;
+  const auto bundle = temp.path() / "project.lmdj";
+  LMDJ_CHECK(store.create(bundle, empty_project()).has_value());
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  const auto header = lifecycle_header();
+
+  const lmdj::project_io::BeginPerformanceDraftRequest request{
+      {CommandId{std::string{kBeginCommandId}}, 0},
+      session_id,
+      performance_id,
+      header,
+      lifecycle_checkpoint(header, 0, true),
+  };
+  const auto begun = store.begin_performance_draft(bundle, request);
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(!begun.value().replayed);
+  LMDJ_CHECK(begun.value().committed_revision == 1);
+  // The header is Truth from the begin commit on.
+  const auto draft = store.load(bundle).value().performances.at(performance_id);
+  LMDJ_CHECK(draft.initial_live_state == header);
+  SequenceJournal journal;
+  const auto active = journal.read_active_performance(bundle);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().admission_ledger.has_value());
+  LMDJ_CHECK(active.value().admission_ledger->next_recording_sequence == 0);
+
+  // The receipt lookup precedes profile selection: the same begin command id
+  // without its header collides instead of switching the durable grammar.
+  const auto conflicting = store.begin_performance_draft(
+      bundle,
+      {{CommandId{std::string{kBeginCommandId}}, 0},
+       session_id,
+       performance_id});
+  LMDJ_CHECK(!conflicting.has_value());
+  LMDJ_CHECK(conflicting.error().code == ErrorCode::invalid_argument);
+
+  const auto move_event = sequenced_move(900, 16, 1);
+  const auto receipt = lifecycle_receipt(0, 16, 1, {1}, false);
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle, session_id, performance_id, 1, 1,
+              std::vector{move_event},
+              lifecycle_checkpoint(header_with_cutoff(header, 900, true), 16,
+                                   true),
+              std::nullopt, receipt)
+          .has_value());
+  // A prepared admission owns the window: flush cannot advance past it.
+  const auto blocked_flush = journal.append_performance_flush(
+      bundle,
+      session_id,
+      CommandId{std::string{kSaveCommandId}},
+      performance_id,
+      1,
+      std::vector{move_event});
+  LMDJ_CHECK(!blocked_flush.has_value());
+  LMDJ_CHECK(
+      journal
+          .complete_performance_admission(
+              bundle, session_id,
+              lifecycle_receipt(0, 16, 1, {1}, true))
+          .has_value());
+
+  // A flush carries exactly the current pending batch; each completed
+  // admission flushes its own events.
+  const auto move_flush = journal.append_performance_flush(
+      bundle,
+      session_id,
+      CommandId{std::string{kSaveCommandId}},
+      performance_id,
+      1,
+      std::vector{move_event});
+  LMDJ_CHECK(move_flush.has_value());
+  const auto move_executed = store.execute_performance_flush(
+      bundle,
+      {session_id,
+       move_flush.value().flush_seq,
+       CommandId{std::string{kSaveCommandId}},
+       performance_id});
+  LMDJ_CHECK(move_executed.has_value());
+  LMDJ_CHECK(move_executed.value().receipt.committed_revision == 2);
+
+  // The release closes the logical gesture; the tuple is retained.
+  const auto release_event = [] {
+    auto event = PerformanceEvent{FilterChangePerformanceEvent{
+        PerformanceFilterPhase::release,
+        PerformanceFilterType::hp,
+        900,
+        250,
+        32,
+    }};
+    event.input_sequence = 2;
+    return event;
+  }();
+  const auto release_receipt = [] {
+    auto receipt = PerformanceAdmissionReceipt{
+        CommandId{"60000000-0000-4000-8000-000000000002"},
+        1,
+        std::string(64, 'b'),
+        32,
+        2,
+        PerformanceAdmissionPhase::prepared,
+        PerformanceAdmissionResult::not_published,
+        {2},
+        std::nullopt,
+    };
+    return receipt;
+  }();
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle, session_id, performance_id, 2, 2,
+              std::vector{release_event},
+              lifecycle_checkpoint(header_with_cutoff(header, 900, false), 32,
+                                   false),
+              std::nullopt, release_receipt)
+          .has_value());
+  auto release_completed = release_receipt;
+  release_completed.phase = PerformanceAdmissionPhase::completed;
+  release_completed.result = PerformanceAdmissionResult::published;
+  LMDJ_CHECK(
+      journal
+          .complete_performance_admission(bundle, session_id,
+                                          release_completed)
+          .has_value());
+
+  const auto flush = journal.append_performance_flush(
+      bundle,
+      session_id,
+      CommandId{std::string{kRecoveryRequestId}},
+      performance_id,
+      2,
+      std::vector{release_event});
+  LMDJ_CHECK(flush.has_value());
+  const auto executed = store.execute_performance_flush(
+      bundle,
+      {session_id,
+       flush.value().flush_seq,
+       CommandId{std::string{kRecoveryRequestId}},
+       performance_id});
+  LMDJ_CHECK(executed.has_value());
+  LMDJ_CHECK(!executed.value().replayed);
+  LMDJ_CHECK(executed.value().receipt.committed_revision == 3);
+  LMDJ_CHECK(
+      executed.value().state.performances.at(performance_id).events.size() ==
+      2);
+
+  LMDJ_CHECK(
+      store
+          .stop_performance_session(
+              bundle, session_id, CommandId{std::string{kStopRequestId}})
+          .has_value());
+  const auto saved = store.save_performance_draft(
+      bundle,
+      {CommandId{std::string{kDiscardCommandId}}, 3},
+      performance_id,
+      "Live take",
+      std::nullopt);
+  LMDJ_CHECK(saved.has_value());
+  LMDJ_CHECK(!journal.read_active_performance(bundle).has_value());
+
+  // Reopen with a fresh Store: header, events and sequences survive.
+  ProjectStore reopened;
+  const auto truth = reopened.load(bundle);
+  LMDJ_CHECK(truth.has_value());
+  const auto& saved_performance =
+      truth.value().performances.at(performance_id);
+  // The header is the immutable begin fence: later moves live in events and
+  // the checkpoint's current state, never in the header.
+  LMDJ_CHECK(saved_performance.initial_live_state == header);
+  LMDJ_CHECK(saved_performance.events.size() == 2);
+  const std::vector<PerformanceEvent> expected_events{
+      move_event, release_event};
+  LMDJ_CHECK(saved_performance.events == expected_events);
+  LMDJ_CHECK(saved_performance.name == "Live take");
+}
+
+void test_live_control_owner_loss_terminal_preserves_unknown_pending() {
+  TempDirectory temp("live-owner-loss-store");
+  const auto bundle = temp.path() / "project.lmdj";
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  const auto header = lifecycle_header();
+  const auto receipt = lifecycle_receipt(0, 16, 1, {}, false);
+  {
+    ProjectStore owner;
+    LMDJ_CHECK(owner.create(bundle, empty_project()).has_value());
+    LMDJ_CHECK(
+        owner
+            .begin_performance_draft(
+                bundle,
+                {{CommandId{std::string{kBeginCommandId}}, 0},
+                 session_id,
+                 performance_id,
+                 header,
+                 lifecycle_checkpoint(header, 0, true)})
+            .has_value());
+    SequenceJournal journal;
+    // Crash after prepared, before publish and before complete: an open Pad
+    // and the open independent Filter gesture remain.
+    const lmdj::project_io::PerformanceTransientCheckpoint pressed{
+        {lmdj::project_io::PerformanceOpenPadTransient{
+            std::string{kSaveCommandId}, 2, 16, 99, 1}},
+        {},
+        false,
+        16,
+        PerformanceOpenFilterTransient{
+            std::string{kFilterGestureId},
+            PerformanceFilterType::hp,
+            800,
+            250},
+        header,
+    };
+    LMDJ_CHECK(
+        journal
+            .append_performance_tail(
+                bundle, session_id, performance_id, 1, 1, {}, pressed,
+                std::nullopt, receipt)
+            .has_value());
+  }
+
+  ProjectStore recovery;
+  const auto reconciled = recovery.reconcile_performance_recovery(bundle);
+  LMDJ_CHECK(reconciled.has_value());
+  LMDJ_CHECK(reconciled.value().size() == 1);
+  const auto& candidate = reconciled.value().front();
+  LMDJ_CHECK(candidate.reason == "owner_lost");
+  // Validated reconcile closed the logical transients; the original prepared
+  // admission is still pending and unknown, never forged complete.
+  LMDJ_CHECK(candidate.journal.admission_ledger.has_value());
+  LMDJ_CHECK(candidate.journal.admission_ledger->pending == receipt);
+  LMDJ_CHECK(!candidate.journal.admission_ledger->completed.has_value());
+  LMDJ_CHECK(candidate.journal.pending_events.size() == 2);
+  LMDJ_CHECK(candidate.journal.pending_events.at(0).input_sequence == 1);
+  LMDJ_CHECK(
+      std::get_if<FilterChangePerformanceEvent>(
+          &candidate.journal.pending_events.at(1).payload) != nullptr);
+
+  const auto applied = recovery.apply_performance_recovery(
+      bundle,
+      {CommandId{std::string{kSaveCommandId}}, 1},
+      session_id);
+  LMDJ_CHECK(applied.has_value());
+  const auto loaded = recovery.load(bundle);
+  LMDJ_CHECK(loaded.has_value());
+  const auto& recovered =
+      loaded.value().performances.at(performance_id);
+  LMDJ_CHECK(recovered.initial_live_state == header);
+  LMDJ_CHECK(recovered.events.size() == 2);
+  LMDJ_CHECK(recovered.events.at(0).input_sequence == 1);
+  LMDJ_CHECK(recovered.events.at(1).input_sequence == 2);
+
+  // The terminal pending admission does not occupy a new Performance's
+  // window: after the recovered draft is saved, a fresh begin gets an empty
+  // ledger.
+  const auto saved = recovery.save_performance_draft(
+      bundle,
+      {CommandId{std::string{kDiscardCommandId}}, 2},
+      performance_id,
+      "Recovered take",
+      std::nullopt);
+  LMDJ_CHECK(saved.has_value());
+  LMDJ_CHECK(
+      !SequenceJournal{}.read_active_performance(bundle).has_value());
+  const auto next = recovery.begin_performance_draft(
+      bundle,
+      {{CommandId{"30000000-0000-4000-8000-000000000020"}, 3},
+       SequenceSessionId{"20000000-0000-4000-8000-000000000020"},
+       PerformanceId{"10000000-0000-4000-8000-000000000020"},
+       header,
+       lifecycle_checkpoint(header, 0, true)});
+  LMDJ_CHECK(next.has_value());
+  const auto fresh =
+      SequenceJournal{}.read_active_performance(bundle);
+  LMDJ_CHECK(fresh.has_value());
+  LMDJ_CHECK(fresh.value().admission_ledger->next_recording_sequence == 0);
+  LMDJ_CHECK(!fresh.value().admission_ledger->pending.has_value());
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
   lmdj::test::process::initialize(argv[0]);
   try {
@@ -1260,6 +1639,8 @@ int main(int argc, char** argv) {
     test_owner_loss_previews_and_closes_durable_open_pad_once();
     test_begin_stop_and_save_faults_are_retryable_without_orphans();
     test_recovery_cleanup_faults_reconcile_exactly_once();
+    test_live_control_draft_lifecycle_persists_header_and_window();
+    test_live_control_owner_loss_terminal_preserves_unknown_pending();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

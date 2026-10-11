@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -2549,6 +2550,330 @@ domain::PerformanceFx parse_performance_fx(std::string_view value) {
       std::distance(kPerformanceFxNames.begin(), found));
 }
 
+// The headered recording profile (lmdj.project.v5 5.4.1) is selected by an
+// explicit discriminator on the Journal begin record; a legacy v1 Journal
+// never carries it, so grammar never has to be guessed from stray fields.
+constexpr std::string_view kLiveControlProfileHeaderInputSequence =
+    "header_input_sequence";
+
+bool is_live_control_profile(const ActivePerformanceJournal& journal) {
+  return journal.initial_live_state.has_value();
+}
+
+// The ledger writes 64-bit sequences as canonical decimal strings ("0" is
+// legal for the Core-issued admission counter; durable event sequences start
+// at 1).
+std::optional<std::uint64_t> parse_bounded_decimal(
+    const nlohmann::json& input,
+    std::uint64_t minimum) {
+  if (!input.is_string()) {
+    return std::nullopt;
+  }
+  const auto& text = input.get_ref<const std::string&>();
+  // Canonical decimal: "0" is the zero counter; longer strings never carry a
+  // leading zero.
+  if (text.empty() || text.size() > 20 ||
+      (text.front() == '0' && text.size() != 1) ||
+      !std::ranges::all_of(text, [](char c) {
+        return c >= '0' && c <= '9';
+      })) {
+    return std::nullopt;
+  }
+  if (text.size() == 20 && text > "18446744073709551615") {
+    return std::nullopt;
+  }
+  std::uint64_t value = 0;
+  const auto* last = text.data() + text.size();
+  const auto parsed = std::from_chars(text.data(), last, value);
+  if (parsed.ec != std::errc{} || parsed.ptr != last ||
+      value < minimum) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::string_view admission_phase_string(PerformanceAdmissionPhase phase) {
+  switch (phase) {
+    case PerformanceAdmissionPhase::prepared:
+      return "prepared";
+    case PerformanceAdmissionPhase::completed:
+      return "completed";
+  }
+  throw std::runtime_error("Performance admission phase is invalid");
+}
+
+std::optional<PerformanceAdmissionPhase> parse_admission_phase(
+    std::string_view value) {
+  if (value == "prepared") {
+    return PerformanceAdmissionPhase::prepared;
+  }
+  if (value == "completed") {
+    return PerformanceAdmissionPhase::completed;
+  }
+  return std::nullopt;
+}
+
+std::string_view admission_result_string(PerformanceAdmissionResult result) {
+  switch (result) {
+    case PerformanceAdmissionResult::not_published:
+      return "not_published";
+    case PerformanceAdmissionResult::published:
+      return "published";
+    case PerformanceAdmissionResult::no_audio:
+      return "no_audio";
+  }
+  throw std::runtime_error("Performance admission result is invalid");
+}
+
+std::optional<PerformanceAdmissionResult> parse_admission_result(
+    std::string_view value) {
+  if (value == "not_published") {
+    return PerformanceAdmissionResult::not_published;
+  }
+  if (value == "published") {
+    return PerformanceAdmissionResult::published;
+  }
+  if (value == "no_audio") {
+    return PerformanceAdmissionResult::no_audio;
+  }
+  return std::nullopt;
+}
+
+nlohmann::json admission_binding_json(
+    const PerformanceAdmissionBinding& binding) {
+  return {
+      {"fx", performance_fx_name(binding.fx)},
+      {"recording_gesture_id", binding.recording_gesture_id},
+  };
+}
+
+nlohmann::json admission_receipt_json(
+    const PerformanceAdmissionReceipt& receipt) {
+  auto event_sequences = nlohmann::json::array();
+  for (const auto sequence : receipt.event_input_sequences) {
+    event_sequences.push_back(std::to_string(sequence));
+  }
+  return {
+      {"accepted_tick", receipt.accepted_tick},
+      {"binding_result",
+       receipt.binding_result.has_value()
+           ? admission_binding_json(*receipt.binding_result)
+           : nlohmann::json(nullptr)},
+      {"event_input_sequences", std::move(event_sequences)},
+      {"expected_recording_sequence",
+       std::to_string(receipt.expected_recording_sequence)},
+      {"input_sequence", std::to_string(receipt.input_sequence)},
+      {"phase", admission_phase_string(receipt.phase)},
+      {"request_fingerprint", receipt.request_fingerprint},
+      {"request_id", receipt.request_id.value()},
+      {"result", admission_result_string(receipt.result)},
+  };
+}
+
+nlohmann::json admission_ledger_json(
+    const PerformanceAdmissionLedger& ledger) {
+  return {
+      {"completed",
+       ledger.completed.has_value()
+           ? admission_receipt_json(*ledger.completed)
+           : nlohmann::json(nullptr)},
+      {"next_recording_sequence",
+       std::to_string(ledger.next_recording_sequence)},
+      {"pending",
+       ledger.pending.has_value() ? admission_receipt_json(*ledger.pending)
+                                  : nlohmann::json(nullptr)},
+  };
+}
+
+PerformanceAdmissionReceipt parse_admission_receipt(
+    const nlohmann::json& input) {
+  if (!input.is_object() || input.size() != 9 ||
+      !input.contains("accepted_tick") || !input.contains("binding_result") ||
+      !input.contains("event_input_sequences") ||
+      !input.contains("expected_recording_sequence") ||
+      !input.contains("input_sequence") || !input.contains("phase") ||
+      !input.contains("request_fingerprint") ||
+      !input.contains("request_id") || !input.contains("result")) {
+    throw std::runtime_error("Performance admission receipt shape is invalid");
+  }
+  PerformanceAdmissionReceipt receipt;
+  receipt.request_id = foundation::CommandId{
+      input.at("request_id").get<std::string>()};
+  receipt.request_fingerprint =
+      input.at("request_fingerprint").get<std::string>();
+  const auto expected =
+      parse_bounded_decimal(input.at("expected_recording_sequence"), 0);
+  const auto sequence = parse_bounded_decimal(input.at("input_sequence"), 1);
+  if (!input.at("phase").is_string() || !input.at("result").is_string()) {
+    throw std::runtime_error("Performance admission receipt shape is invalid");
+  }
+  const auto phase =
+      parse_admission_phase(input.at("phase").get<std::string>());
+  const auto result =
+      parse_admission_result(input.at("result").get<std::string>());
+  if (!domain::is_valid_uuid(receipt.request_id.value()) ||
+      !lowercase_sha256(receipt.request_fingerprint) ||
+      !expected.has_value() || !sequence.has_value() ||
+      !phase.has_value() || !result.has_value()) {
+    throw std::runtime_error("Performance admission receipt value is invalid");
+  }
+  // Phase and result are one closed pairing: prepared is exactly
+  // not_published; completed is exactly published or no_audio.
+  if ((*phase == PerformanceAdmissionPhase::prepared) !=
+          (*result == PerformanceAdmissionResult::not_published)) {
+    throw std::runtime_error(
+        "Performance admission receipt phase/result pairing is invalid");
+  }
+  receipt.expected_recording_sequence = *expected;
+  receipt.input_sequence = *sequence;
+  receipt.phase = *phase;
+  receipt.result = *result;
+  if (!input.at("accepted_tick").is_number_unsigned()) {
+    throw std::runtime_error("Performance admission receipt tick is invalid");
+  }
+  receipt.accepted_tick = input.at("accepted_tick").get<std::uint64_t>();
+  const auto& sequences = input.at("event_input_sequences");
+  if (!sequences.is_array()) {
+    throw std::runtime_error(
+        "Performance admission receipt event sequences are invalid");
+  }
+  for (const auto& encoded : sequences) {
+    const auto event_sequence = parse_bounded_decimal(encoded, 1);
+    if (!event_sequence.has_value()) {
+      throw std::runtime_error(
+          "Performance admission receipt event sequence is invalid");
+    }
+    receipt.event_input_sequences.push_back(*event_sequence);
+  }
+  const auto& binding = input.at("binding_result");
+  if (!binding.is_null()) {
+    if (!binding.is_object() || binding.size() != 2 ||
+        !binding.contains("fx") || !binding.contains("recording_gesture_id") ||
+        !binding.at("fx").is_string() ||
+        !binding.at("recording_gesture_id").is_string()) {
+      throw std::runtime_error(
+          "Performance admission binding result shape is invalid");
+    }
+    PerformanceAdmissionBinding parsed_binding{
+        parse_performance_fx(binding.at("fx").get<std::string>()),
+        binding.at("recording_gesture_id").get<std::string>(),
+    };
+    if (!domain::is_valid_uuid(parsed_binding.recording_gesture_id)) {
+      throw std::runtime_error(
+          "Performance admission binding result identity is invalid");
+    }
+    receipt.binding_result = std::move(parsed_binding);
+  }
+  return receipt;
+}
+
+PerformanceAdmissionLedger parse_admission_ledger(const nlohmann::json& input) {
+  if (!input.is_object() || input.size() != 3 ||
+      !input.contains("completed") || !input.contains("next_recording_sequence") ||
+      !input.contains("pending")) {
+    throw std::runtime_error("Performance admission ledger shape is invalid");
+  }
+  PerformanceAdmissionLedger ledger;
+  const auto next =
+      parse_bounded_decimal(input.at("next_recording_sequence"), 0);
+  if (!next.has_value()) {
+    throw std::runtime_error(
+        "Performance admission ledger next sequence is invalid");
+  }
+  ledger.next_recording_sequence = *next;
+  if (!input.at("pending").is_null()) {
+    ledger.pending = parse_admission_receipt(input.at("pending"));
+    // A durable pending receipt is the prepared boundary; a crash may have
+    // followed the write, so it is never proof the cell stayed unpublished.
+    if (ledger.pending->phase != PerformanceAdmissionPhase::prepared ||
+        ledger.pending->expected_recording_sequence !=
+            ledger.next_recording_sequence) {
+      throw std::runtime_error(
+          "Performance admission ledger pending receipt is invalid");
+    }
+  }
+  if (!input.at("completed").is_null()) {
+    ledger.completed = parse_admission_receipt(input.at("completed"));
+    if (ledger.completed->phase != PerformanceAdmissionPhase::completed ||
+        ledger.completed->expected_recording_sequence + 1 >
+            ledger.next_recording_sequence) {
+      throw std::runtime_error(
+          "Performance admission ledger completed receipt is invalid");
+    }
+  }
+  return ledger;
+}
+
+// The begin checkpoint derives from the header alone: HOLD seeds it, the
+// complete live state is captured, and no gesture is invented — engaged
+// controls at the fence need their caller-supplied logical bindings.
+PerformanceTransientCheckpoint initial_live_checkpoint(
+    const std::optional<domain::PerformanceInitialLiveState>& header) {
+  if (!header.has_value()) {
+    return PerformanceTransientCheckpoint{{}, {}, false, 0};
+  }
+  return PerformanceTransientCheckpoint{{}, {}, header->hold, 0,
+                                        std::nullopt, *header};
+}
+
+nlohmann::json open_filter_json(const PerformanceOpenFilterTransient& filter) {
+  return {
+      {"cutoff_hz", filter.cutoff_hz},
+      {"gesture_id", filter.gesture_id},
+      {"resonance_milli", filter.resonance_milli},
+      {"type",
+       std::string{filter.type == domain::PerformanceFilterType::lp
+                       ? "lp"
+                       : filter.type == domain::PerformanceFilterType::hp
+                             ? "hp"
+                             : "bp"}},
+  };
+}
+
+PerformanceOpenFilterTransient parse_open_filter(const nlohmann::json& input) {
+  if (!input.is_object() || input.size() != 4 ||
+      !input.contains("cutoff_hz") || !input.contains("gesture_id") ||
+      !input.contains("resonance_milli") || !input.contains("type") ||
+      !input.at("cutoff_hz").is_number_unsigned() ||
+      !input.at("gesture_id").is_string() ||
+      !input.at("resonance_milli").is_number_unsigned() ||
+      !input.at("type").is_string()) {
+    throw std::runtime_error(
+        "Performance open Filter checkpoint shape is invalid");
+  }
+  const auto cutoff = input.at("cutoff_hz").get<std::uint64_t>();
+  const auto resonance = input.at("resonance_milli").get<std::uint64_t>();
+  const auto type_text = input.at("type").get<std::string>();
+  domain::PerformanceFilterType type;
+  if (type_text == "lp") {
+    type = domain::PerformanceFilterType::lp;
+  } else if (type_text == "hp") {
+    type = domain::PerformanceFilterType::hp;
+  } else if (type_text == "bp") {
+    type = domain::PerformanceFilterType::bp;
+  } else {
+    throw std::runtime_error(
+        "Performance open Filter checkpoint type is invalid");
+  }
+  PerformanceOpenFilterTransient filter{
+      input.at("gesture_id").get<std::string>(),
+      type,
+      0,
+      0,
+  };
+  if (!domain::is_valid_uuid(filter.gesture_id) ||
+      cutoff < domain::kFilterCutoffHzMin ||
+      cutoff > domain::kFilterCutoffHzMax ||
+      resonance > domain::kFilterResonanceMilliMax) {
+    throw std::runtime_error(
+        "Performance open Filter checkpoint value is invalid");
+  }
+  filter.cutoff_hz = static_cast<std::uint16_t>(cutoff);
+  filter.resonance_milli = static_cast<std::uint16_t>(resonance);
+  return filter;
+}
+
+
 foundation::Result<std::uint64_t> performance_temporal_high_water(
     std::span<const domain::PerformanceEvent> events) {
   std::uint64_t result = 0;
@@ -2575,12 +2900,16 @@ nlohmann::json performance_checkpoint_json(
     const PerformanceTransientCheckpoint& checkpoint) {
   auto pads = nlohmann::json::array();
   for (const auto& pad : checkpoint.open_pads) {
-    pads.push_back({
+    auto encoded = nlohmann::json{
         {"gesture_id", pad.gesture_id},
         {"onset_tick", pad.onset_tick},
         {"slot", pad.slot},
         {"velocity", pad.velocity},
-    });
+    };
+    if (pad.input_sequence.has_value()) {
+      encoded["input_sequence"] = std::to_string(*pad.input_sequence);
+    }
+    pads.push_back(std::move(encoded));
   }
   auto effects = nlohmann::json::array();
   for (const auto& effect : checkpoint.open_fx) {
@@ -2594,12 +2923,24 @@ nlohmann::json performance_checkpoint_json(
              : nlohmann::json(nullptr)},
     });
   }
-  return {
+  auto encoded = nlohmann::json{
       {"hold", checkpoint.hold},
       {"last_accepted_tick", checkpoint.last_accepted_tick},
       {"open_fx", std::move(effects)},
       {"open_pads", std::move(pads)},
   };
+  if (checkpoint.open_filter.has_value() || checkpoint.live_state.has_value()) {
+    encoded["open_filter"] =
+        checkpoint.open_filter.has_value()
+            ? open_filter_json(*checkpoint.open_filter)
+            : nlohmann::json(nullptr);
+    encoded["live_state"] =
+        checkpoint.live_state.has_value()
+            ? domain::performance_initial_live_state_json(
+                  *checkpoint.live_state)
+            : nlohmann::json(nullptr);
+  }
+  return encoded;
 }
 
 nlohmann::json performance_launch_ack_json(
@@ -2719,7 +3060,8 @@ foundation::Result<PerformanceLaunchAck> parse_performance_launch_ack(
 
 foundation::Result<void> validate_performance_checkpoint(
     const PerformanceTransientCheckpoint& checkpoint,
-    std::span<const domain::PerformanceEvent> events) {
+    std::span<const domain::PerformanceEvent> events,
+    bool live_profile) {
   if (!std::ranges::is_sorted(
           checkpoint.open_pads,
           {},
@@ -2749,6 +3091,12 @@ foundation::Result<void> validate_performance_checkpoint(
           "Performance open Pad checkpoint is invalid",
       });
     }
+    if (live_profile != pad.input_sequence.has_value()) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance open Pad checkpoint input sequence is invalid",
+      });
+    }
   }
   for (std::size_t index = 0; index < checkpoint.open_fx.size(); ++index) {
     const auto& effect = checkpoint.open_fx.at(index);
@@ -2765,6 +3113,63 @@ foundation::Result<void> validate_performance_checkpoint(
       });
     }
   }
+  if (!live_profile) {
+    return foundation::Result<void>::success();
+  }
+  // Headered profile: the checkpoint carries the complete current live state
+  // and never two Filter bindings. A legacy-mode Filter gesture stays in
+  // open_fx; an engaged independent Filter has the only open_filter gesture;
+  // a frozen-only Filter is live state, not an open gesture.
+  if (!checkpoint.live_state.has_value()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance live checkpoint is missing the current live state",
+    });
+  }
+  const auto& live_state = *checkpoint.live_state;
+  if (live_state.hold != checkpoint.hold) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance live checkpoint HOLD state is inconsistent",
+    });
+  }
+  const auto legacy_filter_open = std::ranges::any_of(
+      checkpoint.open_fx,
+      [](const auto& effect) {
+        return effect.fx == domain::PerformanceFx::filter;
+      });
+  // The single Filter stage never has two bindings; zero bindings is simply
+  // a disengaged Filter.
+  if (legacy_filter_open && checkpoint.open_filter.has_value()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance live checkpoint carries two Filter bindings",
+    });
+  }
+  const auto* independent =
+      std::get_if<domain::IndependentFilterLiveState>(&live_state.filter);
+  const auto* legacy =
+      std::get_if<domain::LegacyFilterLiveState>(&live_state.filter);
+  if (checkpoint.open_filter.has_value()) {
+    if (independent == nullptr || !independent->engaged ||
+        !gesture_ids.insert(checkpoint.open_filter->gesture_id).second) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance open Filter checkpoint is invalid",
+      });
+    }
+  } else if (independent != nullptr && independent->engaged) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance engaged independent Filter has no open gesture",
+    });
+  }
+  if (legacy_filter_open && (legacy == nullptr || !legacy->engaged)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance legacy Filter gesture lacks its live state",
+    });
+  }
   (void)events;
   return foundation::Result<void>::success();
 }
@@ -2773,15 +3178,19 @@ foundation::Result<PerformanceTransientCheckpoint>
 parse_performance_checkpoint(
     const nlohmann::json& input,
     std::span<const domain::PerformanceEvent> events,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    bool live_profile) {
   try {
-    if (!input.is_object() || input.size() != 4 ||
+    const auto expected_keys = live_profile ? 6U : 4U;
+    if (!input.is_object() || input.size() != expected_keys ||
         !input.contains("hold") || !input.contains("last_accepted_tick") ||
         !input.contains("open_fx") || !input.contains("open_pads") ||
         !input.at("hold").is_boolean() ||
         !input.at("last_accepted_tick").is_number_unsigned() ||
         !input.at("open_fx").is_array() ||
-        !input.at("open_pads").is_array()) {
+        !input.at("open_pads").is_array() ||
+        (live_profile &&
+         (!input.contains("open_filter") || !input.contains("live_state")))) {
       throw std::runtime_error(
           "Performance transient checkpoint shape is invalid");
     }
@@ -2792,14 +3201,16 @@ parse_performance_checkpoint(
         input.at("last_accepted_tick").get<std::uint64_t>(),
     };
     for (const auto& encoded : input.at("open_pads")) {
-      if (!encoded.is_object() || encoded.size() != 4 ||
+      const auto pad_keys = live_profile ? 5U : 4U;
+      if (!encoded.is_object() || encoded.size() != pad_keys ||
           !encoded.contains("gesture_id") ||
           !encoded.contains("onset_tick") || !encoded.contains("slot") ||
           !encoded.contains("velocity") ||
           !encoded.at("gesture_id").is_string() ||
           !encoded.at("onset_tick").is_number_unsigned() ||
           !encoded.at("slot").is_number_unsigned() ||
-          !encoded.at("velocity").is_number_unsigned()) {
+          !encoded.at("velocity").is_number_unsigned() ||
+          (live_profile && !encoded.contains("input_sequence"))) {
         throw std::runtime_error(
             "Performance open Pad checkpoint shape is invalid");
       }
@@ -2810,12 +3221,22 @@ parse_performance_checkpoint(
         throw std::runtime_error(
             "Performance open Pad checkpoint number is out of range");
       }
-      checkpoint.open_pads.push_back(PerformanceOpenPadTransient{
+      PerformanceOpenPadTransient pad{
           encoded.at("gesture_id").get<std::string>(),
           static_cast<std::uint8_t>(slot),
           encoded.at("onset_tick").get<std::uint64_t>(),
           static_cast<std::uint8_t>(velocity),
-      });
+      };
+      if (live_profile) {
+        const auto sequence =
+            parse_bounded_decimal(encoded.at("input_sequence"), 1);
+        if (!sequence.has_value()) {
+          throw std::runtime_error(
+              "Performance open Pad checkpoint input sequence is invalid");
+        }
+        pad.input_sequence = *sequence;
+      }
+      checkpoint.open_pads.push_back(std::move(pad));
     }
     for (const auto& encoded : input.at("open_fx")) {
       if (!encoded.is_object() || encoded.size() != 4 ||
@@ -2853,7 +3274,21 @@ parse_performance_checkpoint(
       }
       checkpoint.open_fx.push_back(std::move(effect));
     }
-    auto valid = validate_performance_checkpoint(checkpoint, events);
+    if (live_profile) {
+      if (!input.at("open_filter").is_null()) {
+        checkpoint.open_filter =
+            parse_open_filter(input.at("open_filter"));
+      }
+      auto live_state = domain::performance_initial_live_state_from_json(
+          input.at("live_state"));
+      if (!live_state.has_value()) {
+        throw std::runtime_error(
+            "Performance live checkpoint state is invalid");
+      }
+      checkpoint.live_state = std::move(live_state.value());
+    }
+    auto valid =
+        validate_performance_checkpoint(checkpoint, events, live_profile);
     if (!valid.has_value()) {
       throw std::runtime_error(valid.error().message);
     }
@@ -2889,7 +3324,8 @@ foundation::Result<void> validate_performance_event_structure(
 foundation::Result<std::vector<domain::PerformanceEvent>>
 parse_performance_events(
     const nlohmann::json& input,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    bool live_profile) {
   if (!input.is_array()) {
     return foundation::Result<
         std::vector<domain::PerformanceEvent>>::failure(Error{
@@ -2907,9 +3343,20 @@ parse_performance_events(
       return foundation::Result<
           std::vector<domain::PerformanceEvent>>::failure(std::move(error));
     }
+    if (live_profile != parsed.value().input_sequence.has_value()) {
+      return foundation::Result<
+          std::vector<domain::PerformanceEvent>>::failure(Error{
+          ErrorCode::invalid_project,
+          "Performance Journal event profile does not match its Journal",
+          {{"path", path.generic_string()}},
+      });
+    }
     events.push_back(std::move(parsed.value()));
   }
-  const auto canonical = domain::canonical_performance_events(events);
+  const auto canonical = domain::canonical_performance_events(
+      events,
+      live_profile ? domain::PerformanceEventProfile::header_input_sequence
+                   : domain::PerformanceEventProfile::legacy);
   if (canonical != events) {
     return foundation::Result<
         std::vector<domain::PerformanceEvent>>::failure(Error{
@@ -2955,7 +3402,7 @@ nlohmann::json performance_journal_json(
         {"to_revision", rebase.to_revision},
     });
   }
-  return {
+  auto encoded = nlohmann::json{
       {"begin_command_id",
        journal.begin_command_id.has_value()
            ? nlohmann::json(journal.begin_command_id->value())
@@ -2987,6 +3434,19 @@ nlohmann::json performance_journal_json(
            ? performance_checkpoint_json(*journal.transient_checkpoint)
            : nlohmann::json(nullptr)},
   };
+  if (is_live_control_profile(journal)) {
+    // The sealed snapshot keeps the profile discriminator, the immutable
+    // begin header and the ledger exactly as they stand; a terminal pending
+    // admission stays unknown rather than being rewritten.
+    encoded["live_control_profile"] =
+        std::string{kLiveControlProfileHeaderInputSequence};
+    encoded["initial_live_state"] =
+        domain::performance_initial_live_state_json(
+            *journal.initial_live_state);
+    encoded["admission_ledger"] =
+        admission_ledger_json(*journal.admission_ledger);
+  }
+  return encoded;
 }
 
 foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
@@ -3012,12 +3472,36 @@ foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
         {},
         std::nullopt,
         std::nullopt,
+        std::nullopt,
+        std::nullopt,
     };
     if (!domain::is_valid_uuid(journal.session_id.value()) ||
         !domain::is_valid_uuid(journal.performance_id.value()) ||
         !lowercase_sha256(journal.performance_fingerprint)) {
       throw std::runtime_error("Performance recovery metadata is invalid");
     }
+    // The discriminator selects the grammar explicitly; a legacy v1 snapshot
+    // never carries it, and an unknown value fails closed.
+    if (input.contains("live_control_profile")) {
+      if (!input.at("live_control_profile").is_string() ||
+          input.at("live_control_profile").get<std::string>() !=
+              kLiveControlProfileHeaderInputSequence ||
+          !input.contains("initial_live_state") ||
+          !input.contains("admission_ledger")) {
+        throw std::runtime_error(
+            "Performance recovery live control profile is invalid");
+      }
+      auto header = domain::performance_initial_live_state_from_json(
+          input.at("initial_live_state"));
+      if (!header.has_value()) {
+        throw std::runtime_error(
+            "Performance recovery initial live state is invalid");
+      }
+      journal.initial_live_state = std::move(header.value());
+      journal.admission_ledger =
+          parse_admission_ledger(input.at("admission_ledger"));
+    }
+    const bool live_profile = journal.initial_live_state.has_value();
     if (!input.at("last_input_sequence").is_null()) {
       journal.last_input_sequence =
           input.at("last_input_sequence").get<std::uint64_t>();
@@ -3050,14 +3534,16 @@ foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
         journal.rebases.push_back(std::move(rebase));
       }
     }
-    auto pending = parse_performance_events(input.at("pending_events"), path);
+    auto pending =
+        parse_performance_events(input.at("pending_events"), path, live_profile);
     if (!pending.has_value()) {
       return foundation::Result<ActivePerformanceJournal>::failure(
           pending.error());
     }
     journal.pending_events = std::move(pending.value());
     for (const auto& encoded : input.at("flushes")) {
-      auto events = parse_performance_events(encoded.at("events"), path);
+      auto events =
+          parse_performance_events(encoded.at("events"), path, live_profile);
       if (!events.has_value()) {
         return foundation::Result<ActivePerformanceJournal>::failure(
             events.error());
@@ -3108,7 +3594,8 @@ foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
             flush.canonical_events.end());
       }
       auto checkpoint = parse_performance_checkpoint(
-          input.at("transient_checkpoint"), durable_events, path);
+          input.at("transient_checkpoint"), durable_events, path,
+          live_profile);
       if (!checkpoint.has_value()) {
         return foundation::Result<ActivePerformanceJournal>::failure(
             checkpoint.error());
@@ -3147,7 +3634,7 @@ foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
       }
     }
     if (!journal.transient_checkpoint.has_value()) {
-      if (journal.state != SequenceSessionState::stopped) {
+      if (journal.state != SequenceSessionState::stopped || live_profile) {
         throw std::runtime_error(
             "active legacy Performance recovery has no transient checkpoint");
       }
@@ -3211,6 +3698,8 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
           {},
           std::nullopt,
           std::nullopt,
+          std::nullopt,
+          std::nullopt,
       },
       checked.value().valid_prefix_length,
   };
@@ -3223,13 +3712,32 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
           record.payload);
       const auto kind = payload.value().at("kind").get<std::string>();
       if (!saw_begin) {
+        const bool live_profile =
+            payload.value().contains("live_control_profile");
         if (kind != "begin" ||
-            (payload.value().size() != 6 &&
-             payload.value().size() != 7 &&
-             payload.value().size() != 8) ||
             payload.value().at("contract") !=
                 recording_protocol(SessionKind::performance)
                     .journal_contract) {
+          throw std::runtime_error(
+              "first record is not a Performance begin");
+        }
+        if (live_profile) {
+          // The discriminator is explicit and the grammar closed; a legacy
+          // v1 begin never grows these keys.
+          const auto& begin_payload = payload.value();
+          if ((begin_payload.size() != 10 && begin_payload.size() != 11) ||
+              !begin_payload.at("live_control_profile").is_string() ||
+              begin_payload.at("live_control_profile").get<std::string>() !=
+                  kLiveControlProfileHeaderInputSequence ||
+              !begin_payload.contains("initial_live_state") ||
+              !begin_payload.contains("admission_ledger") ||
+              !begin_payload.contains("transient_checkpoint")) {
+            throw std::runtime_error(
+                "Performance live-control begin grammar is invalid");
+          }
+        } else if (
+            payload.value().size() != 6 && payload.value().size() != 7 &&
+            payload.value().size() != 8) {
           throw std::runtime_error(
               "first record is not a Performance begin");
         }
@@ -3252,7 +3760,22 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
             {},
             std::nullopt,
             std::nullopt,
+            std::nullopt,
+            std::nullopt,
         };
+        if (live_profile) {
+          auto header = domain::performance_initial_live_state_from_json(
+              payload.value().at("initial_live_state"));
+          if (!header.has_value()) {
+            throw std::runtime_error(
+                "Performance begin initial live state is invalid");
+          }
+          document.journal.initial_live_state = std::move(header.value());
+          document.journal.admission_ledger =
+              parse_admission_ledger(payload.value().at("admission_ledger"));
+          // Write paths create an empty ledger at begin; a restored stopped
+          // Journal carries its terminal one. Both are coherent producers.
+        }
         if (payload.value().contains("command_id")) {
           document.journal.begin_command_id = foundation::CommandId{
               payload.value().at("command_id").get<std::string>()};
@@ -3261,7 +3784,8 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
         }
         if (payload.value().contains("transient_checkpoint")) {
           auto checkpoint = parse_performance_checkpoint(
-              payload.value().at("transient_checkpoint"), {}, path);
+              payload.value().at("transient_checkpoint"), {}, path,
+              live_profile);
           if (!checkpoint.has_value()) {
             return foundation::Result<PerformanceJournalDocument>::failure(
                 checkpoint.error());
@@ -3293,14 +3817,21 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
         document.journal.performance_fingerprint = fingerprint;
         document.journal.state = SequenceSessionState::active;
       } else if (kind == "tail") {
+        const bool live_profile = is_live_control_profile(document.journal);
         const bool has_checkpoint =
             payload.value().contains("transient_checkpoint");
         const bool has_launch_ack =
             payload.value().contains("last_launch_ack");
+        const bool has_ledger = payload.value().contains("admission_ledger");
         const auto expected_size =
-            std::size_t{6} + (has_checkpoint ? 1U : 0U) +
+            (live_profile ? std::size_t{8} : std::size_t{6}) +
+            (live_profile ? 0U : (has_checkpoint ? 1U : 0U)) +
             (has_launch_ack ? 1U : 0U);
-        if (payload.value().size() != expected_size ||
+        // The headered profile fixes its tail shape: extended checkpoint and
+        // admission ledger are always present. A legacy Journal rejects them.
+        if (live_profile != has_ledger ||
+            (live_profile && !has_checkpoint) ||
+            payload.value().size() != expected_size ||
             (has_launch_ack && !has_checkpoint) ||
             (saw_transient_checkpoint && !has_checkpoint) ||
             (saw_launch_ack_field && !has_launch_ack)) {
@@ -3328,7 +3859,7 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
               "Performance tail identity is invalid");
         }
         auto events = parse_performance_events(
-            payload.value().at("events"), path);
+            payload.value().at("events"), path, live_profile);
         if (!events.has_value() ||
             (events.value().empty() && !has_checkpoint)) {
           throw std::runtime_error("Performance tail events are invalid");
@@ -3342,7 +3873,8 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
         }
         if (has_checkpoint) {
           auto parsed = parse_performance_checkpoint(
-              payload.value().at("transient_checkpoint"), durable_events, path);
+              payload.value().at("transient_checkpoint"), durable_events, path,
+              live_profile);
           if (!parsed.has_value()) {
             return foundation::Result<PerformanceJournalDocument>::failure(
                 parsed.error());
@@ -3353,6 +3885,49 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
                   document.journal.transient_checkpoint->last_accepted_tick) {
             throw std::runtime_error(
                 "Performance checkpoint tick is not monotone");
+          }
+        }
+        std::optional<PerformanceAdmissionLedger> ledger;
+        if (live_profile) {
+          // The high-water covers every sequence this admission allocated,
+          // including internal ones that never became durable events.
+          ledger = parse_admission_ledger(payload.value().at("admission_ledger"));
+          const auto& previous = *document.journal.admission_ledger;
+          const auto receipt_within_window = [&]() {
+            if (!ledger->pending.has_value()) {
+              return true;
+            }
+            const auto& pending = *ledger->pending;
+            if (pending.expected_recording_sequence !=
+                    previous.next_recording_sequence ||
+                pending.input_sequence > input_sequence) {
+              return false;
+            }
+            return std::ranges::all_of(
+                pending.event_input_sequences,
+                [input_sequence](std::uint64_t sequence) {
+                  return sequence <= input_sequence;
+                });
+          };
+          const bool carries_new_pending =
+              ledger->pending.has_value() && !previous.pending.has_value() &&
+              ledger->next_recording_sequence ==
+                  previous.next_recording_sequence &&
+              ledger->completed == previous.completed;
+          const bool carries_existing =
+              ledger->pending == previous.pending &&
+              ledger->next_recording_sequence ==
+                  previous.next_recording_sequence &&
+              ledger->completed == previous.completed;
+          // Every durable event sequence stays under the tail's high-water.
+          const auto events_within_window = std::ranges::all_of(
+              events.value(), [input_sequence](const auto& event) {
+                return *event.input_sequence <= input_sequence;
+              });
+          if ((!carries_new_pending && !carries_existing) ||
+              !receipt_within_window() || !events_within_window) {
+            throw std::runtime_error(
+                "Performance tail admission ledger transition is invalid");
           }
         }
         std::optional<PerformanceLaunchAck> launch_ack;
@@ -3379,7 +3954,9 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
             checkpoint.has_value() &&
             *checkpoint == *document.journal.transient_checkpoint &&
             (!has_launch_ack ||
-             launch_ack == document.journal.last_launch_ack)) {
+             launch_ack == document.journal.last_launch_ack) &&
+            (!live_profile ||
+             *ledger == *document.journal.admission_ledger)) {
           throw std::runtime_error("Performance tail is a no-op");
         }
         document.journal.pending_events = std::move(events.value());
@@ -3391,11 +3968,62 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
           document.journal.last_launch_ack = std::move(launch_ack);
           saw_launch_ack_field = true;
         }
+        if (live_profile) {
+          document.journal.admission_ledger = std::move(*ledger);
+        }
         document.journal.last_input_sequence = input_sequence;
         ++document.journal.next_tail_seq;
+      } else if (kind == "admission_complete") {
+        // The metadata record binds to the unique pending admission; it
+        // advances the admission counter and never allocates a musical
+        // sequence or rewrites events.
+        if (!is_live_control_profile(document.journal)) {
+          throw std::runtime_error(
+              "Performance admission completion requires the live-control "
+              "profile");
+        }
+        const auto& record = payload.value();
+        if (record.size() != 5 || !record.contains("expected_revision") ||
+            !record.contains("performance_id") || !record.contains("receipt") ||
+            !record.contains("tail_seq")) {
+          throw std::runtime_error(
+              "Performance admission completion shape is invalid");
+        }
+        const auto tail_seq = record.at("tail_seq").get<std::uint64_t>();
+        const auto expected_revision =
+            record.at("expected_revision").get<std::uint64_t>();
+        const auto performance_id = domain::PerformanceId{
+            record.at("performance_id").get<std::string>()};
+        auto receipt = parse_admission_receipt(record.at("receipt"));
+        auto& ledger = *document.journal.admission_ledger;
+        const auto identity_matches =
+            ledger.pending.has_value() &&
+            ledger.pending->request_id == receipt.request_id &&
+            ledger.pending->expected_recording_sequence ==
+                receipt.expected_recording_sequence &&
+            ledger.pending->request_fingerprint ==
+                receipt.request_fingerprint &&
+            ledger.pending->accepted_tick == receipt.accepted_tick &&
+            ledger.pending->input_sequence == receipt.input_sequence &&
+            ledger.pending->event_input_sequences ==
+                receipt.event_input_sequences &&
+            ledger.pending->binding_result == receipt.binding_result;
+        if (receipt.phase != PerformanceAdmissionPhase::completed ||
+            tail_seq + 1 != document.journal.next_tail_seq ||
+            expected_revision != document.journal.expected_revision ||
+            performance_id != document.journal.performance_id ||
+            !identity_matches) {
+          throw std::runtime_error(
+              "Performance admission completion does not match the pending "
+              "admission");
+        }
+        ledger.next_recording_sequence += 1;
+        ledger.completed = std::move(receipt);
+        ledger.pending.reset();
       } else if (kind == "flush") {
+        const bool live_profile = is_live_control_profile(document.journal);
         auto events = parse_performance_events(
-            payload.value().at("events"), path);
+            payload.value().at("events"), path, live_profile);
         if (!events.has_value() || events.value().empty()) {
           throw std::runtime_error("Performance flush events are invalid");
         }
@@ -3419,6 +4047,10 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
                 document.journal.kind,
                 document.journal.state,
                 document.journal.flushes) ||
+            // A prepared admission owns its pending events until its
+            // completion metadata is durable; flush does not advance past it.
+            (live_profile &&
+             document.journal.admission_ledger->pending.has_value()) ||
             (!document.journal.pending_events.empty() &&
              flush.canonical_events != document.journal.pending_events)) {
           throw std::runtime_error(
@@ -3534,7 +4166,8 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
           "Performance Journal has no durable begin record");
     }
     if (!document.journal.transient_checkpoint.has_value()) {
-      if (document.journal.state != SequenceSessionState::stopped) {
+      if (document.journal.state != SequenceSessionState::stopped ||
+          is_live_control_profile(document.journal)) {
         throw std::runtime_error(
             "active legacy Performance Journal has no transient checkpoint");
       }
@@ -3573,11 +4206,13 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
 }  // namespace
 
 std::string performance_fingerprint(const domain::Performance& performance) {
-  const nlohmann::json preimage = {
+  const auto profile =
+      domain::performance_event_profile(performance);
+  auto preimage = nlohmann::json{
       {"created_bpm", performance.created_bpm},
       {"events",
        performance_events_json(
-           domain::canonical_performance_events(performance.events))},
+           domain::canonical_performance_events(performance.events, profile))},
       {"name", performance.name},
       {"recording_revision", performance.recording_revision},
       {"recording_artifact",
@@ -3585,6 +4220,13 @@ std::string performance_fingerprint(const domain::Performance& performance) {
            ? nlohmann::json(*performance.recording_artifact)
            : nlohmann::json(nullptr)},
   };
+  // The header binds only when present, so a legacy Performance keeps its
+  // exact historical preimage bytes.
+  if (performance.initial_live_state.has_value()) {
+    preimage["initial_live_state"] =
+        domain::performance_initial_live_state_json(
+            *performance.initial_live_state);
+  }
   return sha256(foundation::canonical_json(preimage));
 }
 
@@ -3600,10 +4242,11 @@ preview_performance_owner_loss(const ActivePerformanceJournal& journal) {
         });
   }
   const auto& checkpoint = *journal.transient_checkpoint;
+  const bool live_profile = is_live_control_profile(journal);
   PerformanceTransientClosurePreview preview{
       journal.pending_events, 0, checkpoint.last_accepted_tick};
   if (checkpoint.open_pads.empty() && checkpoint.open_fx.empty() &&
-      !checkpoint.hold) {
+      !checkpoint.hold && !checkpoint.open_filter.has_value()) {
     auto high_water = performance_temporal_high_water(preview.canonical_events);
     if (!high_water.has_value()) {
       return foundation::Result<PerformanceTransientClosurePreview>::failure(
@@ -3640,6 +4283,19 @@ preview_performance_owner_loss(const ActivePerformanceJournal& journal) {
         });
   }
   preview.closure_tick = maximum_tick + 1;
+  // Closure event sequences derive uniquely from the verified durable
+  // high-water: a closed PadHit keeps its press's sequence, while the
+  // internally generated releases and HoldOff each take one fresh value.
+  std::uint64_t next_closure_sequence =
+      journal.last_input_sequence.value_or(0);
+  const auto fresh_sequence = [&next_closure_sequence]() {
+    if (next_closure_sequence == std::numeric_limits<std::uint64_t>::max()) {
+      throw std::runtime_error("performance_input_sequence_overflow");
+    }
+    ++next_closure_sequence;
+    return next_closure_sequence;
+  };
+  try {
   for (const auto& pad : checkpoint.open_pads) {
     if (preview.closure_tick <= pad.onset_tick) {
       return foundation::Result<PerformanceTransientClosurePreview>::failure(
@@ -3656,22 +4312,55 @@ preview_performance_owner_loss(const ActivePerformanceJournal& journal) {
             pad.onset_tick,
             preview.closure_tick - pad.onset_tick,
             pad.velocity,
-        }});
+        },
+        live_profile ? pad.input_sequence : std::nullopt});
     ++preview.appended_event_count;
   }
   for (const auto& effect : checkpoint.open_fx) {
     preview.canonical_events.push_back(domain::PerformanceEvent{
         domain::FxReleasePerformanceEvent{
-            effect.fx, preview.closure_tick}});
+            effect.fx, preview.closure_tick},
+        live_profile
+            ? std::optional<std::uint64_t>{fresh_sequence()}
+            : std::nullopt});
+    ++preview.appended_event_count;
+  }
+  if (checkpoint.open_filter.has_value()) {
+    // The independent Filter gesture closes with its retained parameter
+    // tuple; it never degrades into the legacy scalar.
+    preview.canonical_events.push_back(domain::PerformanceEvent{
+        domain::FilterChangePerformanceEvent{
+            domain::PerformanceFilterPhase::release,
+            checkpoint.open_filter->type,
+            checkpoint.open_filter->cutoff_hz,
+            checkpoint.open_filter->resonance_milli,
+            preview.closure_tick},
+        live_profile
+            ? std::optional<std::uint64_t>{fresh_sequence()}
+            : std::nullopt});
     ++preview.appended_event_count;
   }
   if (checkpoint.hold) {
     preview.canonical_events.push_back(domain::PerformanceEvent{
-        domain::HoldOffPerformanceEvent{preview.closure_tick}});
+        domain::HoldOffPerformanceEvent{preview.closure_tick},
+        live_profile
+            ? std::optional<std::uint64_t>{fresh_sequence()}
+            : std::nullopt});
     ++preview.appended_event_count;
   }
-  preview.canonical_events =
-      domain::canonical_performance_events(preview.canonical_events);
+  } catch (const std::runtime_error& overflow) {
+    return foundation::Result<PerformanceTransientClosurePreview>::failure(
+        Error{
+            ErrorCode::invalid_project,
+            "Performance owner-loss input sequence overflows",
+            {{"journal_retained", true},
+             {"reason", overflow.what()}},
+        });
+  }
+  preview.canonical_events = domain::canonical_performance_events(
+      preview.canonical_events,
+      live_profile ? domain::PerformanceEventProfile::header_input_sequence
+                   : domain::PerformanceEventProfile::legacy);
   std::vector<domain::PerformanceEvent> validation_events;
   for (const auto& flush : journal.flushes) {
     validation_events.insert(
@@ -3683,7 +4372,13 @@ preview_performance_owner_loss(const ActivePerformanceJournal& journal) {
       validation_events.end(),
       preview.canonical_events.begin(),
       preview.canonical_events.end());
-  auto valid = domain::validate_performance_events(validation_events);
+  // The headered stream validates from the begin header's seed, so a release
+  // pairs with the gesture the fence recorded even when its engage predates
+  // the durable event list.
+  auto valid = live_profile
+                   ? domain::validate_performance_events(
+                         validation_events, *journal.initial_live_state)
+                   : domain::validate_performance_events(validation_events);
   if (!valid.has_value()) {
     auto error = valid.error();
     error.code = ErrorCode::invalid_project;
@@ -3702,7 +4397,9 @@ foundation::Result<void> SequenceJournal::begin_performance_draft_locked(
     foundation::SequenceSessionId session_id,
     domain::PerformanceId performance_id,
     std::string fingerprint,
-    std::uint64_t from_revision) {
+    std::uint64_t from_revision,
+    std::optional<domain::PerformanceInitialLiveState> initial_live_state,
+    std::optional<PerformanceTransientCheckpoint> initial_checkpoint) {
   if (!domain::is_valid_uuid(command_id.value()) ||
       !domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(performance_id.value()) ||
@@ -3727,8 +4424,24 @@ foundation::Result<void> SequenceJournal::begin_performance_draft_locked(
           "finish or reconcile the active recording session before beginning a Performance draft"}},
     });
   }
+  auto checkpoint = initial_checkpoint.has_value()
+                        ? std::move(*initial_checkpoint)
+                        : initial_live_checkpoint(initial_live_state);
+  if (initial_checkpoint.has_value() != initial_live_state.has_value()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance draft begin profile is inconsistent",
+    });
+  }
+  if (initial_live_state.has_value()) {
+    auto valid = validate_performance_checkpoint(
+        checkpoint, {}, true);
+    if (!valid.has_value()) {
+      return valid;
+    }
+  }
   const auto path = recording_active_path(bundle, SessionKind::performance);
-  const auto payload = nlohmann::json{
+  auto payload = nlohmann::json{
       {"command_id", command_id.value()},
       {"contract",
        recording_protocol(SessionKind::performance).journal_contract},
@@ -3737,10 +4450,16 @@ foundation::Result<void> SequenceJournal::begin_performance_draft_locked(
       {"performance_fingerprint", std::move(fingerprint)},
       {"performance_id", performance_id.value()},
       {"session_id", session_id.value()},
-      {"transient_checkpoint",
-       performance_checkpoint_json(
-           PerformanceTransientCheckpoint{{}, {}, false, 0})},
+      {"transient_checkpoint", performance_checkpoint_json(checkpoint)},
   };
+  if (initial_live_state.has_value()) {
+    payload["live_control_profile"] =
+        std::string{kLiveControlProfileHeaderInputSequence};
+    payload["initial_live_state"] =
+        domain::performance_initial_live_state_json(*initial_live_state);
+    payload["admission_ledger"] =
+        admission_ledger_json(PerformanceAdmissionLedger{});
+  }
   const auto bytes = foundation::canonical_json(checked_record(payload)) +
                      "\n";
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
@@ -3996,23 +4715,37 @@ foundation::Result<void> SequenceJournal::restore_stopped_performance_locked(
       });
     }
   } else {
-    const auto begin = foundation::canonical_json(checked_record({
-                           {"contract",
-                            recording_protocol(SessionKind::performance)
-                                .journal_contract},
-                           {"expected_revision", expected_revision},
-                           {"kind", "begin"},
-                           {"performance_fingerprint", fingerprint},
-                           {"performance_id",
-                            candidate.journal.performance_id.value()},
-                           {"session_id",
-                            candidate.journal.session_id.value()},
-                           {"transient_checkpoint",
-                            performance_checkpoint_json(
-                                PerformanceTransientCheckpoint{
-                                    {}, {}, false, 0})},
-                       })) +
-                       "\n";
+    auto begin_payload = nlohmann::json{
+        {"contract",
+         recording_protocol(SessionKind::performance)
+             .journal_contract},
+        {"expected_revision", expected_revision},
+        {"kind", "begin"},
+        {"performance_fingerprint", fingerprint},
+        {"performance_id",
+         candidate.journal.performance_id.value()},
+        {"session_id",
+         candidate.journal.session_id.value()},
+        {"transient_checkpoint",
+         performance_checkpoint_json(
+             candidate.journal.transient_checkpoint.has_value()
+                 ? *candidate.journal.transient_checkpoint
+                 : PerformanceTransientCheckpoint{{}, {}, false, 0})},
+    };
+    // The restored stopped Journal keeps the profile's unknown facts: the
+    // discriminator, the immutable header and the terminal ledger survive
+    // recovery verbatim rather than being rewritten or completed.
+    if (is_live_control_profile(candidate.journal)) {
+      begin_payload["live_control_profile"] =
+          std::string{kLiveControlProfileHeaderInputSequence};
+      begin_payload["initial_live_state"] =
+          domain::performance_initial_live_state_json(
+              *candidate.journal.initial_live_state);
+      begin_payload["admission_ledger"] =
+          admission_ledger_json(*candidate.journal.admission_ledger);
+    }
+    const auto begin =
+        foundation::canonical_json(checked_record(begin_payload)) + "\n";
     const auto stop = foundation::canonical_json(checked_record({
                           {"kind", "stop"},
                           {"request_id", request_id.value()},
@@ -4052,7 +4785,9 @@ foundation::Result<void> SequenceJournal::begin_performance(
     foundation::SequenceSessionId session_id,
     domain::PerformanceId performance_id,
     std::string fingerprint,
-    std::uint64_t expected_revision) {
+    std::uint64_t expected_revision,
+    std::optional<domain::PerformanceInitialLiveState> initial_live_state,
+    std::optional<PerformanceTransientCheckpoint> initial_checkpoint) {
   if (!domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(performance_id.value()) ||
       !lowercase_sha256(fingerprint)) {
@@ -4111,8 +4846,23 @@ foundation::Result<void> SequenceJournal::begin_performance(
          {"expected_revision", expected_revision}},
     });
   }
+  if (initial_checkpoint.has_value() != initial_live_state.has_value()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance begin profile is inconsistent",
+    });
+  }
+  auto checkpoint = initial_checkpoint.has_value()
+                        ? std::move(*initial_checkpoint)
+                        : initial_live_checkpoint(initial_live_state);
+  if (initial_live_state.has_value()) {
+    auto valid = validate_performance_checkpoint(checkpoint, {}, true);
+    if (!valid.has_value()) {
+      return valid;
+    }
+  }
   const auto path = recording_active_path(bundle, SessionKind::performance);
-  const auto payload = nlohmann::json{
+  auto payload = nlohmann::json{
       {"contract",
        recording_protocol(SessionKind::performance).journal_contract},
       {"expected_revision", expected_revision},
@@ -4120,10 +4870,16 @@ foundation::Result<void> SequenceJournal::begin_performance(
       {"performance_fingerprint", std::move(fingerprint)},
       {"performance_id", performance_id.value()},
       {"session_id", session_id.value()},
-      {"transient_checkpoint",
-       performance_checkpoint_json(
-           PerformanceTransientCheckpoint{{}, {}, false, 0})},
+      {"transient_checkpoint", performance_checkpoint_json(checkpoint)},
   };
+  if (initial_live_state.has_value()) {
+    payload["live_control_profile"] =
+        std::string{kLiveControlProfileHeaderInputSequence};
+    payload["initial_live_state"] =
+        domain::performance_initial_live_state_json(*initial_live_state);
+    payload["admission_ledger"] =
+        admission_ledger_json(PerformanceAdmissionLedger{});
+  }
   const auto bytes = foundation::canonical_json(checked_record(payload)) +
                      "\n";
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
@@ -4160,7 +4916,32 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
     std::uint64_t input_sequence,
     std::span<const domain::PerformanceEvent> events,
     std::optional<PerformanceTransientCheckpoint> transient_checkpoint,
-    std::optional<PerformanceLaunchAck> last_launch_ack) {
+    std::optional<PerformanceLaunchAck> last_launch_ack,
+    std::optional<PerformanceAdmissionReceipt> pending_receipt) {
+  return append_performance_tail_internal(
+      bundle,
+      session_id,
+      performance_id,
+      expected_revision,
+      input_sequence,
+      events,
+      std::move(transient_checkpoint),
+      std::move(last_launch_ack),
+      std::move(pending_receipt),
+      false);
+}
+
+foundation::Result<void> SequenceJournal::append_performance_tail_internal(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PerformanceId performance_id,
+    std::uint64_t expected_revision,
+    std::uint64_t input_sequence,
+    std::span<const domain::PerformanceEvent> events,
+    std::optional<PerformanceTransientCheckpoint> transient_checkpoint,
+    std::optional<PerformanceLaunchAck> last_launch_ack,
+    std::optional<PerformanceAdmissionReceipt> pending_receipt,
+    bool allow_ledger_carryover) {
   if (!domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(performance_id.value()) || input_sequence == 0) {
     return foundation::Result<void>::failure(Error{
@@ -4172,8 +4953,6 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
   if (!validated.has_value()) {
     return validated;
   }
-  auto canonical = domain::canonical_performance_events(
-      std::vector<domain::PerformanceEvent>{events.begin(), events.end()});
   auto mutex = append_mutex(platform_);
   std::lock_guard append_operation(*mutex);
   auto lease = platform_->acquire_writer(bundle);
@@ -4187,6 +4966,18 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
     return foundation::Result<void>::failure(document.error());
   }
   const auto& journal = document.value().journal;
+  const bool live_profile = is_live_control_profile(journal);
+  // The legacy grammar never grows the new fields: a legacy Journal rejects
+  // a receipt, and a headered Journal never silently drops into it.
+  if (live_profile != pending_receipt.has_value() &&
+      !allow_ledger_carryover) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance tail admission receipt does not match the Journal "
+        "profile",
+        {{"reason", "performance_admission_ledger_profile_mismatch"}},
+    });
+  }
   if (journal.state == SequenceSessionState::recovery_required) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::invalid_argument,
@@ -4208,6 +4999,32 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
         "Performance tail does not match the active session",
     });
   }
+  const auto event_profile =
+      live_profile ? domain::PerformanceEventProfile::header_input_sequence
+                   : domain::PerformanceEventProfile::legacy;
+  for (const auto& event : events) {
+    if (live_profile != event.input_sequence.has_value()) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance tail event profile does not match the Journal",
+      });
+    }
+  }
+  if (live_profile) {
+    std::unordered_set<std::uint64_t> sequences;
+    for (const auto& event : events) {
+      if (!sequences.insert(*event.input_sequence).second ||
+          *event.input_sequence > input_sequence) {
+        return foundation::Result<void>::failure(Error{
+            ErrorCode::invalid_argument,
+            "Performance tail event input sequence is invalid",
+        });
+      }
+    }
+  }
+  auto canonical = domain::canonical_performance_events(
+      std::vector<domain::PerformanceEvent>{events.begin(), events.end()},
+      event_profile);
   std::vector<domain::PerformanceEvent> durable_events = canonical;
   for (const auto& flush : journal.flushes) {
     durable_events.insert(
@@ -4216,6 +5033,12 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
         flush.canonical_events.end());
   }
   if (!transient_checkpoint.has_value()) {
+    if (live_profile) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance live-control tail requires its live checkpoint",
+      });
+    }
     auto high_water = performance_temporal_high_water(durable_events);
     if (!high_water.has_value()) {
       return foundation::Result<void>::failure(high_water.error());
@@ -4223,8 +5046,20 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
     transient_checkpoint =
         PerformanceTransientCheckpoint{{}, {}, false, high_water.value()};
   }
-  auto checkpoint_valid =
-      validate_performance_checkpoint(*transient_checkpoint, durable_events);
+  if (live_profile) {
+    // Open Pad transients reference their press's durable sequence, which is
+    // always under this tail's high-water.
+    for (const auto& pad : transient_checkpoint->open_pads) {
+      if (*pad.input_sequence > input_sequence) {
+        return foundation::Result<void>::failure(Error{
+            ErrorCode::invalid_argument,
+            "Performance open Pad press sequence exceeds the high-water",
+        });
+      }
+    }
+  }
+  auto checkpoint_valid = validate_performance_checkpoint(
+      *transient_checkpoint, durable_events, live_profile);
   if (!checkpoint_valid.has_value()) {
     return checkpoint_valid;
   }
@@ -4249,16 +5084,51 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
         "Performance checkpoint tick is not monotone",
     });
   }
+  std::optional<PerformanceAdmissionLedger> next_ledger;
+  if (live_profile) {
+    next_ledger = journal.admission_ledger;
+    if (pending_receipt.has_value()) {
+      const auto& receipt = *pending_receipt;
+      // One pending admission per session window: the receipt binds the
+      // original request identity, its raw-payload fingerprint and the
+      // frozen tick/sequence; queue rejection happens before this point.
+      if (!domain::is_valid_uuid(receipt.request_id.value()) ||
+          !lowercase_sha256(receipt.request_fingerprint) ||
+          receipt.phase != PerformanceAdmissionPhase::prepared ||
+          receipt.result != PerformanceAdmissionResult::not_published ||
+          receipt.input_sequence == 0 ||
+          receipt.input_sequence > input_sequence ||
+          receipt.expected_recording_sequence !=
+              next_ledger->next_recording_sequence ||
+          next_ledger->pending.has_value() ||
+          (receipt.binding_result.has_value() &&
+           !domain::is_valid_uuid(
+               receipt.binding_result->recording_gesture_id)) ||
+          !std::ranges::all_of(
+              receipt.event_input_sequences,
+              [input_sequence](std::uint64_t sequence) {
+                return sequence >= 1 && sequence <= input_sequence;
+              })) {
+        return foundation::Result<void>::failure(Error{
+            ErrorCode::invalid_argument,
+            "Performance admission receipt does not fit the durable window",
+            {{"reason", "performance_admission_receipt_invalid"}},
+        });
+      }
+      next_ledger->pending = receipt;
+    }
+  }
   if (canonical.empty() && canonical == journal.pending_events &&
       journal.transient_checkpoint.has_value() &&
       *transient_checkpoint == *journal.transient_checkpoint &&
-      last_launch_ack == journal.last_launch_ack) {
+      last_launch_ack == journal.last_launch_ack &&
+      (!live_profile || *next_ledger == *journal.admission_ledger)) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::invalid_argument,
         "Performance tail must contain a state transition",
     });
   }
-  const auto payload = nlohmann::json{
+  auto payload = nlohmann::json{
       {"events", performance_events_json(canonical)},
       {"expected_revision", expected_revision},
       {"input_sequence", input_sequence},
@@ -4272,6 +5142,9 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
       {"transient_checkpoint",
        performance_checkpoint_json(*transient_checkpoint)},
   };
+  if (live_profile) {
+    payload["admission_ledger"] = admission_ledger_json(*next_ledger);
+  }
   const auto append_once = [&]() {
     return append_recording_record(
         platform_,
@@ -4293,7 +5166,8 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
            value.last_input_sequence == input_sequence &&
            value.pending_events == canonical &&
            value.transient_checkpoint == transient_checkpoint &&
-           value.last_launch_ack == last_launch_ack;
+           value.last_launch_ack == last_launch_ack &&
+           value.admission_ledger == next_ledger;
   };
   auto first_observed = read_performance_journal(*platform_, bundle);
   if (first_observed.has_value() &&
@@ -4363,16 +5237,60 @@ SequenceJournal::close_performance_transients_for_owner_loss(
   }
   const auto next_input_sequence =
       active.value().last_input_sequence.value_or(0) + 1;
-  return append_performance_tail(
+  if (!is_live_control_profile(active.value())) {
+    return append_performance_tail(
+        bundle,
+        active.value().session_id,
+        active.value().performance_id,
+        active.value().expected_revision,
+        next_input_sequence,
+        preview.value().canonical_events,
+        PerformanceTransientCheckpoint{
+            {}, {}, false, preview.value().closure_tick},
+        active.value().last_launch_ack);
+  }
+  // Headered profile: the closure is metadata-only. Its tail carries the
+  // admission ledger unchanged — a pending prepared admission stays pending
+  // and unknown — and the checkpoint records the neutralized live state.
+  std::uint64_t closure_high_water = next_input_sequence;
+  for (const auto& event : preview.value().canonical_events) {
+    closure_high_water =
+        std::max(closure_high_water, event.input_sequence.value_or(0));
+  }
+  auto closed_state = *active.value().transient_checkpoint->live_state;
+  closed_state.hold = false;
+  for (auto& gate : closed_state.other_fx) {
+    gate.engaged = false;
+    gate.frozen = false;
+  }
+  if (auto* independent =
+          std::get_if<domain::IndependentFilterLiveState>(
+              &closed_state.filter)) {
+    // A released Filter keeps its parameter tuple for readback.
+    independent->engaged = false;
+    independent->frozen = false;
+  } else {
+    auto& legacy = std::get<domain::LegacyFilterLiveState>(closed_state.filter);
+    legacy.engaged = false;
+    legacy.frozen = false;
+  }
+  return append_performance_tail_internal(
       bundle,
       active.value().session_id,
       active.value().performance_id,
       active.value().expected_revision,
-      next_input_sequence,
+      closure_high_water,
       preview.value().canonical_events,
       PerformanceTransientCheckpoint{
-          {}, {}, false, preview.value().closure_tick},
-      active.value().last_launch_ack);
+          {},
+          {},
+          false,
+          preview.value().closure_tick,
+          std::nullopt,
+          std::move(closed_state)},
+      active.value().last_launch_ack,
+      std::nullopt,
+      true);
 }
 
 foundation::Result<PerformanceFlushRecord>
@@ -4396,8 +5314,6 @@ SequenceJournal::append_performance_flush(
     return foundation::Result<PerformanceFlushRecord>::failure(
         validated.error());
   }
-  auto canonical = domain::canonical_performance_events(
-      std::vector<domain::PerformanceEvent>{events.begin(), events.end()});
   auto mutex = append_mutex(platform_);
   std::lock_guard append_operation(*mutex);
   auto lease = platform_->acquire_writer(bundle);
@@ -4413,6 +5329,19 @@ SequenceJournal::append_performance_flush(
         document.error());
   }
   const auto& journal = document.value().journal;
+  const bool live_profile = is_live_control_profile(journal);
+  for (const auto& event : events) {
+    if (live_profile != event.input_sequence.has_value()) {
+      return foundation::Result<PerformanceFlushRecord>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance flush event profile does not match the Journal",
+      });
+    }
+  }
+  auto canonical = domain::canonical_performance_events(
+      std::vector<domain::PerformanceEvent>{events.begin(), events.end()},
+      live_profile ? domain::PerformanceEventProfile::header_input_sequence
+                   : domain::PerformanceEventProfile::legacy);
   if (journal.state == SequenceSessionState::recovery_required) {
     return foundation::Result<PerformanceFlushRecord>::failure(Error{
         ErrorCode::invalid_argument,
@@ -4446,6 +5375,10 @@ SequenceJournal::append_performance_flush(
       journal.expected_revision != expected_revision ||
       !recording_accepts_flush(
           journal.kind, journal.state, journal.flushes) ||
+      // A prepared admission owns its pending events until its completion
+      // metadata is durable; flush does not advance past it.
+      (live_profile &&
+       journal.admission_ledger->pending.has_value()) ||
       (!journal.pending_events.empty() &&
        journal.pending_events != canonical)) {
     return foundation::Result<PerformanceFlushRecord>::failure(Error{
@@ -4647,6 +5580,188 @@ SequenceJournal::remove_active_performance_if_complete(
     return removed;
   }
   return remove_performance_owner_lock(platform_, bundle);
+}
+
+foundation::Result<void> SequenceJournal::complete_performance_admission(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    const PerformanceAdmissionReceipt& receipt) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(receipt.request_id.value()) ||
+      !lowercase_sha256(receipt.request_fingerprint) ||
+      receipt.phase != PerformanceAdmissionPhase::completed ||
+      receipt.result == PerformanceAdmissionResult::not_published) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance admission completion identity is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (!is_live_control_profile(journal) ||
+      journal.session_id != session_id) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance admission completion does not match the active session",
+    });
+  }
+  const auto& ledger = *journal.admission_ledger;
+  // The completion matches the unique pending admission by identity and
+  // fingerprint; anything else is a collision or an expired retry, never a
+  // second application.
+  const auto matches_pending = [&]() {
+    return ledger.pending.has_value() &&
+           ledger.pending->request_id == receipt.request_id &&
+           ledger.pending->expected_recording_sequence ==
+               receipt.expected_recording_sequence &&
+           ledger.pending->request_fingerprint ==
+               receipt.request_fingerprint &&
+           ledger.pending->accepted_tick == receipt.accepted_tick &&
+           ledger.pending->input_sequence == receipt.input_sequence &&
+           ledger.pending->event_input_sequences ==
+               receipt.event_input_sequences &&
+           ledger.pending->binding_result == receipt.binding_result;
+  };
+  if (matches_pending()) {
+    const auto payload = nlohmann::json{
+        {"expected_revision", journal.expected_revision},
+        {"kind", "admission_complete"},
+        {"performance_id", journal.performance_id.value()},
+        {"receipt", admission_receipt_json(receipt)},
+        {"tail_seq", journal.next_tail_seq - 1},
+    };
+    auto appended = append_recording_record(
+        platform_,
+        bundle,
+        document.value().journal.kind,
+        document.value().valid_prefix_length,
+        payload);
+    if (appended.has_value()) {
+      return appended;
+    }
+    // The metadata write may have persisted before its sync failed: re-read,
+    // then either accept the exact present record or rewrite the identical
+    // bytes once from the validated prefix. Never a second logical write.
+    auto observed = read_performance_journal(*platform_, bundle);
+    const auto completed_matches = [&]() {
+      return observed.has_value() &&
+             observed.value().journal.admission_ledger.has_value() &&
+             !observed.value().journal.admission_ledger->pending.has_value() &&
+             observed.value().journal.admission_ledger->completed ==
+                 receipt &&
+             observed.value().journal.admission_ledger
+                     ->next_recording_sequence ==
+                 ledger.next_recording_sequence + 1;
+    };
+    if (completed_matches()) {
+      return foundation::Result<void>::success();
+    }
+    if (observed.has_value() && observed.value().journal == journal) {
+      auto retried = append_recording_record(
+          platform_,
+          bundle,
+          document.value().journal.kind,
+          document.value().valid_prefix_length,
+          payload);
+      if (retried.has_value()) {
+        return retried;
+      }
+      auto after_retry = read_performance_journal(*platform_, bundle);
+      if (after_retry.has_value() &&
+          after_retry.value().journal == journal) {
+        return foundation::Result<void>::failure(retried.error());
+      }
+    }
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::io_error,
+        "Performance admission completion outcome is unknown after durable "
+        "append",
+        {{"journal_retained", true},
+         {"reason", "performance_admission_complete_outcome_unknown"},
+         {"remedy",
+          "freeze the in-memory session and reconcile the retained Journal "
+          "before accepting more input"}},
+    });
+  }
+  // Exact reattach of an already-completed admission returns its durable
+  // receipt without another write.
+  if (ledger.completed.has_value() &&
+      ledger.completed->request_id == receipt.request_id &&
+      ledger.completed->expected_recording_sequence ==
+          receipt.expected_recording_sequence &&
+      ledger.completed->request_fingerprint ==
+          receipt.request_fingerprint &&
+      ledger.completed->accepted_tick == receipt.accepted_tick &&
+      ledger.completed->input_sequence == receipt.input_sequence &&
+      ledger.completed->event_input_sequences ==
+          receipt.event_input_sequences &&
+      ledger.completed->binding_result == receipt.binding_result &&
+      ledger.completed->phase == receipt.phase &&
+      ledger.completed->result == receipt.result) {
+    return foundation::Result<void>::success();
+  }
+  return foundation::Result<void>::failure(Error{
+      ErrorCode::invalid_argument,
+      "Performance admission completion does not match the durable window",
+      {{"reason", "performance_admission_receipt_invalid"},
+       {"remedy",
+        "query the durable ledger for the original identity before "
+        "completing; an expired or foreign admission is never rewritten"}},
+  });
+}
+
+PerformanceAdmissionLookup lookup_performance_admission(
+    const ActivePerformanceJournal& journal,
+    const foundation::CommandId& request_id,
+    std::uint64_t expected_recording_sequence,
+    std::string_view request_fingerprint) {
+  using Status = PerformanceAdmissionLookupStatus;
+  if (!journal.admission_ledger.has_value()) {
+    return {Status::unavailable, std::nullopt};
+  }
+  const auto& ledger = *journal.admission_ledger;
+  const auto window_hit =
+      [&](const PerformanceAdmissionReceipt& receipt)
+      -> PerformanceAdmissionLookup {
+    if (receipt.request_id == request_id &&
+        receipt.expected_recording_sequence == expected_recording_sequence) {
+      return {receipt.request_fingerprint == request_fingerprint
+                  ? Status::exact
+                  : Status::collision,
+              receipt};
+    }
+    return {Status::occupied, std::nullopt};
+  };
+  if (ledger.pending.has_value() &&
+      (ledger.pending->request_id == request_id ||
+       ledger.pending->expected_recording_sequence ==
+           expected_recording_sequence)) {
+    return window_hit(*ledger.pending);
+  }
+  if (ledger.completed.has_value() &&
+      (ledger.completed->request_id == request_id ||
+       ledger.completed->expected_recording_sequence ==
+           expected_recording_sequence)) {
+    return window_hit(*ledger.completed);
+  }
+  if (expected_recording_sequence < ledger.next_recording_sequence) {
+    return {Status::retry_expired, std::nullopt};
+  }
+  if (expected_recording_sequence > ledger.next_recording_sequence) {
+    return {Status::out_of_order, std::nullopt};
+  }
+  return {Status::fresh, std::nullopt};
 }
 
 }  // namespace lmdj::project_io
