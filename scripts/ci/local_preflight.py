@@ -227,6 +227,21 @@ def toolchain_identity(lane: str, entry: Mapping[str, object], *, root: Path = R
     observed = {"platform": sys.platform, "python": [sys.executable, sys.version],
                 "build_flags": {key: os.environ.get(key, "")
                                 for key in ("CFLAGS", "CXXFLAGS", "LDFLAGS", "EMSDK")}}
+    if lane.startswith("core_") or lane in {"package", "creator", "web_runtime_host", "web_toolchain"}:
+        # CMake can retain a compiler chosen before the current CC/CXX env.
+        # Read compiler fields only; unrelated build-output churn is not an input.
+        configured = {}
+        for cache in sorted(root.glob("build/core/*/CMakeCache.txt")):
+            fields = {}
+            for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+                match = re.fullmatch(r"(CMAKE_(?:C|CXX)_COMPILER(?:_ARG1|_LAUNCHER)?):[^=]+=(.*)", line)
+                if match:
+                    name, value = match.groups()
+                    fields[name] = value
+                    tools.add(shlex.quote(value) if name.endswith("_COMPILER")
+                              else value.replace(";", " "))
+            configured[str(cache.relative_to(root))] = fields
+        observed["configured_compilers"] = configured
     # Web entry points activate this SDK themselves: emcc need not be on the
     # caller's PATH. Bind that installation too, including its active config.
     if lane in {"creator", "web_runtime_host", "web_toolchain"}:
@@ -240,6 +255,11 @@ def toolchain_identity(lane: str, entry: Mapping[str, object], *, root: Path = R
                 hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "not-found")
         tools.update(str(sdk / relative) for relative in
                      ("upstream/emscripten/emcc", "upstream/bin/clang", "upstream/bin/wasm-ld"))
+    # A stable launcher/version string is insufficient when its delegated
+    # executable is replaced. Preserve argv and bind each resolvable delegate.
+    for tool in tuple(tools):
+        tools.update(shlex.quote(part) for part in shlex.split(tool)[1:]
+                     if not part.startswith("-") and shutil.which(part))
     for tool in sorted(tools):
         command = tuple(shlex.split(tool))
         executable = shutil.which(command[0]) if command else None

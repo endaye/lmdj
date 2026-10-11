@@ -1561,6 +1561,37 @@ class VerificationProfileTest(unittest.TestCase):
                 after = self.preflight.toolchain_identity("docs_static", entry)
             self.assertNotEqual(before, after)
 
+    def test_same_version_compiler_behind_wrapper_invalidates_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrapper, compiler = root / "cache-wrapper", root / "actual-compiler"
+            wrapper.write_text('#!/bin/sh\nexec "$@"\n')
+            compiler.write_text('#!/bin/sh\necho compiler-v1\n')
+            wrapper.chmod(0o755)
+            compiler.chmod(0o755)
+            entry = {"requires": {}, "commands": []}
+            with mock.patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"],
+                                              "CC": "cache-wrapper actual-compiler"}):
+                before = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+                compiler.write_text('#!/bin/sh\n# changed binary with same version\necho compiler-v1\n')
+                after = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+            self.assertNotEqual(before, after)
+
+    def test_configured_compiler_replacement_invalidates_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            compiler = root / "configured-cxx"
+            compiler.write_text('#!/bin/sh\necho compiler-v1\n')
+            compiler.chmod(0o755)
+            cache = root / "build/core/dev/CMakeCache.txt"
+            cache.parent.mkdir(parents=True)
+            cache.write_text(f"CMAKE_CXX_COMPILER:FILEPATH={compiler}\n")
+            entry = {"requires": {}, "commands": []}
+            before = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+            compiler.write_text('#!/bin/sh\n# replaced cached compiler\necho compiler-v1\n')
+            after = self.preflight.toolchain_identity("core_ubuntu", entry, root=root)
+            self.assertNotEqual(before, after)
+
     def test_quick_run_and_cache_hit_are_not_full_passes(self):
         plan = {"profile": "quick", "base_sha": self.repository.base_sha,
                 "head_sha": self.repository.base_sha, "selected": ["docs_static"],

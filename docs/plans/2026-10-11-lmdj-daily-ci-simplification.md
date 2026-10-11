@@ -578,3 +578,30 @@ falls back to full work despite the quick default. Final message-only fixes name
 `--profile full --lanes` in full-receipt remedies; local regression rerun follows.
 The JSON table's unaffected entries keep their prior formatting; resolved data
 and all full commands remain identical.
+
+### T3e — Bind compiler delegates in the local execution cache
+
+Review of `29f1f7a5` identified a real boundary behind its speculative wrapper
+comment: replacing the compiler behind `CC="ccache gcc"` with the same advertised
+version need not change the wrapper stat/version identity. Likewise an existing
+CMake configuration can keep a compiler different from the current CC default.
+Declare `scripts/ci/local_preflight.py`, `tests/build/ci_local_preflight_test.py`
+and this plan. Bind resolved executable arguments and the configured compiler
+commands in existing owned CMake caches. This changes only advisory execution
+cache identity; complete source-bound receipts stay unchanged. Cover same-version
+delegate replacement and configured-compiler replacement with a red-before-fix
+regression, then the complete local preflight suite. Documentation impact: none;
+the documented compiler-aware cache contract is being repaired, not changed.
+Version impact: none. Main remains `82c010d0391b956f871d34ecb40720f9a7e0a8d7`;
+this work is not already delivered there. No qualifying new pitfall: the owning
+regressions express this cache defect.
+
+T3e verification: both delegate/configured-compiler replacement regressions failed
+at their cache-identity assertions on the old source, then passed with the fix.
+The complete local preflight suite passes 136/136 and selector contracts 12/12.
+No product artifact or source was restored with a preserved timestamp. Seven
+other automated observations were dispositioned with owning-code/real-Git evidence:
+flat selector inventory, both rename paths, intentional control-plane workloads,
+explicit deferred/quick evidence, retained full debt, fresh atomic Web packaging,
+and conservative missing seam output. The compiler finding remains unresolved
+for the new-head automatic repair recheck, not manually cleared.
