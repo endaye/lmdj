@@ -2,6 +2,7 @@
 #include <lmdj/audio/realtime_engine.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -187,6 +188,206 @@ void midstream_tempo_update_changes_future_boundaries_deterministically() {
 
 }  // namespace
 
+namespace {
+
+using lmdj::audio::FilterGesture;
+using lmdj::audio::FilterPhase;
+using lmdj::audio::FilterType;
+
+// One explicit integer control stream mixing typed Filter controls with the
+// legacy gestures that share the stage (HOLD and legacy Filter ownership).
+struct MixedControl {
+  bool is_filter;
+  FxGesture gesture;
+  FilterGesture filter;
+};
+
+MixedControl typed(FilterPhase phase, FilterType type, std::uint32_t cutoff_hz,
+                   std::uint16_t resonance_milli) {
+  return MixedControl{
+      true, {}, FilterGesture{phase, {type, cutoff_hz, resonance_milli}}};
+}
+
+MixedControl legacy(FxGestureKind kind, std::uint16_t value) {
+  return MixedControl{
+      false, FxGesture{kind, PerformanceFx::filter, value}, {}};
+}
+
+const std::vector<MixedControl>& mixed_stream() {
+  static const std::vector<MixedControl> stream{
+      typed(FilterPhase::engage, FilterType::low_pass, 800, 250),
+      legacy(FxGestureKind::hold_on, 0),
+      typed(FilterPhase::release, FilterType::low_pass, 0, 0),
+      typed(FilterPhase::move, FilterType::low_pass, 100, 0),
+      legacy(FxGestureKind::hold_off, 0),
+      typed(FilterPhase::engage, FilterType::band_pass, 1'200, 900),
+      typed(FilterPhase::move, FilterType::band_pass, 20'000, 1'000),
+      legacy(FxGestureKind::engage, 300),
+      typed(FilterPhase::move, FilterType::low_pass, 500, 0),
+      legacy(FxGestureKind::release, 0),
+      typed(FilterPhase::engage, FilterType::high_pass, 63, 17),
+      typed(FilterPhase::release, FilterType::low_pass, 0, 0),
+  };
+  return stream;
+}
+
+std::pair<std::vector<float>, std::vector<float>> process_chain_mixed() {
+  MasterFxChain chain;
+  LMDJ_CHECK(chain.prepare(MasterFxPreparation{48'000, 137}).has_value());
+  auto left = signal(12'288, 5);
+  auto right = signal(12'288, 19);
+  const auto& stream = mixed_stream();
+  std::size_t applied = 0;
+  for (std::size_t offset = 0; offset < left.size(); offset += 128) {
+    // Two quanta of audio between controls, mirroring the engine pacing.
+    if (offset % 256 == 0 && applied < stream.size()) {
+      const auto& control = stream[applied];
+      if (control.is_filter) {
+        static_cast<void>(chain.apply_filter_gesture(control.filter));
+      } else {
+        static_cast<void>(chain.apply_gesture(control.gesture));
+      }
+      ++applied;
+    }
+    chain.process(left.data() + offset, right.data() + offset, 128);
+  }
+  return {std::move(left), std::move(right)};
+}
+
+std::pair<std::array<float, 12'288>, std::array<float, 12'288>>
+render_live_mixed() {
+  RealtimeEngine engine;
+  const auto sample = [] {
+    std::array<float, 12'288> result{};
+    for (std::size_t frame = 0; frame < result.size(); ++frame) {
+      result[frame] = static_cast<float>(frame % 97U) / 128.0F;
+    }
+    return result;
+  }();
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.prepare_master_fx(137).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue(TriggerEvent{1, 0, 127}) == EnqueueResult::accepted);
+  std::array<float, 12'288> left{};
+  std::array<float, 12'288> right{};
+  const auto& stream = mixed_stream();
+  std::size_t sent = 0;
+  for (std::size_t offset = 0; offset < left.size(); offset += 128) {
+    if (offset % 256 == 0 && sent < stream.size()) {
+      const auto& control = stream[sent];
+      if (control.is_filter) {
+        LMDJ_CHECK(engine.enqueue_filter_gesture(control.filter) ==
+                   FxEnqueueResult::accepted);
+      } else {
+        LMDJ_CHECK(engine.enqueue_fx_gesture(control.gesture) ==
+                   FxEnqueueResult::accepted);
+      }
+      ++sent;
+    }
+    engine.render(left.data() + offset, right.data() + offset, 128);
+  }
+  return {left, right};
+}
+
+// Engine and chain share MasterFxChain code, so two copies agreeing cannot by
+// itself prove the DSP correct — that is this parity test's named blind spot.
+// The independent anchors are master_fx_test's analytic prototype oracles
+// (topology correctness) and the exact golden samples locked here (regression
+// identity); the engine/chain agreement below then proves only that the queue
+// path applies the same stream the same way.
+void mixed_typed_control_stream_is_deterministic_across_engine_and_dsp() {
+  const auto first = process_chain_mixed();
+  const auto second = process_chain_mixed();
+  LMDJ_CHECK(first == second);
+
+  const auto live_first = render_live_mixed();
+  const auto live_second = render_live_mixed();
+  LMDJ_CHECK(live_first == live_second);
+
+  // The coherent state reached through the real engine equals the shared
+  // DSP's state after the same stream: two typed controls are no-ops (a move
+  // while frozen, a move while legacy owns the stage) but still consume
+  // accepted sequence, exactly like any other accepted control.
+  RealtimeEngine engine;
+  const auto sample = [] {
+    std::array<float, 64> result{};
+    result.fill(0.25F);
+    return result;
+  }();
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.prepare_master_fx(137).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  for (const auto& control : mixed_stream()) {
+    if (control.is_filter) {
+      LMDJ_CHECK(engine.enqueue_filter_gesture(control.filter) ==
+                 FxEnqueueResult::accepted);
+    } else {
+      LMDJ_CHECK(engine.enqueue_fx_gesture(control.gesture) ==
+                 FxEnqueueResult::accepted);
+    }
+  }
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  engine.render(left.data(), right.data(), left.size());
+  const auto status = engine.filter_control_status();
+  LMDJ_CHECK(status.accepted_sequence == 8);
+  LMDJ_CHECK(status.applied.sequence == 8);
+  LMDJ_CHECK(status.applied.epoch == engine.telemetry().start_epoch);
+
+  MasterFxChain chain;
+  LMDJ_CHECK(chain.prepare(MasterFxPreparation{48'000, 137}).has_value());
+  for (const auto& control : mixed_stream()) {
+    if (control.is_filter) {
+      static_cast<void>(chain.apply_filter_gesture(control.filter));
+    } else {
+      static_cast<void>(chain.apply_gesture(control.gesture));
+    }
+  }
+  const auto chain_state = chain.filter_state();
+  const auto& applied = status.applied.state;
+  LMDJ_CHECK(applied.mode == chain_state.mode);
+  LMDJ_CHECK(applied.engaged == chain_state.engaged);
+  LMDJ_CHECK(applied.frozen == chain_state.frozen);
+  LMDJ_CHECK(applied.hold == chain_state.hold);
+  LMDJ_CHECK(applied.legacy_value == chain_state.legacy_value);
+  LMDJ_CHECK(applied.parameters.type == chain_state.parameters.type);
+  LMDJ_CHECK(
+      applied.parameters.cutoff_hz == chain_state.parameters.cutoff_hz);
+  LMDJ_CHECK(applied.parameters.resonance_milli ==
+             chain_state.parameters.resonance_milli);
+  // Locked end state: independent HP 63 Hz / 1.7% released, legacy scalar
+  // back to zero after its release, HOLD off.
+  LMDJ_CHECK(chain_state.mode == lmdj::audio::FilterMode::independent);
+  LMDJ_CHECK(!chain_state.engaged && !chain_state.frozen &&
+             !chain_state.hold);
+  LMDJ_CHECK(chain_state.parameters.type == FilterType::high_pass);
+  LMDJ_CHECK(chain_state.parameters.cutoff_hz == 63);
+  LMDJ_CHECK(chain_state.parameters.resonance_milli == 17);
+  LMDJ_CHECK(chain_state.legacy_value == 0);
+
+  // Locked reference samples of the typed stream's chain output. The bypass
+  // frame is exactly the raw input (bit-identical bypass); the engaged frames
+  // carry a 1e-5 tolerance because the coefficients pass through libm tan/exp,
+  // whose last double ulp may differ across platforms — any algorithmic
+  // regression moves these samples by orders of magnitude more.
+  constexpr std::array<std::pair<std::size_t, float>, 6> golden{{
+      {0, 0.112133957F},
+      {256, -0.0279778652F},
+      {512, 0.0211538225F},
+      {1'024, 0.0455697998F},
+      {1'408, -0.0162643939F},
+      {2'048, 0.374967873F},
+  }};
+  for (const auto& [frame, expected] : golden) {
+    LMDJ_CHECK(std::abs(first.first[frame] - expected) < 0.00001F);
+  }
+  constexpr auto bypass_frame = std::size_t{4'096};
+  LMDJ_CHECK(first.first[bypass_frame] == -0.275000006F);
+}
+
+}  // namespace
+
 
 int main() {
   try {
@@ -196,6 +397,7 @@ int main() {
     realtime_engine_processes_the_mixed_voice_through_master_fx();
     running_tempo_update_matches_fresh_preparation_at_quantum_boundary();
     midstream_tempo_update_changes_future_boundaries_deterministically();
+    mixed_typed_control_stream_is_deterministic_across_engine_and_dsp();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

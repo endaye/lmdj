@@ -104,7 +104,6 @@ scripts/local-ci.sh --lanes core_ubuntu   # explicitly run relevant local lanes
 scripts/local-ci.sh                       # daily quick verification; report deferred full checks
 scripts/local-ci.sh --profile full        # explicitly run all selected complete lanes
 scripts/local-ci.sh --declaration-only --pr-body <body-file>
-scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>
 scripts/local-ci.sh --install-hook        # install/migrate this tool's hook
 LMDJ_PRE_PUSH_FULL=1 git push             # opt in to heavy pre-push verification
 ```
@@ -115,19 +114,22 @@ evidence. Unavailable platforms, toolchains and packaging preconditions report
 `--declaration-only` requires a body file, executes no lanes and never caches
 the body check. A not-applicable declaration check is not portal verification.
 
-One local result is a merge obligation (#1619). A lane the change selects but
-no Pull Request runs (`batch_only`) reaches `main` unverified unless someone
-runs it. The Pull Request body therefore records each one under
-`## Batch-only Lanes` as `- <lane>: pass key=<64 hex>`, pasted from the block a
-passing `scripts/local-ci.sh --lanes <lanes>` run prints. The only alternative
-is `- <lane>: accepted-risk key=<64 hex> — <reason>` for a lane the owner
-explicitly accepted for those inputs; like a pass, it goes stale when they change. A change with no such lane declares `Batch-only lanes: none`.
-Before merge, `--batch-evidence-only` checks the live body on a clean checkout
-of the exact head and refuses a missing, extra, stale or malformed lane. The
-key binds the evidence to that lane's inputs, not to a commit, so an unrelated
-later commit keeps it and an input edit invalidates it. This is a merge
-procedure check, not a required CI status: it needs no branch-protection
-change and grants nothing by passing.
+Ordinary merges record Task-specific verification under `## Verification`:
+actual commands, results, the affected risks they cover, and explicit gaps.
+Use the lowest tier that covers the behavior. Persistence and recovery changes
+retain owning integration/restart journeys; concurrent lifetime changes retain
+stress tests. Every declared acceptance journey keeps its far-side assertions.
+The classifier's `batch_only` list records ownership; it does not require every
+selected complete lane to run locally before merge (#1996).
+
+Complete verification remains attached to an explicit candidate/full request.
+Deferred checks are unverified, never successful full results; quick results do
+not clear full verification debt or historical failures. Current-head review,
+conflict checks, conversation protection and Task verification still apply.
+The legacy `--batch-evidence-only --pr-body FILE` checker stays available as a
+strict audit of explicitly requested full receipts. Its keys remain input-bound,
+and an accepted-risk receipt still requires actual owner acceptance; ordinary
+merges do not need such a receipt merely because a PR omits a product lane.
 
 The installed hook does no heavy work by default. Only explicit
 `LMDJ_PRE_PUSH_FULL=1` runs the selected lane set and propagates its failure.

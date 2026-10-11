@@ -83,6 +83,7 @@ import {
   refreshSequenceJourney,
 } from "./runtime/sequence_actions";
 import {
+  createTransportPatternSwitchRequest,
   inspectPatternTransportJourney,
   isPatternTransportSession,
   observePatternTransportJourney,
@@ -129,6 +130,11 @@ import {
   readMetronomePreference,
   writeMetronomePreference,
 } from "./state/metronome_preference";
+import {
+  readSeqSnapPreference,
+  writeSeqSnapPreference,
+  type SeqSnap,
+} from "./state/seq_snap_preference";
 import {
   contextSecondsToEngineFrame,
   engineFrameToContextSeconds,
@@ -494,6 +500,12 @@ function Workspace({
   // Per-device monitoring preference, never Project Truth; boot reads it back
   // from the Host settings store.
   const [metronomeOn, setMetronomeOn] = useState(false);
+  // #1958 S4: the device's SEQ SNAP boundary for playing-state Pattern
+  // switches, never Project Truth. 1 BAR until the stored preference is
+  // read; the choice is available immediately, and an explicit choice wins
+  // over the late boot read (the read only fills a choice never made).
+  const [seqSnap, setSeqSnap] = useState<SeqSnap>("bar");
+  const seqSnapTouchedRef = useRef(false);
   // The grid a bpm commit while playing activates at its activation frame:
   // the old grid owns beats before it, the committed grid restarts there.
   // State (not a ref) so the metronome effect rebuilds the moment a pending
@@ -984,6 +996,11 @@ function Workspace({
     const remembered = readLastProjectId();
     void readMetronomePreference().then((on) => {
       if (active) setMetronomeOn(on);
+    });
+    void readSeqSnapPreference().then((snap) => {
+      // A late read must not overwrite an explicit choice; it only fills
+      // the default when the user never chose during this visit.
+      if (active && !seqSnapTouchedRef.current) setSeqSnap(snap);
     });
     void listLocalProjectsJourney(session).then(
       async (projects) => {
@@ -2178,6 +2195,16 @@ function Workspace({
     void writeMetronomePreference(next);
   };
 
+  // #1958 S4: a SEQ SNAP choice is remembered on this device only; the next
+  // playing-state switch (Sequence arrows, GROOVE picker or Perform launch)
+  // queues at this boundary. The choice is available immediately and, once
+  // made, the late boot read cannot replace it.
+  const onSeqSnapChange = (snap: SeqSnap) => {
+    seqSnapTouchedRef.current = true;
+    setSeqSnap(snap);
+    void writeSeqSnapPreference(snap);
+  };
+
   const stopArmedCapture = async () => {
     const current = sequenceRef.current;
     if (current.phase === "flushing") return;
@@ -2553,16 +2580,15 @@ function Workspace({
       if (selectTransportBusy(current)) return;
       // #1958: while the transport plays and does not record (recording is
       // S3), a selection press queues the transport's Pattern switch at the
-      // engine's next Bar instead of reloading the snapshot. The Host resolves
-      // latest-wins, claim deferral and pressing-the-playing-Pattern
-      // cancellation; a refusal is reported, never thrown.
+      // device's SEQ SNAP boundary (1 BAR by default) instead of reloading
+      // the snapshot. The Host resolves latest-wins, claim deferral and
+      // pressing-the-playing-Pattern cancellation; a refusal is reported,
+      // never thrown.
       if (selectTransportPlaying(current)) {
         if (selectTransportRecording(current)) return;
         try {
-          await session.requestTransportPatternSwitch({
-            patternId,
-            requestId: crypto.randomUUID(),
-          });
+          await session.requestTransportPatternSwitch(
+            createTransportPatternSwitchRequest(patternId, seqSnap));
         } catch (error) {
           reportFailure("Switch Pattern", error);
           return;
@@ -3180,6 +3206,8 @@ function Workspace({
                 onVelocityChange={setSequenceGridVelocity}
                 metronomeOn={metronomeOn}
                 onToggleMetronome={onToggleMetronome}
+                seqSnap={seqSnap}
+                onSeqSnapChange={onSeqSnapChange}
                 onRefresh={() => {
                   void refreshSequence();
                   void reconcileTransport();

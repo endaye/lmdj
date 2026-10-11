@@ -508,6 +508,301 @@ void full_voice_pool_with_every_tone_stage_holds_the_deadline() {
   run_full_kernel_voice_pool(true, kVerifyOptimizedDeadline);
 }
 
+using lmdj::audio::FilterGesture;
+using lmdj::audio::FilterMode;
+using lmdj::audio::FilterPhase;
+using lmdj::audio::FilterType;
+
+void typed_filter_queue_full_rejects_without_touching_accepted_state() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.prepare_master_fx(173).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+
+  // No render is draining: the bounded queue fills deterministically.
+  for (std::uint32_t index = 0; index < lmdj::audio::kRealtimeQueueCapacity;
+       ++index) {
+    LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                   FilterPhase::engage,
+                   {FilterType::low_pass,
+                    20U + index % 19'981U,
+                    static_cast<std::uint16_t>(index % 1'001U)}}) ==
+               FxEnqueueResult::accepted);
+  }
+  const auto status_full = engine.filter_control_status();
+  LMDJ_CHECK(status_full.accepted_sequence ==
+             lmdj::audio::kRealtimeQueueCapacity);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::low_pass, 800, 0}}) ==
+             FxEnqueueResult::queue_full);
+  // The rejection consumes no sequence and leaves the accepted shadow alone.
+  LMDJ_CHECK(engine.filter_control_status().accepted_sequence ==
+             lmdj::audio::kRealtimeQueueCapacity);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::low_pass, 10, 0}}) ==
+             FxEnqueueResult::invalid_value);
+  LMDJ_CHECK(engine.filter_control_status().accepted_sequence ==
+             lmdj::audio::kRealtimeQueueCapacity);
+  const auto fx_full = engine.master_fx_telemetry();
+  LMDJ_CHECK(fx_full.queued_gestures == lmdj::audio::kRealtimeQueueCapacity);
+  LMDJ_CHECK(fx_full.queue_drops == 1);
+
+  // One callback drains the full queue; applied catches up with accepted.
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  engine.render(left.data(), right.data(), left.size());
+  const auto status = engine.filter_control_status();
+  LMDJ_CHECK(status.applied.sequence == status.accepted_sequence);
+  LMDJ_CHECK(status.applied.state.mode == FilterMode::independent);
+  LMDJ_CHECK(status.applied.state.engaged);
+  const auto last = lmdj::audio::kRealtimeQueueCapacity - 1;
+  LMDJ_CHECK(status.applied.state.parameters.cutoff_hz ==
+             20U + last % 19'981U);
+  LMDJ_CHECK(status.applied.state.parameters.resonance_milli ==
+             static_cast<std::uint16_t>(last % 1'001U));
+  const auto fx = engine.master_fx_telemetry();
+  LMDJ_CHECK(fx.enqueued_filter_controls ==
+             lmdj::audio::kRealtimeQueueCapacity);
+  LMDJ_CHECK(fx.dequeued_filter_controls ==
+             lmdj::audio::kRealtimeQueueCapacity);
+  LMDJ_CHECK(fx.queued_gestures == 0);
+  engine.stop();
+}
+
+// Parameter churn under concurrent render. The real-time deadline ownership
+// stays with the two scenarios above (unchanged budgets); this test fixes
+// finiteness, bounded-queue rejection and accepted/applied conservation, so
+// it runs identically in unoptimized and sanitizer builds.
+void independent_filter_churn_stays_finite_bounded_and_coherent() {
+  constexpr std::uint32_t kFramesPerQuantum = 128;
+  constexpr std::uint32_t kQuanta = 750;
+  RealtimeEngine engine;
+  std::vector<float> sample(4'096, 0.0F);
+  for (std::size_t frame = 0; frame < sample.size(); ++frame) {
+    sample[frame] =
+        static_cast<float>(static_cast<std::int32_t>(frame % 89U) - 44) /
+        96.0F;
+  }
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.prepare_master_fx(173).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue(lmdj::audio::TriggerEvent{1, 0, 127}) ==
+      lmdj::audio::EnqueueResult::accepted);
+
+  std::atomic<bool> render_failed{false};
+  std::atomic<std::uint32_t> rendered_quanta{0};
+  // Pause handshake makes the queue-full burst deterministic: the renderer
+  // acknowledges it is between callbacks before the control thread floods
+  // the bounded queue, so rejection cannot depend on scheduling luck.
+  std::atomic<bool> pause_rendering{false};
+  std::atomic<bool> render_paused{false};
+  // Bounded renderer lead: quantum k may render only once the control thread
+  // has entered round k. The renderer can therefore never exit before the
+  // round-100 handshake — reaching it, it must pass through this spin and
+  // ACK the pause instead of leaving the control thread waiting forever.
+  std::atomic<std::uint32_t> control_round{0};
+  std::thread renderer([&] {
+    std::array<float, kFramesPerQuantum> left{};
+    std::array<float, kFramesPerQuantum> right{};
+    for (std::uint32_t quantum = 0; quantum < kQuanta; ++quantum) {
+      while (pause_rendering.load(std::memory_order_acquire) ||
+             control_round.load(std::memory_order_acquire) <= quantum) {
+        if (pause_rendering.load(std::memory_order_acquire)) {
+          render_paused.store(true, std::memory_order_release);
+        }
+        std::this_thread::yield();
+      }
+      engine.render(left.data(), right.data(), left.size());
+      for (std::size_t frame = 0; frame < left.size(); ++frame) {
+        if (!std::isfinite(left[frame]) || !std::isfinite(right[frame])) {
+          render_failed.store(true, std::memory_order_release);
+        }
+      }
+      rendered_quanta.store(quantum + 1U, std::memory_order_release);
+    }
+  });
+
+  std::uint64_t accepted_typed = 0;
+  std::uint64_t accepted_legacy = 0;
+  std::uint64_t rejected_full = 0;
+  std::uint32_t lcg = 0x12345678U;
+  const auto next = [&lcg] {
+    lcg = lcg * 1'664'525U + 1'013'904'223U;
+    return lcg >> 8;
+  };
+  const auto typed_control = [&]() -> FilterGesture {
+    const auto value = next();
+    const auto type = static_cast<FilterType>(value % 3U);
+    const auto cutoff = 20U + (value / 3U) % 19'981U;
+    const auto resonance =
+        static_cast<std::uint16_t>((value / 77U) % 1'001U);
+    const auto phase = value % 11U == 0 ? FilterPhase::engage
+                       : value % 13U == 0 ? FilterPhase::release
+                                          : FilterPhase::move;
+    return FilterGesture{phase, {type, cutoff, resonance}};
+  };
+  const auto enqueue_typed = [&](const FilterGesture& gesture) {
+    const auto result = engine.enqueue_filter_gesture(gesture);
+    if (result == FxEnqueueResult::queue_full) {
+      ++rejected_full;
+      return;
+    }
+    LMDJ_CHECK(result == FxEnqueueResult::accepted);
+    ++accepted_typed;
+  };
+  const auto enqueue_legacy = [&](FxGestureKind kind, std::uint16_t value) {
+    const auto result = engine.enqueue_fx_gesture(FxGesture{
+        kind, lmdj::domain::PerformanceFx::filter, value});
+    if (result == FxEnqueueResult::queue_full) {
+      ++rejected_full;
+      return;
+    }
+    LMDJ_CHECK(result == FxEnqueueResult::accepted);
+    ++accepted_legacy;
+  };
+
+  for (std::uint32_t round = 0; round < kQuanta; ++round) {
+    // Publish the entered round before any enqueue: the renderer may lead by
+    // at most this round, so it is always alive to answer the pause below.
+    control_round.store(round + 1U, std::memory_order_release);
+    enqueue_typed(typed_control());
+    if (round % 37U == 0) {
+      enqueue_typed(FilterGesture{
+          FilterPhase::engage,
+          {FilterType::band_pass, 20U + next() % 19'981U, 500}});
+    }
+    if (round % 53U == 0) {
+      enqueue_legacy(FxGestureKind::hold_on, 0);
+      enqueue_typed(typed_control());
+      enqueue_legacy(FxGestureKind::hold_off, 0);
+    }
+    if (round % 61U == 0) {
+      // Legacy takeover and release interleaved with typed controls.
+      enqueue_legacy(FxGestureKind::engage,
+                     static_cast<std::uint16_t>(next() % 1'001U));
+      enqueue_typed(typed_control());
+      enqueue_legacy(FxGestureKind::release, 0);
+    }
+    if (round == 100) {
+      // Deterministic flood: with the renderer paused between callbacks, the
+      // queue's free space is at most its capacity, so an 1,100-control burst
+      // must reject at least 76 controls.
+      pause_rendering.store(true, std::memory_order_release);
+      while (!render_paused.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      for (std::uint32_t burst = 0; burst < 1'100; ++burst) {
+        enqueue_typed(typed_control());
+      }
+      pause_rendering.store(false, std::memory_order_release);
+      render_paused.store(false, std::memory_order_release);
+    }
+    while (rendered_quanta.load(std::memory_order_acquire) <= round) {
+      std::this_thread::yield();
+    }
+  }
+  renderer.join();
+
+  // Drain whatever the pacing left queued, then compare the coherent final
+  // Filter state BEFORE stop(): stop() resets both halves to the epoch's
+  // neutral state, so a post-stop comparison cannot testify about the
+  // pre-stop tuple.
+  std::array<float, kFramesPerQuantum> left{};
+  std::array<float, kFramesPerQuantum> right{};
+  for (std::uint32_t quantum = 0;
+       quantum < lmdj::audio::kRealtimeQueueCapacity / kFramesPerQuantum + 1 &&
+       engine.master_fx_telemetry().queued_gestures != 0;
+       ++quantum) {
+    engine.render(left.data(), right.data(), left.size());
+  }
+  LMDJ_CHECK(engine.master_fx_telemetry().queued_gestures == 0);
+  const auto status = engine.filter_control_status();
+  LMDJ_CHECK(status.applied.sequence == status.accepted_sequence);
+  LMDJ_CHECK(status.applied.state.mode == status.accepted.mode);
+  LMDJ_CHECK(status.applied.state.engaged == status.accepted.engaged);
+  LMDJ_CHECK(status.applied.state.frozen == status.accepted.frozen);
+  LMDJ_CHECK(status.applied.state.hold == status.accepted.hold);
+  LMDJ_CHECK(status.applied.state.legacy_value == status.accepted.legacy_value);
+  LMDJ_CHECK(status.applied.state.parameters.type ==
+             status.accepted.parameters.type);
+  LMDJ_CHECK(status.applied.state.parameters.cutoff_hz ==
+             status.accepted.parameters.cutoff_hz);
+  LMDJ_CHECK(status.applied.state.parameters.resonance_milli ==
+             status.accepted.parameters.resonance_milli);
+  engine.stop();
+
+  const auto fx = engine.master_fx_telemetry();
+  LMDJ_CHECK(!render_failed.load(std::memory_order_acquire));
+  // The paused burst rejects exactly the burst minus the free space, and the
+  // free space is at most the queue capacity: at least 76 rejections.
+  LMDJ_CHECK(rejected_full >= 76);
+  LMDJ_CHECK(accepted_typed > 0);
+  LMDJ_CHECK(fx.enqueued_filter_controls == accepted_typed);
+  LMDJ_CHECK(fx.dequeued_filter_controls == accepted_typed);
+  LMDJ_CHECK(fx.queued_gestures == 0);
+  // stop() is documented to return both halves to the epoch-stamped neutral
+  // state; pin that this teardown actually happened.
+  const auto stopped = engine.filter_control_status();
+  LMDJ_CHECK(stopped.accepted_sequence == 0);
+  LMDJ_CHECK(stopped.applied.sequence == 0);
+  LMDJ_CHECK(stopped.applied.epoch == engine.telemetry().start_epoch);
+  LMDJ_CHECK(stopped.applied.state.mode == FilterMode::independent);
+  LMDJ_CHECK(!stopped.applied.state.engaged &&
+             !stopped.applied.state.frozen);
+  LMDJ_CHECK(stopped.applied.state.parameters.type == FilterType::low_pass);
+  LMDJ_CHECK(stopped.applied.state.parameters.cutoff_hz == 20'000);
+  LMDJ_CHECK(stopped.applied.state.parameters.resonance_milli == 0);
+}
+
+void filter_ack_epoch_distinguishes_engine_restarts() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.prepare_master_fx(173).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  const auto first_epoch = engine.telemetry().start_epoch;
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::high_pass, 4'000, 500}}) ==
+             FxEnqueueResult::accepted);
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  engine.render(left.data(), right.data(), left.size());
+  const auto first = engine.filter_control_status();
+  LMDJ_CHECK(first.applied.sequence == 1);
+  LMDJ_CHECK(first.applied.epoch == first_epoch);
+  LMDJ_CHECK(first.applied.state.engaged);
+  LMDJ_CHECK(first.applied.state.parameters.type == FilterType::high_pass);
+  LMDJ_CHECK(first.applied.state.parameters.cutoff_hz == 4'000);
+
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  const auto second_epoch = engine.telemetry().start_epoch;
+  LMDJ_CHECK(second_epoch == first_epoch + 1);
+  // The new epoch starts independent OFF with the approved defaults; the old
+  // epoch's applied state cannot masquerade as current.
+  const auto restarted = engine.filter_control_status();
+  LMDJ_CHECK(restarted.accepted_sequence == 0);
+  LMDJ_CHECK(restarted.applied.sequence == 0);
+  LMDJ_CHECK(restarted.applied.epoch == second_epoch);
+  LMDJ_CHECK(restarted.applied.state.mode == FilterMode::independent);
+  LMDJ_CHECK(!restarted.applied.state.engaged);
+  LMDJ_CHECK(!restarted.applied.state.frozen);
+  LMDJ_CHECK(restarted.applied.state.parameters.type ==
+             FilterType::low_pass);
+  LMDJ_CHECK(restarted.applied.state.parameters.cutoff_hz == 20'000);
+  LMDJ_CHECK(restarted.applied.state.parameters.resonance_milli == 0);
+
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::low_pass, 100, 1'000}}) ==
+             FxEnqueueResult::accepted);
+  engine.render(left.data(), right.data(), left.size());
+  const auto second = engine.filter_control_status();
+  LMDJ_CHECK(second.applied.sequence == 1);
+  LMDJ_CHECK(second.applied.epoch == second_epoch);
+  LMDJ_CHECK(second.applied.state.parameters.type == FilterType::low_pass);
+  LMDJ_CHECK(second.applied.state.parameters.cutoff_hz == 100);
+  LMDJ_CHECK(second.applied.state.parameters.resonance_milli == 1'000);
+  engine.stop();
+}
+
 }  // namespace
 
 int main() {
@@ -515,6 +810,9 @@ int main() {
     all_eight_effects_sustain_maximum_gesture_rate_without_underruns();
     full_voice_pool_with_every_kernel_stage_holds_the_deadline();
     full_voice_pool_with_every_tone_stage_holds_the_deadline();
+    typed_filter_queue_full_rejects_without_touching_accepted_state();
+    independent_filter_churn_stays_finite_bounded_and_coherent();
+    filter_ack_epoch_distinguishes_engine_restarts();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -118,11 +118,45 @@ class PatternPublicationAdmission {
   std::atomic<std::uint32_t>& mailbox_;
   bool reserved_ = true;
 };
+
+// Control-only. Beat boundaries use the same independently rounded ticks
+// within each rounded loop as Pattern events; repeating one rounded beat
+// would drift away from those events at BPMs such as 123. Bar intentionally
+// retains the existing repeated rounded-Bar policy (#1973).
+std::optional<std::uint64_t> next_pattern_switch_frame(
+    const PreparedPatternView& pattern, std::uint64_t origin,
+    std::uint64_t observed, PatternSwitchSnap snap) noexcept {
+  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+  const auto elapsed = std::max(observed, origin) - origin;
+  if (snap == PatternSwitchSnap::bar || snap == PatternSwitchSnap::pattern_end) {
+    const auto period = snap == PatternSwitchSnap::bar
+        ? pattern.bar_frames() : pattern.loop_frames();
+    const auto count = elapsed / period;
+    if (count == maximum || count + 1 > (maximum - origin) / period)
+      return std::nullopt;
+    return origin + (count + 1) * period;
+  }
+  if (snap != PatternSwitchSnap::beat) return std::nullopt;
+  const auto local = elapsed % pattern.loop_frames();
+  const auto numerator = integrate_tick_numerator(0, local, pattern.bpm(), pattern.ppq());
+  if (!numerator) return std::nullopt;
+  const auto next_tick = (whole_tick(*numerator) / pattern.ppq() + 1) * pattern.ppq();
+  const auto boundary = tick_boundary_frame(next_tick, pattern.bpm(), pattern.ppq());
+  const auto loop_offset = elapsed - local;
+  if (!boundary.has_value() || loop_offset > maximum - origin ||
+      boundary.value() > maximum - origin - loop_offset) return std::nullopt;
+  return origin + loop_offset + boundary.value();
+}
 static_assert(std::atomic<std::uint16_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(
     kRealtimeMaximumSampleFrames ==
     std::numeric_limits<decltype(cooker::ResolvedPlayback::end_frame)>::max());
+// prepare_master_fx prepares the chain at the fixed realtime rate, which is
+// exactly the typed Filter admission rate; this pin keeps the chain's
+// non-48 kHz typed refusal unreachable through the engine, so the accepted
+// shadow and the audio thread can never diverge on it.
+static_assert(kFilterTypedSampleRate == kRealtimeSampleRate);
 
 foundation::Result<void> invalid_argument(std::string message) {
   return foundation::Result<void>::failure(
@@ -277,6 +311,7 @@ void RealtimeEngine::publish_audio_observation() noexcept {
       start_epoch_, observed_claimed_through_,
       observed_current_pattern_generation_, observed_audio_pending_,
       transport_canceled_publications_,
+      dequeued_filter_controls_,
   });
 }
 
@@ -304,6 +339,7 @@ void RealtimeEngine::publish_control_observation() noexcept {
       fx_queue_drops_,
       enqueued_tempo_updates_,
       observed_last_queued_, observed_last_audio_cancel_,
+      enqueued_filter_controls_,
   });
 }
 
@@ -1196,8 +1232,15 @@ PatternPublication RealtimeEngine::publish_pattern_view(
 PatternPublication RealtimeEngine::publish_pattern_switch_view(
     PreparedPatternView&& pattern,
     std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
+  return publish_pattern_switch_view(std::move(pattern), PatternSwitchSnap::bar,
+      std::move(replacement_authority));
+}
+
+PatternPublication RealtimeEngine::publish_pattern_switch_view(
+    PreparedPatternView&& pattern, PatternSwitchSnap snap,
+    std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
   return publish_pattern_view_impl(std::move(pattern), std::nullopt,
-      std::move(replacement_authority), PatternPublicationTiming::switch_bar);
+      std::move(replacement_authority), PatternPublicationTiming::switch_bar, 0, snap);
 }
 
 PatternPublication RealtimeEngine::publish_pattern_view_immediate(
@@ -1217,7 +1260,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
     std::optional<PatternReplacementAuthority> replacement_authority,
-    PatternPublicationTiming timing, std::uint64_t expected_generation) noexcept {
+    PatternPublicationTiming timing, std::uint64_t expected_generation,
+    PatternSwitchSnap snap) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   if (pattern_transport_reserved_) {
     ++pattern_publication_rejections_;
@@ -1297,7 +1341,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           observed_queued_token == 0 && observed_audio_generation != 0;
       if (pending->activation_frame >= observed_frame && !claimed_switch) {
         observed_pending_activation = pending->activation_frame;
-      } else if (observed_queued_token == 0 && observed_audio_generation != 0) {
+      } else if (timing != PatternPublicationTiming::switch_bar &&
+                 observed_queued_token == 0 && observed_audio_generation != 0) {
         const auto bar_frames = pending->pattern->bar_frames();
         const auto elapsed = std::max(observed_frame, pending->activation_frame) -
             pending->activation_frame;
@@ -1310,10 +1355,6 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           claimed_next_activation =
               pending->activation_frame + (bars + 1) * bar_frames;
         }
-      }
-      if (claimed_switch && !claimed_next_activation) {
-        ++pattern_publication_rejections_;
-        return {PatternPublishResult::publish_queue_full, 0, 0};
       }
       if (pending->pattern->project_id() != pattern.project_id() ||
           (!authorized_replacement &&
@@ -1388,7 +1429,25 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       const auto observed_frame =
           transport_decision_.read().rendered_frames;
       activation_frame = observed_frame;
-      if (timing == PatternPublicationTiming::immediate ||
+      if (timing == PatternPublicationTiming::switch_bar && current != kNoPatternSlot) {
+        const auto* geometry = &*pattern_slots_[current].pattern;
+        auto origin = transport_decision_.read().pattern_origin_frame;
+        if (observed_audio_generation != 0) {
+          // Includes replacing unclaimed C while B already belongs to audio:
+          // C still follows B's geometry, never the old current A's clock.
+          const auto& predecessor = pattern_slots_[pattern_slot_token(observed_audio_mailbox) - 1];
+          geometry = &*predecessor.pattern;
+          origin = predecessor.activation_frame;
+        }
+        const auto selected = next_pattern_switch_frame(*geometry, origin, observed_frame, snap);
+        if (!selected) {
+          slot->pattern.reset();
+          slot->generation = 0;
+          ++pattern_publication_rejections_;
+          return {PatternPublishResult::publish_queue_full, 0, 0};
+        }
+        activation_frame = *selected;
+      } else if (timing == PatternPublicationTiming::immediate ||
           timing == PatternPublicationTiming::preserve_phase) {
         activation_frame = observed_frame;
       } else if (authorized_replacement &&
@@ -1933,7 +1992,17 @@ foundation::Result<void> RealtimeEngine::start() {
   enqueued_tempo_updates_ = 0;
   applied_tempo_updates_ = 0;
   current_master_fx_bpm_.store(master_fx_.bpm(), std::memory_order_relaxed);
+  accepted_filter_state_ = FilterLiveState{};
+  accepted_filter_sequence_ = 0;
+  enqueued_filter_controls_ = 0;
+  applied_filter_sequence_ = 0;
+  dequeued_filter_controls_ = 0;
   start_epoch_ = start_epoch + 1;
+  // Quiescent writer handoff: the new epoch's applied Filter state is the
+  // chain's reset independent OFF, so a stale pre-restart ACK is distinguishable
+  // by epoch and content.
+  filter_applied_channel_.publish(
+      FilterAppliedState{master_fx_.filter_state(), 0, start_epoch_});
   observed_audio_pending_ = {};
   observed_last_queued_ = {};
   observed_claimed_through_ = 0;
@@ -1973,6 +2042,13 @@ void RealtimeEngine::stop() noexcept {
   fx_queue_.clear_quiescent();
   queued_fx_gestures_.store(0, std::memory_order_relaxed);
   master_fx_.reset();
+  // Stopped is neutral: the accepted shadow and the applied snapshot both
+  // return to the default independent OFF of the current epoch.
+  accepted_filter_state_ = FilterLiveState{};
+  accepted_filter_sequence_ = 0;
+  applied_filter_sequence_ = 0;
+  filter_applied_channel_.publish(
+      FilterAppliedState{master_fx_.filter_state(), 0, start_epoch_});
 
   std::uint64_t active = 0;
   for (auto& voice : voices_) {
@@ -2177,12 +2253,16 @@ FxEnqueueResult RealtimeEngine::enqueue_fx_gesture(
   testing::invoke_realtime_hook(testing::RealtimeHookPoint::fx_reserved);
 #endif
   if (!fx_queue_.try_push(MasterFxControlEvent{
-          MasterFxControlKind::gesture, gesture, 0})) {
+          MasterFxControlKind::gesture, gesture, {}, 0, 0})) {
     queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
     fx_queue_drops_ += 1;
     return FxEnqueueResult::queue_full;
   }
   enqueued_fx_gestures_ += 1;
+  // Legacy Filter gestures and HOLD move the accepted Filter shadow with the
+  // same pure transition the chain applies on the audio thread.
+  accepted_filter_state_ = MasterFxChain::filter_live_state_after(
+      accepted_filter_state_, gesture);
   return FxEnqueueResult::accepted;
 }
 
@@ -2199,12 +2279,54 @@ FxEnqueueResult RealtimeEngine::enqueue_master_fx_tempo(
     return FxEnqueueResult::invalid_bpm;
   }
   if (!fx_queue_.try_push(MasterFxControlEvent{
-          MasterFxControlKind::tempo, {}, bpm})) {
+          MasterFxControlKind::tempo, {}, {}, 0, bpm})) {
     fx_queue_drops_ += 1;
     return FxEnqueueResult::queue_full;
   }
   enqueued_tempo_updates_ += 1;
   return FxEnqueueResult::accepted;
+}
+
+FxEnqueueResult RealtimeEngine::enqueue_filter_gesture(
+    FilterGesture gesture) noexcept {
+  const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    return FxEnqueueResult::not_running;
+  }
+  if (!master_fx_.prepared()) {
+    return FxEnqueueResult::not_prepared;
+  }
+  // engage/move carry the full typed tuple; a release's parameters come from
+  // current state, so only engage/move validate the tuple.
+  if (gesture.phase != FilterPhase::release &&
+      !MasterFxChain::valid_filter_parameters(gesture.parameters)) {
+    return FxEnqueueResult::invalid_value;
+  }
+  // Reserve a cell of the same bounded queue before assigning the accepted
+  // sequence: a full queue rejects without touching the accepted shadow.
+  queued_fx_gestures_.fetch_add(1, std::memory_order_relaxed);
+  if (!fx_queue_.try_push(MasterFxControlEvent{
+          MasterFxControlKind::filter,
+          {},
+          gesture,
+          accepted_filter_sequence_ + 1,
+          0})) {
+    queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+    fx_queue_drops_ += 1;
+    return FxEnqueueResult::queue_full;
+  }
+  accepted_filter_sequence_ += 1;
+  accepted_filter_state_ = MasterFxChain::filter_live_state_after(
+      accepted_filter_state_, gesture);
+  enqueued_filter_controls_ += 1;
+  return FxEnqueueResult::accepted;
+}
+
+FilterControlStatus RealtimeEngine::filter_control_status() const noexcept {
+  return FilterControlStatus{
+      accepted_filter_state_,
+      accepted_filter_sequence_,
+      filter_applied_channel_.read()};
 }
 
 void RealtimeEngine::claim_queued_pattern(bool switch_only) noexcept {
@@ -2260,6 +2382,7 @@ void RealtimeEngine::render(
   max_callback_frames_ = std::max(max_callback_frames_, frames);
 
   MasterFxControlEvent fx_control{};
+  auto filter_state_dirty = false;
   for (std::size_t processed = 0;
        processed < kRealtimeQueueCapacity &&
        fx_queue_.try_pop(fx_control);
@@ -2271,12 +2394,26 @@ void RealtimeEngine::render(
       testing::invoke_realtime_hook(testing::RealtimeHookPoint::fx_popped);
 #endif
       queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+      filter_state_dirty = true;
+    } else if (fx_control.kind == MasterFxControlKind::filter) {
+      static_cast<void>(master_fx_.apply_filter_gesture(fx_control.filter));
+      applied_filter_sequence_ = fx_control.sequence;
+      dequeued_filter_controls_ += 1;
+      queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+      filter_state_dirty = true;
     } else {
       static_cast<void>(master_fx_.set_bpm(fx_control.bpm));
       current_master_fx_bpm_.store(
           fx_control.bpm, std::memory_order_relaxed);
       applied_tempo_updates_ += 1;
     }
+  }
+  if (filter_state_dirty) {
+    // Publish the coherent applied Filter state once per quantum, after the
+    // drain: accepted and applied stay separate, and the epoch stamps which
+    // engine start produced this snapshot.
+    filter_applied_channel_.publish(FilterAppliedState{
+        master_fx_.filter_state(), applied_filter_sequence_, start_epoch_});
   }
 
   auto capture_state = CaptureState::arm_pending;
@@ -2905,6 +3042,8 @@ MasterFxTelemetry RealtimeEngine::master_fx_telemetry() const noexcept {
       c.enqueued_tempo_updates_,
       a.applied_tempo_updates_,
       current_master_fx_bpm_.load(std::memory_order_relaxed),
+      c.enqueued_filter_controls_,
+      a.dequeued_filter_controls_,
   };
 }
 

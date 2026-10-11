@@ -9053,7 +9053,8 @@ constexpr std::string_view kSwitchPatternC =
     "00000000-0000-4000-8000-0000000000b3";
 
 std::unique_ptr<ControlRuntime> switch_test_runtime(
-    TempDirectory& temp, FakeCoordinator& coordinator, bool with_third) {
+    TempDirectory& temp, FakeCoordinator& coordinator, bool with_third,
+    unsigned current_bars = 1, unsigned target_bars = 1) {
   auto runtime = make_runtime(temp.path());
   check_success(
       runtime->dispatch("project.create", create_opted_in_project(), {}));
@@ -9064,7 +9065,7 @@ std::unique_ptr<ControlRuntime> switch_test_runtime(
       {{"command_id", uuid(9832)},
        {"expected_revision", 2},
        {"pattern_id", kSwitchPatternB},
-       {"bars", 1}},
+       {"bars", target_bars}},
       {}));
   if (with_third) {
     check_success(runtime->dispatch(
@@ -9074,6 +9075,11 @@ std::unique_ptr<ControlRuntime> switch_test_runtime(
          {"pattern_id", kSwitchPatternC},
          {"bars", 1}},
         {}));
+  }
+  if (current_bars != 1) {
+    check_success(runtime->dispatch("pattern.resize",
+        {{"command_id", uuid(9834)}, {"expected_revision", with_third ? 4 : 3},
+         {"pattern_id", kPatternId}, {"bars", current_bars}}, {}));
   }
   check_success(
       runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
@@ -9088,8 +9094,22 @@ std::unique_ptr<ControlRuntime> switch_test_runtime(
   return runtime;
 }
 
-Json transport_switch_request(std::string_view pattern, std::uint32_t suffix) {
-  return {{"pattern_id", pattern}, {"request_id", uuid(suffix)}};
+Json transport_switch_request(std::string_view pattern, std::uint32_t suffix,
+    std::string_view snap = {}) {
+  Json request{{"pattern_id", pattern}, {"request_id", uuid(suffix)}};
+  if (!snap.empty()) request["snap"] = snap;
+  return request;
+}
+
+// S4 assertions name individual frames; the older grid helper deliberately
+// rounds its requests up to a render quantum and cannot prove this boundary.
+void render_switch_frames_exact(RealtimeEngine& engine, std::uint64_t frames) {
+  std::array<float, 128> left{}, right{};
+  while (frames != 0) {
+    const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, left.size()));
+    engine.render(left.data(), right.data(), count);
+    frames -= count;
+  }
 }
 
 void test_stopped_snapshot_selection_applies_before_the_next_play() {
@@ -9141,6 +9161,458 @@ Json settled_transport_status(
     }
   }
   throw std::runtime_error("Pattern transport did not settle");
+}
+
+// Advance only audio at a one-shot Host cutpoint. No Host inspection or
+// continuation can settle the handoff on the request's behalf.
+struct TransportSwitchHandoff final {
+  RealtimeEngine& engine;
+  std::uint64_t target_frontier;
+  bool invoked{};
+  std::uint64_t from{};
+  static void render(void* context) noexcept {
+    auto& handoff = *static_cast<TransportSwitchHandoff*>(context);
+    handoff.invoked = true;
+    handoff.from = handoff.engine.telemetry().rendered_frames;
+    if (handoff.from < handoff.target_frontier) {
+      render_switch_frames_exact(handoff.engine, handoff.target_frontier - handoff.from);
+    }
+  }
+};
+
+void test_transport_current_pattern_withdraws_both_exact_authorities() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 10100);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  const auto truth = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project");
+  const auto b = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 10101, "beat"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(b.at("activation_frame") == 24'000);
+  render_switch_frames_exact(engine, 1); // B is audio-owned, C will remain in Q.
+  const auto c = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 10102, "pattern_end"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(c.at("activation_frame") == 216'000); // 24000 + two Bars at 120 BPM.
+  const auto before = engine.pattern_transport_observation();
+  LMDJ_CHECK(before && before->pending_switches[0] && before->pending_switches[1]);
+  const auto b_generation = before->pending_switches[0]->generation;
+  const auto accepted = engine.pattern_telemetry().accepted_publications;
+  const auto canceled = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kPatternId, 10103, "beat"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(canceled.at("activation_frame").is_null());
+  const auto withdrawn = engine.pattern_transport_observation();
+  LMDJ_CHECK(withdrawn && !withdrawn->pending_switches[0] && !withdrawn->pending_switches[1]);
+  LMDJ_CHECK(withdrawn->outstanding_cancellation);
+  LMDJ_CHECK(withdrawn->outstanding_cancellation->generation == b_generation);
+  LMDJ_CHECK(withdrawn->outstanding_cancellation->pattern_id.value() == kSwitchPatternB);
+  LMDJ_CHECK(withdrawn->outstanding_cancellation->activation_frame == 24'000);
+  LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 2);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  render_switch_frames_exact(engine, 216'001 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10104, 2, "play_stop"), {}));
+  const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("playing") == false && status.at("phase") == "idle";
+  });
+  LMDJ_CHECK(stopped.at("error").is_null() && stopped.at("recording") == false);
+  LMDJ_CHECK(stopped.at("transport_epoch") == 2 && stopped.at("origin_frame") == 0);
+  LMDJ_CHECK(stopped.at("current_pattern_id") == kPatternId && stopped.at("pending_switch").is_null());
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == accepted);
+  LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 2);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project") == truth);
+}
+
+void test_transport_current_pattern_cancel_race_requeues_after_predecessor_applies() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 10110);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 10111, "beat"), {}));
+  render_switch_frames_exact(engine, 1);
+  const auto c = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 10112, "pattern_end"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(c.at("activation_frame") == 216'000);
+  // The current-A press cancels C, then B applies before its cancellation.
+  TransportSwitchHandoff handoff{engine, 24'001};
+  lmdj::web_runtime::testing::CancelPendingSwitchHook hook{
+      &handoff, &TransportSwitchHandoff::render};
+  lmdj::web_runtime::testing::set_cancel_pending_switch_hook(&hook);
+  const auto response = runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kPatternId, 10113, "beat"), {});
+  lmdj::web_runtime::testing::set_cancel_pending_switch_hook(nullptr);
+  const auto back = check_exact_success(response, {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(handoff.invoked && handoff.from == 129);
+  LMDJ_CHECK(back.at("activation_frame") == 48'000); // B origin 24000 + one Beat.
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 24'000);
+  const auto pending = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(pending.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(pending.at("pending_switch").at("pattern_id") == kPatternId);
+  LMDJ_CHECK(pending.at("pending_switch").at("activation_frame") == 48'000);
+  LMDJ_CHECK(runtime->dispatch("host.status", Json::object(), {}).at("result").at("pattern_id") == kSwitchPatternB);
+  render_switch_frames_exact(engine, 48'000 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  render_switch_frames_exact(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 48'000);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10114, 2, "play_stop"), {}));
+  const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("playing") == false && status.at("phase") == "idle";
+  });
+  LMDJ_CHECK(stopped.at("error").is_null() && stopped.at("current_pattern_id") == kPatternId);
+  LMDJ_CHECK(stopped.at("origin_frame") == 48'000 && stopped.at("pending_switch").is_null());
+  render_switch_frames_exact(engine, 216'001 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 48'000);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 1); // C only; B really applied.
+  LMDJ_CHECK(engine.pattern_telemetry().superseded_publications == 0);
+}
+
+void test_transport_predecessor_press_after_successor_claim_queues_behind_successor() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 10120);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 10121, "beat"), {}));
+  render_switch_frames_exact(engine, 1);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 10122, "pattern_end"), {}));
+  // Host has observed B pending, but audio applies B and claims C before
+  // the predecessor-press branch attempts unclaimed-only cancellation of C.
+  TransportSwitchHandoff handoff{engine, 24'001};
+  lmdj::web_runtime::testing::CancelPendingSwitchHook hook{
+      &handoff, &TransportSwitchHandoff::render};
+  lmdj::web_runtime::testing::set_cancel_pending_switch_hook(&hook);
+  const auto response = runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 10123, "beat"), {});
+  lmdj::web_runtime::testing::set_cancel_pending_switch_hook(nullptr);
+  const auto back = check_exact_success(response, {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(handoff.invoked && handoff.from == 129);
+  LMDJ_CHECK(back.at("activation_frame") == 240'000); // C origin 216000 + one Beat.
+  const auto observed = engine.pattern_transport_observation();
+  LMDJ_CHECK(observed && observed->current_pattern && observed->current_pattern->value() == kSwitchPatternB);
+  LMDJ_CHECK(observed->current_origin_frame == 24'000);
+  LMDJ_CHECK(observed->pending_switches[0] && observed->pending_switches[1]);
+  LMDJ_CHECK(observed->pending_switches[0]->pattern_id.value() == kSwitchPatternC);
+  LMDJ_CHECK(observed->pending_switches[0]->activation_frame == 216'000);
+  LMDJ_CHECK(observed->pending_switches[1]->pattern_id.value() == kSwitchPatternB);
+  LMDJ_CHECK(observed->pending_switches[1]->activation_frame == 240'000);
+  render_switch_frames_exact(engine, 216'000 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  render_switch_frames_exact(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternC);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 216'000);
+  const auto middle = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(middle.at("current_pattern_id") == kSwitchPatternC);
+  LMDJ_CHECK(middle.at("pending_switch").at("pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(middle.at("pending_switch").at("activation_frame") == 240'000);
+  LMDJ_CHECK(runtime->dispatch("host.status", Json::object(), {}).at("result").at("pattern_id") == kSwitchPatternC);
+  render_switch_frames_exact(engine, 240'000 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternC);
+  render_switch_frames_exact(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 240'000);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10124, 2, "play_stop"), {}));
+  const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("playing") == false && status.at("phase") == "idle";
+  });
+  LMDJ_CHECK(stopped.at("error").is_null() && stopped.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(stopped.at("origin_frame") == 240'000 && stopped.at("pending_switch").is_null());
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().superseded_publications == 0);
+}
+
+void test_transport_latest_successor_prepublication_handoff_retains_stop_authorities() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  const auto fourth = uuid(10130);
+  check_success(runtime->dispatch("pattern.create",
+      {{"command_id", uuid(10131)}, {"expected_revision", project_revision_of(*runtime)},
+       {"pattern_id", fourth}, {"bars", 1}}, {}));
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 10132);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 10133, "beat"), {}));
+  render_switch_frames_exact(engine, 1);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 10134, "pattern_end"), {}));
+  // Host retained B/C from its observation. Before native D admission,
+  // audio applies B and hands Q's C to audio; D must queue behind C.
+  TransportSwitchHandoff handoff{engine, 24'001};
+  lmdj::web_runtime::testing::SequenceSwitchPublicationHook hook{
+      &handoff, &TransportSwitchHandoff::render};
+  lmdj::web_runtime::testing::set_sequence_switch_publication_hook(&hook);
+  const auto response = runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(fourth, 10135, "beat"), {});
+  lmdj::web_runtime::testing::set_sequence_switch_publication_hook(nullptr);
+  const auto latest = check_exact_success(response, {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(handoff.invoked && handoff.from == 129);
+  LMDJ_CHECK(latest.at("activation_frame") == 240'000);
+  const auto pending = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(pending.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(pending.at("pending_switch").at("pattern_id") == fourth);
+  LMDJ_CHECK(pending.at("pending_switch").at("activation_frame") == 240'000);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 24'000);
+  const auto observed = engine.pattern_transport_observation();
+  LMDJ_CHECK(observed && observed->pending_switches[0] && observed->pending_switches[1]);
+  LMDJ_CHECK(observed->pending_switches[0]->pattern_id.value() == kSwitchPatternC);
+  LMDJ_CHECK(observed->pending_switches[0]->activation_frame == 216'000);
+  LMDJ_CHECK(observed->pending_switches[1]->pattern_id.value() == fourth);
+  LMDJ_CHECK(observed->pending_switches[1]->activation_frame == 240'000);
+  const auto accepted = engine.pattern_telemetry().accepted_publications;
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10136, 2, "play_stop"), {}));
+  const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("playing") == false && status.at("phase") == "idle";
+  });
+  LMDJ_CHECK(stopped.at("error").is_null() && stopped.at("recording") == false);
+  LMDJ_CHECK(stopped.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(stopped.at("origin_frame") == 24'000 && stopped.at("transport_epoch") == 2);
+  LMDJ_CHECK(stopped.at("pending_switch").is_null());
+  render_switch_frames_exact(engine, 240'001 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 24'000);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 2); // C and D, never B.
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == accepted);
+  LMDJ_CHECK(engine.pattern_telemetry().superseded_publications == 0);
+}
+
+void test_transport_switch_snap_lands_at_its_exact_frame() {
+  for (const auto& [snap, offset] : std::array{
+       std::pair{"beat", 24'000ULL}, std::pair{"bar", 96'000ULL},
+       std::pair{"pattern_end", 192'000ULL}}) {
+    TempDirectory temp;
+    FakeCoordinator coordinator;
+    auto runtime = switch_test_runtime(temp, coordinator, false, 2);
+    auto& engine = runtime->engine();
+    play_grid_transport(*runtime, 9901);
+    const auto origin = *engine.current_pattern_origin_frame();
+    const auto truth = runtime->dispatch("project.inspect", Json::object(), {})
+        .at("result").at("project");
+    const auto result = check_exact_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternB, 9902, snap), {}),
+        {"pattern_id", "activation_frame"});
+    const auto frame = result.at("activation_frame").get<std::uint64_t>();
+    LMDJ_CHECK(frame == origin + offset);
+    render_switch_frames_exact(engine, frame - engine.telemetry().rendered_frames);
+    LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+    render_switch_frames_exact(engine, 1);
+    LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+    LMDJ_CHECK(engine.current_pattern_origin_frame() == frame); // New target starts at zero.
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    LMDJ_CHECK(status.at("current_pattern_id") == kSwitchPatternB);
+    LMDJ_CHECK(status.at("pending_switch").is_null());
+    LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {})
+        .at("result").at("project") == truth);
+  }
+}
+
+void test_transport_switch_replacement_can_change_snap() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9910);
+  const auto origin = *engine.current_pattern_origin_frame();
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9911, "pattern_end"), {}));
+  const auto result = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 9912, "beat"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(result.at("activation_frame") == origin + 24'000);
+  render_switch_frames_exact(engine, origin + 24'000 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+  render_switch_frames_exact(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternC);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == origin + 24'000);
+  LMDJ_CHECK(engine.pattern_telemetry().superseded_publications == 1);
+}
+
+void test_transport_switch_each_snap_can_be_withdrawn() {
+  for (const auto snap : {"beat", "bar", "pattern_end"}) {
+    TempDirectory temp;
+    FakeCoordinator coordinator;
+    auto runtime = switch_test_runtime(temp, coordinator, false, 2);
+    auto& engine = runtime->engine();
+    play_grid_transport(*runtime, 9920);
+    const auto first = check_exact_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternB, 9921, snap), {}),
+        {"pattern_id", "activation_frame"});
+    render_switch_frames_exact(engine, 1); // Also exercise audio-owned cancellation.
+    const auto canceled = check_exact_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kPatternId, 9922, snap), {}),
+        {"pattern_id", "activation_frame"});
+    LMDJ_CHECK(canceled.at("activation_frame").is_null());
+    const auto frame = first.at("activation_frame").get<std::uint64_t>();
+    render_switch_frames_exact(engine, frame - engine.telemetry().rendered_frames + 1);
+    LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+    LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+    LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  }
+}
+
+void test_transport_stop_cancels_each_snap_and_both_claimed_authorities() {
+  for (const auto snap : {"beat", "bar", "pattern_end"}) {
+    TempDirectory temp;
+    FakeCoordinator coordinator;
+    auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+    auto& engine = runtime->engine();
+    play_grid_transport(*runtime, 9930);
+    check_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternB, 9931, snap), {}));
+    render_switch_frames_exact(engine, 1);
+    const auto successor = check_exact_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternC, 9932, snap), {}),
+        {"pattern_id", "activation_frame"});
+    check_success(runtime->dispatch("pattern.transport.request",
+        pattern_transport_request_payload(kSequenceSessionId, 9933, 2, "play_stop"), {}));
+    const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
+      return status.at("playing") == false && status.at("phase") == "idle";
+    });
+    LMDJ_CHECK(stopped.at("error").is_null());
+    const auto frame = successor.at("activation_frame").get<std::uint64_t>();
+    render_switch_frames_exact(engine, frame - engine.telemetry().rendered_frames + 1);
+    LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+    LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+    LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 2);
+    LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  }
+}
+
+void test_transport_claimed_successor_lands_without_host_cadence() {
+  for (const auto& [snap, successor_offset] : std::array{
+       std::pair{"beat", 48'000ULL}, std::pair{"bar", 120'000ULL},
+       std::pair{"pattern_end", 216'000ULL}}) {
+    TempDirectory temp;
+    FakeCoordinator coordinator;
+    auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+    auto& engine = runtime->engine();
+    play_grid_transport(*runtime, 9940);
+    const auto origin = *engine.current_pattern_origin_frame();
+    check_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternB, 9941, "beat"), {}));
+    render_switch_frames_exact(engine, 1);
+    const auto successor = check_exact_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternC, 9942, snap), {}),
+        {"pattern_id", "activation_frame"});
+    LMDJ_CHECK(successor.at("activation_frame") == origin + successor_offset);
+    const auto count = static_cast<std::uint32_t>(origin + successor_offset + 1 -
+        engine.telemetry().rendered_frames);
+    std::vector<float> left(count), right(count);
+    engine.render(left.data(), right.data(), count); // Crosses B and C in ONE callback.
+    LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternC);
+    LMDJ_CHECK(engine.current_pattern_origin_frame() == origin + successor_offset);
+    const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    LMDJ_CHECK(status.at("current_pattern_id") == kSwitchPatternC);
+    LMDJ_CHECK(status.at("pending_switch").is_null());
+  }
+}
+
+void test_transport_claimed_predecessor_is_selection_before_successor_applies() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9950);
+  const auto origin = *engine.current_pattern_origin_frame();
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9951, "beat"), {}));
+  render_switch_frames_exact(engine, 1);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 9952, "pattern_end"), {}));
+  render_switch_frames_exact(engine, origin + 24'000 + 1 - engine.telemetry().rendered_frames);
+  const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(status.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(status.at("pending_switch").at("pattern_id") == kSwitchPatternC);
+  LMDJ_CHECK(status.at("pending_switch").at("activation_frame") == origin + 216'000);
+  LMDJ_CHECK(runtime->dispatch("host.status", Json::object(), {})
+      .at("result").at("pattern_id") == kSwitchPatternB);
+}
+
+void test_transport_switch_rejects_invalid_snap() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  for (const auto& snap : std::array<Json, 6>{"off", "BEAT", "", nullptr, 1, Json::object()}) {
+    auto request = transport_switch_request(kSwitchPatternB, 9960);
+    request["snap"] = snap;
+    check_error(runtime->dispatch("pattern.transport.switch", request, {}), "HOST_PROTOCOL_MISMATCH");
+  }
+}
+
+void test_transport_latest_unclaimed_successor_uses_predecessor_snap_clock() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  const auto fourth = uuid(9961);
+  check_success(runtime->dispatch("pattern.create",
+      {{"command_id", uuid(9962)}, {"expected_revision", project_revision_of(*runtime)},
+       {"pattern_id", fourth}, {"bars", 1}}, {}));
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9963);
+  const auto origin = *engine.current_pattern_origin_frame();
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9964, "beat"), {}));
+  render_switch_frames_exact(engine, 1);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 9965, "pattern_end"), {}));
+  const auto replaced = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(fourth, 9966, "beat"), {}), {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(replaced.at("activation_frame") == origin + 48'000);
+  render_switch_frames_exact(engine, origin + 24'001 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId)
+      .at("current_pattern_id") == kSwitchPatternB);
+  render_switch_frames_exact(engine, 23'999);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  render_switch_frames_exact(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == fourth);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == origin + 48'000);
+}
+
+void test_transport_pressing_claimed_predecessor_withdraws_only_successor() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, true, 2, 2);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 9970);
+  const auto origin = *engine.current_pattern_origin_frame();
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9971, "beat"), {}));
+  render_switch_frames_exact(engine, 1);
+  check_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternC, 9972, "pattern_end"), {}));
+  const auto retained = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 9973, "beat"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(retained.at("activation_frame") == origin + 24'000);
+  render_switch_frames_exact(engine, origin + 216'001 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == origin + 24'000);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
 }
 
 void test_transport_switch_applies_at_the_reported_boundary() {
@@ -9249,8 +9721,8 @@ void test_transport_switch_after_the_claim_defers_to_the_following_bar() {
   // One render quantum claims the publication for the audio thread.
   static_cast<void>(render_grid_frames(engine, 128));
 
-  // The claimed switch still lands at its Bar; the new target waits behind
-  // it for the following Bar and is not published yet.
+  // The claimed B keeps its Bar; native audio already holds B and Q holds
+  // the successor C for the following Bar, without a Host cadence publish.
   const auto second = check_exact_success(
       runtime->dispatch(
           "pattern.transport.switch",
@@ -9262,7 +9734,7 @@ void test_transport_switch_after_the_claim_defers_to_the_following_bar() {
       boundary + 96'000);
   LMDJ_CHECK(
       engine.pending_pattern_id() ==
-      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+      lmdj::foundation::PatternId{std::string(kSwitchPatternC)});
   const auto queued = pattern_transport_inspect(*runtime, kSequenceSessionId);
   LMDJ_CHECK(queued.at("current_pattern_id") == kPatternId);
   LMDJ_CHECK(queued.at("pending_switch").at("pattern_id") == kSwitchPatternC);
@@ -9270,8 +9742,8 @@ void test_transport_switch_after_the_claim_defers_to_the_following_bar() {
       queued.at("pending_switch").at("activation_frame").get<std::uint64_t>() ==
       boundary + 96'000);
 
-  // The claimed switch lands at its boundary; the next observation publishes
-  // the deferred target for the following Bar.
+  // B lands at its boundary; inspect follows B while C remains natively
+  // queued for the following Bar.
   static_cast<void>(render_grid_frames(
       engine, boundary - engine.telemetry().rendered_frames + 129));
   LMDJ_CHECK(
@@ -9491,6 +9963,121 @@ void test_transport_record_after_an_applied_switch_records_the_new_pattern() {
   LMDJ_CHECK(patterns.at(kPatternId).at("events").empty());
 }
 
+void test_transport_record_after_cancellation_opens_from_the_production_receipt() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = switch_test_runtime(temp, coordinator, false);
+  auto& engine = runtime->engine();
+  play_grid_transport(*runtime, 10140);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  const auto initial = engine.pattern_transport_observation();
+  LMDJ_CHECK(initial && initial->current_pattern && initial->current_pattern->value() == kPatternId);
+  const auto a_generation = initial->current_generation;
+  const auto b = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kSwitchPatternB, 10141, "beat"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(b.at("activation_frame") == 24'000);
+  render_switch_frames_exact(engine, 1);
+  const auto claimed = engine.pattern_transport_observation();
+  LMDJ_CHECK(claimed && claimed->pending_switches[0]);
+  const auto b_generation = claimed->pending_switches[0]->generation;
+  const auto canceled = check_exact_success(runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kPatternId, 10142, "beat"), {}),
+      {"pattern_id", "activation_frame"});
+  LMDJ_CHECK(canceled.at("activation_frame").is_null());
+  const auto outstanding = engine.pattern_transport_observation();
+  LMDJ_CHECK(outstanding && !outstanding->pending_switches[0] && !outstanding->pending_switches[1]);
+  LMDJ_CHECK(outstanding->outstanding_cancellation);
+  LMDJ_CHECK(outstanding->outstanding_cancellation->generation == b_generation);
+  LMDJ_CHECK(outstanding->outstanding_cancellation->pattern_id.value() == kSwitchPatternB);
+  LMDJ_CHECK(outstanding->outstanding_cancellation->activation_frame == 24'000);
+  LMDJ_CHECK(engine.telemetry().rendered_frames == 129);
+  LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 1);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  const auto truth_before = inspect_project(temp.path(), kProjectId).at("result").at("project");
+  const auto no_journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!no_journal.has_value() && no_journal.error().code == lmdj::foundation::ErrorCode::not_found);
+
+  // Production EnginePatternTransportPort must carry canceled B into the
+  // fence, then open a fresh A admission from that receipt. This is not a
+  // recording-time Pattern switch and grants no S3 permission.
+  const auto ticket = check_exact_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10143, 2, "record"), {}),
+      {"session_id", "command_id", "submit", "status"});
+  LMDJ_CHECK(ticket.at("submit") == "accepted");
+  LMDJ_CHECK(ticket.at("status").at("phase") == "awaiting_audio");
+  LMDJ_CHECK(ticket.at("status").at("recording") == false);
+  LMDJ_CHECK(ticket.at("status").at("current_pattern_id") == kPatternId);
+  const auto before_receipt = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!before_receipt.has_value() && before_receipt.error().code == lmdj::foundation::ErrorCode::not_found);
+  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 96}}, {}));
+  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto live_only = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!live_only.has_value() && live_only.error().code == lmdj::foundation::ErrorCode::not_found);
+  LMDJ_CHECK(engine.telemetry().rendered_frames == 129); // No receipt or early admission.
+
+  const auto recording = settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == true && status.at("phase") == "idle";
+  });
+  LMDJ_CHECK(recording.at("playing") == true && recording.at("error").is_null());
+  LMDJ_CHECK(recording.at("current_pattern_id") == kPatternId && recording.at("pending_switch").is_null());
+  LMDJ_CHECK(recording.at("origin_frame") == 0 && recording.at("transport_epoch") == 2);
+  const auto fenced = engine.pattern_transport_observation();
+  LMDJ_CHECK(fenced && !fenced->outstanding_cancellation);
+  LMDJ_CHECK(fenced->current_generation == a_generation && fenced->current_origin_frame == 0);
+  const auto journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(journal.has_value() && journal.value().pattern_id.value() == kPatternId);
+  LMDJ_CHECK(journal.value().admission && journal.value().admission->admission_fence);
+  const auto& admission = *journal.value().admission;
+  LMDJ_CHECK(admission.preparation.pattern_id.value() == kPatternId);
+  LMDJ_CHECK(admission.preparation.publication_generation == a_generation);
+  LMDJ_CHECK(admission.preparation.identity.transport_epoch == 2);
+  LMDJ_CHECK(admission.preparation.identity.operation_id.value() == uuid(10143));
+  LMDJ_CHECK(admission.preparation.first_watermark == 10 && admission.candidates.empty());
+  const auto& fence = *admission.admission_fence;
+  LMDJ_CHECK(fence.pattern_id.value() == kPatternId && fence.publication_generation == a_generation);
+  LMDJ_CHECK(fence.effective_frame == 129 && fence.origin_frame == 0);
+  LMDJ_CHECK(!fence.switch_authority && !fence.switch_applied_frame);
+  LMDJ_CHECK(fence.switch_outcome == lmdj::project_io::SequenceSwitchOutcome::none);
+  LMDJ_CHECK(admission.applied_switches.empty()); // Canceled B predates this admission.
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId).at("result").at("project") == truth_before);
+
+  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  render_switch_frames_exact(engine, 128);
+  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto retained = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(retained.has_value() && retained.value().admission);
+  const auto& candidates = retained.value().admission->candidates;
+  LMDJ_CHECK(candidates.size() == 2);
+  LMDJ_CHECK(candidates[0].kind == lmdj::project_io::SequenceCandidateKind::press);
+  LMDJ_CHECK(candidates[0].watermark == 10 && candidates[0].press_sequence == 10);
+  LMDJ_CHECK(candidates[0].velocity == 100);
+  LMDJ_CHECK(candidates[1].kind == lmdj::project_io::SequenceCandidateKind::release);
+  LMDJ_CHECK(candidates[1].watermark == 11 && candidates[1].press_sequence == 10);
+  check_success(runtime->dispatch("pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10144, 3, "record"), {}));
+  const auto settled = settled_transport_status(*runtime, engine, [](const auto& status) {
+    return status.at("recording") == false && status.at("phase") == "idle" &&
+        status.at("publication_pending") == false;
+  });
+  LMDJ_CHECK(settled.at("error").is_null() && settled.at("playing") == true);
+  LMDJ_CHECK(settled.at("current_pattern_id") == kPatternId && settled.at("pending_switch").is_null());
+  const auto completed = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!completed.has_value() && completed.error().code == lmdj::foundation::ErrorCode::not_found);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto& patterns = truth.at("result").at("project").at("patterns");
+  LMDJ_CHECK(patterns.at(kPatternId).at("events").size() == 1);
+  LMDJ_CHECK(patterns.at(kPatternId).at("events").at(0).at("velocity") == 100);
+  LMDJ_CHECK(patterns.at(kSwitchPatternB).at("events").empty());
+  // Advance beyond canceled B's old Beat and the committed A publication.
+  // Neither the canceled authority nor Record-off may resurrect B.
+  render_switch_frames_exact(engine, 96'001 - engine.telemetry().rendered_frames);
+  LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+}
+
 void test_transport_switch_refused_while_recording_and_while_stopped() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -9543,9 +10130,8 @@ void test_transport_switch_refused_while_recording_and_while_stopped() {
       "pattern_transport_not_playing");
 }
 
-// A deferred successor does not publish over a transport that stopped at the
-// command cutoff: the audio-claimed blocker applied before the cutoff, and
-// the deferred target's record is spent without a publication.
+// A natively queued successor is canceled at Stop's cutoff while its
+// already-applied predecessor stays current; Stop publishes nothing new.
 void test_transport_stop_spends_a_deferred_switch_without_publishing() {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -9570,11 +10156,11 @@ void test_transport_stop_spends_a_deferred_switch_without_publishing() {
       boundary + 96'000);
   LMDJ_CHECK(
       engine.pending_pattern_id() ==
-      lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
+      lmdj::foundation::PatternId{std::string(kSwitchPatternC)});
   const auto publications = engine.pattern_telemetry().accepted_publications;
 
-  // The claimed blocker lands at its boundary; no observation runs before
-  // the Stop, so the deferred target still waits behind it.
+  // B lands at its boundary; no Host observation runs before Stop, and
+  // native C remains pending behind it.
   static_cast<void>(render_grid_frames(
       engine, boundary - engine.telemetry().rendered_frames + 129));
   LMDJ_CHECK(
@@ -10154,6 +10740,19 @@ int main() {
     test_pattern_transport_unknown_closure_blocks_clean_suspend();
     test_transport_reload_rebinds_engagement_without_bricking();
     test_transport_record_after_applied_switch_retargets();
+    test_transport_current_pattern_withdraws_both_exact_authorities();
+    test_transport_current_pattern_cancel_race_requeues_after_predecessor_applies();
+    test_transport_predecessor_press_after_successor_claim_queues_behind_successor();
+    test_transport_latest_successor_prepublication_handoff_retains_stop_authorities();
+    test_transport_switch_snap_lands_at_its_exact_frame();
+    test_transport_switch_replacement_can_change_snap();
+    test_transport_switch_each_snap_can_be_withdrawn();
+    test_transport_stop_cancels_each_snap_and_both_claimed_authorities();
+    test_transport_claimed_successor_lands_without_host_cadence();
+    test_transport_claimed_predecessor_is_selection_before_successor_applies();
+    test_transport_switch_rejects_invalid_snap();
+    test_transport_latest_unclaimed_successor_uses_predecessor_snap_clock();
+    test_transport_pressing_claimed_predecessor_withdraws_only_successor();
     test_transport_switch_applies_at_the_reported_boundary();
     test_transport_switch_replaces_an_unclaimed_request();
     test_transport_switch_after_the_claim_defers_to_the_following_bar();
@@ -10161,6 +10760,7 @@ int main() {
     test_transport_stop_cancels_an_audio_claimed_switch();
     test_transport_stop_cancels_a_switch_queued_after_record_off();
     test_transport_record_after_an_applied_switch_records_the_new_pattern();
+    test_transport_record_after_cancellation_opens_from_the_production_receipt();
     test_transport_switch_refused_while_recording_and_while_stopped();
     test_transport_stop_spends_a_deferred_switch_without_publishing();
     test_transport_switch_refuses_a_foreign_pending_publication();

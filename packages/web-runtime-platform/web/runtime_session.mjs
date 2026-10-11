@@ -3705,17 +3705,23 @@ function createRuntimeSessionController(options = {}) {
     if (
       request === null ||
       typeof request !== "object" ||
-      !exactKeys(request, ["patternId", "requestId"])
+      (!exactKeys(request, ["patternId", "requestId"]) &&
+        !exactKeys(request, ["patternId", "requestId", "snap"])) ||
+      (Object.hasOwn(request, "snap") && request.snap !== undefined &&
+        request.snap !== "beat" && request.snap !== "bar" &&
+        request.snap !== "pattern_end")
     ) {
       throw new TypeError("Pattern transport switch request is invalid");
     }
     requirePatternTransportOptIn();
     const patternId = requireSequenceIdentity(request.patternId, "patternId");
     const requestId = requireSequenceIdentity(request.requestId, "requestId");
+    const snap = request.snap;
     return serializeRuntimeAction(async () => {
       const value = await boundedRequest("pattern.transport.switch", {
         pattern_id: patternId,
         request_id: requestId,
+        ...(snap === undefined ? {} : {snap}),
       });
       if (
         !exactKeys(value, ["pattern_id", "activation_frame"]) ||

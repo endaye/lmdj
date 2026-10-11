@@ -91,6 +91,17 @@ Before starting the shipping pipeline:
    original failing check; do not copy snapshot trees or relax path assertions.
    See [`worktree-checkout-flattens-symlinks`](../../pitfalls/worktree-checkout-flattens-symlinks.md).
 
+   A sample-import assertion can fail because worktrees share a host staging
+   directory under the system temporary root. First expose the actual error
+   and inspect the fixture parent, staging ownership and permissions. Only
+   when that proves interference, give the owned verification process a private
+   temporary parent through child-only `TMPDIR`, `TMP` and `TEMP`, and rerun
+   the complete original selection with unchanged assertions and deadlines.
+   Retain both outcomes; do not remove, chown or chmod another owner's data.
+   This is not the remedy for macOS ASan fork failures, whose allocation layout
+   can change with paths. See
+   [`shared-temporary-staging-ownership`](../../pitfalls/shared-temporary-staging-ownership.md).
+
    When `scripts/docs-site.sh check` stops producing output after site load
    while the owned `docusaurus` process shows ~0% CPU, suspect a stalled Rspack
    cache left by an earlier failed or interrupted build. Stop only that
@@ -473,25 +484,18 @@ Issues. Retain the postmerge live Issue-state audit below.
    Validate a changed body again, without closing/reopening the PR merely to
    manufacture an old CI event.
 
-   **Batch-only lanes need evidence before merge (#1619).** A lane in the
-   `--list --json` `batch_only` list never runs on a Pull Request, so its
-   evidence must come from you. Run each one on the committed head and paste
-   the block the run prints under `## Batch-only Lanes`:
-   ```bash
-   scripts/local-ci.sh --lanes <batch-only lanes, comma-separated>
-   scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>
-   ```
-   Each line reads `- <lane>: pass key=<64 hex>`. The key digests that lane's
-   commands and every input's content, so a later commit touching those inputs
-   makes the evidence stale. Rerun the lane and replace the line. A lane this
-   machine cannot run (`not-runnable-here`) is run on a host that can. Only a
-   lane the owner explicitly accepts may read
-   `- <lane>: accepted-risk key=<64 hex> — <reason>`, with the key the printed
-   comment shows for it. The acceptance covers exactly those inputs and goes
-   stale like a pass. The reason names that acceptance.
-   Never write `accepted-risk` on your own judgment, and never copy a key from
-   `--list` without running the lane. A change with no batch-only lane
-   declares `Batch-only lanes: none`.
+   **Record Task verification and affected risks (#1996).** The PR's
+   `## Verification` names the commands actually run, their outcomes and the
+   defects or risks they cover. Run the lowest tier that covers the change.
+   Persistence/recovery changes retain their integration and restart journeys;
+   lock-free/concurrent lifetime changes retain their stress tests. A declared
+   acceptance journey must keep every leg and its far-side assertions.
+   A selected `batch_only` lane is ownership information, not a requirement to
+   execute its complete lane locally before every merge. Complete checks deferred
+   to candidate/full verification remain unverified; never manufacture pass or
+   accepted-risk receipts, erase historical failures, or clear full debt with
+   a quick result. Explicitly requested complete evidence still requires its
+   exact target, input-bound results and applicable platform.
 
    `Documentation impact` means **Architecture Portal pages**, not any file
    under `docs/`. Declare `required` when this change edits a page under
@@ -536,19 +540,13 @@ Issues. Retain the postmerge live Issue-state audit below.
    unresolved review threads and effective protection. Unknown mergeability is
    not proof of no conflict: reread with a bounded wait or report it.
 
-   **Check batch-only lane evidence on the exact head.** With a clean checkout
-   of the PR's current head and its live body:
-   ```bash
-   gh pr view <number> --json body -q .body > <body-file>
-   scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>
-   ```
-   A `fail` is a failed premerge check: `why:` names each missing, stale or
-   malformed lane. Rerun those lanes, update the body, and check again. A
-   `pass` that lists `accepted-risk` lanes still needs the owner's explicit
-   acceptance for this head, from the owner in this session, not an agent's
-   judgment. Without it, stop and ask. The check proves the evidence is
-   complete and current for this head, not that the lanes are healthy on
-   `main`.
+   **Check the Task's verification on the current head.** Read the live PR
+   body's commands, results, affected-risk coverage and explicit gaps. Re-run
+   tests whose inputs changed, resolve actual findings, and retain evidence of
+   unexecuted complete checks. There is no universal batch-only receipt gate.
+   `scripts/local-ci.sh --batch-evidence-only --pr-body <body-file>` remains a
+   strict optional audit when the Task explicitly requests full lane receipts;
+   it neither grants merge authority nor replaces the Task's tests.
 2. **Require independent review evidence for that exact head**. Run the read-only
    one-shot helper from trusted repository code, using authenticated API access:
    ```bash

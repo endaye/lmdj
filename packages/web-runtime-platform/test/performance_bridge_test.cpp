@@ -429,6 +429,94 @@ void test_constructs_application_with_engine_authorities_and_services_launches()
   runtime->engine().stop();
 }
 
+// #1974: a Performance recording opened half a Bar into playback anchors its
+// clock mid-Bar, so the recording clock's next Bar would land at frame
+// 144'000. The launch must switch Patterns at the transport's own Bar line
+// (frame 96'000, tick 1920 in the recording's journal domain) — the same
+// boundary calculation the playing-state Pattern switch uses.
+void test_launch_during_recording_lands_on_the_transport_bar_line() {
+  TempDirectory temporary;
+  auto created = ControlRuntime::create(
+      temporary.path(), config(temporary.path()), kLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  constexpr std::string_view kPatternB =
+      "00000000-0000-4000-8000-000000000011";
+
+  require_success(runtime->dispatch(
+      "project.create",
+      {
+          {"project_id", kProjectId},
+          {"bpm", 120},
+          {"initial_pattern",
+           {{"pattern_id", kPatternId}, {"bars", 1}, {"events", Json::array()}}},
+      },
+      {}));
+  require_success(runtime->dispatch(
+      "pattern.create",
+      {{"command_id", uuid(10)},
+       {"expected_revision", 0},
+       {"pattern_id", kPatternB},
+       {"bars", 1}},
+      {}));
+  require_success(runtime->dispatch(
+      "pattern.slot.assign",
+      {
+          {"command_id", uuid(11)},
+          {"expected_revision", 1},
+          {"pattern_slot", 1},
+          {"pattern_id", kPatternId},
+      },
+      {}));
+  require_success(runtime->dispatch(
+      "pattern.slot.assign",
+      {
+          {"command_id", uuid(12)},
+          {"expected_revision", 2},
+          {"pattern_slot", 2},
+          {"pattern_id", kPatternB},
+      },
+      {}));
+  require_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(runtime->engine().start().has_value());
+
+  render_frames(*runtime, 48'000);
+  require_success(runtime->dispatch(
+      "performance.record.begin",
+      {
+          {"command_id", uuid(13)},
+          {"expected_revision", 3},
+          {"session_id", kSessionId},
+          {"performance_id", kPerformanceId},
+      },
+      {}));
+  const auto requested = require_success(runtime->dispatch(
+      "performance.record.launch-request",
+      {
+          {"session_id", kSessionId},
+          {"request_id", uuid(14)},
+          {"pattern_slot", 2},
+      },
+      {}));
+  LMDJ_CHECK(requested.at("target_tick") == 1'920);
+
+  render_frames(*runtime, 48'128);
+  LMDJ_CHECK(runtime->service_performance().has_value());
+  const auto acknowledged = require_success(runtime->dispatch(
+      "performance.record.status", Json::object(), {}));
+  LMDJ_CHECK(acknowledged.at("pending_launch").is_null());
+  LMDJ_CHECK(
+      acknowledged.at("last_launch_ack").at("request_id") == uuid(14));
+  LMDJ_CHECK(
+      acknowledged.at("last_launch_ack").at("effective_tick") == 1'920);
+  const auto current = runtime->engine().current_pattern_id();
+  LMDJ_CHECK(current.has_value());
+  LMDJ_CHECK(*current == lmdj::foundation::PatternId{std::string(kPatternB)});
+  LMDJ_CHECK(runtime->engine().current_pattern_origin_frame() == 96'000);
+  runtime->engine().stop();
+}
+
 void test_bridge_admits_every_stage10_performance_operation() {
   TempDirectory temporary;
   auto created = ControlRuntime::create(
@@ -958,6 +1046,7 @@ int main() {
   try {
     test_web_audio_bridge_carries_one_opaque_destination_and_direct_fallback();
     test_constructs_application_with_engine_authorities_and_services_launches();
+    test_launch_during_recording_lands_on_the_transport_bar_line();
     test_bridge_admits_every_stage10_performance_operation();
     test_rejects_invalid_values_at_the_cpp_host_boundary();
     test_owner_loss_never_materializes_an_unacknowledged_launch();

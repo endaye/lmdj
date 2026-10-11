@@ -6884,6 +6884,58 @@ test("Pattern transport switch sends the exact payload and validates the result"
   await session.close();
 });
 
+test("Pattern transport switch forwards each SEQ SNAP choice", async () => {
+  const sent = [];
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.switch") {
+        sent.push(envelope.payload);
+        return success(envelope, {
+          pattern_id: envelope.payload.pattern_id, activation_frame: 96_000,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  for (const snap of ["beat", "bar", "pattern_end"]) {
+    await session.requestTransportPatternSwitch({
+      patternId: TRANSPORT_PATTERN_ID, requestId: TRANSPORT_COMMAND_ID, snap,
+    });
+    assert.deepEqual(sent.at(-1), {
+      pattern_id: TRANSPORT_PATTERN_ID, request_id: TRANSPORT_COMMAND_ID, snap,
+    });
+  }
+  await session.requestTransportPatternSwitch({
+    patternId: TRANSPORT_PATTERN_ID, requestId: TRANSPORT_COMMAND_ID,
+    snap: undefined,
+  });
+  assert.deepEqual(sent.at(-1), {
+    pattern_id: TRANSPORT_PATTERN_ID, request_id: TRANSPORT_COMMAND_ID,
+  });
+  await session.close();
+});
+
+test("Pattern transport switch refuses invalid SEQ SNAP before sending", async () => {
+  const sent = [];
+  const {session} = fixture({
+    patternTransport: true,
+    send: async (envelope) => {
+      sent.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  for (const snap of ["off", "BEAT", "", null, 1, {}, ["beat"]]) {
+    assert.throws(() => session.requestTransportPatternSwitch({
+      patternId: TRANSPORT_PATTERN_ID, requestId: TRANSPORT_COMMAND_ID, snap,
+    }), /Pattern transport switch request is invalid/);
+  }
+  assert.equal(sent.includes("pattern.transport.switch"), false);
+  await session.close();
+});
+
 test("Pattern transport switch result refuses a zero activation frame", async () => {
   const {session} = fixture({
     patternTransport: true,

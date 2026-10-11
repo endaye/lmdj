@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="6afe4c12d946a2994294b2265550d40cdfbfa8b7ee3973353a711896b0438624">
-  <title id="title">Audio Runtime Module</title><desc id="description">不可变 Pattern、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="31375997195b2e610b4877010c98e7c88b3a4ce2f71e171e76d6da9d53046701">
+  <title id="title">Audio Runtime Module</title><desc id="description">不可变 Pattern、SEQ SNAP 边界、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -9,7 +9,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变 Pattern、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变 Pattern、SEQ SNAP 边界、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</text>
 
   <g class="connection"><path class="edge-mask" d="M 250 218 H 290 V 218 H 330"/><path class="edge" d="M 250 218 H 290 V 218 H 330" marker-end="url(#arrow)"/></g>
 <g class="connection"><path class="edge-mask" d="M 570 218 H 605 V 218 H 640"/><path class="edge" d="M 570 218 H 605 V 218 H 640" marker-end="url(#arrow)"/><text x="605" y="209">slot token + 64-bit identity</text></g>
@@ -39,13 +39,13 @@
       <rect class="node-mask" x="636" y="166" width="238" height="104" rx="18"/>
       <rect class="node" x="640" y="170" width="230" height="96" rx="14"/>
       <text class="node-title" x="656" y="202">Realtime Engine</text>
-      <text class="node-detail" x="656" y="228">atomic32 claim · Bar clock</text>
+      <text class="node-detail" x="656" y="228">atomic32 claim · SEQ SNAP</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="946" y="166" width="258" height="104" rx="18"/>
       <rect class="node" x="950" y="170" width="250" height="96" rx="14"/>
       <text class="node-title" x="966" y="202">Master FX Chain</text>
-      <text class="node-detail" x="966" y="228">fixed 8 stages · Bar-relative</text>
+      <text class="node-detail" x="966" y="228">fixed 8 stages · single Filter: legacy | typed LP/HP/BP</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="1276" y="166" width="238" height="104" rx="18"/>
@@ -57,7 +57,7 @@
       <rect class="node-mask" x="276" y="376" width="258" height="104" rx="18"/>
       <rect class="node" x="280" y="380" width="250" height="96" rx="14"/>
       <text class="node-title" x="296" y="412">FX Control Lane</text>
-      <text class="node-detail" x="296" y="438">bounded gesture + tempo</text>
+      <text class="node-detail" x="296" y="438">bounded gesture + tempo + typed filter</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="946" y="376" width="258" height="104" rx="18"/>
@@ -83,8 +83,8 @@
       <text class="node-title" x="656" y="412">Retained Receipt</text>
       <text class="node-detail" x="656" y="438">F / origin / identity / cutoff</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Pattern Transport / Phase</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Start anchors F; Stop ramps Pattern voices; Fence keeps origin. Phase retains PCM/cursor/release; control reclaims after last Voice.</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Pattern Transport / Phase</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Beat/Bar/End use claimed geometry; audio applies both. Phase keeps voices. Stop ramps; Fence keeps origin.</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Telemetry</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff. Runtime-only Facade owns OPEN/BUSY drain; its audio-only consumed counter is not proof of a started Voice.</div></foreignObject></g>
-<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master FX</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master FX</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock. The single Filter stage also has a typed independent branch (TPT SVF, LP/HP/BP, integer Hz cutoff, milli-percent resonance) with bit-exact OFF bypass; accepted control shadow and audio-applied state/sequence/epoch stay separate.</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread. Reclaimed decoded PCM bytes refund Project Banks only; the reserved audition pool contributes no Project reservation refund.</div></foreignObject></g>
 </svg>

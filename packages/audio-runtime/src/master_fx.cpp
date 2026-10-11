@@ -27,6 +27,35 @@ float quantize(float sample, std::uint32_t levels) noexcept {
          static_cast<float>(levels);
 }
 
+bool valid_filter_type(FilterType type) noexcept {
+  switch (type) {
+    case FilterType::low_pass:
+    case FilterType::high_pass:
+    case FilterType::band_pass:
+      return true;
+  }
+  return false;
+}
+
+// TPT SVF coefficient from the integer Hz cutoff. The engine prepares the
+// chain at the fixed realtime rate, so 20 kHz stays below Nyquist and no UI
+// boundary is lowered.
+float filter_cutoff_g(
+    std::uint32_t cutoff_hz, std::uint32_t sample_rate) noexcept {
+  return static_cast<float>(
+      std::tan(3.14159265358979323846 * static_cast<double>(cutoff_hz) /
+               static_cast<double>(sample_rate)));
+}
+
+// Q = (1/sqrt(2)) * (10*sqrt(2))^(r/1000): 0% is Butterworth (Q ~= 0.7071),
+// 100% is Q = 10. The SVF damping is k = 1/Q.
+float filter_resonance_k(std::uint16_t resonance_milli) noexcept {
+  const auto log_q =
+      -0.34657359027997265 +
+      2.6491586533460524 * (static_cast<double>(resonance_milli) / 1000.0);
+  return static_cast<float>(std::exp(-log_q));
+}
+
 std::uint32_t delay_division(std::uint16_t value) noexcept {
   return 1U + (static_cast<std::uint32_t>(value) * 15U) /
                   kMasterFxValueMaximum;
@@ -75,6 +104,28 @@ void MasterFxChain::reset() noexcept {
   filter_low_right_ = 0.0F;
   filter_band_left_ = 0.0F;
   filter_band_right_ = 0.0F;
+  // A new control epoch starts independent OFF with the default tuple.
+  filter_mode_ = FilterMode::independent;
+  filter_independent_engaged_ = false;
+  filter_independent_frozen_ = false;
+  filter_parameters_ = kFilterDefaultParameters;
+  filter_ic1_left_ = 0.0F;
+  filter_ic1_right_ = 0.0F;
+  filter_ic2_left_ = 0.0F;
+  filter_ic2_right_ = 0.0F;
+  filter_g_ = 0.0F;
+  filter_k_ = 0.0F;
+  if (sample_rate_ != 0) {
+    filter_g_ =
+        filter_cutoff_g(kFilterDefaultParameters.cutoff_hz, sample_rate_);
+    filter_k_ = filter_resonance_k(kFilterDefaultParameters.resonance_milli);
+  }
+  filter_g_step_ = 0.0F;
+  filter_k_step_ = 0.0F;
+  filter_g_target_ = filter_g_;
+  filter_k_target_ = filter_k_;
+  filter_coefficient_frames_ = 0;
+  filter_wet_frames_ = 0;
   delay_cursor_ = 0;
   delay_play_frames_ = 0;
   delay_period_division_ = 0;
@@ -180,6 +231,7 @@ bool MasterFxChain::apply_gesture(FxGesture gesture) noexcept {
       for (auto& effect : effects_) {
         effect.frozen = false;
       }
+      filter_independent_frozen_ = false;
       return true;
     case FxGestureKind::engage:
     case FxGestureKind::move:
@@ -191,6 +243,47 @@ bool MasterFxChain::apply_gesture(FxGesture gesture) noexcept {
   }
 
   auto& effect = effects_[effect_index(gesture.fx)];
+  if (gesture.fx == domain::PerformanceFx::filter) {
+    // Single Filter stage: legacy engage (and a legacy move while the
+    // independent branch owns the stage) take over as legacy and release the
+    // independent active state. A legacy release owns only the legacy
+    // gesture; it must not kill an independent gesture that took over.
+    if (gesture.kind == FxGestureKind::release) {
+      if (filter_mode_ == FilterMode::legacy) {
+        const auto was_active = effect.engaged || effect.frozen;
+        effect.engaged = false;
+        effect.frozen = hold_ && was_active;
+        if (!effect.frozen) {
+          effect.value = 0;
+        }
+      }
+      return true;
+    }
+    if (gesture.kind == FxGestureKind::engage) {
+      filter_mode_ = FilterMode::legacy;
+      filter_independent_engaged_ = false;
+      filter_independent_frozen_ = false;
+      // Legacy now owns the stage; drop any stale independent wet gate so a
+      // later independent engage restarts its ramp from zero.
+      filter_wet_frames_ = 0;
+      effect.value = gesture.value;
+      effect.engaged = true;
+      effect.frozen = false;
+      reset_effect(gesture.fx);
+      return true;
+    }
+    if (filter_independent_engaged_ || filter_independent_frozen_) {
+      filter_mode_ = FilterMode::legacy;
+      filter_independent_engaged_ = false;
+      filter_independent_frozen_ = false;
+      filter_wet_frames_ = 0;
+      effect.engaged = true;
+      effect.frozen = false;
+      reset_effect(gesture.fx);
+    }
+    effect.value = gesture.value;
+    return true;
+  }
   if (gesture.kind == FxGestureKind::release) {
     const auto was_active = effect.engaged || effect.frozen;
     effect.engaged = false;
@@ -215,23 +308,40 @@ void MasterFxChain::process(
   if (!prepared_ || left == nullptr || right == nullptr || frames == 0) {
     return;
   }
-  auto has_processing_effect = false;
+  // The tail clamp is a whole-block stage: it runs only when a whole-block
+  // effect (legacy Filter or any other FX) actually processed this block.
+  // The independent Filter branch clamps the frames it processes itself, so
+  // a release that settles mid-block leaves the settled dry frames neither
+  // filtered nor clamped — bit-identical to the input on any block split.
+  auto has_whole_block_effect = false;
+  auto independent_filter_runs = false;
   for (std::size_t index = 0; index < effects_.size(); ++index) {
-    const auto& effect = effects_[index];
-    if (!(effect.engaged || effect.frozen)) {
-      continue;
+    if (kFxChainOrder[index] == domain::PerformanceFx::filter) {
+      if (filter_mode_ == FilterMode::legacy) {
+        const auto& effect = effects_[index];
+        if ((effect.engaged || effect.frozen) && effect.value != 500) {
+          has_whole_block_effect = true;
+        }
+      } else if (filter_independent_engaged_ || filter_independent_frozen_ ||
+                 filter_wet_frames_ != 0) {
+        independent_filter_runs = true;
+      }
+    } else {
+      const auto& effect = effects_[index];
+      if (effect.engaged || effect.frozen) {
+        has_whole_block_effect = true;
+      }
     }
-    if (kFxChainOrder[index] == domain::PerformanceFx::filter &&
-        effect.value == 500) {
-      continue;
+    if (has_whole_block_effect && independent_filter_runs) {
+      break;
     }
-    has_processing_effect = true;
-    break;
   }
-  if (!has_processing_effect) {
+  if (!has_whole_block_effect && !independent_filter_runs) {
     return;
   }
   process_filter(left, right, frames);
+  process_independent_filter(
+      left, right, frames, !has_whole_block_effect);
   process_delay(left, right, frames);
   process_reverb(left, right, frames);
   process_stutter(left, right, frames);
@@ -239,9 +349,11 @@ void MasterFxChain::process(
   process_reverse(left, right, frames);
   process_crush(left, right, frames);
   process_cutter(left, right, frames);
-  for (std::size_t frame = 0; frame < frames; ++frame) {
-    left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
-    right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
+  if (has_whole_block_effect) {
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
+      right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
+    }
   }
 }
 
@@ -276,6 +388,260 @@ void MasterFxChain::process_filter(
         filter(left[frame], filter_low_left_, filter_band_left_);
     right[frame] =
         filter(right[frame], filter_low_right_, filter_band_right_);
+  }
+}
+
+bool MasterFxChain::valid_filter_parameters(
+    FilterParameters parameters) noexcept {
+  return valid_filter_type(parameters.type) &&
+         parameters.cutoff_hz >= kFilterCutoffMinimumHz &&
+         parameters.cutoff_hz <= kFilterCutoffMaximumHz &&
+         parameters.resonance_milli <= kFilterResonanceMaximumMilli;
+}
+
+FilterLiveState MasterFxChain::filter_state() const noexcept {
+  const auto legacy = filter_mode_ == FilterMode::legacy;
+  const auto& legacy_effect = effects_[effect_index(domain::PerformanceFx::filter)];
+  return FilterLiveState{
+      hold_,
+      filter_mode_,
+      legacy ? legacy_effect.engaged : filter_independent_engaged_,
+      legacy ? legacy_effect.frozen : filter_independent_frozen_,
+      filter_parameters_,
+      legacy_effect.value};
+}
+
+FilterLiveState MasterFxChain::filter_live_state_after(
+    FilterLiveState state, FxGesture gesture) noexcept {
+  switch (gesture.kind) {
+    case FxGestureKind::hold_on:
+      state.hold = true;
+      return state;
+    case FxGestureKind::hold_off:
+      state.hold = false;
+      state.frozen = false;
+      return state;
+    case FxGestureKind::engage:
+    case FxGestureKind::move:
+    case FxGestureKind::release:
+      break;
+  }
+  if (gesture.fx != domain::PerformanceFx::filter ||
+      gesture.value > kMasterFxValueMaximum) {
+    return state;
+  }
+  switch (gesture.kind) {
+    case FxGestureKind::engage:
+      state.mode = FilterMode::legacy;
+      state.engaged = true;
+      state.frozen = false;
+      state.legacy_value = gesture.value;
+      return state;
+    case FxGestureKind::move:
+      if (state.mode == FilterMode::independent &&
+          (state.engaged || state.frozen)) {
+        state.mode = FilterMode::legacy;
+        state.engaged = true;
+        state.frozen = false;
+      }
+      state.legacy_value = gesture.value;
+      return state;
+    case FxGestureKind::release:
+      if (state.mode == FilterMode::legacy) {
+        const auto was_active = state.engaged || state.frozen;
+        state.engaged = false;
+        state.frozen = state.hold && was_active;
+        if (!state.frozen) {
+          state.legacy_value = 0;
+        }
+      }
+      return state;
+    default:
+      return state;
+  }
+}
+
+FilterLiveState MasterFxChain::filter_live_state_after(
+    FilterLiveState state, FilterGesture gesture) noexcept {
+  // engage/move carry the full typed tuple; a release derives its parameters
+  // from current state, so its tuple is never inspected or validated.
+  switch (gesture.phase) {
+    case FilterPhase::engage:
+      if (!valid_filter_parameters(gesture.parameters)) {
+        return state;
+      }
+      state.mode = FilterMode::independent;
+      state.engaged = true;
+      state.frozen = false;
+      state.parameters = gesture.parameters;
+      return state;
+    case FilterPhase::move:
+      if (!valid_filter_parameters(gesture.parameters)) {
+        return state;
+      }
+      if (state.mode == FilterMode::independent && state.engaged) {
+        state.parameters = gesture.parameters;
+      }
+      return state;
+    case FilterPhase::release:
+      if (state.mode == FilterMode::independent) {
+        const auto was_active = state.engaged || state.frozen;
+        state.engaged = false;
+        state.frozen = state.hold && was_active;
+        // The tuple is retained for readback; it must not become the legacy
+        // scalar's zero.
+      }
+      return state;
+  }
+  return state;
+}
+
+bool MasterFxChain::apply_filter_gesture(FilterGesture gesture) noexcept {
+  // engage/move compute coefficients only at the fixed realtime sample rate
+  // (D0); a chain prepared at any other rate refuses typed admission before
+  // any state mutation. release stays available in every state for cleanup.
+  if (gesture.phase != FilterPhase::release &&
+      sample_rate_ != kFilterTypedSampleRate) {
+    return false;
+  }
+  switch (gesture.phase) {
+    case FilterPhase::engage:
+      if (!valid_filter_parameters(gesture.parameters)) {
+        return false;
+      }
+      filter_mode_ = FilterMode::independent;
+      filter_independent_engaged_ = true;
+      filter_independent_frozen_ = false;
+      filter_parameters_ = gesture.parameters;
+      // The independent branch atomically owns the single stage; the legacy
+      // branch's engaged/frozen die with the takeover, its scalar is kept.
+      // The wet gate restarts from zero: an engage is a fresh activation and
+      // must not inherit a gate position left by a previous ownership span.
+      {
+        auto& legacy_effect = effects_[effect_index(domain::PerformanceFx::filter)];
+        legacy_effect.engaged = false;
+        legacy_effect.frozen = false;
+      }
+      filter_wet_frames_ = 0;
+      reset_filter_registers();
+      begin_filter_coefficient_ramp();
+      return true;
+    case FilterPhase::move:
+      if (!valid_filter_parameters(gesture.parameters)) {
+        return false;
+      }
+      if (filter_mode_ != FilterMode::independent ||
+          !filter_independent_engaged_) {
+        return false;
+      }
+      filter_parameters_ = gesture.parameters;
+      begin_filter_coefficient_ramp();
+      return true;
+    case FilterPhase::release:
+      if (filter_mode_ == FilterMode::independent) {
+        const auto was_active =
+            filter_independent_engaged_ || filter_independent_frozen_;
+        filter_independent_engaged_ = false;
+        filter_independent_frozen_ = hold_ && was_active;
+      }
+      return true;
+  }
+  return false;
+}
+
+void MasterFxChain::reset_filter_registers() noexcept {
+  filter_low_left_ = 0.0F;
+  filter_low_right_ = 0.0F;
+  filter_band_left_ = 0.0F;
+  filter_band_right_ = 0.0F;
+  filter_ic1_left_ = 0.0F;
+  filter_ic1_right_ = 0.0F;
+  filter_ic2_left_ = 0.0F;
+  filter_ic2_right_ = 0.0F;
+}
+
+void MasterFxChain::begin_filter_coefficient_ramp() noexcept {
+  if (sample_rate_ == 0) {
+    return;
+  }
+  filter_g_target_ =
+      filter_cutoff_g(filter_parameters_.cutoff_hz, sample_rate_);
+  filter_k_target_ = filter_resonance_k(filter_parameters_.resonance_milli);
+  filter_g_step_ = (filter_g_target_ - filter_g_) /
+                   static_cast<float>(kFilterTransitionRampFrames);
+  filter_k_step_ = (filter_k_target_ - filter_k_) /
+                   static_cast<float>(kFilterTransitionRampFrames);
+  filter_coefficient_frames_ = kFilterTransitionRampFrames;
+}
+
+void MasterFxChain::process_independent_filter(
+    float* left, float* right, std::size_t frames, bool clamp_output) noexcept {
+  if (filter_mode_ != FilterMode::independent) {
+    return;
+  }
+  const auto active = filter_independent_engaged_ || filter_independent_frozen_;
+  // OFF is a bit-identical bypass: once the wet ramp reaches zero, frames are
+  // neither filtered nor clamped, so settled dry input reaches the output
+  // unchanged no matter how the render is split into blocks.
+  if (!active && filter_wet_frames_ == 0) {
+    return;
+  }
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    if (filter_coefficient_frames_ != 0) {
+      filter_coefficient_frames_ -= 1;
+      if (filter_coefficient_frames_ == 0) {
+        filter_g_ = filter_g_target_;
+        filter_k_ = filter_k_target_;
+      } else {
+        filter_g_ += filter_g_step_;
+        filter_k_ += filter_k_step_;
+      }
+    }
+    if (active) {
+      if (filter_wet_frames_ < kFilterTransitionRampFrames) {
+        ++filter_wet_frames_;
+      }
+    } else if (filter_wet_frames_ != 0) {
+      filter_wet_frames_ -= 1;
+    }
+    if (filter_wet_frames_ == 0) {
+      continue;
+    }
+    const auto g = filter_g_;
+    const auto k = filter_k_;
+    const auto a1 = 1.0F / (1.0F + g * (g + k));
+    const auto a2 = g * a1;
+    const auto a3 = g * a2;
+    const auto type = filter_parameters_.type;
+    const auto wet = static_cast<float>(filter_wet_frames_) /
+                     static_cast<float>(kFilterTransitionRampFrames);
+    const auto run = [k, a1, a2, a3, type, wet, clamp_output](
+                         float input, float& ic1, float& ic2) noexcept {
+      const auto v3 = input - ic2;
+      const auto v1 = a1 * ic1 + a2 * v3;
+      const auto v2 = ic2 + a2 * ic1 + a3 * v3;
+      ic1 = 2.0F * v1 - ic1;
+      ic2 = 2.0F * v2 - ic2;
+      float selected = 0.0F;
+      switch (type) {
+        case FilterType::low_pass:
+          selected = v2;
+          break;
+        case FilterType::high_pass:
+          selected = input - k * v1 - v2;
+          break;
+        case FilterType::band_pass:
+          // v1 peaks at Q at the center frequency; k = 1/Q makes BP unity.
+          selected = k * v1;
+          break;
+      }
+      const auto output = input + (selected - input) * wet;
+      // When no whole-block effect runs the chain's tail clamp this block,
+      // clamp here — exactly the frames this branch processed.
+      return clamp_output ? std::clamp(output, -1.0F, 1.0F) : output;
+    };
+    left[frame] = run(left[frame], filter_ic1_left_, filter_ic2_left_);
+    right[frame] = run(right[frame], filter_ic1_right_, filter_ic2_right_);
   }
 }
 

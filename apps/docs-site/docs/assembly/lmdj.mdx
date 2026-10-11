@@ -14,10 +14,10 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 当前 Product Build 以上方从 active manifests 生成的 Build Identity 为准；各组件页面的身份也从同一份 manifest/Assembly Lock 事实生成，不以以下历史分配记录替代当前版本。
 
-当前分配的 Product Build `2.0.88.0` 在 `2.0.87.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.2.0` 升到 `5.3.0`，
-Contract ID 不变，Asset 新增可选的 `category`（`drums`、`bass`、`melodic`、`vocal`、`texture` 之一，缺席即无类别），
-Pad 新增可选的 `colour`（调色板索引 0..4，只允许出现在已分配素材的 Pad 上）。Module、Host 与 Provider 身份全部不变：
-读写这些键的实现是 #1207 计划的后续 Core Task，在它合入之前 Project I/O 仍拒绝这些键。
+当前分配的 Product Build `2.0.90.0` 在 `2.0.89.0` 之上只做一次 Contract Patch：`lmdj.project.v5` 由 `5.4.0` 升到
+`5.4.1`，语义不变——`input_sequence` 的整串锚定从裸 `$` 换成可移植的 `(?![\s\S])` 后缀，修补 5.4.0 模式在
+Python `re.search` 下接受尾部 LF 的词法漏洞（独立审计发现并复现）。这不是收紧到破坏合法旧数据：新键的读写实现
+（P0）尚未合入，`"10\n"` 按已声明的规范十进制语义从来不合法。Module、Host 与 Provider 身份全部不变。
 Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 
 它不是公共 Release、部署或 Channel 晋级。
@@ -25,6 +25,19 @@ Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 ## 历史分配记录
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
+
+Product Build `2.0.89.0` 曾在 `2.0.88.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.3.0` 升到 `5.4.0`，
+Contract ID 不变，Performance 新增可选的 `initial_live_state` 起始状态头（HOLD、严格 oneOf 的 legacy/independent Filter、
+固定七键的其他 FX 与两组 0..63 的 live Mute/Solo slot 集合），事件封闭并集末尾追加 `filter_change` 与 `pad_gates_set`
+两种 kind（原序号 0–6 不变），每个事件新增可选的 Core 分配 `input_sequence`（规范十进制字符串）。Module、Host 与
+Provider 身份全部不变：读写这些键的实现是 #1822 producer/consumer 计划的后续 Core Task（P0），在它合入之前
+Project I/O 仍拒绝这些键。Cardputer profile 同步到当前 Build 与 Assembly 摘要。
+
+Product Build `2.0.88.0` 曾在 `2.0.87.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.2.0` 升到 `5.3.0`，
+Contract ID 不变，Asset 新增可选的 `category`（`drums`、`bass`、`melodic`、`vocal`、`texture` 之一，缺席即无类别），
+Pad 新增可选的 `colour`（调色板索引 0..4，只允许出现在已分配素材的 Pad 上）。Module、Host 与 Provider 身份全部不变：
+读写这些键的实现是 #1207 计划的后续 Core Task，在它合入之前 Project I/O 仍拒绝这些键。
+Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 
 Product Build `2.0.82.0` 曾在 `2.0.81.0` 之上结算自 `2.0.76.0` 以来欠下的 Module 身份（#1667 计划 Task 20，并收齐 #1671 与 #1789 的欠账），Contract 身份不变（`lmdj.project.v5` 仍为 `5.2.0`）：
 

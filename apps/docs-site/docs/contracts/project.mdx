@@ -91,6 +91,35 @@ Application Facade 的 `sample.update_pad`/`sample.inspect`、MCP 的 `lmdj.samp
 本 Build 只推进 Contract：读写这些键的 Domain、Project I/O 与 Facade 实现是 #1207 计划的后续 Core Task，
 在它合入之前 Project I/O 仍拒绝这些键。
 
+## Performance 实时控制起点与事件序号（`5.4.1`）
+
+`5.4.1` 同样是向后兼容的追加（#1822，D04）：Performance 新增一个**可选**的 `initial_live_state`
+起始状态头；事件封闭并集末尾追加两种新 kind——`filter_change`（序号 7）与 `pad_gates_set`（序号 8），
+原七种 kind 的序号 0–6 不变；每个事件新增**可选**的 `input_sequence`。
+
+`initial_live_state` 是闭合形状：`hold`、严格 oneOf 的 `filter`（`mode: independent` 带
+`type`（`lp`/`hp`/`bp`）、`cutoff_hz` 20..20000 整数 Hz、`resonance_milli` 0..1000，或
+`mode: legacy` 只带 0..1000 的 `value`，两套参数不混收）、固定七键的 `other_fx`
+（`delay`、`reverb`、`stutter`、`gate`、`reverse`、`crush`、`cutter`，各为
+`{engaged, frozen, value}`，`value` 0..1000），以及 `muted_slots`、`solo_slots`
+两组 0..63 唯一整数数组。任何 `frozen: true` 只在 `hold: true` 下合法。
+
+`filter_change` 每次携带完整参数 tuple（`phase` 为 `engage`/`move`/`release`）；`pad_gates_set`
+每次携带两组完整 slot 数组，不是按钮 delta。`input_sequence` 是 Core 分配的规范十进制字符串
+（从 `"1"` 起，无符号、无前导零、无小数、无尾部换行；`5.4.1` 把该串的整串锚定从裸 `$`
+换成可移植的 `(?![\s\S])` 后缀，修补了 5.4.0 模式在 Python `re.search` 下接受尾部 LF 的
+词法漏洞——语义澄清式验证修复，按 Contract Patch 处理）；header 与逐事件序号互为开关：携带 header 的
+Performance 其每个事件都必须带 `input_sequence`，任一事件带 `input_sequence` 的 Performance
+必须携带 header，旧 profile 不能混用。数组的升序与 uint64 精确上界由 Domain reader 校验，
+与旧事件的 canonical 排序一样不属于 Schema 层。
+
+`5.3.0` reader 按设计拒绝携带这些键的 Project。语义权威是
+[2026-10-10 实时控制决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)
+与 2026-10-11 编码设计（`docs/prd/decisions/2026-10-11-performance-live-control-encoding.md`）。
+本 Build 只推进 Contract：新语法与序号的 Domain、Project I/O Journal 与 Cooker 实现是
+[producer/consumer 计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-11-performance-live-control-producers.md)
+的后续 Core Task（P0），在它合入之前 Project I/O 仍拒绝这些键。
+
 ## Slice 采纳 Lineage
 
 新增的 `derivation.kind: capability_adoption` 只支持 Slice，必须搭配现有

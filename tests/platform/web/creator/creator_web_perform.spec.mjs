@@ -1,5 +1,5 @@
 import {createSequencePattern, selectSequencePattern, sequencePattern,
-  showSamplePage, showPerformPage, showPatternLaunchGroup} from "./fixtures/creator_navigation.mjs";
+  showSamplePage, showPerformPage, showPatternLaunchGroup, showSequenceLayer} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash} from "node:crypto";
 import {spawn} from "node:child_process";
@@ -1159,6 +1159,198 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
     .toContainText("idle");
 });
 
+// Records the real transport traffic without replacing responses or the
+// engine: the five operations the launch journeys reason about, with full
+// payloads (the switch payload carries the device's SEQ SNAP).
+async function installLaunchTransportProof(page) {
+  await page.addInitScript(() => {
+    let exposed;
+    window.__launchTransportProof = [];
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get: () => exposed,
+      set(host) {
+        const native = host.transport;
+        host.transport = Object.freeze({
+          async send(...args) {
+            const response = await native.send(...args);
+            const [request] = args;
+            if (["snapshot.reload", "pattern.transport.request", "pattern.transport.switch",
+              "performance.record.begin", "performance.record.launch-request"]
+              .includes(request.operation)) {
+              window.__launchTransportProof.push({
+                operation: request.operation, payload: structuredClone(request.payload),
+                ok: response.ok,
+              });
+            }
+            return response;
+          },
+          subscribe: (...args) => native.subscribe(...args),
+          subscribeFailure: (...args) => native.subscribeFailure(...args),
+          terminate: (...args) => native.terminate(...args),
+          get terminated() { return native.terminated; },
+          get terminalOwnerReleased() { return native.terminalOwnerReleased; },
+        });
+        exposed = host;
+      },
+    });
+  });
+}
+
+// Writes the SEQ SNAP preference into the device's Host settings store the
+// way a previous visit's choice would sit there, bypassing this page's UI.
+async function seedSeqSnapPreference(page, snap) {
+  await page.evaluate(async (value) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("lmdj.creator.host", 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("settings");
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction("settings", "readwrite");
+        transaction.objectStore("settings").put(value, "seq-snap.v1");
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+    } finally {
+      database.close();
+    }
+  }, snap);
+}
+
+// #1958 S4: SEQ SNAP is the device boundary a Perform Launch queues at.
+// A stored 1 BEAT choice is restored at boot and carried by the launch's
+// transport switch, a SETUP change to SEQ END re-aims the next launch, and
+// the choice persists across a reload — without a Performance recording and
+// without entering Project Truth. Exact boundary frames stay with the Host
+// regression; this journey proves the device wiring, slot feedback and the
+// Truth far side.
+test("Perform Launch carries the device SEQ SNAP while playing and the choice persists across reload", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await installLaunchTransportProof(page);
+  await openCandidate(page);
+  await importProject(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await createSequencePattern(page, 2);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
+  const secondPattern = Object.keys((await inspectProjectTruth(page)).project.patterns)
+    .find((id) => id !== PATTERN_ID);
+  expect(secondPattern).toBeTruthy();
+  await selectSequencePattern(page, PATTERN_ID);
+  await openPerform(page);
+  await showPerformPage(page, "Slots");
+  for (const [slot, patternId] of [[0, PATTERN_ID], [1, secondPattern]]) {
+    const revision = await projectRevision(page);
+    await page.getByRole("combobox", {name: "Pattern assignment"}).selectOption(patternId);
+    await page.getByRole("combobox", {name: "Pattern slot", exact: true})
+      .selectOption({value: String(slot)});
+    await page.getByRole("button", {name: "Assign Pattern"}).click();
+    await expectRevisionAfter(page, revision);
+  }
+  const truthAtRest = (await inspectProjectTruth(page)).project;
+  const proof = () => page.evaluate(() => window.__launchTransportProof);
+  const first = page.getByRole("button", {name: "Launch Pattern 1", exact: true});
+  const second = page.getByRole("button", {name: "Launch Pattern 2", exact: true});
+  const playStop = page.getByTestId("physical-controls")
+    .getByRole("button", {name: /^Play\/Stop/});
+
+  // A stored 1 BEAT choice is seeded the way a previous visit left it; the
+  // reload restores it at boot (a launch then carries 1 BEAT, not the 1 BAR
+  // default).
+  await seedSeqSnapPreference(page, "beat");
+  await page.reload();
+  await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await wakeAudioWithPad(page);
+  await expect(page.getByTestId("audio-state"))
+    .toHaveText("Audio running", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+  await openPerform(page);
+  await playStop.click();
+  await expect(first).toHaveAttribute("data-launch", "acknowledged", {
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+  });
+  const sessionId = (await proof()).find(({operation}) =>
+    operation === "pattern.transport.request").payload.session_id;
+  const inspect = async () => {
+    const response = await page.evaluate((session) =>
+      window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
+        request_id: crypto.randomUUID(), operation: "pattern.transport.inspect",
+        payload: {session_id: session}}), sessionId);
+    expect(response.ok).toBe(true);
+    return response.result;
+  };
+  await expect.poll(async () => (await inspect()).playing,
+    {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+
+  // Leg 1 — Launch slot 2 queues the transport switch with the boot-restored
+  // 1 BEAT choice; the slot acknowledges once the switch applies.
+  await second.click();
+  await expect.poll(async () => (await proof()).filter(({operation}) =>
+    operation === "pattern.transport.switch").at(-1)?.payload,
+  {timeout: LAUNCH_TRANSITION_TIMEOUT_MS})
+    .toMatchObject({pattern_id: secondPattern, snap: "beat"});
+  await expect.poll(async () => {
+    const status = await inspect();
+    return status.playing && !status.recording && status.pending_switch == null &&
+      status.current_pattern_id === secondPattern;
+  }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+  await expect(second).toHaveAttribute("data-launch", "acknowledged", {
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+  });
+  await expect(page.getByTestId("perform-counter")).toContainText("/ 02 · BEAT");
+
+  // Leg 2 — SEQ END chosen on Sequence's SETUP re-aims the next launch; slot
+  // 1 acknowledges once the switch applies at the end of the playing 2-bar
+  // Pattern.
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await showSequenceLayer(page, "SETUP");
+  await page.getByRole("group", {name: "Sequence snap"})
+    .getByRole("button", {name: "SEQ END", exact: true}).click();
+  await expect(page.getByRole("group", {name: "Sequence snap"})
+    .getByRole("button", {name: "SEQ END", exact: true}))
+    .toHaveAttribute("aria-pressed", "true");
+  await openPerform(page);
+  await first.click();
+  await expect.poll(async () => (await proof()).filter(({operation}) =>
+    operation === "pattern.transport.switch").at(-1)?.payload,
+  {timeout: LAUNCH_TRANSITION_TIMEOUT_MS})
+    .toMatchObject({pattern_id: PATTERN_ID, snap: "pattern_end"});
+  await expect.poll(async () => {
+    const status = await inspect();
+    return status.playing && !status.recording && status.pending_switch == null &&
+      status.current_pattern_id === PATTERN_ID;
+  }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+  await expect(first).toHaveAttribute("data-launch", "acknowledged", {
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
+  });
+  await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
+
+  // Leg 3 — Stop; the launches and the preference never entered Project
+  // Truth, and no Performance recording was ever opened.
+  await playStop.click();
+  await expect.poll(async () => (await inspect()).playing,
+    {timeout: LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(false);
+  expect((await inspectProjectTruth(page)).project).toEqual(truthAtRest);
+  expect((await proof()).filter(({operation}) =>
+    operation.startsWith("performance.record."))).toEqual([]);
+
+  // Leg 4 — the explicit choice persists across a reload; Truth still equal.
+  await page.reload();
+  await waitForProjectReopen(page, "00000000", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await showSequenceLayer(page, "SETUP");
+  await expect(page.getByRole("group", {name: "Sequence snap"})
+    .getByRole("button", {name: "SEQ END", exact: true}))
+    .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+  expect((await inspectProjectTruth(page)).project).toEqual(truthAtRest);
+});
+
+
 test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
@@ -1701,8 +1893,9 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   test.setTimeout(300_000);
   await importActivateAndPerform(page);
   await assignThenMovePattern(page);
-  const monitor = page.getByRole("slider", {name: "MASTER", exact: true});
-  const monitorValue = await monitor.inputValue();
+  const master = page.getByRole("slider", {name: "MASTER", exact: true});
+  await master.fill("42");
+  await expect(master).toHaveValue("42");
   // The replay must still be playing when Stop Replay is clicked, otherwise
   // the run races natural completion and observes "complete · neutral"
   // instead of the abort path this test owns.
@@ -1724,7 +1917,7 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   for (const name of ["Filter", "Delay", "Reverb"]) {
     await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("500");
   }
-  await expect(monitor).toHaveValue(monitorValue);
+  await expect(master).toHaveValue("42");
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))

@@ -42,7 +42,7 @@ function renderSurface(recovery = false, options: {
     onRefresh: vi.fn(), onSwitch: vi.fn(),
     onCreatePattern: vi.fn(), onSettingsChange: vi.fn(), onSettingsPreview: vi.fn(),
     onResizePattern: vi.fn(), onDoubleUpPattern: vi.fn(), onCopyPattern: vi.fn(),
-    onToggleMetronome: vi.fn(),
+    onToggleMetronome: vi.fn(), onSeqSnapChange: vi.fn(),
     onRecover: vi.fn(), onDiscard: vi.fn(),
     onSnapChange: vi.fn(), onViewportChange: vi.fn(),
     onEditModeChange: vi.fn(), onEdit: vi.fn(),
@@ -52,6 +52,7 @@ function renderSurface(recovery = false, options: {
     project, transport: options.transport ?? initialPatternTransportState,
     bank: 0, snap: "1/16", editMode: "note", selection: [], defaultVelocity: 100,
     projectionRefreshing: options.projectionRefreshing ?? false, metronomeOn: false,
+    seqSnap: "bar",
     state: {
       ...initialSequenceState,
       recovery: recovery ? [{sessionId: "session-1", patternId: project.patternId,
@@ -131,6 +132,7 @@ test("hardware Sequence overview is read-only and the touch workspace owns editi
       onEditModeChange={vi.fn()} onEdit={vi.fn()}
       onSelectionChange={vi.fn()} onVelocityChange={vi.fn()}
       metronomeOn={false} onToggleMetronome={() => {}}
+      seqSnap="bar" onSeqSnapChange={vi.fn()}
       onRefresh={onRefresh} onSwitch={onSwitch}
       onCreatePattern={onCreatePattern} onSettingsChange={onSettingsChange}
       onRecover={onRecover} onDiscard={onDiscard}
@@ -233,6 +235,7 @@ test("rapid step clicks accumulate from the last requested value until Truth cat
     onSnapChange: () => {}, onEditModeChange: () => {}, onViewportChange: () => {},
     onEdit: () => {}, onSelectionChange: () => {}, onVelocityChange: () => {},
     metronomeOn: false, onToggleMetronome: () => {},
+    seqSnap: "bar" as const, onSeqSnapChange: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -272,6 +275,7 @@ test("a failed settings commit resyncs the step base to the committed truth", ()
     onSnapChange: () => {}, onEditModeChange: () => {}, onViewportChange: () => {},
     onEdit: () => {}, onSelectionChange: () => {}, onVelocityChange: () => {},
     metronomeOn: false, onToggleMetronome: () => {},
+    seqSnap: "bar" as const, onSeqSnapChange: () => {},
     onRefresh: () => {}, onSwitch: () => {},
     onCreatePattern: () => {}, onSettingsChange,
     onRecover: () => {}, onDiscard: () => {},
@@ -310,6 +314,7 @@ test("locks every Tempo and Swing control while recording and says why", () => {
     onSnapChange={() => {}} onEditModeChange={() => {}} onViewportChange={() => {}}
     onEdit={() => {}} onSelectionChange={() => {}} onVelocityChange={() => {}}
     metronomeOn={true} onToggleMetronome={() => {}}
+    seqSnap="bar" onSeqSnapChange={() => {}}
     onRefresh={() => {}} onSwitch={() => {}}
     onCreatePattern={() => {}} onSettingsChange={() => {}}
     onRecover={() => {}} onDiscard={() => {}} />);
@@ -330,6 +335,11 @@ test("locks every Tempo and Swing control while recording and says why", () => {
   const metronome = screen.getByRole("button", {name: "Metronome"});
   expect(metronome.hasAttribute("disabled")).toBe(false);
   expect(metronome.getAttribute("aria-pressed")).toBe("true");
+  // SEQ SNAP is likewise a per-device preference, so it stays reachable while
+  // recording (switching while recording is S3).
+  for (const name of ["1 BEAT", "1 BAR", "SEQ END"]) {
+    expect(screen.getByRole("button", {name}).hasAttribute("disabled")).toBe(false);
+  }
   expect(screen.getByText(/locked while recording/)).toBeTruthy();
 });
 
@@ -340,6 +350,43 @@ test("the metronome toggle reports its state and fires the callback", () => {
   expect(metronome.getAttribute("aria-pressed")).toBe("false");
   fireEvent.click(metronome);
   expect(callbacks.onToggleMetronome).toHaveBeenCalledTimes(1);
+});
+
+// #1958 S4: SEQ SNAP names the boundary a playing-state Pattern switch queues
+// at; the segment reports the device choice and fires the callback.
+test("the SEQ SNAP segment reports the device choice and fires the callback", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  const group = screen.getByRole("group", {name: "Sequence snap"});
+  for (const [name, pressed] of [
+    ["1 BEAT", "false"], ["1 BAR", "true"], ["SEQ END", "false"],
+  ] as const) {
+    const option = within(group).getByRole("button", {name});
+    expect(option.getAttribute("aria-pressed")).toBe(pressed);
+    expect(option.hasAttribute("disabled")).toBe(false);
+  }
+  fireEvent.click(within(group).getByRole("button", {name: "SEQ END"}));
+  expect(callbacks.onSeqSnapChange).toHaveBeenCalledExactlyOnceWith("pattern_end");
+});
+
+// #1958 S4: the choice is available from the first paint — no waiting on the
+// stored preference read; the App's touched guard, not a disabled control,
+// keeps a late read from overwriting an explicit choice.
+test("the SEQ SNAP segment is choosable before the stored preference is read", () => {
+  const callbacks = renderSurface(false, {state: {phase: "stopped"}});
+  openSetup();
+  const group = screen.getByRole("group", {name: "Sequence snap"});
+  for (const name of ["1 BEAT", "1 BAR", "SEQ END"]) {
+    expect(within(group).getByRole("button", {name}).hasAttribute("disabled"))
+      .toBe(false);
+  }
+  fireEvent.click(within(group).getByRole("button", {name: "1 BEAT"}));
+  expect(callbacks.onSeqSnapChange).toHaveBeenCalledExactlyOnceWith("beat");
+  // A later stored value arrives as a plain prop change; the App decides
+  // whether it may replace the explicit choice.
+  callbacks.update({seqSnap: "pattern_end"});
+  expect(within(group).getByRole("button", {name: "SEQ END"})
+    .getAttribute("aria-pressed")).toBe("true");
 });
 
 test("requires an explicit destination and preserves original recovery semantics", () => {
@@ -502,6 +549,7 @@ test("DOUBLE UP is disabled at 8 bars", () => {
     onSnapChange={() => {}} onEditModeChange={() => {}} onViewportChange={() => {}}
     onEdit={() => {}} onSelectionChange={() => {}} onVelocityChange={() => {}}
     metronomeOn={false} onToggleMetronome={() => {}}
+    seqSnap="bar" onSeqSnapChange={() => {}}
     onRefresh={() => {}} onSwitch={() => {}}
     onCreatePattern={() => {}} onSettingsChange={() => {}}
     onResizePattern={() => {}} onDoubleUpPattern={() => {}} onCopyPattern={() => {}}

@@ -547,7 +547,7 @@ The Sequence touch area follows the 2026-10-04 Sequence hardware UI decision
 picker with touch buttons. The physical left/right keys retain sequential
 Pattern navigation. Stopped, both select immediately through the snapshot
 reload; playing and not recording, both queue the transport's Pattern switch
-at the engine's next Bar（[#1958](https://github.com/endaye/lmdj/issues/1958)：旧 Pattern 播到边界才换，标题在排队期间显示
+at the engine's selected SEQ SNAP boundary（[#1958](https://github.com/endaye/lmdj/issues/1958)：旧 Pattern 播到边界才换，标题在排队期间显示
 `GROOVE / 01 → 02`，上屏继续命名真正在播的 Pattern，生效后选择跟随新
 Pattern）。Recording and busy transport phases lock selection. EDIT and SETUP
 share the header row. EDIT is the default, and a mode change returns to it.
@@ -592,6 +592,11 @@ share the header row. EDIT is the default, and a mode change returns to it.
     cut or repeated notes. The Host republishes a resized current Pattern, so
     the next Play uses the new length.
 - **QUANTIZE and METRONOME toggles.**
+- **SEQ SNAP.** 1 BEAT, 1 BAR or SEQ END chooses when a playing,
+  non-recording Pattern switch lands. Default 1 BAR; Sequence arrows/GROOVE
+  and non-recording Perform Launch share this device preference. It is saved
+  in IndexedDB Host settings and restored on boot, without changing Project
+  Truth or adding an Undo entry. OFF and recording switches remain later Tasks.
 - **`+ NEW`.** Opens the new Pattern's length (1, 2, 4 or 8 bars) with CREATE
   and CANCEL.
 - **`TAP` and Refresh authority.**
@@ -608,7 +613,7 @@ The physical column drives the same page (Desktop Final plan T6):
   flight locks the Tempo encoder and drops an unsettled turn. Swing remains the SETUP touch slider. **Encoder 4** always controls device monitoring output (0–100%), including metronome clicks, after the capture tap.
 - **`←` and `→`** without SHIFT step to the previous or next Pattern. Stopped,
   the step selects at once; while the transport plays and does not record, it
-  queues the switch at the next Bar and the lamp keeps following "another
+  queues the switch at the selected SEQ SNAP boundary and the lamp keeps following "another
   Pattern exists in that direction" from the queued target（[#1958](https://github.com/endaye/lmdj/issues/1958)）. Recording
   and busy transport phases lock the keys. With SHIFT they remain Undo and
   Redo.

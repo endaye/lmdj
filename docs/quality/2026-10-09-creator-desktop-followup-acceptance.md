@@ -1,6 +1,6 @@
 # Creator Desktop Final 后续验收台账
 
-本记录是 **2026-10-10 的未完成验收快照**。本节保留初始证据；后续完成的
+本记录保留 **2026-10-10 的未完成验收快照**。本节保留初始证据；后续完成的
 transport 验证、实际合并与局部清理见下文「Transport 后续完成证据」。初始工作区基于
 `133939a945b3ea10f7686ab1f0a9f8d58c998aee`；提交前重新检查的 main 为
 `59a121b78db1486b01f482ba2726eb8fd05cb0f6`。四旋钮 consumer 为 Draft PR
@@ -14,6 +14,7 @@ Product Build；源码证明以实际 revision 为身份。
 [后续计划](../plans/2026-10-09-creator-desktop-final-followup.md) 的完整目标保留。
 以下“通过”只覆盖对应证据列；未执行、进行中、失败、待决定均未完成。
 Source merge、组件测试和某次浏览器成功不能代替人工听感或整个 Goal 的验收。
+2026-10-11 新增的 MASTER/ENC4 局部真实浏览器观察见下文同名节；A1/A2 仍未完成。
 
 ## 决定与交付边界
 
@@ -114,6 +115,66 @@ V1 版本/snapshot/provenance 均保留原完成条件。
 | `stopped-pattern-reselection/committed-linux-asan-gcc13_4/terminal.json` | 944 bytes；`e795688d198ef9cdd52ad6d72a801550afb379148eeeefd66035dec3bac35411` | clean 6ae 的新原完整 full/stress exit 0；实际 key 归这一执行 |
 | `stopped-pattern-reselection/committed-linux-asan-gcc13_4/core_asan-terminal.json` | 669 bytes；`40a9c607a6f19b682a0b49efc62b0cdaba650562cc74db3c679f21ab72f5d94e` | lane 执行源头、工具链 handoff、未改 bounds 和 terminal exit 0 |
 | `stopped-pattern-reselection/committed-linux-asan-gcc13_4/core_asan.log` | 101824 bytes；`392a000e230fd88ed8e6d86367c1a8996a64eea4519afcfb4e5e5272f81b5e7f` | 原 full 256/256 与 stress 15/15 均已结束，不是单独 benchmark |
+
+## 2026-10-11 — MASTER/ENC4 局部真实浏览器观察
+
+本次只补充已合并 [#2000](https://github.com/endaye/lmdj/pull/2000) 的设备监听
+音量 UI 观察。文档 Task base 与 freshly fetched main 为
+`82c010d0391b956f871d34ecb40720f9a7e0a8d7`；仅修改本台账与后续计划。
+上述历史记录保持原来源和结果。#2010 当前 `b62f810eb89ae9076d6937741c65446e91289303`
+已于 2026-10-11 02:07 UTC 开始原完整 Creator 重跑，本节未记录其终态；本次 UI
+观察不产生 full PASS 或 accepted-risk，冻结观察报告早于该套件启动。
+
+**来源与设备：** 2026-10-11 01:47–01:58 UTC，Codex `/root`、普通 uid 501，
+macOS 27.0.1 arm64、实际 Google Chrome 155.0.8059.39。使用 Orca native
+computer-use 的可见窗口 69923，经原生点击和键盘输入，再读取 AX/UI；无 DOM
+注入。逻辑窗口 1440×870；22 张稳定快照为 2880×1740、scale 2，Reload 过渡
+截图 step 15 为 1280×773。服务 origin 为
+`http://127.0.0.1:50913/`，由该工作区的正式 verifier/server 启动。
+
+**分发身份：** 使用自身原 canonical `96871218d7d5ceadf168b9fef5decebf32c091f8`
+生成并保留的十文件 distribution，未重新构建。所在工作区为上述 b62f；968 到
+本 Task base 的 `apps/creator-web`、`packages`、`providers`、`products`、`contracts`、
+`tools/web-runtime` 与两份 root CMake 文件逐树比较无差异。完整分发文件长度/digest
+见冻结报告。host-manifest 实读标签为 Product `2.0.88.0`、Creator `6.0.0`、
+Web Platform `5.8.0`、protocol 1；这些既有标签不是本次新 Build 或已结算的 V1
+身份，不为 Goal 最终来源或新 Build 验收背书。
+
+| 实际步骤 | far-side 观察 | 结果与范围 |
+| --- | --- | --- |
+| System → Perform | Runtime ready / Audio inactive；MASTER 100，ENC4 100%；三个 FX 均 500，HOLD 0 | 实际页面可用；默认声音不可用，未启动音频 |
+| 聚焦 MASTER，实际点击后 PageDown、Down、Down | MASTER/ENC4 依次 49/49%、39/39%、38/38%、37/37% | 两处 UI 同步；原生键盘接收方确为 MASTER |
+| Sample → Perform | Sample ENC4 37%；返回 MASTER/ENC4 均 37 | 切页保持当前设备读数 |
+| 聚焦 ENC4，Up → Down | MASTER/ENC4 依次 38/38%、37/37% | 反向入口也同步同一 UI 值 |
+| 点击 Chrome Reload，等待实际 ready 读回 | booting 时 ENC4 禁用且暂显示 100%；ready 后 Sample ENC4 37%；返回 Perform MASTER/ENC4 均 37 | 新页面实例恢复 37%；未测试重启浏览器或设备 |
+| Project → Sequence → System → Back to music → Perform | 每页及 System 的 ENC4 均 37%；最终截图与 AX 显示 MASTER/ENC4 37 | 局部跨页与 System 读回，保留每段观察 |
+| 正常停止自身临时服务 | actual exit 0，十文件 distribution、source head 与 clean status 前后相等 | 临时服务已结束；无源码或分发修改 |
+
+**负面观察保留：** 辅助功能 `SetValue(37)` 返回 actual 100 / value_mismatch，
+没有计作成功；实际输入改由聚焦后的原生点击和键盘完成。工具对 native key 的
+synthetic_input 或 click 的 unasserted 标记也不作为成功判据，结果来自实际 far-side
+AX/UI。Sequence 点击后的 step 19 截图仍为前一 Project frame，另取 step 20 的
+实际新快照确认 Sequence。step 15 的截图为过渡空框架；booting、禁用及 100
+来自同次 AX 树。刷新初始化的 100 不与 ready 后的恢复值混淆。
+
+本地 server 未配置 Catalog upstream；Developer diagnostics 实际记录 16 次
+`Acquire default sound / NOT_FOUND`，16 Pad 为 FAILED。Runtime ready 不能证明
+可听输出。Project 仅观察到 “No changes in this session” UI，未做 Truth/Undo
+语义检查。实体旋钮、人工听感、真实输出路由、录音/重采样/导出 PCM 电平对比、
+0/边界/拒绝存储、浏览器或设备重启、Safari/iPad、Figma fidelity、辅助技术及
+生命周期均未执行；四页最终 A1/A2 和 V1 继续未完成，#2010 完整 Creator 的
+结果须另取该独立执行的终态。
+
+证据位置（仅为执行机保留目录）：
+`/Users/endaye/Projects/lmdj-followup-evidence/2026-10-11-creator-native-monitor-qa/`。
+原始 23 条 native action/AX 与截图均在目录内；下列 digest 只标识这些报告/图片。
+
+| 报告 | 完整身份 | 证明与限制 |
+| --- | --- | --- |
+| `observation-report.json` | 22810 bytes；`903a52e669d4b037f60a6c4db3ef24f1f9a5d1b476dda34e9967a2897e8d3bb4` | 每条实际输入、读回、截图身份、分发 inventory、失败尝试与未执行 leg |
+| `post-main-82-source-binding.json` | 2680 bytes；`ab633e77cb2be46d026a6c98643af169428d4ab4b72aa5631c0688010dd0c5c6` | 新 main/base、上述 product source 树比较、两文件声明与实施前提处置 |
+| `screenshot-dimensions-addendum.json` | 8847 bytes；`dd65b730d9e925294e3e10f6dccb7b0cbdbf79e6cfcc305921c037d32d3dcbff` | 23 PNG 实际尺寸；原报告 device 尺寸对应稳定快照，step 15 过渡图另列；冻结原报告保持不变 |
+| `24-final-stable37.png` | SHA-256 `f325ea8c190b8a358c5291d027ffff06ec7735d57a51ee61cca264646bbad9ca`；长度见报告 | 实际 Perform 显示 MASTER 37%、ENC4 37%；听感与 DSP 电平未验收 |
 
 ## 直接证据及适用范围
 

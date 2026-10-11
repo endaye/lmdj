@@ -94,6 +94,15 @@ async function installTransportProofRecorder(page) {
                 );
               }
             }
+            if (operation === "pattern.transport.switch") {
+              // #1958 S4: the switch request's snap names the device's SEQ
+              // SNAP boundary; the journeys assert it end to end.
+              window.__patternSwitchProof ??= [];
+              window.__patternSwitchProof.push({
+                payload: structuredClone(request.payload),
+                ok: response?.ok ?? null,
+              });
+            }
             if (operation === "trigger") {
               // A trigger response returns only after its admission append is
               // durable, so the journeys gate Record-off on these — never on a
@@ -213,6 +222,36 @@ async function awaitEarlyBar(page, sessionId, bpm) {
 
 async function transportRequests(page) {
   return page.evaluate(() => window.__patternTransportRequests ?? []);
+}
+
+async function switchRequests(page) {
+  return page.evaluate(() => window.__patternSwitchProof ?? []);
+}
+
+// Writes the SEQ SNAP preference into the device's Host settings store the
+// way a previous visit's choice would sit there, bypassing this page's UI.
+async function seedSeqSnapPreference(page, snap) {
+  await page.evaluate(async (value) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("lmdj.creator.host", 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("settings");
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction("settings", "readwrite");
+        transaction.objectStore("settings").put(value, "seq-snap.v1");
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+    } finally {
+      database.close();
+    }
+  }, snap);
 }
 
 // Require the Runtime's durable admission of `count` Pad presses before a
@@ -1290,4 +1329,109 @@ test("SETUP changes, doubles and copies a Pattern, undoes exactly, and reopens w
   expect(reopened.pattern_slots).toEqual(final.pattern_slots);
   await showPatternSetup(page, patternId);
   await expect(lengthButton(page, 4)).toHaveAttribute("aria-pressed", "true");
+});
+
+// #1958 S4: SEQ SNAP names the boundary a playing-state switch queues at.
+// A stored 1 BEAT choice is restored at boot, the playing switch request
+// carries it, a SETUP change to SEQ END re-aims the next request, and the
+// explicit choice persists across a reload — none of it entering Project
+// Truth. Exact boundary frames are the Host regression's authority; this
+// journey proves the device wiring, the queue/current feedback and the
+// Truth far side.
+test("SEQ SNAP restores the stored choice at boot, carries it on playing switches, and persists a SETUP change", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await installTransportProofRecorder(page);
+  await page.goto("/index.html");
+  await importProject(page);
+
+  // A second, 2-bar Pattern gives the switches a target whose end-of-Pattern
+  // boundary differs from a single bar; the imported first stays selected.
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  const firstPattern = await selectedSequencePatternId(page);
+  await createSequencePattern(page, 2);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-count", "2", {timeout: 30_000});
+  const secondPattern = Object.keys((await inspectTruth(page)).patterns)
+    .find((id) => id !== firstPattern);
+  expect(secondPattern).toBeDefined();
+  await selectSequencePattern(page, firstPattern);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", firstPattern);
+  const truthAtRest = await inspectTruth(page);
+
+  // Leg 1 — the stored 1 BEAT choice is restored at boot, offered in SETUP.
+  await seedSeqSnapPreference(page, "beat");
+  await reopenProject(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  const snapOption = (name) => page.getByRole("group", {name: "Sequence snap"})
+    .getByRole("button", {name, exact: true});
+  await showSequenceLayer(page, "SETUP");
+  await expect(snapOption("1 BEAT"))
+    .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+  await showSequenceLayer(page, "EDIT");
+
+  // Leg 2 — the playing switch request carries the restored choice. A 1
+  // BEAT queue window is sub-second, so the far side — the new Pattern
+  // current and the selection following it — is asserted rather than the
+  // queue itself.
+  await wakeAudioWithPad(page);
+  await expect(page.getByTestId("audio-state"))
+    .toHaveText("Audio running", {timeout: 30_000});
+  await playStopKey(page).click();
+  await transportStatus(page, "playing");
+  const sessionId = (await transportRequests(page)).at(-1).payload.session_id;
+  const bpm = truthAtRest.bpm;
+  await awaitEarlyBar(page, sessionId, bpm);
+  await physicalKey(page, "Pattern forward — →").click();
+  await expect.poll(async () => (await switchRequests(page)).at(-1)?.payload,
+    {timeout: 30_000}).toMatchObject({pattern_id: secondPattern, snap: "beat"});
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, sessionId);
+    return status.playing && status.pending_switch == null &&
+      status.current_pattern_id === secondPattern;
+  }, {timeout: 30_000}).toBe(true);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-id", secondPattern, {timeout: 30_000});
+
+  // Leg 3 — a SETUP change to SEQ END re-aims the next request. The playing
+  // 2-bar Pattern's end is at least a bar away, so the queue shows in the
+  // GROOVE header while the current Pattern keeps playing.
+  await showSequenceLayer(page, "SETUP");
+  await snapOption("SEQ END").click();
+  await expect(snapOption("SEQ END")).toHaveAttribute("aria-pressed", "true");
+  await showSequenceLayer(page, "EDIT");
+  await awaitEarlyBar(page, sessionId, bpm);
+  await physicalKey(page, "Pattern back — ←").click();
+  await expect.poll(async () => (await switchRequests(page)).at(-1)?.payload,
+    {timeout: 30_000}).toMatchObject({pattern_id: firstPattern, snap: "pattern_end"});
+  await expect(page.getByRole("button", {name: "Choose Pattern", exact: true}))
+    .toContainText("GROOVE / 02 → 01");
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, sessionId);
+    return status.playing && status.pending_switch == null &&
+      status.current_pattern_id === firstPattern;
+  }, {timeout: 60_000}).toBe(true);
+  await expect(sequencePattern(page))
+    .toHaveAttribute("data-pattern-id", firstPattern, {timeout: 30_000});
+
+  // Leg 4 — Stop settles on the switched Pattern; neither the switches nor
+  // the preference entered Project Truth.
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
+  const stopped = await inspectTransport(page, sessionId);
+  expect(stopped.playing).toBe(false);
+  expect(stopped.pending_switch).toBe(null);
+  expect(stopped.current_pattern_id).toBe(firstPattern);
+  expect(await inspectTruth(page)).toEqual(truthAtRest);
+
+  // Leg 5 — the explicit choice persists across a reload; Truth still equal.
+  await reopenProject(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  await showSequenceLayer(page, "SETUP");
+  await expect(snapOption("SEQ END"))
+    .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+  expect(await inspectTruth(page)).toEqual(truthAtRest);
 });

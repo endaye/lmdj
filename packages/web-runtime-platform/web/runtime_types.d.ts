@@ -111,10 +111,12 @@ export interface PatternTransportRequest {
 export interface TransportPatternSwitchRequest {
   readonly patternId: string;
   readonly requestId: string;
+  /** Device preference; omission retains the legacy next-Bar boundary. */
+  readonly snap?: "beat" | "bar" | "pattern_end";
 }
 
 /**
- * Switches the playing transport's Pattern at the engine's next Bar. A
+ * Switches the playing transport's Pattern at the selected engine boundary. A
  * request for the Pattern already playing withdraws any queued switch and
  * answers `activationFrame: null`.
  */

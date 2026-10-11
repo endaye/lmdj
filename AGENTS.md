@@ -242,11 +242,15 @@ platform cannot execute. It is advisory only: a green local run authorizes no
 push, Pull Request, or later state transition. `--list` resolves the lane plan
 without running, and `--pr-body body.md` checks a Pull Request body's
 `Documentation impact:` declaration in milliseconds instead of a full portal
-lane run. One local result is a merge obligation: every `batch_only` lane a
-change selects runs locally on the committed head, and the Pull Request body
-records its `pass key=` evidence under `## Batch-only Lanes`, or an
-`accepted-risk` reason the owner explicitly accepted. Before merge,
-`--batch-evidence-only --pr-body body.md` checks it on the exact head (#1619).
+lane run. Ordinary merges require the Task's relevant tests and an explicit account of
+covered risks and results in the Pull Request's Verification section. A selected
+`batch_only` lane does not create a blanket obligation to run its complete lane
+locally. Persistence, recovery and concurrency changes retain their owning
+integration/restart/stress tests; all declared acceptance journey legs remain.
+Complete candidate/full checks remain separate, and deferred checks are never
+reported as passed or used to clear full verification debt. The legacy
+`--batch-evidence-only --pr-body body.md` is an optional strict audit of explicitly
+requested full receipts, not an ordinary merge prerequisite (#1996).
 
 Direct verification commands:
 

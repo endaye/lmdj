@@ -666,3 +666,29 @@ T3g verification: the preserved-size/mtime/version replacement failed the
 identity inequality on the old implementation; after repair the complete local
 preflight suite passes 137/137 (10.421 s), and selector contracts pass 12/12.
 No qualifying pitfall: the owning regression fully expresses this cache defect.
+
+### T3h — Refresh the integration base and retain the stronger replay assertion
+
+Integration base: 67d66bf20d7701d339ab2554ac2090bae78ec483.
+Task head before refresh: 85f8f90218df25b3cf292395aeea1045c71a0dfa.
+Outstanding: daily quick/default/cache/workload implementation remains absent on main; no CI producer/consumer successor since 98f8ba11. Retain implementation and exact-head independent review obligation.
+Already delivered: main's stopping-saved-Performance regression now sets MASTER to 42 and preserves it while resetting Filter/Delay/Reverb/HOLD/Pattern. Its test supersedes the branch's capture-default variant; keep main's complete file, including new SEQ SNAP journey. Do not duplicate this fix.
+Main also brings product/contract snapshots and independent Filter/Pattern changes; retain all main changes. Prior product run evidence remains historical, not evidence for this new combined source. Run current CI contracts, portal and the affected replay browser journey after current-source rebuild. No full candidate or normal-workday acceptance is claimed.
+Declared conflict-resolution files: tests/platform/web/creator/creator_web_perform.spec.mjs and docs/plans/2026-10-11-lmdj-daily-ci-simplification.md; other merge changes originate unchanged from main. Version impact: none. Documentation impact: none for resolution itself; original PR portal impact remains required.
+
+Refresh also found the independently merged shared-temporary-staging-ownership
+ledger entry duplicates this branch's shared-host-tmp-staging-permissions entry.
+Extend the declared resolution scope to those two ledger files and
+`.agents/skills/issue-done/SKILL.md`: consolidate both occurrences under main's
+entry, retain the #1996 failure detail and macOS exception, and absorb the second
+recurrence through a causal diagnosis procedure in the shipping skill. This is
+process guidance, not a new check. Verify the existing shipping-skill contracts.
+The precommit portal attempt failed only because incoming snapshot metadata is
+not yet present at HEAD; retain that failure and rerun after the merge commit.
+
+T3h precommit verification: complete CI regression 2,710 tests PASS in
+214.913 s (72 existing environment skips); shipping skill 10/10, pitfall ledger
+15/15, staged ownership 77/77. Conflict-resolved Perform spec is byte-identical
+to main and passes Node syntax checking. AGENTS/CLAUDE remain identical.
+Postcommit Portal and rebuilt Creator targeted execution are required before push;
+their results will be recorded on the PR without rewriting the verified commit.

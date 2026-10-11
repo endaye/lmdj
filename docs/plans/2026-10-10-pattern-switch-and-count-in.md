@@ -9,7 +9,7 @@ The product decisions are:
 - [`2026-10-10-pattern-switch-while-playing.md`](../prd/decisions/2026-10-10-pattern-switch-while-playing.md) (#1958);
 - [`2026-10-10-record-key-and-count-in.md`](../prd/decisions/2026-10-10-record-key-and-count-in.md) (#1959).
 
-The plan ships as seven Tasks. Each Task is one Conventional Commit on its own short-lived branch, with verified commit, push, current-head review and squash merge. No Task releases, allocates a Product Build or cleans worktrees. An implementation Task may be drafted by a delegated coding agent; the shipping agent rebuilds and reruns every listed test itself before committing.
+The plan has seven product stages. Each implementation or declared preparatory Task is one Conventional Commit on its own short-lived branch, with verified commit, push, current-head review and squash merge. A preparatory design or partial capability does not complete its product stage. No Task releases, allocates a Product Build or cleans worktrees. An implementation Task may be drafted by a delegated coding agent; the shipping agent rebuilds and reruns every listed test itself before committing.
 
 Delivery order: S1 → S2 deliver switching while playing at 1 BAR; S4 adds 1 BEAT and SEQ END; S6 → S7 deliver count-in; S3 adds switching while recording; S5 adds OFF.
 
@@ -118,27 +118,126 @@ The addendum names its files and tests before code starts. Expected owners: `pat
 
 **Behaviour.**
 
-- `pattern.transport.switch` takes `snap: "beat" | "bar" | "pattern_end"`, defaulting to `"bar"`. The Host computes the activation frame from the transport origin with the engine's own Bar and loop maths, so the boundary matches the engine's clock.
+- `pattern.transport.switch` takes `snap: "beat" | "bar" | "pattern_end"`, defaulting to `"bar"`. The Host requests the selected boundary from the engine's reservation-bound switch publication. The engine computes the activation frame from the exact current transport origin and prepared Pattern geometry, so both initial and audio-claimed successor boundaries use the actual engine timeline.
 - Creator adds a SEQ SNAP segment (1 BEAT, 1 BAR, SEQ END) in SETUP next to QUANTIZE. The preference is stored in `lmdj.creator.host` / `settings` / `seq-snap.v1`, defaults to 1 BAR, and is read at boot like `metronome.v1`. It does not enter Project Truth.
 
-**Declared files.** S1's Host files plus `apps/creator-web/src/state/seq_snap_preference.ts` (new), `app.tsx`, `sequence_touch_workspace.tsx`, their tests, and the two Creator portal pages.
+**Refreshed premises.** At `deb95de722b845d708371e90bcac138ae5e25e01`, the protocol and SDK accept only Pattern/request identity, Creator SETUP has no SEQ SNAP preference, and both native claimed-successor calculation and Host deferred retries use Bar-only arithmetic. An explicit future frame alone cannot implement the other choices: native claimed timing takes precedence over it. S1/S2 and their Stop/settling/observation follow-ups are already delivered and must be retained. Recording permission remains S3; the separate Performance-origin Task #1974 is not duplicated.
 
-**Lowest-tier tests.** Host: each snap lands on its frame, including SEQ END on a 2-bar Pattern. Creator: the preference round-trips and the request carries the snap.
+**Declared files.** S1's Host/SDK protocol, session, types, dispatch and tests; `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`, `packages/audio-runtime/src/realtime_engine.cpp`, `tests/core/audio/realtime_engine_test.cpp`; `apps/creator-web/src/state/seq_snap_preference.ts` (new), `app.tsx`, `runtime/pattern_transport_actions.ts`, `sequence_touch_workspace.tsx`, `styles.css` (only the SEQ SNAP row's label/segment layout), their tests and the affected packaged Sequence/Perform journeys; this plan, `apps/docs-site/diagrams/audio-runtime.architecture.json` with official generated HTML/SVG, and the current portal pages `/core/modules/audio-runtime/`, `/platform/web-runtime/`, `/hosts/creator-web/`, `/hosts/creator-interactions/`. The native extension parameterizes the existing control-side publication reservation and retains the existing audio apply path. The original public switch signature remains available; any actual ABI change must be declared before shipping.
+
+**Boundary rules.** 1 BEAT uses the prepared Pattern's rational tick boundaries within its rounded loop geometry; 1 BAR retains the existing Bar geometry while #1973 is independently tracked; SEQ END uses the playing Pattern's complete loop. An audio-owned predecessor keeps its own apply point and zero-origin restart. A later request uses the selected boundary on that predecessor's new timeline. Replacement, cancellation and Stop preserve the exact publication authorities. The device setting never enters Project Truth.
+
+**Lowest-tier tests.** Native and Host: each snap lands on its exact frame, including SEQ END on a 2-bar Pattern, noninteger-BPM beat geometry and an audio-claimed successor. Test expectations use independent absolute frame values, so producer/consumer agreement cannot hide a shared wrong boundary. Retain replacement, current-Pattern cancellation, Stop, legacy omitted-snap and reservation-race coverage. Creator: the preference round-trips, defaults safely, preserves an explicit user choice against late boot hydration, and both Sequence and non-recording Perform requests carry the selected snap. Packaged journeys retain their far-side current/queue and reopen/Truth assertions.
+
+**Independent-review verification follow-up.** The frozen S4 delta's review found no demonstrated reachable defect, but identified four missing decisive witnesses in the already-declared native and Host test files. Before freezing S4, add focused tests for: an admitted Beat/SEQ END calculation invalidated by a long callback and recomputed beyond the completed frontier; selected-boundary overflow refusal without losing an existing exact authority; Host cancellation/replacement across a forced publication handoff, including cancelling both a claimed predecessor and queued successor; and the production receipt-bound Record opening after a switch cancellation, with no admission before its actual cutoff receipt and the take retained on the actual current Pattern. Use existing deterministic hooks where possible; any extra test seam must be declared before editing. These tests cover S4 authority and production-port changes, and do not lift S3 recording-switch permission.
+
+The Host witness reuses its existing one-shot hooks in `control_runtime.cpp`, guarded by `LMDJ_WEB_RUNTIME_TESTING`: after cancelling the latest switch and before cancelling predecessors; after the switch request's strong observation and before predecessor withdrawal; and immediately before the native transport publication after retired-view reclamation. No new public hook API, build target, production callback, or concurrency protocol is introduced.
+
+**Shipping verification refresh.** Main `82c010d0391b956f871d34ecb40720f9a7e0a8d7`
+([#2012](https://github.com/endaye/lmdj/pull/2012)) changes only verification
+governance since S4's `deb95de7` base; the product premises above remain
+outstanding at that main revision. Its Task verification policy replaces the
+blanket complete batch-only receipt obligation. Retain the native/Host boundary
+and authority tests, the owning stress suites, SDK request/response tests,
+Creator preference/component tests, and every declared packaged journey leg.
+Rebuild and run those affected tests on the final Task source, and record actual
+commands, risks covered, results and complete-verification gaps in the PR.
+Historical full results remain bound to their original inputs.
+
+The original complete Creator run reproduced an inherited test defect:
+`creator_web_perform.spec.mjs` expects every slider to reset to 500, including
+MASTER whose range is 0–100. The integration repair in that already-declared
+file sets a nondefault MASTER value before recording, preserves the full
+record/replay/Stop/neutral journey, checks Filter/Delay/Reverb individually at
+500, and checks that MASTER retains its device value. Keep the original
+timeouts and all HOLD/Pattern assertions. Run the focused real packaged
+journey before the amendment and the complete Creator proof on the committed
+head. This changes no product behavior or additional version debt.
+
+The same amendment corrects the manual's stale fixed-Bar roadmap statement
+and additionally declares
+`.agents/pitfalls/shared-temporary-staging-ownership.md`. The Linux fixture
+diagnosis established an unwritable root-owned shared temporary staging path;
+the original unchanged binary passed under a fresh worker-owned temporary
+parent. Record that process finding, retain the initial failures, and run the
+existing ledger and staged-ownership checks. No new gate, shared-directory
+mutation, coverage-floor change or timeout adjustment belongs to this repair.
+
+**Diagram presentation follow-up.** On committed S4 head `680a86f5`, the
+independent review's A1 advisory was reduced with the actual generated HTML:
+the expanded Pattern Transport / Phase card needs 174 px inside its existing
+70 px hidden-overflow text box. This documentation-only Task declares this
+plan, `apps/docs-site/diagrams/audio-runtime.architecture.json`, and its official
+`static/diagrams/audio-runtime.html` / `.svg` outputs before editing. Condense
+that card's summary; the module page retains the complete phase, ownership and
+predecessor/successor rules. Do not change the shared renderer or other cards.
+Lowest-tier verification is the actual regenerated card's rendered text fitting
+its existing box and `scripts/docs-site.sh check`. Version impact: none;
+Documentation impact: required on `/core/modules/audio-runtime/`. No product,
+test, timeout or journey input changes. The completed original eight-group
+Creator proof remains bound to `680a86f5`; it is not a full-proof receipt for the
+documentation follow-up's new head. Refresh independent current-head review
+before shipping the follow-up.
 
 ## S5 — SEQ SNAP OFF
 
-OFF needs the engine to start a different Pattern at the current phase. S5 adds that publish mode to `audio-runtime` with its engine tests, exposes `snap: "off"` in the Host, and adds the option in Creator. It is last because it is the only Task that changes the audio thread's apply path.
+OFF needs the engine to start a different Pattern at the current phase. S5 adds that publish mode to `audio-runtime` with its engine tests, exposes `snap: "off"` in the Host, and adds the option in Creator. It is last because it changes the cross-Pattern publication phase; S6 separately adds the native scheduled-start path.
 
 ## S6 — scheduled transport start for count-in (Core)
 
-S6 starts with a design addendum that decides how Record from stopped starts exactly at the count-in end frame.
+The [scheduled Record design addendum](../design/2026-10-11-scheduled-pattern-record-count-in.md)
+selects the complete native, Facade, Host and SDK path before implementation.
+Its preparation Task declares only that addendum and this plan. Lowest-tier
+verification checks relative links, source/test ownership, decision traceability
+and the declared diff; the existing `ci_change_scope_test.py` covers admission
+of the new documentation path, and PR body/declaration checks cover shipping
+metadata. Version impact: none; Documentation impact: none, because the Task
+changes no source or current Portal behavior. No new gate or product proof is
+introduced by this preparation.
 
-- The likely shape is a future start frame on `PatternTransportCommand`, applied as the origin, with the engine silent before it.
-- The decision says no Journal is open during count-in, and cancelling writes nothing. If the Facade cannot meet that without opening the Journal at request time, the addendum raises an erratum to the decision for the owner instead of choosing silently.
-- Cancel before the start frame returns to stopped with nothing written.
-- Inspect reports `count_in {start_frame, bars}`, so Creator can schedule clicks before the origin.
+- A separate tagged native scheduled-start cell pins the prepared Pattern and
+  rounded Bar geometry. The first eligible native frame `C` starts four/eight
+  forced cues; `S = C + bars * bar_frames` starts Pattern playback exactly.
+  Existing command/receipt DTOs and ordinary behavior stay compatible.
+  Before Armed, audio makes an independent scalar/cue copy and acquires a
+  separate material borrow. Cancel/ack/rearm cannot reuse that copy or reclaim
+  borrowed material; tagged CAS is not protection for a later payload read.
+- Journal begin/preparation/writes occur only after acquiring the actual
+  Applied receipt at `S`, through the existing dedicated I/O executor. A
+  winning pre-start cancel leaves the transport stopped and writes nothing.
+  A lost cancel retains the actual start and later cutoff receipts. The hard
+  no-Journal rule is retained; an implementation unable to meet it must raise
+  the owner erratum rather than choose request-time opening.
+- Bounded original-frame ingress and separately reserved native FIFO and
+  metadata release credits keep live Pads,
+  Stop and inspect serviceable while I/O is held. Short Host tickets release
+  both SDK dispatch tails; public scheduled-record trigger completion requires
+  a total sequence-bound native operation completion and durable admission,
+  including muted presses, toggle-stop, release and invalidation. Original
+  opening and operation budgets remain. The opt-in input profile is negotiated
+  at quiescent activation before live input, with acceptance order preserved.
+  Press completion/ticket consumption does not retire a held press's future
+  native or recording release reservation. Each settles at its own real
+  release/owner boundary; saturated silent-held-input tests retain the complete
+  matching-release duration through Record-off/Stop, reconciliation and reopen.
+- Native cues use a second monitoring-only worklet output connected by Runtime
+  Session downstream of the product master tap. S6 includes that consumer and
+  real packaged OPFS/raw-PCM witnesses; telemetry or a native producer alone
+  is incomplete. S7 owns device preference/UI and the JS metronome handoff.
+- Separate strict count-in capability/request/inspect/cancel operations add a
+  `count_in` view with `start_frame: null` while arming, then the real scheduled
+  frame and lineage. Ordinary legacy responses/event streams remain unchanged;
+  unsupported probing leaves ordinary operations usable. Serial/epoch identity
+  uses exact decimal strings across JS. No Host timer invents an origin.
 
-Expected owners: `realtime_engine.cpp` and header, `pattern_transport_controller.cpp`, `control_runtime.cpp`, and their tests.
+**Refreshed premises.** At actual S4 merge
+`e220c98ca1b0f4a3c08646bfeb328ffa186a263d`, S1/S2/S4 are delivered; scheduled
+Record, production-controller I/O ownership and native cue/SDK wiring remain
+outstanding. Existing executor OPFS and ordinary recording journeys are
+retained. #1958/#1959 are decision-only closures. Refresh concurrent F1's actual
+main integration before overlapping Engine/Audio Portal edits. The addendum
+names the owning files, exact lifetime/receipt protocol and every lowest-tier
+test and far-side acceptance leg before code.
 
 ## S7 — count-in in Creator
 
@@ -160,17 +259,36 @@ Expected owners: `realtime_engine.cpp` and header, `pattern_transport_controller
 
 ## Verification
 
-Each Task runs its listed tests and every batch-only lane it selects (`scripts/local-ci.sh --list`), and records pass keys in its Pull Request. S1, S3, S5 and S6 select the Core and Web Runtime lanes; S2, S4 and S7 select creator and portal.
+Each Task runs its listed risk-covering tests and records the actual commands,
+results and explicit gaps in its Pull Request. Persistence and recovery retain
+their owning integration/restart tests; concurrent lifetime changes retain
+stress tests; every declared acceptance journey keeps all its transitions and
+far-side assertions. Resolve ownership with `scripts/local-ci.sh --list` on
+the final committed range. For this Goal, the user's supplied AGENTS requires
+every selected `batch_only` lane on the committed head, with its `pass key=`
+recorded under `## Batch-only Lanes`, or an explicitly owner-accepted risk;
+the exact-head batch-evidence check is required before merge. That user
+requirement takes precedence over the general current-main Task policy above.
+Explicit complete candidate/full evidence remains a separate obligation.
+Unexecuted complete checks remain unverified, and historical failures remain
+visible. S1, S3, S5 and S6 own Core and Web Runtime; S2 and S7 own Creator and
+Portal. S4's native extension also owns Core and Web Runtime alongside Creator
+and Portal: the recorded classifier selects full mode, 13 lanes and 10
+batch-only lanes. This observation does not override the canonical selector.
 
 ## Version Management
 
-Version impact: none in this plan Pull Request (documentation only). The implementation Tasks owe MINOR bumps at the next coordinated version settlement:
+Version impact: none in planning/design preparation Pull Requests (documentation only). The implementation Tasks owe the following debt at the next coordinated version settlement:
 
-- S1, S4: `web-runtime-platform`;
+- S1: `web-runtime-platform`;
+- S4: `web-runtime-platform`, `creator-web`, and the additive native boundary API in `audio-runtime` (retain old public symbols/layout; reassess MAJOR debt if that cannot be met);
 - S2, S7: `creator-web`;
 - S3: `application-facade`, `project-io`, `web-runtime-platform`;
 - S5: `audio-runtime`, `web-runtime-platform`;
-- S6: `audio-runtime`, `application-facade`, `web-runtime-platform`.
+- S6: `audio-runtime` MAJOR, because the selected inline schedule changes the
+  concrete Engine ABI; `application-facade` and `web-runtime-platform` MINOR
+  while companion APIs/Pimpl additions preserve old public layouts/vtables,
+  exact legacy wire schemas and unnegotiated event streams.
 
 S2's stopped-selection integration repair also owes `web-runtime-platform`
 PATCH debt. It uses an existing engine capability and changes no API, ABI,
@@ -180,8 +298,11 @@ No Contract SemVer change is expected: SEQ SNAP and count-in are device preferen
 
 ## Documentation Impact
 
-This plan Pull Request: none. It adds a plan under `docs/plans/`; no portal page describes it as implemented. S1, S3, S5 and S6 update `/platform/web-runtime/` and the affected module pages. S2, S4 and S7 update `/hosts/creator-web/` and `/hosts/creator-interactions/`. S2's stopped-selection repair also updates `/platform/web-runtime/`.
+The original planning Pull Request: none. It added a plan under `docs/plans/`; no portal page described it as implemented. S1, S3, S5 and S6 update `/platform/web-runtime/` and the affected module pages. S2, S4 and S7 update `/hosts/creator-web/` and `/hosts/creator-interactions/`. S2's stopped-selection repair also updates `/platform/web-runtime/`. S4's native extension also updates `/platform/web-runtime/`, `/core/modules/audio-runtime/`, and the Audio Runtime source diagram with its official generated outputs.
 
 ## Pitfall Impact
 
 None expected. Each Task searches open entries labelled with its `area:*` before shipping. S2 and S7 read `synthetic-event-omits-platform-side-effects` and `acceptance-journey-truncation` before writing browser journeys.
+
+S4 records the new `shared-temporary-staging-ownership` process finding in
+`area:ci-release`; its first occurrence remains open without a new mechanism.

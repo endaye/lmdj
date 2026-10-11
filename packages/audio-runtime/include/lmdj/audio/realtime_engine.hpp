@@ -95,6 +95,8 @@ struct PatternPublication {
   std::uint64_t activation_frame;
 };
 
+enum class PatternSwitchSnap : std::uint8_t { beat, bar, pattern_end };
+
 // Exact control-thread authority for replacing a pending Pattern publication
 // with a different Pattern. Ordinary publications may only supersede the same
 // Pattern at the same boundary; Sequence switching and cancellation must prove
@@ -525,11 +527,18 @@ class RealtimeEngine final {
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
-  // Opt-in 1-BAR launch. An audio-owned predecessor keeps its boundary and
-  // this successor takes the following Bar, even before that boundary arrives.
+  // Opt-in 1-BAR launch. Retained as a forwarding overload for existing callers.
+  // An audio-owned predecessor keeps its boundary; its successor uses that
+  // Pattern's geometry and activation as the new origin. Timing is computed
+  // inside publication admission and the returned frame is authoritative.
   // Recomputes timing after a claim race; the returned frame is authoritative.
   PatternPublication publish_pattern_switch_view(
       PreparedPatternView&& pattern,
+      std::optional<PatternReplacementAuthority> replacement_authority =
+          std::nullopt) noexcept;
+  PatternPublication publish_pattern_switch_view(
+      PreparedPatternView&& pattern,
+      PatternSwitchSnap snap,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
   // Exact live ownership, including both pending publications and a
@@ -600,6 +609,15 @@ class RealtimeEngine final {
   foundation::Result<void> prepare_master_fx(std::uint16_t bpm);
   // Control thread, concurrent with render. Sole producer of the FX queue.
   FxEnqueueResult enqueue_fx_gesture(FxGesture gesture) noexcept;
+  // Control thread, concurrent with render. Typed independent Filter control
+  // on the same bounded queue. A successful call updates the control-side
+  // accepted Filter state and consumes one accepted sequence; a rejected call
+  // (including queue_full) changes neither.
+  FxEnqueueResult enqueue_filter_gesture(FilterGesture gesture) noexcept;
+  // Serialized control thread, concurrent with render. The accepted half is
+  // the control-owned shadow of every accepted queue event; the applied half
+  // is the audio thread's last published coherent state, sequence and epoch.
+  FilterControlStatus filter_control_status() const noexcept;
   // Control thread, concurrent with render. Ordered with FX gestures and
   // applied at the next render quantum boundary.
   FxEnqueueResult enqueue_master_fx_tempo(std::uint16_t bpm) noexcept;
@@ -753,10 +771,14 @@ class RealtimeEngine final {
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_generations_{};
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
 
-  enum class MasterFxControlKind : std::uint8_t { gesture, tempo };
+  enum class MasterFxControlKind : std::uint8_t { gesture, tempo, filter };
   struct MasterFxControlEvent {
     MasterFxControlKind kind;
     FxGesture gesture;
+    FilterGesture filter;
+    // Typed Filter controls carry their accepted sequence so the audio thread
+    // can report exactly which control it applied.
+    std::uint64_t sequence;
     std::uint16_t bpm;
   };
   static_assert(std::is_trivially_copyable_v<MasterFxControlEvent>);
@@ -862,7 +884,8 @@ class RealtimeEngine final {
       std::optional<std::uint64_t> activation_frame,
       std::optional<PatternReplacementAuthority> replacement_authority,
       PatternPublicationTiming timing,
-      std::uint64_t expected_generation = 0) noexcept;
+      std::uint64_t expected_generation = 0,
+      PatternSwitchSnap snap = PatternSwitchSnap::bar) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,
@@ -977,6 +1000,17 @@ class RealtimeEngine final {
   std::uint64_t enqueued_tempo_updates_ = 0;
   std::uint64_t applied_tempo_updates_ = 0;
   std::atomic<std::uint16_t> current_master_fx_bpm_{0};
+  // Control-owned accepted Filter shadow; written only after the bounded
+  // queue accepts the event, so a rejected control leaves no trace.
+  FilterLiveState accepted_filter_state_{};
+  std::uint64_t accepted_filter_sequence_ = 0;
+  std::uint64_t enqueued_filter_controls_ = 0;
+  // Audio-owned: the last typed Filter control the render thread applied.
+  std::uint64_t applied_filter_sequence_ = 0;
+  std::uint64_t dequeued_filter_controls_ = 0;
+  // Audio publishes the coherent applied state after any queue event that can
+  // change it; control reads it lock-free. Quiescent writer handoff only.
+  detail::ValueChannel<FilterAppliedState> filter_applied_channel_;
   struct PatternObservation {
     std::uint64_t generation = 0;
     std::uint64_t activation_frame = 0;
@@ -1011,6 +1045,7 @@ class RealtimeEngine final {
     std::uint64_t current_pattern_generation = 0;
     PatternObservation pending{};
     std::uint64_t transport_canceled_publications{};
+    std::uint64_t dequeued_filter_controls_ = 0;
   };
   struct ControlObservation {
     std::uint64_t start_epoch_ = 0;
@@ -1036,6 +1071,7 @@ class RealtimeEngine final {
     std::uint64_t enqueued_tempo_updates_ = 0;
     PatternObservation last_queued{};
     std::uint64_t last_audio_cancel = 0;
+    std::uint64_t enqueued_filter_controls_ = 0;
   };
   struct TransportDecision {
     std::uint64_t rendered_frames = 0;
