@@ -68,7 +68,7 @@ class WebVerificationModes(unittest.TestCase):
         helpers = ("activate_toolchain require_dependencies require_playwright "
                    "verify_browser_fixture_generator run_audio_worklet_conformance "
                    "generate_project_fixture generate_sample_editor_fixture "
-                   "clean_creator configure_creator build_creator package_creator test_creator "
+                   "clean_creator configure_creator build_creator package_creator test_creator test_creator_ui "
                    "clean_host configure_host build_host run_nonbrowser_tests "
                    "generate_browser_fixtures verify_proof_fixture_inventory python3 cmake").split()
         with tempfile.TemporaryDirectory() as directory:
@@ -105,6 +105,23 @@ fixture_source_root=/fixtures
                 self.assertIn("Quick: PASS", result.stdout)
                 self.assertNotIn("reproducibility: PASS", result.stdout)
                 self.assertNotIn("Proof: PASS", result.stdout)
+
+    def test_smoke_builds_once_runs_all_ui_tests_and_durable_journey(self):
+        result, calls = self.invoke("creator", "smoke")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        names = [call.split()[0] for call in calls]
+        self.assertEqual(names, ["activate_toolchain", "require_dependencies",
+                                "configure_creator", "build_creator", "package_creator",
+                                "test_creator_ui", "run_browser_gate"])
+        self.assertEqual(calls[-1], "run_browser_gate    smoke")
+        self.assertIn("Smoke: PASS", result.stdout)
+        self.assertNotIn("Proof: PASS", result.stdout)
+        self.assertNotIn("Quick: PASS", result.stdout)
+
+    def test_smoke_browser_failure_is_not_a_passing_result(self):
+        result, _ = self.invoke("creator", "smoke", browser_status=9)
+        self.assertEqual(result.returncode, 9, result.stderr)
+        self.assertNotIn("Smoke: PASS", result.stdout)
 
     def test_full_keeps_two_clean_builds_and_byte_comparison(self):
         for host, suffix in (("creator", "creator"), ("runtime", "host")):
@@ -148,6 +165,76 @@ fixture_source_root=/fixtures
             result, calls = self.invoke(host, "proof", diff_status=1)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertFalse(any(call.startswith("run_browser_gate ") for call in calls))
+
+
+class CreatorBrowserWorkloads(unittest.TestCase):
+    def invoke(self, mode, status=0):
+        body = shell_function((REPO_ROOT / "scripts/creator-web.sh").read_text(), "run_browser_gate")
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "trace"
+            program = r"""
+set -eu
+repo_root="$ROOT"
+creator_root="$ROOT/apps/creator-web"
+web_test_root="$ROOT/tests/platform/web"
+build_root="$WORK"
+dist_root="$WORK"
+required_sample_editor_spec="$web_test_root/creator/creator_web_sample_editor.spec.mjs"
+required_capture_spec="$web_test_root/creator/creator_web_capture.spec.mjs"
+proof_server_pid=''
+cleanup_server() {
+  if [[ -n "$proof_server_pid" ]]; then
+    kill "$proof_server_pid" 2>/dev/null || true
+    wait "$proof_server_pid" 2>/dev/null || true
+    proof_server_pid=''
+  fi
+}
+trap cleanup_server EXIT
+mktemp() { printf '%s\n' "$WORK"; }
+python3() {
+  case "$1" in
+    */serve_distribution.py) touch "$WORK/ready.json"; exec sleep 30 ;;
+    -c) printf '%s\n' fixture-nonce ;;
+    -)
+      cat >/dev/null
+      if [[ "$2" == */host-manifest.json ]]; then
+        printf '%s\n' '1.0.0.0 1.0.0'
+      else
+        printf '%s\n' 12345
+      fi
+      ;;
+    *) return 64 ;;
+  esac
+}
+npm() {
+  printf '%s|%s|%s\n' "$LMDJ_CREATOR_WEB_BASE_URL" "$LMDJ_WEB_RESULTS_SLOT" "$*" >> "$TRACE"
+  return "$STATUS"
+}
+"""
+            program += "run_browser_gate() {\n" + body + '\n}\nrun_browser_gate /main /sample /candidate "$MODE"\n'
+            result = subprocess.run(["bash", "-c", program], capture_output=True, text=True,
+                                    timeout=10, env={**os.environ, "ROOT": str(REPO_ROOT),
+                                        "WORK": directory, "TRACE": str(trace), "MODE": mode, "STATUS": str(status)})
+            return result, trace.read_text().splitlines()
+
+    def test_smoke_executes_only_the_complete_deployment_journey(self):
+        result, calls = self.invoke("smoke")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("http://127.0.0.1:12345|deployment-chromium|", calls[0])
+        self.assertIn("--project=creator-deployment deployment/creator_web_deployment.spec.mjs", calls[0])
+
+    def test_complete_browser_inventory_is_retained_independently(self):
+        result, calls = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call.split("|")[1] for call in calls], [
+            "chromium", "catalog-chromium", "sample-chromium", "webkit",
+            "capture-chromium", "capture-denied-chromium", "sample-webkit", "deployment-chromium"])
+
+    def test_failure_of_the_durable_smoke_propagates(self):
+        result, calls = self.invoke("smoke", status=17)
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assertEqual(len(calls), 1)
 
 
 class PlaywrightConfigOwnsNoServer(unittest.TestCase):

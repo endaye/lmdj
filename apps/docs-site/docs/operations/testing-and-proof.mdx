@@ -10,6 +10,17 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
 
+## 日常 Creator 冒烟检查
+
+`scripts/creator-web.sh smoke` 增量构建并打包一次，运行全部 Creator UI 单元测试
+和 offline 测试，再执行既有的完整编辑、播放、保存与重新打开浏览器冒烟流程。
+它验证当前打包身份，使用独占的临时端口和音频输出包装器；任一步失败均失败。
+该入口需要已安装的锁定工具链和干净、已提交的源码。
+
+`smoke` 不代表完整浏览器矩阵或双次干净构建的字节可复现性。
+`scripts/creator-web.sh quick` 保留完整浏览器流程，`proof` 另外验证可复现性。
+日常执行策略尚未切换，现有合并证据义务仍适用。
+
 ## PR-Agent 评审引擎（生产路径）
 
 `pr-review.yml` 的 `Review fallback` job 运行一个模型步骤：固定版本

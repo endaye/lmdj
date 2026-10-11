@@ -345,9 +345,33 @@ selector cases pass; all 77 staged ownership checks pass. New/unknown Creator
 components retain complete journeys; only the enumerated presentation
 components, CSS and unit-test family use smoke. Precommit main is unchanged.
 
-T3b will add Creator smoke using the existing complete deployment journey,
-and wire daily local execution and batch evidence together. Freeze its exact
-files after the pure policy checks. New automatic requests bind their workload
+T3b adds Creator smoke using the existing complete deployment journey.
+Declared files: `scripts/creator-web.sh`,
+`tests/build/ci_web_proof_server_test.py`,
+`tests/build/ci_local_audio_output_test.py`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, and this plan.
+Main is unchanged; task base is `5fc95ae9`. Keep the owned ephemeral server,
+audio-output wrapper and packaged artifact identity. Smoke makes one incremental
+build, runs all Creator UI/unit/offline tests, then the unchanged browser journey
+through authoring, playback and durable reload. Complete browser groups and
+fixture generators remain in quick/proof. Full retains byte reproducibility.
+Verify actual shell mode execution, independent browser inventories and failure
+propagation, existing wrapper/package/server contracts, Portal, and the real
+smoke entry after its clean-source checkpoint. This is not release evidence.
+Documentation impact: required; affected route: /operations/testing-and-proof.
+
+T3b local verification: 15 Web mode/server contracts, 24 audio wrapper cases,
+13 build-acceleration cases, 3 thread-preseed cases and 15 Creator package cases
+pass. Shell syntax and the complete Portal check (50 routes) pass. The browser
+mode harness executes the actual shell function: all eight complete groups
+remain, smoke selects only the unchanged durable deployment journey, and its
+failure propagates. Real smoke acceptance requires this clean-source checkpoint;
+it remains pending until the original complete quick run releases its build root.
+No new qualifying pitfall. Integration main is still
+`deb95de722b845d708371e90bcac138ae5e25e01`.
+
+T3c wires daily local execution and frozen batch workloads together; freeze its
+exact files after these prerequisites. New automatic requests bind their workload
 map to the frozen request; historical requests retain complete semantics.
 Quick/deferred results cannot clear old full verification debt or close full
 failure buckets. Explicit candidate/node and bootstrap retain all 15 suites.

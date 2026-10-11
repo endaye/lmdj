@@ -196,6 +196,9 @@ class ProofEntryTest(unittest.TestCase):
     def test_runtime_host_proof_invokes_output_wrapper(self):
         self.check_entry("web-runtime-host.sh", "web_runtime_host")
 
+    def test_creator_smoke_invokes_output_wrapper(self):
+        self.check_entry("creator-web.sh", "creator", "smoke")
+
     def test_creator_quick_invokes_output_wrapper(self):
         self.check_entry("creator-web.sh", "creator", "quick")
 

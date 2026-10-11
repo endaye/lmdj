@@ -32,6 +32,7 @@ usage:
   scripts/creator-web.sh test
   scripts/creator-web.sh proof
   scripts/creator-web.sh quick
+  scripts/creator-web.sh smoke
   scripts/creator-web.sh package
   scripts/creator-web.sh serve [--port PORT] [--catalog-upstream URL]
   scripts/creator-web.sh clean
@@ -177,12 +178,16 @@ package_creator() {
     --dist-root "$dist_root"
 }
 
+test_creator_ui() {
+  npm --prefix "$creator_root" test -- --run
+  node --test "$creator_root"/offline/*.node-test.mjs
+}
+
 test_creator() {
   activate_toolchain
   require_dependencies
   "$repo_root/scripts/asset-server.sh" check
-  npm --prefix "$creator_root" test -- --run
-  node --test "$creator_root"/offline/*.node-test.mjs
+  test_creator_ui
   python3 "$creator_root/test/package_test.py"
   python3 "$creator_root/test/server_test.py"
   python3 "$creator_root/test/deployment_smoke_test.py"
@@ -362,6 +367,7 @@ run_browser_gate() {
   local bundle="$1"
   local sample_bundle="$2"
   local candidate_bundle="$3"
+  local mode="${4:-journey}"
   export LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE="$candidate_bundle"
   local requested_port="${LMDJ_CREATOR_WEB_PORT:-0}"
   local ready_file ready_nonce port="" status=0
@@ -446,6 +452,7 @@ PY
     echo "Creator Web error: proof server did not become ready" >&2
     return 2
   }
+  if [[ "$mode" != smoke ]]; then
   LMDJ_WEB_RESULTS_SLOT=chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
@@ -507,6 +514,7 @@ PY
     npm --prefix "$web_test_root" test -- \
       --project=creator-sample-webkit "$required_relative" \
       --grep "capability boundary" || status=$?
+  fi
   # The deployment journey's frozen import bundle and UI locators must stay
   # fresh against this build's writer and surface. Before this leg existed,
   # a Contract-level bump without regenerating the frozen fixture or a UI
@@ -569,12 +577,14 @@ proof_creator() {
   unset NODE_PATH || true
   unset PYTHONPATH || true
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
+  if [[ "$mode" != smoke ]]; then
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
   generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
   python3 "$web_test_root/creator/fixtures/make_candidate_fixture.py" \
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
+  fi
   if [[ "$mode" == proof ]]; then clean_creator; fi
   configure_creator
   build_creator
@@ -590,6 +600,12 @@ proof_creator() {
       return 2
     }
     echo "Creator Web distribution reproducibility: PASS"
+  fi
+  if [[ "$mode" == smoke ]]; then
+    test_creator_ui
+    run_browser_gate "" "" "" smoke
+    echo "Creator Web Smoke: PASS (authoring/playback/reload; complete proof not verified)"
+    return
   fi
   test_creator
   run_browser_gate \
@@ -621,7 +637,7 @@ case "$command_name" in
     [[ $# -eq 0 ]] || { usage; exit 64; }
     test_creator
     ;;
-  proof|quick)
+  proof|quick|smoke)
     [[ $# -eq 0 ]] || { usage; exit 64; }
     if [[ "${LMDJ_AUDIO_OUTPUT_WRAPPED:-}" != creator ]]; then
       exec python3 "$script_dir/local-audio-output.py" --lane creator -- \
