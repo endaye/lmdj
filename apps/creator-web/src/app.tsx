@@ -343,11 +343,24 @@ function Workspace({
     initialPatternTransportState,
   );
   const [diagnostics, setDiagnostics] = useState<readonly DiagnosticRecord[]>([]);
+  const historyFailureContext = useRef({
+    session, projectId: state.project.current?.projectId ?? null, reported: false,
+  });
+  if (historyFailureContext.current.session !== session ||
+      historyFailureContext.current.projectId !== (state.project.current?.projectId ?? null)) {
+    historyFailureContext.current = {
+      session, projectId: state.project.current?.projectId ?? null, reported: false,
+    };
+  }
+  // The log survives context replacement. A retained callback reports to its
+  // own context, so late failures cannot re-arm a fresh context's navigation.
+  const failureContext = historyFailureContext.current;
   const reportFailure = useCallback((operation: string, error: unknown): string => {
     const record = diagnosticRecord(operation, error);
+    failureContext.reported = true;
     setDiagnostics((records) => appendDiagnostic(records, record));
     return record.code;
-  }, []);
+  }, [failureContext]);
   const [defaultSeed, setDefaultSeed] = useState<DefaultSeed | null>(null);
   const defaultSeedRef = useRef(defaultSeed);
   defaultSeedRef.current = defaultSeed;
@@ -372,6 +385,8 @@ function Workspace({
   // another Pad's controls after the selection moves.
   const [padColourError, setPadColourError] = useState<{slot: number; message: string} | null>(null);
   const [historyPerformPhase, setHistoryPerformPhase] = useState("idle");
+  const [historyPerformRecoveryPending, setHistoryPerformRecoveryPending] = useState(false);
+  const [historyPerformRecoveryLoaded, setHistoryPerformRecoveryLoaded] = useState(false);
   const [performReviewRequested, setPerformReviewRequested] = useState(false);
   // The rail's SHIFT modifier: toggled by its key, consumed by the ← / →
   // history chord or by any other rail action.
@@ -821,7 +836,7 @@ function Workspace({
     setPadCaptureState(controller.getState());
     const unregister = registerRuntimeShutdownBarrier?.(() => controller.cancel());
     return () => {unregister?.(); void controller.cancel();};
-  }, [session, runtimePhase, registerRuntimeShutdownBarrier]);
+  }, [session, runtimePhase, registerRuntimeShutdownBarrier, reportFailure]);
 
   useEffect(() => () => {
     const retiring = padCapture.current;
@@ -1275,8 +1290,18 @@ function Workspace({
     state.project.current?.patternId, registerRuntimeShutdownBarrier]);
 
   useEffect(() => {
-    if (performController === null) { setHistoryPerformPhase("idle"); return; }
-    const update = () => setHistoryPerformPhase(performController.getState().recording.phase);
+    if (performController === null) {
+      setHistoryPerformPhase("idle");
+      setHistoryPerformRecoveryPending(false);
+      setHistoryPerformRecoveryLoaded(false);
+      return;
+    }
+    const update = () => {
+      const current = performController.getState();
+      setHistoryPerformPhase(current.recording.phase);
+      setHistoryPerformRecoveryPending(current.recovery.length > 0);
+      setHistoryPerformRecoveryLoaded(current.recoveryLoaded);
+    };
     update();
     return performController.subscribe(update);
   }, [performController]);
@@ -2054,6 +2079,7 @@ function Workspace({
   // #1958: a queued playing-state switch is observed too, so the queued
   // target and its application surface without another user action.
   const transportSwitchPending = transport.status?.pendingSwitch != null;
+  const transportPublicationPending = transport.status?.publicationPending === true;
   // Busy and failed operations are observed through inspection until they
   // settle; the runtime drives the continuation cadence, the Creator only
   // polls the projection.
@@ -2061,7 +2087,8 @@ function Workspace({
     if (!isPatternTransportSession(session) || transport.sessionId === null) {
       return;
     }
-    if (!transportBusy && transport.lastFailed === null && !transportSwitchPending) {
+    if (!transportBusy && transport.lastFailed === null && !transportSwitchPending &&
+        !transportPublicationPending) {
       return;
     }
     const timer = window.setInterval(() => {
@@ -2069,7 +2096,7 @@ function Workspace({
     }, 250);
     return () => window.clearInterval(timer);
   }, [session, transport.sessionId, transportBusy, transport.lastFailed,
-    transportSwitchPending]);
+    transportSwitchPending, transportPublicationPending]);
 
   // #1958: follow the playing Pattern even when a switch lands before the
   // first inspection, or another target is already queued. A playing switch
@@ -2571,7 +2598,7 @@ function Workspace({
         dispatchSequence({type: "trim-closed"});
       }
     }
-  }, [session]);
+  }, [session, reportFailure]);
 
   const selectSequencePattern = async (patternId: string) => {
     if (!session) return;
@@ -2860,7 +2887,9 @@ function Workspace({
     session,
     projectId: state.project.current?.projectId ?? null,
     revision: state.project.current?.revision ?? null,
-    refreshKey: `${activeMode}:${sequence.phase}:${transport.status?.phase ?? "idle"}:${playing}:${recording}:${historyPerformPhase}`,
+    refreshKey: `${sequence.phase}:${transport.status?.phase ?? "idle"}:${transport.status?.publicationPending ?? false}:${playing}:${recording}:${historyPerformPhase}:${historyPerformRecoveryLoaded}:${historyPerformRecoveryPending}`,
+    navigationKey: activeMode,
+    navigationRefreshRequired: failureContext.reported || activeMode === "slice" || activeMode === "soundset",
     disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
       state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
       state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||

@@ -39,6 +39,8 @@ interface UseAuthoringHistoryOptions {
   projectId: string | null;
   revision: number | null;
   refreshKey: string;
+  navigationKey?: string;
+  navigationRefreshRequired?: boolean;
   disabledReason: string;
   beforeRestore?(): void | Promise<void>;
   onChanged(mutation: AuthoringHistoryMutation): Promise<void>;
@@ -91,19 +93,26 @@ export function useAuthoringHistory(props: UseAuthoringHistoryOptions): Authorin
   latest.current = props;
   const latestStatus = useRef(status);
   latestStatus.current = status;
+  const inspectedNavigation = useRef(props.navigationKey);
+  const conservativeNavigation = useRef(false);
+  const inspectForNavigation = useRef<(() => void) | null>(null);
   const available = isAuthoringHistorySession(props.session) && props.projectId !== null;
 
   useEffect(() => {
     retained.current = null;
+    conservativeNavigation.current = false;
     setError(null);
   }, [props.session, props.projectId]);
 
   useEffect(() => {
-    const epoch = ++generation.current;
+    ++generation.current;
+    inspectedNavigation.current = props.navigationKey;
+    inspectForNavigation.current = null;
     setStatus(null);
     if (!isAuthoringHistorySession(props.session) || props.projectId === null) return;
     const session = props.session;
     const inspect = async () => {
+      const epoch = ++generation.current;
       try {
         const value = await session.inspectAuthoringHistory();
         if (epoch === generation.current) setStatus(value);
@@ -117,13 +126,35 @@ export function useAuthoringHistory(props: UseAuthoringHistoryOptions): Authorin
         }
       }
     };
+    inspectForNavigation.current = () => {setStatus(null); void inspect();};
     void inspect();
     window.addEventListener("focus", inspect);
     return () => {
       ++generation.current;
+      inspectForNavigation.current = null;
       window.removeEventListener("focus", inspect);
     };
   }, [props.session, props.projectId, props.revision, props.refreshKey]);
+
+  // Navigation does not invalidate ready global history. Keep the earlier
+  // recheck when authority is blocked/unknown or an action failed; a failed
+  // authoring acknowledgement can have changed Truth without a new revision
+  // reaching the Host. The authority effect owns the focus listener and also
+  // consumes simultaneous page changes, so this effect cannot duplicate it.
+  // A local authoring owner can fail after it unmounts without reporting the
+  // outcome to App. Once visited, keep the earlier navigation inspection for
+  // this Session/Project rather than claiming its late request has settled.
+  useEffect(() => {
+    const current = latest.current;
+    if (current.navigationRefreshRequired) conservativeNavigation.current = true;
+    if (inspectedNavigation.current === props.navigationKey) return;
+    inspectedNavigation.current = props.navigationKey;
+    const observed = latestStatus.current;
+    if (observed === null || observed.disabledReason !== "" ||
+        current.disabledReason !== "" || conservativeNavigation.current) {
+      inspectForNavigation.current?.();
+    }
+  }, [props.navigationKey, props.session, props.projectId]);
 
   // One synchronous admission reading for the rail chord, the keyboard
   // shortcut and restore itself, so preventDefault only happens when a
