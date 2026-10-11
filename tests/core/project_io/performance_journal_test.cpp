@@ -1992,6 +1992,172 @@ void test_live_control_owner_loss_closure_preserves_unknown_pending() {
   LMDJ_CHECK(!fresh.value().admission_ledger->pending.has_value());
 }
 
+void test_live_control_closure_sequences_derive_from_durable_high_water() {
+  TempDirectory temp("live-closure-high-water");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  // Neutral header under HOLD, legacy-mode Filter off: owner-loss closure
+  // will append exactly a completed PadHit and a HoldOff.
+  auto header = PerformanceInitialLiveState{};
+  header.hold = true;
+  const auto performance = Performance{
+      performance_id, "Live set", 120, 0, std::nullopt, {}, header};
+  LMDJ_CHECK(
+      journal
+          .begin_performance(
+              bundle, session_id, performance_id,
+              lmdj::project_io::performance_fingerprint(performance), 0,
+              header,
+              lmdj::project_io::PerformanceTransientCheckpoint{
+                  {}, {}, true, 0, std::nullopt, header})
+          .has_value());
+  const auto receipt = prepared_receipt(kRequestIdA, 0, kFingerprintA, 16, 1, {});
+  const lmdj::project_io::PerformanceTransientCheckpoint pressed{
+      {lmdj::project_io::PerformanceOpenPadTransient{
+          std::string{kCommandId}, 2, 16, 99, 1}},
+      {},
+      true,
+      16,
+      std::nullopt,
+      header,
+  };
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle, session_id, performance_id, 0, 1, {}, pressed,
+              std::nullopt, receipt)
+          .has_value());
+  // Settle the admission so the spliced flush is not blocked by a pending
+  // window; completion is metadata-only and leaves the tail high-water at 1.
+  LMDJ_CHECK(
+      journal
+          .complete_performance_admission(
+              bundle, session_id,
+              completed_receipt(receipt, PerformanceAdmissionResult::published))
+          .has_value());
+
+  // Splice a checksummed flush whose durable event carries a sequence far
+  // above the recorded tail high-water (pending is empty, so no pending
+  // equality binds it). The read grammar accepts it; closure must derive
+  // fresh sequences from the durable maximum, not from the stale tail
+  // high-water.
+  const auto high_event = sequenced(pad_hit(9, 64), 100);
+  append_text(
+      bundle / "recovery/active/performance.jsonl",
+      checked_line({
+          {"command_id", kSecondCommandId},
+          {"events",
+           nlohmann::json::array(
+               {lmdj::domain::performance_event_json(high_event)})},
+          {"expected_revision", 0},
+          {"flush_seq", 0},
+          {"kind", "flush"},
+          {"performance_id", kPerformanceId},
+      }) +
+          checked_line({
+              {"committed_revision", 1},
+              {"flush_seq", 0},
+              {"kind", "complete"},
+              {"performance_fingerprint", kFingerprintB},
+          }));
+  const auto lagged = journal.read_active_performance(bundle);
+  LMDJ_CHECK(lagged.has_value());
+  LMDJ_CHECK(lagged.value().last_input_sequence == 1);
+  LMDJ_CHECK(lagged.value().flushes.size() == 1);
+  LMDJ_CHECK(lagged.value().flushes.front().completed);
+
+  LMDJ_CHECK(
+      journal
+          .close_performance_transients_for_owner_loss(bundle, session_id)
+          .has_value());
+  const auto closed = journal.read_active_performance(bundle);
+  LMDJ_CHECK(closed.has_value());
+  LMDJ_CHECK(closed.value().pending_events.size() == 2);
+  // The closed PadHit keeps its press sequence; the internally generated
+  // HoldOff takes a fresh sequence above every durable one. The spliced
+  // event's temporal extent (onset 64 + duration 120) also raises the
+  // closure tick to 185.
+  const auto& hit = std::get<PadHitPerformanceEvent>(
+      closed.value().pending_events.at(0).payload);
+  LMDJ_CHECK(hit.slot == 2 && hit.onset_tick == 16 &&
+             hit.duration_tick == 169);
+  LMDJ_CHECK(closed.value().pending_events.at(0).input_sequence == 1);
+  const auto& hold_off = closed.value().pending_events.at(1);
+  LMDJ_CHECK(
+      std::get_if<lmdj::domain::HoldOffPerformanceEvent>(&hold_off.payload) !=
+      nullptr);
+  LMDJ_CHECK(hold_off.input_sequence.has_value());
+  LMDJ_CHECK(*hold_off.input_sequence > 100);
+  LMDJ_CHECK(closed.value().last_input_sequence == *hold_off.input_sequence);
+  // The settled admission rides through untouched.
+  LMDJ_CHECK(!closed.value().admission_ledger->pending.has_value());
+  LMDJ_CHECK(closed.value().admission_ledger->completed ==
+             completed_receipt(receipt, PerformanceAdmissionResult::published));
+}
+
+void test_live_control_read_rejects_unsequenced_event_in_headered_tail() {
+  // The Journal read layer fails closed per event before any ordering runs:
+  // an unsequenced event inside a headered tail never reaches the canonical
+  // sort (where a missing sequence would otherwise read as zero).
+  TempDirectory temp("live-unsequenced-tail");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  const auto header = journal_header();
+  begin_live(journal, bundle, session_id, performance_id, header);
+  const auto active_path = bundle / "recovery/active/performance.jsonl";
+
+  auto malformed_event =
+      lmdj::domain::performance_event_json(sequenced(
+          PerformanceEvent{FilterChangePerformanceEvent{
+              PerformanceFilterPhase::move,
+              PerformanceFilterType::hp, 900, 250, 16}},
+          1));
+  malformed_event.erase("input_sequence");
+  const auto ledger = nlohmann::json{
+      {"completed", nullptr},
+      {"next_recording_sequence", "0"},
+      {"pending", nullptr},
+  };
+  // A complete, self-consistent extended checkpoint; the rejection must come
+  // from the unsequenced event, not from the checkpoint grammar.
+  const auto extended_checkpoint = nlohmann::json{
+      {"hold", false},
+      {"last_accepted_tick", 16},
+      {"live_state",
+       lmdj::domain::performance_initial_live_state_json(header)},
+      {"open_filter",
+       {{"cutoff_hz", 800},
+        {"gesture_id", kGestureId},
+        {"resonance_milli", 250},
+        {"type", "hp"}}},
+      {"open_fx", nlohmann::json::array()},
+      {"open_pads", nlohmann::json::array()},
+  };
+  append_text(
+      active_path,
+      checked_line({
+          {"admission_ledger", ledger},
+          {"events", nlohmann::json::array({malformed_event})},
+          {"expected_revision", 0},
+          {"input_sequence", 1},
+          {"kind", "tail"},
+          {"last_launch_ack", nullptr},
+          {"performance_id", kPerformanceId},
+          {"tail_seq", 0},
+          {"transient_checkpoint", extended_checkpoint},
+      }));
+  const auto rejected = journal.read_active_performance(bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(rejected.error().details.at("journal_retained") == true);
+}
+
 
 }  // namespace
 
@@ -2026,6 +2192,8 @@ int main() {
     test_live_control_torn_and_foreign_records_fail_closed();
     test_legacy_journal_never_gains_the_live_control_ledger();
     test_live_control_owner_loss_closure_preserves_unknown_pending();
+    test_live_control_closure_sequences_derive_from_durable_high_water();
+    test_live_control_read_rejects_unsequenced_event_in_headered_tail();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

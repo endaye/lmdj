@@ -4230,6 +4230,35 @@ std::string performance_fingerprint(const domain::Performance& performance) {
   return sha256(foundation::canonical_json(preimage));
 }
 
+// The verified durable high-water for the headered profile: the recorded
+// tail high-water plus every sequence already durable in pending or flushed
+// events and in open Pad press references. Owner-loss closure derives its
+// fresh sequences only from this value, so they can never collide with or
+// fall below an already-durable sequence.
+std::uint64_t durable_sequence_high_water(
+    const ActivePerformanceJournal& journal) {
+  std::uint64_t result = journal.last_input_sequence.value_or(0);
+  const auto raise = [&result](std::optional<std::uint64_t> sequence) {
+    if (sequence.has_value()) {
+      result = std::max(result, *sequence);
+    }
+  };
+  for (const auto& event : journal.pending_events) {
+    raise(event.input_sequence);
+  }
+  for (const auto& flush : journal.flushes) {
+    for (const auto& event : flush.canonical_events) {
+      raise(event.input_sequence);
+    }
+  }
+  if (journal.transient_checkpoint.has_value()) {
+    for (const auto& pad : journal.transient_checkpoint->open_pads) {
+      raise(pad.input_sequence);
+    }
+  }
+  return result;
+}
+
 foundation::Result<PerformanceTransientClosurePreview>
 preview_performance_owner_loss(const ActivePerformanceJournal& journal) {
   if (!journal.transient_checkpoint.has_value()) {
@@ -4287,7 +4316,7 @@ preview_performance_owner_loss(const ActivePerformanceJournal& journal) {
   // high-water: a closed PadHit keeps its press's sequence, while the
   // internally generated releases and HoldOff each take one fresh value.
   std::uint64_t next_closure_sequence =
-      journal.last_input_sequence.value_or(0);
+      durable_sequence_high_water(journal);
   const auto fresh_sequence = [&next_closure_sequence]() {
     if (next_closure_sequence == std::numeric_limits<std::uint64_t>::max()) {
       throw std::runtime_error("performance_input_sequence_overflow");
@@ -5251,8 +5280,11 @@ SequenceJournal::close_performance_transients_for_owner_loss(
   }
   // Headered profile: the closure is metadata-only. Its tail carries the
   // admission ledger unchanged — a pending prepared admission stays pending
-  // and unknown — and the checkpoint records the neutralized live state.
-  std::uint64_t closure_high_water = next_input_sequence;
+  // and unknown — and the checkpoint records the neutralized live state. The
+  // tail's high-water covers every durable sequence, not only the closure's
+  // own events.
+  std::uint64_t closure_high_water = std::max(
+      next_input_sequence, durable_sequence_high_water(active.value()));
   for (const auto& event : preview.value().canonical_events) {
     closure_high_water =
         std::max(closure_high_water, event.input_sequence.value_or(0));
