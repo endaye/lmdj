@@ -552,6 +552,398 @@ void global_hold_freezes_an_engaged_zero_value() {
   LMDJ_CHECK(differs(left, right, dry_left, dry_right));
 }
 
+using lmdj::audio::FilterMode;
+using lmdj::audio::FilterParameters;
+using lmdj::audio::FilterPhase;
+using lmdj::audio::FilterType;
+using lmdj::audio::FilterGesture;
+
+// Independent oracle: the analog SVF prototype's magnitude under the bilinear
+// frequency warp, derived from the transfer functions, not from the chain's
+// per-sample recurrence. Named blind spot: both sides share the specified
+// resonance-to-Q mapping (that mapping is the product specification), so a
+// defect in that formula itself is out of this test's reach; every topology,
+// state-update, output-selection and scaling defect is caught.
+double analytic_prototype_gain(
+    FilterType type,
+    double frequency_hz,
+    double cutoff_hz,
+    std::uint16_t resonance_milli) {
+  const auto warp = [](double hz) {
+    return std::tan(3.14159265358979323846 * hz / 48'000.0);
+  };
+  const auto u = warp(frequency_hz) / warp(cutoff_hz);
+  const auto log_q =
+      -0.34657359027997265 +
+      2.6491586533460524 * (static_cast<double>(resonance_milli) / 1'000.0);
+  const auto k = std::exp(-log_q);
+  const auto denominator = std::hypot(1.0 - u * u, u * k);
+  switch (type) {
+    case FilterType::low_pass:
+      return 1.0 / denominator;
+    case FilterType::high_pass:
+      return u * u / denominator;
+    case FilterType::band_pass:
+      return u * k / denominator;
+  }
+  return 0.0;
+}
+
+double measured_steady_gain(FilterParameters parameters, double frequency_hz) {
+  constexpr double amplitude = 0.05;
+  constexpr std::size_t frames = 48'000;
+  constexpr std::size_t warmup = 24'000;
+  constexpr auto pi = 3.14159265358979323846;
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(chain.apply_filter_gesture(
+      FilterGesture{FilterPhase::engage, parameters}));
+  std::vector<float> left(frames);
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    left[frame] = static_cast<float>(
+        amplitude *
+        std::sin(2.0 * pi * frequency_hz *
+                 static_cast<double>(frame) / 48'000.0));
+  }
+  auto right = left;
+  chain.process(left.data(), right.data(), frames);
+  auto sine = 0.0;
+  auto cosine = 0.0;
+  for (std::size_t frame = warmup; frame < frames; ++frame) {
+    const auto phase = 2.0 * pi * frequency_hz *
+                       static_cast<double>(frame) / 48'000.0;
+    sine += static_cast<double>(left[frame]) * std::sin(phase);
+    cosine += static_cast<double>(left[frame]) * std::cos(phase);
+  }
+  return 2.0 * std::hypot(sine, cosine) /
+         (static_cast<double>(frames - warmup) * amplitude);
+}
+
+void expect_prototype_gain(
+    FilterType type,
+    double cutoff_hz,
+    std::uint16_t resonance_milli,
+    double frequency_hz) {
+  const auto expected = analytic_prototype_gain(
+      type, frequency_hz, cutoff_hz, resonance_milli);
+  const auto measured = measured_steady_gain(
+      FilterParameters{type, static_cast<std::uint32_t>(cutoff_hz),
+                       resonance_milli},
+      frequency_hz);
+  const auto tolerance = 0.01 * expected + 0.002;
+  if (std::abs(measured - expected) > tolerance) {
+    std::cerr << "independent filter gain mismatch: type "
+              << static_cast<int>(type) << " cutoff " << cutoff_hz
+              << " resonance " << resonance_milli << " frequency "
+              << frequency_hz << " expected " << expected << " measured "
+              << measured << '\n';
+    LMDJ_CHECK(false);
+  }
+}
+
+void independent_filter_response_matches_the_analytic_prototype() {
+  for (const auto type :
+       {FilterType::low_pass, FilterType::high_pass, FilterType::band_pass}) {
+    for (const double frequency : {100.0, 1'000.0, 10'000.0}) {
+      expect_prototype_gain(type, 1'000.0, 0, frequency);
+    }
+  }
+  // Resonance peak: LP/HP reach Q at the cutoff, BP stays unity at center.
+  expect_prototype_gain(FilterType::low_pass, 1'000.0, 1'000, 1'000.0);
+  expect_prototype_gain(FilterType::low_pass, 1'000.0, 1'000, 100.0);
+  expect_prototype_gain(FilterType::high_pass, 1'000.0, 500, 1'000.0);
+  expect_prototype_gain(FilterType::band_pass, 4'000.0, 500, 400.0);
+  expect_prototype_gain(FilterType::band_pass, 4'000.0, 500, 4'000.0);
+  expect_prototype_gain(FilterType::band_pass, 4'000.0, 500, 16'000.0);
+  // Range edges keep the analytic shape; 20 kHz is not lowered.
+  expect_prototype_gain(FilterType::high_pass, 20.0, 0, 20.0);
+  expect_prototype_gain(FilterType::high_pass, 20.0, 0, 1'000.0);
+  expect_prototype_gain(FilterType::low_pass, 20'000.0, 1'000, 20'000.0);
+  expect_prototype_gain(FilterType::low_pass, 20'000.0, 0, 100.0);
+}
+
+void independent_filter_off_is_bit_identical_bypass() {
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  const auto initial = chain.filter_state();
+  LMDJ_CHECK(initial.mode == FilterMode::independent);
+  LMDJ_CHECK(!initial.engaged && !initial.frozen && !initial.hold);
+  LMDJ_CHECK(initial.parameters.type == FilterType::low_pass);
+  LMDJ_CHECK(initial.parameters.cutoff_hz == 20'000);
+  LMDJ_CHECK(initial.parameters.resonance_milli == 0);
+
+  auto left = signal(1'024, 7);
+  auto right = signal(1'024, 13);
+  const auto original_left = left;
+  const auto original_right = right;
+  chain.process(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == original_left);
+  LMDJ_CHECK(right == original_right);
+
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 800, 250}}));
+  chain.process(left.data(), right.data(), left.size());
+  LMDJ_CHECK(differs(left, right, original_left, original_right));
+
+  LMDJ_CHECK(chain.apply_filter_gesture(
+      FilterGesture{FilterPhase::release, {}}));
+  const auto released = chain.filter_state();
+  LMDJ_CHECK(!released.engaged && !released.frozen);
+  // The tuple is retained for readback after release.
+  LMDJ_CHECK(released.parameters.type == FilterType::low_pass);
+  LMDJ_CHECK(released.parameters.cutoff_hz == 800);
+  LMDJ_CHECK(released.parameters.resonance_milli == 250);
+
+  // After the 96-frame wet ramp the bypass is bit-identical again.
+  left = signal(1'024, 71);
+  right = signal(1'024, 73);
+  chain.process(left.data(), right.data(), left.size());
+  left = signal(1'024, 79);
+  right = signal(1'024, 83);
+  const auto exact_left = left;
+  const auto exact_right = right;
+  chain.process(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == exact_left);
+  LMDJ_CHECK(right == exact_right);
+}
+
+void independent_filter_single_parameter_moves_preserve_the_other_two() {
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::high_pass, 800, 250}}));
+
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::move, {FilterType::high_pass, 1'200, 250}}));
+  auto state = chain.filter_state();
+  LMDJ_CHECK(state.parameters.cutoff_hz == 1'200);
+  LMDJ_CHECK(state.parameters.type == FilterType::high_pass);
+  LMDJ_CHECK(state.parameters.resonance_milli == 250);
+
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::move, {FilterType::band_pass, 1'200, 250}}));
+  state = chain.filter_state();
+  LMDJ_CHECK(state.parameters.type == FilterType::band_pass);
+  LMDJ_CHECK(state.parameters.cutoff_hz == 1'200);
+  LMDJ_CHECK(state.parameters.resonance_milli == 250);
+
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::move, {FilterType::band_pass, 1'200, 900}}));
+  state = chain.filter_state();
+  LMDJ_CHECK(state.parameters.resonance_milli == 900);
+  LMDJ_CHECK(state.parameters.type == FilterType::band_pass);
+  LMDJ_CHECK(state.parameters.cutoff_hz == 1'200);
+
+  // A move without an engaged independent gesture is refused, not applied.
+  MasterFxChain idle;
+  LMDJ_CHECK(
+      idle.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(!idle.apply_filter_gesture(FilterGesture{
+      FilterPhase::move, {FilterType::low_pass, 100, 0}}));
+  LMDJ_CHECK(idle.filter_state().parameters.cutoff_hz == 20'000);
+
+  // Same-tuple moves preserve DSP continuity, as with the legacy branch.
+  MasterFxChain stable;
+  MasterFxChain moved;
+  LMDJ_CHECK(
+      stable.prepare(MasterFxPreparation{kSampleRate, kBpm}).has_value());
+  LMDJ_CHECK(
+      moved.prepare(MasterFxPreparation{kSampleRate, kBpm}).has_value());
+  const FilterParameters tuple{FilterType::low_pass, 700, 400};
+  LMDJ_CHECK(stable.apply_filter_gesture(
+      FilterGesture{FilterPhase::engage, tuple}));
+  LMDJ_CHECK(moved.apply_filter_gesture(
+      FilterGesture{FilterPhase::engage, tuple}));
+  auto stable_left = signal(8'192, 53);
+  auto stable_right = signal(8'192, 59);
+  auto moved_left = stable_left;
+  auto moved_right = stable_right;
+  for (std::size_t offset = 0; offset < stable_left.size(); offset += 128) {
+    stable.process(stable_left.data() + offset,
+                   stable_right.data() + offset, 128);
+    LMDJ_CHECK(moved.apply_filter_gesture(
+        FilterGesture{FilterPhase::move, tuple}));
+    moved.process(
+        moved_left.data() + offset, moved_right.data() + offset, 128);
+  }
+  LMDJ_CHECK(moved_left == stable_left);
+  LMDJ_CHECK(moved_right == stable_right);
+}
+
+void independent_filter_extremes_stay_finite_and_stable() {
+  for (const auto type :
+       {FilterType::low_pass, FilterType::high_pass, FilterType::band_pass}) {
+    for (const std::uint32_t cutoff : {20U, 20'000U}) {
+      for (const std::uint16_t resonance : {0, 1'000}) {
+        MasterFxChain chain;
+        LMDJ_CHECK(chain.prepare(MasterFxPreparation{kSampleRate, 120})
+                       .has_value());
+        LMDJ_CHECK(chain.apply_filter_gesture(
+            FilterGesture{FilterPhase::engage, {type, cutoff, resonance}}));
+        auto left = signal(48'000, 101);
+        auto right = signal(48'000, 103);
+        for (auto& sample : left) {
+          sample *= 1.2F;
+        }
+        chain.process(left.data(), right.data(), left.size());
+        auto finite = true;
+        for (std::size_t frame = 0; frame < left.size(); ++frame) {
+          finite = finite && std::isfinite(left[frame]) &&
+                   std::isfinite(right[frame]);
+        }
+        LMDJ_CHECK(finite);
+        // Two seconds of silence decay any resonance tail toward zero.
+        std::vector<float> silence_left(96'000, 0.0F);
+        std::vector<float> silence_right(96'000, 0.0F);
+        chain.process(
+            silence_left.data(), silence_right.data(), silence_left.size());
+        auto tail = 0.0F;
+        for (std::size_t frame = silence_left.size() - 96;
+             frame < silence_left.size();
+             ++frame) {
+          tail = std::max(
+              tail, std::max(std::abs(silence_left[frame]),
+                             std::abs(silence_right[frame])));
+        }
+        LMDJ_CHECK(tail < 0.01F);
+      }
+    }
+  }
+}
+
+void legacy_gestures_take_over_and_legacy_release_owns_only_legacy() {
+  // Legacy engage takes over the single stage with legacy semantics.
+  MasterFxChain takeover;
+  MasterFxChain legacy_only;
+  LMDJ_CHECK(
+      takeover.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(
+      legacy_only.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(takeover.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 800, 250}}));
+  {
+    auto warmup_left = signal(2'048, 3);
+    auto warmup_right = signal(2'048, 5);
+    takeover.process(
+        warmup_left.data(), warmup_right.data(), warmup_left.size());
+  }
+  LMDJ_CHECK(takeover.apply_gesture(FxGesture{
+      FxGestureKind::engage, PerformanceFx::filter, 250}));
+  LMDJ_CHECK(legacy_only.apply_gesture(FxGesture{
+      FxGestureKind::engage, PerformanceFx::filter, 250}));
+  const auto state = takeover.filter_state();
+  LMDJ_CHECK(state.mode == FilterMode::legacy);
+  LMDJ_CHECK(state.engaged && state.legacy_value == 250);
+  auto takeover_left = signal(8'192, 11);
+  auto takeover_right = signal(8'192, 17);
+  auto legacy_left = takeover_left;
+  auto legacy_right = takeover_right;
+  takeover.process(
+      takeover_left.data(), takeover_right.data(), takeover_left.size());
+  legacy_only.process(
+      legacy_left.data(), legacy_right.data(), legacy_left.size());
+  LMDJ_CHECK(takeover_left == legacy_left);
+  LMDJ_CHECK(takeover_right == legacy_right);
+
+  // A legacy move during independent activity takes over as legacy too.
+  MasterFxChain move_takeover;
+  LMDJ_CHECK(
+      move_takeover.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(move_takeover.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::high_pass, 2'000, 100}}));
+  LMDJ_CHECK(move_takeover.apply_gesture(FxGesture{
+      FxGestureKind::move, PerformanceFx::filter, 700}));
+  const auto moved_state = move_takeover.filter_state();
+  LMDJ_CHECK(moved_state.mode == FilterMode::legacy);
+  LMDJ_CHECK(moved_state.engaged && moved_state.legacy_value == 700);
+
+  // A delayed legacy release must not kill the independent gesture.
+  MasterFxChain released;
+  MasterFxChain untouched;
+  LMDJ_CHECK(
+      released.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(
+      untouched.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  const FilterParameters tuple{FilterType::low_pass, 500, 600};
+  LMDJ_CHECK(released.apply_filter_gesture(
+      FilterGesture{FilterPhase::engage, tuple}));
+  LMDJ_CHECK(untouched.apply_filter_gesture(
+      FilterGesture{FilterPhase::engage, tuple}));
+  LMDJ_CHECK(released.apply_gesture(FxGesture{
+      FxGestureKind::release, PerformanceFx::filter, 0}));
+  const auto released_state = released.filter_state();
+  LMDJ_CHECK(released_state.mode == FilterMode::independent);
+  LMDJ_CHECK(released_state.engaged);
+  auto released_left = signal(4'096, 23);
+  auto released_right = signal(4'096, 29);
+  auto untouched_left = released_left;
+  auto untouched_right = released_right;
+  released.process(
+      released_left.data(), released_right.data(), released_left.size());
+  untouched.process(
+      untouched_left.data(), untouched_right.data(), untouched_left.size());
+  LMDJ_CHECK(released_left == untouched_left);
+  LMDJ_CHECK(released_right == untouched_right);
+}
+
+void independent_release_freezes_under_hold_and_hold_off_bypasses() {
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 300, 800}}));
+  LMDJ_CHECK(chain.apply_gesture(
+      FxGesture{FxGestureKind::hold_on, PerformanceFx::filter, 0}));
+  LMDJ_CHECK(chain.apply_filter_gesture(
+      FilterGesture{FilterPhase::release, {}}));
+  const auto frozen = chain.filter_state();
+  LMDJ_CHECK(frozen.mode == FilterMode::independent);
+  LMDJ_CHECK(!frozen.engaged && frozen.frozen && frozen.hold);
+
+  auto left = signal(8'192, 31);
+  auto right = signal(8'192, 37);
+  const auto dry_left = left;
+  const auto dry_right = right;
+  chain.process(left.data(), right.data(), left.size());
+  LMDJ_CHECK(differs(left, right, dry_left, dry_right));
+
+  LMDJ_CHECK(chain.apply_gesture(
+      FxGesture{FxGestureKind::hold_off, PerformanceFx::filter, 0}));
+  const auto cleared = chain.filter_state();
+  LMDJ_CHECK(!cleared.frozen && !cleared.engaged && !cleared.hold);
+  left = signal(1'024, 41);
+  right = signal(1'024, 43);
+  chain.process(left.data(), right.data(), left.size());
+  left = signal(1'024, 47);
+  right = signal(1'024, 53);
+  const auto exact_left = left;
+  const auto exact_right = right;
+  chain.process(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == exact_left);
+  LMDJ_CHECK(right == exact_right);
+}
+
+void invalid_independent_filter_parameters_are_refused() {
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(!chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage,
+      {static_cast<FilterType>(7), 800, 0}}));
+  LMDJ_CHECK(!chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 19, 0}}));
+  LMDJ_CHECK(!chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 20'001, 0}}));
+  LMDJ_CHECK(!chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 800, 1'001}}));
+  const auto state = chain.filter_state();
+  LMDJ_CHECK(state.mode == FilterMode::independent && !state.engaged);
+  LMDJ_CHECK(state.parameters.cutoff_hz == 20'000);
+}
+
 }  // namespace
 
 int main() {
@@ -569,6 +961,13 @@ int main() {
     filter_midpoint_is_bit_identical_bypass();
     global_hold_freezes_releases_and_hold_off_releases_every_effect();
     global_hold_freezes_an_engaged_zero_value();
+    independent_filter_response_matches_the_analytic_prototype();
+    independent_filter_off_is_bit_identical_bypass();
+    independent_filter_single_parameter_moves_preserve_the_other_two();
+    independent_filter_extremes_stay_finite_and_stable();
+    legacy_gestures_take_over_and_legacy_release_owns_only_legacy();
+    independent_release_freezes_under_hold_and_hold_off_bypasses();
+    invalid_independent_filter_parameters_are_refused();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

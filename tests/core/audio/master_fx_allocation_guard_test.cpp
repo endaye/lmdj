@@ -124,6 +124,110 @@ void lock_syntax_is_confined_to_non_realtime_observers() {
   }
 }
 
+void typed_filter_controls_are_allocation_free_and_lock_free() {
+  using lmdj::audio::EnqueueResult;
+  using lmdj::audio::FxEnqueueResult;
+  using lmdj::audio::FxGesture;
+  using lmdj::audio::FxGestureKind;
+  using lmdj::audio::FilterGesture;
+  using lmdj::audio::FilterPhase;
+  using lmdj::audio::FilterType;
+  using lmdj::audio::RealtimeEngine;
+  using lmdj::audio::TriggerEvent;
+
+  static_assert(noexcept(std::declval<RealtimeEngine&>().enqueue_filter_gesture(
+      std::declval<FilterGesture>())));
+  static_assert(
+      noexcept(std::declval<const RealtimeEngine&>().filter_control_status()));
+
+  RealtimeEngine engine;
+  const auto sample = [] {
+    std::array<float, 8'192> result{};
+    for (std::size_t frame = 0; frame < result.size(); ++frame) {
+      result[frame] = static_cast<float>(frame % 127U) / 160.0F;
+    }
+    return result;
+  }();
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.prepare_master_fx(120).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue(TriggerEvent{1, 0, 127}) == EnqueueResult::accepted);
+
+  // Invalid tuples are refused before any queue or accepted-state change.
+  const auto before = engine.filter_control_status();
+  LMDJ_CHECK(before.accepted_sequence == 0);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::low_pass, 19, 0}}) ==
+             FxEnqueueResult::invalid_value);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::low_pass, 20'001, 0}}) ==
+             FxEnqueueResult::invalid_value);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage, {FilterType::low_pass, 800, 1'001}}) ==
+             FxEnqueueResult::invalid_value);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(FilterGesture{
+                 FilterPhase::engage,
+                 {static_cast<FilterType>(7), 800, 0}}) ==
+             FxEnqueueResult::invalid_value);
+  LMDJ_CHECK(engine.filter_control_status().accepted_sequence == 0);
+
+  // Every new parameter change plus HOLD/release/neutral.
+  const std::array<FilterGesture, 6> controls{{
+      FilterGesture{FilterPhase::engage, {FilterType::low_pass, 800, 250}},
+      FilterGesture{FilterPhase::move, {FilterType::low_pass, 20, 0}},
+      FilterGesture{FilterPhase::move, {FilterType::high_pass, 20'000, 1'000}},
+      FilterGesture{FilterPhase::move, {FilterType::band_pass, 1'200, 500}},
+      FilterGesture{FilterPhase::release, {}},
+      FilterGesture{FilterPhase::engage, {FilterType::low_pass, 100, 1'000}},
+  }};
+  for (const auto& control : controls) {
+    LMDJ_CHECK(engine.enqueue_filter_gesture(control) ==
+               FxEnqueueResult::accepted);
+  }
+  LMDJ_CHECK(engine.enqueue_fx_gesture(FxGesture{
+                 FxGestureKind::hold_on, lmdj::domain::PerformanceFx::filter,
+                 0}) == FxEnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_filter_gesture(
+                 FilterGesture{FilterPhase::release, {}}) ==
+             FxEnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_fx_gesture(FxGesture{
+                 FxGestureKind::hold_off, lmdj::domain::PerformanceFx::filter,
+                 0}) == FxEnqueueResult::accepted);
+
+  std::array<float, 4'096> left{};
+  std::array<float, 4'096> right{};
+  g_allocations.store(0, std::memory_order_relaxed);
+  g_deallocations.store(0, std::memory_order_relaxed);
+  g_track_allocations.store(true, std::memory_order_relaxed);
+  engine.render(left.data(), right.data(), left.size());
+  const auto status = engine.filter_control_status();
+  const auto accepted = status.accepted;
+  g_track_allocations.store(false, std::memory_order_relaxed);
+
+  LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
+
+  // The drain applied every accepted control exactly once and the coherent
+  // applied state caught up with the accepted shadow.
+  LMDJ_CHECK(status.accepted_sequence == 7);
+  LMDJ_CHECK(status.applied.sequence == 7);
+  LMDJ_CHECK(status.applied.epoch == engine.telemetry().start_epoch);
+  LMDJ_CHECK(status.applied.state.mode == accepted.mode);
+  LMDJ_CHECK(status.applied.state.engaged == accepted.engaged);
+  LMDJ_CHECK(status.applied.state.frozen == accepted.frozen);
+  LMDJ_CHECK(status.applied.state.hold == accepted.hold);
+  LMDJ_CHECK(status.applied.state.legacy_value == accepted.legacy_value);
+  LMDJ_CHECK(status.applied.state.parameters.type == accepted.parameters.type);
+  LMDJ_CHECK(status.applied.state.parameters.cutoff_hz ==
+             accepted.parameters.cutoff_hz);
+  LMDJ_CHECK(status.applied.state.parameters.resonance_milli ==
+             accepted.parameters.resonance_milli);
+  const auto fx = engine.master_fx_telemetry();
+  LMDJ_CHECK(fx.enqueued_filter_controls == 7);
+  LMDJ_CHECK(fx.dequeued_filter_controls == 7);
+}
+
 void full_chain_render_is_noexcept_allocation_free_and_lock_free() {
   using lmdj::audio::EnqueueResult;
   using lmdj::audio::FxEnqueueResult;
@@ -221,6 +325,7 @@ int main() {
   try {
     lock_syntax_is_confined_to_non_realtime_observers();
     full_chain_render_is_noexcept_allocation_free_and_lock_free();
+    typed_filter_controls_are_allocation_free_and_lock_free();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

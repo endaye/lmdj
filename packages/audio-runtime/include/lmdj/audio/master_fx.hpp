@@ -131,6 +131,71 @@ class MasterFxPeriodAccumulator final {
 
 }  // namespace detail
 
+// Independent live Filter (D04/F1). These are the Core DSP types: integer Hz
+// cutoff and milli-percent resonance. Domain persisted types translate to and
+// from them explicitly at the boundary; neither borrows the other's units.
+enum class FilterType : std::uint8_t { low_pass, high_pass, band_pass };
+
+inline constexpr std::uint32_t kFilterCutoffMinimumHz = 20;
+inline constexpr std::uint32_t kFilterCutoffMaximumHz = 20'000;
+inline constexpr std::uint16_t kFilterResonanceMaximumMilli = 1'000;
+// Coefficient and wet-gate transitions reuse the 2 ms / 96-frame ramp length
+// the voice attack/release already uses at the fixed realtime sample rate.
+inline constexpr std::uint32_t kFilterTransitionRampFrames = 96;
+
+struct FilterParameters {
+  FilterType type = FilterType::low_pass;
+  std::uint32_t cutoff_hz = kFilterCutoffMaximumHz;
+  std::uint16_t resonance_milli = 0;
+};
+// Product-approved initial tuple: LP, 20 kHz, 0%.
+inline constexpr FilterParameters kFilterDefaultParameters{
+    FilterType::low_pass, kFilterCutoffMaximumHz, 0};
+static_assert(std::is_trivially_copyable_v<FilterParameters>);
+
+enum class FilterPhase : std::uint8_t { engage, move, release };
+
+struct FilterGesture {
+  FilterPhase phase;
+  FilterParameters parameters;
+};
+static_assert(std::is_trivially_copyable_v<FilterGesture>);
+
+// The single Filter stage runs either the legacy 0..1000 scalar branch or the
+// typed independent branch, never both in series.
+enum class FilterMode : std::uint8_t { independent, legacy };
+
+// Coherent view of the Filter stage and the chain-wide HOLD flag. `engaged`
+// and `frozen` describe the current mode; the other mode's tuple is retained
+// for readback but inactive.
+struct FilterLiveState {
+  bool hold = false;
+  FilterMode mode = FilterMode::independent;
+  bool engaged = false;
+  bool frozen = false;
+  FilterParameters parameters{};
+  std::uint16_t legacy_value = 0;
+};
+static_assert(std::is_trivially_copyable_v<FilterLiveState>);
+
+// Audio-applied coherent state, stamped with the applied typed-control
+// sequence and the engine start epoch that produced it.
+struct FilterAppliedState {
+  FilterLiveState state{};
+  std::uint64_t sequence = 0;
+  std::uint64_t epoch = 0;
+};
+static_assert(std::is_trivially_copyable_v<FilterAppliedState>);
+
+// Accepted (enqueued) state is control-owned; applied state is audio-owned.
+// A reader compares sequence and epoch instead of guessing from either alone.
+struct FilterControlStatus {
+  FilterLiveState accepted{};
+  std::uint64_t accepted_sequence = 0;
+  FilterAppliedState applied{};
+};
+static_assert(std::is_trivially_copyable_v<FilterControlStatus>);
+
 enum class FxGestureKind : std::uint8_t {
   engage,
   move,
@@ -165,6 +230,8 @@ struct MasterFxTelemetry {
   std::uint64_t enqueued_tempo_updates;
   std::uint64_t applied_tempo_updates;
   std::uint16_t current_bpm;
+  std::uint64_t enqueued_filter_controls;
+  std::uint64_t dequeued_filter_controls;
 };
 
 struct MasterFxPreparation {
@@ -178,9 +245,23 @@ class MasterFxChain final {
   void reset() noexcept;
   bool set_bpm(std::uint16_t bpm) noexcept;
   bool apply_gesture(FxGesture gesture) noexcept;
+  // Typed independent Filter control. engage takes over the single stage
+  // atomically (mode, full tuple, active), clearing the legacy branch's
+  // engaged/frozen; move requires an engaged independent gesture; release
+  // freezes under HOLD or bypasses, retaining the tuple for readback.
+  bool apply_filter_gesture(FilterGesture gesture) noexcept;
   void process(float* left, float* right, std::size_t frames) noexcept;
   bool prepared() const noexcept { return prepared_; }
   std::uint16_t bpm() const noexcept { return bpm_; }
+  FilterLiveState filter_state() const noexcept;
+
+  // Pure Filter-state transitions shared with the engine's control-side
+  // accepted shadow, so accepted and applied can never diverge in meaning.
+  static bool valid_filter_parameters(FilterParameters parameters) noexcept;
+  static FilterLiveState filter_live_state_after(
+      FilterLiveState state, FxGesture gesture) noexcept;
+  static FilterLiveState filter_live_state_after(
+      FilterLiveState state, FilterGesture gesture) noexcept;
 
  private:
   struct EffectState {
@@ -192,7 +273,11 @@ class MasterFxChain final {
   bool active(domain::PerformanceFx fx) const noexcept;
   std::uint16_t value(domain::PerformanceFx fx) const noexcept;
   void reset_effect(domain::PerformanceFx fx) noexcept;
+  void reset_filter_registers() noexcept;
+  void begin_filter_coefficient_ramp() noexcept;
   void process_filter(float* left, float* right, std::size_t frames) noexcept;
+  void process_independent_filter(
+      float* left, float* right, std::size_t frames) noexcept;
   void process_delay(float* left, float* right, std::size_t frames) noexcept;
   void process_reverb(float* left, float* right, std::size_t frames) noexcept;
   void process_stutter(float* left, float* right, std::size_t frames) noexcept;
@@ -206,6 +291,27 @@ class MasterFxChain final {
   bool prepared_ = false;
   std::uint32_t sample_rate_ = 0;
   std::uint16_t bpm_ = 0;
+
+  // Independent Filter branch. A new epoch starts independent OFF with the
+  // approved default tuple; the legacy branch keeps its own registers.
+  FilterMode filter_mode_ = FilterMode::independent;
+  bool filter_independent_engaged_ = false;
+  bool filter_independent_frozen_ = false;
+  FilterParameters filter_parameters_ = kFilterDefaultParameters;
+  float filter_ic1_left_ = 0.0F;
+  float filter_ic1_right_ = 0.0F;
+  float filter_ic2_left_ = 0.0F;
+  float filter_ic2_right_ = 0.0F;
+  // Coefficient (g, k) and wet-gate transitions ramp over the shared 96-frame
+  // (2 ms) ramp; integer frame counters keep both ends bit-exact.
+  float filter_g_ = 0.0F;
+  float filter_k_ = 0.0F;
+  float filter_g_step_ = 0.0F;
+  float filter_k_step_ = 0.0F;
+  float filter_g_target_ = 0.0F;
+  float filter_k_target_ = 0.0F;
+  std::uint32_t filter_coefficient_frames_ = 0;
+  std::uint32_t filter_wet_frames_ = 0;
 
   float filter_low_left_ = 0.0F;
   float filter_low_right_ = 0.0F;
