@@ -276,8 +276,12 @@ class MasterFxChain final {
   void reset_filter_registers() noexcept;
   void begin_filter_coefficient_ramp() noexcept;
   void process_filter(float* left, float* right, std::size_t frames) noexcept;
+  // clamp_output is set when no whole-block effect will run the chain's tail
+  // clamp this block: the independent branch then clamps exactly the frames
+  // it processed and leaves settled dry frames untouched and unclamped.
   void process_independent_filter(
-      float* left, float* right, std::size_t frames) noexcept;
+      float* left, float* right, std::size_t frames,
+      bool clamp_output) noexcept;
   void process_delay(float* left, float* right, std::size_t frames) noexcept;
   void process_reverb(float* left, float* right, std::size_t frames) noexcept;
   void process_stutter(float* left, float* right, std::size_t frames) noexcept;

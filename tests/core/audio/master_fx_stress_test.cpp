@@ -596,12 +596,20 @@ void independent_filter_churn_stays_finite_bounded_and_coherent() {
   // the bounded queue, so rejection cannot depend on scheduling luck.
   std::atomic<bool> pause_rendering{false};
   std::atomic<bool> render_paused{false};
+  // Bounded renderer lead: quantum k may render only once the control thread
+  // has entered round k. The renderer can therefore never exit before the
+  // round-100 handshake — reaching it, it must pass through this spin and
+  // ACK the pause instead of leaving the control thread waiting forever.
+  std::atomic<std::uint32_t> control_round{0};
   std::thread renderer([&] {
     std::array<float, kFramesPerQuantum> left{};
     std::array<float, kFramesPerQuantum> right{};
     for (std::uint32_t quantum = 0; quantum < kQuanta; ++quantum) {
-      while (pause_rendering.load(std::memory_order_acquire)) {
-        render_paused.store(true, std::memory_order_release);
+      while (pause_rendering.load(std::memory_order_acquire) ||
+             control_round.load(std::memory_order_acquire) <= quantum) {
+        if (pause_rendering.load(std::memory_order_acquire)) {
+          render_paused.store(true, std::memory_order_release);
+        }
         std::this_thread::yield();
       }
       engine.render(left.data(), right.data(), left.size());
@@ -654,6 +662,9 @@ void independent_filter_churn_stays_finite_bounded_and_coherent() {
   };
 
   for (std::uint32_t round = 0; round < kQuanta; ++round) {
+    // Publish the entered round before any enqueue: the renderer may lead by
+    // at most this round, so it is always alive to answer the pause below.
+    control_round.store(round + 1U, std::memory_order_release);
     enqueue_typed(typed_control());
     if (round % 37U == 0) {
       enqueue_typed(FilterGesture{
@@ -705,7 +716,9 @@ void independent_filter_churn_stays_finite_bounded_and_coherent() {
 
   const auto fx = engine.master_fx_telemetry();
   LMDJ_CHECK(!render_failed.load(std::memory_order_acquire));
-  LMDJ_CHECK(rejected_full > 0);
+  // The paused burst rejects exactly the burst minus the free space, and the
+  // free space is at most the queue capacity: at least 76 rejections.
+  LMDJ_CHECK(rejected_full >= 76);
   LMDJ_CHECK(accepted_typed > 0);
   LMDJ_CHECK(fx.enqueued_filter_controls == accepted_typed);
   LMDJ_CHECK(fx.dequeued_filter_controls == accepted_typed);

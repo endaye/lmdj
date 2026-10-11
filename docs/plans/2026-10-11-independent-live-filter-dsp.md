@@ -188,3 +188,17 @@ reverted the still-uncommitted implementation instead of the mutation. The
 file was reconstructed from the recorded edits; the rebuilt fixed source
 reproduced every previously locked golden sample bit-for-bit before the
 mutation proof was redone with a byte-level backup.
+
+Follow-up fix commit on the same branch (independent audit of the F1 head):
+the churn stress test's renderer is now rendezvous-bounded (`control_round`),
+so it cannot exit before the round-100 pause handshake — the pre-fix hang was
+reproduced with a diagnostic 500 ms control-thread slowdown (bounded 60 s
+wait killed it) and the same slowdown completes in 4.8 s on the fixed tree;
+and the block tail clamp now runs only when a whole-block effect processed,
+with the independent branch clamping exactly the frames it processed — a
+release settling mid-block leaves settled dry frames bit-identical on any
+block split (permanent regression test
+`independent_release_settling_never_clamps_settled_dry_frames`, red on the
+pre-fix head at master_fx_test.cpp:977). The BP mutation proof was redone
+against the fixed code with a byte-level backup: the same two suites fail,
+the restore rebuilds and passes.

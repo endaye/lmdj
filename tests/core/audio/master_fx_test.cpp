@@ -944,6 +944,72 @@ void invalid_independent_filter_parameters_are_refused() {
   LMDJ_CHECK(state.parameters.cutoff_hz == 20'000);
 }
 
+MasterFxChain make_settling_chain() {
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 800, 250}}));
+  std::array<float, 128> warm_left{};
+  std::array<float, 128> warm_right{};
+  warm_left.fill(0.5F);
+  warm_right.fill(0.5F);
+  chain.process(warm_left.data(), warm_right.data(), warm_left.size());
+  LMDJ_CHECK(chain.apply_filter_gesture(
+      FilterGesture{FilterPhase::release, {}}));
+  return chain;
+}
+
+void independent_release_settling_never_clamps_settled_dry_frames() {
+  // A release whose 96-frame wet ramp completes mid-block: frames past the
+  // settled point are dry and must stay bit-identical to the input — the
+  // filter writes nothing there and no clamp may touch them — and the output
+  // must not depend on how the render is split into blocks.
+  auto chain = make_settling_chain();
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  left.fill(1.5F);
+  right.fill(-1.5F);
+  chain.process(left.data(), right.data(), left.size());
+  // The wet ramp decrements 96 → 0 across the block; the settled frames are
+  // bit-identical dry, never clamped to ±1.
+  for (std::size_t frame = 95; frame < left.size(); ++frame) {
+    LMDJ_CHECK(left[frame] == 1.5F);
+    LMDJ_CHECK(right[frame] == -1.5F);
+  }
+  // Frames the filter did process stay clamped exactly as before.
+  for (std::size_t frame = 0; frame < 95; ++frame) {
+    LMDJ_CHECK(std::abs(left[frame]) <= 1.0F);
+    LMDJ_CHECK(std::abs(right[frame]) <= 1.0F);
+  }
+  std::array<float, 128> next_left{};
+  std::array<float, 128> next_right{};
+  next_left.fill(1.5F);
+  next_right.fill(-1.5F);
+  chain.process(next_left.data(), next_right.data(), next_left.size());
+  for (std::size_t frame = 0; frame < next_left.size(); ++frame) {
+    LMDJ_CHECK(next_left[frame] == 1.5F);
+    LMDJ_CHECK(next_right[frame] == -1.5F);
+  }
+
+  // 96 + 32 must produce exactly the same output as one 128-frame render.
+  auto split = make_settling_chain();
+  std::array<float, 128> split_left{};
+  std::array<float, 128> split_right{};
+  split_left.fill(1.5F);
+  split_right.fill(-1.5F);
+  split.process(split_left.data(), split_right.data(), 96);
+  split.process(split_left.data() + 96, split_right.data() + 96, 32);
+  auto whole = make_settling_chain();
+  std::array<float, 128> whole_left{};
+  std::array<float, 128> whole_right{};
+  whole_left.fill(1.5F);
+  whole_right.fill(-1.5F);
+  whole.process(whole_left.data(), whole_right.data(), whole_left.size());
+  LMDJ_CHECK(split_left == whole_left);
+  LMDJ_CHECK(split_right == whole_right);
+}
+
 }  // namespace
 
 int main() {
@@ -968,6 +1034,7 @@ int main() {
     legacy_gestures_take_over_and_legacy_release_owns_only_legacy();
     independent_release_freezes_under_hold_and_hold_off_bypasses();
     invalid_independent_filter_parameters_are_refused();
+    independent_release_settling_never_clamps_settled_dry_frames();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

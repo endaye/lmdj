@@ -304,33 +304,40 @@ void MasterFxChain::process(
   if (!prepared_ || left == nullptr || right == nullptr || frames == 0) {
     return;
   }
-  auto has_processing_effect = false;
+  // The tail clamp is a whole-block stage: it runs only when a whole-block
+  // effect (legacy Filter or any other FX) actually processed this block.
+  // The independent Filter branch clamps the frames it processes itself, so
+  // a release that settles mid-block leaves the settled dry frames neither
+  // filtered nor clamped — bit-identical to the input on any block split.
+  auto has_whole_block_effect = false;
+  auto independent_filter_runs = false;
   for (std::size_t index = 0; index < effects_.size(); ++index) {
     if (kFxChainOrder[index] == domain::PerformanceFx::filter) {
       if (filter_mode_ == FilterMode::legacy) {
         const auto& effect = effects_[index];
         if ((effect.engaged || effect.frozen) && effect.value != 500) {
-          has_processing_effect = true;
+          has_whole_block_effect = true;
         }
       } else if (filter_independent_engaged_ || filter_independent_frozen_ ||
                  filter_wet_frames_ != 0) {
-        has_processing_effect = true;
+        independent_filter_runs = true;
       }
     } else {
       const auto& effect = effects_[index];
       if (effect.engaged || effect.frozen) {
-        has_processing_effect = true;
+        has_whole_block_effect = true;
       }
     }
-    if (has_processing_effect) {
+    if (has_whole_block_effect && independent_filter_runs) {
       break;
     }
   }
-  if (!has_processing_effect) {
+  if (!has_whole_block_effect && !independent_filter_runs) {
     return;
   }
   process_filter(left, right, frames);
-  process_independent_filter(left, right, frames);
+  process_independent_filter(
+      left, right, frames, !has_whole_block_effect);
   process_delay(left, right, frames);
   process_reverb(left, right, frames);
   process_stutter(left, right, frames);
@@ -338,9 +345,11 @@ void MasterFxChain::process(
   process_reverse(left, right, frames);
   process_crush(left, right, frames);
   process_cutter(left, right, frames);
-  for (std::size_t frame = 0; frame < frames; ++frame) {
-    left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
-    right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
+  if (has_whole_block_effect) {
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
+      right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
+    }
   }
 }
 
@@ -552,13 +561,14 @@ void MasterFxChain::begin_filter_coefficient_ramp() noexcept {
 }
 
 void MasterFxChain::process_independent_filter(
-    float* left, float* right, std::size_t frames) noexcept {
+    float* left, float* right, std::size_t frames, bool clamp_output) noexcept {
   if (filter_mode_ != FilterMode::independent) {
     return;
   }
   const auto active = filter_independent_engaged_ || filter_independent_frozen_;
-  // OFF is a bit-identical bypass: frames after the wet ramp reaches zero are
-  // never touched.
+  // OFF is a bit-identical bypass: once the wet ramp reaches zero, frames are
+  // neither filtered nor clamped, so settled dry input reaches the output
+  // unchanged no matter how the render is split into blocks.
   if (!active && filter_wet_frames_ == 0) {
     return;
   }
@@ -591,7 +601,7 @@ void MasterFxChain::process_independent_filter(
     const auto type = filter_parameters_.type;
     const auto wet = static_cast<float>(filter_wet_frames_) /
                      static_cast<float>(kFilterTransitionRampFrames);
-    const auto run = [k, a1, a2, a3, type, wet](
+    const auto run = [k, a1, a2, a3, type, wet, clamp_output](
                          float input, float& ic1, float& ic2) noexcept {
       const auto v3 = input - ic2;
       const auto v1 = a1 * ic1 + a2 * v3;
@@ -611,7 +621,10 @@ void MasterFxChain::process_independent_filter(
           selected = k * v1;
           break;
       }
-      return input + (selected - input) * wet;
+      const auto output = input + (selected - input) * wet;
+      // When no whole-block effect runs the chain's tail clamp this block,
+      // clamp here — exactly the frames this branch processed.
+      return clamp_output ? std::clamp(output, -1.0F, 1.0F) : output;
     };
     left[frame] = run(left[frame], filter_ic1_left_, filter_ic2_left_);
     right[frame] = run(right[frame], filter_ic1_right_, filter_ic2_right_);
