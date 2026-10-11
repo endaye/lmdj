@@ -213,3 +213,21 @@ the documented post-stop neutral state. Discriminating mutation proof:
 render dropping typed-release applies passes the old post-stop oracle
 (binary green) and fails the new pre-stop comparison at the `engaged`
 assertion; the restored engine rebuilds green.
+
+Third follow-up (review of the rebased head, after #2015/#2016 landed):
+typed engage now restarts the independent wet gate from zero, and both legacy
+takeover paths clear any stale gate — a legacy→independent round trip
+previously re-entered at full wet (0.000979 first frame instead of the
+fresh-gate 0.247406 closed-form value; regression test
+`typed_engage_after_legacy_takeover_restarts_the_wet_gate`, red on the
+pre-fix head at master_fx_test.cpp:1046). Typed engage/move admission is also
+refused without state mutation when the chain was not prepared at the fixed
+48 kHz realtime rate (`kFilterTypedSampleRate`, pinned to
+`kRealtimeSampleRate` by static_assert at the engine); previously a 32 kHz
+preparation accepted LP/20 kHz and diverged to NaN at frame 164 (red at
+master_fx_test.cpp:1078 on the pre-fix head). Legacy non-48k preparation and
+DSP, release/cleanup in every state, the 20 Hz–20 kHz range and all existing
+goldens are unchanged; the BP mutation proof was redone on the fixed tree
+(byte backup, mutant red in `audio.master_fx` + `audio.master_fx_determinism`,
+restore green). Full `fast`/`stress` tiers were deferred by window
+coordination and rerun before merge.

@@ -152,6 +152,11 @@ static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(
     kRealtimeMaximumSampleFrames ==
     std::numeric_limits<decltype(cooker::ResolvedPlayback::end_frame)>::max());
+// prepare_master_fx prepares the chain at the fixed realtime rate, which is
+// exactly the typed Filter admission rate; this pin keeps the chain's
+// non-48 kHz typed refusal unreachable through the engine, so the accepted
+// shadow and the audio thread can never diverge on it.
+static_assert(kFilterTypedSampleRate == kRealtimeSampleRate);
 
 foundation::Result<void> invalid_argument(std::string message) {
   return foundation::Result<void>::failure(

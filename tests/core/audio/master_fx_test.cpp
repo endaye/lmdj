@@ -1010,6 +1010,135 @@ void independent_release_settling_never_clamps_settled_dry_frames() {
   LMDJ_CHECK(split_right == whole_right);
 }
 
+void typed_engage_after_legacy_takeover_restarts_the_wet_gate() {
+  MasterFxChain chain;
+  LMDJ_CHECK(
+      chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 1'000, 0}}));
+  std::array<float, 128> warm_left{};
+  std::array<float, 128> warm_right{};
+  warm_left.fill(0.25F);
+  warm_right.fill(0.25F);
+  chain.process(warm_left.data(), warm_right.data(), warm_left.size());
+  // Legacy neutral takeover of the single stage.
+  LMDJ_CHECK(chain.apply_gesture(FxGesture{
+      FxGestureKind::engage, PerformanceFx::filter, 500}));
+  LMDJ_CHECK(chain.filter_state().mode == FilterMode::legacy);
+  // Typed re-engage with the same tuple must restart the wet gate from zero.
+  LMDJ_CHECK(chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 1'000, 0}}));
+  std::array<float, 1> left{0.25F};
+  std::array<float, 1> right{0.25F};
+  chain.process(left.data(), right.data(), 1);
+
+  // Independent closed-form expectation for a fresh gate: wet = 1/96,
+  // registers reset, LP selects v2 = a3 * x with a-coefficients from
+  // g = tan(pi * 1000 / 48000) and k = sqrt(2) (0% resonance). Named blind
+  // spot: the coefficient formulas are shared with the implementation (they
+  // are the specification); the wet-gate restart this test pins is not — a
+  // stale gate gives 0.000979 instead of 0.247406.
+  const auto g = std::tan(3.14159265358979323846 * 1000.0 / 48'000.0);
+  const auto k = std::sqrt(2.0);
+  const auto a1 = 1.0 / (1.0 + g * (g + k));
+  const auto a3 = g * g * a1;
+  const auto expected = 0.25 + (a3 * 0.25 - 0.25) / 96.0;
+  LMDJ_CHECK(std::abs(static_cast<double>(left[0]) - expected) < 0.000001);
+  LMDJ_CHECK(std::abs(static_cast<double>(right[0]) - expected) < 0.000001);
+
+  // Equivalence with the equivalent fresh-gate baseline: engage, release,
+  // re-engage with the same tuple and coefficient state, no legacy interlude.
+  MasterFxChain baseline;
+  LMDJ_CHECK(
+      baseline.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+  LMDJ_CHECK(baseline.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 1'000, 0}}));
+  auto base_left = warm_left;
+  auto base_right = warm_right;
+  baseline.process(base_left.data(), base_right.data(), base_left.size());
+  LMDJ_CHECK(baseline.apply_filter_gesture(
+      FilterGesture{FilterPhase::release, {}}));
+  baseline.process(base_left.data(), base_right.data(), base_left.size());
+  LMDJ_CHECK(baseline.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 1'000, 0}}));
+  std::array<float, 1> base_frame_left{0.25F};
+  std::array<float, 1> base_frame_right{0.25F};
+  baseline.process(
+      base_frame_left.data(), base_frame_right.data(), 1);
+  LMDJ_CHECK(left[0] == base_frame_left[0]);
+  LMDJ_CHECK(right[0] == base_frame_right[0]);
+}
+
+void typed_admission_refuses_non_realtime_sample_rates_without_state_change() {
+  MasterFxChain chain;
+  // Legacy preparation at other rates remains valid by design.
+  LMDJ_CHECK(chain.prepare(MasterFxPreparation{32'000, 120}).has_value());
+  const auto before = chain.filter_state();
+  LMDJ_CHECK(!chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::engage, {FilterType::low_pass, 20'000, 0}}));
+  LMDJ_CHECK(!chain.apply_filter_gesture(FilterGesture{
+      FilterPhase::move, {FilterType::low_pass, 1'000, 500}}));
+  const auto after = chain.filter_state();
+  LMDJ_CHECK(after.mode == before.mode && after.engaged == before.engaged &&
+             after.frozen == before.frozen && after.hold == before.hold &&
+             after.legacy_value == before.legacy_value &&
+             after.parameters.type == before.parameters.type &&
+             after.parameters.cutoff_hz == before.parameters.cutoff_hz &&
+             after.parameters.resonance_milli ==
+                 before.parameters.resonance_milli);
+
+  // Release after the rejections is still accepted; nothing is stuck.
+  LMDJ_CHECK(chain.apply_filter_gesture(
+      FilterGesture{FilterPhase::release, {}}));
+  const auto released = chain.filter_state();
+  LMDJ_CHECK(!released.engaged && !released.frozen);
+  auto left = signal(1'024, 7);
+  auto right = signal(1'024, 13);
+  const auto dry_left = left;
+  const auto dry_right = right;
+  chain.process(left.data(), right.data(), left.size());
+  LMDJ_CHECK(left == dry_left);
+  LMDJ_CHECK(right == dry_right);
+
+  // The legacy branch at the same non-48k preparation still processes.
+  LMDJ_CHECK(chain.apply_gesture(FxGesture{
+      FxGestureKind::engage, PerformanceFx::filter, 300}));
+  auto legacy_left = signal(2'048, 3);
+  auto legacy_right = signal(2'048, 11);
+  const auto original_left = legacy_left;
+  const auto original_right = legacy_right;
+  chain.process(
+      legacy_left.data(), legacy_right.data(), legacy_left.size());
+  LMDJ_CHECK(differs(legacy_left, legacy_right, original_left,
+                     original_right));
+}
+
+void typed_filter_at_48k_stays_finite_at_the_documented_corners() {
+  // The P2-A probe shape: constant 0.25 input through typed engagements at
+  // the documented corners — 20 kHz / 0% (the 32 kHz NaN repro's intended
+  // 48 kHz behavior), 20 Hz / 0%, and 20 kHz / 100%.
+  for (const auto parameters : {
+           FilterParameters{FilterType::low_pass, 20'000, 0},
+           FilterParameters{FilterType::low_pass, 20, 0},
+           FilterParameters{FilterType::low_pass, 20'000, 1'000},
+       }) {
+    MasterFxChain chain;
+    LMDJ_CHECK(
+        chain.prepare(MasterFxPreparation{kSampleRate, 120}).has_value());
+    LMDJ_CHECK(chain.apply_filter_gesture(
+        FilterGesture{FilterPhase::engage, parameters}));
+    std::array<float, 2'048> left{};
+    std::array<float, 2'048> right{};
+    left.fill(0.25F);
+    right.fill(0.25F);
+    chain.process(left.data(), right.data(), left.size());
+    for (std::size_t frame = 0; frame < left.size(); ++frame) {
+      LMDJ_CHECK(std::isfinite(left[frame]));
+      LMDJ_CHECK(std::isfinite(right[frame]));
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1035,6 +1164,9 @@ int main() {
     independent_release_freezes_under_hold_and_hold_off_bypasses();
     invalid_independent_filter_parameters_are_refused();
     independent_release_settling_never_clamps_settled_dry_frames();
+    typed_engage_after_legacy_takeover_restarts_the_wet_gate();
+    typed_admission_refuses_non_realtime_sample_rates_without_state_change();
+    typed_filter_at_48k_stays_finite_at_the_documented_corners();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

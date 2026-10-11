@@ -263,6 +263,9 @@ bool MasterFxChain::apply_gesture(FxGesture gesture) noexcept {
       filter_mode_ = FilterMode::legacy;
       filter_independent_engaged_ = false;
       filter_independent_frozen_ = false;
+      // Legacy now owns the stage; drop any stale independent wet gate so a
+      // later independent engage restarts its ramp from zero.
+      filter_wet_frames_ = 0;
       effect.value = gesture.value;
       effect.engaged = true;
       effect.frozen = false;
@@ -273,6 +276,7 @@ bool MasterFxChain::apply_gesture(FxGesture gesture) noexcept {
       filter_mode_ = FilterMode::legacy;
       filter_independent_engaged_ = false;
       filter_independent_frozen_ = false;
+      filter_wet_frames_ = 0;
       effect.engaged = true;
       effect.frozen = false;
       reset_effect(gesture.fx);
@@ -493,6 +497,13 @@ FilterLiveState MasterFxChain::filter_live_state_after(
 }
 
 bool MasterFxChain::apply_filter_gesture(FilterGesture gesture) noexcept {
+  // engage/move compute coefficients only at the fixed realtime sample rate
+  // (D0); a chain prepared at any other rate refuses typed admission before
+  // any state mutation. release stays available in every state for cleanup.
+  if (gesture.phase != FilterPhase::release &&
+      sample_rate_ != kFilterTypedSampleRate) {
+    return false;
+  }
   switch (gesture.phase) {
     case FilterPhase::engage:
       if (!valid_filter_parameters(gesture.parameters)) {
@@ -504,11 +515,14 @@ bool MasterFxChain::apply_filter_gesture(FilterGesture gesture) noexcept {
       filter_parameters_ = gesture.parameters;
       // The independent branch atomically owns the single stage; the legacy
       // branch's engaged/frozen die with the takeover, its scalar is kept.
+      // The wet gate restarts from zero: an engage is a fresh activation and
+      // must not inherit a gate position left by a previous ownership span.
       {
         auto& legacy_effect = effects_[effect_index(domain::PerformanceFx::filter)];
         legacy_effect.engaged = false;
         legacy_effect.frozen = false;
       }
+      filter_wet_frames_ = 0;
       reset_filter_registers();
       begin_filter_coefficient_ramp();
       return true;

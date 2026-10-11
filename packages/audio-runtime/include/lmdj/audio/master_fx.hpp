@@ -142,6 +142,9 @@ inline constexpr std::uint16_t kFilterResonanceMaximumMilli = 1'000;
 // Coefficient and wet-gate transitions reuse the 2 ms / 96-frame ramp length
 // the voice attack/release already uses at the fixed realtime sample rate.
 inline constexpr std::uint32_t kFilterTransitionRampFrames = 96;
+// Typed independent Filter coefficients are computed only at the Core fixed
+// realtime sample rate (D0); typed admission refuses any other preparation.
+inline constexpr std::uint32_t kFilterTypedSampleRate = 48'000;
 
 struct FilterParameters {
   FilterType type = FilterType::low_pass;
