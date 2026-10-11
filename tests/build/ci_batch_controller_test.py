@@ -512,7 +512,7 @@ class RealGitTests(unittest.TestCase):
         self.assertEqual(self.daily_change(["test:creator"])["creator"], "full")
 
     def test_missing_historical_policy_never_enables_quick(self):
-        self.inputs.policy_at = lambda sha: None
+        self.inputs.policy_at = lambda sha, **kwargs: None
         result = self.daily_change()
         self.assertEqual(result, {suite: "full" for suite in POLICY.suite_ids})
 

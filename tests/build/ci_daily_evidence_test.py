@@ -100,7 +100,7 @@ class DailyEvidenceTest(unittest.TestCase):
                          reference="missing:daily", outcomes=batch.missing_outcomes(self.request))},
                      requests={"daily": self.request})
         reports = report_runtime.plan_batch_reports("endaye/lmdj", state,
-                                                    SimpleNamespace(policy_at=lambda _: self.policy))
+                                                    SimpleNamespace(policy_at=lambda _, **kwargs: self.policy))
         self.assertEqual(len(reports), 2)
         self.assertEqual({report.management["suite"] for report in reports}, {"creator", "docs_static"})
 
@@ -207,7 +207,7 @@ class DailyEvidenceTest(unittest.TestCase):
                                                           self.selection, verification=self.workloads))
         state = dict(epoch="daily-test", _result_order=["daily"], results={"daily": result},
                      requests={"daily": self.request})
-        inputs = SimpleNamespace(policy_at=lambda _: self.policy)
+        inputs = SimpleNamespace(policy_at=lambda _, **kwargs: self.policy)
         recoveries = report_runtime.plan_bucket_recoveries(state, inputs)
         self.assertTrue(all(item.suite == "docs_static" for item in recoveries))
         self.assertTrue(recoveries)  # the complete static check still has actual full evidence
