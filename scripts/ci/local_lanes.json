@@ -34,6 +34,28 @@
       ]
     },
     "core_ubuntu": {
+      "quick": {
+        "requires": {
+          "os": [
+            "linux"
+          ],
+          "commands": [
+            "cmake",
+            "python3"
+          ]
+        },
+        "commands": [
+          "python3 tests/fixtures/audio/make_fixtures.py",
+          "python3 tests/fixtures/golden/reference_render.py",
+          "bash scripts/verify-core-dependencies.sh",
+          "scripts/core.sh configure dev",
+          "scripts/core.sh build dev",
+          "scripts/core.sh test dev fast"
+        ],
+        "ci_only": [
+          "Quick development feedback only; host, persistence, sanitizer and complete proof obligations remain separate until the coordinated daily cutover."
+        ]
+      },
       "requires": {
         "os": ["linux"]
       },
@@ -82,6 +104,28 @@
       ]
     },
     "core_macos": {
+      "quick": {
+        "requires": {
+          "os": [
+            "darwin"
+          ],
+          "commands": [
+            "cmake",
+            "python3"
+          ]
+        },
+        "commands": [
+          "python3 tests/fixtures/audio/make_fixtures.py",
+          "python3 tests/fixtures/golden/reference_render.py",
+          "bash scripts/verify-core-dependencies.sh",
+          "scripts/core.sh configure dev",
+          "scripts/core.sh build dev",
+          "scripts/core.sh test dev fast"
+        ],
+        "ci_only": [
+          "Quick development feedback only; host, persistence, sanitizer and complete proof obligations remain separate until the coordinated daily cutover."
+        ]
+      },
       "requires": {
         "os": ["darwin"]
       },
@@ -132,6 +176,22 @@
       ]
     },
     "creator": {
+      "quick": {
+        "requires": {
+          "commands": [
+            "node",
+            "npm"
+          ]
+        },
+        "commands": [
+          "npm --prefix apps/creator-web run build",
+          "npm --prefix apps/creator-web test -- --run",
+          "node --test apps/creator-web/offline/*.node-test.mjs"
+        ],
+        "ci_only": [
+          "Quick UI build/unit/offline feedback only; this does not establish WebAssembly, browser journeys or release reproducibility."
+        ]
+      },
       "requires": {
         "commands": ["cmake", "node", "npm"],
         "any_of": [

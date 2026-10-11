@@ -749,6 +749,14 @@ Hosted 用量是预算目标，不是未经验证的保证。观察周必须按 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 target 的完整自测或发布证据。
 
 本地 `scripts/local-ci.sh --list --json` 只分类，`--lanes` 选择 Task 需要执行的 lanes。
+显式 `--profile quick` 提供开发中的快速反馈；当前 Core 使用 Dev 编译和 unit/component，
+Creator 使用 UI 构建、单元及 offline 测试，其他 lane 暂时保留完整命令。
+默认仍为 `--profile full`，直到日常选测与合并证据消费者一起切换。quick 的
+`quick-pass` / `cached-quick-pass` 不生成完整 lane 的 `pass key=`，也不能传给
+`--batch-evidence-only`。quick 尚不替代受影响的持久化、并发和浏览器旅程验证。
+执行缓存额外绑定 profile 与实际本地工具链；每条实际执行的命令记录退出码和耗时，
+缓存命中不伪造执行时间。跨平台的完整 batch 证据仍使用源文件与命令绑定的 key，
+不会要求 Linux 验证者安装 macOS 工具链才能检查证据。
 `pass`、`cached-pass`、`fail`、`not-runnable-here` 明确区分；平台、toolchain、
 clean-tree package 前提不满足不能算 pass。缓存绑定命令与所有输入内容，位于工作树外，
 full-risk 路径是每条 lane 的输入，避免共享改动留下 stale cached pass。

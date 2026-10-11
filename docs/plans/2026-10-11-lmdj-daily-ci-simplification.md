@@ -91,6 +91,35 @@ still need their own verification.
 
 ### T1 — Add explicit local quick verification and separate its evidence
 
+Implementation base refreshed to `deb95de722b845d708371e90bcac138ae5e25e01`.
+T0 is merged (#2009); its final-head PR Contract run `38096931869` completed
+successfully, including CI contract and Portal. T1 remains outstanding: the
+current parser has no profile option and the lane loader accepts only the full
+commands. The existing `--lanes` filter is the positive control for command
+selection; it does not change a selected lane's workload.
+
+T1 declared files are `scripts/local-ci.sh`,
+`scripts/ci/local_preflight.py`, `scripts/ci/local_lanes.json`,
+`tests/build/ci_local_preflight_test.py`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, and this plan.
+The real native run additionally declares
+`.agents/pitfalls/shared-host-tmp-staging-permissions.md` to retain the observed
+root-owned temporary staging collision, with ledger and staged ownership checks.
+Add explicit `--profile quick|full` with full still the default until T3.
+Initial quick overrides provide native Dev compile/unit/component feedback and
+Creator UI build/unit/offline feedback; all other entries retain their full
+commands until their T2 dependencies are audited. This advisory development
+subset is not the final daily merge contract. T2 must add affected complete
+journeys and risk selection before T3 changes any obligation.
+
+Execution-cache identity binds profile, source/commands and the resolved local
+toolchain. Keep source-bound full batch receipts separate so a macOS receipt
+can still be checked from Linux; a local toolchain hash is a cache boundary,
+not a requirement for the verifier to impersonate the execution host. Quick
+prints `quick-pass`/`cached-quick-pass`, never a full receipt, and the old
+full-evidence checker rejects explicit quick mode. Record timings for each
+actually executed command, including a failing command, and none for cache hits.
+
 Primary files: `scripts/local-ci.sh`, `scripts/ci/local_preflight.py`,
 `scripts/ci/local_lanes.json`, `tests/build/ci_local_preflight_test.py`, and
 this plan. Add per-command timing with no extra service. Reuse the canonical
@@ -108,6 +137,30 @@ Lowest-tier tests: planner command selection, profile-separated cache keys,
 input invalidation, quick/full evidence rejection, missing dependencies and
 unchanged full inventory. Defects caught: stale/full-mislabelled evidence and
 unverified changes interpreted as success. Execute representative quick paths.
+
+T1 local evidence: 130 planner/cache/evidence regression tests pass; the full
+Portal check passes (50 routes). A structural comparison against the parent
+confirms all 13 full lane entries retain their requirements, commands and notes.
+A runtime mutation made both profiles omit Creator: their parity still agreed,
+but the independent `[creator, portal]` oracle failed at the intended assertion.
+The mutation changed no source or build artifact; the original classifier was
+restored by the scoped mock.
+Creator quick, one Linux cold execution with dependencies already installed and
+Node 26.8.1: build/typecheck 2.001 s, 73 Vitest files / 1,277 tests 78.406 s,
+offline tests 0.184 s; total 80.6 s. This is not a full-browser result or a
+before/after workday sample. Native cold build took 292.932 s. The complete
+205-test fast tier passed on the warm rerun with owned
+`TMPDIR=/tmp/lmdj-1996-profiles-tmp`: configure 0.663 s, build 1.101 s,
+tests 135.565 s, lane total 138.7 s (n=1 successful warm execution). The first run failed one of 205 fast tests:
+`project_io.authoring_history` could not create its sample staging directory
+under `/tmp/.lmdj-host`, which was owned by root with mode 0755. A diagnostic
+built from the unchanged test and current libraries exposed `Permission denied`;
+this is not evidence of a product regression. Preserve that failure and rerun
+with an owned `TMPDIR`, without changing the assertion or another user's files.
+The operational pitfall is recorded in the additional declared file. Its 15
+ledger checks and all 77 staged ownership checks pass.
+Precommit main refresh still resolves to `deb95de722b845d708371e90bcac138ae5e25e01`;
+no intervening successor changes the premises.
 
 ### T2 — Split expensive Web proof and CI-contract work by actual inputs
 

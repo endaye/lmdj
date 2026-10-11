@@ -9,6 +9,8 @@
 #
 # Usage:
 #   scripts/local-ci.sh                     # run every selected lane
+#   scripts/local-ci.sh --profile quick     # development subset; no full evidence
+#   scripts/local-ci.sh --profile full      # complete selected lanes (default)
 #   scripts/local-ci.sh --list              # resolve the plan without running
 #   scripts/local-ci.sh --lanes docs_static # restrict to named lanes
 #   scripts/local-ci.sh --no-cache          # ignore cached lane verdicts
