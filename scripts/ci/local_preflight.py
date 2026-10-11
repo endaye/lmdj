@@ -204,7 +204,17 @@ def _validate_lane_entry(lane: str, entry: object) -> None:
 
 
 @functools.lru_cache(maxsize=128)
-def _tool_version(command: tuple[str, ...], executable: str, stat_key: tuple[int, int]) -> str:
+def _tool_content(executable: str, revision: tuple[int, ...]) -> str:
+    """Read large shared tools once per process and observed filesystem revision."""
+    digest = hashlib.sha256()
+    with open(executable, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=128)
+def _tool_version(command: tuple[str, ...], executable: str, content_digest: str) -> str:
     """Probe once per executable revision; missing/broken tools never look installed."""
     try:
         result = subprocess.run([executable, *command[1:], "--version"],
@@ -266,8 +276,10 @@ def toolchain_identity(lane: str, entry: Mapping[str, object], *, root: Path = R
         if executable:
             path = Path(executable).resolve()
             stat = path.stat()
-            observed[tool] = [str(path), stat.st_mtime_ns, stat.st_size, _tool_version(command, str(path),
-                                                      (stat.st_mtime_ns, stat.st_size))]
+            content = _tool_content(str(path), (stat.st_dev, stat.st_ino, stat.st_size,
+                                                stat.st_mtime_ns, stat.st_ctime_ns))
+            observed[tool] = [str(path), stat.st_mtime_ns, stat.st_size, content,
+                              _tool_version(command, str(path), content)]
         else:
             observed[tool] = "not-found"
     return hashlib.sha256(json.dumps(observed, sort_keys=True).encode()).hexdigest()

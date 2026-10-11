@@ -645,3 +645,24 @@ verification producer, consumer, policy or tested source; no premise or test
 result above is superseded. The current-head compiler repair model review is
 clean, but its separate repair adapter refused the old finding's inconsistent
 source quote/anchor. Preserve that refusal; it is not an automatic resolution.
+
+### T3g — Bind tool contents when installation metadata is preserved
+
+Review run 38106116405 of `0ecd9889` identifies a further cache boundary:
+an installation can change executable bytes while preserving its size, mtime
+and advertised version. Declare `scripts/ci/local_preflight.py`,
+`tests/build/ci_local_preflight_test.py` and this plan. Include a streaming
+executable content digest in tool identity and version-probe memoization.
+Memoize file reads only within this process using resolved path, inode, size,
+mtime and ctime so multiple selected lanes do not repeatedly read large tools.
+First prove the same-size, restored-mtime, fixed-version replacement collides
+on the old implementation; then run the complete local preflight and selector
+contracts. Main remains `98f8ba113e7cb4c619ad0d34b69d66ea29058f1c`, which
+does not contain this cache implementation. Documentation impact: none; this
+repairs the existing input-bound cache promise. Version impact: none. No new
+product check, timeout or full-lane obligation is introduced.
+
+T3g verification: the preserved-size/mtime/version replacement failed the
+identity inequality on the old implementation; after repair the complete local
+preflight suite passes 137/137 (10.421 s), and selector contracts pass 12/12.
+No qualifying pitfall: the owning regression fully expresses this cache defect.

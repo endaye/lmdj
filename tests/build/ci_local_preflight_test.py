@@ -1561,6 +1561,21 @@ class VerificationProfileTest(unittest.TestCase):
                 after = self.preflight.toolchain_identity("docs_static", entry)
             self.assertNotEqual(before, after)
 
+    def test_tool_replacement_with_preserved_size_mtime_and_version_invalidates_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "profile-test-tool"
+            tool.write_text('#!/bin/sh\n# build A\necho v1\n')
+            tool.chmod(0o755)
+            original = tool.stat()
+            entry = {"requires": {"commands": [str(tool)]}}
+            before = self.preflight.toolchain_identity("docs_static", entry)
+            tool.write_text('#!/bin/sh\n# build B\necho v1\n')
+            os.utime(tool, ns=(original.st_atime_ns, original.st_mtime_ns))
+            self.assertEqual(tool.stat().st_size, original.st_size)
+            self.assertEqual(tool.stat().st_mtime_ns, original.st_mtime_ns)
+            after = self.preflight.toolchain_identity("docs_static", entry)
+            self.assertNotEqual(before, after)
+
     def test_same_version_compiler_behind_wrapper_invalidates_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
