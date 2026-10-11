@@ -467,7 +467,7 @@ Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_n
 
 `apps/creator-web/test/server_test.py` 的 `CatalogUpstreamParityTest` 将相同 accepted/refused corpus、固定种子的生成 corpus 与 ASCII host/path 字符样本交给 Python proof server 和独立 Worker 模块，比较接受、拒绝、崩溃及最终 base。Catalog 字符准入由显式共同 grammar 决定，保留两端的规范 URL 检查；全仓库统一到唯一 Node 26 运行时后，完整 parity 测试在 Node 26 下运行；literal `^` 均被拒绝。唯一预期差异是 proof-only loopback HTTP；生产 Worker 保持 HTTPS。此测试验证源码语义，不是线上 workerd 部署收据。
 
-`scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
+`scripts/web-runtime-host.sh configure|build|test|quick|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
 
 三次 Playwright 调用分别使用 `host-audio-chromium`、`host-chromium` 和
 `host-webkit` 结果目录，位于 `tests/platform/web/test-results/` 下。
@@ -489,7 +489,7 @@ Runtime smoke 独立选择 Runtime triplet。两套自动化和 manual-only work
 `https://lmdj-creator.netlify.app/` 与 `https://lmdj-runtime.netlify.app/`，具有独立 evidence 与
 exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证据不可变，新六资产
 测试也不自动证明 Creator 或 Runtime 已部署、promoted 或完成物理验收。
-`scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
+`scripts/creator-web.sh configure|build|test|quick|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
 Creator 的普通 Chromium 打包旅程使用两个隔离的 Playwright worker，各 spec 内仍串行。
 Sound Set 与默认流式下载 spec 会改写 Proof server 共用的 Catalog upstream 文件，
@@ -749,6 +749,14 @@ Hosted 用量是预算目标，不是未经验证的保证。观察周必须按 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 target 的完整自测或发布证据。
 
 本地 `scripts/local-ci.sh --list --json` 只分类，`--lanes` 选择 Task 需要执行的 lanes。
+Web 边界需要浏览器验证时，可显式运行 `scripts/creator-web.sh quick` 或
+`scripts/web-runtime-host.sh quick`：一次增量构建，继续运行原有全部旅程与浏览器检查，
+包括 Creator 的部署 fixture 兼容性检查。Creator 仍要求已提交的干净源码树。
+这两个 Web `quick` 入口不验证两次干净构建的字节可复现性，也不输出完整 Proof 通过；
+`scripts/*-web.sh proof` / `scripts/web-runtime-host.sh proof` 保留原有完整语义。
+Runtime Host 的 native seam 只编译它实际执行的三个测试目标。
+当前本地 profile、PR 和 main batch 尚未自动接入这些浏览器 quick 入口。
+
 显式 `--profile quick` 提供开发中的快速反馈；当前 Core 使用 Dev 编译和 unit/component，
 Creator 使用 UI 构建、单元及 offline 测试，其他 lane 暂时保留完整命令。
 默认仍为 `--profile full`，直到日常选测与合并证据消费者一起切换。quick 的

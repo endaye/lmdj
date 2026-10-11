@@ -13,7 +13,10 @@ no default base URL to fall back to.
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 
 
@@ -55,6 +58,96 @@ def shell_function(text: str, name: str) -> str:
     if match is None:
         raise AssertionError(f"shell function {name}() is missing")
     return match.group(1)
+
+
+class WebVerificationModes(unittest.TestCase):
+    def invoke(self, host, mode, *, browser_status=0, diff_status=0):
+        name = "proof_creator" if host == "creator" else "proof_host"
+        filename = "creator-web.sh" if host == "creator" else "web-runtime-host.sh"
+        body = shell_function((REPO_ROOT / "scripts" / filename).read_text(), name)
+        helpers = ("activate_toolchain require_dependencies require_playwright "
+                   "verify_browser_fixture_generator run_audio_worklet_conformance "
+                   "generate_project_fixture generate_sample_editor_fixture "
+                   "clean_creator configure_creator build_creator package_creator test_creator "
+                   "clean_host configure_host build_host run_nonbrowser_tests "
+                   "generate_browser_fixtures verify_proof_fixture_inventory python3 cmake").split()
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "trace"
+            program = "set -eu\n" + "\n".join(
+                f'{helper}() {{ printf "%s\\n" "{helper} $*" >> "$TRACE"; }}'
+                for helper in helpers)
+            program += '''
+git() { :; }
+mktemp() { printf '%s\\n' /proof; }
+diff() { printf '%s\\n' "diff $*" >> "$TRACE"; return "$DIFF_STATUS"; }
+run_browser_gate() { printf '%s\\n' "run_browser_gate $*" >> "$TRACE"; return "$BROWSER_STATUS"; }
+repo_root=/repo
+web_test_root=/repo/tests/platform/web
+dist_root=/dist
+fixture_source_root=/fixtures
+'''
+            program += name + "() {\n" + body + "\n}\n" + name + ' "$MODE"\n'
+            result = subprocess.run(["bash", "-c", program], capture_output=True, text=True,
+                                    env={**os.environ, "TRACE": str(trace), "MODE": mode,
+                                         "DIFF_STATUS": str(diff_status),
+                                         "BROWSER_STATUS": str(browser_status)})
+            return result, trace.read_text().splitlines()
+
+    def test_quick_builds_once_without_cleaning_or_reproducibility_claim(self):
+        for host, suffix in (("creator", "creator"), ("runtime", "host")):
+            with self.subTest(host=host):
+                result, calls = self.invoke(host, "quick")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                names = [call.split()[0] for call in calls]
+                self.assertEqual(names.count("build_" + suffix), 1)
+                self.assertNotIn("clean_" + suffix, names)
+                self.assertNotIn("diff", names)
+                self.assertIn("Quick: PASS", result.stdout)
+                self.assertNotIn("reproducibility: PASS", result.stdout)
+                self.assertNotIn("Proof: PASS", result.stdout)
+
+    def test_full_keeps_two_clean_builds_and_byte_comparison(self):
+        for host, suffix in (("creator", "creator"), ("runtime", "host")):
+            with self.subTest(host=host):
+                result, calls = self.invoke(host, "proof")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                build_calls = [call.split()[0] for call in calls
+                               if call.split()[0] in {"clean_" + suffix, "configure_" + suffix,
+                                                      "build_" + suffix, "diff"}]
+                self.assertEqual(build_calls, ["clean_" + suffix, "configure_" + suffix,
+                                              "build_" + suffix] * 2 + ["diff"])
+                self.assertIn("reproducibility: PASS", result.stdout)
+                self.assertIn("Proof: PASS", result.stdout)
+
+    def test_each_mode_reaches_complete_journey_with_all_fixture_arguments(self):
+        # Independent absolute inventories: comparing the two modes alone
+        # would miss a fixture/journey removed from both.
+        for mode in ("quick", "proof"):
+            result, calls = self.invoke("creator", mode)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("generate_project_fixture /proof/creator-proof-bundle.lmdj", calls)
+            self.assertIn("generate_sample_editor_fixture /proof/creator-sample-proof-bundle.lmdj", calls)
+            self.assertIn("run_browser_gate /proof/creator-proof-bundle.lmdj /proof/creator-sample-proof-bundle.lmdj /proof/creator-candidate-proof-bundle.lmdj", calls)
+            result, calls = self.invoke("runtime", mode)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("run_audio_worklet_conformance ", calls)
+            self.assertIn("run_nonbrowser_tests ", calls)
+            self.assertIn("verify_proof_fixture_inventory /proof/fixtures", calls)
+            self.assertIn("run_browser_gate /proof/dist /proof/fixtures 1", calls)
+
+    def test_browser_failure_is_not_reported_as_quick_or_full_pass(self):
+        for host in ("creator", "runtime"):
+            for mode in ("quick", "proof"):
+                result, _ = self.invoke(host, mode, browser_status=9)
+                self.assertEqual(result.returncode, 9, result.stderr)
+                self.assertNotIn("Quick: PASS", result.stdout)
+                self.assertNotIn("Proof: PASS", result.stdout)
+
+    def test_full_reproducibility_failure_stops_before_browser_journeys(self):
+        for host in ("creator", "runtime"):
+            result, calls = self.invoke(host, "proof", diff_status=1)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertFalse(any(call.startswith("run_browser_gate ") for call in calls))
 
 
 class PlaywrightConfigOwnsNoServer(unittest.TestCase):

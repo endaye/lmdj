@@ -164,6 +164,40 @@ no intervening successor changes the premises.
 
 ### T2 — Split expensive Web proof and CI-contract work by actual inputs
 
+T2a starts from local T1 commit `e902498d`, with integration main still
+`deb95de722b845d708371e90bcac138ae5e25e01`. Both public Web proofs still make two
+clean distributions and have no incremental complete-journey entry. Runtime
+nonbrowser verification still builds every native target before running just
+three named Host tests. These premises remain outstanding at both revisions.
+
+T2a declared files: `scripts/creator-web.sh`, `scripts/web-runtime-host.sh`,
+`tests/build/ci_web_proof_server_test.py`,
+`tests/build/ci_local_audio_output_test.py`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, and this plan.
+Add explicit `quick` Web entries that build one incremental distribution and
+retain all existing browser journeys (including the Creator deployment fixture).
+Keep existing `proof` clean-build/reproducibility behavior. Both routes retain
+the audio-output wrapper and propagate browser failures. Creator packaging still
+requires a committed clean tree. Local UI-only quick and main defaults are not
+rewired until the affected-boundary selector and consumers are ready.
+Build only the three owning native test targets in Runtime nonbrowser checks.
+
+Lowest-tier checks execute the actual shell proof functions with recorded build
+and journey calls, assert each mode against its absolute workload (not just
+against the other mode), and prove a failing browser gate fails both entries.
+Run wrapper, Web server, threading-preseed, acceleration and Creator package
+contracts, shell syntax checks, Portal check and a real Web quick journey.
+T2b remains the CI-contract dependency selection and narrow PR-Agent seam work.
+
+T2a local checks: 64 tests across the five declared Web/wrapper/package
+contract suites pass; both scripts pass `bash -n`; Portal check passes all
+50 routes. The three actual Runtime native seam targets build and their three
+CTest cases pass (56.32 s). Precommit main remains `deb95de722b845d708371e90bcac138ae5e25e01`.
+The real Creator quick run requires a clean committed tree for packaging, so
+this local commit freezes its input before that postcommit acceptance. Its
+result belongs in the PR evidence; a source checkpoint is not a journey pass.
+No additional qualifying pitfall occurred in T2a.
+
 Primary files: `scripts/creator-web.sh`, `scripts/web-runtime-host.sh`,
 `scripts/ci/local_lanes.json`, `.github/workflows/pr-contract.yml`, and their
 existing entry-point/contract/browser tests. Declare any new selector and

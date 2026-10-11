@@ -31,6 +31,7 @@ usage:
   scripts/creator-web.sh build
   scripts/creator-web.sh test
   scripts/creator-web.sh proof
+  scripts/creator-web.sh quick
   scripts/creator-web.sh package
   scripts/creator-web.sh serve [--port PORT] [--catalog-upstream URL]
   scripts/creator-web.sh clean
@@ -555,6 +556,7 @@ PY
 }
 
 proof_creator() {
+  local mode="${1:-proof}"
   activate_toolchain
   require_dependencies
   if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]]; then
@@ -573,26 +575,32 @@ proof_creator() {
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
-  clean_creator
+  if [[ "$mode" == proof ]]; then clean_creator; fi
   configure_creator
   build_creator
   package_creator
-  cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
-  clean_creator
-  configure_creator
-  build_creator
-  package_creator
-  diff -qr "$proof_root/first-dist" "$dist_root" || {
-    echo "Creator Web error: two clean distributions are not byte reproducible" >&2
-    return 2
-  }
-  echo "Creator Web distribution reproducibility: PASS"
+  if [[ "$mode" == proof ]]; then
+    cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
+    clean_creator
+    configure_creator
+    build_creator
+    package_creator
+    diff -qr "$proof_root/first-dist" "$dist_root" || {
+      echo "Creator Web error: two clean distributions are not byte reproducible" >&2
+      return 2
+    }
+    echo "Creator Web distribution reproducibility: PASS"
+  fi
   test_creator
   run_browser_gate \
     "$proof_root/creator-proof-bundle.lmdj" \
     "$proof_root/creator-sample-proof-bundle.lmdj" \
     "$proof_root/creator-candidate-proof-bundle.lmdj"
-  echo "Creator Web Proof: PASS"
+  if [[ "$mode" == proof ]]; then
+    echo "Creator Web Proof: PASS"
+  else
+    echo "Creator Web Quick: PASS (incremental build; reproducibility not verified)"
+  fi
 }
 
 [[ $# -ge 1 ]] || { usage; exit 64; }
@@ -613,13 +621,13 @@ case "$command_name" in
     [[ $# -eq 0 ]] || { usage; exit 64; }
     test_creator
     ;;
-  proof)
+  proof|quick)
     [[ $# -eq 0 ]] || { usage; exit 64; }
     if [[ "${LMDJ_AUDIO_OUTPUT_WRAPPED:-}" != creator ]]; then
       exec python3 "$script_dir/local-audio-output.py" --lane creator -- \
-        bash "$script_dir/creator-web.sh" proof
+        bash "$script_dir/creator-web.sh" "$command_name"
     fi
-    proof_creator
+    proof_creator "$command_name"
     ;;
   package)
     [[ $# -eq 0 ]] || { usage; exit 64; }
