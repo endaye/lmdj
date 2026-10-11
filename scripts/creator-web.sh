@@ -210,6 +210,11 @@ clean_creator() {
 
 generate_project_fixture() {
   local output="$1"
+  local layout="${2:-all}"
+  local fixture_root
+  case "$layout" in all|overview) ;; *) return 64 ;; esac
+  fixture_root="$(dirname "$output")"
+  mkdir -p "$fixture_root"
   "$repo_root/scripts/core.sh" configure dev
   # The fixtures execute only lmdj-core. The whole dev tree compiles every
   # native test binary, which the Core lanes own, and it alone cost ~6.5 of
@@ -219,13 +224,14 @@ generate_project_fixture() {
     "$repo_root/build/core/dev/bin/lmdj-core" \
     "$repo_root/products/lmdj/assembly.json" \
     "$repo_root/tests/fixtures/audio/kick.wav" \
-    "$proof_root" <<'PY'
+    "$fixture_root" "$layout" <<'PY'
 import json
 from pathlib import Path
 import subprocess
 import sys
 
-executable, assembly, audio, root = map(Path, sys.argv[1:])
+executable, assembly, audio, root = map(Path, sys.argv[1:5])
+slots = range(64) if sys.argv[5] == "all" else [18]
 workspace = root / "workspace"
 project = root / "creator-proof.lmdj"
 workspace.mkdir()
@@ -257,7 +263,7 @@ invoke("command", {
     "source_path": str(audio), "media_type": "audio/wav",
 }, 1)
 revision = 1
-for slot in range(64):
+for slot in slots:
     invoke("command", {
         "operation": "pad.assign", "project_path": str(project),
         "command_id": f"00000000-0000-4000-8000-{slot + 2:012d}",
@@ -273,11 +279,11 @@ invoke("command", {
 }, revision + 1)
 PY
   python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
-    --source "$proof_root/creator-proof.lmdj" --output "$proof_root/first.lmdj" >/dev/null
+    --source "$fixture_root/creator-proof.lmdj" --output "$fixture_root/first.lmdj" >/dev/null
   python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
-    --source "$proof_root/creator-proof.lmdj" --output "$proof_root/second.lmdj" >/dev/null
-  cmp "$proof_root/first.lmdj" "$proof_root/second.lmdj"
-  cmake -E copy "$proof_root/first.lmdj" "$output"
+    --source "$fixture_root/creator-proof.lmdj" --output "$fixture_root/second.lmdj" >/dev/null
+  cmp "$fixture_root/first.lmdj" "$fixture_root/second.lmdj"
+  cmake -E copy "$fixture_root/first.lmdj" "$output"
   echo "Creator Web Project fixture reproducibility: PASS"
 }
 
@@ -579,6 +585,8 @@ proof_creator() {
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
   if [[ "$mode" != smoke ]]; then
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
+  export LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE="$proof_root/overview/creator-overview-bundle.lmdj"
+  generate_project_fixture "$LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE" overview
   generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
   python3 "$web_test_root/creator/fixtures/make_candidate_fixture.py" \
     "$repo_root/build/core/dev/bin/lmdj-core" \

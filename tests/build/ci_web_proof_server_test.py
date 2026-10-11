@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import json
+import sys
+from types import SimpleNamespace
+from unittest import mock
 import re
 import subprocess
 import tempfile
@@ -143,6 +147,7 @@ fixture_source_root=/fixtures
             result, calls = self.invoke("creator", mode)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("generate_project_fixture /proof/creator-proof-bundle.lmdj", calls)
+            self.assertIn("generate_project_fixture /proof/overview/creator-overview-bundle.lmdj overview", calls)
             self.assertIn("generate_sample_editor_fixture /proof/creator-sample-proof-bundle.lmdj", calls)
             self.assertIn("run_browser_gate /proof/creator-proof-bundle.lmdj /proof/creator-sample-proof-bundle.lmdj /proof/creator-candidate-proof-bundle.lmdj", calls)
             result, calls = self.invoke("runtime", mode)
@@ -165,6 +170,38 @@ fixture_source_root=/fixtures
             result, calls = self.invoke(host, "proof", diff_status=1)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertFalse(any(call.startswith("run_browser_gate ") for call in calls))
+
+
+class CreatorFixtureWorkloads(unittest.TestCase):
+    def assignments(self, layout):
+        source = shell_function((REPO_ROOT / "scripts/creator-web.sh").read_text(), "generate_project_fixture")
+        program = source.split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        calls = []
+        def invoke(command, **kwargs):
+            request = json.loads(command[-1])
+            calls.append(request)
+            revision = 0 if request["operation"] == "project.create" else request.get("expected_revision", 0) + 1
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"ok": True, "project_revision": revision}))
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(sys, "argv", ["-", "/core", "/assembly", "/kick.wav", directory, layout]), \
+                mock.patch.object(subprocess, "run", side_effect=invoke):
+            exec(compile(program, "<real-fixture-generator>", "exec"), {})
+        return calls
+
+    def test_general_fixture_retains_all_64_assignments_and_pattern(self):
+        calls = self.assignments("all")
+        self.assertEqual(len(calls), 67)
+        self.assertEqual([r["slot"] for r in calls if r["operation"] == "pad.assign"],
+                         [{"bank": n // 16, "pad": n % 16} for n in range(64)])
+        self.assertEqual(calls[-1]["operation"], "pattern.create")
+        self.assertEqual(calls[-1]["expected_revision"], 65)
+
+    def test_overview_fixture_keeps_b03_and_only_its_required_history(self):
+        calls = self.assignments("overview")
+        self.assertEqual([r["operation"] for r in calls],
+                         ["project.create", "asset.import", "pad.assign", "pattern.create"])
+        self.assertEqual(calls[2]["slot"], {"bank": 1, "pad": 2})
+        self.assertEqual(calls[-1]["expected_revision"], 2)
 
 
 class CreatorBrowserWorkloads(unittest.TestCase):

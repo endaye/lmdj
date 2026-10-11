@@ -224,11 +224,11 @@ test("all Banks put 01 at bottom left and preserve visual traversal and hit targ
 const projectHeading = (page) =>
   page.getByRole("heading", {name: "Project 00000000"});
 
-async function importAndOpenProject(page) {
+async function importAndOpenProject(page, source = bundle) {
   await page.getByRole("button", {name: "Project", exact: true}).click();
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
-  await (await chooser).setFiles(bundle);
+  await (await chooser).setFiles(source);
   // D01: a card selects the Project and OPEN PROJECT opens the selection.
   const select = page.getByRole("button", {name: "Select Project 00000000"});
   await expect.poll(async () =>
@@ -491,7 +491,9 @@ test("mode-specific overview identity, read-only feedback and details survive na
   });
   await page.goto("/");
   await waitForBootProject(page);
-  await importAndOpenProject(page);
+  // This journey needs one assigned Pad, not 64 incidental assignment entries.
+  // Keep the full fixture for the independent layout matrix and other journeys.
+  await importAndOpenProject(page, process.env.LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE ?? bundle);
   await expect(page.locator(".overview-context")).toHaveText("PROJECT / 00000000");
   await page.setViewportSize({width: 768, height: 600});
   await page.getByRole("button", {name: "Perform", exact: true}).click();
@@ -520,7 +522,7 @@ test("mode-specific overview identity, read-only feedback and details survive na
   await reverse.click();
   await expect(reverse).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
-  // The fixture assigns the same unclassified Sample to all 64 Pads.
+  // B03 owns an unclassified Sample before and after the failed/retried edit.
   await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
   await expect(page.locator(".selected-sample strong")).toHaveText("Pad B03");
   await showSamplePage(page, "Pad");

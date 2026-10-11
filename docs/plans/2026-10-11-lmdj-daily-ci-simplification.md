@@ -317,6 +317,37 @@ viewports/modes, screenshots and state-transition assertions are retained.
 No new process pitfall applies. Precommit main remains
 `deb95de722b845d708371e90bcac138ae5e25e01`.
 
+### T2e — Reduce incidental fixture history in the overview state journey
+
+The complete rerun on `3ab53cad` still times out in the state journey under its
+normal two-worker group, although the isolated test passed. Trace timestamps
+show 11.13 s importing the 750 KiB general fixture with 64 assignment history
+entries; the journey only uses B03. Its later mutation/Undo/System/reopen legs
+exhaust the unchanged 30-second budget. Preserve this failed rerun; T2d alone
+was insufficient. Main remains `deb95de722b845d708371e90bcac138ae5e25e01`.
+
+Declared files: `scripts/creator-web.sh`,
+`tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`,
+`tests/build/ci_web_proof_server_test.py`, and this plan.
+Extend the existing real-Core fixture generator with a closed overview mode
+that assigns only B03. Keep normal 64-Pad fixtures and the layout matrix intact.
+Only the independent overview state journey imports this smaller fixture;
+retain every original action, failure/retry, truth and reload assertion.
+Generate via the real Application Facade/packager, with the same reproducibility
+check. Verify both fixture inventories and a fresh complete state journey;
+then the complete owning browser group on a clean committed source checkpoint.
+Version impact: none. Documentation impact: none — fixture setup is smaller;
+public verification tiers, product behavior and acceptance legs are unchanged.
+
+T2e evidence: the actual generator/packager produced a 50,769-byte overview
+fixture instead of the 767,554-byte general bundle. Regenerated general output
+is byte-identical to the prior general fixture. The complete state journey
+passes in 15.8 s with its unchanged 30-second budget while the original full
+proof continues other browser cases. All 17 Web mode/server/fixture contracts
+and 24 audio wrapper cases pass. Complete owning-spec verification follows the
+source checkpoint. No new process pitfall; the extra history is ordinary test
+data visible in the generator.
+
 ### T3 — Switch daily defaults and merge/main consumers together
 
 T3a freezes a shared daily workload policy before wiring its consumers.
