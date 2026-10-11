@@ -214,8 +214,12 @@ no others; no production code, CMake, Contract or Assembly edit.
   frames; render 3'008 frames.
 - Oracle: `reference_render.py` extended (one-bar pair byte-identical,
   `sha256=d276060107ab2479126c4f66919b799593a852fe624720f03e7be3b70bcfe867`);
-  new pair generated `soundset_audition_slot3.wav`
-  `sha256=53f551ebd7245d1a795bfb388f1b3889c6b3ffea8f310b6b7158081b75e7cb78`;
+  the audition reference is exact-rational end to end (`fractions.Fraction`
+  through normalization/downmix/ramps/clamp, quantized once at the end), and
+  default verification rejects a missing or half-present audition pair — only
+  `--update` writes it (the one-bar pair keeps its historical first-run
+  generation contract). Final pair `soundset_audition_slot3.wav`
+  `sha256=984c60f86e169cbf8474b69f44ed4232e4a8d2c69b5aa3b2966f08db66c36971`;
   default verification passes for both pairs; the WAV follows the repository
   LFS policy (`*.wav`).
 - Harness: `facade.soundset` renders the real producer output through a
@@ -239,3 +243,34 @@ no others; no production code, CMake, Contract or Assembly edit.
 - Unresolved boundaries: no physical output, listening or device-lifecycle
   acceptance; private Host float-vector assembly, Creator UI and Web
   AudioContext/Worklet chains remain unverified here.
+
+## 8. Current-head review dispositions (2026-10-11, PR #2027)
+
+The eligible automated review of head `41767ccde` published five findings;
+each disposition, fixed on the branch in a follow-up commit and re-verified:
+
+- RIFF walk tolerated a truncated trailing chunk (break, not failure): fixed
+  — any chunk whose declared size exceeds the remaining bytes is now a hard
+  check failure. The finding's out-of-bounds-read sub-claim was incorrect
+  (the size guard precedes the `memcpy`), but the lenient-parse sub-claim
+  was real.
+- End-declick ramp convention suspicion: rejected with evidence. The engine
+  applies `boundary_remaining = end_frame - cursor` scaled by 1/96 only when
+  below 96 (`realtime_engine.cpp`), which is exactly the oracle's
+  `(prepared_frames - frame)/96`; the whole-render comparison including the
+  fade region passes within one LSB and both mutation proofs discriminate, so
+  a convention mismatch cannot pass this test.
+- Missing audition pair silently regenerated in default verification: fixed
+  — the plan requires default verification to reject missing/half-present
+  pairs; only `--update` writes them now. The one-bar pair keeps its
+  historical first-run generation contract.
+- Oracle used binary64 floats while the tolerance text claimed exact rational
+  math: fixed — the reference is now exact `fractions.Fraction` through
+  normalization/downmix/ramps/clamp with a single final quantization. The
+  fixture bytes changed accordingly (a few frames crossed a quantization
+  boundary by one LSB) and both mutation proofs were re-run against the
+  rebuilt artifact: wrong rate RED 5'738 mismatches, half gain RED 5'716
+  mismatches, restored PASS each.
+- Relative fixture path plus possible LFS pointer confusion: fixed — the
+  reader names an unhydrated Git LFS pointer as itself with a clear remedy
+  instead of failing a RIFF parse.

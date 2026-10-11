@@ -1209,13 +1209,22 @@ std::uint16_t read_le16(const unsigned char* bytes) {
 
 // A minimal RIFF reader for this fixture only. It refuses anything that is not
 // little-endian PCM16, so a corrupt or regenerated reference cannot slip
-// through as noise.
+// through as noise. A Git LFS pointer (an unhydrated checkout) is named as
+// itself rather than as a bogus RIFF parse, and any chunk whose declared size
+// exceeds the remaining bytes is a hard failure, not a tolerant stop.
 GoldenWav read_golden_wav(const std::filesystem::path& path) {
   std::ifstream stream(path, std::ios::binary);
   LMDJ_CHECK(static_cast<bool>(stream));
   std::vector<unsigned char> bytes(
       (std::istreambuf_iterator<char>(stream)),
       std::istreambuf_iterator<char>());
+  if (bytes.size() >= 27 &&
+      std::memcmp(bytes.data(), "version https://git-lfs", 24) == 0) {
+    std::cerr << "soundset audition golden fixture is a Git LFS pointer, "
+                 "not audio; hydrate Git LFS before running this test: "
+              << path.string() << '\n';
+    LMDJ_CHECK(false);
+  }
   LMDJ_CHECK(bytes.size() >= 12);
   LMDJ_CHECK(std::memcmp(bytes.data(), "RIFF", 4) == 0);
   LMDJ_CHECK(std::memcmp(bytes.data() + 8, "WAVE", 4) == 0);
@@ -1229,7 +1238,10 @@ GoldenWav read_golden_wav(const std::filesystem::path& path) {
     const std::uint32_t size = read_le32(header + 4);
     offset += 8;
     if (offset + size > bytes.size()) {
-      break;
+      std::cerr << "soundset audition golden reference chunk exceeds the "
+                   "file's remaining bytes; the WAV is truncated or corrupt"
+                << '\n';
+      LMDJ_CHECK(false);
     }
     if (std::memcmp(header, "fmt ", 4) == 0) {
       LMDJ_CHECK(size >= 16);

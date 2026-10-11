@@ -23,6 +23,7 @@ import io
 import struct
 import sys
 import wave
+from fractions import Fraction
 from pathlib import Path
 from typing import Sequence
 
@@ -172,12 +173,19 @@ def audition_symmetric_round(numerator: int, denominator: int) -> int:
     return -((-numerator + half) // denominator)
 
 
-def audition_quantize(value: float) -> int:
-    """float to PCM16: negatives scale by 32768, non-negatives by 32767."""
+def audition_quantize(value: Fraction) -> int:
+    """Exact rational to PCM16: negatives scale by 32768, non-negatives by
+    32767, then round half away from zero and clamp to the signed range."""
     scaled = value * (32_768 if value < 0 else 32_767)
-    rounded = (
-        int(scaled + 0.5) if scaled >= 0 else -int(-scaled + 0.5)
-    )
+    half = Fraction(1, 2)
+    if scaled >= 0:
+        # floor(scaled + 1/2) rounds ties upward, which is away from zero.
+        shifted = scaled + half
+        rounded = shifted.numerator // shifted.denominator
+    else:
+        # ceil(scaled - 1/2) rounds ties downward, which is away from zero.
+        shifted = scaled - half
+        rounded = -((-shifted).numerator // (-shifted).denominator)
     return max(-32_768, min(32_767, rounded))
 
 
@@ -187,9 +195,13 @@ def render_soundset_audition() -> list[int]:
     Reads the pinned 44.1 kHz stereo source blob and computes, without any
     product kernel: rational-time linear resampling to 48 kHz with integer
     symmetric rounding and a last-source-frame clamp; per-channel PCM16
-    normalization (positive /32767, negative /32768); a 0.5 stereo average;
-    unity velocity gain; the 96-frame attack/end declick ramps; the +/-1
-    output clamp; mono duplicated into stereo; and a 128-frame silent tail.
+    normalization (positive /32767, negative /32768) as exact rationals; a
+    0.5 stereo average; unity velocity gain; the 96-frame attack/end declick
+    ramps; the +/-1 output clamp; mono duplicated into stereo; and a
+    128-frame silent tail. Every value stays an exact ``Fraction`` until the
+    single final quantization, so the reference carries no floating-point
+    rounding at all and the one-LSB comparison budget covers only the
+    engine's binary32 pipeline.
     """
     raw = AUDITION_SOURCE_PATH.read_bytes()
     if hashlib.sha256(raw).hexdigest() != AUDITION_SOURCE_SHA256:
@@ -248,25 +260,26 @@ def render_soundset_audition() -> list[int]:
                 audition_symmetric_round(weighted, SAMPLE_RATE)
             )
 
-        # PCM16 normalization and stereo downmix, then unity gain.
+        # Exact-rational PCM16 normalization and stereo downmix, then unity
+        # gain. Fractions keep every stage free of floating-point rounding.
         normalized = [
-            sample / (32_767 if sample >= 0 else 32_768)
+            Fraction(sample, 32_767 if sample >= 0 else 32_768)
             for sample in prepared_channels
         ]
-        mono = (normalized[0] + normalized[1]) * 0.5
+        mono = (normalized[0] + normalized[1]) * Fraction(1, 2)
 
         # The 96-frame attack and end declick ramps of a neutral one-shot
         # voice: frame 0 is silent, the ramp reaches unity at frame 96, and
         # the final 95 frames fade back down toward silence.
-        ramp = 1.0
+        ramp = Fraction(1)
         if frame < AUDITION_RAMP_FRAMES:
-            ramp *= frame / AUDITION_RAMP_FRAMES
+            ramp *= Fraction(frame, AUDITION_RAMP_FRAMES)
         remaining = AUDITION_PREPARED_FRAMES - frame
         if remaining < AUDITION_RAMP_FRAMES:
-            ramp *= remaining / AUDITION_RAMP_FRAMES
+            ramp *= Fraction(remaining, AUDITION_RAMP_FRAMES)
 
         value = mono * ramp
-        value = max(-1.0, min(1.0, value))
+        value = max(Fraction(-1), min(Fraction(1), value))
         sample = audition_quantize(value)
         output.extend((sample, sample))
     return output
@@ -316,17 +329,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             SHA256_PATH,
             expected_outputs,
             write_outputs,
+            # The one-bar pair keeps its historical first-run generation
+            # contract unchanged.
+            False,
         ),
         (
             AUDITION_OUTPUT_PATH,
             AUDITION_SHA256_PATH,
             expected_audition_outputs,
             write_audition_outputs,
+            # The audition pair is a committed oracle artifact: a missing or
+            # half-present pair is a verification failure, not something a
+            # verification run regenerates. Only --update writes it.
+            True,
         ),
     )
 
     if args.update:
-        for wav_path, _, expected, write in fixtures:
+        for wav_path, _, expected, write, _ in fixtures:
             wav_bytes, sha_bytes = expected()
             write(wav_bytes, sha_bytes)
             digest = hashlib.sha256(wav_bytes).hexdigest()
@@ -334,12 +354,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     failed = False
-    for wav_path, sha_path, expected, write in fixtures:
+    for wav_path, sha_path, expected, write, reject_missing in fixtures:
         wav_bytes, sha_bytes = expected()
         digest = hashlib.sha256(wav_bytes).hexdigest()
         output_exists = wav_path.exists()
         sha_exists = sha_path.exists()
         if not output_exists and not sha_exists:
+            if reject_missing:
+                print(
+                    "Golden Audio oracle is missing; this is a committed "
+                    "artifact, restore it from revision history or write it "
+                    "explicitly with --update: " + wav_path.name,
+                    file=sys.stderr,
+                )
+                failed = True
+                continue
             write(wav_bytes, sha_bytes)
             print(f"Golden Audio generated: {wav_path.name} sha256={digest}")
             continue
