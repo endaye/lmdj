@@ -289,6 +289,8 @@ allocator interposition 验证失败不创建 session、播放继续及相同身
 - `audio.voice_dsp_parity`：包络、tone 与 EQ 的实时与离线输出一致到 release 尾音结束，包括 attack 中途的 release 与带滤波 one-shot 的结尾；实时以 100 帧 block 渲染，所以两者在不同的 flush 位置比较，另有一个先短促发声再长段静音的用例，让每级滤波都衰减穿过 flush 下限。
 - `audio.master_fx_stress`：#1666 场景保持原样；另加 #1667 全阶段场景，每个 voice 都开用户包络、tone 与三段 EQ。该场景的 deadline 只在优化构建里断言，也就是 Release stress lane 所用的构建（Owner 2026-10-02 决定，见 `docs/quality/core-test-policy.md`）；Debug 里照跑，检查输出有限、voice 计数与满池。
 - `audio.voice_dsp_disabled`：CI 不构建 Cardputer 固件，所以主机以 `LMDJ_VOICE_DSP=0` 构建同一批 Cooker 与 Audio Runtime 源码。它固定块为空、playback 不变大、Cooker 恰好接受共享中性表里的中性情形，以及 declick 的 attack、release 与第二次停止。
+
+#994 的 Sound Set audition golden 验证由 `facade.soundset` 承担：测试把钉定的 Foundry slot-3 Artifact（44.1 kHz 立体声 2'646 帧）经真实 Facade producer 解码并重采样，发布进保留 audition Bank，再由无设备 `RealtimeEngine` 渲染固定 3'008 帧，与 `tests/fixtures/golden/reference_render.py` 独立计算的 `soundset_audition_slot3.wav`（含 detached sha256）逐帧比对。参考是纯标准库的数学陈述（有理时间线性重采样、整数对称取整、末帧 clamp、32767/32768 归一、0.5 立体声平均、单位增益、96 帧 attack/end declick、±1 clamp、半远离零量化、128 帧静音尾），不导入 cooker 或引擎内核；实际与参考相差不超过一个 PCM16 LSB，尾帧精确为零。wrong-rate 与 half-gain 两个 producer 变异证明该断言各自变红（`docs/plans/2026-09-08-lmdj-soundset-audition-byte-path.md` §10.1 记录的缺口由此关闭）。边界：这只验证引擎渲染链，不替代真机输出或听感验收。
 ## 9. 限制与下一门禁
 pitch-up 不做抗混叠滤波，是已知限制。Cardputer 构建不含 voice DSP（见第 2 节），其 admission 由目标 ABI 的对象尺寸推算，不是真机 heap 测量；设备要支持这些参数，需要另开 issue 并重新做内存预算。自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。无锁 atomic32 与对象级 Xtensa 编译不等于完整 ESP-IDF 链接或目标实时支持；ESP32 的 map/size、VFS、真机输出、deadline、jitter 与 underrun 证据分别验证，不能由主机测试推断。
 ## 10. 版本身份

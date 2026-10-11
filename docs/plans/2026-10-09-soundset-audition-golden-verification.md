@@ -1,7 +1,11 @@
 # Sound Set audition: independent golden verification
 
 Related: [#994](https://github.com/endaye/lmdj/issues/994).
-Status: design only; the audio verification described below remains unimplemented.
+Status: implemented 2026-10-11 on base `67d66bf20d7701d339ab2554ac2090bae78ec483`; evidence in
+§7. Premises were re-refreshed against that base before implementation: the
+pinned blob and manifest digests, the `facade.soundset` registration, the
+golden infrastructure and the audition production chain are unchanged since
+`1f20e8f6`; the intervening merges touch no audition production logic.
 
 ## 1. Refreshed premises
 
@@ -197,3 +201,41 @@ No new product decision is needed: preserve existing 48 kHz runtime, mono
 downmix, one-shot/unity playback, declick and best-effort played semantics.
 Public export, stereo product behavior and physical audition acceptance remain
 outside this scope; do not settle an open Contract question through this test.
+
+## 7. Implementation evidence (2026-10-11)
+
+Base `67d66bf20d7701d339ab2554ac2090bae78ec483`, branch
+`feat/soundset-audition-golden`, isolated worktree. Six declared files changed,
+no others; no production code, CMake, Contract or Assembly edit.
+
+- Pinned inputs re-verified at the base: slot-3 blob 10'628 bytes with
+  SHA-256 `ede3cc97…08b2`, manifest SHA `33175f66…9111`, source geometry
+  44'100 Hz / stereo / 2'646 frames; prepared 48'000 Hz / stereo / 2'880
+  frames; render 3'008 frames.
+- Oracle: `reference_render.py` extended (one-bar pair byte-identical,
+  `sha256=d276060107ab2479126c4f66919b799593a852fe624720f03e7be3b70bcfe867`);
+  new pair generated `soundset_audition_slot3.wav`
+  `sha256=53f551ebd7245d1a795bfb388f1b3889c6b3ffea8f310b6b7158081b75e7cb78`;
+  default verification passes for both pairs; the WAV follows the repository
+  LFS policy (`*.wav`).
+- Harness: `facade.soundset` renders the real producer output through a
+  reserved audition Bank and a device-free engine in fixed 1'000+1'000+1'008
+  frame chunks. Three separated assertion groups: identity/geometry,
+  per-frame waveform within one PCM16 LSB (diagnostics print frame, channel,
+  actual, expected, mismatch count, maximum error and FNV-1a digests), and
+  exact silent termination of the 128-frame tail.
+- `ctest --test-dir build/core/dev -R '^facade\.soundset$'`: PASS. Adjacent
+  inventory resolved and run in the same build:
+  `cooker.sample_analysis`, `audio.prepared_sample_bank`,
+  `audio.realtime_engine`, `facade.candidate_audition`,
+  `facade.resample_performance`, `facade.soundset_install_quota` — 7/7 PASS.
+- Producer mutation proofs on `prepare_runtime_pcm`, each with build exit 0,
+  the failure line in the new waveform assertion, fresh-mtime restore,
+  recompiled rebuild and restored PASS:
+  - wrong rate (48'000 source phase advance): RED, 5'738 mismatches,
+    max error 34'131;
+  - half gain (`2 * kRuntimeSampleRate` rounding denominator): RED, 5'716
+    mismatches, first mismatch actual 43 vs expected 86, max error 9'679.
+- Unresolved boundaries: no physical output, listening or device-lifecycle
+  acceptance; private Host float-vector assembly, Creator UI and Web
+  AudioContext/Worklet chains remain unverified here.
