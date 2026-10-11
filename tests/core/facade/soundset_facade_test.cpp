@@ -15,8 +15,10 @@
 // is Host state by S11-D6 and Core never reaches one.
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +35,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/facade/application.hpp>
 #include <lmdj/foundation/json.hpp>
 
@@ -1155,6 +1159,301 @@ void test_typed_audition_audio_matches_the_reported_geometry() {
   // needs a Set whose occupied slots all differ.
 }
 
+// #994: an independent golden-audio verification of the real Sound Set
+// audition chain. The typed producer resolves the pinned Foundry slot-3
+// Artifact, decodes it and resamples it through the production cooker; the
+// test publishes that prepared PCM into a reserved audition Bank, renders it
+// through a device-free RealtimeEngine, and compares every frame against the
+// independently computed `soundset_audition_slot3.wav` oracle from
+// `tests/fixtures/golden/reference_render.py`. The two sides are derived
+// separately: the reference is a pure-Python mathematical statement of the
+// documented resample/downmix/ramp/quantization convention and shares no code
+// with the cooker, the engine or this conversion. A wrong-rate or wrong-gain
+// audition defect passes every existing byte-path test; this is the assertion
+// that fails instead.
+//
+// The three assertion groups each fix one fact: identity and geometry, the
+// per-frame waveform within one PCM16 LSB, and exact silent termination. This
+// harness verifies the engine render chain only; it is not a physical-output
+// or listening acceptance.
+namespace {
+
+constexpr std::string_view kFoundrySlotThreeArtifact =
+    "ede3cc971041736b34a866bb00c24ef1c687ec09570a0e0e1815c3dd89b208b2";
+constexpr std::uint64_t kAuditionGoldenSourceFrames = 2'646;
+constexpr std::uint64_t kAuditionGoldenPreparedFrames = 2'880;
+constexpr std::uint64_t kAuditionGoldenTailFrames = 128;
+constexpr std::uint64_t kAuditionGoldenRenderFrames =
+    kAuditionGoldenPreparedFrames + kAuditionGoldenTailFrames;
+constexpr std::int64_t kAuditionGoldenTolerance = 1;
+
+struct GoldenWav {
+  std::uint32_t sample_rate{};
+  std::uint16_t channels{};
+  std::uint64_t frames{};
+  std::vector<std::int16_t> interleaved;
+};
+
+std::uint32_t read_le32(const unsigned char* bytes) {
+  return static_cast<std::uint32_t>(bytes[0]) |
+         (static_cast<std::uint32_t>(bytes[1]) << 8U) |
+         (static_cast<std::uint32_t>(bytes[2]) << 16U) |
+         (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+std::uint16_t read_le16(const unsigned char* bytes) {
+  return static_cast<std::uint16_t>(
+      static_cast<std::uint16_t>(bytes[0]) |
+      (static_cast<std::uint16_t>(bytes[1]) << 8U));
+}
+
+// A minimal RIFF reader for this fixture only. It refuses anything that is not
+// little-endian PCM16, so a corrupt or regenerated reference cannot slip
+// through as noise. A Git LFS pointer (an unhydrated checkout) is named as
+// itself rather than as a bogus RIFF parse, and any chunk whose declared size
+// exceeds the remaining bytes is a hard failure, not a tolerant stop.
+GoldenWav read_golden_wav(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  LMDJ_CHECK(static_cast<bool>(stream));
+  std::vector<unsigned char> bytes(
+      (std::istreambuf_iterator<char>(stream)),
+      std::istreambuf_iterator<char>());
+  if (bytes.size() >= 27 &&
+      std::memcmp(bytes.data(), "version https://git-lfs", 24) == 0) {
+    std::cerr << "soundset audition golden fixture is a Git LFS pointer, "
+                 "not audio; hydrate Git LFS before running this test: "
+              << path.string() << '\n';
+    LMDJ_CHECK(false);
+  }
+  LMDJ_CHECK(bytes.size() >= 12);
+  LMDJ_CHECK(std::memcmp(bytes.data(), "RIFF", 4) == 0);
+  LMDJ_CHECK(std::memcmp(bytes.data() + 8, "WAVE", 4) == 0);
+
+  GoldenWav wav;
+  bool have_format = false;
+  bool have_data = false;
+  std::size_t offset = 12;
+  while (offset + 8 <= bytes.size()) {
+    const unsigned char* header = bytes.data() + offset;
+    const std::uint32_t size = read_le32(header + 4);
+    offset += 8;
+    if (offset + size > bytes.size()) {
+      std::cerr << "soundset audition golden reference chunk exceeds the "
+                   "file's remaining bytes; the WAV is truncated or corrupt"
+                << '\n';
+      LMDJ_CHECK(false);
+    }
+    if (std::memcmp(header, "fmt ", 4) == 0) {
+      LMDJ_CHECK(size >= 16);
+      const unsigned char* format = bytes.data() + offset;
+      LMDJ_CHECK(read_le16(format) == 1);  // PCM
+      wav.channels = read_le16(format + 2);
+      wav.sample_rate = read_le32(format + 4);
+      LMDJ_CHECK(read_le16(format + 14) == 16);  // bits per sample
+      have_format = true;
+    } else if (std::memcmp(header, "data", 4) == 0) {
+      // Local bound: the walk-level guard above already rejects an
+      // over-long chunk, but the sole gate on the oracle fixture keeps the
+      // bound structural next to the copy itself so no future reorder can
+      // reintroduce an out-of-bounds read.
+      LMDJ_CHECK(offset + size <= bytes.size());
+      LMDJ_CHECK(size % 4 == 0);
+      wav.frames = size / 4;
+      wav.interleaved.resize(size / 2);
+      std::memcpy(wav.interleaved.data(), bytes.data() + offset, size);
+      have_data = true;
+    }
+    offset += size + (size % 2);
+  }
+  LMDJ_CHECK(have_format && have_data);
+  return wav;
+}
+
+// The independent output convention, written per the plan rather than shared
+// with any product kernel: negatives scale by 32768, non-negatives by 32767,
+// then round half away from zero and clamp to PCM16.
+std::int16_t golden_pcm16_from_float(float value) {
+  const float scaled =
+      value < 0.0F ? value * 32'768.0F : value * 32'767.0F;
+  const long rounded = std::lround(scaled);
+  return static_cast<std::int16_t>(
+      std::clamp(rounded, -32'768L, 32'767L));
+}
+
+// A stable non-cryptographic digest for failure diagnostics only, so a
+// mismatch report can name both waveforms without a crypto dependency.
+std::uint64_t fnv1a64(const std::vector<std::int16_t>& samples) {
+  std::uint64_t hash = 14'695'981'039'346'656'037ULL;
+  for (const auto sample : samples) {
+    const auto bits = static_cast<std::uint16_t>(sample);
+    for (int byte = 0; byte < 2; ++byte) {
+      hash ^= static_cast<std::uint8_t>((bits >> (byte * 8)) & 0xFFU);
+      hash *= 1'099'511'628'211ULL;
+    }
+  }
+  return hash;
+}
+
+struct AuditionGoldenRender {
+  lmdj::facade::SoundSetAuditionAudio audio;
+  std::vector<float> left;
+  std::vector<float> right;
+};
+
+AuditionGoldenRender render_pinned_audition(const TempDirectory& temp) {
+  auto source = std::make_shared<FakeCatalogSource>();
+  source->publish(fixture_catalog_index());
+  Application application(config(
+      temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(
+          flatten_fixture_corpus(temp)),
+      source));
+  LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
+
+  // The actual chain: resolve, gate, decode and resample the pinned slot-3
+  // Artifact through the production Facade producer. Nothing here pre-computes
+  // or injects the expected PCM.
+  auto audition = application.audition_soundset(
+      lmdj::facade::SoundSetAuditionRequest{
+          std::string{kFoundrySetId}, std::string{kSetVersion},
+          std::string{kFoundryManifest}, std::optional<std::uint8_t>{3}});
+  LMDJ_CHECK(audition.has_value());
+
+  // A reserved audition Bank with the typed prepared PCM, the audition
+  // identity sentinels, full-range one-shot playback at unity gain, unmuted
+  // and neutral DSP.
+  auto bank = lmdj::audio::PreparedSampleBank::empty(
+      lmdj::audio::kAuditionBankProjectId(),
+      lmdj::audio::kAuditionBankProjectRevision);
+  const auto prepared = audition.value().prepared;
+  const auto prepared_frames = static_cast<std::uint32_t>(
+      prepared->interleaved.size() / prepared->channels);
+  LMDJ_CHECK(bank.set_pcm_sample(
+                 lmdj::audio::kAuditionSampleSlot, prepared,
+                 {0U, prepared_frames,
+                  lmdj::domain::TriggerMode::one_shot, 1.0F, false})
+                 .has_value());
+
+  // A fresh exclusive, device-free engine exercising the real publication,
+  // control queue and audition voice branch.
+  lmdj::audio::RealtimeEngine engine;
+  LMDJ_CHECK(engine.publish_audition_bank(std::move(bank)) ==
+             lmdj::audio::PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(lmdj::audio::PadControlEvent{
+          1U, lmdj::audio::kAuditionSampleSlot, 127U,
+          lmdj::audio::PadControlKind::audition_start, {}, {}}) ==
+      lmdj::audio::EnqueueResult::accepted);
+
+  AuditionGoldenRender render{std::move(audition.value()),
+                              std::vector<float>(
+                                  kAuditionGoldenRenderFrames),
+                              std::vector<float>(
+                                  kAuditionGoldenRenderFrames)};
+  // Fixed chunks totaling 3008 frames: 2880 voice frames plus the 128-frame
+  // silent tail.
+  std::uint64_t offset = 0;
+  for (const auto chunk : {1'000U, 1'000U, 1'008U}) {
+    engine.render(render.left.data() + offset,
+                  render.right.data() + offset, chunk);
+    offset += chunk;
+  }
+  LMDJ_CHECK(offset == kAuditionGoldenRenderFrames);
+  engine.stop();
+  return render;
+}
+
+void test_audition_renders_the_independent_golden_waveform() {
+  TempDirectory temp("audition-golden");
+  const auto render = render_pinned_audition(temp);
+
+  // Fact one: identity and geometry. The pinned source Artifact is the one
+  // that played, source and prepared geometry match the plan's frozen
+  // expectations, and the reference oracle itself carries that exact shape.
+  LMDJ_CHECK(render.audio.artifact.sha256 == kFoundrySlotThreeArtifact);
+  LMDJ_CHECK(render.audio.sample_rate == 44'100);
+  LMDJ_CHECK(render.audio.channels == 2);
+  LMDJ_CHECK(render.audio.source_frames == kAuditionGoldenSourceFrames);
+  LMDJ_CHECK(render.audio.prepared != nullptr);
+  LMDJ_CHECK(render.audio.prepared->sample_rate ==
+             lmdj::audio::kTransportSampleRate);
+  LMDJ_CHECK(render.audio.prepared->channels == 2);
+  LMDJ_CHECK(
+      static_cast<std::uint64_t>(render.audio.prepared->interleaved.size() /
+                                 render.audio.prepared->channels) ==
+      kAuditionGoldenPreparedFrames);
+
+  const auto reference = read_golden_wav(
+      std::filesystem::path("tests/fixtures/golden/"
+                            "soundset_audition_slot3.wav"));
+  LMDJ_CHECK(reference.sample_rate == lmdj::audio::kTransportSampleRate);
+  LMDJ_CHECK(reference.channels == 2);
+  LMDJ_CHECK(reference.frames == kAuditionGoldenRenderFrames);
+
+  // Fact two: the waveform. Every rendered frame and channel agrees with the
+  // independent reference within one PCM16 LSB. The budget covers only the
+  // binary32 pipeline's rounding against the reference's exact rational math;
+  // a wrong rate or wrong gain sits orders of magnitude outside it.
+  std::vector<std::int16_t> actual(kAuditionGoldenRenderFrames * 2);
+  for (std::uint64_t frame = 0; frame < kAuditionGoldenRenderFrames;
+       ++frame) {
+    actual[frame * 2] =
+        golden_pcm16_from_float(render.left[frame]);
+    actual[frame * 2 + 1] =
+        golden_pcm16_from_float(render.right[frame]);
+  }
+
+  std::int64_t maximum_error = 0;
+  std::uint64_t mismatch_count = 0;
+  std::uint64_t first_mismatch_frame = 0;
+  std::uint16_t first_mismatch_channel = 0;
+  std::int64_t first_actual = 0;
+  std::int64_t first_expected = 0;
+  for (std::uint64_t frame = 0; frame < kAuditionGoldenRenderFrames;
+       ++frame) {
+    for (std::uint16_t channel = 0; channel < 2; ++channel) {
+      const std::int64_t value = actual[frame * 2 + channel];
+      const std::int64_t expected = reference.interleaved[frame * 2 + channel];
+      const std::int64_t error = std::abs(value - expected);
+      maximum_error = std::max(maximum_error, error);
+      if (error > kAuditionGoldenTolerance) {
+        if (mismatch_count == 0) {
+          first_mismatch_frame = frame;
+          first_mismatch_channel = channel;
+          first_actual = value;
+          first_expected = expected;
+        }
+        ++mismatch_count;
+      }
+    }
+  }
+  if (mismatch_count != 0) {
+    std::cerr << "soundset audition golden waveform mismatch: frame="
+              << first_mismatch_frame << " channel="
+              << +first_mismatch_channel << " actual=" << first_actual
+              << " expected=" << first_expected << " mismatches="
+              << mismatch_count << " max_error=" << maximum_error
+              << " tolerance=" << kAuditionGoldenTolerance
+              << " fnv1a64(actual)=0x" << std::hex
+              << fnv1a64(actual) << " fnv1a64(reference)=0x"
+              << fnv1a64(reference.interleaved) << std::dec << '\n';
+  }
+  LMDJ_CHECK(maximum_error <= kAuditionGoldenTolerance);
+
+  // Fact three: termination. Every sample of the 128-frame tail is exactly
+  // zero, on both the reference and the actual render.
+  for (std::uint64_t frame = kAuditionGoldenPreparedFrames;
+       frame < kAuditionGoldenRenderFrames; ++frame) {
+    LMDJ_CHECK(render.left[frame] == 0.0F);
+    LMDJ_CHECK(render.right[frame] == 0.0F);
+    LMDJ_CHECK(reference.interleaved[frame * 2] == 0);
+    LMDJ_CHECK(reference.interleaved[frame * 2 + 1] == 0);
+  }
+}
+
+}  // namespace
+
 void test_audition_reaches_both_s11_d5_layers() {
   TempDirectory temp("audition");
   auto source = std::make_shared<FakeCatalogSource>();
@@ -1447,6 +1746,7 @@ int main() {
     test_install_policies_write_the_three_write_sets();
     test_audition_reaches_both_s11_d5_layers();
     test_typed_audition_audio_matches_the_reported_geometry();
+    test_audition_renders_the_independent_golden_waveform();
     test_audition_refuses_a_set_that_declares_no_demo();
     test_audition_refuses_a_set_whose_audio_is_not_s8_d6();
     test_the_workspace_local_catalog_serves_a_host_with_no_injection();

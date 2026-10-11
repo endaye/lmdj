@@ -467,7 +467,7 @@ class CreatorPackageTest(unittest.TestCase):
         # break on every runner-topology edit without proving the lane still runs.
         self.assertIn("uses: ./.github/actions/web-ci-proof", workflow)
         self.assertIn("lane: creator", workflow)
-        self.assertIn("creator) scripts/creator-web.sh proof ;;", action)
+        self.assertIn("creator:full) scripts/creator-web.sh proof ;;", action)
 
     def test_proof_fixtures_build_only_the_core_cli(self) -> None:
         # #1965: the whole native dev tree spent ~6.5 minutes of the CI job's

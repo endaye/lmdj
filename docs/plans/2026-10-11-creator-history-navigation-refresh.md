@@ -1,3 +1,93 @@
+# Current main integration checkpoint — 2026-10-11
+
+This block records the next source preparation within the same H Task
+`task_f8d2b627ef45` / Dispatch `ctx_5ae0503c1bba`, under Root admission
+`relay_844f191f135d`. It precedes the complete immutable prior H plan and the
+complete literal A plan; historical results and limitations remain historical.
+
+## Source and ownership
+
+- Owned isolated worktree: `/Users/endaye/orca/workspaces/lmdj/fix-creator-history-main-recovery-001`.
+- Owned branch: `fix/creator-history-main-recovery-001`; ordinary MBP UID 501.
+- Prior genuine H: `1b0f500d8bb0d9df991439b53877e0253c2f6a87`, tree
+  `d341fd462e22b5610bab6cbf09d82fc025e021ef`, parents original B then A.
+- Selected current main: `08330f29c2889cfa54f5cee90e8d42da50593fc7`, tree
+  `09f5250a28eb1917357a1b81a87e9b12cd8e2bfb`, parent
+  `6423a596360f64a0def1e33c37bd1551b0de838e`.
+- PR #2028 actually merged at `2026-10-11T19:33:42Z`; its inherited one-line
+  package-test correction replaces the retired bare Creator selector with the
+  existing `creator:full` selector. PR #2001 remains the sole delivery PR.
+- The admitted operation is a normal, genuine main merge into prior H, retaining
+  H and A ancestry. The 13 upstream paths are inherited unchanged from verified
+  main. Only the original four paths constitute the Task delta against that main;
+  App, workspace tests and the entire A History hook retain their prior H bytes.
+- No rebase, reset, force push, foreign worktree edit, cleanup, version allocation
+  or release is included. No new candidate commit identity is guessed here.
+
+## Verification and evidence boundaries
+
+The original H full-profile Creator run actually failed on the stale package
+selector assertion: native CLI/fixtures, two clean WASM distributions and their
+reproducibility comparison completed; Vitest passed 74 files/1305 tests; the
+package suite had 14 passes and one failure. All eight browser groups and the
+remaining checks after that package failure were UNREACHED, with no Creator pass
+key. Its original logs, process waits, fixture/distribution identities and failure
+remain immutable evidence. Neither PR #2028 proof nor an old H/5b key establishes
+proof for the next committed head.
+
+This preparation retains the complete five-file cohort, whole Creator TypeScript,
+77-method scope suite, 15-method ledger suite, staged diff check and original
+complete Portal check as the lower checkpoint. A second original complete Portal
+check and canonical full-profile selector inventory bind the next committed head.
+Results are recorded externally against their actual source and process receipts;
+no new pass or collector count is asserted in this admission block. Complete
+Creator/docs_static proof, including fresh native fixture inputs, two clean WASM
+builds and all eight unchanged browser groups, remains HOLD until Root binds and
+admits the actual new committed head. Review, nonforce existing-PR publication,
+guarded merge and postmerge retention remain separate pending operations.
+
+The read-only readiness incident is retained as a negative: an unadmitted ordinary
+UID 501 `git write-tree` returned the existing H tree and touched index metadata.
+Immediate pre-call raw index bytes/digest and object-store metadata were not
+captured; their delta remains UNKNOWN. Bounded reconciliation established all
+3414 source entries and semantic stage-0 modes/blobs equal H, unchanged HEAD/owned
+ref and clean status. Root closed that incident disposition without a repair,
+rerun or lifecycle failure. Future read-only guards compare semantic index entries
+with retained tree maps; they do not invoke `git write-tree`.
+
+## Version Management
+
+Version impact: none for this integration; no manifest or Product Build identity
+is allocated. The existing Creator PATCH obligation remains a separately declared
+V1 debt. Main's current identities and immutable snapshot inputs are retained.
+
+## Documentation Impact
+
+Documentation impact: none for this internal navigation refresh's unchanged
+public operation. This Task still requires both original complete Portal checks;
+those checks are separate from diff-only docs_static and Creator proof.
+
+## Pitfall Impact
+
+The upstream package gate correction and retired-identity ledger entry are
+inherited unchanged. This four-file Task records the readiness boundary negative
+and Root's disposition here; it does not edit an outside-scope ledger or relabel
+missing metadata as preserved bytes.
+
+## Outstanding acceptance
+
+All historical FAIL/UNKNOWN/UNRUN below remain literal, including A's cohort-only
+receipt, old browser failures/MASTER-HOLD downstream gaps, bootstrap Portal FAIL,
+prior 5b evidence, Sample abort/lost-ACK uncertainty, simultaneous authority and
+navigation race, separate Sequence capture causal RED, and microphone/hearing/
+Safari/physical/A1/A2/whole-Goal debts. The separate D5 native run remains FAILED,
+cause UNKNOWN, with later scenarios UNREACHED; it is not a successful Core receipt
+or a reason to repeat Core. No Release, Channel, deployment or cleanup follows.
+
+---
+
+## Immutable prior H source checkpoint and literal A historical suffix
+
 # H integration of Creator history with current main
 
 ## Current Task and source checkpoint
