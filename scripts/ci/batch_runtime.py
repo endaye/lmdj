@@ -407,7 +407,7 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
             return {"status": "missing"}
         validate_job_observations(checked, producers[0], jobs)
         reference = encode_reference(checked)
-        return {"status": "ready", "outcomes": batch_verdict.scheduler_outcomes(checked, policy, identity, request["selection"]),
+        return {"status": "ready", "outcomes": batch_verdict.scheduler_outcomes(checked, policy, identity, request["selection"], verification=request.get("verification")),
                 "reference": reference}
 
     def validate_bundle(self, bundle, request, run, policy):

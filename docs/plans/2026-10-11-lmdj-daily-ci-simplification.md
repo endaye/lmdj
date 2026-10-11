@@ -370,12 +370,45 @@ it remains pending until the original complete quick run releases its build root
 No new qualifying pitfall. Integration main is still
 `deb95de722b845d708371e90bcac138ae5e25e01`.
 
-T3c wires daily local execution and frozen batch workloads together; freeze its
-exact files after these prerequisites. New automatic requests bind their workload
+T3c first adds the frozen workload/evidence boundary, without enabling it.
+Declared files: `scripts/ci/incremental_batch.py`, `scripts/ci/batch_verdict.py`,
+`scripts/ci/batch_execution.py`, `scripts/ci/batch_evidence_validation.py`,
+`scripts/ci/batch_runtime.py`, `scripts/ci/batch_controller.py`,
+`scripts/ci/report_runtime.py`, new `tests/build/ci_daily_evidence_test.py`,
+`tests/build/ci_batch_execution_workflow_test.py` (its real-Git fixture must
+include the new imported workload validator), and this plan. Base `50f0d600`; main is unchanged. Requests may carry a closed
+per-suite workload map only for automatic requests. Historical requests with no
+map retain complete behavior. The execution artifact, raw-needs reconstruction,
+verdict and reporting all bind to that same map. Deferred jobs cannot execute or
+produce observations. Quick success is explicitly `quick-passed`; it cannot
+clear full debt, close full failure buckets or authorize candidate verification.
+Missing quick evidence retains debt, while intentional deferral is not failure.
+
+Verify complete producer→raw-needs→verdict→journal→report journeys and negative
+cases for missing/mismatched maps, forged full passes, deferred execution,
+candidate substitution and existing full debt. Run all existing owning CI
+contracts. Documentation impact: none — the optional format is not emitted by
+automatic admission until the following coordinated consumer/default cutover. New automatic requests bind their workload
 map to the frozen request; historical requests retain complete semantics.
 Quick/deferred results cannot clear old full verification debt or close full
 failure buckets. Explicit candidate/node and bootstrap retain all 15 suites.
 
+
+T3c verification: all 2,688 CI contracts executed (72 existing environment
+skips). Sixteen cases initially failed because the real-Git workflow fixture
+omitted the newly imported validator, all in the same workflow suite. After
+including that source in the fixture, all 35 workflow cases and all 16 new
+daily-evidence cases pass. All other tests passed in the complete run. This
+retains the initial failed run; no assertion or scope was relaxed. No new
+qualifying pitfall. All 79 release batch-evidence regressions also pass. Defaults and automatic
+request construction remain unchanged.
+
+The ordinary merge obligation has an independently reviewable policy
+prerequisite: `docs/plans/2026-10-11-lmdj-daily-verification-obligation.md` on
+`docs/daily-verification-obligation`, based on current main. That Task verifies
+its only selected batch-only lane (Deploy Contract) under the live old rule
+before shipping. Once merged, the execution PR follows the new Task-specific
+obligation; a draft never waives its own current live checks.
 
 Primary files: `AGENTS.md`, `CLAUDE.md`,
 `.agents/skills/issue-done/SKILL.md`, `docs/governance/git-workflow.md`,

@@ -11,10 +11,12 @@ from copy import deepcopy
 import re
 
 import self_test
+import daily_verification
 import test_scope
 
 SCHEMA = "lmdj.ci-batch-verdict.v1"
 COMMON_EVENT_SCHEMA = "lmdj.ci-batch-verdict.v2"
+DAILY_SCHEMA = "lmdj.ci-batch-verdict.v3"
 IDENTITY_KEYS = {"request_id", "request_kind", "base_sha", "target_sha", "control_sha",
                  "policy_digest", "run_id", "run_attempt"}
 REQUIRED_OBSERVATION_KEYS = {"suite", "job", "run_id", "run_attempt", "target_revision", "conclusion"}
@@ -140,7 +142,7 @@ def _debt(suite, by_job):
     return None
 
 
-def build(policy, identity, selection, observations, *, common_events=None):
+def build(policy, identity, selection, observations, *, common_events=None, verification=None):
     """Build new-schema evidence from strictly typed original observations.
 
 Only selected-suite rows are accepted. A needs-context adapter must omit rows
@@ -157,8 +159,19 @@ still appear in the report. Missing selected rows become uncovered obligations.
         raise VerdictError(str(error)) from error
     if identity["request_kind"] in {"bootstrap", "node", "candidate"}:
         require(selection["kind"] == "full", "explicit and bootstrap requests require full selection")
-    rows = _observations(observations)
     selected = set(selection["suites"])
+    workloads = {suite: "full" for suite in selected}
+    if verification is not None:
+        require(identity["request_kind"] == "auto", "candidate and explicit requests require complete verification")
+        try:
+            workloads = daily_verification.validate(verification, selected)
+        except ValueError as error:
+            raise VerdictError(str(error)) from error
+    rows = _observations(observations)
+    require(all(workloads.get(row.suite) != "deferred" for row in rows),
+            "deferred suite cannot produce test observations")
+    require(all(workloads[suite] != "deferred" for event in common_events
+                for suite in event["blocked_suites"]), "deferred suite cannot claim a shared execution failure")
     require(all(row.suite in selected for row in rows), "observation belongs to an unselected or unknown suite")
     # Keep the complete authoritative policy. This temporary identity is not
     # serialized as legacy evidence and uses the NEW schema even internally.
@@ -181,6 +194,12 @@ still appear in the report. Missing selected rows become uncovered obligations.
                            "scheduler_outcome": None, "verification_debt": False, "failures": [],
                            "jobs": {}, "diagnostics": ["outside this frozen request's selected scope; not a pass"]})
             continue
+        if workloads[suite.id] == "deferred":
+            suites.append({"id": suite.id, "selected": True, "status": "deferred",
+                           "scheduler_outcome": "deferred", "verification_debt": False,
+                           "failures": [], "jobs": {}, "diagnostics": [
+                               "deferred to complete verification; not executed and not a pass"]})
+            continue
         result = results[suite.id]
         debt = _debt(suite, by_job)
         failures = sorted(row.job for row in rows if row.suite == suite.id and row.conclusion == "failure"
@@ -189,25 +208,36 @@ still appear in the report. Missing selected rows become uncovered obligations.
         if debt and status == "passed":
             status = "infrastructure_failure"  # alternative's failed evidence is not reusable success
         outcome = debt or ("passed" if status == "passed" else "failed")
+        if workloads[suite.id] != "full":
+            if status == "passed":
+                status = "quick-passed"
+            if not debt:
+                outcome = "quick-passed" if status == "quick-passed" else "quick-failed"
         diagnostics = list(result.diagnostics)
+        if workloads[suite.id] != "full":
+            diagnostics.append("daily workload only; complete verification remains unverified")
         if debt:
             diagnostics.append(f"why: selected work remains uncovered ({debt}); remedy: preserve verification debt and repair its cause")
         suites.append({"id": suite.id, "selected": True, "status": status,
                        "scheduler_outcome": outcome, "verification_debt": debt is not None,
                        "failures": failures, "jobs": dict(sorted(result.jobs.items())), "diagnostics": diagnostics})
-    status = "not-required" if not selected else (
-        "passed" if all(suite["status"] == "passed" for suite in suites if suite["selected"]) else "failed")
-    document = {"evidence_schema": COMMON_EVENT_SCHEMA if common_events else SCHEMA,
+    executed = [suite for suite in suites if suite["selected"] and suite["status"] != "deferred"]
+    status = "not-required" if not executed else (
+        ("quick-passed" if verification is not None else "passed")
+        if all(suite["status"] in {"passed", "quick-passed"} for suite in executed) else "failed")
+    document = {"evidence_schema": DAILY_SCHEMA if verification is not None else (COMMON_EVENT_SCHEMA if common_events else SCHEMA),
                 "identity": deepcopy(identity), "selection": selection,
                 "inventory_digest": policy.inventory.revision, "status": status, "suites": suites,
                 "observations": deepcopy(sorted(observations, key=lambda row: (row["suite"], row["job"])))}
+    if verification is not None:
+        document["verification"] = workloads
     if common_events:
         document["common_events"] = common_events
     document["evidence_digest"] = self_test.digest_of(document)
     return document
 
 
-def validate(document, policy, expected_identity, expected_selection):
+def validate(document, policy, expected_identity, expected_selection, *, verification=None):
     """Exact independently supplied identity/scope, then full semantic replay.
 
 Rehashing edited statuses cannot make them valid. Replacing observations with
@@ -216,20 +246,24 @@ invented results is prevented by caller provenance verification, not this hash.
     base_keys = {"evidence_schema", "identity", "selection", "inventory_digest", "status", "suites",
                  "observations", "evidence_digest"}
     require(isinstance(document, dict) and base_keys <= set(document)
-            and set(document) <= base_keys | {"common_events"}, "verdict schema is not closed")
+            and set(document) <= base_keys | {"common_events", "verification"}, "verdict schema is not closed")
     schema = document["evidence_schema"]
-    require(schema in {SCHEMA, COMMON_EVENT_SCHEMA}, "unsupported scoped verdict schema")
+    require(schema in {SCHEMA, COMMON_EVENT_SCHEMA, DAILY_SCHEMA}, "unsupported scoped verdict schema")
+    require((schema == DAILY_SCHEMA) == (verification is not None),
+            "daily verdict requires independently frozen verification workloads")
+    require(document.get("verification") == verification, "verdict differs from frozen verification workloads")
     if schema == SCHEMA:
         require("common_events" not in document, "legacy verdict cannot carry common events")
-    else:
+    elif schema == COMMON_EVENT_SCHEMA:
         require("common_events" in document, "common-event verdict lacks its event list")
     require(document["identity"] == expected_identity, "verdict differs from independently resolved executor identity")
     require(document["selection"] == expected_selection, "verdict differs from frozen request scope")
     common_events = _common_events(expected_identity, expected_selection, document.get("common_events", []))
-    require((schema == COMMON_EVENT_SCHEMA) == bool(common_events),
-            "common-event schema does not match its event list")
+    if schema != DAILY_SCHEMA:
+        require((schema == COMMON_EVENT_SCHEMA) == bool(common_events),
+                "common-event schema does not match its event list")
     rebuilt = build(policy, expected_identity, expected_selection, document["observations"],
-                    common_events=common_events)
+                    common_events=common_events, verification=verification)
     try:
         matches = self_test.canonical_json(document) == self_test.canonical_json(rebuilt)
     except (TypeError, ValueError):
@@ -238,12 +272,12 @@ invented results is prevented by caller provenance verification, not this hash.
     return deepcopy(rebuilt)
 
 
-def scheduler_outcomes(document, policy, expected_identity, expected_selection):
+def scheduler_outcomes(document, policy, expected_identity, expected_selection, *, verification=None):
     """Project selected-only outcomes after validation; debt wins over failure.
 
 Reporter must separately retain each suite's failures list: a mixed suite can
 have both a real product failure and uncovered jobs. Historical candidates must
 still be isolated by the scheduler's request kind, not inferred here.
 """
-    checked = validate(document, policy, expected_identity, expected_selection)
+    checked = validate(document, policy, expected_identity, expected_selection, verification=verification)
     return {suite["id"]: suite["scheduler_outcome"] for suite in checked["suites"] if suite["selected"]}

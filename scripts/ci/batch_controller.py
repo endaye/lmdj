@@ -183,8 +183,7 @@ All methods must be invoked inside the SAME externally managed short lock.
                           "result availability schema is not closed")
             if status == "pending":
                 return self._answer("waiting", "terminal executor evidence is not yet available", request)
-            outcomes = receipt["outcomes"] if status == "ready" else {
-                suite: "missing" for suite in request["selection"]["suites"]}
+            outcomes = receipt["outcomes"] if status == "ready" else batch.missing_outcomes(request)
             reference = receipt["reference"] if status == "ready" else f"missing:{request['id']}"
             self._persist("result", {"request_id": request["id"], "run": executor,
                                     "target": request["target"], "policy": request["policy"],

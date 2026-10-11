@@ -53,23 +53,21 @@ def validate_bundle(bundle, request, run, policy):
     identity = {"request_id": request["id"], "request_kind": request["kind"], "base_sha": request["base"],
                 "target_sha": request["target"], "control_sha": request["control"], "policy_digest": request["policy"],
                 "run_id": run["id"], "run_attempt": 1}
-    selected = set(request["selection"]["suites"])
-    expected_execution = {"schema": batch_execution.SCHEMA, "identity": identity, "selection": request["selection"],
-        "lanes": {s.scope_lane: s.id in selected for s in policy.inventory.suites if s.scope_lane is not None},
-        "suites": {s.id: s.id in selected for s in policy.inventory.suites}}
+    verification = request.get("verification")
+    expected_execution = batch_execution.execution_plan(policy, identity, request["selection"], verification)
     require(bundle["execution.json"] == expected_execution, "execution artifact differs from frozen request")
     verdict_document = bundle["verdict.json"]
     require(isinstance(verdict_document, dict), "verdict artifact is not an object")
     schema = verdict_document.get("evidence_schema")
-    require(schema in {batch_verdict.SCHEMA, batch_verdict.COMMON_EVENT_SCHEMA},
+    require(schema in {batch_verdict.SCHEMA, batch_verdict.COMMON_EVENT_SCHEMA, batch_verdict.DAILY_SCHEMA},
             "verdict artifact uses an unsupported scoped schema")
     # Historical v1 verdicts remain readable byte-for-byte. Only v2 bundles
     # opt into rebuilding the source-bound event from raw needs; the workflow
     # producer is the sole caller that publishes the new event family.
     rebuilt = batch_execution.from_needs(
         policy, identity, request["selection"], bundle["needs.json"], aliases=ALIASES,
-        dependencies=dependencies(policy), emit_common_events=(schema == batch_verdict.COMMON_EVENT_SCHEMA))
-    checked = batch_verdict.validate(bundle["verdict.json"], policy, identity, request["selection"])
+        dependencies=dependencies(policy), emit_common_events=(schema != batch_verdict.SCHEMA), verification=verification)
+    checked = batch_verdict.validate(bundle["verdict.json"], policy, identity, request["selection"], verification=verification)
     require(checked == rebuilt, "verdict differs from actual retained needs context")
     return checked, identity
 

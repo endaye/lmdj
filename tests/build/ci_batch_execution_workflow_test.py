@@ -143,7 +143,7 @@ class WorkflowScripts(unittest.TestCase):
             dest = self.root / ".github/workflows" / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / ".github/workflows" / name, dest)
-        for name in ("batch_execution.py", "batch_verdict.py", "incremental_batch.py", "test_scope.py",
+        for name in ("batch_execution.py", "batch_verdict.py", "daily_verification.py", "incremental_batch.py", "test_scope.py",
                      "self_test.py", "change_scope.py", "scope_policy.json", "self_test_policy.json", "test_scope_policy.json"):
             dest = self.root / "scripts/ci" / name
             dest.parent.mkdir(parents=True, exist_ok=True)

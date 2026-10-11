@@ -13,10 +13,11 @@ import json
 import re
 
 import test_scope
+import daily_verification
 
 SCHEMA = "lmdj.incremental-batch.v1"
-OUTCOMES = {"passed", "failed", "blocked", "cancelled", "infrastructure", "missing"}
-DEBT_OUTCOMES = OUTCOMES - {"passed", "failed"}
+DEBT_OUTCOMES = {"blocked", "cancelled", "infrastructure", "missing"}
+OUTCOMES = DEBT_OUTCOMES | {"passed", "failed", "quick-passed", "quick-failed", "deferred"}
 
 
 class BatchError(ValueError):
@@ -55,7 +56,7 @@ def new_state(epoch):
 
 
 def make_request(policy, *, request_id, kind, base_sha, target_sha, control_sha,
-                 selection, origin_run, bound=True):
+                 selection, origin_run, bound=True, verification=None):
     require(isinstance(request_id, str) and bool(request_id), "missing request identity")
     require(kind in {"auto", "bootstrap", "node", "candidate"}, "unknown request kind")
     if base_sha is not None:
@@ -73,19 +74,29 @@ def make_request(policy, *, request_id, kind, base_sha, target_sha, control_sha,
                                           test_scope.bounded_reasons(selection["reasons"]))
     if kind in {"bootstrap", "node", "candidate"}:
         require(selection["kind"] == "full", "bootstrap and explicit requests require full scope")
-    return {"id": request_id, "kind": kind, "base": base_sha,
+    request = {"id": request_id, "kind": kind, "base": base_sha,
             "target": exact_sha(target_sha), "control": exact_sha(control_sha),
             "policy": policy.digest, "selection": selection, "origin_run": identity(origin_run)}
+    if verification is not None:
+        require(kind == "auto", "only automatic requests may use daily workloads")
+        request["verification"] = daily_verification.validate(verification, selection["suites"])
+    return request
+
+
+def missing_outcomes(request):
+    workloads = request.get("verification", {})
+    return {suite: "deferred" if workloads.get(suite) == "deferred" else "missing"
+            for suite in request["selection"]["suites"]}
 
 
 def _request(policy, request):
-    require(isinstance(request, dict) and set(request) == {
-        "id", "kind", "base", "target", "control", "policy", "selection", "origin_run"},
+    keys = {"id", "kind", "base", "target", "control", "policy", "selection", "origin_run"}
+    require(isinstance(request, dict) and set(request) in (keys, keys | {"verification"}),
         "request schema is not closed")
     rebuilt = make_request(policy, request_id=request["id"], kind=request["kind"],
                            base_sha=request["base"], target_sha=request["target"],
                            control_sha=request["control"], selection=request["selection"],
-                           origin_run=request["origin_run"], bound=False)
+                           origin_run=request["origin_run"], bound=False, verification=request.get("verification"))
     require(request == rebuilt, "request policy or canonical representation differs")
 
 
@@ -171,6 +182,9 @@ publish this returned state as committed if journal/anchor persistence fails.
             needed = required_selection(result, policy, request["selection"])
             require(set(needed["suites"]) <= set(request["selection"]["suites"]),
                     "request omitted executable verification debt")
+            require(all(record["paused"] or request.get("verification", {}).get(suite, "full") == "full"
+                        for suite, record in result["debts"].items()),
+                    "executable full verification debt requires complete workload")
             result["requests"][request["id"]] = deepcopy(request)
             result["recovery_requested"] = False
         result["active"] = {"request_id": request["id"], "executor_run": executor, "claim": None}
@@ -197,6 +211,12 @@ publish this returned state as committed if journal/anchor persistence fails.
                 "result does not enumerate every selected suite")
         require(all(isinstance(value, str) and value in OUTCOMES for value in data["outcomes"].values()),
                 "unknown suite outcome")
+        for suite, outcome in data["outcomes"].items():
+            mode = request.get("verification", {}).get(suite, "full")
+            allowed = ({"deferred"} if mode == "deferred" else
+                       DEBT_OUTCOMES | ({"passed", "failed"} if mode == "full" else
+                                        {"quick-passed", "quick-failed"}))
+            require(outcome in allowed, "suite outcome contradicts frozen verification workload")
         previous = result["results"].get(data["request_id"])
         require(previous is None or previous == data, "terminal result cannot be rewritten")
         result["results"][data["request_id"]] = deepcopy(data)
@@ -215,9 +235,9 @@ publish this returned state as committed if journal/anchor persistence fails.
                     result["debts"][suite] = {"target": request["target"], "attempts": attempts,
                                               "paused": attempts >= 2, "outcome": outcome,
                                               "reference": observation["reference"]}
-                else:
+                elif request.get("verification", {}).get(suite, "full") == "full":
                     result["debts"].pop(suite, None)
-                if outcome == "failed":
+                if outcome in {"failed", "quick-failed"}:
                     result["failures"].append({"suite": suite, "target": request["target"],
                                                "reference": observation["reference"]})
         result["active"] = None
