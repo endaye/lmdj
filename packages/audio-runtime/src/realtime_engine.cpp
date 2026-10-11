@@ -118,6 +118,35 @@ class PatternPublicationAdmission {
   std::atomic<std::uint32_t>& mailbox_;
   bool reserved_ = true;
 };
+
+// Control-only. Beat boundaries use the same independently rounded ticks
+// within each rounded loop as Pattern events; repeating one rounded beat
+// would drift away from those events at BPMs such as 123. Bar intentionally
+// retains the existing repeated rounded-Bar policy (#1973).
+std::optional<std::uint64_t> next_pattern_switch_frame(
+    const PreparedPatternView& pattern, std::uint64_t origin,
+    std::uint64_t observed, PatternSwitchSnap snap) noexcept {
+  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+  const auto elapsed = std::max(observed, origin) - origin;
+  if (snap == PatternSwitchSnap::bar || snap == PatternSwitchSnap::pattern_end) {
+    const auto period = snap == PatternSwitchSnap::bar
+        ? pattern.bar_frames() : pattern.loop_frames();
+    const auto count = elapsed / period;
+    if (count == maximum || count + 1 > (maximum - origin) / period)
+      return std::nullopt;
+    return origin + (count + 1) * period;
+  }
+  if (snap != PatternSwitchSnap::beat) return std::nullopt;
+  const auto local = elapsed % pattern.loop_frames();
+  const auto numerator = integrate_tick_numerator(0, local, pattern.bpm(), pattern.ppq());
+  if (!numerator) return std::nullopt;
+  const auto next_tick = (whole_tick(*numerator) / pattern.ppq() + 1) * pattern.ppq();
+  const auto boundary = tick_boundary_frame(next_tick, pattern.bpm(), pattern.ppq());
+  const auto loop_offset = elapsed - local;
+  if (!boundary.has_value() || loop_offset > maximum - origin ||
+      boundary.value() > maximum - origin - loop_offset) return std::nullopt;
+  return origin + loop_offset + boundary.value();
+}
 static_assert(std::atomic<std::uint16_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(
@@ -1196,8 +1225,15 @@ PatternPublication RealtimeEngine::publish_pattern_view(
 PatternPublication RealtimeEngine::publish_pattern_switch_view(
     PreparedPatternView&& pattern,
     std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
+  return publish_pattern_switch_view(std::move(pattern), PatternSwitchSnap::bar,
+      std::move(replacement_authority));
+}
+
+PatternPublication RealtimeEngine::publish_pattern_switch_view(
+    PreparedPatternView&& pattern, PatternSwitchSnap snap,
+    std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
   return publish_pattern_view_impl(std::move(pattern), std::nullopt,
-      std::move(replacement_authority), PatternPublicationTiming::switch_bar);
+      std::move(replacement_authority), PatternPublicationTiming::switch_bar, 0, snap);
 }
 
 PatternPublication RealtimeEngine::publish_pattern_view_immediate(
@@ -1217,7 +1253,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
     std::optional<PatternReplacementAuthority> replacement_authority,
-    PatternPublicationTiming timing, std::uint64_t expected_generation) noexcept {
+    PatternPublicationTiming timing, std::uint64_t expected_generation,
+    PatternSwitchSnap snap) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   if (pattern_transport_reserved_) {
     ++pattern_publication_rejections_;
@@ -1297,7 +1334,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           observed_queued_token == 0 && observed_audio_generation != 0;
       if (pending->activation_frame >= observed_frame && !claimed_switch) {
         observed_pending_activation = pending->activation_frame;
-      } else if (observed_queued_token == 0 && observed_audio_generation != 0) {
+      } else if (timing != PatternPublicationTiming::switch_bar &&
+                 observed_queued_token == 0 && observed_audio_generation != 0) {
         const auto bar_frames = pending->pattern->bar_frames();
         const auto elapsed = std::max(observed_frame, pending->activation_frame) -
             pending->activation_frame;
@@ -1310,10 +1348,6 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           claimed_next_activation =
               pending->activation_frame + (bars + 1) * bar_frames;
         }
-      }
-      if (claimed_switch && !claimed_next_activation) {
-        ++pattern_publication_rejections_;
-        return {PatternPublishResult::publish_queue_full, 0, 0};
       }
       if (pending->pattern->project_id() != pattern.project_id() ||
           (!authorized_replacement &&
@@ -1388,7 +1422,25 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       const auto observed_frame =
           transport_decision_.read().rendered_frames;
       activation_frame = observed_frame;
-      if (timing == PatternPublicationTiming::immediate ||
+      if (timing == PatternPublicationTiming::switch_bar && current != kNoPatternSlot) {
+        const auto* geometry = &*pattern_slots_[current].pattern;
+        auto origin = transport_decision_.read().pattern_origin_frame;
+        if (observed_audio_generation != 0) {
+          // Includes replacing unclaimed C while B already belongs to audio:
+          // C still follows B's geometry, never the old current A's clock.
+          const auto& predecessor = pattern_slots_[pattern_slot_token(observed_audio_mailbox) - 1];
+          geometry = &*predecessor.pattern;
+          origin = predecessor.activation_frame;
+        }
+        const auto selected = next_pattern_switch_frame(*geometry, origin, observed_frame, snap);
+        if (!selected) {
+          slot->pattern.reset();
+          slot->generation = 0;
+          ++pattern_publication_rejections_;
+          return {PatternPublishResult::publish_queue_full, 0, 0};
+        }
+        activation_frame = *selected;
+      } else if (timing == PatternPublicationTiming::immediate ||
           timing == PatternPublicationTiming::preserve_phase) {
         activation_frame = observed_frame;
       } else if (authorized_replacement &&

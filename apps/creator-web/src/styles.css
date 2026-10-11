@@ -1349,6 +1349,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   letter-spacing: .06em;
 }
 .sequence-setup-bars { grid-template-columns: 48px minmax(0, 1fr); }
+/* SEQ SNAP's three segments need the label column narrow like BARS so the
+   segment fills the panel width without horizontal overflow. */
+.sequence-setup-seq-snap { grid-template-columns: 64px minmax(0, 1fr); }
 .sequence-settings {
   display: grid;
   gap: 12px;

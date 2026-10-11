@@ -106,11 +106,15 @@ B 已应用、随后被 C 变为 retiring 时仍报告 B 的实际 applied outco
 `outstanding_cancellation` 单独命名 token 已为零但 audio-local 尚未退役的已取消槽，
 它不属于可播放 pending。所有 outstanding authority 合计最多两项。
 
-`publish_pattern_switch_view(view, replacement_authority)` 是显式选择的 1-BAR switch 路径。
-尚未 claim 的替换保持原 boundary；已 claim 的 B 即使还未到其 future frame，C 也排在
-B 的 strictly following Bar，使用 B 的 BPM/Bar anchor，并在 Q→A CAS 竞态后重新推导。
-返回的是 native publication 的实际 activation frame。B 应用后音频线程可在同一 callback
-中接管已排队 C，保证跨两个 boundary 的长 callback 也按返回帧应用，无需 Host tick。
+`publish_pattern_switch_view(view, replacement_authority)` 保留默认 1-BAR 的原有入口；
+新增重载接受 `PatternSwitchSnap::beat`、`bar` 或 `pattern_end`。控制 owner 在同一
+publication admission 内推导边界：beat 按 prepared Pattern 的有理数 tick 在每个 loop
+内分别取整，bar 保留既有 Bar geometry（#1973 单独跟踪），pattern_end 使用完整 loop。
+新 Pattern 在生效帧从开头开始。已 claim 的 B 即使还未到其 future frame，也保留
+自己的边界；后来的 C 在 B 的实际 activation 所建立的新 timeline 上，使用 B 的
+Pattern geometry 和 C 请求的 SNAP 推导下一个边界。Q→A CAS 竞态后重新推导，返回
+native publication 的实际 activation frame。B 应用后音频线程可在同一 callback
+中接管已排队 C，跨两个 boundary 的长 callback 也按返回帧应用，无需 Host tick。
 控制线程先在同一 lock-free uint32 Q mailbox 保留 publication admission，再读取时间与
 authority 并提交 payload。音频 claim 用固定 RMW 标记该 admission 失效，包括空 Q；
 该标记跨空交接保留到控制清理或重新保留，最终 CAS 不能把旧时间观察当成有效提交。

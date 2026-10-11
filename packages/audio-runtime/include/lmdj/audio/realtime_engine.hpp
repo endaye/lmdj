@@ -95,6 +95,8 @@ struct PatternPublication {
   std::uint64_t activation_frame;
 };
 
+enum class PatternSwitchSnap : std::uint8_t { beat, bar, pattern_end };
+
 // Exact control-thread authority for replacing a pending Pattern publication
 // with a different Pattern. Ordinary publications may only supersede the same
 // Pattern at the same boundary; Sequence switching and cancellation must prove
@@ -525,11 +527,18 @@ class RealtimeEngine final {
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
-  // Opt-in 1-BAR launch. An audio-owned predecessor keeps its boundary and
-  // this successor takes the following Bar, even before that boundary arrives.
+  // Opt-in 1-BAR launch. Retained as a forwarding overload for existing callers.
+  // An audio-owned predecessor keeps its boundary; its successor uses that
+  // Pattern's geometry and activation as the new origin. Timing is computed
+  // inside publication admission and the returned frame is authoritative.
   // Recomputes timing after a claim race; the returned frame is authoritative.
   PatternPublication publish_pattern_switch_view(
       PreparedPatternView&& pattern,
+      std::optional<PatternReplacementAuthority> replacement_authority =
+          std::nullopt) noexcept;
+  PatternPublication publish_pattern_switch_view(
+      PreparedPatternView&& pattern,
+      PatternSwitchSnap snap,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
   // Exact live ownership, including both pending publications and a
@@ -862,7 +871,8 @@ class RealtimeEngine final {
       std::optional<std::uint64_t> activation_frame,
       std::optional<PatternReplacementAuthority> replacement_authority,
       PatternPublicationTiming timing,
-      std::uint64_t expected_generation = 0) noexcept;
+      std::uint64_t expected_generation = 0,
+      PatternSwitchSnap snap = PatternSwitchSnap::bar) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,

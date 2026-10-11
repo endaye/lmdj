@@ -61,7 +61,9 @@ test("the Pad matrix, Sequence overview rows and touch grid notes draw the same 
   const touch = render(<SequenceTouchWorkspace project={project} state={initialSequenceState}
     transport={initialPatternTransportState} bank={0} snap="1/16" editMode="note"
     selection={[]} defaultVelocity={100} projectionRefreshing={false} metronomeOn={false}
-    onToggleMetronome={vi.fn()} onRefresh={vi.fn()} onSwitch={vi.fn()}
+    onToggleMetronome={vi.fn()} onSeqSnapChange={vi.fn()}
+    seqSnap="bar"
+    onRefresh={vi.fn()} onSwitch={vi.fn()}
     onCreatePattern={vi.fn()} onSnapChange={vi.fn()} onEditModeChange={vi.fn()}
     onViewportChange={vi.fn()} onEdit={vi.fn()} onSelectionChange={vi.fn()}
     onVelocityChange={vi.fn()} onSettingsChange={vi.fn()} onRecover={vi.fn()}

@@ -1,6 +1,7 @@
 import {expect, test, vi} from "vitest";
 
 import {
+  createTransportPatternSwitchRequest,
   inspectPatternTransportJourney,
   isPatternTransportSession,
   observePatternTransportJourney,
@@ -100,6 +101,22 @@ test("the capability surface is structural: extra members do not matter", () => 
     }),
   };
   expect(isPatternTransportSession({...session, unrelated: true})).toBe(true);
+});
+
+// #1958 S4: the request keeps the agreed shape {patternId, requestId, snap?}
+// and carries the device's SEQ SNAP boundary; each press is a fresh identity.
+test("a switch request carries the device's snap with a fresh identity per press", () => {
+  const patternId = "00000000-0000-4000-8000-0000000000ee";
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const end = createTransportPatternSwitchRequest(patternId, "pattern_end");
+  const beat = createTransportPatternSwitchRequest(patternId, "beat");
+  expect(end.patternId).toBe(patternId);
+  expect(end.snap).toBe("pattern_end");
+  expect(end.requestId).toMatch(uuid);
+  expect(beat.snap).toBe("beat");
+  expect(beat.requestId).toMatch(uuid);
+  expect(beat.requestId).not.toBe(end.requestId);
+  expect(Object.keys(end).sort()).toEqual(["patternId", "requestId", "snap"]);
 });
 
 const engagedState = () => reducePatternTransport(initialPatternTransportState, {

@@ -95,6 +95,37 @@ function expectCode(code) {
   return (error) => error instanceof HostProtocolError && error.code === code;
 }
 
+test("Pattern transport switch accepts optional SEQ SNAP and the legacy payload", () => {
+  const legacy = {pattern_id: requestIdFor(220), request_id: requestIdFor(221)};
+  for (const payload of [legacy, ...["beat", "bar", "pattern_end"].map(
+    (snap) => ({...legacy, snap}),
+  )]) {
+    const envelope = createRequestEnvelope({
+      operation: "pattern.transport.switch", payload, crypto: webcrypto,
+    });
+    assert.deepEqual(envelope.payload, payload);
+    assert.deepEqual(decodeRequestEnvelope(encode(envelope)), envelope);
+  }
+});
+
+test("Pattern transport switch refuses unsupported or malformed SEQ SNAP", () => {
+  const legacy = {pattern_id: requestIdFor(220), request_id: requestIdFor(221)};
+  const invalid = [
+    ...["off", "BEAT", "", null, 1, {}, ["beat"]].map(
+      (snap) => ({...legacy, snap}),
+    ),
+    {...legacy, snap: "beat", extra: true},
+  ];
+  for (const payload of invalid) {
+    assert.throws(() => createRequestEnvelope({
+      operation: "pattern.transport.switch", payload, crypto: webcrypto,
+    }), expectCode("HOST_PROTOCOL_MISMATCH"));
+    assert.throws(() => decodeRequestEnvelope(encode(request({
+      operation: "pattern.transport.switch", payload,
+    }))), expectCode("HOST_PROTOCOL_MISMATCH"));
+  }
+});
+
 test("exports the locked protocol constants, operations, and notifications", () => {
   assert.equal(PROTOCOL_VERSION, 1);
   assert.equal(MAX_ENVELOPE_BYTES, 65_536);
