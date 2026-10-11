@@ -91,9 +91,9 @@ Application Facade 的 `sample.update_pad`/`sample.inspect`、MCP 的 `lmdj.samp
 本 Build 只推进 Contract：读写这些键的 Domain、Project I/O 与 Facade 实现是 #1207 计划的后续 Core Task，
 在它合入之前 Project I/O 仍拒绝这些键。
 
-## Performance 实时控制起点与事件序号（`5.4.0`）
+## Performance 实时控制起点与事件序号（`5.4.1`）
 
-`5.4.0` 同样是向后兼容的追加（#1822，D04）：Performance 新增一个**可选**的 `initial_live_state`
+`5.4.1` 同样是向后兼容的追加（#1822，D04）：Performance 新增一个**可选**的 `initial_live_state`
 起始状态头；事件封闭并集末尾追加两种新 kind——`filter_change`（序号 7）与 `pad_gates_set`（序号 8），
 原七种 kind 的序号 0–6 不变；每个事件新增**可选**的 `input_sequence`。
 
@@ -106,7 +106,9 @@ Application Facade 的 `sample.update_pad`/`sample.inspect`、MCP 的 `lmdj.samp
 
 `filter_change` 每次携带完整参数 tuple（`phase` 为 `engage`/`move`/`release`）；`pad_gates_set`
 每次携带两组完整 slot 数组，不是按钮 delta。`input_sequence` 是 Core 分配的规范十进制字符串
-（从 `"1"` 起，无符号、无前导零、无小数）；header 与逐事件序号互为开关：携带 header 的
+（从 `"1"` 起，无符号、无前导零、无小数、无尾部换行；`5.4.1` 把该串的整串锚定从裸 `$`
+换成可移植的 `(?![\s\S])` 后缀，修补了 5.4.0 模式在 Python `re.search` 下接受尾部 LF 的
+词法漏洞——语义澄清式验证修复，按 Contract Patch 处理）；header 与逐事件序号互为开关：携带 header 的
 Performance 其每个事件都必须带 `input_sequence`，任一事件带 `input_sequence` 的 Performance
 必须携带 header，旧 profile 不能混用。数组的升序与 uint64 精确上界由 Domain reader 校验，
 与旧事件的 canonical 排序一样不属于 Schema 层。

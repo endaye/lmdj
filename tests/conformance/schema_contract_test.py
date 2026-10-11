@@ -65,7 +65,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "5.4.0" if name == "project_v5" else
+        "5.4.1" if name == "project_v5" else
         "2.0.0"
         if name in {"project_bundle", "assembly", "capability_v2"}
         else (
@@ -1309,7 +1309,7 @@ for name, earlier in (
     ("project-v5-tone-parity-valid", tone_project_v5),
     ("project-v5-pad-colour-valid", colour_project_v5),
 ):
-    json_schema.check(earlier, project_v5, f"{name} stays legal under 5.4.0")
+    json_schema.check(earlier, project_v5, f"{name} stays legal under 5.4.1")
 
 # 5.4.0 (decisions 2026-10-10 and 2026-10-11, #1822): a Performance gains an
 # optional `initial_live_state` header, two new event kinds (`filter_change`,
@@ -1342,10 +1342,13 @@ assert performance_v5["additionalProperties"] is False
 input_sequence_v5 = project_v5["$defs"]["input_sequence"]
 assert input_sequence_v5 == {
     "type": "string",
-    "pattern": "^[1-9][0-9]{0,19}$",
+    "pattern": "^[1-9][0-9]{0,19}(?![\\s\\S])",
 }, (
     "why: input_sequence is an opaque canonical decimal string from 1 with no "
-    "sign, leading zero or fraction; remedy: restore the strict pattern"
+    "sign, leading zero, fraction or trailing newline; remedy: restore the "
+    "strict pattern, anchored with the portable (?![\\s\\S]) full-string "
+    "idiom instead of a bare `$` (5.4.1: Python `re.search` treats `$` as "
+    "matching before a trailing LF)"
 )
 # The schema pins the string shape and a 20-digit ceiling; the exact
 # uint64 upper bound is the Domain reader's rule, as with every other
@@ -1514,6 +1517,11 @@ for pointer, key, bad in [
     (live_events + [0], "input_sequence", "+1"),
     (live_events + [0], "input_sequence", "1.5"),
     (live_events + [0], "input_sequence", 10),
+    # 5.4.1 regression: a bare `$` lets Python `re.search` accept a trailing
+    # LF; the full-string `(?![\s\S])` idiom rejects every line-ending probe.
+    (live_events + [0], "input_sequence", "10\n"),
+    (live_events + [0], "input_sequence", "10\r\n"),
+    (live_events + [0], "input_sequence", "10\n\n"),
     (live_events + [1], "phase", "hold"),
     (live_events + [1], "cutoff_hz", 20001),
     (live_events + [1], "extra", True),
