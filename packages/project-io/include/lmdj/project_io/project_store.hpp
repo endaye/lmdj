@@ -54,9 +54,25 @@ struct PerformanceMutation {
 };
 
 struct CreatePerformance {
+  // The constructor keeps the three-field form every existing caller uses;
+  // the header defaults to absent (legacy recording profile).
+  CreatePerformance(
+      domain::CommandMeta meta_value,
+      domain::PerformanceId performance_id_value,
+      std::string name_value,
+      std::optional<domain::PerformanceInitialLiveState>
+          initial_live_state_value = std::nullopt)
+      : meta(std::move(meta_value)),
+        performance_id(std::move(performance_id_value)),
+        name(std::move(name_value)),
+        initial_live_state(std::move(initial_live_state_value)) {}
+
   domain::CommandMeta meta;
   domain::PerformanceId performance_id;
   std::string name;
+  // lmdj.project.v5 5.4.1: present exactly when the new draft records the
+  // headered live-control profile.
+  std::optional<domain::PerformanceInitialLiveState> initial_live_state;
 };
 
 struct RenamePerformance {
@@ -85,9 +101,28 @@ struct PerformanceFlushExecution {
 };
 
 struct BeginPerformanceDraftRequest {
+  BeginPerformanceDraftRequest(
+      domain::CommandMeta meta_value,
+      foundation::SequenceSessionId session_id_value,
+      domain::PerformanceId performance_id_value,
+      std::optional<domain::PerformanceInitialLiveState>
+          initial_live_state_value = std::nullopt,
+      std::optional<PerformanceTransientCheckpoint> initial_checkpoint_value =
+          std::nullopt)
+      : meta(std::move(meta_value)),
+        session_id(std::move(session_id_value)),
+        performance_id(std::move(performance_id_value)),
+        initial_live_state(std::move(initial_live_state_value)),
+        initial_checkpoint(std::move(initial_checkpoint_value)) {}
+
   domain::CommandMeta meta;
   foundation::SequenceSessionId session_id;
   domain::PerformanceId performance_id;
+  // lmdj.project.v5 5.4.1: selecting the headered recording profile requires
+  // the Core-fence header plus its initial checkpoint (logical bindings for
+  // controls engaged at the fence); both absent keeps the legacy profile.
+  std::optional<domain::PerformanceInitialLiveState> initial_live_state;
+  std::optional<PerformanceTransientCheckpoint> initial_checkpoint;
 };
 
 struct PerformanceLifecycleReceipt {

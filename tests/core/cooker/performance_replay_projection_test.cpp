@@ -216,6 +216,92 @@ void test_projection_rejects_invalid_identity_and_missing_resolver() {
              lmdj::foundation::ErrorCode::invalid_project);
 }
 
+// lmdj.project.v5 5.4.1: the recorded live-control header rides the
+// projection as fixed state — independent of events, ticks and revision.
+void test_live_control_header_survives_zero_events_and_first_tick() {
+  const auto artifact = fixture_artifact("kick.wav");
+  const auto bytes = fixture_bytes("kick.wav");
+  const auto resolver = [bytes](const ArtifactRef&) {
+    return lmdj::foundation::Result<std::vector<std::byte>>::success(bytes);
+  };
+
+  lmdj::domain::PerformanceInitialLiveState header;
+  header.hold = true;
+  header.filter = lmdj::domain::IndependentFilterLiveState{
+      true, false, lmdj::domain::PerformanceFilterType::hp, 800, 250};
+  header.other_fx.at(0) = {true, false, 500};
+  header.muted_mask = std::uint64_t{1};
+  header.solo_mask = std::uint64_t{1} << 63;
+
+  // Zero events: the header still projects, with no boundary to anchor it.
+  {
+    auto project = replay_project(artifact);
+    auto& performance =
+        project.performances.at(PerformanceId{kPerformanceId});
+    performance.events.clear();
+    performance.initial_live_state = header;
+    const auto cooked = lmdj::cooker::cook_performance_replay(
+        project, PerformanceId{kPerformanceId}, resolver);
+    LMDJ_CHECK(cooked.has_value());
+    LMDJ_CHECK(cooked.value()->event_count == 0);
+    LMDJ_CHECK(cooked.value()->boundaries.empty());
+    LMDJ_CHECK(cooked.value()->initial_live_state == header);
+    LMDJ_CHECK(cooked.value()->resolved_revision == 17);
+  }
+
+  // With events: the header is verbatim and never shifts with the first
+  // event's tick normalization.
+  {
+    auto project = replay_project(artifact);
+    auto& performance =
+        project.performances.at(PerformanceId{kPerformanceId});
+    // The fixture stream begins with hold_on, so this header is not under
+    // HOLD; the frozen/engaged seeds still apply.
+    auto event_header = header;
+    event_header.hold = false;
+    // Unique sequences per event in the headered profile.
+    std::uint64_t sequence = 0;
+    for (auto& event : performance.events) {
+      event.input_sequence = ++sequence;
+    }
+    performance.events = lmdj::domain::canonical_performance_events(
+        performance.events,
+        lmdj::domain::PerformanceEventProfile::header_input_sequence);
+    performance.initial_live_state = event_header;
+    const auto cooked = lmdj::cooker::cook_performance_replay(
+        project, PerformanceId{kPerformanceId}, resolver);
+    LMDJ_CHECK(cooked.has_value());
+    LMDJ_CHECK(cooked.value()->initial_live_state == event_header);
+    LMDJ_CHECK(!cooked.value()->boundaries.empty());
+    LMDJ_CHECK(cooked.value()->boundaries.front().offset_tick == 0);
+    LMDJ_CHECK(cooked.value()->resolved_revision == 17);
+    LMDJ_CHECK(cooked.value()->pads.at(35).has_value());
+    // A different first-event tick moves the boundary offsets only.
+    auto later = project;
+    for (auto& event :
+         later.performances.at(PerformanceId{kPerformanceId}).events) {
+      std::visit(
+          [](auto& payload) {
+            using Event = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
+              payload.onset_tick += 960;
+            } else if constexpr (
+                std::is_same_v<Event, PatternLaunchPerformanceEvent>) {
+              payload.effective_tick += 960;
+            } else {
+              payload.tick += 960;
+            }
+          },
+          event.payload);
+    }
+    const auto cooked_later = lmdj::cooker::cook_performance_replay(
+        later, PerformanceId{kPerformanceId}, resolver);
+    LMDJ_CHECK(cooked_later.has_value());
+    LMDJ_CHECK(cooked_later.value()->initial_live_state == event_header);
+    LMDJ_CHECK(cooked_later.value()->boundaries.front().offset_tick == 0);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -223,6 +309,7 @@ int main() {
     test_projection_is_fixed_to_the_cooked_revision();
     test_second_cook_reflects_new_truth_and_empty_performance_is_valid();
     test_projection_rejects_invalid_identity_and_missing_resolver();
+    test_live_control_header_survives_zero_events_and_first_tick();
     std::cout << "performance replay projection tests passed\n";
     return 0;
   } catch (const std::exception& error) {

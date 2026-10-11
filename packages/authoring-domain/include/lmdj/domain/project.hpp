@@ -40,6 +40,10 @@ inline constexpr std::uint8_t kPatternSlotMax = 15;
 inline constexpr std::uint16_t kFxValueMin = 0;
 inline constexpr std::uint16_t kFxValueMax = 1000;
 inline constexpr std::uint8_t kFxCount = 8;
+inline constexpr std::uint8_t kPerformancePadSlotCount = 64;
+inline constexpr std::uint16_t kFilterCutoffHzMin = 20;
+inline constexpr std::uint16_t kFilterCutoffHzMax = 20000;
+inline constexpr std::uint16_t kFilterResonanceMilliMax = 1000;
 inline constexpr std::int32_t kPadPitchCentsMin = -2400;
 inline constexpr std::int32_t kPadPitchCentsMax = 2400;
 inline constexpr std::int32_t kPadPanMin = -100;
@@ -339,6 +343,10 @@ enum class PerformanceEventKind : std::uint8_t {
   fx_release,
   hold_on,
   hold_off,
+  // lmdj.project.v5 5.4.1, appended after the locked 0-6 vocabulary; the two
+  // new kinds exist only in the headered recording profile.
+  filter_change,
+  pad_gates_set,
 };
 
 enum class PerformanceFx : std::uint8_t {
@@ -350,6 +358,21 @@ enum class PerformanceFx : std::uint8_t {
   reverse,
   crush,
   cutter,
+};
+
+// lmdj.project.v5 5.4.1: the independent live Filter's durable type and
+// phase vocabulary. Values are typed integers: Cutoff in Hz, Resonance in
+// milli-percent (1000 = 100%).
+enum class PerformanceFilterType : std::uint8_t {
+  lp,
+  hp,
+  bp,
+};
+
+enum class PerformanceFilterPhase : std::uint8_t {
+  engage,
+  move,
+  release,
 };
 
 struct PadHitPerformanceEvent {
@@ -403,6 +426,27 @@ struct HoldOffPerformanceEvent {
   bool operator==(const HoldOffPerformanceEvent&) const = default;
 };
 
+// lmdj.project.v5 5.4.1 ordinals 7 and 8, appended after the locked 0-6
+// vocabulary. Both exist only in the headered (new) recording profile and
+// always carry the event's Core-issued input sequence.
+struct FilterChangePerformanceEvent {
+  PerformanceFilterPhase phase;
+  PerformanceFilterType type;
+  std::uint16_t cutoff_hz;
+  std::uint16_t resonance_milli;
+  std::uint64_t tick;
+
+  bool operator==(const FilterChangePerformanceEvent&) const = default;
+};
+
+struct PadGatesSetPerformanceEvent {
+  std::uint64_t muted_mask;
+  std::uint64_t solo_mask;
+  std::uint64_t tick;
+
+  bool operator==(const PadGatesSetPerformanceEvent&) const = default;
+};
+
 using PerformanceEventPayload = std::variant<
     PadHitPerformanceEvent,
     PatternLaunchPerformanceEvent,
@@ -410,21 +454,106 @@ using PerformanceEventPayload = std::variant<
     FxMovePerformanceEvent,
     FxReleasePerformanceEvent,
     HoldOnPerformanceEvent,
-    HoldOffPerformanceEvent>;
+    HoldOffPerformanceEvent,
+    FilterChangePerformanceEvent,
+    PadGatesSetPerformanceEvent>;
 
 struct PerformanceEvent {
+  // The constructor keeps the single-payload form every existing caller
+  // uses, so no caller relies on partially initializing an aggregate.
+  PerformanceEvent() = default;
+  explicit PerformanceEvent(
+      PerformanceEventPayload payload_value,
+      std::optional<std::uint64_t> input_sequence_value =
+          std::nullopt) noexcept
+      : payload(std::move(payload_value)),
+        input_sequence(input_sequence_value) {}
+
   PerformanceEventPayload payload;
+  // Core-issued durable input sequence (lmdj.project.v5 5.4.1): present on
+  // every event of the headered profile, absent everywhere in the legacy
+  // profile. A PadHit carries its press's sequence; a reserved Pattern
+  // carries the original request's sequence.
+  std::optional<std::uint64_t> input_sequence;
 
   bool operator==(const PerformanceEvent&) const = default;
 };
 
+// lmdj.project.v5 5.4.1: the legacy live Filter state keeps the original
+// 0-1000 scalar semantics (500 bypass); it never carries typed parameters.
+struct LegacyFilterLiveState {
+  bool engaged{};
+  bool frozen{};
+  std::uint16_t value{};
+
+  bool operator==(const LegacyFilterLiveState&) const = default;
+};
+
+struct IndependentFilterLiveState {
+  bool engaged{};
+  bool frozen{};
+  PerformanceFilterType type{PerformanceFilterType::lp};
+  std::uint16_t cutoff_hz{kFilterCutoffHzMax};
+  std::uint16_t resonance_milli{};
+
+  bool operator==(const IndependentFilterLiveState&) const = default;
+};
+
+using PerformanceFilterLiveState =
+    std::variant<LegacyFilterLiveState, IndependentFilterLiveState>;
+
+struct PerformanceFxGateState {
+  bool engaged{};
+  bool frozen{};
+  std::uint16_t value{};
+
+  bool operator==(const PerformanceFxGateState&) const = default;
+};
+
+// The optional recording header (lmdj.project.v5 5.4.1): the Core-received
+// live state at the begin fence. It holds control parameters only — never
+// delay-lines, tails, voice cursors or Runtime Snapshot content. `other_fx`
+// is indexed by the PerformanceFx ordinal minus one (delay..cutter; the
+// Filter lives in `filter`). A frozen state is legal only under `hold`.
+struct PerformanceInitialLiveState {
+  bool hold{};
+  PerformanceFilterLiveState filter{LegacyFilterLiveState{}};
+  std::array<PerformanceFxGateState, kFxCount - 1> other_fx{};
+  std::uint64_t muted_mask{};
+  std::uint64_t solo_mask{};
+
+  bool operator==(const PerformanceInitialLiveState&) const = default;
+};
+
 struct Performance {
+  // The constructor keeps the six-field form every existing caller uses, so
+  // no caller relies on partially initializing an aggregate.
+  Performance(
+      PerformanceId id_value,
+      std::string name_value,
+      std::uint16_t created_bpm_value,
+      std::uint64_t recording_revision_value,
+      std::optional<foundation::ArtifactRef> recording_artifact_value,
+      std::vector<PerformanceEvent> events_value,
+      std::optional<PerformanceInitialLiveState> initial_live_state_value =
+          std::nullopt)
+      : id(std::move(id_value)),
+        name(std::move(name_value)),
+        created_bpm(created_bpm_value),
+        recording_revision(recording_revision_value),
+        recording_artifact(std::move(recording_artifact_value)),
+        events(std::move(events_value)),
+        initial_live_state(std::move(initial_live_state_value)) {}
+
   PerformanceId id;
   std::string name;
   std::uint16_t created_bpm;
   std::uint64_t recording_revision{};
   std::optional<foundation::ArtifactRef> recording_artifact;
   std::vector<PerformanceEvent> events;
+  // Present exactly when this Performance uses the headered recording
+  // profile; the two profiles never mix within one Performance.
+  std::optional<PerformanceInitialLiveState> initial_live_state;
 
   bool operator==(const Performance&) const = default;
 };
@@ -501,12 +630,35 @@ std::uint64_t performance_event_tick(
     const PerformanceEvent& event) noexcept;
 std::uint8_t performance_event_fx_or_slot(
     const PerformanceEvent& event) noexcept;
+
+// The two durable recording profiles (lmdj.project.v5 5.4.1): a Performance
+// without a header uses the legacy grammar (kind ordinals 0-6, no per-event
+// sequence, the original canonical ordering); a Performance with
+// `initial_live_state` uses the headered profile (every event carries
+// `input_sequence`, canonical order is (tick, input_sequence)).
+enum class PerformanceEventProfile : std::uint8_t {
+  legacy,
+  header_input_sequence,
+};
+
+PerformanceEventProfile performance_event_profile(
+    const Performance& performance) noexcept;
 std::vector<PerformanceEvent> canonical_performance_events(
     const std::vector<PerformanceEvent>& events);
+std::vector<PerformanceEvent> canonical_performance_events(
+    const std::vector<PerformanceEvent>& events,
+    PerformanceEventProfile profile);
 foundation::Result<void> validate_performance_events(
     const std::vector<PerformanceEvent>& events);
+foundation::Result<void> validate_performance_events(
+    const std::vector<PerformanceEvent>& events,
+    const PerformanceInitialLiveState& seed);
 foundation::Result<void> validate_performance(
     const Performance& performance);
+foundation::Result<PerformanceInitialLiveState>
+performance_initial_live_state_from_json(const nlohmann::json& input);
+nlohmann::json performance_initial_live_state_json(
+    const PerformanceInitialLiveState& state);
 AssetLineageSourceKind asset_lineage_source_kind(
     const AssetLineage& lineage) noexcept;
 AssetLineageDerivationKind asset_lineage_derivation_kind(

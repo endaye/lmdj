@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -98,6 +99,137 @@ std::optional<std::uint64_t> bounded_unsigned(
 
 bool valid_fx(PerformanceFx fx) noexcept {
   return static_cast<std::uint8_t>(fx) < kFxCount;
+}
+
+// A durable input sequence is the canonical decimal string of a uint64 from
+// 1: no sign, no leading zero, no fraction, nothing after the last digit.
+std::optional<std::uint64_t> parse_input_sequence(
+    const nlohmann::json& input) noexcept {
+  if (!input.is_string()) {
+    return std::nullopt;
+  }
+  const auto& text = input.get_ref<const std::string&>();
+  if (text.empty() || text.size() > 20 || text.front() == '0' ||
+      !std::ranges::all_of(text, [](char c) {
+        return c >= '0' && c <= '9';
+      })) {
+    return std::nullopt;
+  }
+  if (text.size() == 20 && text > "18446744073709551615") {
+    return std::nullopt;
+  }
+  std::uint64_t value = 0;
+  const auto* last = text.data() + text.size();
+  const auto parsed =
+      std::from_chars(text.data(), last, value);
+  if (parsed.ec != std::errc{} || parsed.ptr != last) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+bool valid_filter_type(PerformanceFilterType type) noexcept {
+  switch (type) {
+    case PerformanceFilterType::lp:
+    case PerformanceFilterType::hp:
+    case PerformanceFilterType::bp:
+      return true;
+  }
+  return false;
+}
+
+bool valid_filter_phase(PerformanceFilterPhase phase) noexcept {
+  switch (phase) {
+    case PerformanceFilterPhase::engage:
+    case PerformanceFilterPhase::move:
+    case PerformanceFilterPhase::release:
+      return true;
+  }
+  return false;
+}
+
+std::optional<PerformanceFilterType> filter_type_from_string(
+    std::string_view value) noexcept {
+  if (value == "lp") {
+    return PerformanceFilterType::lp;
+  }
+  if (value == "hp") {
+    return PerformanceFilterType::hp;
+  }
+  if (value == "bp") {
+    return PerformanceFilterType::bp;
+  }
+  return std::nullopt;
+}
+
+std::string_view filter_type_string(PerformanceFilterType type) noexcept {
+  switch (type) {
+    case PerformanceFilterType::lp:
+      return "lp";
+    case PerformanceFilterType::hp:
+      return "hp";
+    case PerformanceFilterType::bp:
+      return "bp";
+  }
+  return "lp";
+}
+
+std::optional<PerformanceFilterPhase> filter_phase_from_string(
+    std::string_view value) noexcept {
+  if (value == "engage") {
+    return PerformanceFilterPhase::engage;
+  }
+  if (value == "move") {
+    return PerformanceFilterPhase::move;
+  }
+  if (value == "release") {
+    return PerformanceFilterPhase::release;
+  }
+  return std::nullopt;
+}
+
+std::string_view filter_phase_string(PerformanceFilterPhase phase) noexcept {
+  switch (phase) {
+    case PerformanceFilterPhase::engage:
+      return "engage";
+    case PerformanceFilterPhase::move:
+      return "move";
+    case PerformanceFilterPhase::release:
+      return "release";
+  }
+  return "engage";
+}
+
+// Live slot masks are uint64 bit sets in the Domain; the wire carries
+// ascending, duplicate-free integer arrays (slot 0 = A01, 63 = D16).
+std::optional<std::uint64_t> slot_mask_from_json(
+    const nlohmann::json& input) noexcept {
+  if (!input.is_array()) {
+    return std::nullopt;
+  }
+  std::uint64_t mask = 0;
+  std::uint64_t previous = 0;
+  bool first = true;
+  for (const auto& encoded : input) {
+    const auto slot = bounded_unsigned(encoded, kPerformancePadSlotMax);
+    if (!slot.has_value() || (!first && *slot <= previous)) {
+      return std::nullopt;
+    }
+    mask |= std::uint64_t{1} << *slot;
+    previous = *slot;
+    first = false;
+  }
+  return mask;
+}
+
+nlohmann::json slot_mask_json(std::uint64_t mask) {
+  auto encoded = nlohmann::json::array();
+  for (std::uint8_t slot = 0; slot < kPerformancePadSlotCount; ++slot) {
+    if ((mask & (std::uint64_t{1} << slot)) != 0) {
+      encoded.push_back(slot);
+    }
+  }
+  return encoded;
 }
 
 bool valid_sha256(std::string_view value) noexcept {
@@ -582,6 +714,13 @@ std::uint8_t performance_event_fx_or_slot(
       event.payload);
 }
 
+PerformanceEventProfile performance_event_profile(
+    const Performance& performance) noexcept {
+  return performance.initial_live_state.has_value()
+             ? PerformanceEventProfile::header_input_sequence
+             : PerformanceEventProfile::legacy;
+}
+
 std::vector<PerformanceEvent> canonical_performance_events(
     const std::vector<PerformanceEvent>& events) {
   auto ordered = events;
@@ -598,14 +737,65 @@ std::vector<PerformanceEvent> canonical_performance_events(
   return ordered;
 }
 
-foundation::Result<void> validate_performance_events(
-    const std::vector<PerformanceEvent>& events) {
+std::vector<PerformanceEvent> canonical_performance_events(
+    const std::vector<PerformanceEvent>& events,
+    PerformanceEventProfile profile) {
+  if (profile == PerformanceEventProfile::legacy) {
+    return canonical_performance_events(events);
+  }
+  auto ordered = events;
+  // The headered profile orders by musical time, then by Core reception
+  // order within one tick; sequence uniqueness is validated separately.
+  std::ranges::stable_sort(
+      ordered,
+      {},
+      [](const PerformanceEvent& event) {
+        return std::pair{
+            performance_event_tick(event),
+            event.input_sequence.value_or(0),
+        };
+      });
+  return ordered;
+}
+
+namespace {
+
+foundation::Result<void> validate_performance_events_with_seed(
+    const std::vector<PerformanceEvent>& events,
+    const PerformanceInitialLiveState* seed) {
   std::array<bool, kFxCount> engaged{};
+  bool independent_filter_active = false;
   bool hold_enabled = false;
-  for (const auto& event : canonical_performance_events(events)) {
+  if (seed != nullptr) {
+    // The header seeds the state machine: an engaged or frozen control is
+    // active at the fence, so a recorded move or release can pair with it
+    // without an in-stream engage. HOLD seeds the hold state the same way.
+    hold_enabled = seed->hold;
+    for (std::size_t index = 0; index < seed->other_fx.size(); ++index) {
+      const auto& gate = seed->other_fx.at(index);
+      if (gate.engaged || gate.frozen) {
+        engaged.at(index + 1) = true;
+      }
+    }
+    if (const auto* legacy =
+            std::get_if<LegacyFilterLiveState>(&seed->filter)) {
+      engaged.at(0) = legacy->engaged || legacy->frozen;
+    } else {
+      const auto& independent = std::get<IndependentFilterLiveState>(
+          seed->filter);
+      independent_filter_active = independent.engaged || independent.frozen;
+    }
+  }
+  for (const auto& event : events) {
+    if ((seed != nullptr) != event.input_sequence.has_value()) {
+      return invalid_performance(
+          seed != nullptr
+              ? "headered performance event is missing its input sequence"
+              : "legacy performance event must not carry an input sequence");
+    }
     const auto valid = std::visit(
-        [&engaged, &hold_enabled](const auto& payload)
-            -> foundation::Result<void> {
+        [&engaged, &hold_enabled, &independent_filter_active, seed](
+            const auto& payload) -> foundation::Result<void> {
           using Event = std::decay_t<decltype(payload)>;
           if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
             if (payload.slot > kPerformancePadSlotMax ||
@@ -632,6 +822,11 @@ foundation::Result<void> validate_performance_events(
                   "fx_engage requires a disengaged effect");
             }
             active = true;
+            // The single Filter stage: a legacy Filter engage takes over
+            // from an independent gesture, releasing that active state.
+            if (payload.fx == PerformanceFx::filter) {
+              independent_filter_active = false;
+            }
           } else if constexpr (
               std::is_same_v<Event, FxMovePerformanceEvent>) {
             if (!valid_fx(payload.fx) || payload.value < kFxValueMin ||
@@ -660,12 +855,55 @@ foundation::Result<void> validate_performance_events(
                   "hold_on requires HOLD to be off");
             }
             hold_enabled = true;
-          } else {
+          } else if constexpr (
+              std::is_same_v<Event, HoldOffPerformanceEvent>) {
             if (!hold_enabled) {
               return invalid_performance(
                   "hold_off requires HOLD to be on");
             }
             hold_enabled = false;
+          } else if constexpr (
+              std::is_same_v<Event, FilterChangePerformanceEvent>) {
+            if (seed == nullptr) {
+              return invalid_performance(
+                  "filter_change requires the headered recording profile");
+            }
+            if (!valid_filter_phase(payload.phase) ||
+                !valid_filter_type(payload.type) ||
+                payload.cutoff_hz < kFilterCutoffHzMin ||
+                payload.cutoff_hz > kFilterCutoffHzMax ||
+                payload.resonance_milli > kFilterResonanceMilliMax) {
+              return invalid_performance("filter_change event is invalid");
+            }
+            switch (payload.phase) {
+              case PerformanceFilterPhase::engage:
+                if (independent_filter_active) {
+                  return invalid_performance(
+                      "filter_change engage requires a disengaged "
+                      "independent Filter");
+                }
+                // An independent engage atomically takes the single Filter
+                // stage, clearing any legacy Filter engagement.
+                engaged.at(0) = false;
+                independent_filter_active = true;
+                break;
+              case PerformanceFilterPhase::move:
+              case PerformanceFilterPhase::release:
+                if (!independent_filter_active) {
+                  return invalid_performance(
+                      "filter_change requires a matching active independent "
+                      "Filter gesture");
+                }
+                if (payload.phase == PerformanceFilterPhase::release) {
+                  independent_filter_active = false;
+                }
+                break;
+            }
+          } else {
+            if (seed == nullptr) {
+              return invalid_performance(
+                  "pad_gates_set requires the headered recording profile");
+            }
           }
           return foundation::Result<void>::success();
         },
@@ -676,6 +914,62 @@ foundation::Result<void> validate_performance_events(
   }
   return foundation::Result<void>::success();
 }
+
+}  // namespace
+
+foundation::Result<void> validate_performance_events(
+    const std::vector<PerformanceEvent>& events) {
+  return validate_performance_events_with_seed(
+      canonical_performance_events(events), nullptr);
+}
+
+foundation::Result<void> validate_performance_events(
+    const std::vector<PerformanceEvent>& events,
+    const PerformanceInitialLiveState& seed) {
+  return validate_performance_events_with_seed(
+      canonical_performance_events(
+          events, PerformanceEventProfile::header_input_sequence),
+      &seed);
+}
+
+namespace {
+
+foundation::Result<void> validate_initial_live_state(
+    const PerformanceInitialLiveState& state) {
+  const auto frozen_requires_hold = [&state](bool frozen) {
+    return !frozen || state.hold;
+  };
+  if (const auto* legacy =
+          std::get_if<LegacyFilterLiveState>(&state.filter)) {
+    if (legacy->value > kFxValueMax ||
+        !frozen_requires_hold(legacy->frozen)) {
+      return invalid_performance(
+          "performance initial live Filter state is invalid");
+    }
+  } else {
+    const auto& independent =
+        std::get<IndependentFilterLiveState>(state.filter);
+    if (!valid_filter_type(independent.type) ||
+        independent.cutoff_hz < kFilterCutoffHzMin ||
+        independent.cutoff_hz > kFilterCutoffHzMax ||
+        independent.resonance_milli > kFilterResonanceMilliMax ||
+        !frozen_requires_hold(independent.frozen)) {
+      return invalid_performance(
+          "performance initial live Filter state is invalid");
+    }
+  }
+  for (const auto& gate : state.other_fx) {
+    if (gate.value > kFxValueMax || !frozen_requires_hold(gate.frozen)) {
+      return invalid_performance(
+          "performance initial live FX state is invalid");
+    }
+  }
+  // The masks are uint64 bit sets, so 0-63 uniqueness and ascending wire
+  // order hold by construction; only the parse boundary can violate them.
+  return foundation::Result<void>::success();
+}
+
+}  // namespace
 
 foundation::Result<void> validate_performance(
     const Performance& performance) {
@@ -699,9 +993,33 @@ foundation::Result<void> validate_performance(
     return invalid_performance(
         "performance recording artifact is invalid");
   }
-  if (performance.events != canonical_performance_events(performance.events)) {
+  const auto profile = performance_event_profile(performance);
+  if (profile == PerformanceEventProfile::header_input_sequence) {
+    const auto valid_state =
+        validate_initial_live_state(*performance.initial_live_state);
+    if (!valid_state.has_value()) {
+      return valid_state;
+    }
+    // Sequence numbers are unique within one Performance; gaps are legal
+    // (releases, cancelled reservations and other internal admissions need
+    // not become durable events).
+    std::set<std::uint64_t> sequences;
+    for (const auto& event : performance.events) {
+      if (!event.input_sequence.has_value() ||
+          !sequences.insert(*event.input_sequence).second) {
+        return invalid_performance(
+            "headered performance events must carry unique input sequences");
+      }
+    }
+  }
+  if (performance.events !=
+      canonical_performance_events(performance.events, profile)) {
     return invalid_performance(
         "performance events must use canonical ordering");
+  }
+  if (profile == PerformanceEventProfile::header_input_sequence) {
+    return validate_performance_events(
+        performance.events, *performance.initial_live_state);
   }
   return validate_performance_events(performance.events);
 }
@@ -1041,80 +1359,177 @@ foundation::Result<PerformanceEvent> performance_event_from_json(
           "performance event must declare a supported kind");
     }
     const auto kind = input.at("kind").get<std::string>();
+    // The legacy kinds gain one optional trailing key in the headered
+    // profile; every other field set is exact, as before.
+    const auto optional_sequence =
+        [&input]() -> std::optional<std::optional<std::uint64_t>> {
+      if (!input.contains("input_sequence")) {
+        return std::optional<std::optional<std::uint64_t>>{
+            std::in_place, std::nullopt};
+      }
+      const auto parsed = parse_input_sequence(input.at("input_sequence"));
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      return std::optional<std::optional<std::uint64_t>>{
+          std::in_place, *parsed};
+    };
     if (kind == "pad_hit" &&
-        exact_object_keys(
-            input,
-            {"kind", "slot", "onset_tick", "duration_tick", "velocity"})) {
+        (exact_object_keys(
+             input,
+             {"kind", "slot", "onset_tick", "duration_tick", "velocity"}) ||
+         exact_object_keys(
+             input,
+             {"kind", "slot", "onset_tick", "duration_tick", "velocity",
+              "input_sequence"}))) {
       const auto slot = bounded_unsigned(
           input.at("slot"), kPerformancePadSlotMax);
       const auto onset_tick = unsigned_value(input.at("onset_tick"));
       const auto duration_tick = unsigned_value(input.at("duration_tick"));
       const auto velocity = bounded_unsigned(input.at("velocity"), 127);
+      const auto sequence = optional_sequence();
       if (slot.has_value() && onset_tick.has_value() &&
           duration_tick.has_value() && *duration_tick > 0 &&
-          velocity.has_value() && *velocity > 0) {
+          velocity.has_value() && *velocity > 0 && sequence.has_value()) {
         return foundation::Result<PerformanceEvent>::success(
-            PerformanceEvent{PadHitPerformanceEvent{
-                static_cast<std::uint8_t>(*slot),
-                *onset_tick,
-                *duration_tick,
-                static_cast<std::uint8_t>(*velocity),
-            }});
+            PerformanceEvent{
+                PadHitPerformanceEvent{
+                    static_cast<std::uint8_t>(*slot),
+                    *onset_tick,
+                    *duration_tick,
+                    static_cast<std::uint8_t>(*velocity),
+                },
+                *sequence,
+            });
       }
     } else if (
         kind == "pattern_launch" &&
-        exact_object_keys(
-            input, {"kind", "pattern_slot", "effective_tick"})) {
+        (exact_object_keys(
+             input, {"kind", "pattern_slot", "effective_tick"}) ||
+         exact_object_keys(
+             input,
+             {"kind", "pattern_slot", "effective_tick", "input_sequence"}))) {
       const auto slot = bounded_unsigned(
           input.at("pattern_slot"), kPatternSlotMax);
       const auto tick = unsigned_value(input.at("effective_tick"));
-      if (slot.has_value() && tick.has_value()) {
+      const auto sequence = optional_sequence();
+      if (slot.has_value() && tick.has_value() && sequence.has_value()) {
         return foundation::Result<PerformanceEvent>::success(
-            PerformanceEvent{PatternLaunchPerformanceEvent{
-                static_cast<std::uint8_t>(*slot), *tick}});
+            PerformanceEvent{
+                PatternLaunchPerformanceEvent{
+                    static_cast<std::uint8_t>(*slot), *tick},
+                *sequence,
+            });
       }
     } else if (
         (kind == "fx_engage" || kind == "fx_move") &&
-        exact_object_keys(input, {"kind", "fx", "value", "tick"})) {
+        (exact_object_keys(input, {"kind", "fx", "value", "tick"}) ||
+         exact_object_keys(
+             input, {"kind", "fx", "value", "tick", "input_sequence"}))) {
       const auto fx = bounded_unsigned(input.at("fx"), kFxCount - 1);
       const auto value = bounded_unsigned(input.at("value"), kFxValueMax);
       const auto tick = unsigned_value(input.at("tick"));
-      if (fx.has_value() && value.has_value() && tick.has_value()) {
+      const auto sequence = optional_sequence();
+      if (fx.has_value() && value.has_value() && tick.has_value() &&
+          sequence.has_value()) {
         const auto typed_fx = static_cast<PerformanceFx>(*fx);
         if (kind == "fx_engage") {
           return foundation::Result<PerformanceEvent>::success(
-              PerformanceEvent{FxEngagePerformanceEvent{
-                  typed_fx, static_cast<std::uint16_t>(*value), *tick}});
+              PerformanceEvent{
+                  FxEngagePerformanceEvent{
+                      typed_fx, static_cast<std::uint16_t>(*value), *tick},
+                  *sequence,
+              });
         }
         return foundation::Result<PerformanceEvent>::success(
-            PerformanceEvent{FxMovePerformanceEvent{
-                typed_fx, static_cast<std::uint16_t>(*value), *tick}});
+            PerformanceEvent{
+                FxMovePerformanceEvent{
+                    typed_fx, static_cast<std::uint16_t>(*value), *tick},
+                *sequence,
+            });
       }
     } else if (
         kind == "fx_release" &&
-        exact_object_keys(input, {"kind", "fx", "tick"})) {
+        (exact_object_keys(input, {"kind", "fx", "tick"}) ||
+         exact_object_keys(
+             input, {"kind", "fx", "tick", "input_sequence"}))) {
       const auto fx = bounded_unsigned(input.at("fx"), kFxCount - 1);
       const auto tick = unsigned_value(input.at("tick"));
-      if (fx.has_value() && tick.has_value()) {
+      const auto sequence = optional_sequence();
+      if (fx.has_value() && tick.has_value() && sequence.has_value()) {
         return foundation::Result<PerformanceEvent>::success(
-            PerformanceEvent{FxReleasePerformanceEvent{
-                static_cast<PerformanceFx>(*fx), *tick}});
+            PerformanceEvent{
+                FxReleasePerformanceEvent{
+                    static_cast<PerformanceFx>(*fx), *tick},
+                *sequence,
+            });
       }
     } else if (
-        kind == "hold_on" &&
-        exact_object_keys(input, {"kind", "tick"})) {
+        (kind == "hold_on" || kind == "hold_off") &&
+        (exact_object_keys(input, {"kind", "tick"}) ||
+         exact_object_keys(input, {"kind", "tick", "input_sequence"}))) {
       const auto tick = unsigned_value(input.at("tick"));
-      if (tick.has_value()) {
+      const auto sequence = optional_sequence();
+      if (tick.has_value() && sequence.has_value()) {
+        if (kind == "hold_on") {
+          return foundation::Result<PerformanceEvent>::success(
+              PerformanceEvent{HoldOnPerformanceEvent{*tick}, *sequence});
+        }
         return foundation::Result<PerformanceEvent>::success(
-            PerformanceEvent{HoldOnPerformanceEvent{*tick}});
+            PerformanceEvent{HoldOffPerformanceEvent{*tick}, *sequence});
       }
     } else if (
-        kind == "hold_off" &&
-        exact_object_keys(input, {"kind", "tick"})) {
+        kind == "filter_change" &&
+        exact_object_keys(
+            input,
+            {"kind", "tick", "input_sequence", "phase", "type", "cutoff_hz",
+             "resonance_milli"})) {
       const auto tick = unsigned_value(input.at("tick"));
-      if (tick.has_value()) {
+      const auto sequence = parse_input_sequence(input.at("input_sequence"));
+      const auto cutoff =
+          bounded_unsigned(input.at("cutoff_hz"), kFilterCutoffHzMax);
+      const auto resonance = bounded_unsigned(
+          input.at("resonance_milli"), kFilterResonanceMilliMax);
+      const auto type = input.at("type").is_string()
+                            ? filter_type_from_string(
+                                  input.at("type").get<std::string>())
+                            : std::nullopt;
+      const auto phase = input.at("phase").is_string()
+                             ? filter_phase_from_string(
+                                   input.at("phase").get<std::string>())
+                             : std::nullopt;
+      if (tick.has_value() && sequence.has_value() && cutoff.has_value() &&
+          *cutoff >= kFilterCutoffHzMin && resonance.has_value() &&
+          type.has_value() && phase.has_value()) {
         return foundation::Result<PerformanceEvent>::success(
-            PerformanceEvent{HoldOffPerformanceEvent{*tick}});
+            PerformanceEvent{
+                FilterChangePerformanceEvent{
+                    *phase,
+                    *type,
+                    static_cast<std::uint16_t>(*cutoff),
+                    static_cast<std::uint16_t>(*resonance),
+                    *tick,
+                },
+                *sequence,
+            });
+      }
+    } else if (
+        kind == "pad_gates_set" &&
+        exact_object_keys(
+            input,
+            {"kind", "tick", "input_sequence", "muted_slots",
+             "solo_slots"})) {
+      const auto tick = unsigned_value(input.at("tick"));
+      const auto sequence = parse_input_sequence(input.at("input_sequence"));
+      const auto muted = slot_mask_from_json(input.at("muted_slots"));
+      const auto solo = slot_mask_from_json(input.at("solo_slots"));
+      if (tick.has_value() && sequence.has_value() && muted.has_value() &&
+          solo.has_value()) {
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{
+                PadGatesSetPerformanceEvent{*muted, *solo, *tick},
+                *sequence,
+            });
       }
     }
   } catch (const std::exception&) {
@@ -1124,7 +1539,7 @@ foundation::Result<PerformanceEvent> performance_event_from_json(
 }
 
 nlohmann::json performance_event_json(const PerformanceEvent& event) {
-  return std::visit(
+  auto encoded = std::visit(
       [](const auto& payload) -> nlohmann::json {
         using Event = std::decay_t<decltype(payload)>;
         if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
@@ -1168,11 +1583,226 @@ nlohmann::json performance_event_json(const PerformanceEvent& event) {
         } else if constexpr (
             std::is_same_v<Event, HoldOnPerformanceEvent>) {
           return {{"kind", "hold_on"}, {"tick", payload.tick}};
-        } else {
+        } else if constexpr (
+            std::is_same_v<Event, HoldOffPerformanceEvent>) {
           return {{"kind", "hold_off"}, {"tick", payload.tick}};
+        } else if constexpr (
+            std::is_same_v<Event, FilterChangePerformanceEvent>) {
+          return {
+              {"cutoff_hz", payload.cutoff_hz},
+              {"kind", "filter_change"},
+              {"phase", filter_phase_string(payload.phase)},
+              {"resonance_milli", payload.resonance_milli},
+              {"tick", payload.tick},
+              {"type", filter_type_string(payload.type)},
+          };
+        } else {
+          return {
+              {"kind", "pad_gates_set"},
+              {"muted_slots", slot_mask_json(payload.muted_mask)},
+              {"solo_slots", slot_mask_json(payload.solo_mask)},
+              {"tick", payload.tick},
+          };
         }
       },
       event.payload);
+  if (event.input_sequence.has_value()) {
+    encoded["input_sequence"] = std::to_string(*event.input_sequence);
+  } else {
+    encoded.erase("input_sequence");
+  }
+  return encoded;
+}
+
+namespace {
+
+constexpr std::array<std::string_view, kFxCount - 1> kLiveGateFxNames{
+    "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"};
+
+foundation::Result<PerformanceInitialLiveState> invalid_initial_live_state(
+    std::string_view message) {
+  return foundation::Result<PerformanceInitialLiveState>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
+foundation::Result<PerformanceFxGateState> gate_state_from_json(
+    const nlohmann::json& input) {
+  if (!exact_object_keys(input, {"engaged", "frozen", "value"}) ||
+      !input.at("engaged").is_boolean() || !input.at("frozen").is_boolean()) {
+    return foundation::Result<PerformanceFxGateState>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_argument,
+            "live FX gate state shape is invalid",
+        });
+  }
+  const auto value = bounded_unsigned(input.at("value"), kFxValueMax);
+  if (!value.has_value()) {
+    return foundation::Result<PerformanceFxGateState>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_argument,
+            "live FX gate state shape is invalid",
+        });
+  }
+  return foundation::Result<PerformanceFxGateState>::success(
+      PerformanceFxGateState{
+          input.at("engaged").get<bool>(),
+          input.at("frozen").get<bool>(),
+          static_cast<std::uint16_t>(*value),
+      });
+}
+
+nlohmann::json gate_state_json(const PerformanceFxGateState& state) {
+  return {
+      {"engaged", state.engaged},
+      {"frozen", state.frozen},
+      {"value", state.value},
+  };
+}
+
+}  // namespace
+
+foundation::Result<PerformanceInitialLiveState>
+performance_initial_live_state_from_json(const nlohmann::json& input) {
+  try {
+    if (!exact_object_keys(
+            input, {"hold", "filter", "other_fx", "muted_slots",
+                    "solo_slots"}) ||
+        !input.at("hold").is_boolean()) {
+      return invalid_initial_live_state(
+          "performance initial live state shape is invalid");
+    }
+    PerformanceInitialLiveState state;
+    state.hold = input.at("hold").get<bool>();
+    const auto& filter = input.at("filter");
+    if (!filter.is_object() || !filter.contains("mode") ||
+        !filter.at("mode").is_string()) {
+      return invalid_initial_live_state(
+          "performance initial live Filter shape is invalid");
+    }
+    const auto mode = filter.at("mode").get<std::string>();
+    if (mode == "legacy") {
+      if (!exact_object_keys(
+              filter, {"mode", "engaged", "frozen", "value"}) ||
+          !filter.at("engaged").is_boolean() ||
+          !filter.at("frozen").is_boolean()) {
+        return invalid_initial_live_state(
+            "performance initial live Filter shape is invalid");
+      }
+      const auto value = bounded_unsigned(filter.at("value"), kFxValueMax);
+      if (!value.has_value()) {
+        return invalid_initial_live_state(
+            "performance initial live Filter shape is invalid");
+      }
+      state.filter = LegacyFilterLiveState{
+          filter.at("engaged").get<bool>(),
+          filter.at("frozen").get<bool>(),
+          static_cast<std::uint16_t>(*value),
+      };
+    } else if (mode == "independent") {
+      if (!exact_object_keys(
+              filter,
+              {"mode", "engaged", "frozen", "type", "cutoff_hz",
+               "resonance_milli"}) ||
+          !filter.at("engaged").is_boolean() ||
+          !filter.at("frozen").is_boolean() ||
+          !filter.at("type").is_string()) {
+        return invalid_initial_live_state(
+            "performance initial live Filter shape is invalid");
+      }
+      const auto type =
+          filter_type_from_string(filter.at("type").get<std::string>());
+      const auto cutoff =
+          bounded_unsigned(filter.at("cutoff_hz"), kFilterCutoffHzMax);
+      const auto resonance = bounded_unsigned(
+          filter.at("resonance_milli"), kFilterResonanceMilliMax);
+      if (!type.has_value() || !cutoff.has_value() ||
+          *cutoff < kFilterCutoffHzMin || !resonance.has_value()) {
+        return invalid_initial_live_state(
+            "performance initial live Filter shape is invalid");
+      }
+      state.filter = IndependentFilterLiveState{
+          filter.at("engaged").get<bool>(),
+          filter.at("frozen").get<bool>(),
+          *type,
+          static_cast<std::uint16_t>(*cutoff),
+          static_cast<std::uint16_t>(*resonance),
+      };
+    } else {
+      return invalid_initial_live_state(
+          "performance initial live Filter shape is invalid");
+    }
+    const auto& other_fx = input.at("other_fx");
+    if (!other_fx.is_object() || other_fx.size() != kLiveGateFxNames.size()) {
+      return invalid_initial_live_state(
+          "performance initial live state other_fx is invalid");
+    }
+    for (std::size_t index = 0; index < kLiveGateFxNames.size(); ++index) {
+      const auto name = std::string{kLiveGateFxNames.at(index)};
+      if (!other_fx.contains(name)) {
+        return invalid_initial_live_state(
+            "performance initial live state other_fx is invalid");
+      }
+      auto gate = gate_state_from_json(other_fx.at(name));
+      if (!gate.has_value()) {
+        return foundation::Result<PerformanceInitialLiveState>::failure(
+            gate.error());
+      }
+      state.other_fx.at(index) = gate.value();
+    }
+    const auto muted = slot_mask_from_json(input.at("muted_slots"));
+    const auto solo = slot_mask_from_json(input.at("solo_slots"));
+    if (!muted.has_value() || !solo.has_value()) {
+      return invalid_initial_live_state(
+          "performance initial live state slot masks are invalid");
+    }
+    state.muted_mask = *muted;
+    state.solo_mask = *solo;
+    return foundation::Result<PerformanceInitialLiveState>::success(
+        std::move(state));
+  } catch (const std::exception&) {
+    return invalid_initial_live_state(
+        "performance initial live state shape is invalid");
+  }
+}
+
+nlohmann::json performance_initial_live_state_json(
+    const PerformanceInitialLiveState& state) {
+  nlohmann::json filter;
+  if (const auto* legacy =
+          std::get_if<LegacyFilterLiveState>(&state.filter)) {
+    filter = {
+        {"engaged", legacy->engaged},
+        {"frozen", legacy->frozen},
+        {"mode", "legacy"},
+        {"value", legacy->value},
+    };
+  } else {
+    const auto& independent =
+        std::get<IndependentFilterLiveState>(state.filter);
+    filter = {
+        {"cutoff_hz", independent.cutoff_hz},
+        {"engaged", independent.engaged},
+        {"frozen", independent.frozen},
+        {"mode", "independent"},
+        {"resonance_milli", independent.resonance_milli},
+        {"type", filter_type_string(independent.type)},
+    };
+  }
+  auto other_fx = nlohmann::json::object();
+  for (std::size_t index = 0; index < kLiveGateFxNames.size(); ++index) {
+    other_fx[std::string{kLiveGateFxNames.at(index)}] =
+        gate_state_json(state.other_fx.at(index));
+  }
+  return {
+      {"filter", std::move(filter)},
+      {"hold", state.hold},
+      {"muted_slots", slot_mask_json(state.muted_mask)},
+      {"other_fx", std::move(other_fx)},
+      {"solo_slots", slot_mask_json(state.solo_mask)},
+  };
 }
 
 }  // namespace lmdj::domain
