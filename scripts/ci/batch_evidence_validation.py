@@ -20,6 +20,13 @@ JOB_NAMES = {
     "core-tsan": "Self-test TSan stress / core-tsan",
     "core-stress": "Self-test Release stress / core-stress",
 }
+# Closed registry of jobs retired from JOB_NAMES. Evidence validation only
+# ever authenticates already-executed runs, so a historical verdict may name
+# a retired job; its recorded API display name stays a fact, never an
+# admission. Current admission cannot select a retired lane: policy parsing,
+# execution planning and the workflow manifest checks all stay strict.
+# chameleon_lab facts recovered from `git show 305b76608^` (PR #1997).
+RETIRED_JOB_NAMES = {"chameleon-lab": "Chameleon Lab"}
 EXECUTION_SOURCES = (
     ".github/workflows/self-test-report.yml", ".github/workflows/ci.yml",
     ".github/workflows/core-nightly.yml", ".github/workflows/architecture-portal.yml",
@@ -80,7 +87,7 @@ def validate_job_observations(checked, producer, jobs):
             and producer["conclusion"] == ("failure" if checked["status"] == "failed" else "success"),
             "producer business outcome contradicts recomputed verdict")
     for observation in checked["observations"]:
-        name = JOB_NAMES.get(observation["job"])
+        name = JOB_NAMES.get(observation["job"], RETIRED_JOB_NAMES.get(observation["job"]))
         require(name is not None, "product job has no reviewed API name mapping")
         matches = [j for j in jobs if j.get("name") == PREFIX + name]
         if observation["conclusion"] == "skipped" and not matches:

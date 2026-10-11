@@ -21,6 +21,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import batch_runtime as runtime
+import batch_evidence_validation
 import batch_execution
 import batch_verdict
 import incremental_batch as batch
@@ -504,6 +505,31 @@ class RuntimeTests(unittest.TestCase):
         instance.inputs.refresh()
         self.assertEqual(instance.result_for(start["request"], start["executor"]), {"status": "missing"})
 
+    def test_retired_job_name_observation_validates_against_api_evidence(self):
+        # Historical executor from before the chameleon_lab lane retirement
+        # (#1997): its verdict names the retired job and the authenticated API
+        # job list carries its historical display name.
+        checked = {"status": "success",
+                   "observations": [{"job": "chameleon-lab", "conclusion": "success"}]}
+        producer = {"conclusion": "success", "steps": [
+            {"name": "Keep failed selected work visible", "conclusion": "skipped"}]}
+        jobs = [{"name": runtime.PREFIX + "Chameleon Lab", "conclusion": "success"}]
+        runtime.validate_job_observations(checked, producer, jobs)
+
+    def test_unknown_job_name_observation_is_rejected(self):
+        checked = {"status": "success",
+                   "observations": [{"job": "not-a-reviewed-job", "conclusion": "success"}]}
+        producer = {"conclusion": "success", "steps": [
+            {"name": "Keep failed selected work visible", "conclusion": "skipped"}]}
+        jobs = [{"name": runtime.PREFIX + "not-a-reviewed-job", "conclusion": "success"}]
+        with self.assertRaisesRegex(batch.BatchError, "no reviewed API name mapping"):
+            runtime.validate_job_observations(checked, producer, jobs)
+
+    def test_retired_job_names_are_a_closed_disjoint_registry(self):
+        self.assertEqual(batch_evidence_validation.RETIRED_JOB_NAMES,
+                         {"chameleon-lab": "Chameleon Lab"})
+        self.assertFalse(set(batch_evidence_validation.RETIRED_JOB_NAMES) & set(runtime.JOB_NAMES))
+
     def test_job_api_failure_cannot_be_invented_success(self):
         start = self.start()
         self.evidence(start["request"])
@@ -799,10 +825,10 @@ class RuntimeTests(unittest.TestCase):
             self.api.runs[19].update(status="completed", conclusion="failure")
             self.api.jobs[19][0].update(status="completed", conclusion="success")
         original = instance.inputs.policy_at
-        def unavailable(revision):
+        def unavailable(revision, **kwargs):
             if revision == self.api.sha:
                 raise OSError("policy read unavailable")
-            return original(revision)
+            return original(revision, **kwargs)
         with mock.patch.object(instance.inputs, "policy_at", side_effect=unavailable):
             with self.assertRaises(OSError):
                 instance.result_for(admitted["request"], {"run_id": 19, "attempt": 1})
