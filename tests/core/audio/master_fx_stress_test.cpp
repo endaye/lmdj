@@ -703,7 +703,10 @@ void independent_filter_churn_stays_finite_bounded_and_coherent() {
   }
   renderer.join();
 
-  // Drain whatever the pacing left queued, then check conservation.
+  // Drain whatever the pacing left queued, then compare the coherent final
+  // Filter state BEFORE stop(): stop() resets both halves to the epoch's
+  // neutral state, so a post-stop comparison cannot testify about the
+  // pre-stop tuple.
   std::array<float, kFramesPerQuantum> left{};
   std::array<float, kFramesPerQuantum> right{};
   for (std::uint32_t quantum = 0;
@@ -712,17 +715,7 @@ void independent_filter_churn_stays_finite_bounded_and_coherent() {
        ++quantum) {
     engine.render(left.data(), right.data(), left.size());
   }
-  engine.stop();
-
-  const auto fx = engine.master_fx_telemetry();
-  LMDJ_CHECK(!render_failed.load(std::memory_order_acquire));
-  // The paused burst rejects exactly the burst minus the free space, and the
-  // free space is at most the queue capacity: at least 76 rejections.
-  LMDJ_CHECK(rejected_full >= 76);
-  LMDJ_CHECK(accepted_typed > 0);
-  LMDJ_CHECK(fx.enqueued_filter_controls == accepted_typed);
-  LMDJ_CHECK(fx.dequeued_filter_controls == accepted_typed);
-  LMDJ_CHECK(fx.queued_gestures == 0);
+  LMDJ_CHECK(engine.master_fx_telemetry().queued_gestures == 0);
   const auto status = engine.filter_control_status();
   LMDJ_CHECK(status.applied.sequence == status.accepted_sequence);
   LMDJ_CHECK(status.applied.state.mode == status.accepted.mode);
@@ -736,6 +729,29 @@ void independent_filter_churn_stays_finite_bounded_and_coherent() {
              status.accepted.parameters.cutoff_hz);
   LMDJ_CHECK(status.applied.state.parameters.resonance_milli ==
              status.accepted.parameters.resonance_milli);
+  engine.stop();
+
+  const auto fx = engine.master_fx_telemetry();
+  LMDJ_CHECK(!render_failed.load(std::memory_order_acquire));
+  // The paused burst rejects exactly the burst minus the free space, and the
+  // free space is at most the queue capacity: at least 76 rejections.
+  LMDJ_CHECK(rejected_full >= 76);
+  LMDJ_CHECK(accepted_typed > 0);
+  LMDJ_CHECK(fx.enqueued_filter_controls == accepted_typed);
+  LMDJ_CHECK(fx.dequeued_filter_controls == accepted_typed);
+  LMDJ_CHECK(fx.queued_gestures == 0);
+  // stop() is documented to return both halves to the epoch-stamped neutral
+  // state; pin that this teardown actually happened.
+  const auto stopped = engine.filter_control_status();
+  LMDJ_CHECK(stopped.accepted_sequence == 0);
+  LMDJ_CHECK(stopped.applied.sequence == 0);
+  LMDJ_CHECK(stopped.applied.epoch == engine.telemetry().start_epoch);
+  LMDJ_CHECK(stopped.applied.state.mode == FilterMode::independent);
+  LMDJ_CHECK(!stopped.applied.state.engaged &&
+             !stopped.applied.state.frozen);
+  LMDJ_CHECK(stopped.applied.state.parameters.type == FilterType::low_pass);
+  LMDJ_CHECK(stopped.applied.state.parameters.cutoff_hz == 20'000);
+  LMDJ_CHECK(stopped.applied.state.parameters.resonance_milli == 0);
 }
 
 void filter_ack_epoch_distinguishes_engine_restarts() {

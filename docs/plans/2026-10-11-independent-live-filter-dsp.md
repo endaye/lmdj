@@ -202,3 +202,14 @@ block split (permanent regression test
 pre-fix head at master_fx_test.cpp:977). The BP mutation proof was redone
 against the fixed code with a byte-level backup: the same two suites fail,
 the restore rebuilds and passes.
+
+Second follow-up (read-only review of the fix head): the churn test's
+accepted-vs-applied final-state comparison ran after `engine.stop()`, which
+resets both halves to the epoch's neutral state — the comparison was vacuous
+for pre-stop coherence. The test now captures `filter_control_status()` after
+the drain (`queued_gestures == 0`) and before `stop()`, compares tuple and
+sequence there, keeps the count-conservation checks, and additionally pins
+the documented post-stop neutral state. Discriminating mutation proof:
+render dropping typed-release applies passes the old post-stop oracle
+(binary green) and fails the new pre-stop comparison at the `engaged`
+assertion; the restored engine rebuilds green.
