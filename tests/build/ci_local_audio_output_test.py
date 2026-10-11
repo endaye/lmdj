@@ -170,7 +170,7 @@ class ProofExecutionTest(unittest.TestCase):
 
 
 class ProofEntryTest(unittest.TestCase):
-    def check_entry(self, filename, lane):
+    def check_entry(self, filename, lane, mode="proof"):
         # Stop at the wrapper invocation so this test verifies the public shell
         # entry without substituting a browser device or running a Web build.
         with tempfile.TemporaryDirectory() as directory:
@@ -183,11 +183,11 @@ class ProofEntryTest(unittest.TestCase):
             executable.chmod(0o755)
             environment = {**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}
             environment.pop("LMDJ_AUDIO_OUTPUT_WRAPPED", None)
-            completed = subprocess.run(["bash", str(ROOT / "scripts" / filename), "proof"],
+            completed = subprocess.run(["bash", str(ROOT / "scripts" / filename), mode],
                 env=environment, capture_output=True, text=True, check=False)
         self.assertEqual(completed.returncode, 7)
         self.assertEqual(json.loads(completed.stdout), [str(HELPER), "--lane", lane, "--",
-                         "bash", str(ROOT / "scripts" / filename), "proof"],
+                         "bash", str(ROOT / "scripts" / filename), mode],
             "why: public audio proofs must record device endpoints; remedy: invoke the diagnostic wrapper")
 
     def test_creator_proof_invokes_output_wrapper(self):
@@ -195,6 +195,15 @@ class ProofEntryTest(unittest.TestCase):
 
     def test_runtime_host_proof_invokes_output_wrapper(self):
         self.check_entry("web-runtime-host.sh", "web_runtime_host")
+
+    def test_creator_smoke_invokes_output_wrapper(self):
+        self.check_entry("creator-web.sh", "creator", "smoke")
+
+    def test_creator_quick_invokes_output_wrapper(self):
+        self.check_entry("creator-web.sh", "creator", "quick")
+
+    def test_runtime_host_quick_invokes_output_wrapper(self):
+        self.check_entry("web-runtime-host.sh", "web_runtime_host", "quick")
 
 
 if __name__ == "__main__":

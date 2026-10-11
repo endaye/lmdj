@@ -38,6 +38,7 @@ from change_scope import CLASSIFICATION_INERT_POLICY_PATHS  # noqa: E402
 CLASSIFICATION_MODULES = (
     "scripts/ci/change_scope.py",
     "scripts/ci/local_preflight.py",
+    "scripts/ci/daily_verification.py",
 )
 
 

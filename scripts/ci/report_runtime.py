@@ -132,17 +132,17 @@ def plan_batch_reports(repository, state, inputs):
             require(not selection["suites"] and not result["outcomes"], "not-required receipt claims selected work")
             continue
         if reference == f"missing:{request_id}":
-            require(bool(selection["suites"]) and result["outcomes"] == {
-                suite: "missing" for suite in selection["suites"]}, "missing receipt has non-missing outcomes")
-            suites = [dict(id=suite, selected=True, failures=[], verification_debt=True,
-                           scheduler_outcome="missing", jobs={}, diagnostics=[
-                               "Selected execution evidence was confirmed missing; no product verdict is available."])
-                      for suite in selection["suites"]]
+            require(bool(selection["suites"]) and result["outcomes"] == batch.missing_outcomes(request), "missing receipt has non-missing outcomes")
+            suites = [dict(id=suite, selected=True, failures=[], verification_debt=(outcome == "missing"),
+                           scheduler_outcome=outcome, jobs={}, diagnostics=[
+                               "Selected execution evidence was confirmed missing; no product verdict is available."
+                               if outcome == "missing" else "Deferred to complete verification; not a pass."])
+                      for suite, outcome in batch.missing_outcomes(request).items()]
             evidence_digest = batch.digest({"identity": identity, "reference": reference})
         else:
             require(bool(selection["suites"]), "empty selection must use its exact not-required receipt")
-            verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, selection)
-            require(result["outcomes"] == batch_verdict.scheduler_outcomes(verdict, policy, identity, selection),
+            verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, selection, verification=request.get("verification"))
+            require(result["outcomes"] == batch_verdict.scheduler_outcomes(verdict, policy, identity, selection, verification=request.get("verification")),
                     "journal outcomes differ from the durable scoped verdict")
             suites, evidence_digest = verdict["suites"], verdict["evidence_digest"]
             common_events = verdict.get("common_events", [])
@@ -220,6 +220,7 @@ def plan_batch_reports(repository, state, inputs):
                     "- Not selected (not passes): " + (", ".join(sorted(set(policy.suite_ids) - set(selection['suites']))) or "none"),
                     f"- Policy: `{request['policy']}`; evidence: `{evidence_digest}`",
                     f"- Suite: `{suite['id']}`; class: **{failure_class}**",
+                    f"- Verification workload: `{request.get('verification', {}).get(suite['id'], 'full')}`",
                     f"- Actual failed jobs: {', '.join(suite['failures']) or 'none'}",
                     f"- Verification debt: {suite['scheduler_outcome'] if suite['verification_debt'] else 'none'}",
                     "- Next step: investigate the exact target and execution; retain uncovered work and unresolved defects."]
@@ -257,7 +258,7 @@ def plan_bucket_recoveries(state, inputs):
         identity = dict(request_id=request_id, request_kind=request["kind"], base_sha=request["base"],
                         target_sha=request["target"], control_sha=request["control"], policy_digest=request["policy"],
                         run_id=result["run"]["run_id"], run_attempt=result["run"]["attempt"])
-        verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, request["selection"])
+        verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, request["selection"], verification=request.get("verification"))
         for suite in verdict["suites"]:
             if not suite["selected"] or suite["status"] != "passed" or suite["verification_debt"]:
                 continue

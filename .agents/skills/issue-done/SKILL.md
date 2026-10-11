@@ -91,6 +91,17 @@ Before starting the shipping pipeline:
    original failing check; do not copy snapshot trees or relax path assertions.
    See [`worktree-checkout-flattens-symlinks`](../../pitfalls/worktree-checkout-flattens-symlinks.md).
 
+   A sample-import assertion can fail because worktrees share a host staging
+   directory under the system temporary root. First expose the actual error
+   and inspect the fixture parent, staging ownership and permissions. Only
+   when that proves interference, give the owned verification process a private
+   temporary parent through child-only `TMPDIR`, `TMP` and `TEMP`, and rerun
+   the complete original selection with unchanged assertions and deadlines.
+   Retain both outcomes; do not remove, chown or chmod another owner's data.
+   This is not the remedy for macOS ASan fork failures, whose allocation layout
+   can change with paths. See
+   [`shared-temporary-staging-ownership`](../../pitfalls/shared-temporary-staging-ownership.md).
+
    When `scripts/docs-site.sh check` stops producing output after site load
    while the owned `docusaurus` process shows ~0% CPU, suspect a stalled Rspack
    cache left by an earlier failed or interrupted build. Stop only that

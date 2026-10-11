@@ -132,7 +132,8 @@ jobs:
           # executor must still use the same complete reusable-workflow source
           # closure; different SHAs alone are not an incompatibility.
           sources = ('.github/workflows/self-test-report.yml', '.github/workflows/ci.yml',
-                     '.github/workflows/core-nightly.yml', '.github/workflows/architecture-portal.yml')
+                     '.github/workflows/core-nightly.yml', '.github/workflows/architecture-portal.yml',
+                     '.github/actions/web-ci-proof/action.yml')
           def git(*args):
               return subprocess.check_output(['git', '--no-replace-objects', *args], stderr=subprocess.DEVNULL)
           try:
@@ -149,6 +150,16 @@ jobs:
                       raise ValueError('missing source blob')
                   if git('cat-file', 'blob', old) != git('cat-file', 'blob', current):
                       raise ValueError('source changed')
+              # Local actions come from the target checkout, not the reusable
+              # workflow ref. Bind daily dispatch to that actual source too.
+              if any(request.get('verification', {}).get(lane) in {'quick', 'journey'}
+                     for lane in ('creator', 'web_runtime_host')):
+                  target = request['target']
+                  if not isinstance(target, str) or len(target) != 40 or any(char not in '0123456789abcdef' for char in target):
+                      raise ValueError('invalid target source')
+                  action = '.github/actions/web-ci-proof/action.yml'
+                  if git('cat-file', 'blob', request['control'] + ':' + action) != git('cat-file', 'blob', target + ':' + action):
+                      raise ValueError('daily target action changed')
           except (KeyError, ValueError, subprocess.CalledProcessError):
               raise SystemExit('why: batch workflow sources are incompatible or unavailable; remedy: retain verification debt and enqueue a request under compatible trusted control')
           # Candidate acceptance already requires the executor's current
@@ -262,6 +273,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
       - name: Verify the checked-out target
         if: ${{ needs.change-scope.outputs.self-test == 'true' }}
@@ -301,12 +313,22 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "26"
+      - name: Run affected CI-control contracts
+        id: quick-contracts
+        if: ${{ fromJSON(needs.change-scope.outputs.manifest).verification.ci_contract == 'quick' }}
+        env:
+          BASE_SHA: ${{ needs.change-scope.outputs.resolved-base-sha }}
+          HEAD_SHA: ${{ needs.change-scope.outputs.resolved-head-sha }}
+        run: python3 scripts/ci/contract_selection.py --base "$BASE_SHA" --head "$HEAD_SHA" --interval --execute tests --github-output "$GITHUB_OUTPUT"
       - name: Run every CI-control contract
+        if: ${{ fromJSON(needs.change-scope.outputs.manifest).verification.ci_contract != 'quick' }}
         run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
       - uses: actions/setup-python@v6
+        if: ${{ steps.quick-contracts.outputs.seam != 'false' }}
         with:
           python-version: "3.12"
       - name: Run the pinned PR-Agent real-handler seam proof
+        if: ${{ steps.quick-contracts.outputs.seam != 'false' }}
         run: scripts/ci/pr-agent/integration-test.sh
 
   deploy-contract:
@@ -559,6 +581,7 @@ jobs:
       - uses: ./.github/actions/web-ci-proof
         with:
           lane: web_runtime_host
+          verification: ${{ fromJSON(needs.change-scope.outputs.manifest).verification.web_runtime_host || 'full' }}
           install-system-deps: "false"
 
   creator-web:
@@ -602,6 +625,7 @@ jobs:
       - uses: ./.github/actions/web-ci-proof
         with:
           lane: creator
+          verification: ${{ fromJSON(needs.change-scope.outputs.manifest).verification.creator || 'full' }}
           install-system-deps: "false"
 
   web-runtime-lab:
@@ -689,7 +713,20 @@ jobs:
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - run: scripts/core.sh proof
+      - name: Execute the selected Core verification
+        env:
+          VERIFICATION: ${{ fromJSON(needs.change-scope.outputs.manifest).verification.core_ubuntu || 'full' }}
+        run: |
+          set -euo pipefail
+          case "$VERIFICATION" in
+            quick)
+              scripts/core.sh configure dev
+              scripts/core.sh build dev
+              scripts/core.sh test dev fast
+              ;;
+            full) scripts/core.sh proof ;;
+            *) echo 'why: invalid Core workload; remedy: use the admitted verification map' >&2; exit 64 ;;
+          esac
       - name: Verify Apple-only audio targets are absent on Ubuntu
         shell: bash
         run: |
@@ -1207,7 +1244,7 @@ jobs:
           dependencies['core-macos'] = ['change-scope', 'select-macos-runner']
           dependencies['core-asan-macos'] = ['change-scope', 'select-macos-runner']
           document = batch_execution.from_needs(policy, execution['identity'], execution['selection'], needs,
-                                                aliases=aliases, dependencies=dependencies)
+                                                aliases=aliases, dependencies=dependencies, verification=execution.get('verification'))
           for name, value in [('execution.json', execution), ('needs.json', needs), ('verdict.json', document)]:
               (work / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -1215,7 +1252,7 @@ jobs:
               print('status=' + document['status'], file=output)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               print('Scoped batch: ' + document['selection']['kind'] + ' / ' + document['status'], file=summary)
-              print('Unselected suites are not passed; this is not legacy full release evidence.', file=summary)
+              print('Deferred and unselected suites are not passed; quick results are not complete release evidence.', file=summary)
           PYEOF
       - name: Retain scoped verdict and raw needs
         if: ${{ always() && steps.judge.outputs.artifact != '' }}

@@ -97,23 +97,31 @@ function alone grants no permission to start a product job.
                 "base_sha": request["base"], "target_sha": request["target"],
                 "control_sha": control_sha, "policy_digest": policy.digest,
                 "run_id": run_id, "run_attempt": run_attempt}
+    return execution_plan(policy, identity, request["selection"], request.get("verification"))
+
+
+def execution_plan(policy, identity, selection, verification=None):
     # Structural validation does not invent passing observations.
-    batch_verdict.build(policy, identity, request["selection"], [])
-    selected = set(request["selection"]["suites"])
-    return {"schema": SCHEMA, "identity": identity, "selection": request["selection"],
-            "lanes": {suite.scope_lane: suite.id in selected for suite in policy.inventory.suites
-                      if suite.scope_lane is not None},
-            "suites": {suite.id: suite.id in selected for suite in policy.inventory.suites}}
+    batch_verdict.build(policy, identity, selection, [], verification=verification)
+    selected = set(selection["suites"])
+    runnable = {suite for suite in selected if (verification or {}).get(suite) != "deferred"}
+    result = {"schema": SCHEMA, "identity": identity, "selection": selection,
+              "lanes": {suite.scope_lane: suite.id in runnable for suite in policy.inventory.suites
+                        if suite.scope_lane is not None},
+              "suites": {suite.id: suite.id in runnable for suite in policy.inventory.suites}}
+    if verification is not None:
+        result["verification"] = dict(verification)
+    return result
 
 
 def from_needs(policy, identity, selection, needs, *, aliases=None, dependencies=None,
-               emit_common_events=True):
+               emit_common_events=True, verification=None):
     """Use actual needs context, reject extra product execution, retain missing.
 
 Unknown control jobs are ignored: they are not product-suite evidence. A
 canonical product job outside selection may only be skipped, never executed.
 """
-    batch_verdict.build(policy, identity, selection, [])
+    batch_verdict.build(policy, identity, selection, [], verification=verification)
     aliases, dependencies = dict(aliases or {}), dict(dependencies or {})
     owners = dict(policy.inventory.job_owner)
     for suite in policy.inventory.suites:
@@ -127,7 +135,8 @@ canonical product job outside selection may only be skipped, never executed.
     require(set(dependencies) <= set(owners)
             and all(isinstance(values, list) and all(isinstance(v, str) and v for v in values)
                     for values in dependencies.values()), "invalid dependency map")
-    selected = set(selection["suites"])
+    selected = {suite for suite in selection["suites"]
+                if (verification or {}).get(suite) != "deferred"}
     for job, suite in owners.items():
         key = aliases.get(job, job)
         if key not in needs:
@@ -152,7 +161,7 @@ canonical product job outside selection may only be skipped, never executed.
     require(type(emit_common_events) is bool, "common-event publication mode is not explicit")
     events = common_events_from_needs(identity, selection, needs, selected_rows, owners) if emit_common_events else []
     return batch_verdict.build(policy, identity, selection, [asdict(row) for row in selected_rows],
-                               common_events=events)
+                               common_events=events, verification=verification)
 
 
 def read(path):
@@ -174,7 +183,8 @@ def main(argv=None):
                     "execution input schema is not closed")
             result = prepare(policy, repo=args.root, **document)
         else:
-            require(set(document) == {"identity", "selection", "needs", "aliases", "dependencies"},
+            keys = {"identity", "selection", "needs", "aliases", "dependencies"}
+            require(set(document) in (keys, keys | {"verification"}),
                     "verdict input schema is not closed")
             result = from_needs(policy, **document)
         args.output.write_text(self_test.canonical_json(result) + "\n")

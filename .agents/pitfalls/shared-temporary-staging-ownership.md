@@ -1,12 +1,15 @@
 ---
 id: shared-temporary-staging-ownership
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-10-11
     occurrence: https://github.com/endaye/lmdj/issues/1958
     observed_by: Codex coordinator and Orca Codex worker ctx_c0982cb189dc
-exit: none
+  - date: 2026-10-11
+    occurrence: https://github.com/endaye/lmdj/issues/1996
+    observed_by: Codex
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
 # An isolated Git worktree can still share an unwritable OS temporary staging directory with another owner.
@@ -40,8 +43,11 @@ lane with unchanged selection, thresholds and timeouts. Do not chmod, remove
 or take over another owner's shared directory; do not use a changed temporary
 path as a generic substitute for causal diagnosis.
 
-This first recurrence remains open with `exit: none`: a product regression
-cannot determine a particular operator host's external staging ownership, and
-no dedicated ownership workflow or gate has been introduced. A second
-recurrence requires the mechanism or escalation specified by the pitfall
-policy.
+The independent #1996 Core fast run failed 1 of 205 tests at the same
+`project_io.authoring_history` import boundary. A diagnostic exposed permission
+denied under root-owned `/tmp/.lmdj-host/sample-staging`; all 205 tests passed
+with an owned TMPDIR. Both failures remain historical evidence. The shipping
+skill now owns this causal diagnosis and complete unchanged rerun procedure.
+Do not apply it to macOS ASan fork failures: a different temporary path can
+change their allocation layout; use the separate
+`asan-macos-fork-child-stack-depot-boundary` guidance.

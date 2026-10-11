@@ -386,7 +386,8 @@ class CiBuildAccelerationTest(unittest.TestCase):
         job = self.workflow_job("core-ubuntu")
         self.assertIn("scripts/core.sh proof", job)
         self.assertIn("scripts/core.sh configure dev", job)
-        self.assertNotIn("scripts/core.sh build dev", job)
+        probe = job.split("      - name: Verify Apple-only audio targets are absent on Ubuntu", 1)[1]
+        self.assertNotIn("scripts/core.sh build dev", probe)
         self.assertIn("cmake --build build/core/dev --target help", job)
 
     def test_macos_primary_uses_persistent_cache_but_fallback_does_not(self) -> None:

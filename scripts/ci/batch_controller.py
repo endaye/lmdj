@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 
 import change_scope
+import daily_verification
 import incremental_batch as batch
 import test_scope
 
@@ -33,6 +34,7 @@ is incomplete. Complete paths and trusted policies still define the floor.
         self.read_main, self.advice = read_main, advice
         self.main = None
         self._policies = {}
+        self._daily_inputs = {}
 
     def _git(self, *args):
         try:
@@ -95,7 +97,21 @@ is incomplete. Complete paths and trusted policies still define the floor.
             selection["reasons"].append(
                 "why: review scope records are incomplete; remedy: restore authenticated review evidence; "
                 "complete Git and historical-policy rules define the fallback scope")
+        self._daily_inputs[(base, target, policy.digest)] = (interval["paths"], policies, advice["labels"])
         return test_scope._selection(policy, selection["suites"], selection["reasons"])
+
+    def interval_verification(self, base, target, policy, selected):
+        data = self._daily_inputs.get((base, target, policy.digest))
+        # A recovery without changes and incomplete historical policy both
+        # retain full work. Never reinterpret old requests as a daily result.
+        if data is None or any(p is None or p.digest != policy.digest for p in data[1]):
+            return {suite: "full" for suite in selected}
+        paths, _, labels = data
+        workloads = daily_verification.select(policy.routing, selected, paths)
+        extra = test_scope._dependency_closure([policy], test_scope.labels_to_suites(policy, labels))
+        for suite in extra & set(selected):
+            workloads[suite] = "full"
+        return workloads
 
 
 class Controller:
@@ -183,8 +199,7 @@ All methods must be invoked inside the SAME externally managed short lock.
                           "result availability schema is not closed")
             if status == "pending":
                 return self._answer("waiting", "terminal executor evidence is not yet available", request)
-            outcomes = receipt["outcomes"] if status == "ready" else {
-                suite: "missing" for suite in request["selection"]["suites"]}
+            outcomes = receipt["outcomes"] if status == "ready" else batch.missing_outcomes(request)
             reference = receipt["reference"] if status == "ready" else f"missing:{request['id']}"
             self._persist("result", {"request_id": request["id"], "run": executor,
                                     "target": request["target"], "policy": request["policy"],
@@ -258,9 +273,15 @@ same-run claim into execution, not just creating new admissions.
             else:
                 selection = self.inputs.interval_selection(base, latest, self.policy)
             selection = batch.required_selection(self.state, self.policy, selection)
+            verification = None
+            if kind == "auto" and hasattr(self.inputs, "interval_verification"):
+                verification = self.inputs.interval_verification(base, latest, self.policy, selection["suites"])
+                for suite, record in self.state["debts"].items():
+                    if not record["paused"]:
+                        verification[suite] = "full"
             request = batch.make_request(self.policy, request_id=f"batch:{self.state['epoch']}:{self.state['generation']}",
                 kind=kind, base_sha=base, target_sha=latest, control_sha=self.inputs.control_sha,
-                selection=selection, origin_run=self.run)
+                selection=selection, origin_run=self.run, verification=verification)
             policy = self.policy
         self.inputs.verify_target(request["target"])
         old_terminal = self.old_runs_terminal() if self.state["processed"] is None else True

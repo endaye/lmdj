@@ -115,7 +115,7 @@ def plan_after_result(repository_path, *, scheduler, source_request_id, main_sha
     """Consume caller-authenticated journal replay, never an Actions conclusion.
 
 The retained verdict is semantically revalidated, not remotely authenticated
-here. Recovery is transport, not a new request identity. Successful focused
+here. Recovery is transport, not a new request identity. Successful focused or daily
 tests wake planning only: they do not cover every site's older interval or
 grant admission. This function leaves scheduler and independent progress alone.
 An optional caller-authenticated adopted receipt permits durable historical
@@ -150,20 +150,19 @@ observations strictly before that initial baseline, never delivery coverage.
             run_id=run["run_id"], run_attempt=run["attempt"])
         reference = terminal["reference"]
         if reference == "missing:" + source_request_id:
-            r.require(bool(request["selection"]["suites"]) and terminal["outcomes"] == {
-                suite: "missing" for suite in request["selection"]["suites"]}, "missing evidence contradicts selected outcomes")
+            r.require(bool(request["selection"]["suites"]) and terminal["outcomes"] == incremental_batch.missing_outcomes(request), "missing evidence contradicts selected outcomes")
             status, evidence = "missing", None
         elif reference == "not-required:" + source_request_id:
             r.require(not request["selection"]["suites"] and terminal["outcomes"] == {},
                       "not-required evidence claims selected work")
             status, evidence = "not-required", None
         else:
-            verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, request["selection"])
-            outcomes = batch_verdict.scheduler_outcomes(verdict, policy, identity, request["selection"])
+            verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, request["selection"], verification=request.get("verification"))
+            outcomes = batch_verdict.scheduler_outcomes(verdict, policy, identity, request["selection"], verification=request.get("verification"))
             r.require(terminal["outcomes"] == outcomes, "persisted outcomes differ from retained verdict")
             status, evidence = verdict["status"], verdict["evidence_digest"]
         source = {**identity, "status": status, "evidence_digest": evidence}
-        if status != "passed" or request["kind"] not in ("auto", "bootstrap"):
+        if status not in {"passed", "quick-passed"} or request["kind"] not in ("auto", "bootstrap"):
             return {"action": "ignore", "source_role": "wakeup-only", "source": source, "plan": None}
         if baseline_receipt is not None:
             # The Journal owns the existing adoption receipt codec; import at

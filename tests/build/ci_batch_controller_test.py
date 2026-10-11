@@ -126,6 +126,27 @@ class ControllerTests(unittest.TestCase):
                          "why: bootstrap did not persist progress; remedy: settle result then advance")
         return done
 
+    def test_auto_freezes_daily_work_and_bootstrap_stays_complete(self):
+        self.inputs.interval_verification = lambda base, target, policy, selected: {s: "quick" for s in selected}
+        first = self.make().reconcile()
+        self.assertNotIn("verification", first["request"])
+        self.settle(first, 1)
+        self.make(2).reconcile()
+        self.inputs.main = C
+        action = self.make(2).reconcile()
+        self.assertEqual(action["request"]["verification"], {"creator": "quick"})
+
+    def test_unpaused_debt_overrides_daily_quick_with_complete_work(self):
+        self.baseline()
+        self.inputs.main = C
+        first = self.make(2).reconcile()
+        self.settle(first, 2, "infrastructure")
+        self.make(3).reconcile()
+        self.inputs.main = D
+        self.inputs.interval_verification = lambda base, target, policy, selected: {s: "quick" for s in selected}
+        action = self.make(3).reconcile()
+        self.assertEqual(action["request"]["verification"], {"creator": "full"})
+
     def test_bootstrap_claim_then_completion_then_idle(self):
         start = self.make().reconcile()
         self.assertEqual(start["action"], "execute", "why: bootstrap did not claim; remedy: admit full after old-run audit")
@@ -472,6 +493,27 @@ class RealGitTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "fixture")
         return self.git("rev-parse", "HEAD")
+
+    def daily_change(self, labels=()):
+        target = self.root / "apps/creator-web/src/components/overview_display.tsx"
+        target.parent.mkdir(parents=True)
+        target.write_text("// presentation fixture")
+        self.tip = self.commit()
+        self.inputs.advice = lambda interval: {"complete": True, "labels": list(labels)}
+        self.inputs.refresh()
+        selected = self.inputs.interval_selection(self.base, self.tip, POLICY)
+        return self.inputs.interval_verification(self.base, self.tip, POLICY, selected["suites"])
+
+    def test_real_interval_selects_durable_smoke(self):
+        self.assertEqual(self.daily_change()["creator"], "quick")
+
+    def test_authenticated_review_can_restore_complete_work(self):
+        self.assertEqual(self.daily_change(["test:creator"])["creator"], "full")
+
+    def test_missing_historical_policy_never_enables_quick(self):
+        self.inputs.policy_at = lambda sha: None
+        result = self.daily_change()
+        self.assertEqual(result, {suite: "full" for suite in POLICY.suite_ids})
 
     def test_revert_retains_actual_interval_paths(self):
         contract = self.root / "contracts/new.json"
