@@ -1121,7 +1121,9 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
   };
   await earlyBar();
   await second.click();
-  await expect(second).toHaveAttribute("data-launch", "pending");
+  await expect.poll(() => second.evaluateAll((elements) =>
+    elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
+    {timeout: 5_000, intervals: [50]}).toBe("pending");
   await expect(cue).toHaveText("LAST LAUNCH — → QUEUED SLOT 02");
   expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
   await expect(first).toHaveAttribute("data-launch", "acknowledged");
@@ -1133,7 +1135,9 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
   expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
   await earlyBar();
   await second.click();
-  await expect(second).toHaveAttribute("data-launch", "pending");
+  await expect.poll(() => second.evaluateAll((elements) =>
+    elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
+    {timeout: 5_000, intervals: [50]}).toBe("pending");
   await expect.poll(async () => {
     const status = await inspect();
     return status.playing && !status.recording && status.pending_switch == null &&
