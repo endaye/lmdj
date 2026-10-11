@@ -8,7 +8,9 @@ Related issue: <!-- Write exactly one: Closes #123 | Relates to #123 | None — 
 
 ## Verification
 
-<!-- Exact commands and retained evidence. -->
+<!-- Exact Task commands, actual outcomes, affected risks covered and retained
+far-side evidence. Keep persistence/recovery/concurrency journeys where relevant.
+List any deferred complete checks honestly; quick results are not full passes. -->
 
 ## PR Review
 
@@ -24,17 +26,6 @@ Expected selected lanes: <!-- Closed lane names, space-separated. -->
 Expected skipped lanes: <!-- Closed lane names, space-separated. -->
 `ci:full` required: no
 Reason: <!-- Explain path ownership or the full-upgrade trigger. -->
-
-## Batch-only Lanes
-
-<!-- Lanes this change selects that no Pull Request runs (`scripts/local-ci.sh
---list --json` → `batch_only`). Paste the block `scripts/local-ci.sh --lanes
-<lanes>` prints after they pass. The merge procedure refuses stale or missing
-evidence: `scripts/local-ci.sh --batch-evidence-only --pr-body <file>` on the
-exact head. Use `accepted-risk key=<64 hex> — <reason>` (key from the printed
-comment) only for a lane the owner explicitly accepted for those inputs. -->
-
-Batch-only lanes: none
 
 ## Version Management
 
