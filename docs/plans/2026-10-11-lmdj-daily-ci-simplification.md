@@ -293,6 +293,30 @@ The independent overview timeout remains outstanding. Its viewport/layout
 matrix and state/recovery journey need separate tests without dropping any
 assertion, viewport, reload leg or widening the existing budgets (T2d).
 
+### T2d — Separate overview layout from state recovery verification
+
+Main refresh remains `deb95de722b845d708371e90bcac138ae5e25e01`; task base is
+`c53744b9`. The initial fresh T2a artifact timed out at the final Project reopen
+in the overview test. Its 3-viewport × 4-mode layout matrix and four screenshots
+share one 30-second test budget with an independent state/failure/recovery journey.
+
+Declared files: `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`
+and this plan. Move the entire unchanged layout matrix into its own test; keep
+all loading, failure, unchanged-truth, retry, delete, undo, System identity,
+back-navigation and reload/reopen assertions together. Preserve the state test's
+768×600 viewport and Perform-to-Sample transition. Both tests keep the default
+30-second budget; no journey is divided across browser contexts. Verify both
+against the same freshly built product artifact with fresh Chromium contexts.
+Version impact: none. Documentation impact: none — only independent test facts
+are separated; product behavior and acceptance requirements remain unchanged.
+
+T2d verification: both tests passed in fresh Chromium contexts (2 tests,
+41.4 s total); each retained the default 30-second budget. The full recovery
+journey reaches the Project-ID assertion after reopening. All original layout
+viewports/modes, screenshots and state-transition assertions are retained.
+No new process pitfall applies. Precommit main remains
+`deb95de722b845d708371e90bcac138ae5e25e01`.
+
 ### T3 — Switch daily defaults and merge/main consumers together
 
 Primary files: `AGENTS.md`, `CLAUDE.md`,

@@ -438,7 +438,27 @@ async function expectOverviewFits(overview, context) {
   expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.height);
 }
 
-test("mode-specific overview identity, read-only feedback and details survive navigation and reopen", async ({page}, testInfo) => {
+test("mode-specific overview stays read-only and fits every supported viewport", async ({page}, testInfo) => {
+  await page.goto("/");
+  await waitForBootProject(page);
+  await importAndOpenProject(page);
+  await expect(page.locator(".overview-context")).toHaveText("PROJECT / 00000000");
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
+    await page.setViewportSize(viewport);
+    for (const mode of ["Project", "Sample", "Sequence", "Perform"]) {
+      await page.getByRole("button", {name: mode, exact: true}).click();
+      const overview = page.getByTestId("overview-display");
+      await expect(overview.locator("button,input,select,[tabindex]")).toHaveCount(0);
+      await expect(overview.getByText("Rev", {exact: true})).toHaveCount(0);
+      await expectOverviewFits(overview, `${mode} at ${viewport.width}×${viewport.height}`);
+      if (viewport.width === 1440) await testInfo.attach(`${mode} overview`, {
+        body: await overview.screenshot(), contentType: "image/png",
+      });
+    }
+  }
+});
+
+test("mode-specific overview identity, read-only feedback and details survive navigation and reopen", async ({page}) => {
   // Fault/latency injection proves Creator's rendering and recovery, not a
   // physical device or Runtime I/O failure. Other operations reach real Wasm.
   await page.addInitScript(() => {
@@ -473,19 +493,8 @@ test("mode-specific overview identity, read-only feedback and details survive na
   await waitForBootProject(page);
   await importAndOpenProject(page);
   await expect(page.locator(".overview-context")).toHaveText("PROJECT / 00000000");
-  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
-    await page.setViewportSize(viewport);
-    for (const mode of ["Project", "Sample", "Sequence", "Perform"]) {
-      await page.getByRole("button", {name: mode, exact: true}).click();
-      const overview = page.getByTestId("overview-display");
-      await expect(overview.locator("button,input,select,[tabindex]")).toHaveCount(0);
-      await expect(overview.getByText("Rev", {exact: true})).toHaveCount(0);
-      await expectOverviewFits(overview, `${mode} at ${viewport.width}×${viewport.height}`);
-      if (viewport.width === 1440) await testInfo.attach(`${mode} overview`, {
-        body: await overview.screenshot(), contentType: "image/png",
-      });
-    }
-  }
+  await page.setViewportSize({width: 768, height: 600});
+  await page.getByRole("button", {name: "Perform", exact: true}).click();
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await page.getByRole("button", {name: "Bank B", exact: true}).click();
   await page.evaluate(() => { window.__holdOverviewInspect = true; });
