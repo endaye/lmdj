@@ -218,7 +218,7 @@ test("all Banks put 01 at bottom left and preserve visual traversal and hit targ
   await first.focus();
   await page.keyboard.press("Tab");
   await expect(matrix.getByRole("button", {name: /^Pad D14 /})).toBeFocused();
-  await expect(matrix.getByRole("button", {name: /^Pad D01 /}).locator("kbd")).toHaveText("Q");
+  await expect(matrix.getByRole("button", {name: /^Pad D01 /}).locator("kbd")).toHaveText("Z");
 });
 
 const projectHeading = (page) =>
