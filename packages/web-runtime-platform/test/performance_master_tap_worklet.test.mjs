@@ -51,20 +51,24 @@ test("processor is idle until start and isolates serial generations", async () =
   assert.deepEqual(output, input);
   assert.deepEqual(messages, []);
 
-  processor.port.onmessage({data: {type: "start", generation: 7}});
+  // The worklet acknowledges the applied start before the next process().
+  processor.port.onmessage({data: {type: "start", generation: 7, binding: null}});
+  assert.deepEqual({...messages.at(-1)}, {
+    type: "started", generation: 7, binding: null,
+  });
   processor.process([input], [output]);
   assert.deepEqual(
-    {...messages[0], channels: [...messages[0].channels]},
+    {...messages.at(-1), channels: [...messages.at(-1).channels]},
     {type: "batch", generation: 7, sequence: 1, channels: input},
   );
   processor.port.onmessage({data: {type: "stop", generation: 6}});
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   processor.port.onmessage({data: {type: "stop", generation: 7}});
   assert.deepEqual({...messages.at(-1)}, {
     type: "stopped", generation: 7, finalSequence: 1,
   });
 
-  processor.port.onmessage({data: {type: "start", generation: 8}});
+  processor.port.onmessage({data: {type: "start", generation: 8, binding: null}});
   processor.process([[input[0].subarray(0, 127)]], [
     [new Float32Array(127), new Float32Array(127)],
   ]);
@@ -92,7 +96,7 @@ test("render remains transparent and non-throwing when batch delivery fails", as
   const {Processor} = await loadMasterTapProcessor({
     postMessage(message) {
       attempts += 1;
-      if (attempts === 1) throw new Error("post failed");
+      if (attempts === 2) throw new Error("post failed");
       messages.push(message);
     },
   });
@@ -102,18 +106,25 @@ test("render remains transparent and non-throwing when batch delivery fails", as
     new Float32Array(4_800).fill(-0.5),
   ];
   const output = [new Float32Array(4_800), new Float32Array(4_800)];
-  processor.port.onmessage({data: {type: "start", generation: 9}});
+  processor.port.onmessage({data: {type: "start", generation: 9, binding: null}});
+  assert.deepEqual({...messages.at(-1)}, {
+    type: "started", generation: 9, binding: null,
+  });
 
   assert.doesNotThrow(() => processor.process([input], [output]));
   assert.deepEqual(output, input);
   assert.deepEqual(messages.map((message) => ({...message})), [{
+    type: "started",
+    generation: 9,
+    binding: null,
+  }, {
     type: "failed",
     generation: 9,
     reason: "post-message-failed",
     droppedFrames: 4_800,
   }]);
   assert.equal(processor.process([input], [output]), true);
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 3);
 });
 
 test("accepts only exact nonnegative safe-integer control messages", async () => {
@@ -122,8 +133,11 @@ test("accepts only exact nonnegative safe-integer control messages", async () =>
   for (const data of [
     null,
     {type: "start", generation: 1, extra: true},
-    {type: "start", generation: -1},
-    {type: "start", generation: Number.MAX_SAFE_INTEGER + 1},
+    {type: "start", generation: 1},
+    {type: "start", generation: 1, binding: {}},
+    {type: "start", generation: 1, binding: {control_epoch: "nope"}},
+    {type: "start", generation: -1, binding: null},
+    {type: "start", generation: Number.MAX_SAFE_INTEGER + 1, binding: null},
     {type: "stop", generation: null},
     {type: "stop", generation: 1, extra: true},
   ]) {
@@ -136,7 +150,8 @@ test("accepts only exact nonnegative safe-integer control messages", async () =>
     new Float32Array(127).fill(-0.5),
   ];
   const output = [new Float32Array(127), new Float32Array(127)];
-  processor.port.onmessage({data: {type: "start", generation: 7}});
+  processor.port.onmessage({data: {type: "start", generation: 7, binding: null}});
+  const started = messages.at(-1);
   processor.process([input], [output]);
   for (const data of [
     {type: "start", generation: 7, extra: true},
@@ -146,18 +161,22 @@ test("accepts only exact nonnegative safe-integer control messages", async () =>
   ]) {
     processor.port.onmessage({data});
   }
-  assert.deepEqual(messages, []);
+  // The invalid loop added nothing: only the started ACK is in the log.
+  assert.equal(messages.length, 1);
 
   processor.port.onmessage({data: {type: "stop", generation: 7}});
+  assert.deepEqual({...started}, {
+    type: "started", generation: 7, binding: null,
+  });
   assert.deepEqual({
-    ...messages[0], channels: [...messages[0].channels],
+    ...messages.at(-2), channels: [...messages.at(-2).channels],
   }, {
     type: "batch",
     generation: 7,
     sequence: 1,
     channels: input,
   });
-  assert.deepEqual({...messages[1]}, {
+  assert.deepEqual({...messages.at(-1)}, {
     type: "stopped", generation: 7, finalSequence: 1,
   });
 });
@@ -168,18 +187,23 @@ test("reports a stopped acknowledgement delivery failure exactly", async () => {
   const {Processor} = await loadMasterTapProcessor({
     postMessage(message) {
       attempts += 1;
-      if (attempts === 1) throw new Error("stopped delivery failed");
+      if (attempts === 2) throw new Error("stopped delivery failed");
       messages.push(message);
     },
   });
   const processor = new Processor();
-  processor.port.onmessage({data: {type: "start", generation: 11}});
+  processor.port.onmessage({data: {type: "start", generation: 11, binding: null}});
 
   assert.doesNotThrow(() => processor.port.onmessage({
     data: {type: "stop", generation: 11},
   }));
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 3);
   assert.deepEqual({...messages[0]}, {
+    type: "started",
+    generation: 11,
+    binding: null,
+  });
+  assert.deepEqual({...messages[1]}, {
     type: "failed",
     generation: 11,
     reason: "post-message-failed",

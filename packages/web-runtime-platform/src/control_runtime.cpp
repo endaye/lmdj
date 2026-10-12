@@ -108,6 +108,8 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
       operation == "sequence.recovery.list" ||
       operation == "performance.record.event" ||
       operation == "performance.fx.gesture" ||
+      operation == "performance.live.control" ||
+      operation == "performance.live.status" ||
       operation == "performance.record.launch-request" ||
       operation == "performance.record.status" ||
       operation == "performance.recovery.list" ||
@@ -644,6 +646,165 @@ void validate_soundset_operation_payload(
   }
 }
 
+// D0/W1: opaque Core sequences are canonical decimal strings — validated as
+// text, never converted through a lossy Number/double.
+void validate_opaque_sequence(const Json& value, std::string_view key) {
+  const auto& text = string_field(value, key);
+  require(!text.empty());
+  require(text.size() == 1 || text.front() != '0');
+  require(std::all_of(text.begin(), text.end(), [](char character) {
+    return character >= '0' && character <= '9';
+  }));
+  // uint64 range without a lossy conversion: compare decimal text.
+  require(text.size() < 20U ||
+          (text.size() == 20U &&
+           text <= "18446744073709551615"));
+}
+
+// The closed live-control intent vocabulary (D0/W1), mirrored byte-for-byte
+// with the JS registry validator; the native boundary is the real oracle.
+void validate_live_control_intent(const Json& intent) {
+  require(intent.is_object() && intent.contains("kind"));
+  const auto& kind = string_field(intent, "kind");
+  if (kind == "filter_parameter") {
+    const auto bound = exact_keys(
+        intent, {"kind", "phase", "parameter", "value", "gesture_generation"});
+    require(bound ||
+            exact_keys(intent, {"kind", "phase", "parameter", "value"}));
+    if (bound) {
+      (void)uuid_field(intent, "gesture_generation");
+    }
+    const auto& phase = string_field(intent, "phase");
+    require(phase == "engage" || phase == "move");
+    const auto& parameter = string_field(intent, "parameter");
+    if (parameter == "type") {
+      const auto& type = string_field(intent, "value");
+      require(type == "lp" || type == "hp" || type == "bp");
+    } else if (parameter == "cutoff_hz") {
+      const auto cutoff = safe_unsigned_field(intent, "value", 20'000U);
+      require(cutoff >= 20U);
+    } else {
+      require(parameter == "resonance_milli");
+      (void)safe_unsigned_field(intent, "value", 1'000U);
+    }
+    return;
+  }
+  if (kind == "filter_release") {
+    require(exact_keys(intent, {"kind", "gesture_generation"}));
+    (void)uuid_field(intent, "gesture_generation");
+    return;
+  }
+  if (kind == "fx_parameter") {
+    const auto bound = exact_keys(
+        intent, {"kind", "phase", "fx", "value", "gesture_generation"});
+    require(bound || exact_keys(intent, {"kind", "phase", "fx", "value"}));
+    if (bound) {
+      (void)uuid_field(intent, "gesture_generation");
+    }
+    const auto& phase = string_field(intent, "phase");
+    require(phase == "engage" || phase == "move");
+    const auto& effect = string_field(intent, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    (void)safe_unsigned_field(intent, "value", 1'000U);
+    return;
+  }
+  if (kind == "fx_release") {
+    require(exact_keys(intent, {"kind", "fx", "gesture_generation"}));
+    const auto& effect = string_field(intent, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    (void)uuid_field(intent, "gesture_generation");
+    return;
+  }
+  if (kind == "pad_mute" || kind == "pad_solo") {
+    require(exact_keys(intent, {"kind", "slot", "enabled"}));
+    (void)safe_unsigned_field(intent, "slot", 63U);
+    require(intent.at("enabled").is_boolean());
+    return;
+  }
+  require((kind == "clear_pad_gates" || kind == "hold_on" ||
+           kind == "hold_off") &&
+          exact_keys(intent, {"kind"}));
+}
+
+// The headered recording profile's closed event vocabulary (D0): Pad gestures
+// keep their legacy keys; FX moves/releases carry the Core binding pair.
+void validate_headered_performance_event(const Json& event) {
+  require(event.is_object() && event.contains("kind"));
+  const auto& kind = string_field(event, "kind");
+  if (kind == "pad_press" || kind == "pad_release") {
+    validate_performance_gesture(event);
+    return;
+  }
+  if (kind == "fx_engage") {
+    require(exact_keys(event, {"kind", "fx", "value"}));
+    const auto& effect = string_field(event, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    (void)safe_unsigned_field(event, "value", 1'000U);
+    return;
+  }
+  if (kind == "fx_move" || kind == "fx_release") {
+    if (kind == "fx_move") {
+      require(exact_keys(
+          event, {"kind", "fx", "value", "gesture_id", "gesture_generation"}));
+      (void)safe_unsigned_field(event, "value", 1'000U);
+    } else {
+      require(exact_keys(
+          event, {"kind", "fx", "gesture_id", "gesture_generation"}));
+    }
+    const auto& effect = string_field(event, "fx");
+    require(std::find(kPerformanceFxNames.begin(), kPerformanceFxNames.end(),
+                      effect) != kPerformanceFxNames.end());
+    (void)uuid_field(event, "gesture_id");
+    (void)uuid_field(event, "gesture_generation");
+    return;
+  }
+  if (kind == "filter_parameter") {
+    const auto bound = exact_keys(
+        event,
+        {"kind", "phase", "parameter", "value", "gesture_id",
+         "gesture_generation"});
+    require(bound ||
+            exact_keys(event, {"kind", "phase", "parameter", "value"}));
+    if (bound) {
+      (void)uuid_field(event, "gesture_id");
+      (void)uuid_field(event, "gesture_generation");
+    }
+    const auto& phase = string_field(event, "phase");
+    require(phase == "engage" || phase == "move");
+    const auto& parameter = string_field(event, "parameter");
+    if (parameter == "type") {
+      const auto& type = string_field(event, "value");
+      require(type == "lp" || type == "hp" || type == "bp");
+    } else if (parameter == "cutoff_hz") {
+      const auto cutoff = safe_unsigned_field(event, "value", 20'000U);
+      require(cutoff >= 20U);
+    } else {
+      require(parameter == "resonance_milli");
+      (void)safe_unsigned_field(event, "value", 1'000U);
+    }
+    return;
+  }
+  if (kind == "filter_release") {
+    require(exact_keys(
+        event, {"kind", "gesture_id", "gesture_generation"}));
+    (void)uuid_field(event, "gesture_id");
+    (void)uuid_field(event, "gesture_generation");
+    return;
+  }
+  if (kind == "pad_mute" || kind == "pad_solo") {
+    require(exact_keys(event, {"kind", "slot", "enabled"}));
+    (void)safe_unsigned_field(event, "slot", 63U);
+    require(event.at("enabled").is_boolean());
+    return;
+  }
+  require((kind == "clear_pad_gates" || kind == "hold_on" ||
+           kind == "hold_off") &&
+          exact_keys(event, {"kind"}));
+}
+
 void validate_performance_operation_payload(
     std::string_view operation,
     const Json& payload) {
@@ -682,23 +843,73 @@ void validate_performance_operation_payload(
     require(exact_keys(payload, {"performance_id"}));
     (void)uuid_field(payload, "performance_id");
   } else if (operation == "performance.record.begin") {
+    // The headered profile is selected by the extra Core-issued epoch key;
+    // the legacy four-key shape is unchanged.
+    if (payload.contains("control_epoch")) {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "session_id", "performance_id",
+           "control_epoch"}));
+      command_identity();
+      (void)uuid_field(payload, "session_id");
+      (void)uuid_field(payload, "performance_id");
+      (void)uuid_field(payload, "control_epoch");
+    } else {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "session_id", "performance_id"}));
+      command_identity();
+      (void)uuid_field(payload, "session_id");
+      (void)uuid_field(payload, "performance_id");
+    }
+  } else if (operation == "performance.live.status") {
+    require(exact_keys(payload, {}));
+  } else if (operation == "performance.live.control") {
     require(exact_keys(
         payload,
-        {"command_id", "expected_revision", "session_id", "performance_id"}));
-    command_identity();
-    (void)uuid_field(payload, "session_id");
-    (void)uuid_field(payload, "performance_id");
+        {"control_epoch", "command_id", "expected_control_sequence",
+         "intent"}));
+    (void)uuid_field(payload, "control_epoch");
+    (void)uuid_field(payload, "command_id");
+    validate_opaque_sequence(payload, "expected_control_sequence");
+    validate_live_control_intent(payload.at("intent"));
   } else if (operation == "performance.record.event") {
-    require(exact_keys(payload, {"session_id", "event_id", "event"}));
-    (void)uuid_field(payload, "session_id");
-    (void)uuid_field(payload, "event_id");
-    validate_performance_gesture(payload.at("event"));
+    if (payload.contains("control_epoch") ||
+        payload.contains("expected_recording_sequence")) {
+      require(exact_keys(
+          payload,
+          {"session_id", "event_id", "event", "control_epoch",
+           "expected_recording_sequence"}));
+      (void)uuid_field(payload, "session_id");
+      (void)uuid_field(payload, "event_id");
+      (void)uuid_field(payload, "control_epoch");
+      validate_opaque_sequence(payload, "expected_recording_sequence");
+      validate_headered_performance_event(payload.at("event"));
+    } else {
+      require(exact_keys(payload, {"session_id", "event_id", "event"}));
+      (void)uuid_field(payload, "session_id");
+      (void)uuid_field(payload, "event_id");
+      validate_performance_gesture(payload.at("event"));
+    }
   } else if (operation == "performance.record.launch-request") {
-    require(exact_keys(
-        payload, {"session_id", "request_id", "pattern_slot"}));
-    (void)uuid_field(payload, "session_id");
-    (void)uuid_field(payload, "request_id");
-    pattern_slot("pattern_slot");
+    if (payload.contains("control_epoch") ||
+        payload.contains("expected_recording_sequence")) {
+      require(exact_keys(
+          payload,
+          {"session_id", "request_id", "pattern_slot", "control_epoch",
+           "expected_recording_sequence"}));
+      (void)uuid_field(payload, "session_id");
+      (void)uuid_field(payload, "request_id");
+      (void)uuid_field(payload, "control_epoch");
+      validate_opaque_sequence(payload, "expected_recording_sequence");
+      pattern_slot("pattern_slot");
+    } else {
+      require(exact_keys(
+          payload, {"session_id", "request_id", "pattern_slot"}));
+      (void)uuid_field(payload, "session_id");
+      (void)uuid_field(payload, "request_id");
+      pattern_slot("pattern_slot");
+    }
   } else if (operation == "performance.record.flush") {
     require(exact_keys(payload, {"session_id", "command_id"}));
     (void)uuid_field(payload, "session_id");
@@ -1601,6 +1812,9 @@ struct ControlRuntime::Impl {
     config.performance_replay_controller =
         std::move(adapter.replay_controller);
     config.performance_gesture_sink = std::move(adapter.gesture_sink);
+    // W1: the typed live-control port reaches the Facade; epoch binding and
+    // stale rejection stay Core-side.
+    config.performance_live_control = std::move(adapter.live_control);
     service = std::move(adapter.service);
     return facade::Application(std::move(config));
   }
@@ -3326,6 +3540,8 @@ Json ControlRuntime::dispatch(
         {"performance.inspect", true},
         {"performance.record.begin", false},
         {"performance.record.event", false},
+        {"performance.live.control", false},
+        {"performance.live.status", true},
         {"performance.record.launch-request", false},
         {"performance.record.flush", false},
         {"performance.record.stop", false},

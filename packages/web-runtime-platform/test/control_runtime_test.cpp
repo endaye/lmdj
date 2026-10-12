@@ -7273,6 +7273,144 @@ void switch_grid_project(ControlRuntime& runtime) {
   static_cast<void>(render_grid_frames(runtime.engine(), 128));
 }
 
+// W1 oracle on the real ControlRuntime → Facade → engine path: the live
+// command binds the retained Project and engine epoch; the headered begin
+// fence gates the first Pad; the replacement Project refuses the old epoch.
+void test_headered_live_control_flows_through_control_runtime() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+
+  const auto status =
+      runtime->dispatch("performance.live.status", Json::object(), {});
+  check_success(status);
+  LMDJ_CHECK(status.at("result").at("available") == true);
+  const auto epoch =
+      status.at("result").at("control_epoch").get<std::string>();
+
+  // A live control accepted but not yet drained makes the fence genuinely
+  // pending; the first Pad is refused until the drain proves it.
+  check_success(runtime->dispatch(
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(9809)},
+       {"expected_control_sequence", "0"},
+       {"intent", {{"kind", "pad_mute"}, {"slot", 0}, {"enabled", true}}}},
+      {}));
+  const auto revision = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("revision").get<std::uint64_t>();
+  const auto session = uuid(9801);
+  const auto performance = uuid(9802);
+  const auto begun = runtime->dispatch(
+      "performance.record.begin",
+      {{"command_id", uuid(9800)},
+       {"expected_revision", revision},
+       {"session_id", session},
+       {"performance_id", performance},
+       {"control_epoch", epoch}},
+      {});
+  check_success(begun);
+  LMDJ_CHECK(begun.at("result").at("profile") == "header_input_sequence");
+  LMDJ_CHECK(begun.at("result").at("core_control_ready") == false);
+  LMDJ_CHECK(begun.at("result").at("next_recording_sequence") == "0");
+
+
+  // The first Pad is refused before the fence's applied proof.
+  const auto early = runtime->dispatch(
+      "performance.record.event",
+      {{"session_id", session},
+       {"event_id", uuid(9803)},
+       {"control_epoch", epoch},
+       {"expected_recording_sequence", "0"},
+       {"event",
+        {{"kind", "pad_press"},
+         {"gesture_id", uuid(9804)},
+         {"slot", 0},
+         {"velocity", 127}}}},
+      {});
+  LMDJ_CHECK(!early.value("ok", false));
+
+  // One real drain proves the fence: the gate opens for the same epoch.
+  static_cast<void>(render_grid_frames(engine, 128));
+  static_cast<void>(runtime->service_performance());
+  const auto ready =
+      runtime->dispatch("performance.record.status", Json::object(), {});
+  check_success(ready);
+  LMDJ_CHECK(ready.at("result").at("core_control_ready") == true);
+
+  check_success(runtime->dispatch(
+      "performance.record.event",
+      {{"session_id", session},
+       {"event_id", uuid(9803)},
+       {"control_epoch", epoch},
+       {"expected_recording_sequence", "0"},
+       {"event",
+        {{"kind", "pad_press"},
+         {"gesture_id", uuid(9804)},
+         {"slot", 0},
+         {"velocity", 127}}}},
+      {}));
+  static_cast<void>(render_grid_frames(engine, 128));
+  check_success(runtime->dispatch(
+      "performance.record.event",
+      {{"session_id", session},
+       {"event_id", uuid(9805)},
+       {"control_epoch", epoch},
+       {"expected_recording_sequence", "1"},
+       {"event",
+        {{"kind", "pad_release"},
+         {"gesture_id", uuid(9804)},
+         {"slot", 0}}}},
+      {}));
+
+  // The sessionless route is refused while the headered recording owns the
+  // epoch's control.
+  const auto bypass = runtime->dispatch(
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(9806)},
+       {"expected_control_sequence", "0"},
+       {"intent", {{"kind", "hold_on"}}}},
+      {});
+  LMDJ_CHECK(!bypass.value("ok", false));
+
+  check_success(runtime->dispatch(
+      "performance.record.stop",
+      {{"session_id", session}, {"request_id", uuid(9807)}}, {}));
+
+  // The PadHit carries its press's durable sequence on the headered wire.
+  const auto saved_at = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("revision").get<std::uint64_t>();
+  check_success(runtime->dispatch(
+      "performance.save",
+      {{"command_id", uuid(9810)},
+       {"expected_revision", saved_at},
+       {"performance_id", performance},
+       {"name", "Headered take"},
+       {"recording_artifact", nullptr}},
+      {}));
+  const auto inspected = runtime->dispatch(
+      "performance.inspect", {{"performance_id", performance}}, {});
+  check_success(inspected);
+  const auto& events =
+      inspected.at("result").at("performance").at("events");
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.at(0).at("kind") == "pad_hit");
+  LMDJ_CHECK(events.at(0).at("input_sequence") == "1");
+
+  // Replacement Project: the old epoch cannot publish into it.
+  switch_grid_project(*runtime);
+  const auto stale = runtime->dispatch(
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(9808)},
+       {"expected_control_sequence", "0"},
+       {"intent", {{"kind", "hold_on"}}}},
+      {});
+  LMDJ_CHECK(!stale.value("ok", false));
+}
+
 // #1789: a replay holds the Runtime only for its own Project, so a Project
 // opened during it publishes its own Pattern view.
 void test_a_project_switch_during_a_replay_publishes_its_own_view() {
@@ -10656,6 +10794,7 @@ int main() {
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
     test_pattern_transport_status_reports_the_rendered_frame();
     test_pattern_events_edit_during_a_replay_returns_at_its_end();
+    test_headered_live_control_flows_through_control_runtime();
     test_a_pad_delete_during_a_replay_stops_only_the_live_voice();
     test_an_undo_during_a_replay_publishes_nothing_over_it();
     test_a_bpm_change_during_a_replay_publishes_nothing_over_it();

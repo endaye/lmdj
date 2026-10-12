@@ -23,6 +23,8 @@ const PERFORMANCE_OPERATIONS = Object.freeze([
   "performance.record.begin",
   "performance.record.event",
   "performance.fx.gesture",
+  "performance.live.control",
+  "performance.live.status",
   "performance.record.launch-request",
   "performance.record.flush",
   "performance.record.stop",
@@ -64,6 +66,7 @@ function validRequests() {
     ["performance.list", {}],
     ["performance.inspect", {performance_id: ids[2]}],
     ["performance.record.begin", {command_id: ids[1], expected_revision: 2, session_id: ids[2], performance_id: ids[3]}],
+    ["performance.record.begin", {command_id: ids[1], expected_revision: 2, session_id: ids[2], performance_id: ids[3], control_epoch: ids[5]}],
     ...[
       {...eventBase, kind: "pad_press", slot: 7, velocity: 100},
       {...eventBase, kind: "pad_release", slot: 7},
@@ -81,6 +84,15 @@ function validRequests() {
     ["performance.fx.gesture", {event: {kind: "fx_release", fx: "reverb"}}],
     ["performance.fx.gesture", {event: {kind: "hold_on"}}],
     ["performance.fx.gesture", {event: {kind: "hold_off"}}],
+    ["performance.live.status", {}],
+    ["performance.live.control", {control_epoch: ids[5], command_id: ids[6], expected_control_sequence: "0", intent: {kind: "hold_on"}}],
+    ["performance.live.control", {control_epoch: ids[5], command_id: ids[6], expected_control_sequence: "1", intent: {kind: "pad_mute", slot: 63, enabled: true}}],
+    ["performance.live.control", {control_epoch: ids[5], command_id: ids[6], expected_control_sequence: "2", intent: {kind: "filter_parameter", phase: "engage", parameter: "cutoff_hz", value: 800}}],
+    ["performance.live.control", {control_epoch: ids[5], command_id: ids[6], expected_control_sequence: "3", intent: {kind: "fx_release", fx: "delay", gesture_generation: ids[7]}}],
+    ["performance.record.event", {session_id: ids[2], event_id: ids[3], control_epoch: ids[5], expected_recording_sequence: "4", event: {kind: "fx_move", fx: "delay", value: 500, gesture_id: ids[8], gesture_generation: ids[9]}}],
+    ["performance.record.event", {session_id: ids[2], event_id: ids[3], control_epoch: ids[5], expected_recording_sequence: "5", event: {kind: "clear_pad_gates"}}],
+    ["performance.record.event", {session_id: ids[2], event_id: ids[3], control_epoch: ids[5], expected_recording_sequence: "6", event: {kind: "pad_mute", slot: 0, enabled: false}}],
+    ["performance.record.launch-request", {session_id: ids[2], request_id: ids[3], pattern_slot: 4, control_epoch: ids[5], expected_recording_sequence: "7"}],
     ["performance.record.flush", {session_id: ids[2], command_id: ids[3]}],
     ["performance.record.stop", {session_id: ids[2], request_id: ids[3]}],
     ["performance.record.status", {}],
@@ -100,7 +112,7 @@ function validRequests() {
 }
 
 test("locks the complete Performance operation inventory", () => {
-  assert.equal(PERFORMANCE_OPERATIONS.length, 24);
+  assert.equal(PERFORMANCE_OPERATIONS.length, 26);
   assert.deepEqual(
     HOST_OPERATIONS.filter((operation) =>
       operation.startsWith("performance.") || operation.startsWith("pattern.slot.")),
@@ -186,6 +198,15 @@ const status = {
   open_pad_gestures: 0, open_fx_gestures: 0, hold: false,
   pending_launch: null, last_launch_ack: null,
 };
+const liveState = {
+  hold: false,
+  filter: {mode: "legacy", engaged: false, frozen: false, value: 0},
+  other_fx: Object.fromEntries(
+    ["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"]
+      .map((name) => [name, {engaged: false, frozen: false, value: 0}])),
+  muted_slots: [],
+  solo_slots: [],
+};
 
 function validResults() {
   const revisioned = new Set([
@@ -204,6 +225,20 @@ function validResults() {
     ["performance.record.begin", lifecycle],
     ["performance.record.event", {event_id: ids[3], accepted_tick: 0, input_sequence: 1, coalesced: false, replayed: false}],
     ["performance.fx.gesture", {applied: true}],
+    ["performance.live.control", {
+      command_id: ids[6], control_epoch: ids[5], control_sequence: "2",
+      gesture_generation: ids[7], accepted: true, applied: false,
+      replayed: false,
+    }],
+    ["performance.live.status", {
+      available: true, control_epoch: ids[5], accepted: liveState,
+      applied: liveState,
+      runtime_generations: Object.fromEntries(
+        ["crush", "cutter", "delay", "filter", "gate", "reverse", "reverb", "stutter"]
+          .map((name) => [name, null])),
+      accepted_control_sequence: "1", applied_control_sequence: "1",
+      reset_pending: false, begin_pending: false,
+    }],
     ["performance.record.launch-request", {request_id: ids[3], state: "pending", target_tick: 3840}],
     ["performance.record.flush", lifecycle],
     ["performance.record.stop", {request_id: ids[3], session_id: ids[2], performance_id: ids[4], state: "stopped", pending_event_count: 0, replayed: false}],
@@ -318,6 +353,153 @@ test("validates projected Performance names by Unicode code point", () => {
       response(operation, rejected), operation,
     ));
   }
+});
+
+test("rejects lossy sequences, out-of-range slots, and headered shape drift", () => {
+  const control = (intent) => ({
+    control_epoch: ids[5], command_id: ids[6],
+    expected_control_sequence: "0", intent,
+  });
+  // Opaque Core sequences are canonical decimal strings: no sign, no leading
+  // zero, no float, no uint64 overflow, never a Number.
+  for (const bad of ["01", "+1", "1.0", "18446744073709551616", 1, -1]) {
+    expectProtocolMismatch(() => request(
+      "performance.live.control",
+      {...control({kind: "hold_on"}), expected_control_sequence: bad},
+    ));
+    expectProtocolMismatch(() => request("performance.record.event", {
+      session_id: ids[2], event_id: ids[3], control_epoch: ids[5],
+      expected_recording_sequence: bad, event: {kind: "hold_on"},
+    }));
+  }
+  // Slots are 0..63 safe integers; a JS 32-bit mask is not a slot list.
+  expectProtocolMismatch(() => request(
+    "performance.live.control",
+    control({kind: "pad_mute", slot: 64, enabled: true}),
+  ));
+  expectProtocolMismatch(() => request(
+    "performance.live.control",
+    control({kind: "pad_solo", slot: -1, enabled: true}),
+  ));
+  expectProtocolMismatch(() => request(
+    "performance.live.control",
+    control({kind: "pad_mute", slot: 2.5, enabled: true}),
+  ));
+  // Intent shapes are closed: no extra key, no Host-side generation on an
+  // engage, no legacy gesture id on the headered fx_engage.
+  expectProtocolMismatch(() => request(
+    "performance.live.control",
+    control({kind: "hold_on", generation: ids[7]}),
+  ));
+  expectProtocolMismatch(() => request(
+    "performance.live.control",
+    control({kind: "filter_parameter", phase: "engage", parameter: "cutoff_hz", value: 19}),
+  ));
+  expectProtocolMismatch(() => request(
+    "performance.live.control",
+    control({kind: "filter_parameter", phase: "engage", parameter: "cutoff_hz", value: 20_001}),
+  ));
+  expectProtocolMismatch(() => request("performance.record.event", {
+    session_id: ids[2], event_id: ids[3], control_epoch: ids[5],
+    expected_recording_sequence: "0",
+    event: {kind: "fx_engage", fx: "delay", value: 500, gesture_id: ids[8]},
+  }));
+  expectProtocolMismatch(() => request("performance.record.event", {
+    session_id: ids[2], event_id: ids[3], control_epoch: ids[5],
+    expected_recording_sequence: "0",
+    event: {kind: "pad_mute", slot: 0, enabled: true, mask: "0x1"},
+  }));
+  // The two headered keys come as a pair; neither alone selects the profile.
+  expectProtocolMismatch(() => request("performance.record.begin", {
+    command_id: ids[1], expected_revision: 2, session_id: ids[2],
+    performance_id: ids[3], control_epoch: ids[5], header: {},
+  }));
+});
+
+const liveStateControl = {
+  command_id: ids[6], control_epoch: ids[5], control_sequence: "2",
+  gesture_generation: ids[7], accepted: true, applied: false,
+  replayed: false, project_revision: null,
+};
+
+test("validates the new live results and rejects their drift", () => {
+  const response = (operation, result) => ({
+    protocol_version: PROTOCOL_VERSION,
+    request_id: ids[0],
+    ok: true,
+    result,
+  });
+  assert.equal(validateResponseEnvelope(
+    response("performance.live.control", liveStateControl),
+    "performance.live.control",
+  ).result.accepted, true);
+  // A Number where an opaque sequence belongs is rejected.
+  expectProtocolMismatch(() => validateResponseEnvelope(response(
+    "performance.live.control",
+    {...liveStateControl, control_sequence: 2},
+  ), "performance.live.control"));
+  // The unavailable status never fakes a neutral state.
+  const unavailable = {
+    available: false, control_epoch: null, accepted: null, applied: null,
+    accepted_control_sequence: null, applied_control_sequence: null,
+    reset_pending: false, begin_pending: false, project_revision: null,
+  };
+  assert.equal(validateResponseEnvelope(
+    response("performance.live.status", unavailable),
+    "performance.live.status",
+  ).result.available, false);
+  expectProtocolMismatch(() => validateResponseEnvelope(response(
+    "performance.live.status",
+    {...unavailable, accepted: liveState},
+  ), "performance.live.status"));
+  // The headered begin result carries the fence state and mapping.
+  const headeredBegin = {
+    performance_id: ids[3], committed_revision: 3, replayed: false,
+    profile: "header_input_sequence", control_epoch: ids[5],
+    core_control_ready: false, next_recording_sequence: "0",
+    fx_bindings: [{
+      fx: "delay",
+      gesture_generation: ids[7],
+      recording_gesture_id: ids[8],
+    }],
+    project_revision: 3,
+  };
+  assert.equal(validateResponseEnvelope(
+    response("performance.record.begin", headeredBegin),
+    "performance.record.begin",
+  ).result.core_control_ready, false);
+  expectProtocolMismatch(() => validateResponseEnvelope(response(
+    "performance.record.begin",
+    {...headeredBegin, fx_bindings: [{fx: "flanger"}]},
+  ), "performance.record.begin"));
+  // The headered event receipt: fresh typed shape and replayed admission.
+  const freshEvent = {
+    event_id: ids[3], accepted_tick: 16, input_sequence: "2",
+    next_recording_sequence: "2", result: "published", coalesced: false,
+    gesture_generation: ids[7], recording_gesture_id: ids[8],
+    replayed: false, project_revision: null,
+  };
+  assert.equal(validateResponseEnvelope(
+    response("performance.record.event", freshEvent),
+    "performance.record.event",
+  ).result.result, "published");
+  const replayedEvent = {
+    admission: {
+      request_id: ids[3], expected_recording_sequence: "1",
+      accepted_tick: 16,
+      input_sequence: "2", phase: "prepared", result: "not_published",
+      event_input_sequences: [], binding_result: null,
+    },
+    replayed: true, project_revision: null,
+  };
+  assert.equal(validateResponseEnvelope(
+    response("performance.record.event", replayedEvent),
+    "performance.record.event",
+  ).result.admission.phase, "prepared");
+  expectProtocolMismatch(() => validateResponseEnvelope(response(
+    "performance.record.event",
+    {...freshEvent, input_sequence: 2},
+  ), "performance.record.event"));
 });
 
 test("transport validates a successful result against its pending operation", async () => {
