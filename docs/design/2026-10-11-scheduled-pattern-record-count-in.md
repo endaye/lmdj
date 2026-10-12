@@ -1047,3 +1047,24 @@ This additive API owes Web Runtime Platform MINOR and Creator PATCH at the next
 coordinated version settlement; current main's existing identity is not a new
 allocation. Complete SDK/controller/type/Portal verification, unchanged packaged
 recovery and original full Creator proof remain distinct from physical acceptance.
+
+
+## Perform application shutdown is an independent owner boundary
+
+A positive SDK terminal receipt covers SDK/Native/backend ownership, while
+Perform capture/WAV and durable finalization remain application obligations.
+Public UI Stop/Leave/Save may report an error without throwing; cached close
+must retain and reject the actual unresolved shutdown operation's original
+failure. Unknown begin or write responses keep their exact identity and debt.
+An absent revision/resource reference, stopped UI phase or fulfilled action
+Promise cannot prove cleanup. Genuine matching disposition/readback may settle
+only its corresponding obligation. An unrelated display/action failure with
+known no owner and actual successful cleanup does not block clean shutdown.
+
+The registered real controller.close barrier must propagate this failure to
+Creator replacement even if independently modeled SDK cleanup is positive.
+Original error, retained temporary/artifact identity and pre-settlement hold
+remain far-side assertions. Model/component coverage remains separate from
+actual OPFS/PCM/Native retirement and the original complete packaged journey.
+This private fix owes Creator PATCH at the next coordinated settlement, without
+new SDK/wire/persisted Contract or Product allocation.

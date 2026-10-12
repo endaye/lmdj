@@ -837,3 +837,14 @@ The prior five recovery cases and evidence remain unchanged. This is test
 source, UNRUN; native seed/capture interleaving and all type/component/Portal/
 browser/native/shipping acceptance remain HOLD. The earlier one-time install
 exit0 and withheld optional lifecycle warning are unchanged readiness facts.
+
+
+### Perform 关闭的应用结算边界
+
+Perform 的公开 Stop／Leave／Save 可以继续通过 UI 报告操作失败，但原实例
+关闭仍须保留真实未结算的捕获、WAV 和持久化责任。缓存的 controller.close
+向已注册关闭屏障传播原操作失败；SDK 的正向释放结果不能替代这些应用
+结算，替代实例不得越过失败屏障。未知 begin／写入结果、停止画面或空资源
+引用不证明 owner 已释放；只有真实匹配回执与实际清理才能结清对应责任。
+已知无 owner 且实际清理成功的失败操作仍可正常关闭，不以任意 UI 错误
+永久锁住会话。当前源码与组件验证不表示原完整浏览器或 OPFS/物理验收通过。

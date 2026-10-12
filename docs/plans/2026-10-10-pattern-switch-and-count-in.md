@@ -1373,3 +1373,50 @@ manifests or identities; the plan records its failing premise and owning test.
 
 Version impact: none. This Task changes a test fixture and its plan only;
 public interfaces, persisted Contracts and Product identity remain unchanged.
+
+
+## S6 followup — preserve actual Perform shutdown outcomes
+
+The real Perform controller currently catches setup, Core/capture Stop and
+finalization failures before its registered close barrier observes them. The
+Provider's positive SDK cleanup cannot prove application WAV/storage work has
+settled. This remains at main `cbd7f898604f4e0953cb912279976bf12badaecc`;
+W source starts on integrated `1550151e8b05155e705bbcb630d05f6778d5e49a`.
+Verified V positive-cleanup/Provider changes are a dependency before runtime
+verification; their pending source draft is not acceptance.
+
+**Declared files:** `apps/creator-web/src/state/perform_state.ts`,
+`apps/creator-web/test/perform_surface.test.tsx`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`, and
+`apps/docs-site/docs/hosts/creator-web.mdx`.
+
+Preserve original public Stop/Leave/Save UI outcomes while privately retaining
+the actual shutdown-relevant operation identity, original failure and unresolved
+ownership. Cached close rejects the original unresolved failure after all safe
+existing work settles; repeated calls retain that exact Promise. No global
+reported-error flag may permanently block a known no-owner operation whose
+actual cleanup succeeded. Unknown begin or durable write response remains
+unknown; absent revision/resources or a fulfilled UI method is not settlement.
+Only genuine matching retry/readback and actual cleanup can clear matching debt.
+No extra Stop/cancel/admission, fake owner ACK or second writer is introduced.
+
+**Lowest-tier verification / defect caught:** use the real Perform controller
+through its actual registered Provider barrier. Hold then reject original Core
+Stop, capture/WAV, setup compensation and finalization outcomes; even an
+independently positive modeled SDK cleanup cannot create a new factory. Keep
+original error/retained artifact identity and far-side assertions. A strict known
+no-owner/actually-cleaned companion must allow genuine closure, detecting an
+overly broad error latch. Preserve every existing Perform and Provider journey,
+original budgets/workers and complete tests. Root owns same final fixture
+old/fixed discrimination, full Perform/Creator controller, types/build and full
+Portal before atomic commit. Component facts do not certify actual SDK Native
+retirement, OPFS/PCM, physical hearing or original full packaged Creator. Any
+additional packaged producer witness must have an explicitly expanded scope
+before editing; final S6 retains its complete original eight-group obligations.
+
+### Version Management
+
+Version impact: Creator PATCH debt at the next coordinated settlement. This
+private correctness Task allocates no identity or Product Build and changes no
+public SDK API, Native wire or persisted Contract. Documentation impact:
+required on `/hosts/creator-web/`, with this design and plan updated together.

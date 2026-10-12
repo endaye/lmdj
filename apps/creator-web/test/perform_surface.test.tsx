@@ -1,9 +1,15 @@
 import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
+import {useEffect} from "react";
+import {RuntimeProvider, useRuntime} from "../src/runtime/runtime_context";
+import type {RuntimeDiagnostics, RuntimeHostState} from "../src/runtime/runtime_types";
+import {PerformanceRecordingStore} from "../src/record/performance_recording_store";
+import {openWavStreamWriter} from "../src/record/wav_stream_writer";
 
 import type {ContextualEncoders} from "../src/components/physical_controls";
-import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
+import type {PatternTransportStatus, PerformanceMasterCapture} from
+  "@lmdj/web-runtime-platform/runtime_types";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
@@ -601,17 +607,22 @@ test("installs writer and queue sink, starts capture, then begins the Core draft
     .toBe(fixture.controller.recordingSink());
 });
 
-test("capture start failure cleans the temporary WAV without beginning Core", async () => {
+test("unknown capture start failure retains the temporary WAV without beginning Core", async () => {
   const fixture = controllerFixture();
+  const original = new Error("tap unavailable");
   fixture.runtime.calls.capture.mockImplementationOnce(async () => {
     fixture.order.push("capture");
-    throw new Error("tap unavailable");
+    throw original;
   });
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
-  await waitFor(() => expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
   expect(fixture.runtime.calls.begin).not.toHaveBeenCalled();
-  expect(fixture.order).toEqual(["writer", "queue", "capture", "temporary-cleanup"]);
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.order).toEqual(["writer", "queue", "capture"]);
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  await expect(fixture.controller.close()).rejects.toBe(original);
 });
 
 test("capture readiness loss stops the matching Core recording and WAV", async () => {
@@ -642,20 +653,26 @@ test("capture-stop rejection converges through the controller stop path", async 
     expect.objectContaining({message: "tap stop failed"}));
 });
 
-test("begin failure stops capture, drains its tail, and removes the temporary WAV", async () => {
+test("unknown begin failure stops capture, drains its tail, and retains the temporary WAV", async () => {
   const fixture = controllerFixture();
+  const original = new Error("begin rejected");
   fixture.runtime.calls.begin.mockImplementationOnce(async () => {
     fixture.order.push("begin");
-    throw new Error("begin rejected");
+    throw original;
   });
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
-  await waitFor(() => expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
   expect(fixture.order).toEqual([
     "writer", "queue", "capture", "begin", "capture-stop", "tail-drained",
-    "temporary-cleanup",
   ]);
   expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  expect(fixture.controller.getState().recording.expectedRevision).toBeNull();
+  expect(fixture.controller.getState().wavStatus).toContain("temporary retained");
+  await expect(fixture.controller.close()).rejects.toBe(original);
 });
 
 test("projection failure after begin discards the stopped Core draft and temporary WAV", async () => {
@@ -1821,3 +1838,607 @@ test("touch continues a rotary FX gesture until page exit journals its matching 
   expect(fixture.controller.getState().fx.reverb).toBe(500);
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
 });
+
+
+// This is a component storage/capture model with real Controller, WAV writer
+// and recording Store. Its receipts are not production OPFS/Native/physical proof.
+async function shutdownRecordingFixture() {
+  const runtime = sessionFixture();
+  let temporaryPresent = true;
+  let bytes = new Uint8Array(0);
+  let writerOwned = false;
+  let captureOwned = false;
+  let coreOwned = false;
+  let coreRecordState: "idle" | "active" | "stopped" = "idle";
+  let nextCheckpoint: Promise<void> | null = null;
+  let abortFailure: {error: unknown} | null = null;
+  let checkpointEntered = false;
+  const abort = vi.fn(async () => {
+    if (abortFailure !== null) throw abortFailure.error;
+    writerOwned = false;
+  });
+  let sink: Parameters<CreatorPerformanceRuntimeSession["startPerformanceMasterCapture"]>[0] | null = null;
+  const truth = {revision: 7, name: null as string | null, artifact: null as unknown};
+  const file = {
+    name: `${ids.performance}.wav`,
+    async createWritable({keepExistingData = false} = {}) {
+      if (writerOwned) throw new Error("The original modeled writer still owns its transaction");
+      writerOwned = true;
+      let pending = keepExistingData ? bytes.slice() : new Uint8Array(0);
+      let cursor = 0;
+      return {
+        async seek(position: number) { cursor = position; },
+        async write(data: Uint8Array) {
+          const next = new Uint8Array(Math.max(pending.length, cursor + data.length));
+          next.set(pending); next.set(data, cursor); pending = next; cursor += data.length;
+        },
+        async truncate(length: number) {
+          const next = new Uint8Array(length);
+          next.set(pending.subarray(0, length)); pending = next;
+        },
+        async close() {
+          if (nextCheckpoint !== null) {
+            const original = nextCheckpoint; nextCheckpoint = null;
+            checkpointEntered = true;
+            await original;
+          }
+          bytes = pending; writerOwned = false;
+        },
+        abort,
+      };
+    },
+    async getFile() {
+      if (!temporaryPresent) throw new Error("The original temporary has been deleted");
+      const snapshot = bytes.slice();
+      return {size: snapshot.length, type: "audio/wav",
+        slice(start = 0, end = snapshot.length) {
+          return {arrayBuffer: async () => snapshot.slice(start, end).buffer};
+        }};
+    },
+  };
+  const cleanupTemporary = vi.fn(async () => {
+    if (writerOwned || captureOwned) throw new Error("Cannot delete live original capture/writer bytes");
+    temporaryPresent = false;
+  });
+  const installed = new Map<string, Uint8Array>();
+  const storage = {
+    installManaged: vi.fn(async (artifact: {sha256: string}) => {
+      installed.set(artifact.sha256, bytes.slice());
+      return {name: `${artifact.sha256}.wav`};
+    }),
+    deleteTemporary: cleanupTemporary,
+  };
+  const writer = await openWavStreamWriter(file, {
+    perform_recording_frames: 86_400_000, perform_recording_queue_batches: 32,
+  });
+  const bind = vi.fn<CreatorPerformanceRuntimeSession["bindPerformanceRecording"]>(async (request) => {
+    truth.artifact = request.recordingArtifact; truth.revision = 11;
+    return {performanceId: ids.performance, committedRevision: 11,
+      replayed: false, projectRevision: 11};
+  });
+  runtime.session.bindPerformanceRecording = bind;
+  const discard = runtime.session.discardPerformance as ReturnType<typeof vi.fn>;
+  discard.mockImplementation(async () => {
+    truth.name = null; truth.artifact = null; truth.revision = 11;
+    return {committedRevision: 11};
+  });
+  const save = runtime.session.savePerformance as ReturnType<typeof vi.fn>;
+  save.mockImplementation(async (request) => {
+    truth.name = request.name; truth.revision = 10;
+    return {performanceId: ids.performance, committedRevision: 10, replayed: false, projectRevision: 10};
+  });
+  const inspect = runtime.session.inspectPerformance as ReturnType<typeof vi.fn>;
+  inspect.mockImplementation(async () => ({id: ids.performance, name: truth.name,
+    projectRevision: truth.revision, recordingArtifact: truth.artifact, events: []}));
+  runtime.calls.begin.mockImplementation(async () => {
+    coreOwned = true; coreRecordState = "active"; truth.revision = 8;
+    return {performanceId: ids.performance, committedRevision: 8, replayed: false, projectRevision: 8};
+  });
+  runtime.calls.stop.mockImplementation(async () => {
+    coreOwned = false; coreRecordState = "stopped";
+    return {requestId: "stop", sessionId: ids.session, performanceId: ids.performance,
+      state: "stopped" as const, pendingEventCount: 0, replayed: false, projectRevision: null};
+  });
+  // Successful raw events refresh this authoring status. This complete reply
+  // models the original begin/Stop operations, not an owner retirement receipt.
+  (runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(async () => authority({state: coreRecordState,
+      sessionId: coreRecordState === "idle" ? null : ids.session,
+      performanceId: coreRecordState === "idle" ? null : ids.performance}));
+  const captureStop = vi.fn(async () => { captureOwned = false; sink?.onStopped(); });
+  const startCapture = vi.fn<CreatorPerformanceRuntimeSession["startPerformanceMasterCapture"]>(
+    async (capturing): Promise<PerformanceMasterCapture> => {
+      sink = capturing; captureOwned = true;
+      return {stop: captureStop};
+    });
+  runtime.session.startPerformanceMasterCapture = startCapture;
+  const store = new PerformanceRecordingStore(file, storage, runtime.session);
+  const refresh = vi.fn(async () => ({revision: truth.revision}));
+  const reports = vi.fn();
+  let sequence = 0;
+  const controller = createPerformController({session: runtime.session,
+    getCreatorState: () => creatorState(), refreshProject: refresh,
+    reportFailure: reports, opfsAvailable: () => true,
+    dependencies: {
+      createId: () => [ids.session, ids.performance][sequence++] ?? `shutdown-${sequence}`,
+      prepareRecording: async () => ({writer, store, cleanupTemporary}),
+    }});
+  await controller.refreshRecovery();
+  return {runtime: {...runtime, calls: {...runtime.calls, capture: startCapture}},
+    controller, file, writer, store, storage, captureStop,
+    cleanupTemporary, bind, discard, save, inspect, refresh, reports, truth, installed,
+    temporaryPresent: () => temporaryPresent,
+    bytes: () => bytes.slice(), writerOwned: () => writerOwned,
+    captureOwned: () => captureOwned, coreOwned: () => coreOwned,
+    getSink: () => sink, abort,
+    holdNextCheckpoint: (original: Promise<void>) => { nextCheckpoint = original; },
+    rejectAbort: (error: unknown) => { abortFailure = {error}; },
+    checkpointEntered: () => checkpointEntered,
+  };
+}
+
+function modeledCleanupSession(session: CreatorPerformanceRuntimeSession) {
+  const listeners = new Set<(value: RuntimeHostState) => void>();
+  let diagnostics = {state: "audio-suspended", error_code: null, error_details: {},
+    capabilities: {opfs: true, opfsWritableReplace: true}} as unknown as RuntimeDiagnostics;
+  const independentCleanup = deferred<boolean>();
+  const wait = vi.fn(() => independentCleanup.promise);
+  const close = vi.fn(async () => false);
+  const modeled = Object.assign(session, {
+    start: vi.fn(async () => true), close, waitForTerminalCleanup: wait,
+    diagnostics: () => diagnostics,
+    subscribeHostState(listener: (value: RuntimeHostState) => void) {
+      listeners.add(listener); return () => listeners.delete(listener);
+    },
+    subscribeDiagnostics: () => () => {},
+  });
+  return {session: modeled, independentCleanup, wait, close,
+    emit(state: string) {
+      diagnostics = {...diagnostics, state, error_code: "HOST_TIMEOUT"};
+      for (const listener of [...listeners]) listener({state, errorCode: "HOST_TIMEOUT",
+        errorDetails: {reason: "independent modeled SDK fatal"}});
+    },
+  };
+}
+
+function PerformShutdownBoundary({barrier}: {barrier: () => Promise<void>}) {
+  const runtime = useRuntime();
+  useEffect(() => runtime.registerShutdownBarrier(barrier), [runtime.registerShutdownBarrier, barrier]);
+  return <>
+    <output aria-label="shutdown-provider-phase">{runtime.phase}</output>
+    <button type="button" onClick={runtime.retryRuntime}>Retry failed Perform Runtime</button>
+  </>;
+}
+
+function mountPerformShutdown(fixture: {controller: ReturnType<typeof createPerformController>;
+  runtime: {session: CreatorPerformanceRuntimeSession}}) {
+  const old = modeledCleanupSession(fixture.runtime.session);
+  const next = modeledCleanupSession(sessionFixture().session);
+  const sessions = [old.session, next.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  // Exact actual controller.close is the registered producer; no synthetic reject.
+  const barrier = vi.fn(() => fixture.controller.close());
+  const rendered = render(<RuntimeProvider factory={factory}>
+    <PerformShutdownBoundary barrier={barrier} />
+  </RuntimeProvider>);
+  return {old, next, factory, barrier, rendered};
+}
+
+function triggerPerformReplacement(harness: ReturnType<typeof mountPerformShutdown>, mode: "manual" | "automatic") {
+  act(() => harness.old.emit(mode === "automatic" ? "restart-required" : "failed"));
+  if (mode === "manual") fireEvent.click(screen.getByRole("button", {name: "Retry failed Perform Runtime"}));
+}
+
+for (const mode of ["manual", "automatic"] as const) {
+  for (const stage of ["core-stop", "capture-stop"] as const) {
+    test(`${mode} Provider blocks replacement after the original Perform ${stage} fails despite independent positive modeled SDK cleanup`, async () => {
+      const fixture = await shutdownRecordingFixture();
+      await fixture.controller.record();
+      const originalBytes = fixture.bytes();
+      const originalTruth = {...fixture.truth};
+      const original = new Error(`original ${stage} failure`);
+      const gate = deferred<void>();
+      if (stage === "core-stop") fixture.runtime.calls.stop.mockImplementationOnce(async () => {
+        await gate.promise;
+        throw original;
+      });
+      else fixture.captureStop.mockImplementationOnce(async () => {
+        await gate.promise;
+        throw original;
+      });
+      const harness = mountPerformShutdown(fixture);
+      await screen.findByText("ready");
+      harness.old.independentCleanup.resolve(true);
+      expect(await harness.old.independentCleanup.promise).toBe(true);
+      triggerPerformReplacement(harness, mode);
+      await waitFor(() => expect(stage === "core-stop" ? fixture.runtime.calls.stop : fixture.captureStop)
+        .toHaveBeenCalledTimes(1));
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(fixture.temporaryPresent()).toBe(true);
+      await act(async () => { gate.resolve(); await gate.promise; });
+      await expect(fixture.controller.close()).rejects.toBe(original);
+      await act(async () => {});
+      const originalClose = harness.barrier.mock.results[0]?.value;
+      expect(fixture.controller.close()).toBe(originalClose);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.old.wait).not.toHaveBeenCalled();
+      expect(harness.old.close).not.toHaveBeenCalled();
+      expect(fixture.controller.getState().recording.phase).toBe("stopped");
+      expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+      expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+      expect(fixture.bytes()).toEqual(originalBytes);
+      expect(fixture.truth).toEqual(originalTruth);
+      expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+      expect(fixture.reports).toHaveBeenCalledWith("Perform", original);
+      // Unrelated save/discard cannot delete the still-unsettled exact owner.
+      await fixture.controller.save("Unrelated retry");
+      await fixture.controller.discard();
+      expect(fixture.bind).not.toHaveBeenCalled();
+      expect(fixture.discard).not.toHaveBeenCalled();
+      expect(fixture.temporaryPresent()).toBe(true);
+      expect(fixture.coreOwned()).toBe(stage === "core-stop");
+      expect(fixture.captureOwned()).toBe(stage === "capture-stop");
+    });
+  }
+}
+
+for (const stage of ["bind", "discard", "save-unknown"] as const) {
+  test(`real Perform ${stage} retained failure reaches the registered barrier and prevents automatic replacement`, async () => {
+    const fixture = await shutdownRecordingFixture();
+    await fixture.controller.record();
+    await fixture.controller.stop();
+    const original = new Error(`original ${stage} storage failure`);
+    const gate = deferred<never>();
+    if (stage === "bind") fixture.bind.mockImplementationOnce(() => gate.promise);
+    else if (stage === "discard") fixture.discard.mockImplementationOnce(() => gate.promise);
+    else {
+      fixture.save.mockImplementationOnce(() => gate.promise);
+      fixture.inspect.mockRejectedValueOnce(new Error("later readback also unavailable"));
+    }
+    const originalBytes = fixture.bytes();
+    const operation = stage === "discard" ? fixture.controller.discard() : fixture.controller.save("Original Take");
+    await waitFor(() => expect(stage === "bind" ? fixture.bind : stage === "discard" ? fixture.discard : fixture.save)
+      .toHaveBeenCalledTimes(1));
+    const retainedTruth = {...fixture.truth};
+    const harness = mountPerformShutdown(fixture);
+    await screen.findByText("ready");
+    harness.old.independentCleanup.resolve(true);
+    expect(await harness.old.independentCleanup.promise).toBe(true);
+    triggerPerformReplacement(harness, "automatic");
+    await waitFor(() => expect(harness.barrier).toHaveBeenCalledTimes(1));
+    expect(harness.factory).toHaveBeenCalledTimes(1);
+    expect(fixture.temporaryPresent()).toBe(true);
+    await act(async () => { gate.reject(original); await operation; });
+    await expect(fixture.controller.close()).rejects.toBe(original);
+    await act(async () => {});
+    expect(harness.factory).toHaveBeenCalledTimes(1);
+    expect(fixture.controller.close()).toBe(harness.barrier.mock.results[0]?.value);
+    expect(harness.old.wait).not.toHaveBeenCalled();
+    expect(fixture.bytes()).toEqual(originalBytes);
+    expect(fixture.file.name).toBe(`${ids.performance}.wav`);
+    expect(fixture.truth).toEqual(retainedTruth);
+    expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+    expect(fixture.temporaryPresent()).toBe(true);
+    expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+    expect(fixture.coreOwned()).toBe(false);
+    expect(fixture.captureOwned()).toBe(false);
+    expect(fixture.writerOwned()).toBe(false);
+  });
+}
+
+test("unknown original Core begin retains exact bytes and original error through the real manual Provider barrier", async () => {
+  const fixture = await shutdownRecordingFixture();
+  const original = new Error("original begin response lost");
+  const admitBegin = fixture.runtime.calls.begin.getMockImplementation()!;
+  fixture.runtime.calls.begin.mockImplementationOnce(async () => {
+    await admitBegin();
+    throw original;
+  });
+  await fixture.controller.record();
+  const bytes = fixture.bytes();
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  triggerPerformReplacement(harness, "manual");
+  await expect(fixture.controller.close()).rejects.toBe(original);
+  await act(async () => {});
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.bytes()).toEqual(bytes);
+  expect(fixture.controller.getState().recording.expectedRevision).toBeNull();
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  expect(fixture.coreOwned()).toBe(true); // Original begin was actually admitted in this component model.
+  expect(fixture.truth.revision).toBe(8);
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+});
+
+test("setup interrupted before Core submission closes actual capture/WAV and temporary before replacement", async () => {
+  const fixture = await shutdownRecordingFixture();
+  const captureGate = deferred<Awaited<ReturnType<CreatorPerformanceRuntimeSession["startPerformanceMasterCapture"]>>>();
+  fixture.runtime.calls.capture.mockImplementationOnce(() => captureGate.promise);
+  const starting = fixture.controller.record();
+  await waitFor(() => expect(fixture.runtime.calls.capture).toHaveBeenCalledTimes(1));
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(harness.barrier).toHaveBeenCalledTimes(1));
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  const queue = fixture.controller.recordingSink();
+  expect(queue).not.toBeNull();
+  captureGate.resolve({stop: vi.fn(async () => queue!.onStopped())});
+  await starting;
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+  await waitFor(() => expect(harness.factory).toHaveBeenCalledTimes(2));
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  expect(harness.old.wait).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.begin).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(1);
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.controller.getState().recording.phase).toBe("idle");
+  expect(fixture.reports).toHaveBeenCalledWith("Perform",
+    expect.objectContaining({message: "Performance controller closed during setup"}));
+});
+
+test("the same acknowledged bind cleanup retry clears only its real retained debt before clean close", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const original = new Error("original temporary deletion failed");
+  fixture.cleanupTemporary.mockRejectedValueOnce(original);
+  await fixture.controller.save("Matching Take");
+  expect(fixture.bind).toHaveBeenCalledTimes(1);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.controller.getState().bindingStatus).toBe("retry");
+  await fixture.controller.retryWavBind();
+  expect(fixture.bind).toHaveBeenCalledTimes(1);
+  expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(2);
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.truth.name).toBe("Matching Take");
+  expect(fixture.truth.artifact).not.toBeNull();
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+});
+
+test("a committed bind's display failure alone is not unresolved application shutdown ownership", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const commitBind = fixture.bind.getMockImplementation()!;
+  fixture.bind.mockImplementationOnce(async (request) => {
+    const receipt = await commitBind(request);
+    fixture.refresh.mockRejectedValueOnce(new Error("display projection unavailable"));
+    return receipt;
+  });
+  await fixture.controller.save("Display Only Failure");
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.controller.getState().bindingStatus).toBe("retry");
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.captureOwned()).toBe(false);
+  expect(fixture.coreOwned()).toBe(false);
+});
+
+
+test("original setup projection and failed real discard preserve exact errors and bytes at the Provider barrier", async () => {
+  const fixture = await shutdownRecordingFixture();
+  const primary = new Error("original setup projection failed");
+  const compensation = new Error("original discard response failed");
+  const gate = deferred<never>();
+  fixture.refresh.mockRejectedValueOnce(primary);
+  fixture.discard.mockImplementationOnce(() => gate.promise);
+  const starting = fixture.controller.record();
+  await waitFor(() => expect(fixture.discard).toHaveBeenCalledTimes(1));
+  const retainedBytes = fixture.bytes();
+  const retainedTruth = {...fixture.truth};
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(harness.barrier).toHaveBeenCalledTimes(1));
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  await act(async () => { gate.reject(compensation); await starting; });
+  await expect(fixture.controller.close()).rejects.toBe(primary);
+  await act(async () => {});
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.close()).toBe(harness.barrier.mock.results[0]?.value);
+  expect(fixture.reports).toHaveBeenCalledWith("Perform", primary);
+  expect(fixture.reports).toHaveBeenCalledWith("Perform", compensation);
+  expect(fixture.bytes()).toEqual(retainedBytes);
+  expect(fixture.truth).toEqual(retainedTruth);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.expectedRevision).toBe(8);
+  expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+});
+
+test("a trusted default preparation failure before any writer attempt does not latch shutdown failure", async () => {
+  const runtime = sessionFixture();
+  const previousStorage = navigator.storage;
+  Object.defineProperty(navigator, "storage", {configurable: true, value: undefined});
+  const reports = vi.fn();
+  const controller = createPerformController({session: runtime.session,
+    getCreatorState: () => creatorState(), refreshProject: async () => {},
+    opfsAvailable: () => true, reportFailure: reports});
+  try {
+    await controller.refreshRecovery();
+    await controller.record();
+    expect(reports).toHaveBeenCalledWith("Perform",
+      expect.objectContaining({message: "Origin-private storage is unavailable"}));
+    expect(runtime.calls.capture).not.toHaveBeenCalled();
+    expect(runtime.calls.begin).not.toHaveBeenCalled();
+    expect(controller.getState().recording.phase).toBe("idle");
+    const harness = mountPerformShutdown({controller, runtime});
+    await screen.findByText("ready");
+    harness.old.independentCleanup.resolve(true);
+    triggerPerformReplacement(harness, "manual");
+    await expect(controller.close()).resolves.toBeUndefined();
+    await waitFor(() => expect(harness.factory).toHaveBeenCalledTimes(2));
+    expect(await harness.old.independentCleanup.promise).toBe(true);
+    expect(harness.old.wait).toHaveBeenCalledTimes(1);
+  } finally {
+    Object.defineProperty(navigator, "storage", {configurable: true, value: previousStorage});
+  }
+});
+
+test("a late matching cleanup retry cannot rewrite the original cached rejected close or permit a factory", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const original = new Error("original temporary cleanup rejected");
+  fixture.cleanupTemporary.mockRejectedValueOnce(original);
+  await fixture.controller.save("Retained Take");
+  const pendingError = fixture.reports.mock.calls.find((call) =>
+    (call[1] as {cause?: unknown} | undefined)?.cause === original)?.[1];
+  expect(pendingError).toBeDefined();
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await expect(fixture.controller.close()).rejects.toBe(pendingError);
+  const cached = fixture.controller.close();
+  await fixture.controller.retryWavBind();
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.bind).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.close()).toBe(cached);
+  await expect(cached).rejects.toBe(pendingError);
+  fireEvent.click(screen.getByRole("button", {name: "Retry failed Perform Runtime"}));
+  await act(async () => {});
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+});
+
+
+test("the original real WAV checkpoint holds the registered Perform barrier until durable PCM completion", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  const original = deferred<void>();
+  fixture.holdNextCheckpoint(original.promise);
+  fixture.getSink()!.onBatch([new Float32Array([0.25, -0.25]), new Float32Array([0.5, -0.5])]);
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(fixture.checkpointEntered()).toBe(true));
+  let settled = false;
+  const close = fixture.controller.close();
+  void close.then(() => { settled = true; });
+  await act(async () => {});
+  expect(settled).toBe(false);
+  expect(fixture.writerOwned()).toBe(true);
+  expect(fixture.bytes()).toHaveLength(44);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(harness.old.close).not.toHaveBeenCalled();
+  expect(harness.old.wait).not.toHaveBeenCalled();
+  await act(async () => { original.resolve(); await close; });
+  await waitFor(() => expect(harness.factory).toHaveBeenCalledTimes(2));
+  expect(fixture.writer.snapshot).toMatchObject({state: "sealed", reason: "stopped", durableFrames: 2});
+  expect(fixture.bytes()).toHaveLength(52);
+  expect(new DataView(fixture.bytes().buffer).getUint32(40, true)).toBe(8);
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.captureOwned()).toBe(false);
+  expect(fixture.coreOwned()).toBe(false);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  expect(fixture.truth).toEqual({revision: 8, name: null, artifact: null});
+  expect(harness.old.close).toHaveBeenCalledTimes(1);
+  expect(harness.old.wait).toHaveBeenCalledTimes(1);
+});
+
+test("a real Queue writer-error snapshot cannot erase the failed original writable abort or permit replacement", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  const checkpoint = deferred<void>();
+  const checkpointFailure = new Error("original writable checkpoint failed");
+  const abortFailure = new Error("original writable abort failed and still owns its transaction");
+  fixture.holdNextCheckpoint(checkpoint.promise);
+  fixture.rejectAbort(abortFailure);
+  fixture.getSink()!.onBatch([new Float32Array([0.25, -0.25]), new Float32Array([0.5, -0.5])]);
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(fixture.checkpointEntered()).toBe(true));
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(fixture.writerOwned()).toBe(true);
+  const close = fixture.controller.close();
+  // Observe the original cached Promise before releasing the real storage operation.
+  void close.catch(() => {});
+  await act(async () => { checkpoint.reject(checkpointFailure); });
+  await waitFor(() => expect(fixture.reports.mock.calls.some(([, error]) =>
+    (error as {reason?: string} | undefined)?.reason === "writer-error")).toBe(true));
+  const realQueueFailure = fixture.reports.mock.calls.find(([, error]) =>
+    (error as {reason?: string} | undefined)?.reason === "writer-error")![1];
+  expect(Object.isFrozen(realQueueFailure)).toBe(true);
+  await expect(close).rejects.toBe(realQueueFailure);
+  expect(fixture.abort).toHaveBeenCalledTimes(1);
+  expect(fixture.abort).toHaveBeenCalledWith(checkpointFailure);
+  expect(fixture.writer.snapshot).toMatchObject({state: "sealed", reason: "writer-error", durableFrames: 0});
+  expect(fixture.writerOwned()).toBe(true);
+  expect(fixture.captureOwned()).toBe(false);
+  expect(fixture.coreOwned()).toBe(false);
+  expect(fixture.bytes()).toHaveLength(44);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.controller.getState().recording.wav?.reason).toBe("writer-error");
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  await fixture.controller.save("Do not delete the original owner");
+  await fixture.controller.discard();
+  expect(fixture.save).not.toHaveBeenCalled();
+  expect(fixture.bind).not.toHaveBeenCalled();
+  expect(fixture.discard).not.toHaveBeenCalled();
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.truth).toEqual({revision: 8, name: null, artifact: null});
+  expect(fixture.controller.close()).toBe(close);
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  expect(harness.old.close).not.toHaveBeenCalled();
+  expect(harness.old.wait).not.toHaveBeenCalled();
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  // The real writer currently hides abortFailure; this test does not invent its
+  // missing channel or claim that the live writable/physical owner was released.
+});
+
+
+for (const operation of ["raw-event", "flush"] as const) {
+  test(`an unrelated later ${operation} command cannot discharge the original unknown recording operation`, async () => {
+    const fixture = await shutdownRecordingFixture();
+    await fixture.controller.record();
+    const original = new Error(`original ${operation} response lost`);
+    if (operation === "raw-event") {
+      fixture.runtime.calls.raw.mockRejectedValueOnce(original);
+      await expect(fixture.controller.recordRawEvent({kind: "hold_on"})).rejects.toBe(original);
+      await fixture.controller.recordRawEvent({kind: "hold_off"});
+      expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
+    } else {
+      fixture.runtime.calls.flush.mockRejectedValueOnce(original);
+      await fixture.controller.flush();
+      await fixture.controller.flush();
+      expect(fixture.runtime.calls.flush).toHaveBeenCalledTimes(2);
+    }
+    await fixture.controller.stop();
+    expect(fixture.coreOwned()).toBe(false);
+    expect(fixture.captureOwned()).toBe(false);
+    expect(fixture.writerOwned()).toBe(false);
+    const harness = mountPerformShutdown(fixture);
+    await screen.findByText("ready");
+    harness.old.independentCleanup.resolve(true);
+    triggerPerformReplacement(harness, "automatic");
+    await expect(fixture.controller.close()).rejects.toBe(original);
+    await act(async () => {});
+    expect(await harness.old.independentCleanup.promise).toBe(true);
+    expect(harness.factory).toHaveBeenCalledTimes(1);
+    expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+    expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+    expect(fixture.temporaryPresent()).toBe(true);
+    expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  });
+}
