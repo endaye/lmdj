@@ -486,3 +486,22 @@ owner。该修复保留原五秒开录与 300 秒 stress 预算及所有生产�
 正常 close／suspend 已等待原 owner 时，丢失 admission 随后确认的匹配 profile
 Release 只在 lifecycle 实际 handoff 后使用真实本地 retained press 续接，不排在等待它的 Host 请求后。原 runtime
 短 admission 串行性与实际 handoff 一秒 deadline 不变；新输入与无关请求仍排原队列。
+
+
+### S6 协商 profile 的恢复探针期限（修复源码，执行验收未完成）
+
+恢复探针只绑定真实 Press。SDK 在等待 admission 前保留原 recovery epoch、
+前台 epoch 和原调用开始时间；Release 不获得 probe 身份。只有仍有效的同一
+probe 可以完成恢复或触发 SDK 失败。原一秒 deadline 到期会产生实际
+`HOST_TIMEOUT`／`restart-required`，普通 running Pad 超时仍只拒绝原 caller、
+继续保留真实 debt，不采用这项 probe 失败语义。
+
+真实消费回复到达后，SDK 在成功通知和 running 转换前再次检查原期限；即使
+timer 尚未执行，迟到回复也不能恢复旧会话。已失效 probe 的真实消费仍结清
+原 ticket／physical debt，却不能覆盖新的恢复 epoch 或发布旧恢复成功。真实
+voice-capacity 失败保留原错误码和失败 outcome。前台失效后迟到的 accepted
+admission 仍保留原 owner，并提交真实 correlated Release，不制造取消或 ACK。
+
+本段是独立恢复修复源码说明，不代表 packaged replacement 或完整 Creator
+验收通过。版本影响为未交付 S6 的 Web Runtime Platform PATCH 正确性债务；
+公开 API、Native wire、持久化 Contract 和 Product Build 均未改变。

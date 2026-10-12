@@ -8309,7 +8309,8 @@ test("total Native dispositions cannot relabel a press as release or a release a
 // Host seam admits once, keeps exact identities, and refuses consumer ACKs
 // until its own input, physical-owner and original count evidence gates pass.
 function retainedConsumerFixture({countMode = "accepted", retainedAvailable = true, loseInputAdmission = false,
-  terminate, beforeAdmission, admissionReply, beforeInputInspect, retainLifecycleUntilInputConsumed = false} = {}) {
+  terminate, beforeAdmission, admissionReply, beforeInputInspect, beforeInputAdmission, inputReply,
+  inputDisposition = () => null, browserWindow = {}, browserDocument = {}, retainLifecycleUntilInputConsumed = false} = {}) {
   let clock = 0;
   let timerId = 0;
   let failureListener = null;
@@ -8407,6 +8408,8 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     }
     if (e.operation === "pattern.transport.input.request") {
       beforeAdmission?.(e);
+      const refusal = beforeInputAdmission?.(e);
+      if (refusal !== undefined) return refusal;
       if (p.kind === "release") {
         const owner = physicalOwners.get(p.held_press_sequence);
         assert.ok(owner, "release targets a still-retained original physical press");
@@ -8415,7 +8418,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
         assert.equal(p.frame_epoch, owner.frame_epoch);
       } else assert.equal(retainedLane, false, "no new press enters the sealed lane");
       assert.equal(inputEntries.has(p.input_serial), false, "no original input is re-enqueued");
-      const status = inputWireStatus(p, p.input_serial, state.completeInput(p));
+      const status = inputWireStatus(p, p.input_serial, state.completeInput(p), inputDisposition(p));
       inputEntries.set(p.input_serial, {payload: {...p}, status});
       if (p.kind === "press" && p.held) physicalOwners.set(status.admission.sequence, {...p});
       if (loseInputAdmission && p.kind === "press") {
@@ -8443,7 +8446,8 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
           physicalOwners.delete(entry.payload.held_press_sequence);
         resolveLifecycleContinuations();
       }
-      return success(e, status);
+      const response = success(e, status);
+      return inputReply?.(e, response) ?? response;
     }
     if (e.operation === "pattern.transport.inspect") return success(e, transportStatus({phase: "idle"}));
     assert.equal(retainedLane, false, "ordinary operations never borrow a retained capability");
@@ -8496,7 +8500,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     subscribeFailure(listener) { failureListener = listener; return () => { failureListener = null; }; },
   };
   let handle = 10;
-  const f = fixture({patternTransport: true, sessionTransport: transport, now: () => clock,
+  const f = fixture({patternTransport: true, browserWindow, browserDocument, sessionTransport: transport, now: () => clock,
     timers: {
       setTimeout(callback, ms) {
         const id = ++timerId;
@@ -8547,6 +8551,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
   };
   return {...f, state, normal, retained, transport, originalError, inputEntries, inputConsumed, physicalOwners, nodes,
     clockMilliseconds: () => clock,
+    advanceClock(ms) { clock += ms; }, // Do not dispatch timers: models a delayed timer task.
     seal(error = originalError) { sealed = true; failureListener?.(error); },
     releaseTerminal: releaseTerminalOwner,
     cancelTimers() {
@@ -9990,3 +9995,254 @@ for (const operation of ["host.close", "audio.suspend"]) {
     assert.equal(f.state.backendCloses, 1);
   });
 }
+
+
+// Recovery is owned by an exact SDK epoch, not by the fixture's reported state.
+function profileRecoveryFixture(t, options = {}) {
+  const browserWindow = new EventTarget();
+  const browserDocument = new EventTarget();
+  browserDocument.visibilityState = "visible";
+  const f = retainedConsumerFixture({browserWindow, browserDocument,
+    inputDisposition: p => p.kind === "press" ? "voice_started" : "release_no_voice", ...options});
+  t.after(() => f.cancelTimers());
+  return {...f, browserWindow, setVisibility(hidden) {
+    browserDocument.visibilityState = hidden ? "hidden" : "visible";
+    browserDocument.dispatchEvent(new Event("visibilitychange"));
+  }};
+}
+async function armProfileRecovery(f) {
+  f.browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  f.browserWindow.dispatchEvent(browserEvent("pageshow", {persisted: true}));
+  await tickRetainedUntil(f, () => f.session.diagnostics().recovery_probe_ready === true);
+  assert.equal(f.session.diagnostics().state, "recovering");
+}
+const observeProfileCall = promise => promise.then(value => ({value}), error => ({error}));
+async function finishFailedProfileOwner(f) {
+  await tickRetainedUntil(f, () => f.physicalOwners.size === 0 &&
+    [...f.inputEntries.keys()].every(key => f.inputConsumed.has(key)));
+  // The fixture's independent backend receipt checks every real modeled debt.
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => f.state.backendCloses === 1);
+}
+
+for (const delayedTimer of [false, true]) {
+  test(`profile recovery original deadline prevents late success with ${delayedTimer ? "delayed" : "dispatched"} timer`, async t => {
+    let releaseReply;
+    let heldReply = null;
+    const held = new Promise(resolve => { releaseReply = resolve; });
+    const f = profileRecoveryFixture(t, {inputReply: (e, response) => {
+      if (e.payload.consume && e.payload.ticket === "1") {
+        heldReply = response;
+        return held.then(() => response); // Genuine consumed bytes, never synthetic status.
+      }
+      return response;
+    }});
+    t.after(() => releaseReply());
+    await activateInputProfile(f);
+    await armProfileRecovery(f);
+    f.state.inputComplete = true;
+    const outcomes = [];
+    f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+    const key = {};
+    const press = observeProfileCall(f.session.trigger(0, 100, "pointer", key));
+    await tickRetainedUntil(f, () => heldReply !== null);
+    assert.equal(f.inputConsumed.has("1"), true, "Native consumed; SDK still has not observed its reply");
+    assert.equal(f.physicalOwners.size, 1, "press consumption cannot repay physical release");
+    if (delayedTimer) f.advanceClock(1000);
+    else {
+      await f.tick(1000);
+      await tickRetainedUntil(f, () => f.session.diagnostics().state === "restart-required");
+      assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT",
+        "SDK fails before the original consuming response is delivered");
+    }
+    releaseReply();
+    const result = await settleRetainedCall(f, press);
+    assert.equal(result.error?.code, "HOST_TIMEOUT");
+    await tickRetainedUntil(f, () => f.session.diagnostics().state === "restart-required");
+    assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+    assert.deepEqual(outcomes, [], "expired probe cannot publish old recovery success");
+    assert.equal(f.normal.filter(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "press").length, 1);
+    await finishFailedProfileOwner(f);
+    assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"]);
+    const release = f.normal.find(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "release");
+    assert.equal(release.payload.held_press_sequence, "1");
+    assert.equal(f.session.diagnostics().state, "restart-required");
+  });
+}
+
+for (const unknown of [false, true]) {
+  test(`profile recovery ${unknown ? "unknown admitted" : "known pre-enqueue"} error fails only its original probe`, async t => {
+    const error = Object.assign(new Error("original probe admission failure"), {
+      code: unknown ? "HOST_TIMEOUT" : "HOST_STATE_INVALID", details: {pending: unknown},
+    });
+    const f = profileRecoveryFixture(t, {
+      beforeInputAdmission: e => !unknown && e.payload.kind === "press" ? {
+        protocol_version: 1, request_id: e.request_id, ok: false,
+        error: {code: error.code, message: error.message, details: error.details},
+      } : undefined,
+      admissionReply: (e, response) => {
+        if (unknown && e.operation === "pattern.transport.input.request" && e.payload.kind === "press") throw error;
+        return response;
+      },
+    });
+    await activateInputProfile(f);
+    await armProfileRecovery(f);
+    f.state.inputComplete = true;
+    const press = observeProfileCall(f.session.trigger(0, 100, "pointer", {}));
+    const result = await settleRetainedCall(f, press);
+    assert.equal(result.error?.code, error.code);
+    await tickRetainedUntil(f, () => f.session.diagnostics().state === (unknown ? "restart-required" : "failed"));
+    assert.equal(f.session.diagnostics().error_code, error.code);
+    await finishFailedProfileOwner(f);
+    assert.equal(f.inputEntries.size, unknown ? 2 : 0);
+    assert.equal(f.normal.filter(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "press").length, 1);
+    const releases = [...f.normal, ...f.retained].filter(e =>
+      e.operation === "pattern.transport.input.request" && e.payload.kind === "release");
+    assert.deepEqual(releases.map(e => [e.payload.input_serial, e.payload.held_press_sequence]),
+      unknown ? [["2", "1"]] : [], "ordinary and retained lanes together submit exactly one original Release");
+  });
+}
+
+test("profile recovery late accepted admission after foreground invalidation owes an exact release", async t => {
+  let deliverAdmission;
+  let originalReply = null;
+  const gate = new Promise(resolve => { deliverAdmission = resolve; });
+  const f = profileRecoveryFixture(t, {admissionReply: (e, response) => {
+    if (e.operation === "pattern.transport.input.request" && e.payload.kind === "press") {
+      originalReply = response;
+      return gate.then(() => response);
+    }
+    return response;
+  }});
+  t.after(() => deliverAdmission());
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const first = observeProfileCall(f.session.trigger(0, 100, "pointer", {}));
+  await tickRetainedUntil(f, () => originalReply !== null);
+  // A real visibility edge invalidates ownership before admission returns.
+  f.setVisibility(true);
+  deliverAdmission();
+  await settleRetainedCall(f, first);
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2 && f.physicalOwners.size === 0);
+  assert.deepEqual(outcomes, [], "late old epoch cannot publish success");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.notEqual(f.session.diagnostics().state, "running");
+  assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+    .map(e => [e.payload.kind, e.payload.held_press_sequence]), [["press", null], ["release", "1"]]);
+  f.setVisibility(false);
+  await tickRetainedUntil(f, () => f.session.diagnostics().recovery_probe_ready);
+  // The original Release consumed during recovery must not become a probe.
+  assert.equal(f.session.diagnostics().state, "recovering");
+  assert.equal(await settleRetainedCall(f, f.session.close()), true);
+});
+
+test("profile recovery reserves one pending Press and only healthy exact success completes it", async t => {
+  let deliverAdmission;
+  let originalReply = null;
+  const gate = new Promise(resolve => { deliverAdmission = resolve; });
+  const f = profileRecoveryFixture(t, {admissionReply: (e, response) => {
+    if (e.operation === "pattern.transport.input.request" && e.payload.kind === "press") {
+      originalReply = response;
+      return gate.then(() => response);
+    }
+    return response;
+  }});
+  t.after(() => deliverAdmission());
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const key = {};
+  const first = observeProfileCall(f.session.trigger(0, 100, "pointer", key));
+  await tickRetainedUntil(f, () => originalReply !== null);
+  const duplicate = observeProfileCall(f.session.trigger(1, 100, "pointer", {}));
+  assert.equal(f.inputEntries.size, 1, "one genuine admission owns the pending recovery window");
+  assert.equal(f.session.diagnostics().recovery_probe_ready, false);
+  deliverAdmission();
+  assert.equal((await settleRetainedCall(f, first)).value.sequence, 1);
+  // Once the first succeeds the queued second is an ordinary real Pad; it
+  // must not be classified as a second recovery probe while admission waits.
+  const second = await settleRetainedCall(f, duplicate);
+  assert.equal(f.session.diagnostics().state, "running");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.equal(outcomes[0].sequence, 1);
+  assert.equal(await settleRetainedCall(f, f.session.release(0, "pointer", key)), true);
+  if (second.value !== false) assert.equal(await settleRetainedCall(f, f.session.release(1, "pointer")), true);
+  assert.equal(await settleRetainedCall(f, f.session.close()), true);
+});
+
+test("ordinary profile Pad deadline remains nonfatal with genuine later consume and release", async t => {
+  const f = profileRecoveryFixture(t);
+  await activateInputProfile(f);
+  const key = {};
+  const press = observeProfileCall(f.session.trigger(0, 100, "pointer", key));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 1);
+  await f.tick(1000);
+  assert.equal((await settleRetainedCall(f, press)).error?.code, "HOST_TIMEOUT");
+  assert.equal(f.session.diagnostics().state, "running");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.physicalOwners.size, 1);
+  const release = observeProfileCall(f.session.release(0, "pointer", key));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  f.state.inputComplete = true;
+  assert.equal((await settleRetainedCall(f, release)).value, true);
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.session.diagnostics().state, "running");
+  assert.equal(await settleRetainedCall(f, f.session.close()), true);
+});
+
+
+test("profile recovery real close invalidates a held consuming reply without successful resurrection", async t => {
+  let deliverConsume;
+  let actualConsumedReply = null;
+  const gate = new Promise(resolve => { deliverConsume = resolve; });
+  const f = profileRecoveryFixture(t, {inputReply: (e, response) => {
+    if (e.payload.consume && e.payload.ticket === "1") {
+      actualConsumedReply = response;
+      return gate.then(() => response);
+    }
+    return response;
+  }});
+  t.after(() => deliverConsume());
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const press = observeProfileCall(f.session.trigger(0, 100, "pointer", {}));
+  await tickRetainedUntil(f, () => actualConsumedReply !== null);
+  assert.equal(f.inputConsumed.has("1"), true);
+  const close = observeProfileCall(f.session.close());
+  await tickRetainedUntil(f, () => f.physicalOwners.size === 0 && f.inputConsumed.has("2"));
+  deliverConsume();
+  await settleRetainedCall(f, press);
+  assert.equal((await settleRetainedCall(f, close)).value, true);
+  assert.deepEqual(outcomes, []);
+  assert.equal(f.session.diagnostics().state, "closed");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.equal(f.state.backendCloses, 1);
+});
+
+
+test("profile recovery actual voice capacity fails with its original code and consumed evidence", async t => {
+  const f = profileRecoveryFixture(t, {inputDisposition: p => p.kind === "press" ? "voice_capacity" : "release_no_voice"});
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const result = await settleRetainedCall(f, observeProfileCall(f.session.trigger(0, 100, "pointer", {})));
+  assert.equal(result.error?.code, "HOST_STATE_INVALID");
+  await tickRetainedUntil(f, () => f.session.diagnostics().state === "failed");
+  assert.equal(f.session.diagnostics().error_code, "HOST_STATE_INVALID");
+  assert.deepEqual(outcomes.map(value => value.outcome), ["voice_capacity"], "actual failure outcome is not recovery success");
+  await finishFailedProfileOwner(f);
+  assert.equal(f.inputConsumed.size, 2);
+});

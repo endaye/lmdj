@@ -921,3 +921,29 @@ for that owner. Positive local held-press identity, generation/epoch/sequence
 and an actually dispatched close/suspend request authorize only that continuation. It retains short
 runtime admission serialization and its original handoff deadline; new input
 and ordinary requests retain their original queue.
+
+
+## S6 negotiated recovery probe followup
+
+A recovery probe belongs only to its original Press. Before awaiting admission,
+the SDK reserves the exact local recovery epoch and foreground epoch, carrying
+the original caller start; a physical Release never inherits probe identity.
+Known pre-enqueue failure creates no owner. Lost submitted admission still
+retains the exact original ticket and physical hold before reporting its failure.
+A late accepted Press after interruption remains owned and submits its genuine
+correlated Release rather than being relabeled into a later recovery epoch.
+
+Only the same currently usable probe can fail or complete product recovery.
+Its unchanged original one-second deadline causes actual SDK HOST_TIMEOUT /
+restart-required. Real consumption checks that deadline before success
+notification or running transition, including when the deadline timer was
+delayed. Stale/expired consumption still settles the real original debt but
+never clears a new probe or emits old recovery success. A current actual
+voice-capacity refusal keeps its real failure code/outcome. Ordinary running
+Pad expiry retains its nonfatal caller/reconciliation behavior.
+
+This is a separate PATCH correctness Task within the unshipped S6 settlement;
+no public API, Native wire, persisted Contract or Product identity changes.
+Documentation impact: required on `/core/modules/web-runtime-platform/`.
+Source and owning units do not grant rebuilt packaged recovery replacement,
+full Creator, Native/Bridge/browser/OPFS/physical or release acceptance.

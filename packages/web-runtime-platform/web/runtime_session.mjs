@@ -4342,6 +4342,31 @@ function createRuntimeSessionController(options = {}) {
     return pending;
   }
 
+  function currentProfileProbe(probe) {
+    return probe !== null && probe !== undefined && probe.profile === true && !probe.failed &&
+      probeReservation === probe && recoveryEpoch === probe.epoch &&
+      machine.state === "recovering" && !closing && safetyReservation === null &&
+      interruptionReservation === null && !visibilityHidden && !pageHidden &&
+      foregroundLossEpoch === probe.foregroundEpoch;
+  }
+  function expiredProfileProbe() {
+    return typedError("HOST_TIMEOUT", "Original recovery probe deadline expired", {pending: true});
+  }
+  function failProfileProbe(probe, error) {
+    if (!currentProfileProbe(probe)) return;
+    // Claim once before fail rejects all raw observers. No rejection callback
+    // may recursively acquire this probe's fatal transition.
+    probe.failed = true;
+    fail(error);
+  }
+  function releaseInvalidatedProfileProbe(entry) {
+    // A late accepted admission is still a real physical owner. Submit its
+    // original Release in a later short runtime turn, never await that turn
+    // from the admission which currently owns it. Safety joins the same intent.
+    void serializeRuntimeAction(() => admitProfileHoldRelease(entry, monotonicNow()))
+      .then(result => result === false ? false : result.completion).catch(() => {});
+  }
+
   async function awaitPatternInput(entry) {
     let status = entry.status;
     for (;;) {
@@ -4365,7 +4390,20 @@ function createRuntimeSessionController(options = {}) {
           const native = consumed.nativeResult;
           if (entry.kind === "release" && ["release_applied", "release_no_voice"].includes(native.disposition))
             patternInputHolds.delete(entry.heldPressSequence);
-          if (["voice_started", "voice_capacity"].includes(native.disposition) &&
+          let probeSucceeded = false;
+          let currentProbeCapacityOutcome = false;
+          if (currentProfileProbe(entry.probe)) {
+            // The timer may not have run yet. Judge the original budget before
+            // publishing any probe success or restoring running after consume.
+            if (monotonicNow() - entry.probe.startedAt >= deadlineForOperation("trigger"))
+              failProfileProbe(entry.probe, expiredProfileProbe());
+            else if (consumed.error || native.disposition !== "voice_started") {
+              currentProbeCapacityOutcome = native.disposition === "voice_capacity";
+              failProfileProbe(entry.probe, typedError(consumed.error?.code ?? "HOST_STATE_INVALID",
+                consumed.error?.message ?? "Recovery probe made no voice", consumed.error?.details ?? {}));
+            } else probeSucceeded = true;
+          }
+          if ((!entry.probe || probeSucceeded || currentProbeCapacityOutcome) && ["voice_started", "voice_capacity"].includes(native.disposition) &&
               BigInt(native.sequence) <= BigInt(Number.MAX_SAFE_INTEGER)) {
             triggerOutcomeCount += 1;
             for (const listener of runtimeOutcomeListeners) listener(Object.freeze({sequence: Number(native.sequence),
@@ -4377,9 +4415,8 @@ function createRuntimeSessionController(options = {}) {
           const result = Object.freeze({sequence: native.sequence, slot: entry.slot, velocity: entry.velocity,
             source: entry.source, disposition: native.disposition, runtimeFrame: native.runtimeFrame,
             heldPressSequence: native.heldPressSequence, recorded: consumed.retained});
-          if (!closing && machine.state === "recovering" && entry.probeEpoch && recoveryEpoch?.id === entry.probeEpoch) {
+          if (probeSucceeded && currentProfileProbe(entry.probe)) {
             probeReservation = null;
-            if (native.disposition !== "voice_started") throw typedError("HOST_STATE_INVALID", "Recovery probe made no voice");
             recoveryEpoch = null;
             machine.transition("running", {reason: "recovery_probe_completed"});
           }
@@ -4406,21 +4443,27 @@ function createRuntimeSessionController(options = {}) {
       if (entry) entry.rejectObserver = reject;
       const expired = () => typedError("HOST_TIMEOUT",
         "Pattern input effect remains retained after its original deadline", {pending: true});
+      const rejectObservation = error => {
+        reject(error);
+        failProfileProbe(entry?.probe, error);
+      };
       const remaining = deadlineForOperation("trigger") - (monotonicNow() - startedAt);
-      const timeout = remaining > 0 ? timers.setTimeout(() => reject(expired()), remaining) : null;
-      if (remaining <= 0) reject(expired());
-      if (entry?.observerError) reject(entry.observerError);
+      const timeout = remaining > 0 ? timers.setTimeout(() => rejectObservation(expired()), remaining) : null;
+      if (remaining <= 0) rejectObservation(expired());
+      if (entry?.observerError) rejectObservation(entry.observerError);
       completion.then((result) => {
         if (timeout !== null) timers.clearTimeout(timeout);
-        if (monotonicNow() - startedAt >= deadlineForOperation("trigger")) reject(expired());
+        if (monotonicNow() - startedAt >= deadlineForOperation("trigger")) rejectObservation(expired());
         else resolve(result);
       }, (error) => {
         if (timeout !== null) timers.clearTimeout(timeout);
-        reject(error);
+        if (entry?.probe && monotonicNow() - startedAt >= deadlineForOperation("trigger"))
+          rejectObservation(expired());
+        else rejectObservation(error);
       });
     });
   }
-  async function admitProfileInput(slot, velocity, source, kind, hold = null, startedAt = monotonicNow(), gestureKey = hold?.gestureKey) {
+  async function admitProfileInput(slot, velocity, source, kind, hold = null, startedAt = monotonicNow(), gestureKey = hold?.gestureKey, probe = null) {
     if (patternInputSerial > BigInt(UNSIGNED_64_MAXIMUM)) throw typedError("HOST_STATE_INVALID", "Pattern input serial exhausted");
     const capacity = patternInputProfile.inputCapacity;
     if (kind === "press" && ([...patternInputOperations.values()].filter((i) => i.kind === "press").length >= capacity ||
@@ -4462,20 +4505,18 @@ function createRuntimeSessionController(options = {}) {
       heldPressSequence: hold?.sequence ?? null, sequence: admission.status?.admission.sequence ?? null,
       gestureKey, releaseIntent: null,
       unknown: admission.status === null, observerError, rejectObserver: null,
-      probeEpoch: machine.state === "recovering" ? recoveryEpoch?.id : null};
+      probe};
     patternInputOperations.set(serial, entry);
     if (kind === "press") {
       patternInputHolds.set(entry.sequence ?? `pending:${serial}`, entry);
       triggerAdmittedCount += 1;
-      if (entry.probeEpoch) {
-        recoveryEpoch.probeWindow = false;
-        probeReservation = {epochId: entry.probeEpoch, sequence: entry.sequence, timeout: null};
-      }
+      if (currentProfileProbe(probe)) probe.sequence = entry.sequence;
     } else hold.releaseSubmitted = true;
     const completion = awaitPatternInput(entry);
     entry.completion = observePatternInputDeadline(completion, startedAt, entry);
     // The caller may attach its handler after the short runtime turn releases.
     void entry.completion.catch(() => {});
+    if (kind === "press" && probe && !currentProfileProbe(probe)) releaseInvalidatedProfileProbe(entry);
     return entry;
   }
   function admitProfileTrigger(slot, velocity, source, startedAt, gestureKey) {
@@ -4489,7 +4530,27 @@ function createRuntimeSessionController(options = {}) {
         ([...patternInputHolds.values()].some(h => h.gestureKey === gestureKey) ||
          [...patternInputOperations.values()].some(e => e.kind === "press" && e.gestureKey === gestureKey)))
       return rejectTrigger();
-    return admitProfileInput(slot, velocity, source, "press", null, startedAt, gestureKey);
+    const probe = machine.state === "recovering" ? {
+      profile: true, epoch: recoveryEpoch, epochId: recoveryEpoch.id,
+      foregroundEpoch: foregroundLossEpoch, startedAt, sequence: null, timeout: null, failed: false,
+    } : null;
+    if (probe) {
+      recoveryEpoch.probeWindow = false;
+      probeReservation = probe;
+    }
+    return admitProfileInput(slot, velocity, source, "press", null, startedAt, gestureKey, probe).then(entry => {
+      if (entry === false && currentProfileProbe(probe)) {
+        // Known local refusal created no Native debt. Restore only this same
+        // epoch's original opportunity; never overwrite a newer reservation.
+        probeReservation = null;
+        probe.epoch.probeWindow = true;
+        renderDiagnostics();
+      }
+      return entry;
+    }, error => {
+      failProfileProbe(probe, error);
+      throw error;
+    });
   }
   function admitProfileRelease(slot, source, startedAt, gestureKey) {
     const matching = [...patternInputHolds.values()].reverse().filter(h => h.slot === slot && h.source === source);

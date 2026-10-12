@@ -1054,3 +1054,47 @@ Product Build or Assembly change is allocated by this followup.
 Documentation impact: required. Update `/core/modules/web-runtime-platform/`
 and this design/plan in the same Task. Source and unit evidence do not establish
 Native/Bridge/Creator/browser or physical hearing acceptance.
+
+
+## S6 followup — exact negotiated recovery probe deadline
+
+Base `bd3e77930645e939d5f23949899e71d4599d62c8` / tree
+`b93b2349c3a0a88ac54d498eb6788e9ec2b723db` retains the delivered local
+physical-gesture fix. Its negotiated profile still rejects an expired recovery
+Press caller without failing SDK HostState, classifies probes after awaited
+admission (including Release), and may publish late recovery success before
+checking the original deadline. These three source premises remain outstanding.
+The original packaged recovery fault seam targets the legacy notification path;
+its faithful profile seam is a separate Task, not acceptance of this repair.
+
+Declared files: `packages/web-runtime-platform/web/runtime_session.mjs`,
+`packages/web-runtime-platform/test/runtime_session.test.mjs`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`, and
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`.
+
+Capture one Press-only private probe reservation before awaited admission, with
+its exact recovery epoch, foreground epoch and original caller start. Preserve
+original one-second deadline and all actual input/caller/physical debts. Current
+probe failure uses SDK failure; stale/expired success cannot emit recovery
+success, clear another epoch or restore running. Release is never a probe.
+Late accepted admission after interruption retains and genuinely releases its
+original physical owner. Ordinary running Pad expiry remains nonfatal.
+
+Lowest-tier owning tests distinguish actual current-probe timeout, delayed
+timer late consume, known/unknown admission error, epoch/foreground invalidation,
+Release versus probe/duplicate admission, and healthy success/ordinary timeout.
+Use finite fixture turns, immediate rejection handlers, unchanged original
+request/reply identities and real modeled consume/physical evidence. Root owns
+same-fixture original-source RED/fresh restoration GREEN, owning SDK/Creator
+source checks and full Portal before commit. Rebuilt original recovery journey
+and complete eight-group Creator proof remain required before shipping.
+SOURCE ONLY delivery does not execute, commit or grant runtime acceptance.
+
+### Version Management
+
+Version impact: Web Runtime Platform PATCH correctness debt in the original
+unshipped S6 settlement; no additional identity allocation, public API, Native
+wire, persisted Contract, Product Build or Assembly change.
+
+Documentation impact: required on `/core/modules/web-runtime-platform/`, with
+this design/plan updated in the same Task.
