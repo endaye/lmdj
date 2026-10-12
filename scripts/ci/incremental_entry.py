@@ -285,8 +285,13 @@ class Entry:
         for operation in [*operations, "drain"]:
             try:
                 self.diagnostic_stage = "report"
-                result = reporter.execute(operation, limit=1, **({"run_id": run["id"], "attempt": run["run_attempt"]}
-                    if operation in {"legacy", "review"} else {}))
+                # A source-refused drain still recovers durable payloads with
+                # their own authenticated writes, but manufactures no anchor
+                # verified-prefix write; that upgrade waits for an
+                # authenticated tick.
+                result = reporter.execute(operation, limit=1, persist_verified=source != "unverified",
+                    **({"run_id": run["id"], "attempt": run["run_attempt"]}
+                       if operation in {"legacy", "review"} else {}))
             except Exception as error:
                 emit_diagnostic("reports", self.diagnostic_stage, error)
                 result = {"status": "error", "why": "authenticated report source or outbox state is unresolved",

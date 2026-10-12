@@ -339,8 +339,12 @@ def reduce(state, event):
 
 
 class Outbox:
-    def __init__(self, journal, lock_held, epoch):
+    def __init__(self, journal, lock_held, epoch, *, persist_verified=True):
         self.journal, self.lock_held, self.epoch = journal, lock_held, epoch
+        # A source-refused drain constructs an Outbox with persist_verified
+        # False: recovery of durable payloads keeps its own authenticated
+        # writes, but the refused path manufactures no anchor write of its own.
+        self.persist_verified = persist_verified
         self.state = None
 
     def _replay(self, events):
@@ -355,10 +359,12 @@ class Outbox:
         require(self.lock_held() is True, "outbox lacks shared short writer lock")
         try:
             state = self._replay(self.journal.load())
-            # Idle reads must also upgrade legacy anchors for the next process.
-            # Persist only after both journal authentication and outbox replay
-            # succeed; failure must precede state publication or business POSTs.
-            self.journal.persist_verified()
+            # Idle reads on an authenticated source path must also upgrade
+            # legacy anchors for the next process. Persist only after both
+            # journal authentication and outbox replay succeed; failure must
+            # precede state publication or business POSTs.
+            if self.persist_verified:
+                self.journal.persist_verified()
             self.state = state
             return state
         except Exception as error:

@@ -311,11 +311,13 @@ tick 约需 4,300 请求而无法完成。完整重放逐页完成协议校验�
 而不会在本进程内被采纳。
 
 跨进程复用通过已认证锚点上的 `verified: {head, count}` 前缀完成：scheduler 的
-成功 reconcile 和 outbox 的成功 load 都在共享短 writer lock 内保存该前缀，
-不必等下一次 append。outbox 必须先完成 journal 认证和语义回放，再保存前缀并公开
-状态；保存失败仍阻断业务 POST。相同前缀不重复 PATCH。新进程仍读取全部评论并校验
-元数据、编辑状态和 digest 链，只省去已验证前缀内的 writer 运行证明重复请求；前缀
-之后的新评论继续完整认证。outbox 只更新自己的锚点，不推进 scheduler progress。
+成功 reconcile 和来源已认证路径上 outbox 的成功 load 都在共享短 writer lock 内
+保存该前缀，不必等下一次 append。来源被拒绝的 drain 仍会恢复 durable payload
+（业务写携带自己的前缀），但不制造锚点前缀写。outbox 必须先完成 journal 认证和
+语义回放，再保存前缀并公开状态；保存失败仍阻断业务 POST。相同前缀不重复 PATCH。
+新进程仍读取全部评论并校验元数据、编辑状态和 digest 链，只省去已验证前缀内的
+writer 运行证明重复请求；前缀之后的新评论继续完整认证。outbox 只更新自己的锚点，
+不推进 scheduler progress。
 本地重启与 HTTP fixture 证明这个边界，不构成线上配额降本或 hosted 权限验收。
 
 每日产品 cron 与每日未启动告警均已退役。独立轻量健康巡检按 UTC 每小时

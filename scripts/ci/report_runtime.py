@@ -352,8 +352,9 @@ class ReportRuntime:
                 "outbox storage aliases the scheduler Issue")
         self.api, self.repository = self.storage.api, b["repository"]
 
-    def outbox(self):
-        return report_outbox.Outbox(self.storage.journal(), self.storage.lock_held, self.storage.config["epoch"])
+    def outbox(self, *, persist_verified=True):
+        return report_outbox.Outbox(self.storage.journal(), self.storage.lock_held, self.storage.config["epoch"],
+                                    persist_verified=persist_verified)
 
     def deliver(self, planned, limit, *, recoveries=(), causal_floor=None):
         require(type(limit) is int and 1 <= limit <= 32, "report limit must be 1..32")
@@ -429,11 +430,13 @@ class ReportRuntime:
         state = report_scheduler_state(self.scheduler)
         return causal_floor(state, self.scheduler.inputs)
 
-    def execute(self, operation, *, run_id=None, attempt=None, limit=8, command=None):
+    def execute(self, operation, *, run_id=None, attempt=None, limit=8, command=None, persist_verified=True):
         require(operation in {"init-outbox", "review", "legacy", "batches", "drain", "reconcile-claim"},
                 "unknown report operation")
         require(command is None or operation == "reconcile-claim",
                 "an audited command belongs only to reconcile-claim")
+        require(persist_verified is True or operation == "drain",
+                "verified-prefix suppression belongs only to a source-refused drain")
         if operation == "init-outbox":
             return self.storage.initialize()
         self.storage.authenticate_current()
@@ -443,7 +446,7 @@ class ReportRuntime:
             # blocked scheduler journal cannot block this recovery either.
             return self.outbox().reconcile_claim(self.api, command)
         if operation == "drain":
-            outbox = self.outbox()
+            outbox = self.outbox(persist_verified=persist_verified)
             stored = outbox.load()
             has_recovery = any(row["status"] not in {"closed", "stale", "not-applicable"}
                                for row in stored["recoveries"].values())
