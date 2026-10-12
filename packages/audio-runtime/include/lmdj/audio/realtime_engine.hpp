@@ -210,6 +210,35 @@ enum class PadControlOrigin : std::uint8_t {
   performance_replay,
 };
 
+// D04 live Mute/Solo gate state: the full 64-Pad mute and solo masks, always
+// written atomically as one pair by the single mask producer. Slot 0 is A01,
+// 15 is A16, 16 is B01, 63 is D16. A Pad sounds when
+// !live_muted && (solo_mask == 0 || live_solo); the persistent Truth mute
+// (`playback.muted`) is an additional, separate prohibition.
+struct PadGatesState {
+  std::uint64_t muted_mask{};
+  std::uint64_t solo_mask{};
+};
+static_assert(std::is_trivially_copyable_v<PadGatesState>);
+
+// Audio-applied coherent gate state, stamped with the applied mask sequence
+// and the engine start epoch that produced it.
+struct PadGatesAppliedState {
+  PadGatesState state{};
+  std::uint64_t sequence{};
+  std::uint64_t epoch{};
+};
+static_assert(std::is_trivially_copyable_v<PadGatesAppliedState>);
+
+// Accepted (enqueued) gates are control-owned; applied gates are audio-owned.
+// A reader compares sequence and epoch instead of guessing from either alone.
+struct PadGatesControlStatus {
+  PadGatesState accepted{};
+  std::uint64_t accepted_sequence{};
+  PadGatesAppliedState applied{};
+};
+static_assert(std::is_trivially_copyable_v<PadGatesControlStatus>);
+
 struct PadControlEvent {
   std::uint64_t sequence;
   std::uint8_t slot;
@@ -618,6 +647,19 @@ class RealtimeEngine final {
   // the control-owned shadow of every accepted queue event; the applied half
   // is the audio thread's last published coherent state, sequence and epoch.
   FilterControlStatus filter_control_status() const noexcept;
+  // Control thread, concurrent with render. Atomically sets both live Pad
+  // gate masks as one pair on the same bounded master-control queue; the pair
+  // applies together at the next render quantum boundary. Mask, status and
+  // reset share this one producer; a reset is the neutral pair. A rejected
+  // call (including queue_full) changes neither the queue nor the accepted
+  // shadow, and a stale pre-restart applied snapshot is distinguishable by
+  // epoch.
+  FxEnqueueResult enqueue_pad_gates(
+      std::uint64_t muted_mask, std::uint64_t solo_mask) noexcept;
+  // Serialized control thread, concurrent with render. The accepted half is
+  // the control-owned shadow of every accepted mask pair; the applied half is
+  // the audio thread's last published coherent pair, sequence and epoch.
+  PadGatesControlStatus pad_gates_status() const noexcept;
   // Control thread, concurrent with render. Ordered with FX gestures and
   // applied at the next render quantum boundary.
   FxEnqueueResult enqueue_master_fx_tempo(std::uint16_t bpm) noexcept;
@@ -771,11 +813,13 @@ class RealtimeEngine final {
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_generations_{};
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
 
-  enum class MasterFxControlKind : std::uint8_t { gesture, tempo, filter };
+  enum class MasterFxControlKind : std::uint8_t { gesture, tempo, filter, pad_gates };
   struct MasterFxControlEvent {
     MasterFxControlKind kind;
     FxGesture gesture;
     FilterGesture filter;
+    // The live Pad gate pair, valid when kind is pad_gates.
+    PadGatesState gates;
     // Typed Filter controls carry their accepted sequence so the audio thread
     // can report exactly which control it applied.
     std::uint64_t sequence;
@@ -822,6 +866,12 @@ class RealtimeEngine final {
     bool pattern_voice = false;
     PadControlOrigin origin = PadControlOrigin::host_input;
     std::uint8_t pattern_slot = kNoPatternSlot;
+    // The voice's live Pad gate gain (D04 Mute/Solo): 1.0 is fully open. A
+    // newly disallowed voice ramps to 0 over 96 frames while its cursor keeps
+    // advancing, and a re-allowed voice ramps back to its current sound; the
+    // multiply is skipped at exactly 1.0 so an ungated voice stays
+    // bit-identical. Audition voices are never gated.
+    float live_gate = 1.0F;
     // A voice whose playback carries a non-neutral DSP block renders through
     // the shared kernel; every other voice keeps the original path, whose
     // output is unchanged.
@@ -855,6 +905,11 @@ class RealtimeEngine final {
   static SampleView bank_sample(const PreparedSampleBank& bank,
                                 std::uint8_t slot) noexcept;
   SampleView current_sample(std::uint8_t slot) const noexcept;
+  // Audio thread only: whether a project Pad voice is currently silenced by
+  // the live gate pair (muted, or unsoloed while any Solo is active).
+  // Audition voices are never gated; the metronome does not pass through
+  // this engine.
+  bool pad_live_gated(std::uint8_t slot) const noexcept;
   // Resolves `Voice::bank_slot` to the slot that owns the voice's samples,
   // across both pools. Returns nullptr for `kLegacyBankSlot`, which owns none.
   BankSlot* bank_slot_for(std::uint8_t bank_slot) noexcept;
@@ -1011,6 +1066,17 @@ class RealtimeEngine final {
   // Audio publishes the coherent applied state after any queue event that can
   // change it; control reads it lock-free. Quiescent writer handoff only.
   detail::ValueChannel<FilterAppliedState> filter_applied_channel_;
+  // Audio-owned live Pad gates, written only by the render thread when the
+  // bounded queue delivers a pair.
+  PadGatesState audio_pad_gates_{};
+  std::uint64_t applied_pad_gates_sequence_ = 0;
+  // Control-owned accepted gate shadow; written only after the bounded queue
+  // accepts the pair, so a rejected control leaves no trace.
+  PadGatesState accepted_pad_gates_{};
+  std::uint64_t accepted_pad_gates_sequence_ = 0;
+  std::uint64_t enqueued_pad_gates_ = 0;
+  std::uint64_t dequeued_pad_gates_ = 0;
+  detail::ValueChannel<PadGatesAppliedState> pad_gates_applied_channel_;
   struct PatternObservation {
     std::uint64_t generation = 0;
     std::uint64_t activation_frame = 0;

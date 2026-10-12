@@ -2003,6 +2003,16 @@ foundation::Result<void> RealtimeEngine::start() {
   // by epoch and content.
   filter_applied_channel_.publish(
       FilterAppliedState{master_fx_.filter_state(), 0, start_epoch_});
+  // The live Pad gates follow the same rule: a start leaves no old mask, and
+  // the new epoch's neutral applied pair distinguishes any stale snapshot.
+  accepted_pad_gates_ = PadGatesState{};
+  accepted_pad_gates_sequence_ = 0;
+  enqueued_pad_gates_ = 0;
+  dequeued_pad_gates_ = 0;
+  audio_pad_gates_ = PadGatesState{};
+  applied_pad_gates_sequence_ = 0;
+  pad_gates_applied_channel_.publish(
+      PadGatesAppliedState{{}, 0, start_epoch_});
   observed_audio_pending_ = {};
   observed_last_queued_ = {};
   observed_claimed_through_ = 0;
@@ -2104,6 +2114,14 @@ void RealtimeEngine::stop() noexcept {
       CaptureState::corrupted) {
     capture_state_.store(CaptureState::idle, std::memory_order_release);
   }
+  // Stopping leaves no old mask: both gate halves go neutral at once and the
+  // applied snapshot is republished so no stale pair survives the stop.
+  accepted_pad_gates_ = PadGatesState{};
+  accepted_pad_gates_sequence_ = 0;
+  audio_pad_gates_ = PadGatesState{};
+  applied_pad_gates_sequence_ = 0;
+  pad_gates_applied_channel_.publish(
+      PadGatesAppliedState{{}, 0, start_epoch_});
 }
 
 EnqueueResult RealtimeEngine::enqueue(TriggerEvent event) noexcept {
@@ -2253,7 +2271,7 @@ FxEnqueueResult RealtimeEngine::enqueue_fx_gesture(
   testing::invoke_realtime_hook(testing::RealtimeHookPoint::fx_reserved);
 #endif
   if (!fx_queue_.try_push(MasterFxControlEvent{
-          MasterFxControlKind::gesture, gesture, {}, 0, 0})) {
+          MasterFxControlKind::gesture, gesture, {}, {}, 0, 0})) {
     queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
     fx_queue_drops_ += 1;
     return FxEnqueueResult::queue_full;
@@ -2279,7 +2297,7 @@ FxEnqueueResult RealtimeEngine::enqueue_master_fx_tempo(
     return FxEnqueueResult::invalid_bpm;
   }
   if (!fx_queue_.try_push(MasterFxControlEvent{
-          MasterFxControlKind::tempo, {}, {}, 0, bpm})) {
+          MasterFxControlKind::tempo, {}, {}, {}, 0, bpm})) {
     fx_queue_drops_ += 1;
     return FxEnqueueResult::queue_full;
   }
@@ -2309,6 +2327,7 @@ FxEnqueueResult RealtimeEngine::enqueue_filter_gesture(
           MasterFxControlKind::filter,
           {},
           gesture,
+          {},
           accepted_filter_sequence_ + 1,
           0})) {
     queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
@@ -2327,6 +2346,48 @@ FilterControlStatus RealtimeEngine::filter_control_status() const noexcept {
       accepted_filter_state_,
       accepted_filter_sequence_,
       filter_applied_channel_.read()};
+}
+
+FxEnqueueResult RealtimeEngine::enqueue_pad_gates(
+    std::uint64_t muted_mask, std::uint64_t solo_mask) noexcept {
+  const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    return FxEnqueueResult::not_running;
+  }
+  // The gate is a voice-level gain, not an FX stage: it works whether or not
+  // the Master FX chain has been prepared, and every bit pattern is legal.
+  // Reserve a cell of the same bounded queue before assigning the accepted
+  // sequence: a full queue rejects without touching the accepted shadow.
+  queued_fx_gestures_.fetch_add(1, std::memory_order_relaxed);
+  if (!fx_queue_.try_push(MasterFxControlEvent{
+          MasterFxControlKind::pad_gates,
+          {},
+          {},
+          PadGatesState{muted_mask, solo_mask},
+          accepted_pad_gates_sequence_ + 1,
+          0})) {
+    queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+    fx_queue_drops_ += 1;
+    return FxEnqueueResult::queue_full;
+  }
+  accepted_pad_gates_ = PadGatesState{muted_mask, solo_mask};
+  accepted_pad_gates_sequence_ += 1;
+  enqueued_pad_gates_ += 1;
+  return FxEnqueueResult::accepted;
+}
+
+PadGatesControlStatus RealtimeEngine::pad_gates_status() const noexcept {
+  return PadGatesControlStatus{
+      accepted_pad_gates_,
+      accepted_pad_gates_sequence_,
+      pad_gates_applied_channel_.read()};
+}
+
+bool RealtimeEngine::pad_live_gated(std::uint8_t slot) const noexcept {
+  const auto muted = (audio_pad_gates_.muted_mask >> slot) & 1U;
+  const auto soloed = (audio_pad_gates_.solo_mask >> slot) & 1U;
+  return muted != 0 ||
+         (audio_pad_gates_.solo_mask != 0 && soloed == 0);
 }
 
 void RealtimeEngine::claim_queued_pattern(bool switch_only) noexcept {
@@ -2383,6 +2444,7 @@ void RealtimeEngine::render(
 
   MasterFxControlEvent fx_control{};
   auto filter_state_dirty = false;
+  auto pad_gates_dirty = false;
   for (std::size_t processed = 0;
        processed < kRealtimeQueueCapacity &&
        fx_queue_.try_pop(fx_control);
@@ -2401,12 +2463,24 @@ void RealtimeEngine::render(
       dequeued_filter_controls_ += 1;
       queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
       filter_state_dirty = true;
+    } else if (fx_control.kind == MasterFxControlKind::pad_gates) {
+      // The pair applies together: one dequeue swaps both masks atomically
+      // with respect to the voice mix below.
+      audio_pad_gates_ = fx_control.gates;
+      applied_pad_gates_sequence_ = fx_control.sequence;
+      dequeued_pad_gates_ += 1;
+      queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+      pad_gates_dirty = true;
     } else {
       static_cast<void>(master_fx_.set_bpm(fx_control.bpm));
       current_master_fx_bpm_.store(
           fx_control.bpm, std::memory_order_relaxed);
       applied_tempo_updates_ += 1;
     }
+  }
+  if (pad_gates_dirty) {
+    pad_gates_applied_channel_.publish(PadGatesAppliedState{
+        audio_pad_gates_, applied_pad_gates_sequence_, start_epoch_});
   }
   if (filter_state_dirty) {
     // Publish the coherent applied Filter state once per quantum, after the
@@ -2587,6 +2661,12 @@ void RealtimeEngine::render(
     if (playback.muted) {
       continue;
     }
+    // A currently gated Pad accepts no new input either: the press is
+    // blocked, not queued into a silent voice, so unmuting later does not
+    // resurrect it. Audition starts bypass the gate entirely.
+    if (!audition && pad_live_gated(event.slot)) {
+      continue;
+    }
     bool dsp_active = false;
     detail::VoiceDspState dsp{};
     if (!prepare_voice_kernel(playback, sample.frame_count, dsp_active, dsp)) {
@@ -2757,6 +2837,28 @@ void RealtimeEngine::render(
             static_cast<float>(voice.release_frames_remaining) *
             voice.release_scale;
       }
+      // The live Pad gate (D04 Mute/Solo): a project Pad voice whose Pad is
+      // muted, or unsoloed while any Solo is active, ramps to zero over 96
+      // frames while its cursor keeps advancing; re-allowing ramps it back to
+      // the current sound without retriggering. Audition voices bypass the
+      // gate, and bytes already inside the shared Delay/Reverb decay on their
+      // own because the gate sits before the shared-FX input.
+      if (!is_audition_bank_slot(voice.bank_slot)) {
+        if (pad_live_gated(voice.slot)) {
+          if (voice.live_gate > 0.0F) {
+            voice.live_gate -= kRealtimeRampScale;
+            if (voice.live_gate < 0.0F) {
+              voice.live_gate = 0.0F;
+            }
+          }
+        } else if (voice.live_gate < 1.0F) {
+          voice.live_gate += kRealtimeRampScale;
+          if (voice.live_gate > 1.0F) {
+            voice.live_gate = 1.0F;
+          }
+        }
+      }
+      const auto live_gate = voice.live_gate;
       if (voice.dsp_active) {
         const auto& material = voice.material;
         const float* const samples = voice.samples;
@@ -2769,6 +2871,9 @@ void RealtimeEngine::render(
                              : samples[source_frame];
                 }) *
             voice.gain * ramp;
+        if (live_gate != 1.0F) {
+          value *= live_gate;
+        }
         // Tone and EQ follow the envelope. They are linear and the gain is
         // constant, so filtering after it equals the decision's order.
         if (voice.dsp.filter_count != 0) {
@@ -2789,7 +2894,10 @@ void RealtimeEngine::render(
                                 ? prepared_material_sample(
                                       voice.material, voice.cursor)
                                 : voice.samples[voice.cursor];
-        const auto value = sample * voice.gain * ramp;
+        auto value = sample * voice.gain * ramp;
+        if (live_gate != 1.0F) {
+          value *= live_gate;
+        }
         left[frame] += value;
         right[frame] += value;
         ++voice.cursor;
