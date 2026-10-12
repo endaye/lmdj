@@ -22,6 +22,7 @@ source_paths:
   - docs/prd/decisions/2026-10-10-record-key-and-count-in.md
   - docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md
   - docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md
+  - docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md
   - docs/plans/2026-10-10-pattern-switch-and-count-in.md
   - docs/plans/2026-10-10-creator-interaction-map.md
   - docs/plans/2026-10-10-creator-interactions-refresh.md
@@ -56,7 +57,7 @@ export const ConsoleDiagram = () => {
         <rect x="112" y="16" width="752" height="176" rx="8" {...line} />
         <text x="488" y="96" fontSize="20">上屏（只读反馈）</text>
         <text x="488" y="124" fontSize="14">显示当前页的总览</text>
-        {'QWERTYUIASDFGHJK'.split('').map((key, i) => {
+        {'ZXCVASDFQWER1234'.split('').map((key, i) => {
           const x = 112 + (i % 4) * 96, y = 496 - Math.floor(i / 4) * 96;
           return <g key={key}><rect x={x} y={y} width="80" height="80" rx="8" {...line} fillOpacity="0.08" fill="currentColor" /><text x={x + 40} y={y + 46} fontSize="15">{String(i + 1).padStart(2, '0')} · {key}</text></g>;
         })}
@@ -64,14 +65,16 @@ export const ConsoleDiagram = () => {
         <text x="680" y="384" fontSize="20">触摸区</text>
         <text x="680" y="412" fontSize="14">内容随页面变化</text>
       </svg>
-      <figcaption>880 × 592 控制台。左栏按键自上而下八行；Pad 标签为本 Bank 内序号与键盘键。</figcaption>
+      <figcaption>880 × 592 控制台。左栏按键自上而下八行；Pad 标签为本 Bank 内序号与已批准的新版设计键位，键盘映射尚待程序实现。当前程序键位见 1.8 的对照表。</figcaption>
     </figure>
   );
 };
 
 <BuildIdentity />
 
-本手册按页面说明 Creator Web 当前已接线的交互。核对日期：2026-10-12。第 1 章写全页通用的规则，各页只引用；每页先给一张**控件速查卡**，再列触摸区控件。表中只写会改变内容的格子。已批准但还没完整交付的行为集中在[第 2 章](#planned)，其余章节只写当前行为。实现细节、精确条件、源码与测试索引放在[附录](#appendix)；尚未批准的体验优化建议另列在[本次复核](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-12-creator-interaction-audit.md)，不作为现有能力或已确认设计。
+本手册按页面说明 Creator Web 当前已接线的交互。核对日期：2026-10-12。第 1 章写全页通用的规则，各页只引用；每页先给一张**控件速查卡**，再列触摸区控件。表中只写会改变内容的格子。已批准但还没完整交付的行为集中在[第 2 章](#planned)；整机示意图和 [1.8](#pads) 同时展示已批准的新版设计键位，并明确区分当前程序映射，其余章节只写当前行为。实现细节、精确条件、源码与测试索引放在[附录](#appendix)；尚未批准的体验优化建议另列在[本次复核](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-12-creator-interaction-audit.md)，不作为现有能力或已确认设计。
+
+[新版 Figma 交互 UI](https://www.figma.com/design/GPFarNiZNsjLQzfG9kR8DO?node-id=413-4178) 的 35 个界面已统一采用 `1234 / QWER / ASDF / ZXCV` 四排键位。**设计稿已更新，当前程序的默认映射仍是旧版**；实际操作请看 [1.8](#pads) 的“当前程序键位”列，键盘实现与验收由 [任务 #1960](https://github.com/endaye/lmdj/issues/1960) 跟进。
 
 本页依据当前源码和界面测试，不是硬件按键设计提案；实体设备、听感和线上部署需要各自的验收，见[附录 A.4](#evidence)。
 
@@ -186,33 +189,37 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 四个 Bank 共 64 个声音槽，每次显示 16 个。每个格子的行为相同，只是目标槽不同。
 
-屏幕按 MPC 方向排列：左下是 01，向右到 04，再向上逐行增加。Tab 焦点按屏幕从上到下、从左到右访问可用的 Pad。Sound Set 安装预览也用同一排列。位置排列不改变 Pad 地址、快捷键、MIDI 或 Pattern 引用。
+屏幕按 MPC 方向排列：左下是 01，向右到 04，再向上逐行增加。Tab 焦点按屏幕从上到下、从左到右访问可用的 Pad。Sound Set 安装预览也用同一排列。新版键位只改变键盘与 Pad 的对应关系，不改变这套位置排列、Pad 地址、MIDI 或 Pattern 引用。
+
+**新版设计键位（已批准，程序待实现）：** 键盘从上到下的四排，分别对应屏幕从上到下的四行。此表与整机示意图、新版 Figma 所有页面的 Pad 键帽一致，依据[四排空间映射决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)。
 
 | 屏幕行（自上而下） | 左 1 | 左 2 | 左 3 | 左 4 |
 | --- | --- | --- | --- | --- |
-| 第一行 | 13 · G | 14 · H | 15 · J | 16 · K |
-| 第二行 | 09 · A | 10 · S | 11 · D | 12 · F |
-| 第三行 | 05 · T | 06 · Y | 07 · U | 08 · I |
-| 第四行 | 01 · Q | 02 · W | 03 · E | 04 · R |
+| 第一行 | 13 · 1 | 14 · 2 | 15 · 3 | 16 · 4 |
+| 第二行 | 09 · Q | 10 · W | 11 · E | 12 · R |
+| 第三行 | 05 · A | 06 · S | 07 · D | 08 · F |
+| 第四行 | 01 · Z | 02 · X | 03 · C | 04 · V |
 
-| 本 Bank 内序号 | Bank A／B／C／D 的地址 | 键盘 | MIDI note |
-| --- | --- | --- | --- |
-| 01 | A01／B01／C01／D01 | Q | 36 |
-| 02 | A02／B02／C02／D02 | W | 37 |
-| 03 | A03／B03／C03／D03 | E | 38 |
-| 04 | A04／B04／C04／D04 | R | 39 |
-| 05 | A05／B05／C05／D05 | T | 40 |
-| 06 | A06／B06／C06／D06 | Y | 41 |
-| 07 | A07／B07／C07／D07 | U | 42 |
-| 08 | A08／B08／C08／D08 | I | 43 |
-| 09 | A09／B09／C09／D09 | A | 44 |
-| 10 | A10／B10／C10／D10 | S | 45 |
-| 11 | A11／B11／C11／D11 | D | 46 |
-| 12 | A12／B12／C12／D12 | F | 47 |
-| 13 | A13／B13／C13／D13 | G | 48 |
-| 14 | A14／B14／C14／D14 | H | 49 |
-| 15 | A15／B15／C15／D15 | J | 50 |
-| 16 | A16／B16／C16／D16 | K | 51 |
+**设计与当前程序对照：** 当前程序中 Q 仍触发本 Bank 的 01；新版设计中 Q 对应 09、Z 对应 01。实现切换前，以“当前程序键位”列为准。切 Bank 只改变地址前缀 A／B／C／D，以下相对映射对四个 Bank 相同。
+
+| 本 Bank 内序号 | Bank A／B／C／D 的地址 | 新版设计键位（待实现） | 当前程序键位 | MIDI note |
+| --- | --- | --- | --- | --- |
+| 01 | A01／B01／C01／D01 | Z | Q | 36 |
+| 02 | A02／B02／C02／D02 | X | W | 37 |
+| 03 | A03／B03／C03／D03 | C | E | 38 |
+| 04 | A04／B04／C04／D04 | V | R | 39 |
+| 05 | A05／B05／C05／D05 | A | T | 40 |
+| 06 | A06／B06／C06／D06 | S | Y | 41 |
+| 07 | A07／B07／C07／D07 | D | U | 42 |
+| 08 | A08／B08／C08／D08 | F | I | 43 |
+| 09 | A09／B09／C09／D09 | Q | A | 44 |
+| 10 | A10／B10／C10／D10 | W | S | 45 |
+| 11 | A11／B11／C11／D11 | E | D | 46 |
+| 12 | A12／B12／C12／D12 | R | F | 47 |
+| 13 | A13／B13／C13／D13 | 1 | G | 48 |
+| 14 | A14／B14／C14／D14 | 2 | H | 49 |
+| 15 | A15／B15／C15／D15 | 3 | J | 50 |
+| 16 | A16／B16／C16／D16 | 4 | K | 51 |
 
 - 字母键按键盘的物理键位映射。
 - MIDI note 36–51 对应当前 Bank 的 16 个 Pad。
@@ -296,7 +303,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
 | Sample 精确数值输入 | Start／End 已有精确输入；六个声音参数仍用触摸滑块及已接线旋钮。 | 点 Volume／Pitch／Pan／Attack／Release／Tone 数值输入，合法值立即试听，Apply／Enter 保存一次；Esc／切目标／离开取消未提交值。保留触摸与旋钮各自的提交规则。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
 | 三页普通方向导航 | 普通方向键目前只在 Sequence 接线。 | Project ←/→ 选相邻项、↑/↓ 按三列移一行，OPEN 才打开；Sample ↑/↓ 选 Pad、←/→ 切四子页；Perform ↑/↓ 选 Pad、←/→ 切 PRIMARY／FILTER／MORE 并保持效果。选择不演奏、不保存；切编辑上下文取消未提交预览。SHIFT＋↑/↓ 暂不分配。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
-| 四排键盘 | 仍使用 [1.8](#pads) 的旧映射，Q 对应 01。 | 屏幕从上到下分别对应 1234 → 13–16、QWER → 09–12、ASDF → 05–08、ZXCV → 01–04。Pad 地址和 MIDI 不变；Q 改为 09，Z 为 01。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)。 |
+| 四排键盘 | 新版 Figma 的 35 个界面、整机示意图及 [1.8](#pads) 的设计键位表已统一更新；程序仍使用该节对照表的旧映射，Q 对应 01。 | 将默认输入映射和程序键帽切换为屏幕从上到下的 1234 → 13–16、QWER → 09–12、ASDF → 05–08、ZXCV → 01–04，并完成验收。Pad 地址和 MIDI 不变；Q 改为 09，Z 为 01。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)；[任务 #1960](https://github.com/endaye/lmdj/issues/1960)。 |
 | Perform 独立滤波 | 底层音频能力已加入；Creator 仍是旧单值 Filter。 | 主组为 Cutoff／Delay／Reverb；FILTER 组为 LP／HP／BP、Cutoff、Resonance。初始 OFF，LP／20 kHz／0%；参数完整录制和回放。需要剩余接线与验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | 底层 64-Pad 门控已加入；Creator 尚无实时按钮及完整录放流程。 | 多 Solo、Mute 优先；切 Bank／Pattern 保持，离开 Perform／换工程清空；录制起点状态和后续变化。立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
