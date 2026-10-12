@@ -355,6 +355,10 @@ class Outbox:
         require(self.lock_held() is True, "outbox lacks shared short writer lock")
         try:
             state = self._replay(self.journal.load())
+            # Idle reads must also upgrade legacy anchors for the next process.
+            # Persist only after both journal authentication and outbox replay
+            # succeed; failure must precede state publication or business POSTs.
+            self.journal.persist_verified()
             self.state = state
             return state
         except Exception as error:
