@@ -458,7 +458,7 @@ def _settled_candidate_intent(context, directory, state, reserved):
         raise CommandError("the outstanding candidate intent's cut Pull Request is missing",
                            detail=f"#{number}")
     expected_title = f"chore(release): allocate {reserved} candidate"
-    if (row["state"] != "closed" or row["merged"] or row["merge_commit_sha"] is not None
+    if (row["state"] != "closed" or row["merged"] is not False
             or row["head_sha"] != spec["head_sha"] or row["title"] != expected_title):
         raise CommandError(
             "the outstanding candidate intent's cut Pull Request is not closed unmerged",
@@ -466,7 +466,7 @@ def _settled_candidate_intent(context, directory, state, reserved):
                    f"head={row['head_sha']} title={row['title']!r}")
     return {"step": "candidate", "operation_id": records[-1]["operation_id"],
             "pull_request": number, "head_sha": spec["head_sha"],
-            "state": "closed", "merge_commit_sha": None}
+            "state": "closed", "merged": False}
 
 
 def format_request_status(root: Path, git, request_id: str | None = None) -> str:

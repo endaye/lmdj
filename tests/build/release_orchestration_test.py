@@ -186,7 +186,7 @@ class RequestJournalTest(unittest.TestCase):
 
     def settled_intent(self, **overrides):
         settled = {"step": "candidate", "operation_id": "f" * 64, "pull_request": 2073,
-                   "head_sha": "a" * 40, "state": "closed", "merge_commit_sha": None}
+                   "head_sha": "a" * 40, "state": "closed", "merged": False}
         settled.update(overrides)
         return settled
 
@@ -202,7 +202,7 @@ class RequestJournalTest(unittest.TestCase):
                 journal.retire("release-1", dict(retirement,
                                                  settled_intent=self.settled_intent()))
             for bad in (self.settled_intent(state="open", operation_id=begun["operation_id"]),
-                        self.settled_intent(merge_commit_sha="b" * 40, operation_id=begun["operation_id"]),
+                        self.settled_intent(merged=True, operation_id=begun["operation_id"]),
                         self.settled_intent(step="verification", operation_id=begun["operation_id"]),
                         self.settled_intent(head_sha="not-a-sha", operation_id=begun["operation_id"]),
                         self.settled_intent(pull_request=0, operation_id=begun["operation_id"])):

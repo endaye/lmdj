@@ -470,8 +470,10 @@ class ReleaseEntryPointTest(unittest.TestCase):
     def test_retire_unreleased_settles_an_outstanding_candidate_intent_by_a_closed_cut(self):
         request_id = self.candidate_intent_request()
         head = "a" * 40
+        # GitHub fills merge_commit_sha even for a closed Pull Request that
+        # never merged; the merged boolean and state are the settle facts.
         closed = lambda number: {"number": number, "state": "closed", "merged": False,
-                                 "merge_commit_sha": None, "head_sha": head,
+                                 "merge_commit_sha": "b" * 40, "head_sha": head,
                                  "title": "chore(release): allocate 1.0.64.0 candidate"}
         code, report, calls = self.retire_unreleased(request_id, "1.0.65.0", pull_request=closed)
         self.assertEqual(code, 0, report)

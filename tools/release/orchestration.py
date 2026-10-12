@@ -110,13 +110,15 @@ def _validate_settled_intent(settled):
     Only the candidate step's managed cut owns a Pull Request far side, and a
     Pull Request observed closed and unmerged at its exact recorded head can
     never merge or review again without a new deliberate action by an actor,
-    which is not an unknown outstanding write of this request.
+    which is not an unknown outstanding write of this request. GitHub fills
+    `merge_commit_sha` for closed Pull Requests that never merged, so the
+    merged boolean and the state are the settle facts, not that field.
     """
-    _keys(settled, ("step", "operation_id", "pull_request", "head_sha", "state", "merge_commit_sha"))
+    _keys(settled, ("step", "operation_id", "pull_request", "head_sha", "state", "merged"))
     if (settled["step"] != "candidate" or not _match(_DIGEST, settled["operation_id"])
             or type(settled["pull_request"]) is not int or settled["pull_request"] <= 0
             or not _match(_SHA, settled["head_sha"]) or settled["state"] != "closed"
-            or settled["merge_commit_sha"] is not None):
+            or settled["merged"] is not False):
         _fail("settled intent is not a closed-unmerged candidate cut Pull Request")
 
 
