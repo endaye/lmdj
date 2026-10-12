@@ -4,6 +4,7 @@
 #include <lmdj/facade/pattern_transport_controller.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -282,6 +283,7 @@ class JournalFaultStorage final : public lmdj::project_io::ProjectStoragePlatfor
   unsigned journal_creates{}, journal_appends{};
   std::function<void()> before_create;
   std::function<void(const std::string&)> before_append;
+  std::function<void(const std::filesystem::path&)> before_read;
   unsigned fail_empty_appends{};
   lmdj::foundation::Result<void> failure() const {
     return lmdj::foundation::Result<void>::failure(
@@ -293,13 +295,18 @@ class JournalFaultStorage final : public lmdj::project_io::ProjectStoragePlatfor
     return inner->ensure_directory(p);
   }
   lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
     return inner->exists(p);
   }
   lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
     return inner->byte_length(p);
   }
   lmdj::foundation::Result<std::vector<std::byte>> read_complete(
-      const std::filesystem::path& p) const override { return inner->read_complete(p); }
+      const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
+    return inner->read_complete(p);
+  }
   lmdj::foundation::Result<void> create_immutable(
       const std::filesystem::path& p, std::span<const std::byte> bytes) override {
     if (p.filename() == "sequence.jsonl") {
@@ -3116,6 +3123,201 @@ void ordinary_opening_refusal_preserves_a_settled_cancelled_count_in() {
   LMDJ_CHECK(reader.load(bundle).value() == changed.value());
 }
 
+// Hold actual delegated storage calls on the production owner's thread. The
+// ordinary Native link has no Web conformance hook or synthetic completion.
+struct PreparedOwnerWorkGate {
+  std::atomic<bool> preparation_entered{}, release_preparation{};
+  std::atomic<bool> disposition_entered{}, release_disposition{};
+  std::atomic<bool> arm_disposition{};
+  lmdj::facade::PatternTransportWorkIdentity preparation{0, 0, CommandId{""}, 0};
+  lmdj::facade::PatternTransportWorkIdentity disposition{0, 0, CommandId{""}, 0};
+  const std::thread::id control_thread{std::this_thread::get_id()};
+  std::thread::id preparation_thread{}, disposition_thread{};
+  void before_read(const std::filesystem::path& path) {
+    if (std::this_thread::get_id() == control_thread) return;
+    if (path.filename() == "manifest.json" && !preparation_entered.load(std::memory_order_acquire)) {
+      preparation_thread = std::this_thread::get_id();
+      preparation_entered.store(true, std::memory_order_release);
+      while (!release_preparation.load(std::memory_order_acquire)) std::this_thread::yield();
+    } else if (path.filename() == "sequence.jsonl" &&
+        arm_disposition.load(std::memory_order_acquire) && !disposition_entered.load(std::memory_order_acquire)) {
+      disposition_thread = std::this_thread::get_id();
+      disposition_entered.store(true, std::memory_order_release);
+      while (!release_disposition.load(std::memory_order_acquire)) std::this_thread::yield();
+    }
+  }
+};
+
+// fault 1: real owner-lost append writes bytes but loses its response, followed
+// by a real sync refusal; fault 2: a genuine foreign owner; fault 3: unknown
+// preparation after an actual empty Journal create. All use production owners.
+void ordinary_prepared_native_stop_retires_only_after_same_owner_disposition(
+    bool receipt_bound, unsigned fault) {
+  using namespace lmdj;
+  const auto await_stage = [&](const char* stage, auto predicate) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+    while (!predicate()) {
+      const bool in_time = std::chrono::steady_clock::now() < deadline;
+      if (!in_time) std::cerr << "ordinary_prepared_native_stop: receipt_bound=" << receipt_bound
+          << " fault=" << fault << " stage=" << stage << '\n';
+      LMDJ_CHECK(in_time); // A failure belongs to this regression, not the generic helper.
+      std::this_thread::yield();
+    }
+  };
+  auto platform = std::make_shared<JournalFaultStorage>();
+  Fixture f({}, platform);
+  f.audio.receipt_bound_capability = receipt_bound;
+  f.audio.render(1); // Apply the real initial publication before preflight.
+  project_io::ProjectStore reader;
+  project_io::SequenceJournal journals;
+  const auto truth = reader.load(f.bundle);
+  LMDJ_CHECK(truth.has_value());
+  PreparedOwnerWorkGate gate;
+  platform->before_read = [&](const std::filesystem::path& path) { gate.before_read(path); };
+  struct Cleanup {
+    Fixture& fixture;
+    PreparedOwnerWorkGate& gate;
+    ~Cleanup() {
+      gate.release_preparation.store(true, std::memory_order_release);
+      gate.release_disposition.store(true, std::memory_order_release);
+      fixture.audio.engine.stop();
+      fixture.controller.reset(); // Actual worker join after releasing both I/O holds.
+    }
+  } cleanup{f, gate};
+  await_stage("worker_ready", [&] { return f.controller->inspect_io().ready; });
+  const auto original = f.make(970, 1, PatternTransportIntent::record);
+  LMDJ_CHECK(f.controller->request(original) == PatternTransportSubmit::accepted);
+  await_stage("original_preparation_held", [&] {
+    static_cast<void>(f.controller->continue_operation());
+    return gate.preparation_entered.load(std::memory_order_acquire);
+  });
+  LMDJ_CHECK(f.controller->inspect_io().ticket.has_value());
+  gate.preparation = *f.controller->inspect_io().ticket;
+  LMDJ_CHECK(gate.preparation.command_id == original.command_id &&
+      gate.preparation.transport_epoch == original.expected_epoch && gate.preparation.step == 1);
+  LMDJ_CHECK(gate.preparation_thread != std::this_thread::get_id());
+  LMDJ_CHECK(!f.journal_exists() && f.audio.accepted_submits == 0);
+  LMDJ_CHECK(f.controller->request(original) == PatternTransportSubmit::replayed);
+  f.audio.engine.stop(); // This facade fixture has no concurrent audio callback.
+  f.controller->request_shutdown();
+  static_cast<void>(f.controller->continue_operation());
+  LMDJ_CHECK(f.audio.engine.telemetry().state == audio::RealtimeState::stopped);
+  LMDJ_CHECK(!f.controller->inspect_io().stopped && !f.controller->shutdown_complete());
+  LMDJ_CHECK(!f.controller->inspect().recording && f.controller->inspect().origin_frame == 0);
+  LMDJ_CHECK(!f.controller->inspect_count_in().opening_complete);
+  LMDJ_CHECK(!f.audio.engine.inspect_pattern_transport_receipt(7, 1));
+  if (fault == 3) platform->uncertain_begin = true;
+  gate.release_preparation.store(true, std::memory_order_release);
+  if (fault == 3) {
+    await_stage("original_preparation_unknown", [&] { return f.controller->inspect_io().completion != nullptr; });
+    const auto uncertain = f.controller->inspect_io();
+    LMDJ_CHECK(uncertain.ticket && *uncertain.ticket == gate.preparation);
+    LMDJ_CHECK(uncertain.completion->outcome == facade::PatternTransportWorkOutcome::unknown);
+    LMDJ_CHECK(!uncertain.stopped && !f.controller->shutdown_complete());
+    const auto readable = f.read_journal();
+    LMDJ_CHECK(readable.session_id == f.session && !readable.admission &&
+        readable.pending_events.empty() && readable.state == project_io::SequenceSessionState::active);
+  }
+  await_stage("original_native_not_running", [&] {
+    static_cast<void>(f.controller->continue_operation());
+    const auto status = f.controller->inspect();
+    return status.phase == PatternTransportPhase::error && status.error &&
+        status.error->message == "Pattern transport audio submit refused";
+  });
+  // Arm only after consuming actual preparation and observing actual Native
+  // refusal, so a preparation's earlier Journal reads cannot pay this debt.
+  gate.arm_disposition.store(true, std::memory_order_release);
+  await_stage("same_owner_disposition_held", [&] {
+    static_cast<void>(f.controller->continue_operation());
+    return gate.disposition_entered.load(std::memory_order_acquire);
+  });
+  LMDJ_CHECK(f.controller->inspect_io().ticket.has_value());
+  gate.disposition = *f.controller->inspect_io().ticket;
+  // Same worker, same original nonzero operation/epoch, monotonically next work.
+  LMDJ_CHECK(gate.disposition.command_id == original.command_id &&
+      gate.disposition.transport_epoch == original.expected_epoch &&
+      gate.disposition.runtime_generation == original.runtime_generation &&
+      gate.disposition.step == gate.preparation.step + 1);
+  LMDJ_CHECK(gate.preparation_thread == gate.disposition_thread);
+  const auto failed = f.controller->inspect();
+  LMDJ_CHECK(failed.phase == PatternTransportPhase::error && failed.error &&
+      failed.error->message == "Pattern transport audio submit refused" &&
+      failed.command_id == original.command_id && failed.transport_epoch == original.expected_epoch &&
+      !failed.recording && !failed.playing && failed.origin_frame == 0);
+  LMDJ_CHECK(f.controller->request(original) == PatternTransportSubmit::replayed);
+  auto changed = original;
+  changed.expected_epoch = 2;
+  LMDJ_CHECK(f.controller->request(changed) == PatternTransportSubmit::invalid);
+  LMDJ_CHECK(f.audio.accepted_submits == 0 && f.audio.acknowledge_calls == 0);
+  LMDJ_CHECK(!f.controller->inspect_count_in().opening_complete);
+  LMDJ_CHECK(!f.controller->shutdown_complete());
+  const auto prepared = journals.read_active(f.bundle);
+  if (receipt_bound) LMDJ_CHECK(!prepared.has_value() && prepared.error().code == foundation::ErrorCode::not_found);
+  else LMDJ_CHECK(prepared.has_value() && prepared.value().admission &&
+      prepared.value().admission->preparation.identity.operation_id == original.command_id &&
+      prepared.value().admission->preparation.fence_timeout_ms == 5000 &&
+      !prepared.value().admission->admission_fence && !prepared.value().admission->cutoff_fence &&
+      !prepared.value().admission->closure &&
+      prepared.value().admission->candidates.empty());
+  if (fault == 1) {
+    platform->fail_append_kind = "owner_lost";
+    platform->uncertain_append = true;
+    platform->fail_empty_appends = 1;
+  }
+  if (fault == 2) {
+    LMDJ_CHECK(receipt_bound);
+    LMDJ_CHECK(journals.begin(f.bundle, SequenceSessionId{uuid(971)}, f.pattern, 1,
+        project_io::sequence_pattern_fingerprint(truth.value().patterns.at(f.pattern)), 0, {}).has_value());
+  }
+  gate.release_disposition.store(true, std::memory_order_release);
+  if (fault == 1 || fault == 2) {
+    await_stage("original_disposition_unknown_or_refused", [&] { return f.controller->inspect_io().completion != nullptr; });
+    const auto unresolved = f.controller->inspect_io();
+    LMDJ_CHECK(unresolved.ticket && *unresolved.ticket == gate.disposition);
+    LMDJ_CHECK(unresolved.completion->outcome == (fault == 1
+        ? facade::PatternTransportWorkOutcome::unknown : facade::PatternTransportWorkOutcome::refused));
+    LMDJ_CHECK(!unresolved.stopped && !f.controller->shutdown_complete());
+    static_cast<void>(f.controller->continue_operation());
+    if (fault == 1) {
+      await_stage("original_disposition_sync_unknown", [&] { return f.controller->inspect_io().completion != nullptr; });
+      const auto sync_failed = f.controller->inspect_io();
+      LMDJ_CHECK(sync_failed.ticket && *sync_failed.ticket == gate.disposition &&
+          sync_failed.completion->outcome == facade::PatternTransportWorkOutcome::unknown && !sync_failed.stopped);
+      LMDJ_CHECK(!f.controller->inspect_input_owner().disposed && !f.controller->shutdown_complete());
+    } else {
+      LMDJ_CHECK(!f.controller->inspect_input_owner().disposed && !f.controller->shutdown_complete());
+      LMDJ_CHECK(journals.read_active(f.bundle).value().session_id == SequenceSessionId{uuid(971)});
+      LMDJ_CHECK(reader.load(f.bundle).value() == truth.value());
+      return; // Real refused disposition remains held; destructor is not success.
+    }
+  }
+  await_stage("real_worker_stopped", [&] {
+    static_cast<void>(f.controller->continue_operation());
+    return f.controller->inspect_io().stopped;
+  });
+  LMDJ_CHECK(f.controller->shutdown_complete());
+  const auto terminal = f.controller->inspect();
+  LMDJ_CHECK(terminal.error && terminal.error->code == failed.error->code &&
+      terminal.error->message == failed.error->message && terminal.error->details == failed.error->details &&
+      terminal.command_id == original.command_id);
+  LMDJ_CHECK(f.controller->request(original) == PatternTransportSubmit::replayed);
+  LMDJ_CHECK(f.audio.accepted_submits == 0 && f.audio.acknowledge_calls == 0);
+  LMDJ_CHECK(!f.controller->inspect_count_in().opening_complete);
+  LMDJ_CHECK(reader.load(f.bundle).value() == truth.value());
+  const auto disposed = journals.read_active(f.bundle);
+  if (receipt_bound) LMDJ_CHECK(!disposed.has_value() && disposed.error().code == foundation::ErrorCode::not_found);
+  else LMDJ_CHECK(disposed.has_value() && disposed.value().state == project_io::SequenceSessionState::owner_lost &&
+      disposed.value().admission == prepared.value().admission && disposed.value().pending_events == prepared.value().pending_events);
+  f.controller.reset(); // Actual I/O thread join before independent writer/reopen.
+  {
+    const auto independent = project_io::make_default_project_storage_platform();
+    const auto writer = independent->acquire_writer(f.bundle);
+    LMDJ_CHECK(writer.has_value());
+  }
+  project_io::ProjectStore reopened;
+  LMDJ_CHECK(reopened.load(f.bundle).value() == truth.value());
+}
+
 void native_refused_unsent_schedule_clears_only_its_exact_deferred_cutoff() {
   refused_schedule_keeps_original_owner_failure(false);
 }
@@ -3130,6 +3332,11 @@ void shutdown_fallback_preserves_an_established_native_owner_failure() {
 
 int main() {
   try {
+    ordinary_prepared_native_stop_retires_only_after_same_owner_disposition(true, 0);
+    ordinary_prepared_native_stop_retires_only_after_same_owner_disposition(false, 0);
+    ordinary_prepared_native_stop_retires_only_after_same_owner_disposition(false, 1);
+    ordinary_prepared_native_stop_retires_only_after_same_owner_disposition(true, 2);
+    ordinary_prepared_native_stop_retires_only_after_same_owner_disposition(false, 3);
     ordinary_record_after_settled_count_in_owns_its_opening(false);
     ordinary_record_after_settled_count_in_owns_its_opening(true);
     ordinary_opening_refusal_preserves_a_settled_cancelled_count_in();

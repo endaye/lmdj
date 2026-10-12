@@ -11591,6 +11591,7 @@ class HeldCountInOpeningStorage final
   };
   explicit HeldCountInOpeningStorage(std::filesystem::path bundle)
       : bundle_(std::move(bundle)) {}
+  std::function<void(const std::filesystem::path&)> before_read;
   void arm() { std::lock_guard lock(mutex_); armed_ = true; released_ = false; observation_ = {}; }
   void release() noexcept { std::lock_guard lock(mutex_); released_ = true; changed_.notify_all(); }
   Observation inspect() const { std::lock_guard lock(mutex_); return observation_; }
@@ -11621,10 +11622,20 @@ class HeldCountInOpeningStorage final
   lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& p) override { return inner_->acquire_writer(p); }
   lmdj::foundation::Result<void> ensure_directory(const std::filesystem::path& p) override { return inner_->ensure_directory(p); }
-  lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override { return inner_->exists(p); }
-  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override { return inner_->byte_length(p); }
-  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override { return inner_->read_complete(p); }
+  lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
+    return inner_->exists(p);
+  }
+  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
+    return inner_->byte_length(p);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
+    return inner_->read_complete(p);
+  }
   lmdj::foundation::Result<std::string> read_complete_text(const std::filesystem::path& p) const override {
+    if (before_read) before_read(p);
     const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(inner_.get());
     LMDJ_CHECK(reader != nullptr);
     return reader->read_complete_text(p);
@@ -12593,10 +12604,183 @@ void test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release()
   check_success(reopened->dispatch("host.close", Json::object(), {}));
 }
 
+void test_prepared_record_timeout_waits_for_real_owner_and_original_consumers() {
+  using lmdj::web_runtime::detail::ControlRuntimePatternIoAccess;
+  using lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess;
+  TempDirectory temp;
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  auto storage = std::make_shared<HeldCountInOpeningStorage>(bundle);
+  auto config = make_application_config(temp.path());
+  config.storage_platform = storage;
+  auto created = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  FakeCoordinator coordinator;
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  const auto imported = check_locked_success_result(runtime->dispatch(
+      "asset.import", import_payload(10520, 0, kAssetId, wav), wav));
+  check_success(runtime->dispatch("pad.assign", assign_payload(10521, 1, kAssetId), {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto asset = bundle / "assets" / (imported.at("artifact").at("sha256").get<std::string>() + ".wav");
+  const auto asset_bytes = read_bytes(asset);
+  const auto asset_digest = sha256(asset_bytes);
+  LMDJ_CHECK(asset_digest == imported.at("artifact").at("sha256").get<std::string>());
+
+  struct Reads {
+    const std::thread::id control{std::this_thread::get_id()};
+    std::atomic<bool> preparation{}, release_preparation{}, arm_disposition{};
+    std::atomic<bool> disposition{}, release_disposition{};
+    std::thread::id preparation_worker{}, disposition_worker{};
+    void before(const std::filesystem::path& path) {
+      if (std::this_thread::get_id() == control) return;
+      if (path.filename() == "manifest.json" && !preparation.load(std::memory_order_acquire)) {
+        preparation_worker = std::this_thread::get_id();
+        preparation.store(true, std::memory_order_release);
+        while (!release_preparation.load(std::memory_order_acquire)) std::this_thread::yield();
+      } else if (path.filename() == "sequence.jsonl" && arm_disposition.load(std::memory_order_acquire) &&
+          !disposition.load(std::memory_order_acquire)) {
+        disposition_worker = std::this_thread::get_id();
+        disposition.store(true, std::memory_order_release);
+        while (!release_disposition.load(std::memory_order_acquire)) std::this_thread::yield();
+      }
+    }
+    void release_all() noexcept {
+      release_preparation.store(true, std::memory_order_release);
+      release_disposition.store(true, std::memory_order_release);
+    }
+  } reads;
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  FakeProxy proxy;
+  std::unique_ptr<ControlBridge> bridge;
+  struct Cleanup {
+    Reads& reads;
+    OneShotAudioDriver& driver;
+    std::unique_ptr<ControlBridge>& bridge;
+    std::unique_ptr<ControlRuntime>& runtime;
+    ~Cleanup() {
+      reads.release_all(); // Before either real callback or I/O thread join on RED.
+      driver.stop();
+      bridge.reset();
+      runtime.reset();
+    }
+  } cleanup{reads, driver, bridge, runtime};
+  coordinator.engine = &runtime->engine();
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  LMDJ_CHECK(ControlRuntimePhysicalAudioAccess::install(*runtime, coordinator.physical_seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10522, 1, "play_stop"), {}));
+  LMDJ_CHECK(settle_pattern_transport(*runtime, driver, kSequenceSessionId).at("playing") == true);
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10523, 2, "play_stop"), {}));
+  const auto stopped = settle_pattern_transport(*runtime, driver, kSequenceSessionId);
+  LMDJ_CHECK(stopped.at("playing") == false && stopped.at("recording") == false && stopped.at("phase") == "idle");
+  const auto generation = stopped.at("runtime_generation").get<std::uint64_t>();
+  LMDJ_CHECK(ControlRuntimePatternIoAccess::idle(*runtime));
+  // Engage and fully settle the actual constructor before arming worker reads.
+  storage->before_read = [&](const std::filesystem::path& path) { reads.before(path); };
+  bridge = make_bridge(*runtime, proxy);
+  const auto record_rpc = uuid(10525);
+  LMDJ_CHECK(bridge->submit(encode(request(record_rpc, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10524, 3, "record"))), {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto admitted = poll_message(*bridge);
+  LMDJ_CHECK(admitted.at("request_id") == record_rpc && admitted.at("ok") == true);
+  LMDJ_CHECK(admitted.at("result").at("command_id") == uuid(10524));
+  LMDJ_CHECK(admitted.at("result").at("status").at("phase") == "preparing");
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+  const auto release_record = proxy.tasks.front();
+  proxy.tasks.erase(proxy.tasks.begin());
+  proxy.pump_one(); // Real Host service submits the original preflight to its worker.
+  wait_until([&] { runtime->service_pattern_transport(); return reads.preparation.load(std::memory_order_acquire); });
+  const auto pending = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(pending.at("phase") == "preparing" && pending.at("command_id") == uuid(10524) &&
+      pending.at("transport_epoch") == 3 && pending.at("recording") == false && pending.at("origin_frame") == 0);
+  LMDJ_CHECK(reads.preparation_worker != reads.control);
+  LMDJ_CHECK(!runtime->engine().inspect_pattern_transport_receipt(generation, 3));
+  const auto no_journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!no_journal.has_value() && no_journal.error().code == lmdj::foundation::ErrorCode::not_found);
+
+  const auto timeout_rpc = uuid(10526);
+  LMDJ_CHECK(bridge->submit(encode(request(timeout_rpc, "host.status", Json::object())),
+      {}, std::chrono::steady_clock::now()) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  LMDJ_CHECK(runtime->failed() && bridge->failed() && proxy.tasks.empty());
+  runtime->service_pattern_transport();
+  LMDJ_CHECK(!FakeCoordinator::callback_thread_joined(&coordinator));
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::stopped(*runtime) && !bridge->terminal_release_ready());
+  driver.stop(); // Real callback last-use/join, not a terminal-state surrogate.
+  LMDJ_CHECK(FakeCoordinator::callback_thread_joined(&coordinator));
+  runtime->service_pattern_transport(); // E requests actual controller shutdown after Native Stop.
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::stopped(*runtime) && !runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(!bridge->terminal_release_ready() && coordinator.await_calls == 0);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("phase") == "preparing");
+  LMDJ_CHECK(!runtime->engine().inspect_pattern_transport_receipt(generation, 3));
+  reads.release_preparation.store(true, std::memory_order_release);
+  Json failed;
+  wait_until([&] {
+    runtime->service_pattern_transport();
+    failed = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    return failed.at("phase") == "error" && failed.at("error").is_object();
+  });
+  LMDJ_CHECK(failed.at("command_id") == uuid(10524) && failed.at("transport_epoch") == 3 &&
+      failed.at("recording") == false && failed.at("playing") == false && failed.at("origin_frame") == 0);
+  LMDJ_CHECK(failed.at("error") == (Json{{"code", "INVALID_ARGUMENT"},
+      {"message", "request is invalid"}, {"details", Json::object()}}));
+  reads.arm_disposition.store(true, std::memory_order_release);
+  wait_until([&] { runtime->service_pattern_transport(); return reads.disposition.load(std::memory_order_acquire); });
+  LMDJ_CHECK(reads.disposition_worker == reads.preparation_worker);
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::stopped(*runtime) && !runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(!bridge->terminal_release_ready() && coordinator.await_calls == 0);
+  LMDJ_CHECK(!runtime->engine().inspect_pattern_transport_receipt(generation, 3));
+  const auto still_absent = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!still_absent.has_value() && still_absent.error().code == lmdj::foundation::ErrorCode::not_found);
+  reads.release_disposition.store(true, std::memory_order_release);
+  wait_until([&] { runtime->service_pattern_transport(); return ControlRuntimePatternIoAccess::stopped(*runtime); });
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete() && !bridge->terminal_release_ready());
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("error") == failed.at("error"));
+  const auto timeout = poll_message(*bridge);
+  LMDJ_CHECK(timeout.at("request_id") == timeout_rpc && timeout.at("ok") == false);
+  LMDJ_CHECK(timeout.at("error") == (Json{{"code", "HOST_TIMEOUT"},
+      {"message", "host request timed out"}, {"details", Json::object()}}));
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+  const auto release_timeout = proxy.tasks.front();
+  proxy.tasks.erase(proxy.tasks.begin());
+  LMDJ_CHECK(release_record.function == release_timeout.function && release_record.argument != release_timeout.argument);
+  proxy.pump_one();
+  LMDJ_CHECK(proxy.tasks.empty() && !bridge->terminal_release_ready());
+  proxy.run_as_control(release_record);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  proxy.run_as_control(release_timeout);
+  LMDJ_CHECK(bridge->terminal_release_ready() && coordinator.await_calls == 0);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  auto observer = make_application(temp.path());
+  LMDJ_CHECK(!observer.acquire_project_writer(bundle).has_value());
+  bridge.reset();
+  runtime.reset(); // Actual owner/controller destruction, including its worker join.
+  {
+    const auto writer = observer.acquire_project_writer(bundle);
+    LMDJ_CHECK(writer.has_value());
+  }
+  auto reopened = make_runtime(temp.path());
+  check_success(reopened->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  const auto reopened_asset = read_bytes(asset);
+  LMDJ_CHECK(reopened_asset == asset_bytes && reopened_asset.size() == asset_bytes.size() && sha256(reopened_asset) == asset_digest);
+  check_success(reopened->dispatch("host.close", Json::object(), {}));
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_prepared_record_timeout_waits_for_real_owner_and_original_consumers();
     test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release();
     test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(true);
     test_bridge_pre_dispatch_timeout_keeps_count_in_caller_ack_serviceable();

@@ -516,3 +516,16 @@ admission 仍保留原 owner，并提交真实 correlated Release，不制造取
 本段是独立恢复修复源码说明，不代表 packaged replacement 或完整 Creator
 验收通过。版本影响为未交付 S6 的 Web Runtime Platform PATCH 正确性债务；
 公开 API、Native wire、持久化 Contract 和 Product Build 均未改变。
+
+
+### S6 普通 Record 准备期间的失败（修复源码）
+
+失败后的真实 Native stop 不解除仍在 worker 中的原 prepare/preflight。普通
+Record 在已知准备完成后得到真实 `not_running` 时，Facade 保留原 command、epoch
+和失败，并经同一 worker 的真实 `owner_lost` 读取/持久化结算后继续 shutdown。
+没有已开始录音的 S/F 或 opening 成功收据；未知结果与拒绝仍保留责任。
+
+Host 继续要求实际 callback-last-use、Native stopped、executor owner 释放及
+原 Bridge response/consumer release。独立 writer acquisition、完整 Truth/Artifact
+reopen 和浏览器 OPFS 回执不能从逻辑 idle、计时器或单个 stopped 值推断。
+该私有结算不新增 wire/DTO/vtable 或 Product 身份；源码与当前运行验收分开记录。

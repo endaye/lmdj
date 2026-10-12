@@ -1152,3 +1152,64 @@ Build or Assembly identity is allocated by this followup.
 
 Documentation impact: required on `/core/modules/web-runtime-platform/`, with
 this design/plan updated in the same Task.
+
+
+## S6 followup — retained ordinary preparation after Native stop
+
+Independent source review found an inherited gap beyond the idle Play repair:
+ordinary Record can retain an actual `prepare`/`preflight` operation when audio
+fails. Shutdown cannot submit a new Stop while that request is pending. After
+the real preparation completes, Native `not_running` changes phase to error
+but leaves the original preparation pending; the real executor cannot stop.
+This premise was source-confirmed and is now distinguished by the same freshly
+rebuilt regressions: the original Controller and Host each fail inside their new
+owner-disposition witness; the fixed full Controller, count-in, executor, Host
+and original 64-round stress all pass. The stress takes 226.44 seconds under its
+unchanged 300-second ceiling. This Native evidence does not certify the complete
+integrated Web/Creator/OPFS/PCM or physical candidate. The Task depends on the
+verified E idle Play repair, replayed as
+`ea9ab99b043f68c13aa3e75ca079a5b54bc9c6e7` (tree equals original `61decc21`).
+
+**Declared files:** `packages/application-facade/src/pattern_transport_controller.cpp`,
+`tests/core/facade/pattern_transport_controller_test.cpp`,
+`packages/web-runtime-platform/test/control_runtime_test.cpp`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`,
+`apps/docs-site/docs/core/modules/application-facade.mdx`, and
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`.
+
+Retain a private binding of the exact failed ordinary preparation request and
+its genuine Native refusal. Only a known completed preparation, actual
+`not_running` refusal and shutdown intent authorize its terminal bookkeeping.
+Preserve unknown work, original command/epoch/opening clock/caller error and
+legacy/input debt. The same real worker performs existing `owner_lost`: actual
+Journal absence is read back; an existing matching prefix receives durable
+owner-loss disposition; foreign, refused or uncertain effects retain their
+real debt. No start/cutoff frame, opened take, successful cancellation or ACK
+is manufactured. Executor shutdown still requires actual work, input and
+owner settlement, with caller response consumption remaining independent.
+
+**Lowest-tier verification:** unchanged complete controller tests plus a new
+real storage-delegate discriminator for receipt-bound preflight/no Journal,
+legacy prepare/real empty prefix, unknown preparation and refused/uncertain
+owner-loss sync. Original and repaired production are freshly rebuilt with the
+same fixtures; the original failure must occur inside the new regression.
+A real Host witness additionally retains actual callback last use, Native stop,
+held original preparation, same-worker disposition, executor owner release,
+original Bridge consumer/release, independent writer acquisition and complete
+Truth/Artifact reopen. Storage gates delegate the actual operation and release
+on unwind; they do not manufacture completion. Ordinary Native links do not
+borrow a Web-only conformance hook. Keep every original test, 1-second input,
+5-second opening, 300-second stress, 64 rounds and original workers. Full Portal
+runs before commit. Current integrated Web/Creator/OPFS/PCM and physical/manual
+acceptance remain separate obligations, not inferred from a component result.
+
+### Version Management
+
+Version impact: correctness debt within the already declared unshipped S6
+settlement. Private implementation bookkeeping adds no public layout/vtable,
+wire schema, persisted Contract or Product identity allocation.
+
+Documentation impact: required on `/core/modules/application-facade/` and
+`/core/modules/web-runtime-platform/`, with this design and plan in the same
+Task. Source text describes the required behavior; runtime proof is recorded
+only after actual execution.

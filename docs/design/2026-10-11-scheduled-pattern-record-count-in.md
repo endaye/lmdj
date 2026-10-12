@@ -975,3 +975,25 @@ and repaired flow with the same observer and complete original test suite.
 Documentation impact: required on `/core/modules/web-runtime-platform/`.
 Source describes the required behavior; current rebuilt runtime and physical
 acceptance must be recorded separately.
+
+
+## Ordinary preparation failure retains its real owner
+
+Ordinary Record preparation can still be owned when real Native audio stops.
+A shutdown intent must not forget the original pending I/O or create a new
+successful Stop. After that exact preparation is known complete and Native
+really refuses its unsent start/fence as `not_running`, private bookkeeping
+retains the original request and failure. Shutdown then uses the same worker's
+existing `owner_lost` operation to establish actual Journal absence or durably
+dispose the original matching prefix. Unknown work and refused/conflicting
+owner disposition stay retained; readable bytes alone are not durable proof.
+
+This no-start failure has no S/F or successful opening/cancellation receipt.
+It does not borrow a prior closed take, a scheduled e2, or an input-only epoch
+zero identity. Actual executor owner destruction, Native input/physical holds,
+original caller response release and independent storage reacquisition remain
+separate boundaries. The additive private request binding changes no public
+layout, wire or persisted Contract; identities remain in the existing unshipped
+S6 settlement. Native real-storage tests and Host callback/Bridge witnesses
+require rebuilt old/fixed discrimination; browser OPFS, complete current
+Creator and physical acceptance still need their own actual execution.

@@ -103,6 +103,9 @@ struct PatternTransportCoordinator::Async {
     if (r.runtime_generation != config.runtime_generation || !domain::is_valid_uuid(r.command_id.value()))
       return PatternTransportSubmit::stale;
     if (r.session != config.session || r.project_id != config.project) return PatternTransportSubmit::invalid;
+    if (shutdown && failed_preparation && failed_preparation->request.command_id == r.command_id)
+      return failed_preparation->request == r ? PatternTransportSubmit::replayed
+                                              : PatternTransportSubmit::invalid;
     if (shutdown || phase == PatternTransportPhase::error) return PatternTransportSubmit::refused;
     if (const auto found = retained.find(r.command_id); found != retained.end())
       return found->second == r ? PatternTransportSubmit::replayed : PatternTransportSubmit::invalid;
@@ -345,6 +348,22 @@ struct PatternTransportCoordinator::Async {
     closing = false;
     prepare_needed = false;
     phase = error ? PatternTransportPhase::error : PatternTransportPhase::idle;
+  }
+  void retire_failed_preparation() {
+    if (!shutdown || !failed_preparation || !pending ||
+        *pending != failed_preparation->request || !prepared || work_request || receipt ||
+        recording || active_schedule()) return;
+    // Known preparation and an actual Native not_running refusal have no S/F
+    // or opening ACK. Retain that original failure; the same worker must still
+    // confirm absence or durably dispose its real prepared Journal.
+    owner_invalidated = true;
+    owner_disposed = false;
+    owner_failure = failed_preparation->error;
+    error = owner_failure;
+    playing = false;
+    opening_failed = true;
+    prepared = false;
+    finish_request();
   }
   void expire_inputs() {
     const auto now = std::chrono::steady_clock::now();
@@ -1003,13 +1022,22 @@ struct PatternTransportCoordinator::Async {
       work(std::move(payload), *pending);
       return Void::success();
     }
+    retire_failed_preparation();
     if (prepared && pending && !receipt && phase == PatternTransportPhase::preparing) {
       if (submit_audio(*pending, playing ? audio::PatternTransportAction::fence
                                        : audio::PatternTransportAction::start)) {
         prepared = false;
         recording_request = *pending;
         phase = PatternTransportPhase::awaiting_audio;
-      } else if (audio_submit_result != audio::PatternTransportSubmit::busy) phase = PatternTransportPhase::error;
+      } else if (audio_submit_result != audio::PatternTransportSubmit::busy) {
+        phase = PatternTransportPhase::error;
+        if (audio_submit_result == audio::PatternTransportSubmit::not_running &&
+            pending->intent == PatternTransportIntent::record && !recording &&
+            !active_schedule() && error) {
+          failed_preparation = FailedPreparation{*pending, *error};
+          retire_failed_preparation();
+        }
+      }
       return Void::success();
     }
     if (!shutdown && phase == PatternTransportPhase::error && !active_schedule() && !owner_invalidated)
@@ -1068,6 +1096,8 @@ struct PatternTransportCoordinator::Async {
         if (!owner_disposition_refused) work_owner_disposition();
       } else if (closed_owner_disposition) {
         if (!owner_disposition_refused) work({{"op", "owner_lost"}}, *closed_owner_request);
+      } else if (failed_preparation) {
+        if (!owner_disposition_refused) work({{"op", "owner_lost"}}, failed_preparation->request);
       } else if (recording_request || count.request)
         work({{"op", "owner_lost"}}, recording_request ? *recording_request : count.request->transport);
     }
@@ -1309,6 +1339,11 @@ struct PatternTransportCoordinator::Async {
   std::optional<foundation::CommandId> last_command;
   std::optional<foundation::Error> error;
   std::optional<foundation::Error> owner_failure;
+  struct FailedPreparation {
+    PatternTransportRequest request;
+    foundation::Error error;
+  };
+  std::optional<FailedPreparation> failed_preparation;
   audio::PatternTransportSubmit audio_submit_result{audio::PatternTransportSubmit::accepted};
   PatternTransportPhase phase{PatternTransportPhase::idle};
   std::optional<PatternTransportRequest> pending, recording_request;
