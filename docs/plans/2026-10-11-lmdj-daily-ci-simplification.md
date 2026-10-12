@@ -886,3 +886,120 @@ reader mocks; the complete CTest runs them without mocks. Syntax check and
 15 existing pitfall-ledger contracts pass. Original local and remote red
 results are retained; no timeout, selection or assertion was weakened.
 Precommit refresh still resolves to `db6776df18445a6c6d64315e840e88face3c062b`.
+
+### T8 — Retain the completed weekday observation with workload limits
+
+Integration/task base: `618cb45ef7630280405bbec1c121184816be945c`.
+Relates to #1996. Declared file: this plan only.
+
+Premises before editing:
+
+- Already delivered: #2011 implements quick/risk selection, #2067 repairs
+  recovery probes, and #2079 separates the Facade/Native inventories. Retain
+  their implementation; this evidence Task changes no execution policy.
+- Outstanding: T6 contains adjacent weekend/partial-day observations, while
+  the weekday collector was still waiting for the Oct 12 window to close.
+  That collector now exits 0 with `status=collected`; both cohorts and all
+  their exact latest-observed-attempt job inventories are terminal. Enrichment
+  and summary also exit 0, with no unavailable executed CI logs or unresolved
+  allocated-job timestamp anomalies. Record the completed observation.
+- Unverified: a representative, matched-source/toolchain/cache experiment and
+  an exact successful full candidate. Calendar weekdays alone do not establish
+  normal workload: contributors, this CI repair session and concurrent Tasks
+  generated these runs. Do not size capacity or claim causal savings from them.
+  The d7a0e68d full request remains queued behind older immutable requests.
+  Precommit main refresh reaches `f084f3e34` (#2085): it fixes the old hardware
+  browser oracle expecting Q where the spatial mapping renders Z. That is the
+  current old-target Creator job's owning failure, already repaired by another
+  Task; do not repeat it. The immutable d7a0e68d request predates this test
+  repair and cannot establish acceptance for the corrected source.
+
+#### Fixed windows and consumption
+
+Compare Berlin 09:00–17:00 on Friday Oct 9 and Monday Oct 12: UTC half-open
+`[2026-10-09T07:00:00Z, 2026-10-09T15:00:00Z)` and
+`[2026-10-12T07:00:00Z, 2026-10-12T15:00:00Z)`. Enumerate `pr-contract.yml`
+runs by creation time with complete pagination and unique-ID/API-total checks,
+then collect every job of each latest observed attempt. All attempts are 1;
+all runs were terminal before analysis. This is one workflow's run-created
+cohort, not repository-wide billing, all retries or active-day overlap.
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Workflow runs | 26 | 31 |
+| Successful / failed / cancelled / skipped runs | 17 / 3 / 6 / 0 | 25 / 3 / 1 / 2 |
+| Complete job inventory | 125 | 155 |
+| Actually executed terminal jobs | 109 | 104 |
+| Sum of executed job wall seconds | 13,755 | 9,679 |
+| Job wall seconds per workflow run | 529.04 | 312.23 |
+| Executed CI contract jobs | 15 | 13 |
+| CI contract job wall seconds | 9,828 | 6,503 |
+| CI contract job median seconds | 314 | 350 |
+| CI contract job p95 seconds (nearest rank) | 1,319 | 1,173 |
+
+Count parallel jobs separately; include actual failure/cancellation execution.
+Skipped jobs are not passes. Four before-window jobs cancelled before runner
+allocation have no steps and reversed API timestamps; preserve them separately
+and exclude them from executed duration, without producing negative consumption.
+After has no such jobs. No allocated-job timestamp anomalies remain.
+
+Per-run observed job wall time is **40.98% lower**. The raw total is 29.63%
+lower, with 26 versus 31 runs; neither figure is a causal optimization estimate,
+CPU consumption or billable minutes. The CI contract median actually increases
+from 314 to 350 seconds. Preserve that result alongside the lower per-run total.
+Portal execution frequency also changes (21 versus 16 jobs); do not attribute
+all workflow-level movement to the Python selector.
+
+#### Machine, workload and cache evidence
+
+Each executed CI job has its retained log and log-reported machine name. The
+after selector reports four `focused` selections with `seam=false` and nine
+conservative `full` selections with `seam=true`; unmapped dependencies include
+pitfall entries, Assembly and recovery probes. A quick execution profile can
+select full work. Before predates this profile report and runs the full suite.
+
+| Machine from log | Before CI jobs / seconds | After CI jobs / seconds | Before completed full Python phases / median seconds | After completed full Python phases / median seconds |
+| --- | ---: | ---: | ---: | ---: |
+| netcup01 | 9 / 2,570 | 5 / 1,295 | 8 / 201.039 | 4 / 225.956 |
+| vmi3444835 | 6 / 7,258 | 8 / 5,208 | 5 / 990.973 | 5 / 860.099 |
+
+Before full Python phases contain 2,561 tests; after full phases contain 2,734.
+Two before jobs cancel during Python and stay in job consumption rather than
+acquiring a fabricated complete-phase duration. After focused phases contain
+12 tests: one on netcup01 (3.113 seconds), three on vmi3444835 (8.023, 9.287,
+7.630 seconds). These phase figures exclude the separate PR-Agent seam.
+Different sources, risk groups and host load prohibit a matched-workload
+interpretation of the machine table. Source heads/bounds, test summaries,
+selector reasons and per-step times are retained, rather than inferred from
+PR titles.
+
+All 28 executed CI logs report the Node tool-cache hit. This establishes only
+that component's warm state; overall dependency/build cache and cold state
+remain unknown. Keep installation markers and pinned seam timing separate.
+The prior same-source/host warm n=1 Python comparison remains the controlled
+scope-specific result: 19.139 versus 228.972 seconds, 91.64% lower wall time;
+it is not a whole-workflow or cold-cache estimate.
+
+Raw authenticated inventories/logs and analysis are retained locally under
+`/tmp/lmdj-ci-workday-observation/`. SHA-256 of `summary.json` is
+`f6465919c45c51d113d1190fb37dce75e295398e4a97bc16a76ce04843e3b507`;
+`before-enriched.json` is
+`1a87a9b9fcdf397e8ef41d14c0f12eab1320a6d5d65d83d0a45d571914bc4a7f`;
+`after-enriched.json` is
+`aa99092f6172f28ec92a668cdfa3f0e7e3468155b0ef1f6e984b9a0033cad484`.
+These local hashes bind this analysis; they do not promise permanent log
+retention. The dated workflow API queries above identify the cohort, and
+Issue #1996 retains the observation and verification boundaries.
+
+Lowest-tier verification: independent recalculation of both complete inventories
+passes, including counts/interval sums/percentages, retained-log hashes and
+machine/cache markers. Inspect profile/test summaries, then run staged
+scope/whitespace and the docs-static lane. No new gate or qualifying pitfall
+recurrence occurred. The intervening #2085 changes only its owning browser
+test and does not change this observation or the declared file.
+
+#### Version Management
+
+Version impact: none — observational evidence only.
+Documentation impact: none — no portal source facts, product identities or
+published routes change; this plan retains measured cost and its limitations.
