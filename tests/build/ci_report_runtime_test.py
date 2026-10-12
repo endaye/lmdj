@@ -111,7 +111,7 @@ class ProjectionTests(unittest.TestCase):
         self.adapter = object.__new__(module.ReportRuntime)
         self.adapter.api = self.api
         self.adapter.scheduler = self.runtime
-        self.adapter.outbox = lambda: report_outbox.Outbox(self.outbox.journal(), lambda: True, "outbox")
+        self.adapter.outbox = lambda *, persist_verified=True: report_outbox.Outbox(self.outbox.journal(), lambda: True, "outbox", persist_verified=persist_verified)
 
     def planned(self):
         state = module.report_scheduler_state(self.runtime)

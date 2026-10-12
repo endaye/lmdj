@@ -243,7 +243,7 @@ class EntryTests(unittest.TestCase):
             answer = controller.reports(self.push())
         self.assertEqual(answer['status'], 'error')
         self.assertEqual([row['stage'] for row in self.diagnostic_rows(log)], ['event-authenticate', 'report'])
-        execute.assert_called_once_with('drain', limit=1)
+        execute.assert_called_once_with('drain', limit=1, persist_verified=False)
         self.assertNotIn('SECRET', log.getvalue())
 
     def setUp(self):
@@ -830,6 +830,37 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(len(self.api.issues), 1)
         self.assertEqual(reporter.outbox().load()["deliveries"][key]["status"], "delivered")
         self.assertEqual(self.scheduler.comments, before)
+
+    def test_source_refused_drain_with_idle_nonempty_journal_manufactures_no_write(self):
+        source = full_legacy_api()
+        _, planned = report_runtime.reporting.plan_run(source, 100, attempt=1, repository="endaye/lmdj", sleep=lambda _: None)
+        reporter = report_runtime.ReportRuntime(self.config, root=self.f.root, environment=self.env, api=self.api)
+        reporter.storage.authenticate_current()
+        box = reporter.outbox()
+        box.load()
+        import report_outbox
+        import incremental_batch as batch
+        key = batch.digest({"key": planned[0].key, "observation": planned[0].observation})
+        box._persist("queue", {"delivery": key, "payload": report_outbox.freeze(planned[0], "endaye")})
+        self.assertEqual(reporter.execute("drain")["status"], "delivered")
+        # Simulate a legacy anchor: an authenticated non-empty journal whose
+        # verified prefix was never persisted. Only an authenticated tick may
+        # upgrade it; the source-refused drain must stay write-free even here.
+        body = json.loads(self.http["outbox"].issue["body"])
+        prefix = body["payload"].pop("verified")
+        self.assertGreater(prefix["count"], 0)
+        self.http["outbox"].issue["body"] = json.dumps(body)
+        self.calls.clear()
+        foreign = self.source(".github/workflows/ci.yml", 100)
+        foreign["repository"]["id"] = 7
+        foreign["path"] = ".github/workflows/unknown.yml"
+        self.add_run(18)
+        result = self.make(18, "workflow_run").reports(self.callback(foreign))
+        self.assertEqual(result["status"], "error")
+        self.assertEqual([row["operation"] for row in result["outcomes"]], ["source", "drain"])
+        self.assertEqual(result["outcomes"][1]["result"], {"status": "idle"})
+        self.assertFalse(self.writes())
+        self.assertNotIn("verified", json.loads(self.http["outbox"].issue["body"])["payload"])
 
     def test_cli_report_cannot_overwrite_preexisting_control_result(self):
         with tempfile.TemporaryDirectory() as directory:
