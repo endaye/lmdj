@@ -31,6 +31,57 @@ async function installTransportProofRecorder(page) {
       set(nativeHost) {
         const nativeTransport = nativeHost.transport;
         window.__patternTransportVoiceProof = [];
+        // Observe actual transport receipts only; never issue a synthetic
+        // inspection or consume. Admission cannot enter the proof counter.
+        const inputAdmissions = new Map();
+        const consumedInputs = new Set();
+        const ticketKey = ticket => JSON.stringify([ticket?.command_id,
+          ticket?.runtime_generation, ticket?.frame_epoch, ticket?.ticket]);
+        const observeInput = (request, response) => {
+          if (request?.operation === "pattern.transport.input.request" &&
+              request.payload?.kind === "press" && response?.ok === true &&
+              response.request_id === request.request_id) {
+            const ticket = {command_id: request.payload.command_id,
+              runtime_generation: request.payload.runtime_generation,
+              frame_epoch: request.payload.frame_epoch, ticket: request.payload.input_serial};
+            const sameTicket = value => Object.keys(ticket).length === Object.keys(value ?? {}).length &&
+              Object.entries(ticket).every(([key, expected]) => value?.[key] === expected);
+            if (sameTicket(response.result?.ticket) && sameTicket(response.result?.status?.ticket)) {
+              inputAdmissions.set(ticketKey(ticket), structuredClone({request, response}));
+            }
+          }
+          if (request?.operation !== "pattern.transport.input.inspect" ||
+              request.payload?.consume !== true || response?.ok !== true ||
+              response.request_id !== request.request_id) return null;
+          const key = ticketKey(request.payload);
+          const original = inputAdmissions.get(key);
+          if (!original || consumedInputs.has(key)) return null;
+          const status = response.result;
+          const admission = original.response.result.status.admission;
+          const native = status?.native_result;
+          if (!admission?.authority) return null;
+          const ticket = original.response.result.ticket;
+          const decimal = value => typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
+            BigInt(value) <= 18446744073709551615n;
+          if (Object.keys(ticket).length !== Object.keys(status?.ticket ?? {}).length ||
+              !Object.entries(ticket).every(([field, expected]) => status.ticket[field] === expected) ||
+              status.complete !== true || status.durable_settled !== true || status.error !== null ||
+              (admission.authority.recording === true && status.retained !== true) ||
+              !native || native.disposition !== "voice_started" ||
+              JSON.stringify(status.admission) !== JSON.stringify(admission) ||
+              !decimal(native.sequence) || native.sequence !== admission.sequence ||
+              !decimal(native.acceptance_ordinal) || native.acceptance_ordinal !== admission.acceptance_ordinal ||
+              native.runtime_generation !== ticket.runtime_generation || native.frame_epoch !== ticket.frame_epoch ||
+              native.slot !== original.request.payload.slot || native.held_press_sequence !== null ||
+              JSON.stringify(native.authority) !== JSON.stringify(admission.authority) ||
+              !Number.isSafeInteger(native.runtime_frame) || native.runtime_frame < 0 ||
+              !Number.isSafeInteger(Number(native.sequence)) || Number(native.sequence) <= 0) return null;
+          consumedInputs.add(key);
+          return {payload: original.request.payload, ok: response.ok, sequence: Number(native.sequence),
+            operation: "pattern.transport.input.inspect", status: structuredClone(status),
+            evidence: {admission: original, consume: structuredClone({request, response})}};
+        };
+
         nativeTransport.subscribe(message => {
           if (message.event === "runtime.voice_state") {
             window.__patternTransportVoiceProof.push(...message.payload.events);
@@ -58,6 +109,11 @@ async function installTransportProofRecorder(page) {
               );
             }
             const response = await nativeTransport.send(...arguments_);
+            const consumed = observeInput(request, response);
+            if (consumed) {
+              window.__patternTransportTriggerProof ??= [];
+              window.__patternTransportTriggerProof.push(consumed);
+            }
             if (operation === "sequence.settings.update") {
               window.__sequenceSettingsUpdateProof ??= [];
               window.__sequenceSettingsUpdateProof.push({
@@ -109,6 +165,7 @@ async function installTransportProofRecorder(page) {
               // bare key dispatch.
               window.__patternTransportTriggerProof ??= [];
               window.__patternTransportTriggerProof.push({
+                operation,
                 payload: structuredClone(request.payload),
                 ok: response?.ok ?? null,
                 status: response?.result?.status ?? null,
@@ -254,15 +311,22 @@ async function seedSeqSnapPreference(page, snap) {
   }, snap);
 }
 
-// Require the Runtime's durable admission of `count` Pad presses before a
-// caller can close or lose the owner.
-// One-shot Pads send no release operation, so only presses are gated here.
+// Require the original Pad ticket's complete NativeResult, durable settlement
+// and successful exact caller consume before closing or losing the owner.
+// The initial wake gesture may be live-only. Every recording press beyond
+// that floor must actually be retained, including ordinary Record whose Native
+// authority.recording is legitimately false. Legacy Hosts keep their original
+// durable trigger reply. Held Releases remain real SDK-owned operations.
 async function awaitAdmittedPresses(page, count) {
   const wakeAdmissions = await page.evaluate(() => window.__wakeAudioAdmissionCount ?? 0);
-  await expect.poll(() => page.evaluate(() =>
-    (window.__patternTransportTriggerProof ?? [])
-      .filter(({payload, ok}) => ok === true && payload?.velocity !== undefined)
-      .length), {timeout: 30_000}).toBe(count + wakeAdmissions);
+  await expect.poll(() => page.evaluate(({count, wakeAdmissions}) => {
+    const presses = (window.__patternTransportTriggerProof ?? [])
+      .filter(({payload, ok}) => ok === true && payload?.velocity !== undefined);
+    const recorded = presses.slice(wakeAdmissions);
+    return presses.length === count + wakeAdmissions && recorded.length === count &&
+      recorded.every(({operation, status}) => operation === "trigger" ||
+        (operation === "pattern.transport.input.inspect" && status.retained === true));
+  }, {count, wakeAdmissions}), {timeout: 30_000}).toBe(true);
 }
 
 // The terminal cutoff excludes candidates at or after its frame. Record-off

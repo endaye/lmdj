@@ -53,17 +53,21 @@ export async function prepareCountInProject(page, bpm, {silentPattern = false} =
         gain_millidb: 0, muted: false,
       }});
     truth = await host.inspection.inspectProject();
-    await send("pattern.events.edit", {command_id: crypto.randomUUID(),
-      expected_revision: truth.project.revision, pattern_id: patternId,
-      remove: (() => {
-        if (!Object.hasOwn(truth.project.patterns, patternId))
-          throw new Error("actual Pattern ID must exist");
-        return truth.project.patterns[patternId].events.map(({slot, onset_tick}) => ({slot, onset_tick}));
-      })(),
-      put: silentPattern ? [] : [{slot: {bank: 0, pad: 0}, onset_tick: 0,
-        duration_tick: 960, velocity: 100}],
+    if (!Object.hasOwn(truth.project.patterns, patternId))
+      throw new Error("actual Pattern ID must exist");
+    const remove = truth.project.patterns[patternId].events
+      .map(({slot, onset_tick}) => ({slot, onset_tick}));
+    const put = silentPattern ? [] : [{slot: {bank: 0, pad: 0}, onset_tick: 0,
+      duration_tick: 960, velocity: 100}];
+    // An already empty actual Pattern needs no authoring mutation. A nonempty
+    // imported Pattern still goes through the real removal command.
+    if (remove.length || put.length) await send("pattern.events.edit", {
+      command_id: crypto.randomUUID(), expected_revision: truth.project.revision,
+      pattern_id: patternId, remove, put,
     });
     truth = await host.inspection.inspectProject();
+    if (silentPattern && truth.project.patterns[patternId].events.length !== 0)
+      throw new Error("silent setup did not produce actual empty Pattern Truth");
     await send("sequence.settings.update", {command_id: crypto.randomUUID(),
       expected_revision: truth.project.revision, session_id: null, bpm,
       quantize_enabled: false, swing_percent: 50});
@@ -320,6 +324,81 @@ export async function calibrateCountInClock(page) {
 
 export async function requestCountIn(page, setup, bars) {
   return page.evaluate(async ({setup, bars}) => {
+    if (!window.__countInRpcProof) {
+      const host = window.lmdjWebRuntimeHost;
+      const transport = host.transport;
+      const module = window.Module;
+      if (typeof module?.ccall !== "function" || !(module.wasmMemory instanceof WebAssembly.Memory))
+        throw new Error("actual Host dispatch instrumentation is unavailable");
+      const proof = window.__countInRpcProof = {requests: [], stalls: [], instrumentationErrors: []};
+      const byRequest = new Map();
+      const originalCcall = module.ccall;
+      module.ccall = function observedCountInDispatch(...arguments_) {
+        const [identifier, , types, values] = arguments_;
+        let entry;
+        if (identifier === "lmdj_web_host_submit") {
+          try {
+            if (!Array.isArray(types) || types.length !== 5 || types.some(type => type !== "number") ||
+                !Array.isArray(values) || values.length !== 5)
+              throw new Error("actual Host submit arguments differ from the production signature");
+            const envelope = JSON.parse(new TextDecoder().decode(
+              new Uint8Array(module.wasmMemory.buffer).subarray(values[0], values[0] + values[1])));
+            entry = byRequest.get(envelope.request_id);
+            if (entry) {
+              entry.nativeRequestId = envelope.request_id;
+              entry.dispatchAt = performance.now();
+              entry.nativeDeadlineAtEpoch = values[4];
+              entry.nativeDeadlineAt = values[4] - performance.timeOrigin;
+            }
+          } catch (error) { proof.instrumentationErrors.push(String(error.message)); }
+        }
+        // The observer never substitutes this, arguments, a native receipt,
+        // or an exception from the production submission.
+        const result = Reflect.apply(originalCcall, this, arguments_);
+        if (entry) entry.submitResult = result;
+        return result;
+      };
+      const proxy = new Proxy({}, {get(_target, key) {
+        if (!["send", "sendRetained"].includes(key)) return Reflect.get(transport, key);
+        const send = transport[key];
+        if (typeof send !== "function") return send;
+        return function observedCountInSend(...arguments_) {
+          const [request, options] = arguments_;
+          const originalThis = this === proxy ? transport : this;
+          if (request.operation !== "pattern.transport.count-in.inspect")
+            return Reflect.apply(send, originalThis, arguments_);
+          const entry = {requestId: request.request_id, operation: request.operation,
+            payload: structuredClone(request.payload),
+            handoffAt: performance.now(), deadlineMs: options?.deadlineMs ?? null,
+            nativeRequestId: null, responseRequestId: null,
+            dispatchAt: null, nativeDeadlineAtEpoch: null, nativeDeadlineAt: null,
+            submitResult: null, settledAt: null, ok: null, error: null};
+          proof.requests.push(entry);
+          byRequest.set(request.request_id, entry);
+          const failed = error => {
+            entry.error = {message: String(error?.message ?? error), code: error?.code ?? null,
+              pending: error?.details?.pending ?? null};
+            entry.settledAt = performance.now();
+          };
+          try {
+            const pending = Reflect.apply(send, originalThis, arguments_);
+            // Observe completion without replacing the original Promise or
+            // its rejection. SDK's default transport dynamically forwards to
+            // runtime.transport, even after its Session has been created.
+            void pending.then(response => {
+              entry.responseRequestId = response?.request_id ?? null;
+              entry.ok = response?.ok ?? null;
+              entry.settledAt = performance.now();
+            }, failed);
+            return pending;
+          } catch (error) {
+            failed(error);
+            throw error;
+          }
+        };
+      }});
+      host.transport = proxy;
+    }
     const session = window.lmdjWebRuntimeHost.session;
     const capability = await session.queryPatternCountInCapabilities();
     if (!capability.supported || !capability.negotiated || !capability.outputReady)
@@ -336,11 +415,19 @@ export async function requestCountIn(page, setup, bars) {
     // cannot create a fresh budget. The controller's retained error enforces
     // its own first-acquired-Applied deadline; S is not its timer's start.
     window.__countInOpeningWatches ??= new Map();
-    const watch = {firstAppliedAt: null, deadline: null, status: null, failure: null};
+    const watch = {firstAppliedAt: null, deadline: null, status: null, failure: null,
+      paused: false, inFlight: null, resumeObserver: null};
     watch.settled = (async () => {
       try {
         while (true) {
-          const status = await session.inspectPatternCountIn(admitted.ticket);
+          if (watch.paused) {
+            await new Promise(resolve => { watch.resumeObserver = resolve; });
+            continue;
+          }
+          watch.inFlight = session.inspectPatternCountIn(admitted.ticket);
+          let status;
+          try { status = await watch.inFlight; }
+          finally { watch.inFlight = null; }
           watch.status = status;
           if (status.startReceipt?.result === "applied" && watch.deadline === null) {
             watch.firstAppliedAt = performance.now();
@@ -357,6 +444,61 @@ export async function requestCountIn(page, setup, bars) {
     window.__countInOpeningWatches.set(admitted.ticket.scheduleSerial, watch);
     return admitted;
   }, {setup, bars});
+}
+
+export async function pauseCountInOpeningObserver(page, ticket, label) {
+  const fence = await page.evaluate(async ({ticket, label}) => {
+    const watch = window.__countInOpeningWatches.get(ticket.scheduleSerial);
+    if (!watch || watch.paused) throw new Error("original opening watch cannot be fenced");
+    const pauseRequestedAt = performance.now();
+    watch.paused = true;
+    // Drain the original query; neither abort nor a new RPC deadline counts
+    // as receiving its real response. The next watch turn sees paused first.
+    if (watch.inFlight !== null) await watch.inFlight;
+    if (watch.failure !== null) throw new Error(watch.failure);
+    const proof = window.__countInRpcProof;
+    if (proof.instrumentationErrors.length)
+      throw new Error(`actual RPC observation failed: ${JSON.stringify(proof.instrumentationErrors)}`);
+    const requests = proof.requests.filter(entry => entry.payload.command_id === ticket.commandId &&
+      entry.payload.session_id === ticket.sessionId && entry.payload.runtime_generation === ticket.runtimeGeneration &&
+      entry.payload.frame_epoch === ticket.frameEpoch && entry.payload.schedule_serial === ticket.scheduleSerial &&
+      entry.payload.consume === false);
+    if (!requests.length) throw new Error("stall fence has no positive original inspect evidence");
+    const pending = requests.filter(entry => entry.settledAt === null);
+    if (pending.length) throw new Error("original count-in inspect remains in flight at stall fence");
+    if (requests.some(entry => entry.nativeRequestId !== entry.requestId ||
+        entry.responseRequestId !== entry.requestId || entry.submitResult !== 0 || entry.ok !== true ||
+        entry.error !== null || entry.dispatchAt === null || entry.nativeDeadlineAt === null ||
+        entry.nativeDeadlineAtEpoch === null || entry.deadlineMs !== 1_000))
+      throw new Error("stall fence lacks successful exact-ID Native dispatch and original response evidence");
+    const fence = {label, scheduleSerial: ticket.scheduleSerial,
+      commandId: ticket.commandId, pauseRequestedAt, drainedAt: performance.now(),
+      firstAppliedAt: watch.firstAppliedAt, deadline: watch.deadline,
+      observedRequestIds: requests.map(entry => entry.requestId),
+      pendingRequestIds: pending.map(entry => entry.requestId)};
+    window.__countInRpcProof.stalls.push(fence);
+    return fence;
+  }, {ticket, label});
+  expect(fence.pendingRequestIds, "every original inspect settled before blocking its observer").toEqual([]);
+  expect(fence.observedRequestIds.length, "fence has positive exact original RPC evidence").toBeGreaterThan(0);
+  return fence;
+}
+
+export async function resumeCountInOpeningObserver(page, ticket, observed) {
+  await page.evaluate(({ticket, observed}) => {
+    const watch = window.__countInOpeningWatches.get(ticket.scheduleSerial);
+    if (!watch?.paused) throw new Error("original opening watch was not paused");
+    const fence = window.__countInRpcProof.stalls.at(-1);
+    if (fence.scheduleSerial !== ticket.scheduleSerial || fence.resumedAt !== undefined)
+      throw new Error("stall fence identity does not match the original watch");
+    if (watch.firstAppliedAt !== fence.firstAppliedAt || watch.deadline !== fence.deadline)
+      throw new Error("opening observer budget changed while paused");
+    Object.assign(fence, observed, {resumedAt: performance.now()});
+    watch.paused = false;
+    const resume = watch.resumeObserver;
+    watch.resumeObserver = null;
+    resume?.();
+  }, {ticket, observed});
 }
 
 export async function inspectCountIn(page, ticket, consume = false) {
@@ -527,12 +669,14 @@ export async function stallCountInObserver(page, marker, framesAfter = 1920) {
   {timeout: 16_000, intervals: [10]}).toBeGreaterThanOrEqual(marker - 9600);
   const observed = await page.evaluate(({marker, framesAfter}) => {
     const context = window.__countInPcm.context;
+    const stallBeganAt = performance.now();
     const before = Math.round(context.currentTime * 48_000);
     if (before >= marker) throw new Error("observer missed the pre-marker stall window");
     const deadline = performance.now() + 2_000;
     while (context.currentTime * 48_000 < marker + framesAfter)
       if (performance.now() >= deadline) throw new Error("AudioContext stopped during bounded cue stall");
-    return {before, after: Math.round(context.currentTime * 48_000)};
+    return {before, after: Math.round(context.currentTime * 48_000), stallBeganAt,
+      stallEndedAt: performance.now()};
   }, {marker, framesAfter});
   expect(observed.before).toBeLessThan(marker);
   expect(observed.after).toBeGreaterThanOrEqual(marker + framesAfter);

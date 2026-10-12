@@ -82,6 +82,57 @@ test("default Bank A plays on the first native touch while the next object waits
       Object.defineProperty(window, "lmdjWebRuntimeHost", {configurable:true,
         get: () => exposed, set(host) {
           const transport = host.transport;
+          // Observe actual transport receipts only; never issue an inspection
+          // or consume. Admission cannot enter the proof counter.
+          const inputAdmissions = new Map();
+          const consumedInputs = new Set();
+          const ticketKey = ticket => JSON.stringify([ticket?.command_id,
+            ticket?.runtime_generation, ticket?.frame_epoch, ticket?.ticket]);
+          const observeInput = (request, response) => {
+            if (request?.operation === "pattern.transport.input.request" &&
+                request.payload?.kind === "press" && response?.ok === true &&
+                response.request_id === request.request_id) {
+              const ticket = {command_id: request.payload.command_id,
+                runtime_generation: request.payload.runtime_generation,
+                frame_epoch: request.payload.frame_epoch, ticket: request.payload.input_serial};
+              const sameTicket = value => Object.keys(ticket).length === Object.keys(value ?? {}).length &&
+                Object.entries(ticket).every(([key, expected]) => value?.[key] === expected);
+              if (sameTicket(response.result?.ticket) && sameTicket(response.result?.status?.ticket)) {
+                inputAdmissions.set(ticketKey(ticket), structuredClone({request, response}));
+              }
+            }
+            if (request?.operation !== "pattern.transport.input.inspect" ||
+                request.payload?.consume !== true || response?.ok !== true ||
+                response.request_id !== request.request_id) return null;
+            const key = ticketKey(request.payload);
+            const original = inputAdmissions.get(key);
+            if (!original || consumedInputs.has(key)) return null;
+            const status = response.result;
+            const admission = original.response.result.status.admission;
+            const native = status?.native_result;
+            if (!admission?.authority) return null;
+            const ticket = original.response.result.ticket;
+            const decimal = value => typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
+              BigInt(value) <= 18446744073709551615n;
+            if (Object.keys(ticket).length !== Object.keys(status?.ticket ?? {}).length ||
+                !Object.entries(ticket).every(([field, expected]) => status.ticket[field] === expected) ||
+                status.complete !== true || status.durable_settled !== true || status.error !== null ||
+                (admission.authority.recording === true && status.retained !== true) ||
+                !native || native.disposition !== "voice_started" ||
+                JSON.stringify(status.admission) !== JSON.stringify(admission) ||
+                !decimal(native.sequence) || native.sequence !== admission.sequence ||
+                !decimal(native.acceptance_ordinal) || native.acceptance_ordinal !== admission.acceptance_ordinal ||
+                native.runtime_generation !== ticket.runtime_generation || native.frame_epoch !== ticket.frame_epoch ||
+                native.slot !== original.request.payload.slot || native.held_press_sequence !== null ||
+                JSON.stringify(native.authority) !== JSON.stringify(admission.authority) ||
+                !Number.isSafeInteger(native.runtime_frame) || native.runtime_frame < 0 ||
+                !Number.isSafeInteger(Number(native.sequence)) || Number(native.sequence) <= 0) return null;
+            consumedInputs.add(key);
+            return {payload: original.request.payload, ok: response.ok, sequence: Number(native.sequence),
+              operation: "pattern.transport.input.inspect", status: structuredClone(status),
+              evidence: {admission: original, consume: structuredClone({request, response})}};
+          };
+
           transport.subscribe(message => {
             if (message.event === "runtime.voice_state") window.__firstTouchProof.voices.push(...message.payload.events);
           });
@@ -89,6 +140,9 @@ test("default Bank A plays on the first native touch while the next object waits
             if (key !== "send") return Reflect.get(transport,key);
             return async (...args) => {
               const result = await transport.send(...args);
+              const consumed = observeInput(args[0], result);
+              if (consumed) window.__firstTouchProof.responses.push({ok: result.ok,
+                result: {sequence: consumed.sequence}, companion: consumed});
               if (args[0]?.operation.startsWith("soundset.")) window.__seedResponses.push({operation:args[0].operation,result});
               if (args[0]?.operation === "trigger" && args[0]?.payload?.velocity > 0) window.__firstTouchProof.responses.push(result);
               return result;

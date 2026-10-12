@@ -20,6 +20,12 @@ S6 当前为**源码草稿，执行验收 UNVERIFIED**。Native、Facade、Workl
 companion 的 source wiring 不等于 packaged OPFS、实际 PCM、完整 Portal 或设备验收。
 历史自动化证据只属于原版本与原旅程；S7 Creator 偏好/控件仍在后续 Task。
 
+已有 Pattern input／count-in ticket 的 inspect/consume 是原 admission 的 continuation，
+在 SDK 中按该 exact ticket 串行，不排在等待这些 caller 消费的 close/suspend
+RPC 后面。新 admission、普通 Host 操作和不属于本 Session 的 ticket 仍走原 Host
+队列；独立 continuation 不生成 ACK、不放宽原 deadline，也不证明物理 owner 已退役。
+SDK、保留 lifecycle RPC 的 Bridge 与真实 Host 的组合运行验收仍待完成。
+
 ## 1. 目的与非职责
 为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
 ## 2. 当前实现状态

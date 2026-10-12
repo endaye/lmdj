@@ -173,6 +173,22 @@ the refusal and clears only its matching unsent deferred cutoff; it preserves
 e1 as the authoring epoch, the original error and the real owner-lost worker
 disposition. This cleanup must not spend e2 or overwrite the failed phase.
 
+### Reusing an engagement across takes
+
+Each ordinary Record admission owns its original opening timestamp from the
+start of preparation. A previous settled count-in opening cannot supply its
+five-second guard. Keep the matching immutable work/publication evidence and
+the unchanged opening-only deadline. Ordinary opening success or refusal must
+not alter a retained scheduled caller ticket's request, receipts, opening
+flags or error. Only the matching scheduled operation owns that status.
+
+A locally admitted input ticket's inspect/consume continuation must remain
+serviceable while a lifecycle RPC awaits its actual caller consumption. It is
+serialized per original ticket independently of the ordinary Host request
+tail. New admissions and unknown tickets retain ordinary request ordering.
+This continuation does not invent completion, reset an observer's deadline,
+consume another owner, or replace physical last-use/retirement barriers.
+
 ## 3. Facade I/O ownership and recording boundary
 
 Reuse `PatternTransportExecutor` with one dedicated Store/Journal owner.

@@ -8309,7 +8309,7 @@ test("total Native dispositions cannot relabel a press as release or a release a
 // Host seam admits once, keeps exact identities, and refuses consumer ACKs
 // until its own input, physical-owner and original count evidence gates pass.
 function retainedConsumerFixture({countMode = "accepted", retainedAvailable = true, loseInputAdmission = false,
-  terminate, beforeAdmission, admissionReply} = {}) {
+  terminate, beforeAdmission, admissionReply, retainLifecycleUntilInputConsumed = false} = {}) {
   let clock = 0;
   let timerId = 0;
   let failureListener = null;
@@ -8318,6 +8318,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
   let resolveTerminalOwnerRelease;
   const terminalOwnerRelease = new Promise((resolve) => { resolveTerminalOwnerRelease = resolve; });
   const pendingTimers = new Map();
+  let timerSchedulingCancelled = false;
   const normal = [];
   const retained = [];
   const inputEntries = new Map();
@@ -8329,7 +8330,8 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
   });
   const state = {retainedAvailable, inputComplete: false, nativeOwnerAcknowledged: false,
     countAccepted: false, countConsumed: false, countStatus: countInWireStatus(), countConsumes: 0,
-    countInspects: 0, terminalStarts: 0, corruptConsume: false, zeroTimersServiced: 0, backendCloses: 0};
+    countInspects: 0, terminalStarts: 0, corruptConsume: false, zeroTimersServiced: 0, backendCloses: 0,
+    lifecyclePending: [], lifecycleCompleted: []};
   state.completeInput = () => state.inputComplete;
   const reject = (e, code = "HOST_STATE_INVALID", details = {pending: true}) => ({
     protocol_version: 1, request_id: e.request_id, ok: false,
@@ -8345,6 +8347,12 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     assert.equal(physicalOwners.size, 0);
     assert.equal([...inputEntries.keys()].some((key) => !inputConsumed.has(key)), false);
     assert.equal(state.countAccepted && !state.countConsumed, false, "NativeStop cannot consume the count caller ticket");
+  };
+  const resolveLifecycleContinuations = () => {
+    if (physicalOwners.size === 0 && [...inputEntries.keys()].every((key) => inputConsumed.has(key)) &&
+        !(state.countAccepted && !state.countConsumed)) {
+      for (const continuation of state.lifecyclePending.splice(0)) continuation.resolve();
+    }
   };
   const releaseTerminalOwner = () => {
     assert.equal(state.nativeOwnerAcknowledged, true, "the real backend independently acknowledged retirement");
@@ -8384,6 +8392,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
             state.countStatus.opening_pending || !state.nativeOwnerAcknowledged || physicalOwners.size ||
             [...inputEntries.keys()].some((key) => !inputConsumed.has(key))) return reject(e);
         state.countConsumed = true;
+        resolveLifecycleContinuations();
       }
       return success(e, state.corruptConsume && p.consume
         ? {...state.countStatus, start_receipt: {...state.countStatus.start_receipt, frame_epoch: "2"}}
@@ -8431,6 +8440,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
         if (entry.payload.kind === "release" &&
             ["release_applied", "release_no_voice"].includes(status.native_result.disposition))
           physicalOwners.delete(entry.payload.held_press_sequence);
+        resolveLifecycleContinuations();
       }
       return success(e, status);
     }
@@ -8448,6 +8458,22 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
         frame_epoch: countInWireTicket().frame_epoch, next_serial: countInWireTicket().schedule_serial,
         input_capacity: 16,
       });
+      if (retainLifecycleUntilInputConsumed && ["host.close", "audio.suspend"].includes(e.operation)) {
+        // Model the production Bridge continuation: the lifecycle RPC keeps
+        // its original response pending while the Host still owns an input
+        // caller ticket. It never substitutes Stop for the actual consume.
+        const startedAt = clock;
+        const tickets = [...inputEntries.keys()].filter((key) => !inputConsumed.has(key));
+        const countPending = state.countAccepted && !state.countConsumed;
+        if (tickets.length !== 0 || countPending) await new Promise((resolve) => {
+          state.lifecyclePending.push({operation: e.operation, tickets, countPending, resolve});
+        });
+        assert.equal(clock - startedAt < options.deadlineMs, true,
+          "the lifecycle response still fits its unchanged original deadline");
+        assertNoTerminalDebt();
+        state.lifecycleCompleted.push({operation: e.operation, consumed: [...inputConsumed]});
+        return success(e, defaultResult(e.operation));
+      }
       // Non-short bootstrap/project operations use the existing fixture.
       if (!["pattern.transport.count-in.request", "pattern.transport.count-in.inspect",
         "pattern.transport.count-in.cancel",
@@ -8473,6 +8499,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     timers: {
       setTimeout(callback, ms) {
         const id = ++timerId;
+        if (timerSchedulingCancelled) return id;
         const timer = {callback, at: clock + ms, realHandle: null};
         pendingTimers.set(id, timer);
         // Device resume polling must observe the real Promise outcome before
@@ -8521,6 +8548,15 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     clockMilliseconds: () => clock,
     seal(error = originalError) { sealed = true; failureListener?.(error); },
     releaseTerminal: releaseTerminalOwner,
+    cancelTimers() {
+      // Test-resource disposal only. Do not resolve a retained RPC, invoke
+      // its callback, consume a caller ticket or retire a physical owner.
+      timerSchedulingCancelled = true;
+      for (const timer of pendingTimers.values()) {
+        if (timer.realHandle !== null) globalThis.clearTimeout(timer.realHandle);
+      }
+      pendingTimers.clear();
+    },
     async tick(ms = 5) {
       clock += ms;
       for (const [id, timer] of [...pendingTimers]) if (timer.at <= clock) {
@@ -8564,6 +8600,163 @@ function expiredOpeningCountInEvidence(pending = true) {
 async function tickRetainedUntil(f, predicate) {
   for (let step = 0; step < 40 && !predicate(); ++step) await f.tick();
   assert.equal(predicate(), true);
+}
+
+async function settleRetainedCall(f, promise) {
+  let outcome = null;
+  void promise.then(
+    (value) => { outcome = {ok: true, value}; },
+    (error) => { outcome = {ok: false, error}; });
+  // Observe a bounded number of existing fixture turns. A queue cycle must
+  // fail this test naturally; it must not wedge the module awaiting an RPC
+  // whose response is deliberately retained. This neither changes the RPC's
+  // deadline nor resolves it on behalf of its original owner.
+  await tickRetainedUntil(f, () => outcome !== null);
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
+}
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  for (const expireObserver of [false, true]) {
+    test(`retained ${operation} consumes the original Release ${expireObserver ? "after observer expiry" : "within its observer budget"}`, async (t) => {
+      const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
+      t.after(() => f.cancelTimers());
+      await activateInputProfile(f);
+      // The press is genuinely admitted and consumed first. Its physical
+      // owner remains held; only its exact correlated Release may
+      // remove it. Leave that Release's durable completion unresolved.
+      f.state.completeInput = (payload) => payload.kind === "press" || f.state.inputComplete;
+      assert.deepEqual(await f.session.trigger(0, 100, "pointer"),
+        {sequence: 1, slot: 0, velocity: 100, source: "pointer"});
+      assert.deepEqual([...f.inputConsumed], ["1"]);
+      assert.equal(f.physicalOwners.size, 1);
+      let originalRelease = null;
+      if (expireObserver) {
+        originalRelease = f.session.release(0, "pointer").then(
+          (value) => ({value}), (error) => ({error}));
+        await tickRetainedUntil(f, () => f.inputEntries.has("2"));
+        // Spend the original input observer's time before lifecycle dispatch,
+        // so its expiry remains inside audio.suspend's own original budget.
+        await f.tick(750);
+      }
+      let lifecycleResult = null;
+      const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+        .then((value) => { lifecycleResult = value; return value; });
+      await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+      assert.deepEqual(f.state.lifecyclePending[0].tickets, ["2"]);
+      assert.equal(f.state.lifecyclePending[0].operation, operation);
+      const release = f.inputEntries.get("2");
+      assert.equal(release.payload.kind, "release");
+      assert.equal(release.payload.held_press_sequence, "1");
+      assert.equal(release.payload.slot, 0);
+      assert.equal(lifecycleResult, null, "admission and Stop do not finish the retained lifecycle RPC");
+      assert.equal(f.state.backendCloses, 0);
+
+      let ordinaryQuery = null;
+      if (operation === "audio.suspend") {
+        ordinaryQuery = f.session.inspectProject();
+        await drainTasks();
+        assert.equal(f.normal.some((e) => e.operation === "project.inspect"), false,
+          "an ordinary query still waits behind the lifecycle RPC");
+      }
+      if (expireObserver) {
+        await f.tick(250);
+        const originalOutcome = await originalRelease;
+        assert.equal(originalOutcome.error?.code, "HOST_TIMEOUT");
+        assert.equal(originalOutcome.error.details.pending, true);
+      }
+      assert.equal(f.physicalOwners.size, 1, "observer time cannot release the held physical owner");
+      assert.deepEqual([...f.inputConsumed], ["1"], "pending durability cannot pay caller debt");
+      assert.equal(lifecycleResult, null);
+
+      f.state.inputComplete = true;
+      await tickRetainedUntil(f, () => f.inputConsumed.has("2"));
+      assert.equal(await settleRetainedCall(f, lifecycle), true);
+      if (ordinaryQuery !== null) assert.deepEqual(await settleRetainedCall(f, ordinaryQuery), {});
+      assert.equal(f.state.lifecyclePending.length, 0);
+      assert.deepEqual(f.state.lifecycleCompleted[0], {operation, consumed: ["1", "2"]});
+      assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.request")
+        .map((e) => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+        [["press", "1", null], ["release", "2", "1"]]);
+      assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+        .map((e) => e.payload.ticket), ["1", "2"]);
+      assert.equal(f.physicalOwners.size, 0);
+      assert.equal(f.retained.length, 0, "a healthy continuation keeps ordinary transport.send");
+      if (operation === "audio.suspend") {
+        assert.equal(f.session.diagnostics().state, "audio-suspended");
+        assert.equal(f.context.state, "suspended");
+        assert.equal(f.state.backendCloses, 0);
+        assert.equal(await settleRetainedCall(f, f.session.close()), true);
+      }
+      assert.equal(f.state.backendCloses, 1);
+    });
+  }
+}
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  test(`known count-in consumption stays independent of retained ${operation}`, async (t) => {
+    const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
+    t.after(() => f.cancelTimers());
+    await activateInputProfile(f);
+    const admission = await f.session.requestPatternCountIn(countInRequest());
+    let lifecycleResult = null;
+    const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+      .then((value) => { lifecycleResult = value; return value; });
+    await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+    assert.equal(f.state.lifecyclePending[0].countPending, true);
+    assert.deepEqual(f.state.lifecyclePending[0].tickets, []);
+    assert.equal(lifecycleResult, null);
+    assert.equal(f.state.countConsumed, false, "the lifecycle Stop cannot consume its original count caller");
+
+    let ordinaryStop = null;
+    if (operation === "audio.suspend") {
+      const priorStops = f.normal.filter((e) => e.operation === "sample.stop").length;
+      ordinaryStop = f.session.stopAll();
+      await drainTasks();
+      assert.equal(f.normal.filter((e) => e.operation === "sample.stop").length, priorStops,
+        "an ordinary Runtime action still waits for the retained lifecycle RPC");
+    }
+    const pending = await settleRetainedCall(f, f.session.inspectPatternCountIn(admission.ticket));
+    assert.equal(pending.startReceipt, null);
+    assert.equal(f.state.countConsumes, 0);
+    assert.equal(lifecycleResult, null);
+
+    // The Host seam separately publishes its original applied S and Stop F,
+    // with the opened recording fully settled. The SDK neither creates that
+    // evidence nor turns it into the independent physical-owner ACK.
+    const final = expiredOpeningCountInEvidence(false);
+    final.error = null;
+    final.opening_complete = true;
+    f.state.countStatus = final;
+    const terminal = await settleRetainedCall(f, f.session.inspectPatternCountIn(admission.ticket));
+    assert.equal(terminal.startReceipt.result, "applied");
+    assert.equal(terminal.cancelReceipt.result, "applied");
+    assert.equal(terminal.cancelReceipt.playing, false);
+    assert.equal(terminal.openingComplete, true);
+    await settleRetainedCall(f,
+      assert.rejects(f.session.inspectPatternCountIn(admission.ticket, true), {code: "HOST_STATE_INVALID"}));
+    assert.equal(f.state.countConsumed, false, "terminal-looking evidence alone never pays caller debt");
+    assert.equal(lifecycleResult, null);
+    assert.equal(f.state.backendCloses, 0);
+
+    f.state.nativeOwnerAcknowledged = true;
+    const consumed = await settleRetainedCall(f, f.session.inspectPatternCountIn(admission.ticket, true));
+    assert.deepEqual(consumed.startReceipt, terminal.startReceipt);
+    assert.deepEqual(consumed.cancelReceipt, terminal.cancelReceipt);
+    assert.equal(f.state.countConsumed, true);
+    assert.equal(await settleRetainedCall(f, lifecycle), true);
+    if (ordinaryStop !== null) assert.equal(await settleRetainedCall(f, ordinaryStop), true);
+    assert.equal(f.state.lifecyclePending.length, 0);
+    assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.count-in.request").length, 1);
+    assert.equal(f.normal.some((e) => e.operation === "pattern.transport.count-in.cancel"), false);
+    assert.equal(f.retained.length, 0, "healthy original callers use ordinary transport.send");
+    if (operation === "audio.suspend") {
+      assert.equal(f.session.diagnostics().state, "audio-suspended");
+      assert.equal(f.context.state, "suspended");
+      assert.equal(await settleRetainedCall(f, f.session.close()), true);
+    }
+    assert.equal(f.state.backendCloses, 1);
+  });
 }
 
 test("accepted count-in response loss keeps original failure and exact final caller consumption", async () => {

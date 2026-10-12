@@ -13,11 +13,21 @@ import {
   expectCountInClock, setCountInMonitor, stallCountInObserver, waitForCountInOpening,
   readCountInJournal, expectedCountInHeldEvent, expectCountInProductMonitor,
   expectCountInMixedCapture, resampleCountInMasterCapture,
+  pauseCountInOpeningObserver, resumeCountInOpeningObserver,
 } from "./fixtures/count_in_helpers.mjs";
 
 test.beforeEach(async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   await installCountInAudioObserver(page);
+});
+
+test.afterEach(async ({page}, testInfo) => {
+  // Keep original RPC identities, actual Native dispatch deadlines and stall
+  // intervals in the private test result even when the musical proof fails.
+  const proof = await page.evaluate(() => window.__countInRpcProof ?? null).catch(() => null);
+  if (proof !== null) await testInfo.attach("count-in-original-rpc-and-stall-proof", {
+    body: Buffer.from(JSON.stringify(proof, null, 2)), contentType: "application/json",
+  });
 });
 
 async function inspectOrdinary(page, sessionId) {
@@ -85,7 +95,11 @@ for (const scenario of [
       ]);
       const markers = offsets.map(offset => count.countInFrame + clock.offset + offset);
       const start = count.startFrame + clock.offset;
-      if (scenario.stall) await stallCountInObserver(page, markers[1]);
+      if (scenario.stall) {
+        await pauseCountInOpeningObserver(page, admitted.ticket, "cue");
+        const observed = await stallCountInObserver(page, markers[1]);
+        await resumeCountInOpeningObserver(page, admitted.ticket, observed);
+      }
       await waitForObservedFrame(page, markers.at(-1) + 1920,
         scenario.bars * scenario.barFrames / 48 + 1_000);
       const capture = await stopCountInMasterCapture(page);
@@ -95,16 +109,20 @@ for (const scenario of [
       expect(beforeStart.startReceipt, "capture seals before the actual native S").toBeNull();
       expect(beforeStart.openingPending).toBe(false);
       if (scenario.stall) {
+        await pauseCountInOpeningObserver(page, admitted.ticket, "S");
         const stalled = await page.evaluate(start => {
           const context = window.__countInPcm.context;
+          const stallBeganAt = performance.now();
           const before = Math.round(context.currentTime * 48_000);
           // Block only the observing main thread. The production Wasm audio
           // processor, Native clock and I/O worker keep their actual owners.
           const deadline = performance.now() + 2_000;
           while (context.currentTime * 48_000 < start + 9_600)
             if (performance.now() >= deadline) throw new Error("AudioContext stopped during bounded S stall");
-          return {before, after: Math.round(context.currentTime * 48_000)};
+          return {before, after: Math.round(context.currentTime * 48_000),
+            stallBeganAt, stallEndedAt: performance.now()};
         }, start);
+        await resumeCountInOpeningObserver(page, admitted.ticket, stalled);
         expect(stalled.before).toBeLessThan(start);
         expect(stalled.after).toBeGreaterThanOrEqual(start + 9_600);
       } else await waitForObservedFrame(page, start + 9_600, 2_000);
@@ -112,6 +130,31 @@ for (const scenario of [
       // exists. I/O opening may use its original remaining five seconds.
       const pcm = await readCountInPcm(page, [...markers, start], {cueMarkers: markers});
       const applied = await waitForCountInOpening(page, admitted.ticket, clock, count.startFrame);
+      if (scenario.stall) {
+        const proof = await page.evaluate(() => window.__countInRpcProof);
+        expect(proof.instrumentationErrors).toEqual([]);
+        expect(proof.stalls.map(fence => fence.label)).toEqual(["cue", "S"]);
+        for (const fence of proof.stalls) {
+          expect(fence.drainedAt).toBeLessThanOrEqual(fence.stallBeganAt);
+          expect(fence.stallEndedAt).toBeLessThanOrEqual(fence.resumedAt);
+          expect(proof.requests.filter(entry => entry.payload.command_id === admitted.ticket.commandId &&
+            entry.dispatchAt < fence.stallEndedAt && entry.settledAt > fence.stallBeganAt),
+          "no original short inspect crosses a deliberate observer stall").toEqual([]);
+        }
+        const originalRequests = proof.requests.filter(entry =>
+          entry.payload.command_id === admitted.ticket.commandId);
+        expect(originalRequests.length).toBeGreaterThan(0);
+        for (const entry of originalRequests) {
+          expect(entry.deadlineMs, "original short RPC budget stays unchanged").toBe(1_000);
+          expect(entry.submitResult, "actual Native submit receipt").toBe(0);
+          expect(entry.nativeRequestId).toBe(entry.requestId);
+          expect(entry.responseRequestId).toBe(entry.requestId);
+          expect(entry.nativeDeadlineAtEpoch).not.toBeNull();
+          expect(entry.nativeDeadlineAt).toBeGreaterThan(entry.dispatchAt);
+          expect(entry.ok).toBe(true);
+          expect(entry.error).toBeNull();
+        }
+      }
       expect(applied.startReceipt.patternId).toBe(setup.patternId);
       expectForcedCountInPcm(pcm, markers, {monitorLevel: scenario.monitor / 100});
       expect(pcm.planes[0].onsets).toEqual([start + 1]);

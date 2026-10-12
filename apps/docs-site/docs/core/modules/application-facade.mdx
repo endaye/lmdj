@@ -18,6 +18,11 @@ S6 当前为**源码草稿，执行验收 UNVERIFIED**：生产 transport 的 I/
 scheduled/input companion 已接入源码，尚不能宣称完整 S6 通过。既有自动化和物理
 证据只保留原身份与范围；完整 persistence、并发、Web/OPFS 和 Portal 验证仍待执行。
 
+普通 Record 每次 admission 都绑定自己的原始五秒开录时钟，包含准备与耐久
+opening；先前已结算的 count-in 不提供新录音的 deadline。旧 scheduled ticket
+仍保留原 request、start/cancel receipt 和 opening/error 状态，普通录音的完成或
+拒绝不会改写它。跨 take 复用 controller 的运行回归仍须验证，源码修复不代表验收。
+
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态

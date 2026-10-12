@@ -2792,6 +2792,330 @@ void refused_schedule_keeps_original_owner_failure(bool stop_during_submit, bool
   }
 }
 
+bool same_scheduled_receipt(
+    const std::optional<lmdj::audio::ScheduledPatternRecordReceipt>& left,
+    const std::optional<lmdj::audio::ScheduledPatternRecordReceipt>& right) {
+  if (left.has_value() != right.has_value()) return false;
+  if (!left) return true;
+  return left->runtime_generation == right->runtime_generation && left->frame_epoch == right->frame_epoch &&
+      left->serial == right->serial && left->epoch == right->epoch &&
+      left->pattern_generation == right->pattern_generation && left->pattern_id == right->pattern_id &&
+      left->result == right->result && left->effective_frame == right->effective_frame &&
+      left->origin_frame == right->origin_frame && left->playing == right->playing;
+}
+
+bool same_scheduled_status(
+    const std::optional<lmdj::audio::ScheduledPatternRecordStatus>& left,
+    const std::optional<lmdj::audio::ScheduledPatternRecordStatus>& right) {
+  if (left.has_value() != right.has_value()) return false;
+  if (!left) return true;
+  return left->runtime_generation == right->runtime_generation && left->frame_epoch == right->frame_epoch &&
+      left->serial == right->serial && left->phase == right->phase && left->bars == right->bars &&
+      left->bpm == right->bpm && left->bar_frames == right->bar_frames &&
+      left->count_in_frame == right->count_in_frame && left->start_frame == right->start_frame &&
+      same_scheduled_receipt(left->start_receipt, right->start_receipt) &&
+      same_scheduled_receipt(left->cancel_receipt, right->cancel_receipt);
+}
+
+void ordinary_record_after_settled_count_in_owns_its_opening(bool cancel_before_start) {
+  TempDirectory directory;
+  const auto bundle = directory.path() / "project.lmdj";
+  const SequenceSessionId session{uuid(1)};
+  RefusedSchedulePort audio{true};
+  auto expected = lmdj::domain::create_project(ProjectId{kProject}, 120).value();
+  expected.patterns.emplace(PatternId{kPattern}, lmdj::domain::Pattern{PatternId{kPattern}, 1, {}});
+  lmdj::project_io::ProjectStore reader;
+  lmdj::project_io::SequenceJournal journals;
+  LMDJ_CHECK(reader.create(bundle, expected).has_value());
+  auto controller = lmdj::facade::make_pattern_transport_controller(audio, audio,
+      {bundle, session, ProjectId{kProject}, PatternId{kPattern}, 7});
+  LMDJ_CHECK(controller);
+  wait_for_refused_schedule([&] { return controller->inspect_io().ready; });
+  const auto request = [&](unsigned id, std::uint64_t epoch, PatternTransportIntent intent) {
+    return PatternTransportRequest{session, ProjectId{kProject}, CommandId{uuid(id)},
+        7, epoch, intent, {}};
+  };
+  const auto assert_closed = [&] {
+    const auto closed = journals.read_active(bundle);
+    LMDJ_CHECK(!closed.has_value() && closed.error().code == lmdj::foundation::ErrorCode::not_found);
+    const auto reopened = reader.load(bundle);
+    LMDJ_CHECK(reopened.has_value() && reopened.value() == expected);
+    LMDJ_CHECK(controller->inspect_ingress().retained_tickets == 0 &&
+        controller->inspect_ingress().held_release_metadata == 0);
+    const auto profile = audio.engine.pattern_input_profile_status();
+    LMDJ_CHECK(profile.retained_completions == 0 && profile.held_release_reservations == 0);
+    LMDJ_CHECK(!audio.pending_switch());
+  };
+  const auto settle = [&](const PatternTransportRequest& r, bool recording, bool playing) {
+    LMDJ_CHECK(admitted_request(*controller, r) == PatternTransportSubmit::accepted);
+    // Actual control admission precedes the actual callback, including an
+    // ordinary cutoff deferred by withdrawal of a genuine overlay.
+    LMDJ_CHECK(controller->continue_operation().has_value());
+    const auto frame = audio.engine.telemetry().rendered_frames;
+    audio.render(1);
+    const auto receipt = audio.engine.inspect_pattern_transport_receipt(7, r.expected_epoch);
+    LMDJ_CHECK(receipt && receipt->runtime_generation == 7 && receipt->epoch == r.expected_epoch &&
+        receipt->effective_frame == frame && receipt->pattern_id == PatternId{kPattern} &&
+        receipt->playing == playing);
+    wait_for_refused_schedule([&] {
+      const auto continued = controller->continue_operation();
+      const auto observed = controller->inspect();
+      lmdj::test::check(!observed.error, observed.error
+          ? "cross-take real opening/cutoff failed: " + observed.error->message : "");
+      LMDJ_CHECK(continued.has_value());
+      return observed.phase == PatternTransportPhase::idle && observed.transport_epoch == r.expected_epoch;
+    });
+    const auto status = controller->inspect();
+    LMDJ_CHECK(status.phase == PatternTransportPhase::idle && !status.error &&
+        status.transport_epoch == r.expected_epoch && status.recording == recording && status.playing == playing);
+    LMDJ_CHECK(!audio.engine.inspect_pattern_transport_receipt(7, r.expected_epoch));
+    LMDJ_CHECK(!audio.engine.acknowledge_pattern_transport_receipt(7, r.expected_epoch));
+    return *receipt;
+  };
+  bool scheduled_recording_authority{};
+  std::uint64_t authority_serial{}, authority_epoch{};
+  const auto input = [&](unsigned id, bool pressed, std::uint8_t velocity, std::uint64_t correlation = 0) {
+    const lmdj::facade::PatternTransportInputRequest r{CommandId{uuid(id)}, 7,
+        audio.engine.telemetry().start_epoch, audio.engine.telemetry().rendered_frames,
+        {0, 1}, pressed, velocity, correlation, true};
+    const auto ticket = controller->reserve_input(r);
+    LMDJ_CHECK(ticket.has_value());
+    const auto admitted = audio.engine.enqueue_pattern_input({7, r.frame_epoch, 1, velocity,
+        !pressed, correlation, true, ResolvedPlayback{0, 128, TriggerMode::loop_gate, 1.0F, true}});
+    LMDJ_CHECK(admitted.result == lmdj::audio::PatternInputSubmit::accepted);
+    // Scheduled lineage is Native-owned. Its historical identity survives
+    // cutoff with recording=false; an ordinary take gains no scheduled claim.
+    // Ordinary Facade eligibility independently uses its real admission fence.
+    lmdj::test::check(admitted.authority.recording == scheduled_recording_authority &&
+        admitted.authority.schedule_serial == authority_serial &&
+        admitted.authority.transport_epoch == authority_epoch,
+        "cross-take actual authority: pressed=" + std::to_string(pressed) +
+        " recording=" + std::to_string(admitted.authority.recording) +
+        " serial=" + std::to_string(admitted.authority.schedule_serial) +
+        " epoch=" + std::to_string(admitted.authority.transport_epoch) +
+        " expected_serial=" + std::to_string(authority_serial) +
+        " facade_epoch=" + std::to_string(controller->inspect().transport_epoch));
+    LMDJ_CHECK(controller->bind_input(ticket.value(), admitted));
+    audio.render(1);
+    const auto completion = audio.engine.inspect_pattern_input_completion(7, r.frame_epoch, admitted.sequence);
+    LMDJ_CHECK(completion && completion->runtime_frame == r.runtime_frame &&
+        completion->disposition == (pressed ? lmdj::audio::PatternInputDisposition::muted_no_voice
+            : lmdj::audio::PatternInputDisposition::release_no_voice));
+    if (!pressed) LMDJ_CHECK(completion->held_press_sequence == correlation);
+    LMDJ_CHECK(controller->complete_input(*completion));
+    LMDJ_CHECK(!controller->consume_input(ticket.value()));
+    wait_for_refused_schedule([&] {
+      LMDJ_CHECK(controller->continue_operation().has_value());
+      const auto status = controller->inspect_input(ticket.value());
+      LMDJ_CHECK(status && !status->error);
+      return status->complete;
+    });
+    const auto durable = controller->inspect_input(ticket.value());
+    LMDJ_CHECK(durable && durable->retained && durable->durable_settled && durable->native_result &&
+        durable->native_result->sequence == admitted.sequence &&
+        durable->native_result->runtime_frame == completion->runtime_frame);
+    LMDJ_CHECK(audio.engine.consume_pattern_input_completion(7, r.frame_epoch, admitted.sequence));
+    LMDJ_CHECK(!audio.engine.consume_pattern_input_completion(7, r.frame_epoch, admitted.sequence));
+    LMDJ_CHECK(controller->consume_input(ticket.value()));
+    LMDJ_CHECK(!controller->consume_input(ticket.value()));
+    LMDJ_CHECK(drain_io(*controller).has_value());
+    return std::pair{admitted, *completion};
+  };
+  const auto gesture = [&](unsigned id, std::uint8_t velocity, std::uint64_t offset,
+                           const auto& start) {
+    audio.render(offset);
+    const auto press = input(id, true, velocity);
+    LMDJ_CHECK(controller->inspect_ingress().held_release_metadata == 1 &&
+        audio.engine.pattern_input_profile_status().held_release_reservations == 1);
+    audio.render(24'000);
+    const auto release = input(id + 1, false, 0, press.first.sequence);
+    LMDJ_CHECK(release.second.runtime_frame - press.second.runtime_frame == 24'001);
+    LMDJ_CHECK(controller->inspect_ingress().held_release_metadata == 0 &&
+        audio.engine.pattern_input_profile_status().held_release_reservations == 0);
+    const auto journal = journals.read_active(bundle);
+    LMDJ_CHECK(journal.has_value() && journal.value().admission && journal.value().admission->admission_fence);
+    const auto& admission = *journal.value().admission;
+    LMDJ_CHECK(admission.admission_fence->transport_epoch == start.epoch &&
+        admission.admission_fence->effective_frame == start.effective_frame &&
+        admission.admission_fence->origin_frame == start.origin_frame &&
+        !admission.cutoff_fence && !admission.closure && admission.candidates.size() == 2);
+    LMDJ_CHECK(admission.candidates[0].watermark == press.first.acceptance_ordinal + 9 &&
+        admission.candidates[0].runtime_frame == press.second.runtime_frame &&
+        admission.candidates[0].press_sequence == press.first.sequence &&
+        admission.candidates[0].kind == lmdj::project_io::SequenceCandidateKind::press);
+    LMDJ_CHECK(admission.candidates[1].watermark == release.first.acceptance_ordinal + 9 &&
+        admission.candidates[1].runtime_frame == release.second.runtime_frame &&
+        admission.candidates[1].press_sequence == press.first.sequence &&
+        admission.candidates[1].kind == lmdj::project_io::SequenceCandidateKind::release);
+    LMDJ_CHECK(reader.load(bundle).value() == expected); // Far side is still uncommitted before genuine F.
+  };
+
+  std::uint64_t epoch = 1;
+  if (!cancel_before_start) {
+    // The complete ordinary prefix and every later take share this exact
+    // public production controller, worker, bundle and Native engagement.
+    const auto first = settle(request(940, epoch++, PatternTransportIntent::record), true, true);
+    gesture(941, 90, 0, first);
+    const auto cutoff = settle(request(943, epoch++, PatternTransportIntent::play_stop), false, false);
+    LMDJ_CHECK(cutoff.origin_frame == first.origin_frame && cutoff.effective_frame > first.effective_frame);
+    expected.revision = 1;
+    expected.patterns.at(PatternId{kPattern}).events = {{{0, 1}, 0, 960, 90}};
+    assert_closed();
+  }
+  const lmdj::facade::ScheduledPatternTransportRequest count{
+      request(930, epoch++, PatternTransportIntent::record), audio.engine.telemetry().start_epoch, 1, 1};
+  LMDJ_CHECK(controller->request_count_in(count) == PatternTransportSubmit::accepted);
+  std::optional<lmdj::audio::ScheduledPatternRecordReceipt> scheduled_start;
+  if (!cancel_before_start) {
+    const auto c = audio.engine.telemetry().rendered_frames;
+    const auto s = c + 96'000; // Independent 120 BPM / 48 kHz one-bar oracle.
+    audio.render(96'001);
+    wait_for_refused_schedule([&] {
+      LMDJ_CHECK(controller->continue_operation().has_value());
+      const auto status = controller->inspect();
+      return controller->inspect_count_in().opening_complete && status.recording &&
+          status.phase == PatternTransportPhase::idle && status.transport_epoch == count.transport.expected_epoch;
+    });
+    const auto opened = controller->inspect_count_in();
+    LMDJ_CHECK(opened.start_receipt && opened.start_receipt->result == lmdj::audio::ScheduledPatternResult::applied &&
+        opened.start_receipt->epoch == count.transport.expected_epoch &&
+        opened.start_receipt->effective_frame == s && opened.start_receipt->origin_frame == s && !opened.error);
+    scheduled_start = opened.start_receipt; // Retain the exact actual Native evidence.
+    scheduled_recording_authority = true;
+    authority_serial = count.schedule_serial;
+    authority_epoch = count.transport.expected_epoch;
+    gesture(944, 100, 24'000, *scheduled_start);
+  }
+  const auto off_epoch = epoch++;
+  const auto off = request(931, off_epoch, PatternTransportIntent::record);
+  if (cancel_before_start) {
+    LMDJ_CHECK(controller->request(off) == PatternTransportSubmit::accepted);
+    wait_for_refused_schedule([&] {
+      audio.render(1);
+      LMDJ_CHECK(controller->continue_operation().has_value());
+      const auto status = controller->inspect();
+      return status.phase == PatternTransportPhase::idle && status.transport_epoch == off_epoch && !status.recording;
+    });
+  } else {
+    const auto cutoff = settle(off, false, true);
+    LMDJ_CHECK(cutoff.origin_frame == scheduled_start->origin_frame &&
+        cutoff.effective_frame > scheduled_start->effective_frame);
+    expected.revision = 2;
+    expected.patterns.at(PatternId{kPattern}).events.push_back({{0, 1}, 960, 960, 100});
+  }
+  const auto settled = controller->inspect_count_in();
+  LMDJ_CHECK(settled.request == count && settled.start_receipt && settled.cancel_receipt && !settled.error);
+  LMDJ_CHECK(settled.start_receipt->result == (cancel_before_start
+      ? lmdj::audio::ScheduledPatternResult::cancelled : lmdj::audio::ScheduledPatternResult::applied));
+  LMDJ_CHECK(settled.cancel_receipt->epoch == off_epoch &&
+      !settled.opening_pending && settled.opening_complete == !cancel_before_start);
+  LMDJ_CHECK(audio.scheduled_quiescent());
+  LMDJ_CHECK((audio.acknowledged_epochs == std::vector<std::uint64_t>{count.transport.expected_epoch, off_epoch}));
+  assert_closed();
+  const auto check_retained_count = [&] {
+    const auto retained = controller->inspect_count_in();
+    LMDJ_CHECK(same_scheduled_status(retained.count_in, settled.count_in));
+    LMDJ_CHECK(retained.request == settled.request && same_scheduled_receipt(retained.start_receipt, settled.start_receipt) &&
+        same_scheduled_receipt(retained.cancel_receipt, settled.cancel_receipt));
+    LMDJ_CHECK(retained.opening_pending == settled.opening_pending &&
+        retained.opening_complete == settled.opening_complete && !retained.error);
+  };
+  if (!cancel_before_start) {
+    settle(request(934, epoch++, PatternTransportIntent::play_stop), false, false);
+    check_retained_count();
+    assert_closed();
+    // Expire only the earlier real opening budget, once, before the next
+    // admission. The next ordinary take keeps its own unchanged five seconds.
+    std::this_thread::sleep_for(lmdj::facade::kScheduledPatternOpeningDeadline +
+        std::chrono::milliseconds{100});
+  }
+  const auto record = request(932, epoch++, PatternTransportIntent::record);
+  scheduled_recording_authority = false;
+  const auto start = settle(record, true, true);
+  check_retained_count();
+  const auto opened = journals.read_active(bundle);
+  LMDJ_CHECK(opened.has_value() && opened.value().admission && opened.value().admission->admission_fence);
+  const auto& admission = *opened.value().admission;
+  LMDJ_CHECK(admission.preparation.identity.operation_id == record.command_id &&
+      admission.preparation.fence_timeout_ms == 5000 &&
+      admission.admission_fence->transport_epoch == start.epoch &&
+      admission.admission_fence->effective_frame == start.effective_frame &&
+      admission.admission_fence->origin_frame == start.origin_frame);
+  gesture(946, 110, 48'000, start);
+  check_retained_count();
+  const auto final_cutoff = settle(request(933, epoch++, PatternTransportIntent::record), false, true);
+  LMDJ_CHECK(final_cutoff.origin_frame == start.origin_frame && final_cutoff.effective_frame > start.effective_frame);
+  ++expected.revision;
+  expected.patterns.at(PatternId{kPattern}).events.push_back({{0, 1}, 1920, 960, 110});
+  check_retained_count();
+  assert_closed();
+  settle(request(935, epoch++, PatternTransportIntent::play_stop), false, false);
+  check_retained_count();
+  assert_closed();
+}
+
+void ordinary_opening_refusal_preserves_a_settled_cancelled_count_in() {
+  TempDirectory directory;
+  const auto bundle = directory.path() / "project.lmdj";
+  const SequenceSessionId session{uuid(1)};
+  RefusedSchedulePort audio{true};
+  auto initial = lmdj::domain::create_project(ProjectId{kProject}, 120).value();
+  initial.patterns.emplace(PatternId{kPattern}, lmdj::domain::Pattern{PatternId{kPattern}, 1, {}});
+  lmdj::project_io::ProjectStore reader;
+  lmdj::project_io::SequenceJournal journals;
+  LMDJ_CHECK(reader.create(bundle, initial).has_value());
+  auto controller = lmdj::facade::make_pattern_transport_controller(audio, audio,
+      {bundle, session, ProjectId{kProject}, PatternId{kPattern}, 7});
+  LMDJ_CHECK(controller);
+  wait_for_refused_schedule([&] { return controller->inspect_io().ready; });
+  const lmdj::facade::ScheduledPatternTransportRequest count{
+      {session, ProjectId{kProject}, CommandId{uuid(950)}, 7, 1, PatternTransportIntent::record, 0},
+      audio.engine.telemetry().start_epoch, 1, 1};
+  LMDJ_CHECK(controller->request_count_in(count) == PatternTransportSubmit::accepted);
+  const PatternTransportRequest cancel{session, ProjectId{kProject}, CommandId{uuid(951)},
+      7, 2, PatternTransportIntent::record, {}};
+  LMDJ_CHECK(controller->request(cancel) == PatternTransportSubmit::accepted);
+  wait_for_refused_schedule([&] {
+    audio.render(1);
+    LMDJ_CHECK(controller->continue_operation().has_value());
+    return controller->inspect().phase == PatternTransportPhase::idle;
+  });
+  const auto settled = controller->inspect_count_in();
+  LMDJ_CHECK(settled.start_receipt && settled.cancel_receipt &&
+      settled.start_receipt->result == lmdj::audio::ScheduledPatternResult::cancelled &&
+      !settled.opening_pending && !settled.opening_complete && !settled.error && audio.scheduled_quiescent());
+  const PatternTransportRequest record{session, ProjectId{kProject}, CommandId{uuid(952)},
+      7, 3, PatternTransportIntent::record, 0};
+  LMDJ_CHECK(admitted_request(*controller, record) == PatternTransportSubmit::accepted);
+  // A real authoring transaction after preflight supplies a genuine final
+  // opening refusal. No injected worker success, fabricated ACK or fake F.
+  LMDJ_CHECK(reader.execute(bundle, lmdj::domain::EditPatternEvents{
+      {CommandId{uuid(953)}, 0}, PatternId{kPattern}, {}, {{{0, 1}, 0, 120, 80}}}).has_value());
+  const auto changed = reader.load(bundle);
+  LMDJ_CHECK(changed.has_value() && changed.value().revision == 1);
+  audio.render(1);
+  const auto receipt = audio.engine.inspect_pattern_transport_receipt(7, 3);
+  LMDJ_CHECK(receipt && receipt->playing);
+  LMDJ_CHECK(!settled_continuation(*controller).has_value());
+  const auto failed = controller->inspect();
+  LMDJ_CHECK(failed.phase == PatternTransportPhase::error && !failed.recording && failed.error &&
+      failed.error->code == lmdj::foundation::ErrorCode::revision_conflict && failed.command_id == record.command_id);
+  const auto retained = controller->inspect_count_in();
+  LMDJ_CHECK(same_scheduled_status(retained.count_in, settled.count_in));
+  LMDJ_CHECK(retained.request == settled.request && same_scheduled_receipt(retained.start_receipt, settled.start_receipt) &&
+      same_scheduled_receipt(retained.cancel_receipt, settled.cancel_receipt) && retained.opening_pending == settled.opening_pending &&
+      retained.opening_complete == settled.opening_complete && !retained.error);
+  const auto unacknowledged = audio.engine.inspect_pattern_transport_receipt(7, 3);
+  LMDJ_CHECK(unacknowledged && unacknowledged->epoch == receipt->epoch &&
+      unacknowledged->effective_frame == receipt->effective_frame &&
+      unacknowledged->origin_frame == receipt->origin_frame &&
+      unacknowledged->pattern_id == receipt->pattern_id &&
+      unacknowledged->pattern_generation == receipt->pattern_generation);
+  const auto journal = journals.read_active(bundle);
+  LMDJ_CHECK(!journal.has_value() && journal.error().code == lmdj::foundation::ErrorCode::not_found);
+  LMDJ_CHECK(reader.load(bundle).value() == changed.value());
+}
+
 void native_refused_unsent_schedule_clears_only_its_exact_deferred_cutoff() {
   refused_schedule_keeps_original_owner_failure(false);
 }
@@ -2806,6 +3130,9 @@ void shutdown_fallback_preserves_an_established_native_owner_failure() {
 
 int main() {
   try {
+    ordinary_record_after_settled_count_in_owns_its_opening(false);
+    ordinary_record_after_settled_count_in_owns_its_opening(true);
+    ordinary_opening_refusal_preserves_a_settled_cancelled_count_in();
     native_refused_unsent_schedule_clears_only_its_exact_deferred_cutoff();
     deferred_submit_refusal_acquires_native_failure_without_overwriting_it();
     shutdown_fallback_preserves_an_established_native_owner_failure();
@@ -2856,7 +3183,7 @@ int main() {
     known_owner_registration_protects_only_the_open_transport_journal();
     controller_destroyed_after_application_is_safe();
     owner_lost_transport_admission_is_sealed_and_listed();
-    std::cout << "pattern transport controller tests: PASS (41 scenarios)\n";
+    std::cout << "pattern transport controller tests: PASS (53 top-level scenario invocations)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

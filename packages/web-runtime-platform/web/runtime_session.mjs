@@ -4010,12 +4010,16 @@ function createRuntimeSessionController(options = {}) {
         throw typedError("HOST_STATE_INVALID", "Count-in ticket was already consumed");
       }
       const payload = {...countInTicketPayload(entry.ticket), consume};
-      // The private consumer never occupies either SDK dispatch tail. Its
-      // one bounded inspect still uses the ordinary envelope/deadline checks.
-      const request = automatic ? dispatchBoundedRequest : boundedRequest;
+      // Both known and unknown original callers can owe this exact consume
+      // while a Bridge lifecycle RPC retains its response. Keep the owner's
+      // inspection independent of that RPC, with the same short envelope,
+      // deadline and sealed-transport checks.
+      const retainedOwner = () => patternCountInTickets.get(countInTicketKey(entry.ticket)) === entry &&
+        !entry.consumed && !entry.retired;
+      const request = automatic || retainedOwner() ? dispatchBoundedRequest : boundedRequest;
       const status = recordCountInEvidence(entry, normalizeCountInStatus(await request(
         "pattern.transport.count-in.inspect", payload,
-        {retainedOwner: () => !entry.consumed && !entry.retired}), entry.ticket));
+        {retainedOwner}), entry.ticket));
       if (consume) {
         // Host success is the independent physical/input/recording gate;
         // merely reaching a terminal-looking view never clears caller debt.
@@ -4260,10 +4264,16 @@ function createRuntimeSessionController(options = {}) {
     const entry = patternInputTickets.get(key);
     const action = async () => {
       if (automatic && entry?.consumed) return entry.status;
-      const request = automatic ? dispatchBoundedRequest : boundedRequest;
+      const retainedOwner = () => patternInputTickets.get(key) === entry && entry !== undefined && !entry.consumed;
+      // A Bridge lifecycle RPC can retain its response until this original
+      // caller consumes its input. Queueing that consumer behind host.close
+      // or audio.suspend would make each wait for the other. Only an exact
+      // locally admitted owner takes this continuation path; unknown public
+      // tickets and new admissions keep the ordinary Host dispatch tail.
+      const request = automatic || retainedOwner() ? dispatchBoundedRequest : boundedRequest;
       const status = normalizePatternInputStatus(await request("pattern.transport.input.inspect",
         {...patternInputTicketPayload(ticket), consume}, {
-          retainedOwner: () => patternInputTickets.get(key) === entry && entry !== undefined && !entry.consumed,
+          retainedOwner,
         }), ticket);
       if (entry) {
         // An unknown worker outcome may clear its error when the same retained
@@ -4299,8 +4309,8 @@ function createRuntimeSessionController(options = {}) {
       return status;
     };
     if (!entry) return action();
-    // A lost direct admission owns a private consumer, independent of both
-    // SDK tails. Serialize its exact ticket with any later public inspection.
+    // Known and lost admissions use the same independent continuation. Its
+    // exact ticket remains serialized with any later public inspection.
     const pending = entry.inspectionTail === null ? action() : entry.inspectionTail.then(action);
     entry.inspectionTail = pending.then(() => undefined, () => undefined);
     return pending;
@@ -4535,6 +4545,10 @@ function createRuntimeSessionController(options = {}) {
     requirePatternTransportOptIn();
     requirePatternTransportCompanion();
     const entry = patternCountInTickets.get(countInTicketKey(ticket));
+    // An existing owner has its own inspectionTail. Waiting behind a Runtime
+    // action that itself waits for a retained lifecycle RPC would recreate
+    // the same cycle even after removing the Host dispatch-tail dependency.
+    if (entry !== undefined && !entry.retired) return inspectCountInEntry(entry, consume);
     if (entry !== undefined) return serializeRuntimeAction(() => inspectCountInEntry(entry, consume));
     return serializeRuntimeAction(async () => normalizeCountInStatus(
       await boundedRequest("pattern.transport.count-in.inspect", {...payload, consume}), ticket));

@@ -290,24 +290,73 @@ async function recoverFromLifecycleEdge(page) {
 
 async function installLifecycleNativeProof(page) {
   await page.addInitScript(() => {
-    window.__lifecycleNativeProof = {suspends: [], voices: [], outcomes: []};
+    window.__lifecycleNativeProof = {suspends: [], voices: [], outcomes: [], consumed: []};
     let exposed;
     Object.defineProperty(window, "lmdjWebRuntimeHost", {
       configurable: true,
       get() { return exposed; },
       set(nativeHost) {
         const nativeTransport = nativeHost.transport;
+        // Observe actual transport receipts only; never issue a synthetic
+        // inspection or consume. Admission cannot enter the proof counter.
+        const inputAdmissions = new Map();
+        const consumedInputs = new Set();
+        const ticketKey = ticket => JSON.stringify([ticket?.command_id,
+          ticket?.runtime_generation, ticket?.frame_epoch, ticket?.ticket]);
+        const observeInput = (request, response) => {
+          if (request?.operation === "pattern.transport.input.request" &&
+              request.payload?.kind === "press" && response?.ok === true &&
+              response.request_id === request.request_id) {
+            const ticket = {command_id: request.payload.command_id,
+              runtime_generation: request.payload.runtime_generation,
+              frame_epoch: request.payload.frame_epoch, ticket: request.payload.input_serial};
+            const sameTicket = value => Object.keys(ticket).length === Object.keys(value ?? {}).length &&
+              Object.entries(ticket).every(([key, expected]) => value?.[key] === expected);
+            if (sameTicket(response.result?.ticket) && sameTicket(response.result?.status?.ticket)) {
+              inputAdmissions.set(ticketKey(ticket), structuredClone({request, response}));
+            }
+          }
+          if (request?.operation !== "pattern.transport.input.inspect" ||
+              request.payload?.consume !== true || response?.ok !== true ||
+              response.request_id !== request.request_id) return null;
+          const key = ticketKey(request.payload);
+          const original = inputAdmissions.get(key);
+          if (!original || consumedInputs.has(key)) return null;
+          const status = response.result;
+          const admission = original.response.result.status.admission;
+          const native = status?.native_result;
+          if (!admission?.authority) return null;
+          const ticket = original.response.result.ticket;
+          const decimal = value => typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
+            BigInt(value) <= 18446744073709551615n;
+          if (Object.keys(ticket).length !== Object.keys(status?.ticket ?? {}).length ||
+              !Object.entries(ticket).every(([field, expected]) => status.ticket[field] === expected) ||
+              status.complete !== true || status.durable_settled !== true || status.error !== null ||
+              (admission.authority.recording === true && status.retained !== true) ||
+              !native || native.disposition !== "voice_started" ||
+              JSON.stringify(status.admission) !== JSON.stringify(admission) ||
+              !decimal(native.sequence) || native.sequence !== admission.sequence ||
+              !decimal(native.acceptance_ordinal) || native.acceptance_ordinal !== admission.acceptance_ordinal ||
+              native.runtime_generation !== ticket.runtime_generation || native.frame_epoch !== ticket.frame_epoch ||
+              native.slot !== original.request.payload.slot || native.held_press_sequence !== null ||
+              JSON.stringify(native.authority) !== JSON.stringify(admission.authority) ||
+              !Number.isSafeInteger(native.runtime_frame) || native.runtime_frame < 0 ||
+              !Number.isSafeInteger(Number(native.sequence)) || Number(native.sequence) <= 0) return null;
+          consumedInputs.add(key);
+          return {payload: original.request.payload, ok: response.ok, sequence: Number(native.sequence),
+            operation: "pattern.transport.input.inspect", status: structuredClone(status),
+            evidence: {admission: original, consume: structuredClone({request, response})}};
+        };
         nativeTransport.subscribe((notification) => {
           if (notification?.event === "runtime.voice_state") {
             window.__lifecycleNativeProof.voices.push(...structuredClone(notification.payload.events));
-          }
-          if (notification?.event === "runtime.trigger_outcomes") {
-            window.__lifecycleNativeProof.outcomes.push(...structuredClone(notification.payload.events));
           }
         });
         nativeHost.transport = Object.freeze({
           async send(...args) {
             const response = await nativeTransport.send(...args);
+            const consumed = observeInput(args[0], response);
+            if (consumed) window.__lifecycleNativeProof.consumed.push(consumed);
             if (args[0]?.operation === "audio.suspend") {
               window.__lifecycleNativeProof.suspends.push({
                 request: structuredClone(args[0]), response: structuredClone(response),
@@ -341,9 +390,21 @@ async function expectNativeLoopClear(page, afterSuspend) {
 }
 
 async function latchObservedLoopToggle(page) {
+  // The public Session is attached after the raw Runtime namespace is exposed.
+  // Subscribe before the musical gesture, including after a real replacement.
+  await page.evaluate(() => {
+    const session = window.lmdjWebRuntimeHost.session;
+    if (window.__lifecycleOutcomeSession === session) return;
+    window.__lifecycleOutcomeUnsubscribe?.();
+    window.__lifecycleOutcomeSession = session;
+    window.__lifecycleOutcomeUnsubscribe = session.subscribeRuntimeOutcome(outcome => {
+      window.__lifecycleNativeProof.outcomes.push(structuredClone(outcome));
+    });
+  });
   const before = await page.evaluate(() => ({
     voices: window.__lifecycleNativeProof.voices.length,
     outcomes: window.__lifecycleNativeProof.outcomes.length,
+    consumed: window.__lifecycleNativeProof.consumed.length,
   }));
   await latchLoopToggle(page);
   await expect.poll(() => page.evaluate((after) => {
@@ -351,7 +412,10 @@ async function latchObservedLoopToggle(page) {
     return proof.voices.slice(after.voices).some((voice) =>
       voice.slot === 0 && voice.state === "started" &&
       proof.outcomes.slice(after.outcomes).some((outcome) =>
-        outcome.sequence === voice.sequence && outcome.outcome === "voice_started"));
+        outcome.sequence === voice.sequence && outcome.outcome === "voice_started" &&
+        proof.consumed.slice(after.consumed).some(input => input.sequence === voice.sequence &&
+          input.status.native_result.slot === voice.slot &&
+          input.status.native_result.runtime_frame === outcome.runtimeFrame)));
   }, before), {timeout: 30_000}).toBe(true);
 }
 

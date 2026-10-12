@@ -141,6 +141,12 @@ struct PatternTransportCoordinator::Async {
     pending = r;
     if (r.intent == PatternTransportIntent::record) {
       prepare_started = std::chrono::steady_clock::now();
+      // This admission owns a new opening clock, including its prepare work.
+      // A retained earlier count-in ticket keeps its receipts, but cannot
+      // supply the deadline or opening disposition for an ordinary Record.
+      opening_started = prepare_started;
+      opening_done = false;
+      opening_failed = false;
       // An asynchronous prepare can span a real Pattern Apply even when no
       // publication was pending at admission. Capability ports always bind
       // the durable opening to their actual receipt, never prior telemetry.
@@ -458,13 +464,13 @@ struct PatternTransportCoordinator::Async {
           i->status.error = done.error;
           settle_input(*i, false);
         }
-      } else if (work_kind == "open") count.error = done.error;
+      } else if (work_kind == "open" && active_schedule()) count.error = done.error;
       // Failed actual opening still needs a real Stop; no successful cancel.
       if (work_kind == "open") {
         opening_failed = true;
         // This exact final refusal is consumed below. Unknown/retryable
         // effects retain their cell above and cannot clear pending opening.
-        count.opening_pending = false;
+        if (active_schedule()) count.opening_pending = false;
         if (!active_schedule()) phase = PatternTransportPhase::error;
       }
       else if (!work_input) {
@@ -510,9 +516,9 @@ struct PatternTransportCoordinator::Async {
         prepare_needed = false;
       } else if (work_kind == "open") {
         opening_done = true;
-        count.opening_pending = false;
-        count.opening_complete = true;
         if (active_schedule()) {
+          count.opening_pending = false;
+          count.opening_complete = true;
           recording = true;
           recording_request = count.request->transport;
         }
@@ -1045,7 +1051,7 @@ struct PatternTransportCoordinator::Async {
       if (opening_failed && !opening_done) {
         // A refused opening has no admitted prefix. Preserve failed e1 and
         // actual native e2, and leave any uncertain journal for owner recovery.
-        count.error = error ? error : count.error;
+        if (active_schedule()) count.error = error ? error : count.error;
         finish_request();
         schedule_settled = true;
       } else if (!cutoff_done) {

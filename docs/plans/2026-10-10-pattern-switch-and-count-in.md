@@ -607,6 +607,8 @@ MAJOR. Documentation impact: required; affected page `/core/modules/audio-runtim
 - When ● starts from stopped with count-in on, Creator requests the scheduled start. The metronome clicks for the count-in bars regardless of its toggle, then follows the toggle.
 - The upper screen shows COUNT-IN and the beats left. The Record lamp blinks during count-in and is steady once recording.
 - ● or Play/Stop during count-in cancels.
+- User-resolved policy (2026-10-13): lock BPM and Pattern changes during count-in while Pad Press/Release remains playable. Unlock after actual matching cancellation/Stop settlement; pending cancellation does not unlock competing authoring intent.
+- User-resolved policy (2026-10-13): if COUNT-IN is 1/2 and the actual environment cannot provide scheduled count-in or cue output, retain the preference, refuse this Record request and show its actual reason. Complete the normal user activation path when applicable; do not silently start ordinary Record or rewrite the preference to Off.
 
 **Declared files.** `app.tsx`, `src/state/count_in_preference.ts` (new), `src/runtime/metronome_scheduler.ts`, `sequence_touch_workspace.tsx`, `physical_controls.tsx`, `styles.css`, `components/transport_status.ts`, the overview components, their tests, `tests/platform/web/creator/creator_web_metronome.spec.mjs`, and the two Creator portal pages.
 
@@ -903,3 +905,80 @@ Assembly, tag or Release is allocated.
 The same repair updates current topology and remaining verification limits;
 immutable historical snapshots stay unchanged. Run the original official
 `scripts/docs-site.sh check` before the repair commit.
+
+
+## S6 current-head review followup — engagement reuse and lifecycle consumption
+
+The complete independent review of `c7448c60af2116e6e789e425ae5e1567e2decc49`
+(base `f084f3e345b4122e0649907e30eb83f331546887`) requested changes: the prior
+scheduled opening clock can strand a later ordinary opening, normal SDK input
+consumption can queue behind the lifecycle RPC waiting for it, and ordinary
+opening can rewrite a retained cancelled scheduled ticket. These are confirmed
+source paths; the review did not run new reproducers. The original committed
+Creator proof is separately red and retained; its final eight-group receipt
+must be read independently. Neither finding justifies widening the original
+five-second opening or 300-second stress budget.
+
+**Declared files.** `packages/application-facade/src/pattern_transport_controller.cpp`,
+`tests/core/facade/pattern_transport_controller_test.cpp`,
+`packages/web-runtime-platform/web/runtime_session.mjs`,
+`packages/web-runtime-platform/test/runtime_session.test.mjs`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`, and the current
+Application Facade and Web Runtime Platform module pages.
+
+**Behaviour.** A new ordinary Record binds its guard to its own preparation
+clock and starts fresh internal opening state. Scheduled status updates belong
+only to the matching active scheduled operation; old caller evidence stays
+inspectable. Exact locally admitted input continuations remain serialized per
+ticket independently of a lifecycle RPC that waits for their consumption.
+Unknown tickets, new admissions and other ordinary Host work keep original
+ordering. Preserve response-loss debt, request identities, real Release,
+physical last use and caller/worker consumption.
+
+**Lowest-tier tests and defects caught.** The existing real Native Facade
+component test must cover controller reuse across ordinary and scheduled takes,
+old real-clock expiry followed by prompt new durable opening, genuine receipt
+ACK, correlated input and far-side Truth/reopen. A winning pre-S cancellation
+retains an unchanged old ticket across ordinary opening. Existing SDK tests
+must model lifecycle response retention until the original Release consumer
+actually consumes its ticket. The production SDK/Bridge/Host browser witness
+then verifies that model against real runtime ownership. Keep all prior full
+journeys, workers, rounds and budgets; execute affected Portal checks before
+commit, then the selected committed-head lanes before shipping. Source-only
+work and individual old green receipts are not completion of this followup.
+
+### Version Management
+
+Version impact: none. This followup repairs existing internal lifetime and
+queue ownership without a manifest, Contract shape or Product Build change.
+Preserve independently allocated upstream Build and immutable snapshots when
+integrating the final candidate.
+
+Documentation impact: required. Update `/docs/core/modules/application-facade`
+and `/docs/core/modules/web-runtime-platform` and the existing design/plan in
+the same Task. No topology change is introduced by this repair.
+
+
+**Creator followup scope refresh.** The original complete c744 Creator run
+naturally ended exit 1: all eight groups, 136 selected / 106 PASS / 19 FAIL /
+11 SKIP. Its full log, source binding and browser evidence are retained.
+Three new silent-Pattern setups sent an invalid empty edit. Eight existing
+observers require the old trigger/outcome stream after companion negotiation;
+replace them with actual exact-ticket consume, complete NativeResult and
+required durable evidence. The shared Candidate journey bypassed Creator's
+opted-in Session reopen. Preserve its Web Host branch and every original leg.
+The slow 40 BPM observer may have a short inspect RPC spanning its intentional
+main-thread stall; record and fence the original observer before blocking,
+without changing any Host/input/opening deadline. Six real lifecycle failures
+remain independent runtime debts until rebuilt verification establishes their
+cause and successful disposition.
+
+Add these declared files before editing: `tests/platform/web/candidate_journey.mjs`,
+`tests/platform/web/creator/fixtures/count_in_helpers.mjs`,
+`creator_web_count_in.spec.mjs`, `creator_web_sequence.spec.mjs`,
+`creator_web_default_streaming.spec.mjs`, `creator_web_lifecycle.spec.mjs` and
+`creator_web_sample_editor.spec.mjs` under that Creator directory. Validate the
+original focused journeys and all six S6 count-in cases against an actual
+rebuilt Creator, then run the original full eight-group proof when ready.
+Do not convert an old missing-observer failure into runtime acceptance by
+source inspection, or lower the gate to admission alone.
