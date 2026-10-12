@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-10-12
     occurrence: https://github.com/endaye/lmdj/issues/2025
     observed_by: Kimi Code CLI (agent)
-exit: gate:tests/build/ci_batch_controller_test.py; gate:tests/build/ci_incremental_batch_journal_test.py; gate:tests/build/ci_batch_github_journal_test.py
+exit: gate:tests/build/ci_batch_controller_test.py
 ---
 
 # A journal record that explains itself per changed path grows with the unprocessed backlog until it exceeds the bounded record size, and the local refusal then blocks every admit with no observable cause.
