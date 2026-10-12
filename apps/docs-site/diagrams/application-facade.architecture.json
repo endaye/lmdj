@@ -191,7 +191,7 @@
   "cards": [
     {
       "title": "Facade / I/O owner",
-      "body": "Host 只用 Facade；Runtime-only 无 IO/Provider。worker 独占 Store/Journal/lease；S 前无 I/O。"
+      "body": "Host 只用 Facade；Runtime-only 无 IO/Provider。worker 独占 Store/Journal/lease；scheduled count-in 在真 S 后开 Journal。"
     },
     {
       "title": "独立录音 release",

@@ -1420,3 +1420,47 @@ Version impact: Creator PATCH debt at the next coordinated settlement. This
 private correctness Task allocates no identity or Product Build and changes no
 public SDK API, Native wire or persisted Contract. Documentation impact:
 required on `/hosts/creator-web/`, with this design and plan updated together.
+
+## S6 followup — preserve final input consumption budget and diagram scope
+
+**Premises refreshed before editing.** Actual main remains
+`cbd7f898604f4e0953cb912279976bf12badaecc` at the 2026-10-12T22:08Z
+fetch, with no intervening changes. This isolated repair starts at
+`c0052f5d380db9aeed835a70aae1c0c621ddc340`, whose independent full
+109-file/798-hunk review remains REQUEST_CHANGES. Both findings remain:
+the public count-in test helper checks the original one-second deadline after
+non-consuming observation, but not after the actual consuming reply; the
+ordinary+scheduled Facade diagram overstates the scheduled pre-S I/O rule.
+Ordinary Record still performs preflight/prepare work before audio submit;
+scheduled count-in waits for its actual applied e1/S before opening.
+
+**Declared files:** `tests/platform/web/creator/fixtures/count_in_helpers.mjs`,
+this plan, `apps/docs-site/diagrams/application-facade.architecture.json`, and
+its officially generated `static/diagrams/application-facade.svg` and `.html`.
+Check the same saved input deadline immediately after the original consuming
+await, before publishing settled success. Retain that RPC, actual ticket,
+Native/durable/admission/authority/retention assertions and every far-side leg.
+Qualify the diagram card to scheduled count-in; ordinary preflight/prepare and
+strict scheduled e1/S-before-open behavior stay unchanged.
+
+**Lowest-tier verification / defects caught:** import the actual helper in a
+focused clock model. On-time observation followed by consume at/after the
+original deadline must fail; consumption before it must retain the original
+result and correlation checks. The same late-consume expectation must fail
+against the old helper. This models witness timing only, never Native/backend,
+OPFS/PCM or physical retirement. Regenerate diagrams through the official
+portal script, verify generated equality, and run the original complete
+`scripts/docs-site.sh check`. Preserve the in-flight frozen c005 original full
+Creator run through natural exit. After repair integration, the final committed
+candidate still owes its original whole eight-group Creator proof and every
+other selected exact-head lane; an old-head PASS cannot clear these findings.
+No original budget, worker count, journey or consume leg is relaxed.
+
+### Version Management
+
+Version impact: none. This changes a test witness and documented source fact,
+with no product/API/ABI/wire/persisted Contract or Product Build allocation.
+All existing unshipped S6 version debts remain. Documentation impact: required
+on `/core/modules/application-facade/`, with source diagram and official
+HTML/SVG outputs updated in this Task. S6 runtime and physical acceptance
+remain incomplete until their actual current-candidate evidence exists.

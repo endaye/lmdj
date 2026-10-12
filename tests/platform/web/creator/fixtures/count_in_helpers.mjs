@@ -272,6 +272,7 @@ export async function settleCountInInput(page, ticket) {
     if (status.expired || status.error !== null || !status.durableSettled || status.nativeResult === null)
       throw new Error(`input did not complete timely: ${JSON.stringify(status)}`);
     const consumed = await session.inspectPatternInput(ticket, true);
+    if (performance.now() >= deadline) throw new Error("input consumption exceeded original one-second budget");
     window.__countInSettledInputs ??= new Map();
     window.__countInSettledInputs.set(ticket.ticket, status);
     return {status, consumed};
