@@ -6869,6 +6869,7 @@ struct Application::Impl {
       return success_envelope(
           replay_status_json(replay_id, current.value()), std::nullopt);
     }
+    bool clear_completed_active = false;
     if (!active_replay_id.empty()) {
       const ReplayId active_id{active_replay_id};
       const auto active_status =
@@ -6883,12 +6884,50 @@ struct Application::Impl {
             {{"active_replay_id", active_replay_id}},
         });
       }
-      active_replay_id.clear();
+      clear_completed_active = true;
     }
 
     const auto loaded = projects.load(path);
     if (!loaded.has_value()) {
+      if (clear_completed_active) {
+        active_replay_id.clear();
+      }
       return error_envelope(loaded.error());
+    }
+    const auto performance = loaded.value().performances.find(performance_id);
+    if (performance != loaded.value().performances.end()) {
+      const auto legacy_event = [](const domain::PerformanceEvent& event) {
+        if (event.input_sequence.has_value()) {
+          return false;
+        }
+        switch (domain::performance_event_kind(event)) {
+          case domain::PerformanceEventKind::pad_hit:
+          case domain::PerformanceEventKind::pattern_launch:
+          case domain::PerformanceEventKind::fx_engage:
+          case domain::PerformanceEventKind::fx_move:
+          case domain::PerformanceEventKind::fx_release:
+          case domain::PerformanceEventKind::hold_on:
+          case domain::PerformanceEventKind::hold_off:
+            return true;
+          default:
+            return false;
+        }
+      };
+      if (performance->second.initial_live_state.has_value() ||
+          !std::all_of(performance->second.events.begin(),
+                       performance->second.events.end(), legacy_event)) {
+        return error_envelope(Error{
+            ErrorCode::invalid_argument,
+            "Performance replay Runtime does not support header, "
+            "input_sequence or live-control profiles",
+            {{"reason", "performance_replay_profile_unsupported"}},
+        });
+      }
+    }
+    // A rejected profile must retain Replay bookkeeping. Loading still owns
+    // its existing Project maintenance; legacy failures retain prior cleanup.
+    if (clear_completed_active) {
+      active_replay_id.clear();
     }
     const auto projection = cooker::cook_performance_replay(
         loaded.value(), performance_id,

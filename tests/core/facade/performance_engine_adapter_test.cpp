@@ -1053,6 +1053,191 @@ void test_replay_stop_after_quiescent_engine_stop_stays_stopped() {
       .value().state == ReplayState::stopped);
 }
 
+std::vector<PerformanceReplayProjection> unsupported_engine_projections() {
+  std::vector<PerformanceReplayProjection> values;
+  auto headered = *empty_replay_projection();
+  headered.initial_live_state = lmdj::domain::PerformanceInitialLiveState{};
+  values.push_back(headered);
+  headered.initial_live_state->hold = true;
+  headered.initial_live_state->filter =
+      lmdj::domain::IndependentFilterLiveState{
+          true, false, lmdj::domain::PerformanceFilterType::hp, 800, 250};
+  headered.initial_live_state->other_fx.at(0) = {true, false, 500};
+  headered.initial_live_state->muted_mask = 1;
+  headered.initial_live_state->solo_mask = std::uint64_t{1} << 63;
+  values.push_back(headered);
+  headered = *replay_projection();
+  headered.initial_live_state = lmdj::domain::PerformanceInitialLiveState{};
+  for (std::size_t index = 0; index < headered.boundaries.size(); ++index) {
+    headered.boundaries.at(index).event.input_sequence = index + 1;
+  }
+  values.push_back(headered);
+  for (const std::uint64_t sequence : {0U, 1U}) {
+    auto sequenced = *pad_only_replay_projection(240);
+    sequenced.boundaries.front().event.input_sequence = sequence;
+    values.push_back(sequenced);
+    sequenced = *replay_projection();
+    sequenced.boundaries.back().event.input_sequence = sequence;
+    values.push_back(sequenced);
+  }
+  for (const auto sequence : {std::optional<std::uint64_t>{},
+                             std::optional<std::uint64_t>{1}}) {
+    for (const auto& event : {
+             PerformanceEvent{lmdj::domain::FilterChangePerformanceEvent{
+                                  lmdj::domain::PerformanceFilterPhase::engage,
+                                  lmdj::domain::PerformanceFilterType::hp,
+                                  800, 250, 100}, sequence},
+             PerformanceEvent{lmdj::domain::PadGatesSetPerformanceEvent{
+                                  1, std::uint64_t{1} << 63, 100}, sequence},
+         }) {
+      auto mixed = *replay_projection();
+      // Retain real Pad and Pattern material before the later unsupported kind.
+      mixed.boundaries.resize(2);
+      mixed.boundaries.push_back({100, event});
+      mixed.event_count = mixed.boundaries.size();
+      values.push_back(mixed);
+    }
+  }
+  return values;
+}
+
+void check_filter_state_unchanged(const lmdj::audio::FilterLiveState& before,
+                                  const lmdj::audio::FilterLiveState& after) {
+  LMDJ_CHECK(after.hold == before.hold);
+  LMDJ_CHECK(after.mode == before.mode);
+  LMDJ_CHECK(after.engaged == before.engaged);
+  LMDJ_CHECK(after.frozen == before.frozen);
+  LMDJ_CHECK(after.legacy_value == before.legacy_value);
+  LMDJ_CHECK(after.parameters.type == before.parameters.type);
+  LMDJ_CHECK(after.parameters.cutoff_hz == before.parameters.cutoff_hz);
+  LMDJ_CHECK(after.parameters.resonance_milli ==
+             before.parameters.resonance_milli);
+}
+
+void test_unsupported_replay_profiles_have_no_native_effects() {
+  for (const auto& unsupported : unsupported_engine_projections()) {
+    RealtimeEngine engine;
+    prepare_running_engine(engine);
+    auto adapter = lmdj::facade::make_engine_performance_adapter(
+        engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+    LMDJ_CHECK(engine.enqueue_filter_gesture({
+        lmdj::audio::FilterPhase::engage,
+        {lmdj::audio::FilterType::high_pass, 800, 250},
+    }) == lmdj::audio::FxEnqueueResult::accepted);
+    LMDJ_CHECK(adapter.gesture_sink->apply_gesture({
+        lmdj::audio::FxGestureKind::engage, PerformanceFx::delay, 500,
+    }).has_value());
+    LMDJ_CHECK(adapter.gesture_sink->apply_gesture({
+        lmdj::audio::FxGestureKind::hold_on, PerformanceFx::filter, 0,
+    }).has_value());
+    render(engine, 128);
+    const auto before = engine.telemetry();
+    const auto fx_before = engine.master_fx_telemetry();
+    const auto pattern_before = engine.pattern_telemetry();
+    const auto current_pattern = engine.current_pattern_id();
+    const auto filter_before = engine.filter_control_status();
+    LMDJ_CHECK(filter_before.applied.state.hold);
+    LMDJ_CHECK(filter_before.applied.state.engaged);
+    LMDJ_CHECK(filter_before.applied.state.parameters.cutoff_hz == 800);
+    LMDJ_CHECK(fx_before.queued_gestures == 0);
+
+    const auto rejected = adapter.replay_controller->begin(
+        ReplayId{kReplay},
+        std::make_shared<const PerformanceReplayProjection>(unsupported));
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(rejected.error().details.at("reason") ==
+               "performance_replay_profile_unsupported");
+    const auto missing = adapter.replay_controller->status(ReplayId{kReplay});
+    LMDJ_CHECK(!missing.has_value());
+    LMDJ_CHECK(missing.error().code == ErrorCode::not_found);
+    const auto stopped = adapter.replay_controller->stop(ReplayId{kReplay});
+    LMDJ_CHECK(!stopped.has_value());
+    LMDJ_CHECK(stopped.error().code == ErrorCode::not_found);
+    adapter.service();
+    render(engine, 6'000);
+    adapter.service();
+    LMDJ_CHECK(!adapter.replay_controller->status(ReplayId{kReplay}).has_value());
+    const auto after = engine.telemetry();
+    const auto fx_after = engine.master_fx_telemetry();
+    const auto pattern_after = engine.pattern_telemetry();
+    const auto filter_after = engine.filter_control_status();
+    LMDJ_CHECK(after.start_epoch == before.start_epoch);
+    LMDJ_CHECK(after.enqueued_events == before.enqueued_events);
+    LMDJ_CHECK(after.dequeued_events == before.dequeued_events);
+    LMDJ_CHECK(after.queued_events == before.queued_events);
+    LMDJ_CHECK(after.started_voices == before.started_voices);
+    LMDJ_CHECK(after.active_voices == before.active_voices);
+    LMDJ_CHECK(fx_after.enqueued_gestures == fx_before.enqueued_gestures);
+    LMDJ_CHECK(fx_after.dequeued_gestures == fx_before.dequeued_gestures);
+    LMDJ_CHECK(fx_after.queued_gestures == fx_before.queued_gestures);
+    LMDJ_CHECK(fx_after.enqueued_tempo_updates == fx_before.enqueued_tempo_updates);
+    LMDJ_CHECK(fx_after.applied_tempo_updates == fx_before.applied_tempo_updates);
+    LMDJ_CHECK(fx_after.current_bpm == fx_before.current_bpm);
+    LMDJ_CHECK(fx_after.enqueued_filter_controls ==
+               fx_before.enqueued_filter_controls);
+    LMDJ_CHECK(fx_after.dequeued_filter_controls ==
+               fx_before.dequeued_filter_controls);
+    LMDJ_CHECK(pattern_after.current_generation == pattern_before.current_generation);
+    LMDJ_CHECK(pattern_after.pending_generation == pattern_before.pending_generation);
+    LMDJ_CHECK(pattern_after.accepted_publications ==
+               pattern_before.accepted_publications);
+    LMDJ_CHECK(pattern_after.applied_publications == pattern_before.applied_publications);
+    LMDJ_CHECK(engine.current_pattern_id() == current_pattern);
+    LMDJ_CHECK(filter_after.accepted_sequence == filter_before.accepted_sequence);
+    LMDJ_CHECK(filter_after.applied.sequence == filter_before.applied.sequence);
+    LMDJ_CHECK(filter_after.applied.epoch == filter_before.applied.epoch);
+    check_filter_state_unchanged(filter_before.accepted, filter_after.accepted);
+    check_filter_state_unchanged(filter_before.applied.state, filter_after.applied.state);
+
+    // The real adapter still admits legacy Pad/Pattern/FX on the rejected ID.
+    LMDJ_CHECK(adapter.replay_controller->begin(
+        ReplayId{kReplay}, replay_projection()).has_value());
+    adapter.service();
+    render(engine, 128);
+    LMDJ_CHECK(engine.telemetry().enqueued_events > before.enqueued_events);
+    LMDJ_CHECK(engine.telemetry().started_voices > before.started_voices);
+    LMDJ_CHECK(engine.pattern_telemetry().accepted_publications >
+               pattern_before.accepted_publications);
+    LMDJ_CHECK(engine.master_fx_telemetry().enqueued_gestures >
+               fx_before.enqueued_gestures);
+  }
+}
+
+void test_rejected_same_id_profile_preserves_engine_replay_anchor() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  LMDJ_CHECK(adapter.replay_controller->begin(
+      ReplayId{kReplay}, delayed_pad_replay_projection()).has_value());
+  render(engine, 1);
+  adapter.service();
+  const auto before = adapter.replay_controller->status(ReplayId{kReplay}).value();
+  auto unsupported = *pad_only_replay_projection(240);
+  unsupported.boundaries.front().event.input_sequence = 1;
+  const auto rejected = adapter.replay_controller->begin(
+      ReplayId{kReplay},
+      std::make_shared<const PerformanceReplayProjection>(unsupported));
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().details.at("reason") ==
+             "performance_replay_profile_unsupported");
+  const auto after = adapter.replay_controller->status(ReplayId{kReplay}).value();
+  LMDJ_CHECK(after.state == before.state);
+  LMDJ_CHECK(after.event_cursor == before.event_cursor);
+  LMDJ_CHECK(after.resolved_revision == before.resolved_revision);
+  LMDJ_CHECK(engine.telemetry().enqueued_events == 0);
+  render(engine, 48);
+  adapter.service();
+  LMDJ_CHECK(adapter.replay_controller->status(ReplayId{kReplay})
+                 .value().event_cursor == 0);
+  render(engine, 1);
+  adapter.service();
+  LMDJ_CHECK(adapter.replay_controller->status(ReplayId{kReplay})
+                 .value().event_cursor == 1);
+  LMDJ_CHECK(engine.telemetry().enqueued_events == 1);
+}
+
 }  // namespace
 
 // The live gesture sink is the audible half of P10-D7: the same FxGesture the
@@ -1120,6 +1305,8 @@ int main() {
     test_reset_queue_pressure_continues_without_duplicate_gestures();
     test_explicit_stop_waits_for_neutral_reset_confirmation();
     test_replay_stop_after_quiescent_engine_stop_stays_stopped();
+    test_unsupported_replay_profiles_have_no_native_effects();
+    test_rejected_same_id_profile_preserves_engine_replay_anchor();
     test_live_gesture_sink_reaches_the_running_master_bus();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

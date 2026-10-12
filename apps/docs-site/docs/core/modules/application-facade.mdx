@@ -28,6 +28,35 @@ owner 仍在的记录返回 `sequence_admission_unresolved`，保留原始 seale
 candidates 经同一转换器 finalize（未释放按压止于 attack tail 的 240-tick 默认
 形态）后并入恢复投影，apply 直接落地表演者已听到的 take，不再永久拒绝。
 
+### Performance Replay profile admission
+
+P0 的数据能力允许 Project I/O 读取、验证并由 Cooker 投影带
+`initial_live_state` 的 Performance，包括零事件的录制；这不代表当前 Runtime
+已经能够播放该 profile。当前 Replay 只支持 legacy profile：没有 header，
+每个事件都没有 `input_sequence`，且 payload 只属于锁定的 0–6 事件词汇
+（Pad、Pattern、FX engage/move/release、HOLD on/off）。v5 Project 中的 legacy
+Performance 仍可 Replay。
+
+Application 对尚未登记的 Replay 保留 request/identity/playing-exclusion 与原
+loader 错误优先级，在正常 `ProjectStore::load` 找到目标后检查整个 Performance；
+Reference controller 对 direct C++ projection 检查 header 和全部 boundaries。
+存在 header、任何序号（含 0）、`FilterChange`、`PadGatesSet` 或未来未支持的
+payload 时，返回既有 `INVALID_ARGUMENT` failure envelope，诊断
+`details.reason=performance_replay_profile_unsupported`。拒绝发生在新增 Replay
+identity、清除已完成 active Replay bookkeeping 和 native sink effect 之前，
+不调用 begin 后再 Stop。Engine adapter 与 headless bridge 复用 Reference fence。
+
+已经登记的 Application exact retry 继续查询原 legacy immutable projection/status，
+不重新加载之后修改或删除的 Truth；direct controller 对同 ID 携带不支持 profile
+的调用仍拒绝并保留原状态。legacy 顺序、固定 revision/BPM、排他、neutral reset
+及 pending/error 的显式重试语义保持。正常 load 的 history acquire、writer lease、
+recovery 与 staging 维护仍执行；上述 admission 边界限定于 Replay/Performance
+状态、bookkeeping 和 native effects，不承诺整个 Project bundle 零维护副作用。
+
+完整 P1 的 header 起点 apply ACK、typed LP/HP/BP、64-Pad Mute/Solo、录制与
+binding/reset 能力仍待实际前置交付和实施。该 fence 只拒绝未支持的播放，
+不表示完整 P1、设备听感、Core full/stress 或最终 combined proof 已通过。
+
 ## 3. 所有权与依赖
 
 现有 Sequence 的 Pad 事件计算由内部 `PatternEventReducer` 统一实现：
