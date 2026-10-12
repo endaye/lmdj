@@ -42,6 +42,16 @@ PERFORMANCE_OPERATIONS = {
 }
 assert len(PERFORMANCE_OPERATIONS) == 24
 
+# Live controls are a Facade/Bridge surface; the Native instrument keeps its
+# separate Performance inventory. Keep an explicit oracle so a missing or
+# wrong-kind live registration cannot hide behind agreement between readers.
+FACADE_PERFORMANCE_OPERATIONS = {
+    **PERFORMANCE_OPERATIONS,
+    "performance.live.control": "command",
+    "performance.live.status": "query",
+}
+assert len(FACADE_PERFORMANCE_OPERATIONS) == 26
+
 # Stage 11's Sound Set surface is a second Facade inventory the Native Host
 # forwards, kept apart from the Performance one above so P10-D20 stays exactly
 # P10-D20. The Facade's `dispatch()` routes an unlisted operation name to
@@ -273,11 +283,17 @@ def cli_operation_kind_contract(
     workspace: Path,
     assembly: Path,
 ) -> None:
-    assert registered_facade_performance_operations() == PERFORMANCE_OPERATIONS
+    assert (
+        registered_facade_performance_operations() == FACADE_PERFORMANCE_OPERATIONS
+    ), (
+        "why: Facade Performance registrations differ from their host contract; "
+        "remedy: reconcile Facade names/kinds with the explicit Facade inventory, "
+        "preserving the separate Native inventory"
+    )
     assert registered_native_performance_operations() == PERFORMANCE_OPERATIONS
     assert registered_facade_soundset_operations() == FACADE_SOUNDSET_OPERATIONS
     assert registered_native_soundset_operations() == SOUNDSET_OPERATIONS
-    for operation, surface in PERFORMANCE_OPERATIONS.items():
+    for operation, surface in FACADE_PERFORMANCE_OPERATIONS.items():
         request = {"operation": operation}
         response = cli_request(cli, workspace, assembly, surface, request)
         assert_error_envelope(response)
