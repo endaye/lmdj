@@ -270,9 +270,24 @@ export interface PatternInputAdmission {
   readonly ticket: PatternInputTicket;
   readonly status: PatternInputStatus;
 }
+/** Local Session lifecycle; these waits introduce no Native RPC or wire DTO. */
+export interface RuntimeLifecycleSession {
+  start(): Promise<boolean>;
+  /** True only for a clean normal close; a fatal close still returns false. */
+  close(): Promise<boolean>;
+  /**
+   * Observes this Session's already initiated cleanup. True requires actual
+   * owner/backend retirement and SDK teardown. Failure is false; unknown
+   * retained debt remains pending. Before cleanup begins returns false and
+   * starts no owner action. Older healthy normal closure and a known empty,
+   * never-loaded Session retain their separate closure contracts.
+   */
+  waitForTerminalCleanup(): Promise<boolean>;
+}
+
 /** Same already-running frozen Session; never a second input/controller owner. */
 export interface RuntimeSessionNamespace {
-  readonly session: PatternTransportRuntimeSession & MonitorOutputSession &
+  readonly session: RuntimeLifecycleSession & PatternTransportRuntimeSession & MonitorOutputSession &
     WebAudioClockSession & WebPerformanceCaptureSession & Readonly<{
     /** Opaque local reference; exact hold correlation requires the negotiated input profile. */
     trigger(slot: number, velocity: number, source?: "pointer" | "keyboard" | "midi", gestureKey?: object):

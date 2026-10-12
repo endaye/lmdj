@@ -1010,3 +1010,40 @@ existing prompt false response and independent continuation. This private fix
 adds no public API and cannot by itself certify replacement for that retained
 case. Strict intermediate and final owning assertions, rejected closure and the
 original packaged recovery remain required evidence.
+
+
+## Positive cleanup and Creator replacement eligibility
+
+`waitForTerminalCleanup(): Promise<boolean>` observes the same exact Session's
+already initiated terminal cleanup. Bind its one completion Promise before
+calling a possibly reentrant terminator or pressed-state/diagnostic callback. Before initiation the observer reports
+false and performs no lifecycle action. Cleanup rejection returns false. Once
+initiated, genuine
+unknown owner/backend work remains pending; rejection or unproven closure is
+ineligible. True requires original retained consumers, actual full Native owner
+retirement, backend closure and SDK teardown. It does not change close's original
+false/fatal outcome, error priority, physical receipts or deadlines. Explicit
+never-loaded absence and legacy healthy normal close have separate contracts;
+missing capability is not a full-owner ACK.
+
+A failed loader cannot infer its partial owner from changed global publication.
+The creating invocation registers its local Host through the original private
+Module configuration before publication; the SDK validates that exact Module.
+Default packaged loads reserve shared Module injection per window before any
+await, refusing overlap until the original invocation settles. This reservation
+does not replace actual partial-owner retirement or extend initialization budgets.
+
+Creator replacement first settles its original application shutdown obligations,
+then invokes the one cached close and observes this exact-session positive
+barrier. Both automatic and manual factories require strict true and a current
+generation. Legacy sessions without the observer are eligible only after a
+genuine clean close true. A rejected application barrier remains rejection even
+if an SDK barrier is positive; neither catch nor unregister turns it into
+permission. Pending or failed eligibility retains the original fatal display
+and ownership, without extra factories or automatic attempts. Yield/pagehide
+retain their original close boolean and invalidate late factory callbacks.
+
+This additive API owes Web Runtime Platform MINOR and Creator PATCH at the next
+coordinated version settlement; current main's existing identity is not a new
+allocation. Complete SDK/controller/type/Portal verification, unchanged packaged
+recovery and original full Creator proof remain distinct from physical acceptance.

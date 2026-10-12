@@ -426,3 +426,60 @@ test("terminal worker waits for native completion after a positive physical drai
   assert.equal(fixture.workerCloses, 1);
   assert.equal(fixture.timers.length, 0);
 });
+
+function actualBrowserRuntimePublication({Module, window, crypto}) {
+  const channels = [];
+  class BroadcastChannel {
+    constructor(name) { this.name = name; channels.push(this); }
+    addEventListener() {}
+    close() {}
+  }
+  runInNewContext(readFileSync(new URL("../src/web-runtime-pre.js", import.meta.url), "utf8"), {
+    ENVIRONMENT_IS_PTHREAD: false,
+    Module, window, crypto, BroadcastChannel, TextEncoder, TextDecoder,
+  }, {filename: "web-runtime-pre.js"});
+  return channels;
+}
+
+test("actual Host publisher reports its local owner to its original Module before global publication", () => {
+  const priorHost = {prior: true};
+  const foreignHost = {foreign: true};
+  const foreignModule = {foreign: true};
+  let callbackHost;
+  let callbackModule;
+  let callbackCalls = 0;
+  const window = {lmdjWebRuntimeHost: priorHost, Worker: class {}};
+  const Module = {lmdjRuntimeOwnerCreated(host, producerModule) {
+    callbackCalls += 1;
+    callbackHost = host;
+    callbackModule = producerModule;
+    assert.equal(window.lmdjWebRuntimeHost, priorHost, "registration precedes global publication");
+    assert.equal(host.transport.terminalOwnerReleased, false,
+      "creating a Host is no Native retirement or quiescence ACK");
+    window.Module = foreignModule;
+    window.lmdjWebRuntimeHost = foreignHost;
+  }};
+  window.Module = Module;
+  const channels = actualBrowserRuntimePublication({Module, window,
+    crypto: {randomUUID: () => "00000000-0000-4000-8000-000000000001"}});
+  assert.equal(callbackCalls, 1);
+  assert.equal(callbackModule, Module, "the actual producer reports its captured Module, not a global replacement");
+  assert.equal(window.Module, foreignModule);
+  assert.equal(window.lmdjWebRuntimeHost, callbackHost);
+  assert.notEqual(callbackHost, priorHost);
+  assert.notEqual(callbackHost, foreignHost);
+  assert.equal(callbackHost.runtimeInitialized, false);
+  assert.equal(callbackHost.transport.terminalOwnerReleased, false);
+  assert.equal(channels.length, 1);
+  assert.equal(Module.lmdjRuntimeOwnerCreated, undefined, "the configuration callback is captured once locally");
+});
+
+test("actual Host publisher preserves standalone behavior without an invocation registration hook", () => {
+  const priorHost = {};
+  const window = {lmdjWebRuntimeHost: priorHost, Worker: class {}};
+  actualBrowserRuntimePublication({Module: {}, window,
+    crypto: {randomUUID: () => "00000000-0000-4000-8000-000000000002"}});
+  assert.notEqual(window.lmdjWebRuntimeHost, priorHost);
+  assert.equal(window.lmdjWebRuntimeHost.runtimeInitialized, false);
+  assert.equal(window.lmdjWebRuntimeHost.transport.terminalOwnerReleased, false);
+});

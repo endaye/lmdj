@@ -538,3 +538,23 @@ Native transport 已 sealed 仍可能等待真实 owner 与 AudioContext backend
 Promise，保留原 false/失败结果。存在未知 retained Pattern 债务时仍保留原 prompt
 false 和独立结算；不能把 sealed 或单个 Promise 返回当作完整物理释放。私有修复
 不新增公开 API；原 packaged replacement 和完整 Creator 需各自实际运行验收。
+
+
+### S6 replacement 的正向清理屏障
+
+Session 的本地消费 API `waitForTerminalCleanup(): Promise<boolean>` 观察
+同一实例已经发起的真实 terminal cleanup，不发起第二次 Stop 或 terminator。
+只有原 caller/input 消费、Native full-owner 释放、真实后台关闭及 SDK 节点与
+监听器清理全部完成才返回 true；未知工作继续等待，失败不授予替换资格。
+清理尚未发起或已拒绝时返回 false，不因观察而启动清理；绑定完成 Promise
+先于可能重入的 terminator、按键状态与诊断回调。原 close 的 false/fatal 结果与最早错误仍保留，
+缺少 getter、transport sealed 或自定义 terminator 已 resolve 都不是释放回执。
+
+部分加载失败只清理原调用通过私有 Module 配置登记的本地 Host；变化的全局
+Host 不证明归属。实际 pre-js 在发布前通知原配置，SDK 核对同一 Module。默认
+packaged loader 在首次 await 前串行保留同一窗口的 Module 注入，重叠加载
+拒绝，直到原调用真实结束才释放保留；这仍不是物理 owner 的释放回执。
+
+此新增 API 另欠下一协调结算的 Web Runtime Platform MINOR；Creator 消费
+修复欠 PATCH。本段不分配身份，当前 packaged recovery、完整 Creator 与
+真实 OPFS/PCM/物理验收仍需各自原始旅程证据。

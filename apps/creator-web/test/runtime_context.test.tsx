@@ -20,6 +20,8 @@ function Probe() {
     <output aria-label="phase">{runtime.phase}</output>
     <output aria-label="host-state">{runtime.hostState}</output>
     <output aria-label="recovery-probe">{String(runtime.recoveryProbeReady)}</output>
+    <output aria-label="error-code">{runtime.errorCode}</output>
+    <output aria-label="issue-details">{JSON.stringify(runtime.issue?.details)}</output>
     <button type="button" onClick={runtime.retryRuntime}>Retry runtime</button>
   </>;
 }
@@ -546,4 +548,338 @@ test("retry after a yield starts a fresh Session", async () => {
   await waitFor(() => expect(second.starts()).toBe(1));
   await screen.findByText("ready");
   expect(first.closes()).toBe(1);
+});
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((fulfill, refuse) => {
+    resolve = fulfill;
+    reject = refuse;
+  });
+  return {promise, resolve, reject};
+}
+
+type ReplacementMode = "automatic" | "manual";
+const ORIGINAL_FAILURE_DETAILS = {reason: "original-owner-still-held"};
+
+function requestReplacement(first: ReturnType<typeof sessionFixture>, mode: ReplacementMode) {
+  act(() => first.emitHost({
+    state: mode === "automatic" ? "restart-required" : "failed",
+    errorCode: "HOST_TIMEOUT",
+    errorDetails: ORIGINAL_FAILURE_DETAILS,
+  }));
+  if (mode === "manual") {
+    fireEvent.click(screen.getByRole("button", {name: "Retry runtime"}));
+  }
+}
+
+function expectOriginalFailure(mode: ReplacementMode) {
+  expect(screen.getByLabelText("phase").textContent).toBe(
+    mode === "automatic" ? "restart-required" : "failed",
+  );
+  expect(screen.getByLabelText("error-code").textContent).toBe("HOST_TIMEOUT");
+  expect(screen.getByLabelText("issue-details").textContent).toBe(
+    JSON.stringify(ORIGINAL_FAILURE_DETAILS),
+  );
+}
+
+for (const mode of ["automatic", "manual"] as const) {
+  test(`${mode} replacement awaits the original application barrier, close and positive cleanup`, async () => {
+    const first = sessionFixture();
+    const second = sessionFixture();
+    const barrierGate = deferred<void>();
+    const closeGate = deferred<boolean>();
+    const cleanupGate = deferred<boolean>();
+    const order: string[] = [];
+    const barrier = vi.fn(async () => {
+      order.push("barrier:start");
+      await barrierGate.promise;
+      order.push("barrier:end");
+    });
+    first.session.close = vi.fn(async () => {
+      order.push("close:start");
+      const result = await closeGate.promise;
+      order.push("close:end");
+      // A cleanup notification must not erase the first fatal UI.
+      first.emit("closed", null);
+      return result;
+    });
+    const waiter = vi.fn(() => {
+      order.push("cleanup:wait");
+      return cleanupGate.promise;
+    });
+    first.session.waitForTerminalCleanup = waiter;
+    const sessions = [first.session, second.session];
+    let creations = 0;
+    const factory = vi.fn(() => {
+      order.push(`create:${++creations}`);
+      return sessions[creations - 1]!;
+    });
+    const rendered = render(<RuntimeProvider factory={factory}>
+      <ShutdownBarrierProbe barrier={barrier} />
+    </RuntimeProvider>);
+    await screen.findByText("ready");
+    order.splice(0);
+    requestReplacement(first, mode);
+    await waitFor(() => expect(barrier).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["barrier:start"]);
+    expect(first.session.close).not.toHaveBeenCalled();
+    expect(waiter).not.toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectOriginalFailure(mode);
+
+    await act(async () => { barrierGate.resolve(undefined); await barrierGate.promise; });
+    await waitFor(() => expect(first.session.close).toHaveBeenCalledTimes(1));
+    expect(waiter).not.toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectOriginalFailure(mode);
+    await act(async () => { closeGate.resolve(false); await closeGate.promise; });
+    await waitFor(() => expect(waiter).toHaveBeenCalledTimes(1));
+    expect(waiter.mock.contexts[0]).toBe(first.session);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectOriginalFailure(mode);
+    await act(async () => { cleanupGate.resolve(true); await cleanupGate.promise; });
+    await waitFor(() => expect(second.starts()).toBe(1));
+    await screen.findByText("ready");
+    expect(order).toEqual([
+      "barrier:start", "barrier:end", "close:start", "close:end", "cleanup:wait", "create:2",
+    ]);
+    expect(factory).toHaveBeenCalledTimes(2);
+    rendered.unmount();
+    await waitFor(() => expect(second.closes()).toBe(1));
+    expect(first.session.close).toHaveBeenCalledTimes(1);
+    expect(waiter).toHaveBeenCalledTimes(1);
+  });
+
+  for (const result of ["false", "reject", "undefined"] as const) {
+    test(`${mode} replacement refuses ${result} cleanup even after a true close`, async () => {
+      const first = sessionFixture();
+      const second = sessionFixture();
+      const cleanupGate = deferred<boolean>();
+      const close = vi.fn(async () => true);
+      const waiter = vi.fn(() => cleanupGate.promise);
+      first.session.close = close;
+      first.session.waitForTerminalCleanup = waiter;
+      const sessions = [first.session, second.session];
+      let creations = 0;
+      const factory = vi.fn(() => sessions[creations++]!);
+      render(<RuntimeProvider factory={factory}><Probe /></RuntimeProvider>);
+      await screen.findByText("ready");
+      requestReplacement(first, mode);
+      await waitFor(() => expect(waiter).toHaveBeenCalledTimes(1));
+      expect(factory).toHaveBeenCalledTimes(1);
+      expectOriginalFailure(mode);
+      await act(async () => {
+        if (result === "reject") cleanupGate.reject(new Error("actual cleanup rejected"));
+        else cleanupGate.resolve(result === "false" ? false : undefined as unknown as boolean);
+        await cleanupGate.promise.catch(() => {});
+      });
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(second.starts()).toBe(0);
+      expect(close).toHaveBeenCalledTimes(1);
+      expectOriginalFailure(mode);
+    });
+
+    test(`${mode} legacy replacement refuses a ${result} close without a cleanup waiter`, async () => {
+      const first = sessionFixture();
+      const second = sessionFixture();
+      const closeGate = deferred<boolean>();
+      const close = vi.fn(() => closeGate.promise);
+      first.session.close = close;
+      expect(first.session.waitForTerminalCleanup).toBeUndefined();
+      const sessions = [first.session, second.session];
+      let creations = 0;
+      const factory = vi.fn(() => sessions[creations++]!);
+      render(<RuntimeProvider factory={factory}><Probe /></RuntimeProvider>);
+      await screen.findByText("ready");
+      requestReplacement(first, mode);
+      await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        if (result === "reject") closeGate.reject(new Error("original close rejected"));
+        else closeGate.resolve(result === "false" ? false : undefined as unknown as boolean);
+        await closeGate.promise.catch(() => {});
+      });
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(second.starts()).toBe(0);
+      expectOriginalFailure(mode);
+    });
+  }
+}
+
+test("a rejected registered application barrier prevents automatic factory despite a positive SDK waiter", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const gate = deferred<void>();
+  const barrier = vi.fn(() => gate.promise);
+  const close = vi.fn(async () => true);
+  const waiter = vi.fn(async () => true);
+  first.session.close = close;
+  first.session.waitForTerminalCleanup = waiter;
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  render(<RuntimeProvider factory={factory}><ShutdownBarrierProbe barrier={barrier} /></RuntimeProvider>);
+  await screen.findByText("ready");
+  requestReplacement(first, "automatic");
+  await waitFor(() => expect(barrier).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    gate.reject(new Error("original persistence failed"));
+    await gate.promise.catch(() => {});
+  });
+  expect(close).not.toHaveBeenCalled();
+  expect(waiter).not.toHaveBeenCalled();
+  expect(factory).toHaveBeenCalledTimes(1);
+  expect(second.starts()).toBe(0);
+  expectOriginalFailure("automatic");
+});
+
+test("unregister observes but retains the original rejected persistence barrier for manual retry", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const gate = deferred<void>();
+  const barrier = vi.fn(() => gate.promise);
+  const close = vi.fn(async () => true);
+  const waiter = vi.fn(async () => true);
+  first.session.close = close;
+  first.session.waitForTerminalCleanup = waiter;
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  const rendered = render(<RuntimeProvider factory={factory}>
+    <ShutdownBarrierProbe barrier={barrier} />
+  </RuntimeProvider>);
+  await screen.findByText("ready");
+  // Remove only the owner of this barrier, keeping the same RuntimeProvider.
+  rendered.rerender(<RuntimeProvider factory={factory}><Probe /></RuntimeProvider>);
+  await waitFor(() => expect(barrier).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    gate.reject(new Error("original unregistered persistence failed"));
+    await gate.promise.catch(() => {});
+  });
+  requestReplacement(first, "manual");
+  await act(async () => {});
+  expect(barrier).toHaveBeenCalledTimes(1);
+  expect(close).not.toHaveBeenCalled();
+  expect(waiter).not.toHaveBeenCalled();
+  expect(factory).toHaveBeenCalledTimes(1);
+  expect(second.starts()).toBe(0);
+  expectOriginalFailure("manual");
+});
+
+test("a rejected original close cannot be overridden by a positive SDK waiter", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const gate = deferred<boolean>();
+  const close = vi.fn(() => gate.promise);
+  const waiter = vi.fn(async () => true);
+  first.session.close = close;
+  first.session.waitForTerminalCleanup = waiter;
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  render(<RuntimeProvider factory={factory}><Probe /></RuntimeProvider>);
+  await screen.findByText("ready");
+  requestReplacement(first, "manual");
+  await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    gate.reject(new Error("original close rejected"));
+    await gate.promise.catch(() => {});
+  });
+  expect(waiter).not.toHaveBeenCalled();
+  expect(factory).toHaveBeenCalledTimes(1);
+  expectOriginalFailure("manual");
+});
+
+test("mixed automatic and duplicate manual retries share one close and one exact-session cleanup wait", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const gate = deferred<boolean>();
+  const close = vi.fn(async () => false);
+  const waiter = vi.fn(() => gate.promise);
+  first.session.close = close;
+  first.session.waitForTerminalCleanup = waiter;
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  render(<RuntimeProvider factory={factory}><Probe /></RuntimeProvider>);
+  await screen.findByText("ready");
+  requestReplacement(first, "automatic");
+  await waitFor(() => expect(waiter).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", {name: "Retry runtime"}));
+  fireEvent.click(screen.getByRole("button", {name: "Retry runtime"}));
+  act(() => first.emitCapturedHost({state: "closed", errorCode: null, errorDetails: {}}));
+  expect(factory).toHaveBeenCalledTimes(1);
+  expectOriginalFailure("automatic");
+  await act(async () => { gate.resolve(true); await gate.promise; });
+  await waitFor(() => expect(second.starts()).toBe(1));
+  await screen.findByText("ready");
+  expect(factory).toHaveBeenCalledTimes(2);
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(waiter).toHaveBeenCalledTimes(1);
+  act(() => first.emitCapturedHost({state: "failed", errorCode: "INTERNAL_ERROR", errorDetails: {}}));
+  expect(screen.getByLabelText("phase").textContent).toBe("ready");
+});
+
+for (const retirement of ["yield", "pagehide", "unmount"] as const) {
+  test(`${retirement} invalidates an in-flight positive replacement without a factory`, async () => {
+    const first = sessionFixture();
+    const second = sessionFixture();
+    const gate = deferred<boolean>();
+    const close = vi.fn(async () => false);
+    const waiter = vi.fn(() => gate.promise);
+    first.session.close = close;
+    first.session.waitForTerminalCleanup = waiter;
+    const sessions = [first.session, second.session];
+    let creations = 0;
+    const factory = vi.fn(() => sessions[creations++]!);
+    const rendered = render(<RuntimeProvider factory={factory}><YieldProbe /></RuntimeProvider>);
+    await screen.findByText("ready");
+    requestReplacement(first, retirement === "pagehide" ? "manual" : "automatic");
+    await waitFor(() => expect(waiter).toHaveBeenCalledTimes(1));
+    if (retirement === "yield") {
+      document.title = "";
+      fireEvent.click(screen.getByRole("button", {name: "Yield runtime"}));
+      await waitFor(() => expect(document.title).toBe("yield:false"));
+    } else if (retirement === "pagehide") {
+      act(() => window.dispatchEvent(new Event("pagehide")));
+    } else {
+      rendered.unmount();
+    }
+    await act(async () => { gate.resolve(true); await gate.promise; });
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(second.starts()).toBe(0);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(waiter).toHaveBeenCalledTimes(1);
+    if (retirement !== "unmount") expect(screen.getByLabelText("phase").textContent).toBe("closed");
+  });
+}
+
+test("a new Session's negative cleanup cannot reuse the previous Session's eligibility", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const third = sessionFixture();
+  const firstWait = vi.fn(async () => true);
+  const secondGate = deferred<boolean>();
+  const secondWait = vi.fn(() => secondGate.promise);
+  first.session.close = vi.fn(async () => false);
+  first.session.waitForTerminalCleanup = firstWait;
+  second.session.close = vi.fn(async () => false);
+  second.session.waitForTerminalCleanup = secondWait;
+  const sessions = [first.session, second.session, third.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  render(<RuntimeProvider factory={factory}><Probe /></RuntimeProvider>);
+  await screen.findByText("ready");
+  requestReplacement(first, "automatic");
+  await waitFor(() => expect(second.starts()).toBe(1));
+  await screen.findByText("ready");
+  requestReplacement(second, "manual");
+  await waitFor(() => expect(secondWait).toHaveBeenCalledTimes(1));
+  await act(async () => { secondGate.resolve(false); await secondGate.promise; });
+  expect(firstWait).toHaveBeenCalledTimes(1);
+  expect(factory).toHaveBeenCalledTimes(2);
+  expect(third.starts()).toBe(0);
+  expectOriginalFailure("manual");
 });

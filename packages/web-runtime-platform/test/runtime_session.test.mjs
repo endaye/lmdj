@@ -33,6 +33,7 @@ const API = [
   "clearSamplePreview",
   "clearPatternSlot",
   "close",
+  "waitForTerminalCleanup",
   "commitPerformanceResample",
   "createPattern",
   "editPatternEvents",
@@ -281,8 +282,13 @@ function fixture({
   createPerformanceMasterTap,
   connectAudioWorkletDirect,
   preflight,
+  beforeRuntimeLoad,
+  beforeManifest,
+  useDefaultRuntimeLoader = false,
+  verifiedManifest,
   now,
   inputOwnership,
+  onPressedChange,
   soundsetCatalog,
   manifestSource = {
     resourceLimits: RESOURCE_LIMITS,
@@ -362,7 +368,10 @@ function fixture({
       productBuild: TEST_PRODUCT_BUILD,
       protocolVersion: 1,
     },
-    inputConfiguration,
+    inputConfiguration: {
+      ...inputConfiguration,
+      ...(onPressedChange === undefined ? {} : {onPressedChange}),
+    },
     inputOwnership,
     ...(patternTransport === undefined ? {} : {patternTransport}),
     soundsetCatalog,
@@ -372,7 +381,8 @@ function fixture({
         ? {}
         : {capabilityProbeTimeoutMs}),
       createAudioContext: () => context,
-      loadRuntime: async () => {
+      ...(useDefaultRuntimeLoader ? {} : {loadRuntime: async (_manifest, invocation) => {
+        if (beforeRuntimeLoad !== undefined) await beforeRuntimeLoad(invocation);
         const loaded = {
         registerAudioContext: () => 1,
         registerAudioNode: registerAudioNode ?? (() => 2),
@@ -391,9 +401,10 @@ function fixture({
           ? {}
           : {transport: runtimeTransport}),
         };
+        invocation?.onRuntimeOwnerCreated?.(loaded);
         if (publishRuntime) browserWindow.lmdjWebRuntimeHost = loaded;
         return loaded;
-      },
+      }}),
       preflight: preflight ?? (async () => {}),
       ...(createPerformanceMasterTap === undefined
         ? {}
@@ -403,13 +414,16 @@ function fixture({
         await runtimeTerminator?.(...arguments_);
       },
       transport: sessionTransport ?? transport,
-      verifyManifest: async () => ({
+      verifyManifest: async () => {
+        if (beforeManifest !== undefined) await beforeManifest();
+        return verifiedManifest ?? {
         host_id: "web-runtime-host",
         host_version: "1.2.15",
         platform_version: "0.3.6",
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
-      }),
+        };
+      },
       ...(now === undefined ? {} : {now}),
       ...(timers === undefined ? {} : {timers}),
     },
@@ -10386,4 +10400,471 @@ test("profile recovery actual voice capacity fails with its original code and co
   assert.deepEqual(outcomes.map(value => value.outcome), ["voice_capacity"], "actual failure outcome is not recovery success");
   await finishFailedProfileOwner(f);
   assert.equal(f.inputConsumed.size, 2);
+});
+
+// Replacement eligibility is a local observation of the original cleanup,
+// independent of the public fatal close(false) result and of Native tickets.
+test("terminal cleanup waiter before initiation is false and starts no work", async () => {
+  const sent = [];
+  const f = fixture({send: async (envelope) => {
+    sent.push(envelope); return success(envelope, defaultResult(envelope.operation));
+  }});
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(f.terminated(), 0);
+  assert.equal(sent.length, 0);
+  assert.equal(await f.session.start(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(f.terminated(), 0);
+  assert.equal(sent.length, 0);
+  assert.equal(await f.session.close(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true,
+    "the separately supported older normal-close contract remains compatible");
+});
+
+for (const phase of ["manifest", "capability", "preflight"]) {
+  test(`closing while ${phase} is pending cannot load or publish a late owner`, async () => {
+    let releasePhase;
+    const phasePending = new Promise((resolve) => { releasePhase = resolve; });
+    let entered = false;
+    let loads = 0;
+    const browserWindow = {};
+    const hold = async () => { entered = true; await phasePending; };
+    const f = fixture({browserWindow, publishRuntime: true,
+      ...(phase === "manifest" ? {beforeManifest: hold} :
+        phase === "capability" ? {capabilities: {secureContext: hold}} : {preflight: hold}),
+      beforeRuntimeLoad: () => { loads += 1; }});
+    const starting = f.session.start();
+    for (let turn = 0; turn < 40 && !entered; ++turn) await drainTasks();
+    assert.equal(entered, true);
+    assert.equal(await f.session.close(), true);
+    assert.equal(await f.session.waitForTerminalCleanup(), true);
+    assert.equal(loads, 0);
+    assert.equal(browserWindow.lmdjWebRuntimeHost, undefined);
+    releasePhase();
+    assert.equal(await starting, false, "the original closed bootstrap cannot resume into a new owner");
+    assert.equal(loads, 0, "far-side original loader was never invoked");
+    assert.equal(browserWindow.lmdjWebRuntimeHost, undefined);
+    assert.equal(f.session.diagnostics().state, "closed");
+    assert.equal(f.terminated(), 1);
+  });
+}
+
+test("cleanup waits an already invoked loader and retires its actual late published owner", async () => {
+  let releaseLoad;
+  const loadPending = new Promise((resolve) => { releaseLoad = resolve; });
+  let entered = false;
+  let releaseOwner;
+  const ownerPending = new Promise((resolve) => { releaseOwner = resolve; });
+  let sealed = false;
+  let fullReceipt = false;
+  const ownerTransport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return fullReceipt; },
+    async send(envelope) { return success(envelope, defaultResult(envelope.operation)); },
+  };
+  const browserWindow = {};
+  let terminatedRuntime = null;
+  const f = fixture({browserWindow, publishRuntime: true, sessionTransport: ownerTransport,
+    runtimeTransport: ownerTransport,
+    beforeRuntimeLoad: async () => { entered = true; await loadPending; },
+    runtimeTerminator: async ({runtime}) => {
+      terminatedRuntime = runtime;
+      sealed = true;
+      await ownerPending;
+      fullReceipt = true;
+    }});
+  const starting = f.session.start();
+  for (let turn = 0; turn < 40 && !entered; ++turn) await drainTasks();
+  assert.equal(entered, true);
+  let closed = null;
+  const closing = f.session.close().then((value) => { closed = value; });
+  await drainTasks();
+  await drainTasks();
+  let eligible = null;
+  const waiting = f.session.waitForTerminalCleanup().then((value) => { eligible = value; });
+  await drainTasks();
+  assert.equal(closed, null);
+  assert.equal(eligible, null, "an invoked loader's null result is not never-loaded evidence");
+  assert.equal(f.terminated(), 0, "the actual late owner has not been handed back yet");
+  releaseLoad();
+  assert.equal(await starting, false);
+  for (let turn = 0; turn < 40 && terminatedRuntime === null; ++turn) await drainTasks();
+  assert.equal(terminatedRuntime, browserWindow.lmdjWebRuntimeHost);
+  assert.ok(terminatedRuntime);
+  assert.equal(terminatedRuntime.session, undefined, "the retired bootstrap must not publish a live SDK namespace");
+  assert.equal(fullReceipt, false);
+  assert.equal(eligible, null);
+  releaseOwner();
+  for (let turn = 0; turn < 40 && (closed === null || eligible === null); ++turn) await drainTasks();
+  assert.notEqual(closed, null);
+  assert.notEqual(eligible, null);
+  await Promise.all([closing, waiting]);
+  assert.equal(closed, true);
+  assert.equal(eligible, true);
+  assert.equal(f.terminated(), 1);
+});
+
+test("attempted loader rejection cannot obtain replacement permission from absent runtime", async () => {
+  const loaderError = Object.assign(new Error("actual loader failed"), {code: "IO_ERROR"});
+  const f = fixture({beforeRuntimeLoad: () => { throw loaderError; }});
+  assert.equal(await f.session.start(), false);
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1, "original safety and actual cleanup have begun before observing its result");
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+});
+
+test("fatal waiter retains physical input and count debt through genuine consume then Native and backend closure", async (t) => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  t.after(() => f.cancelTimers());
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  let backendStarted = 0;
+  const actualClose = f.context.close.bind(f.context);
+  f.context.close = async () => { backendStarted += 1; await backendPending; return actualClose(); };
+  await activateInputProfile(f);
+  f.state.completeInput = (payload) => payload.kind === "press" || f.state.inputComplete;
+  assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, 1);
+  assert.deepEqual([...f.inputConsumed], ["1"]);
+  assert.equal(f.physicalOwners.size, 1);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2 && f.state.terminalStarts === 1);
+  assert.equal(await f.session.close(), false, "retained caller debt still returns prompt fatal false");
+  const originalWait = f.session.waitForTerminalCleanup();
+  assert.equal(f.session.waitForTerminalCleanup(), originalWait, "duplicate callers observe one actual cleanup");
+  let outcome = null;
+  void originalWait.then((value) => { outcome = value; });
+  await f.tick();
+  assert.equal(outcome, null);
+  assert.equal(f.physicalOwners.size, 1);
+  assert.equal(f.state.countConsumed, false);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(backendStarted, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.state.countConsumed, false, "physical Release does not consume the separate count caller");
+  assert.equal(outcome, null);
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  assert.equal(f.transport.terminalOwnerReleased, false, "all genuine consumers are not the separate full owner receipt");
+  assert.equal(outcome, null);
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => backendStarted === 1);
+  assert.equal(f.context.state, "running");
+  assert.equal(outcome, null, "full Native receipt is not an AudioContext close receipt");
+  releaseBackend();
+  await tickRetainedUntil(f, () => outcome !== null);
+  assert.equal(await originalWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.state.backendCloses, 1);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 1));
+  assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+  const original = f.inputEntries.get("1");
+  const release = f.inputEntries.get("2");
+  assert.deepEqual([release.payload.slot, release.payload.runtime_generation, release.payload.frame_epoch,
+    release.payload.held_press_sequence], [original.payload.slot, original.payload.runtime_generation,
+      original.payload.frame_epoch, original.status.admission.sequence]);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(await f.session.close(), false);
+});
+
+for (const failure of ["termination", "backend"]) {
+  test(`fatal waiter is false after actual ${failure} rejection and keeps the first error`, async (t) => {
+    const cleanupError = Object.assign(new Error("actual cleanup rejected"), {code: "IO_ERROR"});
+    const f = retainedConsumerFixture(failure === "termination"
+      ? {terminate: () => { throw cleanupError; }} : {});
+    t.after(() => f.cancelTimers());
+    await activateInputProfile(f);
+    if (failure === "backend") f.context.close = async () => { throw cleanupError; };
+    f.seal();
+    await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+    const waiting = f.session.waitForTerminalCleanup();
+    if (failure === "backend") { f.state.nativeOwnerAcknowledged = true; f.releaseTerminal(); }
+    assert.equal(await settleRetainedCall(f, waiting), false);
+    assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+    assert.equal(f.context.state, "running");
+    assert.equal(f.state.backendCloses, 0);
+    assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+    assert.equal(f.state.terminalStarts, 1);
+  });
+}
+
+test("resolved terminator waiter stays pending without Native ACK and false with a still open backend", async (t) => {
+  const f = retainedConsumerFixture({terminate: async () => {}});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  let outcome = null;
+  const waiting = f.session.waitForTerminalCleanup().then((value) => { outcome = value; });
+  await f.tick();
+  assert.equal(outcome, null);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => outcome !== null);
+  await waiting;
+  assert.equal(outcome, false);
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+test("synchronous terminator reentry sees the same bound pending cleanup waiter", async (t) => {
+  let reentrantWait;
+  let outcome = null;
+  let releaseTermination;
+  const terminationPending = new Promise((resolve) => { releaseTermination = resolve; });
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => {
+    reentrantWait = f.session.waitForTerminalCleanup();
+    void reentrantWait.then((value) => { outcome = value; });
+    await terminationPending;
+    await audioContext.close();
+  }});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.ok(reentrantWait, "the real terminator synchronously entered the local observer");
+  assert.equal(f.session.waitForTerminalCleanup(), reentrantWait);
+  await f.tick();
+  assert.equal(outcome, null, "reentrant null/unbound Promise cannot mean completed cleanup");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  assert.equal(outcome, null);
+  releaseTermination();
+  await tickRetainedUntil(f, () => outcome !== null);
+  assert.equal(await reentrantWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.state.backendCloses, 1);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+
+test("late rejected load retires its actually published partial owner without granting success", async () => {
+  const browserWindow = {};
+  const loaderError = Object.assign(new Error("partial actual loader failed"), {code: "IO_ERROR"});
+  let releaseOwner;
+  const ownerPending = new Promise((resolve) => { releaseOwner = resolve; });
+  let fullReceipt = false;
+  let sealed = false;
+  const ownerTransport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return fullReceipt; },
+    async send(envelope) { return success(envelope, defaultResult(envelope.operation)); },
+  };
+  const partialOwner = {transport: ownerTransport, workers: []};
+  let terminatedRuntime;
+  const f = fixture({browserWindow, sessionTransport: ownerTransport,
+    beforeRuntimeLoad: (invocation) => {
+      invocation.onRuntimeOwnerCreated(partialOwner);
+      browserWindow.lmdjWebRuntimeHost = partialOwner;
+      throw loaderError;
+    },
+    runtimeTerminator: async ({runtime}) => {
+      terminatedRuntime = runtime;
+      sealed = true;
+      await ownerPending;
+      fullReceipt = true;
+    }});
+  assert.equal(await f.session.start(), false);
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1, "the original fatal safety has reached actual terminal cleanup");
+  let outcome = null;
+  const waiting = f.session.waitForTerminalCleanup().then((value) => { outcome = value; });
+  await drainTasks();
+  assert.equal(terminatedRuntime, partialOwner, "the real partial published owner was not discarded on rejection");
+  assert.equal(fullReceipt, false);
+  assert.equal(outcome, null, "published resources still require their original termination");
+  releaseOwner();
+  for (let turn = 0; turn < 40 && outcome === null; ++turn) await drainTasks();
+  assert.notEqual(outcome, null);
+  await waiting;
+  assert.equal(fullReceipt, true);
+  assert.equal(outcome, false, "actual loader failure is not a successful closure eligibility result");
+  assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+  assert.equal(f.terminated(), 1);
+});
+
+test("healthy older normal closure observes actual backend closure without inventing a Native getter", async () => {
+  let backendCloses = 0;
+  const f = fixture({runtimeTerminator: async ({audioContext}) => { await audioContext.close(); }});
+  f.context.close = async () => { backendCloses += 1; f.context.state = "closed"; };
+  await activateInputProfile(f);
+  assert.equal(f.context.state, "running");
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(await f.session.close(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(backendCloses, 1);
+  assert.equal(f.terminated(), 1);
+  assert.equal(f.session.diagnostics().error_code, null);
+});
+
+for (const publication of ["prior", "other-session"]) {
+  test(`failed custom loader never terminates or borrows ${publication} global Host`, async () => {
+    let foreignTerminations = 0;
+    const foreign = {transport: {
+      get terminalOwnerReleased() { return true; },
+      terminate() { foreignTerminations += 1; },
+    }, workers: [{terminate() { foreignTerminations += 1; }}]};
+    const browserWindow = publication === "prior" ? {lmdjWebRuntimeHost: foreign} : {};
+    const loaderError = Object.assign(new Error("this invocation actually rejected"), {code: "IO_ERROR"});
+    let actualTerminatorRuntime;
+    const f = fixture({browserWindow,
+      beforeRuntimeLoad: () => {
+        if (publication === "other-session") browserWindow.lmdjWebRuntimeHost = foreign;
+        throw loaderError; // No producer registration means no identity claim.
+      },
+      runtimeTerminator: ({runtime}) => {
+        actualTerminatorRuntime = runtime;
+        runtime?.transport?.terminate?.();
+        for (const worker of runtime?.workers ?? []) worker.terminate();
+      }});
+    assert.equal(await f.session.start(), false);
+    for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+    assert.equal(f.terminated(), 1);
+    assert.equal(await f.session.waitForTerminalCleanup(), false);
+    assert.equal(actualTerminatorRuntime, null, "global identity is not this invocation's owned partial runtime");
+    assert.equal(foreignTerminations, 0, "no direct or formal termination of an unrelated Host");
+    assert.equal(browserWindow.lmdjWebRuntimeHost, foreign);
+    assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+  });
+}
+
+test("pressed-state reentry observes the bound original cleanup before actual terminator entry", async () => {
+  let latestWait;
+  let outcome = null;
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  const f = fixture({
+    onPressedChange: () => { latestWait = f.session.waitForTerminalCleanup(); },
+    runtimeTerminator: async ({audioContext}) => { await backendPending; await audioContext.close(); },
+  });
+  f.context.close = async () => { f.context.state = "closed"; };
+  await activateInputProfile(f);
+  const closing = f.session.close();
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1);
+  assert.equal(latestWait, f.session.waitForTerminalCleanup(),
+    "clearPressed external callback cannot observe an initiated cleanup as unbound false");
+  void latestWait.then((value) => { outcome = value; });
+  await drainTasks();
+  assert.equal(outcome, null);
+  assert.equal(f.context.state, "running");
+  releaseBackend();
+  assert.equal(await closing, true);
+  assert.equal(await latestWait, true);
+  assert.equal(f.context.state, "closed");
+});
+
+async function packagedLoaderFixture() {
+  const wasmBytes = new Uint8Array([0]);
+  const wasmDigest = [...new Uint8Array(await webcrypto.subtle.digest("SHA-256", wasmBytes))]
+    .map((value) => value.toString(16).padStart(2, "0")).join("");
+  const manifest = {
+    host_id: "web-runtime-host", host_version: "1.2.15", platform_version: "0.3.6",
+    product_build: TEST_PRODUCT_BUILD, protocol_version: 1,
+    canonical_bytes: new Uint8Array([1]), manifest_sha256: "0".repeat(64),
+    assets: [
+      {role: "runtime_script", path: "runtime.js", bytes: 1, sha256: "0".repeat(64)},
+      {role: "runtime_wasm", path: "runtime.wasm", bytes: wasmBytes.length, sha256: wasmDigest},
+    ],
+  };
+  const scripts = [];
+  const browserWindow = {
+    fetch: async () => new Response(wasmBytes), btoa: globalThis.btoa,
+    performance: globalThis.performance, setTimeout, clearTimeout,
+  };
+  const browserDocument = {
+    baseURI: "https://example.test/index.html",
+    createElement: () => new EventTarget(),
+    head: {append(script) { scripts.push({script, configuration: browserWindow.Module}); }},
+  };
+  const newOwner = () => ({
+    runtimeInitialized: true, registerAudioContext: () => 1,
+    audioCallbackHeartbeat: () => 1, startAudioWorklet: async () => ({ok: true}),
+    workers: [], transport: {send: async (envelope) => success(envelope, defaultResult(envelope.operation))},
+  });
+  return {browserWindow, browserDocument, scripts, newOwner,
+    makeSession(runtimeTerminator) {
+      return fixture({browserWindow, browserDocument, useDefaultRuntimeLoader: true,
+        verifiedManifest: manifest, runtimeTerminator});
+    },
+    publish(index, owner = newOwner()) {
+      const {script, configuration} = scripts[index];
+      configuration.lmdjRuntimeOwnerCreated(owner, configuration);
+      browserWindow.lmdjWebRuntimeHost = owner;
+      script.dispatchEvent(new Event("load"));
+      return owner;
+    }};
+}
+
+test("two default packaged loaders cannot overwrite one in-flight producer Module and release the real load reservation", async () => {
+  const p = await packagedLoaderFixture();
+  let retiredFirst;
+  const first = p.makeSession(({runtime}) => { retiredFirst = runtime; });
+  const firstStart = first.session.start();
+  for (let turn = 0; turn < 40 && p.scripts.length === 0; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 1);
+  const firstConfiguration = p.scripts[0].configuration;
+  let retiredOther;
+  const other = p.makeSession(({runtime}) => { retiredOther = runtime; });
+  let otherOutcome = null;
+  const otherStart = other.session.start().then((value) => { otherOutcome = {value}; },
+    (error) => { otherOutcome = {error}; });
+  for (let turn = 0; turn < 40 && otherOutcome === null && p.scripts.length === 1; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 1, "the second loader is refused before another script can own shared Module");
+  assert.deepEqual(otherOutcome, {value: false});
+  await otherStart;
+  for (let turn = 0; turn < 40 && other.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(other.terminated(), 1);
+  assert.equal(await other.session.waitForTerminalCleanup(), false);
+  assert.equal(retiredOther, null);
+  assert.equal(p.browserWindow.Module, firstConfiguration,
+    "a second loader cannot redirect the original script into a foreign configuration");
+  assert.equal(p.scripts.length, 1);
+  assert.equal(retiredFirst, undefined);
+  const firstOwner = p.publish(0);
+  assert.equal(await firstStart, true);
+  assert.equal(p.browserWindow.lmdjWebRuntimeHost, firstOwner);
+  assert.equal(firstOwner.session, first.session);
+  assert.equal(await first.session.close(), true);
+  assert.equal(retiredFirst, firstOwner);
+  const later = p.makeSession();
+  const laterStart = later.session.start();
+  for (let turn = 0; turn < 40 && p.scripts.length < 2; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 2, "completed original invocation releases its actual single-flight reservation");
+  const laterOwner = p.publish(1);
+  assert.notEqual(laterOwner, firstOwner);
+  assert.equal(await laterStart, true);
+  assert.equal(await later.session.close(), true);
+});
+
+test("default packaged load rejects a foreign Module callback and never adopts a global foreign owner", async () => {
+  const p = await packagedLoaderFixture();
+  let actualTerminatorRuntime;
+  const f = p.makeSession(({runtime}) => { actualTerminatorRuntime = runtime; });
+  const starting = f.session.start();
+  for (let turn = 0; turn < 40 && p.scripts.length === 0; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 1);
+  const foreign = p.newOwner();
+  p.browserWindow.lmdjWebRuntimeHost = foreign;
+  assert.throws(() => p.scripts[0].configuration.lmdjRuntimeOwnerCreated(foreign, {}),
+    (error) => error.code === "HOST_STATE_INVALID");
+  p.scripts[0].script.dispatchEvent(new Event("error"));
+  assert.equal(await starting, false);
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1);
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(actualTerminatorRuntime, null);
+  assert.equal(p.browserWindow.lmdjWebRuntimeHost, foreign);
+  assert.equal(foreign.session, undefined);
 });

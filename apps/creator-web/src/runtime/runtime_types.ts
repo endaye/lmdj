@@ -289,6 +289,9 @@ export interface RuntimeDiagnostics {
 export interface CreatorRuntimeSession {
   start(): Promise<boolean>;
   close(): Promise<boolean>;
+  // Production SDK observes the original terminal cleanup. Optional only for
+  // legacy adapters whose genuine clean close(true) already proves retirement.
+  waitForTerminalCleanup?(): Promise<boolean>;
   listLocalProjects(): Promise<readonly LocalProjectSummary[]>;
   importProject(
     file: File,

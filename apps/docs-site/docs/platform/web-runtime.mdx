@@ -167,6 +167,16 @@ generation 都必须释放 Worker/transport、MIDI listeners、BroadcastChannel�
 成为 owner。persisted page lifecycle 保留共享 Runtime，non-persisted terminal
 pagehide 才进入 close。
 
+替代实例还须取得同一旧 Session 的
+`waitForTerminalCleanup(): Promise<boolean>` 正向结果。它仅观察已经发起的
+清理；caller 的原始消费、Native full-owner、AudioContext 真实关闭以及 SDK
+监听器/节点退出全部完成才允许 true。close 的 false/fatal 结果仍保留，
+sealed、计时结束、清理拒绝或未知 owner 均不授予替换资格。Host 不能把
+观察变成第二个清理 owner。加载中的部分 Host 由创建它的原 Module 配置
+在发布前登记，不能借用其他实例的全局对象。默认 packaged 加载在同一窗口
+拒绝重叠 Module 注入；原调用结束只释放加载保留，不证明物理释放。
+当前源码修复仍需原 packaged 生命周期旅程验证。
+
 ## 自动化范围
 
 共享 C++/Node tests 固定 manifest、transport、frame-stamped input、Sequence recovery、realtime session，以及 Perform 的 master tap processor、capture 消息契约、Performance 协议与 Facade bridge；Creator 和 Diagnostic 的 packaged Playwright proof 分别验证 Sequence 创作旅程与诊断压力/lifecycle 路径。WebKit capability smoke 只有在 mandatory primitive 可用时才能升级为完整自动化 PASS。

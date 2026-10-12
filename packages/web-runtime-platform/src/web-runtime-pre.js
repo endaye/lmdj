@@ -1,5 +1,9 @@
 if (typeof globalThis.window !== "undefined") {
   globalThis.Module = Module;
+  // Capture this invocation's configuration before any publication or
+  // external callback can change the shared browser Module reference.
+  const runtimeOwnerCreated = Module["lmdjRuntimeOwnerCreated"];
+  delete Module["lmdjRuntimeOwnerCreated"];
   const PUBLICATION_SETTLEMENT_WATCHDOG_MS = 1_000;
   const TRANSPORT_POLL_INTERVAL_MS = 16;
   const deadlineProofConfig = window.__LMDJ_WEB_HOST_DEADLINE_PROOF__;
@@ -937,6 +941,7 @@ if (typeof globalThis.window !== "undefined") {
     transport,
     ...(deadlineProof === undefined ? {} : {deadlineProof}),
   };
+  if (typeof runtimeOwnerCreated === "function") runtimeOwnerCreated(host, Module);
   window.lmdjWebRuntimeHost = host;
 
   /* LMDJ_WEB_AUDIO_CONFORMANCE_API_BEGIN */

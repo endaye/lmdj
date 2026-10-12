@@ -1244,8 +1244,7 @@ async function verifyDocumentManifest({
     : verifySourceShellManifest({document, crypto, assemblyIdentity});
 }
 
-async function loadSourceRuntime({ window }) {
-  const runtime = window?.lmdjWebRuntimeHost;
+function requireLoadedRuntime(runtime) {
   if (
     typeof runtime?.registerAudioContext !== "function" ||
     typeof runtime?.audioCallbackHeartbeat !== "function" ||
@@ -1253,6 +1252,12 @@ async function loadSourceRuntime({ window }) {
   ) {
     throw typedError("HOST_STATE_INVALID", "Source runtime is not loaded");
   }
+  return runtime;
+}
+
+async function loadSourceRuntime({ window, onRuntimeOwnerCreated }) {
+  const runtime = requireLoadedRuntime(window?.lmdjWebRuntimeHost);
+  onRuntimeOwnerCreated?.(runtime);
   return runtime;
 }
 
@@ -1275,66 +1280,92 @@ function sha256Integrity(hexDigest, window) {
   return `sha256-${window.btoa(binary)}`;
 }
 
-async function loadPackagedRuntime({ document, window, crypto, manifest }) {
-  const runtimeScript = assetForRole(manifest, "runtime_script");
-  const runtimeWasm = assetForRole(manifest, "runtime_wasm");
-  const runtimeScriptURL = new URL(
-    `./${runtimeScript.path}`,
-    document.baseURI,
-  ).href;
-  const wasmURL = new URL(`./${runtimeWasm.path}`, document.baseURI).href;
-  const wasmResponse = await window.fetch(wasmURL, {
-    cache: "force-cache",
-    credentials: "same-origin",
-  });
-  const wasmBytes = await readBoundedResponse(wasmResponse, runtimeWasm.bytes);
-  if (
-    wasmBytes.byteLength !== runtimeWasm.bytes ||
-    (await sha256Hex(wasmBytes, crypto)) !== runtimeWasm.sha256
-  ) {
-    throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
+const packagedRuntimeLoads = new WeakMap();
+
+async function loadPackagedRuntime({ document, window, crypto, manifest, onRuntimeOwnerCreated }) {
+  // Scripts consume the shared Module configuration. Fail closed while the
+  // original actual script/load invocation still owns it, rather than letting
+  // a second default loader bind the first producer to its configuration.
+  if (packagedRuntimeLoads.has(window)) {
+    throw typedError("HOST_STATE_INVALID", "Packaged runtime loading is already owned", {pending: false});
   }
-  window.Module = {
-    lmdjHostManifestBytes: manifest.canonical_bytes,
-    lmdjHostManifestSha256: manifest.manifest_sha256,
-    wasmBinary: wasmBytes,
-    locateFile: createPackagedRuntimeLocator({
-      baseURI: document.baseURI,
-      runtimeScriptURL,
-      runtimeWasmURL: wasmURL,
-    }),
-  };
-  await new Promise((resolvePromise, rejectPromise) => {
-    const script = document.createElement("script");
-    script.src = runtimeScriptURL;
-    script.integrity = sha256Integrity(runtimeScript.sha256, window);
-    script.crossOrigin = "anonymous";
-    script.addEventListener("load", resolvePromise, { once: true });
-    script.addEventListener(
-      "error",
-      () => rejectPromise(
-        typedError("HOST_PROTOCOL_MISMATCH", "Runtime script asset mismatch"),
-      ),
-      { once: true },
-    );
-    document.head.append(script);
-  });
-  const runtime = await loadSourceRuntime({ window });
-  const initializationDeadline =
-    (window.performance ?? globalThis.performance).now() + 30_000;
-  while (
-    runtime.runtimeInitialized !== true &&
-    (window.performance ?? globalThis.performance).now() < initializationDeadline
-  ) {
-    await new Promise((resolvePromise) => window.setTimeout(resolvePromise, 2));
+  const reservation = {};
+  packagedRuntimeLoads.set(window, reservation);
+  try {
+    const runtimeScript = assetForRole(manifest, "runtime_script");
+    const runtimeWasm = assetForRole(manifest, "runtime_wasm");
+    const runtimeScriptURL = new URL(
+      `./${runtimeScript.path}`,
+      document.baseURI,
+    ).href;
+    const wasmURL = new URL(`./${runtimeWasm.path}`, document.baseURI).href;
+    const wasmResponse = await window.fetch(wasmURL, {
+      cache: "force-cache",
+      credentials: "same-origin",
+    });
+    const wasmBytes = await readBoundedResponse(wasmResponse, runtimeWasm.bytes);
+    if (
+      wasmBytes.byteLength !== runtimeWasm.bytes ||
+      (await sha256Hex(wasmBytes, crypto)) !== runtimeWasm.sha256
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
+    }
+    let runtime = null;
+    const moduleConfiguration = {
+      lmdjRuntimeOwnerCreated(owner, producerModule) {
+        if (producerModule !== moduleConfiguration || owner === null || typeof owner !== "object" ||
+            (runtime !== null && runtime !== owner)) {
+          throw typedError("HOST_STATE_INVALID", "Runtime producer ownership does not match its invocation");
+        }
+        runtime = owner;
+        onRuntimeOwnerCreated?.(owner);
+      },
+      lmdjHostManifestBytes: manifest.canonical_bytes,
+      lmdjHostManifestSha256: manifest.manifest_sha256,
+      wasmBinary: wasmBytes,
+      locateFile: createPackagedRuntimeLocator({
+        baseURI: document.baseURI,
+        runtimeScriptURL,
+        runtimeWasmURL: wasmURL,
+      }),
+    };
+    window.Module = moduleConfiguration;
+    await new Promise((resolvePromise, rejectPromise) => {
+      const script = document.createElement("script");
+      script.src = runtimeScriptURL;
+      script.integrity = sha256Integrity(runtimeScript.sha256, window);
+      script.crossOrigin = "anonymous";
+      script.addEventListener("load", resolvePromise, { once: true });
+      script.addEventListener(
+        "error",
+        () => rejectPromise(
+          typedError("HOST_PROTOCOL_MISMATCH", "Runtime script asset mismatch"),
+        ),
+        { once: true },
+      );
+      document.head.append(script);
+    });
+    // This producer reported its local Host through the exact Module input.
+    // Neither a different global Host nor a missing callback proves ownership.
+    requireLoadedRuntime(runtime);
+    const initializationDeadline =
+      (window.performance ?? globalThis.performance).now() + 30_000;
+    while (
+      runtime.runtimeInitialized !== true &&
+      (window.performance ?? globalThis.performance).now() < initializationDeadline
+    ) {
+      await new Promise((resolvePromise) => window.setTimeout(resolvePromise, 2));
+    }
+    if (runtime.runtimeInitialized !== true) {
+      throw typedError("HOST_STATE_INVALID", "Runtime initialization timed out");
+    }
+    if (typeof runtime.transport?.send !== "function") {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
+    }
+    return runtime;
+  } finally {
+    if (packagedRuntimeLoads.get(window) === reservation) packagedRuntimeLoads.delete(window);
   }
-  if (runtime.runtimeInitialized !== true) {
-    throw typedError("HOST_STATE_INVALID", "Runtime initialization timed out");
-  }
-  if (typeof runtime.transport?.send !== "function") {
-    throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
-  }
-  return runtime;
 }
 
 function createRuntimeSessionController(options = {}) {
@@ -1385,10 +1416,10 @@ function createRuntimeSessionController(options = {}) {
   const preflight = options.preflight ?? runPreflight;
   const loadRuntime =
     options.loadRuntime ??
-    ((manifest) =>
+    ((manifest, invocation) =>
       Array.isArray(manifest?.assets)
-        ? loadPackagedRuntime({ document, window, crypto, manifest })
-        : loadSourceRuntime({ window }));
+        ? loadPackagedRuntime({ document, window, crypto, manifest, ...invocation })
+        : loadSourceRuntime({ window, ...invocation }));
   const createAudioContext =
     options.createAudioContext ??
     ((audioOptions) => new window.AudioContext(audioOptions));
@@ -1481,6 +1512,10 @@ function createRuntimeSessionController(options = {}) {
   let verifiedSampleImportLimit = null;
   let verifiedSampleIngestLimits = null;
   let runtime = null;
+  let runtimeLoadStarted = false;
+  let runtimeLoadPromise = null;
+  let runtimeLoadOwner = null;
+  let runtimeLoadError = null;
   let audioContext = null;
   let contextHandle = null;
   // Host monitoring is downstream of capture and never enters Project Truth.
@@ -1501,6 +1536,8 @@ function createRuntimeSessionController(options = {}) {
   let closing = false;
   let terminalCleanupStarted = false;
   let terminalCleanupPromise = null;
+  let terminalCleanupWaitPromise = null;
+  let terminalCleanupEligible = false;
   let terminalCleanupError = null;
   let normalCloseReservation = null;
   let unsubscribeTransport = null;
@@ -1943,12 +1980,39 @@ function createRuntimeSessionController(options = {}) {
       return terminalCleanupPromise;
     }
     terminalCleanupStarted = true;
-    if (probeReservation?.timeout != null) {
-      timers.clearTimeout(probeReservation.timeout);
-    }
-    probeReservation = null;
-    clearPressed();
-    terminalCleanupPromise = (async () => {
+    // Bind before any timer, pressed-state or diagnostic callback can
+    // reenter this already initiated cleanup. A seal never means completion.
+    let resolveCleanup;
+    let rejectCleanup;
+    terminalCleanupPromise = new Promise((resolve, reject) => {
+      resolveCleanup = resolve;
+      rejectCleanup = reject;
+    });
+    terminalCleanupWaitPromise = terminalCleanupPromise.then(
+      () => terminalCleanupEligible, () => false);
+    // Observe failure without replacing the original rejected owner Promise.
+    void terminalCleanupPromise.catch((error) => {
+      terminalCleanupError = error;
+      if (normalClose && fatalReservation === null) fail(error);
+    });
+    void (async () => {
+      if (probeReservation?.timeout != null) {
+        timers.clearTimeout(probeReservation.timeout);
+      }
+      probeReservation = null;
+      clearPressed();
+      // A loader already invoked still owns its eventual real resources.
+      // Wait that exact invocation before retiring them; a null runtime while
+      // it is pending is not evidence that this session never loaded.
+      if (runtimeLoadPromise !== null && runtime === null) {
+        try { runtime = await runtimeLoadPromise; }
+        catch (error) {
+          runtimeLoadError = error;
+          // Only the original producer's explicit invocation binding can
+          // identify a partial owner. A foreign global publication is ignored.
+          runtime = runtimeLoadOwner;
+        }
+      }
       // Start the real transport stop/drain first. Its returned Promise is
       // not permission to detach SDK resources or discard retained owners.
       let termination;
@@ -1970,6 +2034,7 @@ function createRuntimeSessionController(options = {}) {
           transport.terminalOwnerReleased !== true)
         throw typedError("HOST_STATE_INVALID", "Runtime owner did not confirm normal closure", {pending: true});
       await retirement;
+      if (runtimeLoadError !== null) throw runtimeLoadError;
       if (normalClose?.failure) throw normalClose.failure;
       if (typeof audioContext?.close === "function" && audioContext.state !== "closed")
         throw typedError("HOST_STATE_INVALID", "AudioContext did not confirm backend closure", {pending: true});
@@ -1995,14 +2060,25 @@ function createRuntimeSessionController(options = {}) {
       countInOutputActive = false;
       try { monitorGain?.disconnect(); } catch {}
       monitorGain = null;
-    })();
-    // Observe rejection without replacing the original rejected Promise or
-    // discarding resources. An earlier fatal observation remains first.
-    void terminalCleanupPromise.catch((error) => {
-      terminalCleanupError = error;
-      if (normalClose && fatalReservation === null) fail(error);
-    });
+      const fullOwnerReceipt = transport.terminalOwnerReleased;
+      const neverLoaded = !runtimeLoadStarted && runtime === null && audioContext === null &&
+        window?.lmdjWebRuntimeHost == null;
+      // A healthy older transport has a separate normal-close contract. Its
+      // missing getter is never a Native ACK for a fatal or negotiated owner.
+      const legacyNormalClose = normalClose !== null && normalClose.failure === null &&
+        fatalReservation === null && transport.terminated !== true &&
+        fullOwnerReceipt === undefined && patternInputProfile === null;
+      terminalCleanupEligible = !hasRetainedPatternOwners() &&
+        (audioContext === null || audioContext.state === "closed") &&
+        (fullOwnerReceipt === true || neverLoaded || legacyNormalClose);
+    })().then(resolveCleanup, rejectCleanup);
     return terminalCleanupPromise;
+  }
+
+  function waitForTerminalCleanup() {
+    // This is a read-only wait on this Session's already initiated cleanup.
+    // It never starts close, repeats an owner action or clears the first fault.
+    return terminalCleanupWaitPromise ?? Promise.resolve(false);
   }
 
   function observeTransportFailure(error) {
@@ -6415,7 +6491,9 @@ function createRuntimeSessionController(options = {}) {
     started = true;
     try {
       machine.transition("preflight", { reason: "bootstrap" });
-      manifest = Object.freeze(await verifyManifest());
+      const verifiedManifest = await verifyManifest();
+      if (closing || terminalCleanupStarted) return false;
+      manifest = Object.freeze(verifiedManifest);
       if (
         manifest.product_build !== assemblyIdentity.productBuild ||
         manifest.host_version !== assemblyIdentity.hostVersion ||
@@ -6453,6 +6531,7 @@ function createRuntimeSessionController(options = {}) {
         (preflight === runPreflight
           ? await defaultCapabilities(window, capabilityProbeTimeoutMs)
           : {});
+      if (closing || terminalCleanupStarted) return false;
       const resolvedCapabilities = {};
       for (const name of PREFLIGHT_CAPABILITIES) {
         try {
@@ -6462,6 +6541,7 @@ function createRuntimeSessionController(options = {}) {
         } catch {
           resolvedCapabilities[name] = false;
         }
+        if (closing || terminalCleanupStarted) return false;
       }
       capabilitySnapshot = Object.freeze({
         ...resolvedCapabilities,
@@ -6470,13 +6550,38 @@ function createRuntimeSessionController(options = {}) {
       try {
         await preflight(resolvedCapabilities);
       } catch (error) {
+        if (closing || terminalCleanupStarted) return false;
         publishCaptureUnavailable(
           "capture-unsupported",
           "Use a browser with the required secure audio and storage capabilities.",
         );
         throw error;
       }
-      runtime = await loadRuntime(manifest);
+      if (closing || terminalCleanupStarted) return false;
+      runtimeLoadStarted = true;
+      const invocation = Object.freeze({onRuntimeOwnerCreated(owner) {
+        if (owner === null || typeof owner !== "object" ||
+            (runtimeLoadOwner !== null && runtimeLoadOwner !== owner)) {
+          throw typedError("HOST_STATE_INVALID", "Runtime invocation reported a different owner");
+        }
+        runtimeLoadOwner = owner;
+      }});
+      let resolveLoad;
+      let rejectLoad;
+      runtimeLoadPromise = new Promise((resolve, reject) => {
+        resolveLoad = resolve; rejectLoad = reject;
+      });
+      // Publish the invocation debt before any synchronous loader callback
+      // can reenter close. Both start and cleanup await this same owner.
+      try {
+        Promise.resolve(loadRuntime(manifest, invocation)).then((loaded) => {
+          if (runtimeLoadOwner !== null && runtimeLoadOwner !== loaded) {
+            rejectLoad(typedError("HOST_STATE_INVALID", "Loaded runtime differs from its actual producer owner"));
+          } else resolveLoad(loaded);
+        }, rejectLoad);
+      } catch (error) { rejectLoad(error); }
+      runtime = await runtimeLoadPromise;
+      if (closing || terminalCleanupStarted) return false;
       if (window?.lmdjWebRuntimeHost === runtime) {
         // The packaged Host already publishes this runtime namespace. Expose
         // the same session methods for trusted programmatic callers through
@@ -6514,7 +6619,7 @@ function createRuntimeSessionController(options = {}) {
       renderDiagnostics();
       return true;
     } catch (error) {
-      fail(error, "failed");
+      if (!closing && !terminalCleanupStarted) fail(error, "failed");
       return false;
     }
   }
@@ -7191,6 +7296,7 @@ function createRuntimeSessionController(options = {}) {
     subscribePerformanceMasterCaptureStatus,
     startPerformanceMasterCapture,
     close,
+    waitForTerminalCleanup,
     subscribeDiagnostics,
     subscribeHostState,
     subscribeRuntimeOutcome,

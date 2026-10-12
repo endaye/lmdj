@@ -814,6 +814,13 @@ audio; exact revisions are in their playback details. Perform recording,
 WAV binding, replay revision and gesture counts are available in details,
 with live assistive status retained.
 
+Manual retry 和自动恢复都先等待原实例的应用关闭工作与真实资源清理，
+再创建新实例。等待期间保留原失败状态与原因；关闭返回 false 时仍需同实例正向清理
+资格，后台清理失败或应用保存/捕获屏障拒绝时不创建替代实例。SDK 的
+同实例正向清理结果与当前 generation 一起约束 factory；重复触发、离开页面或已 yield
+后的迟到结果不能重复替换。旧适配器只有原 clean close true 才能沿用
+正常关闭兼容路径。此源码修复不表示原完整生命周期或物理验收已通过。
+
 以下继续保留 private automatic reopen 的 Source-only 历史记录；其中的 UNRUN／HOLD 是该记录形成时的状态，当前轻量状态见上文。
 
 ### N13 private automatic reopen Source boundary

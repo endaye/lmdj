@@ -1249,3 +1249,92 @@ Runtime Platform S6 PATCH; no new public API, wire, persisted Contract or Produc
 identity is allocated. Documentation impact: required on
 `/core/modules/web-runtime-platform/`, with this design and plan. Source-only
 text and component verification do not establish final integrated acceptance.
+
+
+## S6 followup — require genuine cleanup before Creator replacement
+
+Premise at actual main `cbd7f898604f4e0953cb912279976bf12badaecc`: both
+Creator replacement paths still follow any settled close result. The original
+packaged recovery reached a new factory with the old Native full-owner receipt
+false and an AudioContext/BroadcastChannel alive. Verified Q waits the same
+cleanup when local Pattern debt is empty, but retained-debt prompt false and
+cleanup rejection remain distinct from completed retirement. Registered
+application shutdown barriers also swallow failures. These remaining producer
+and consumer gaps require this Task; the latest main squash witness is unrelated.
+
+**Declared files:** `packages/web-runtime-platform/web/runtime_session.mjs`,
+`packages/web-runtime-platform/test/runtime_session.test.mjs`,
+`packages/web-runtime-platform/web/runtime_types.d.ts`,
+`apps/creator-web/src/runtime/runtime_context.tsx`,
+`apps/creator-web/src/runtime/runtime_types.ts`,
+`apps/creator-web/test/runtime_context.test.tsx`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`,
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`,
+`apps/docs-site/docs/platform/web-runtime.mdx`, and
+`apps/docs-site/docs/hosts/creator-web.mdx`,
+`packages/web-runtime-platform/src/web-runtime-pre.js`, and
+`packages/web-runtime-platform/test/runtime_loader.test.mjs`.
+
+The original loader invocation must explicitly register its locally created
+Host through the exact private Module configuration before publication. A changed
+global Host is not proof of ownership; failed custom loading without registered
+ownership remains ineligible and cannot terminate a foreign Host. Bind cleanup
+completion before any external pressed/diagnostic callback can reenter. Original
+initialization budgets and known failure outcomes remain unchanged.
+The default packaged loader serializes shared Module injection per window before
+its first await; overlap is refused without replacing the original configuration.
+Its reservation ends only when that original load invocation settles and is not
+proof of physical owner retirement. Producer registration validates the exact
+original Module reference, including when callbacks change global publication.
+
+Add local `waitForTerminalCleanup(): Promise<boolean>` as an explicit SDK
+consumption API. It observes the same already initiated cleanup, never starts
+another terminator, Stop, admission, Release or deadline. A call before cleanup
+starts returns false and cannot initiate cleanup. Cleanup rejection also returns
+false; only already initiated unknown cleanup remains pending. Bind the one cleanup Promise
+before invoking potentially reentrant terminator code. Only actual Native
+full-owner retirement, original caller/input/physical settlement, actual backend
+closure and existing SDK teardown permit true. Failed or unproven cleanup is
+ineligible; retained unknown debt remains pending. Preserve original close
+booleans and first fatal error. A resolved custom terminator is not a receipt.
+Explicit never-loaded absence and legacy healthy closure must retain their
+separate truthful contracts rather than treating missing getters as Native ACK.
+
+Creator caches one exact-session replacement-eligibility wait separately from
+close. Manual and automatic replacement require positive cleanup and original
+application barriers before factory, preserve fatal display while waiting,
+and suppress duplicates/stale/unmounted/yielded generations. An absent waiter
+is eligible only under the existing genuine normal clean-close true contract;
+false/rejection/undefined is ineligible. Registered barrier rejection remains
+real rejection, observed for unhandled-rejection safety without swallowing it
+into successful factory permission. Preserve the original one automatic
+allowance and manual retry latch; negative results create no instance.
+
+The existing Perform producer itself swallows some Stop/capture/finalization
+errors before its registered barrier can observe them. This Task preserves
+actual propagated rejection only. A separate followup must retain the real
+Perform shutdown failure and prove no replacement across that producer/consumer
+boundary; final S6 acceptance cannot infer its completion from a controlled
+barrier rejection test.
+
+**Lowest-tier verification / defect caught:** SDK tests distinguish held
+original consumers, Native receipt, backend closure and final teardown; include
+reentrant invocation, rejected/no-ACK/open-backend cleanup and repeat callers.
+Creator tests retain every original lifecycle leg and assert zero factory calls
+before positive completion or after cleanup/application-barrier failure, with
+manual/automatic duplicate and stale-generation protection. Root runs identical
+meaningful old/fixed fixtures, complete SDK and Creator controller suites,
+types/build and full Portal before atomic commit. Original packaged recovery
+240/120/10/30-second budgets, full eight-group Creator, original 1/5/300-second
+bounds, 64 stress rounds and workers remain unchanged. Model/source results
+do not establish Native/browser OPFS/PCM or physical acceptance.
+
+### Version Management
+
+Version impact: additive Web Runtime Platform MINOR and Creator PATCH debt at
+the next coordinated version settlement. Actual main already has SDK 5.8.0;
+that allocated identity does not cover this new API. This Task allocates no
+version or Product Build, changes no Native wire or persisted Contract, and
+performs no release. Documentation impact: required on
+`/core/modules/web-runtime-platform/`, `/platform/web-runtime/` and
+`/hosts/creator-web/`, with design and plan updated in this same Task.
