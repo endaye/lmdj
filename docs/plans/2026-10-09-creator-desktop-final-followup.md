@@ -50,7 +50,7 @@
 | D4 | D03 audition/trim/browse/assign 与细调 | Assign 与精确数值编辑已批准；待独立实现 | 当前工程已有 Asset → 明确 A01–D16 目标，不移动来源、覆盖确认、取消不改 Truth；数值立即试听，Apply/Enter 一次保存/Undo，Esc/切目标取消。复用现有单位/边界与已批准旋钮细调，不改 touch slider 提交语义。 |
 | D5 | D04 MASTER/滤波类型/Mute/Solo/电平 | 产品问答及共享尾音已批准；Contract 设计、实施与验收待完成 | MASTER 共用 ENC4；主效果 Cutoff/Delay/Reverb，新增 FILTER 类型/Cutoff/Resonance；独立滤波初始 OFF、LP/20 kHz/0%，Cutoff 20 Hz–20 kHz 对数、Resonance 0–100%，进组不改声，按实时 HOLD 规则并录制/重放全部参数。64 Pad live Mute/Solo 多个 Solo、Mute 优先，切 Bank/Pattern 保持、离 Perform/切工程清空，Performance 包含起点状态与后续变更。对应 Pad 当前／后续输入立即阻断，已进入共享 Delay/Reverb 的尾音自然衰减，其他 Pad 效果继续。Post-FX/Pre-ENC4 立体声 dBFS 峰值排除节拍器，L/R 独立、保持 1 秒、−60…0、静音 −∞、不可用明确显示。具体事件兼容、ramp 工程验证与 meter 投影仍由对应 Task 完成。 |
 | I1–I5 | D1–D5 的对应实现 | I1b/I1c 已合并，原浏览器失败项及 BPM 可听预览仍未关闭；D4 待实现，D5 待设计和实现 | #1936 → `9b4d80c9e5ed965f5776c0321cf166d9d1f289ce` 交付 contextual consumer，不等于完整验收；每项追加精确 Task，独立实现和合并。 |
-| K1 | #1960 四排键盘映射 | 已批准；实现与验收待独立 Task | 1234 → 13–16、QWER → 09–12、ASDF → 05–08、ZXCV → 01–04；Q 从 01 改为 09；MIDI note 36–51、Pad 身份与引用保持，见四排键盘决定。 |
+| K1 | #1960 四排键盘映射 | 四排映射与 Ctrl／Cmd 准入修复已合并；实体键盘输入／听感待验收 | [#2058](https://github.com/endaye/lmdj/pull/2058) 交付四排映射，#1960 已关闭；[#2082](https://github.com/endaye/lmdj/pull/2082) 交付已批准的 Ctrl／Cmd 准入修复，#2060 已关闭。1234 → 13–16、QWER → 09–12、ASDF → 05–08、ZXCV → 01–04；Q 从 01 改为 09；MIDI note 36–51、A01–D16 的 Pad 身份与引用保持，见四排键盘决定。 |
 | K2 | #1822 三页普通方向导航 | 已批准；实现与验收待独立 Task | 导航不触发 Pad、不写 Truth；上下文切换取消未提交预览。复用各页现有选择／子页状态，完整 Perform FILTER 导航依赖真实 producer／consumer。 |
 | A1 | 四页自动化与视觉核对 | 待验收 | I1–I5、K1、K2 完成或 owner 明确取消相应范围；保留每个 journey 的 far-side assertion。 |
 | A2 | 真实设备及人工验收 | 待验收 | 具体设备、来源、身份、步骤和结果；缺失 leg 保持未验收。 |
@@ -58,7 +58,8 @@
 | C1 | 本地工作区/分支收尾 | 待调查 | 完整改动保留、干净（含 untracked）、未锁定且无人使用；逐个安全移除。 |
 
 执行顺序为 P0 → R1，之后依次完成 D1/I1、D2/I2、D3/I3、D4/I4、D5/I5，
-再 A1/A2、V1、C1；已批准的 K1 可在独立声明后并行准备，验收前完成。
+再 A1/A2、V1、C1；K1 四排映射（#2058）及已批准的 Ctrl／Cmd 准入修复
+（#2082）已交付，不再列入待实施顺序；实体键盘输入／听感验收仍须完成。
 人工等待时可推进不依赖该结果的调查或实施。R2 仅在
 适用条件出现时加入。每个产品问题一次给出少量选项、建议及影响，收到明确
 回答后记录 decision。决定不做可以完成该范围的处置；暂缓仍是未完成，除非
@@ -157,6 +158,11 @@ lint 与 declaration／batch-only check。不运行或声称产品音频验收�
 decision archive 机制，无新增流程缺陷或机制。
 
 ### 2026-10-11 — D04 剩余产品边界与四排键盘已批准
+
+以下 K1 的源码检查、批准及待实现处置保留为 2026-10-11 的历史记录。
+当前交付状态以 Progress and order 为准：#2058 已交付四排映射，#2082
+已交付批准的 Ctrl／Cmd 准入修复；#1960 与 #2060 均已关闭。
+实体键盘输入／听感验收仍未执行。
 
 本次独立 Decision Task 初始检查 fresh main
 `305b76608b5c6a19b718253604973d250a795765`；开始编辑前进一步刷新并将
