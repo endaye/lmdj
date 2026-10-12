@@ -192,6 +192,41 @@ class RecordingSink final : public PerformanceReplayRuntimeSink {
         NeutralResetProgress::complete);
   }
 
+  Result<void> apply_filter_change(
+      lmdj::domain::PerformanceFilterPhase,
+      lmdj::domain::PerformanceFilterType,
+      std::uint16_t,
+      std::uint16_t) override {
+    calls.push_back("filter_change");
+    return apply_result();
+  }
+
+  Result<void> apply_pad_gates(
+      std::uint64_t muted, std::uint64_t solo) override {
+    calls.push_back("pad_gates");
+    last_muted_mask = muted;
+    last_solo_mask = solo;
+    return apply_result();
+  }
+
+  Result<void> apply_initial_live_state(
+      const lmdj::domain::PerformanceInitialLiveState& state) override {
+    calls.push_back("header");
+    header_states.push_back(state);
+    return apply_result();
+  }
+
+  Result<NeutralResetProgress> initial_live_state_applied() override {
+    header_progress_calls.push_back("header_applied");
+    if (header_pending > 0) {
+      --header_pending;
+      return Result<NeutralResetProgress>::success(
+          NeutralResetProgress::pending);
+    }
+    return Result<NeutralResetProgress>::success(
+        NeutralResetProgress::complete);
+  }
+
   Result<void> apply_result() {
     if (apply_failures > 0) {
       --apply_failures;
@@ -202,10 +237,15 @@ class RecordingSink final : public PerformanceReplayRuntimeSink {
   }
 
   std::vector<std::string> calls;
+  std::vector<std::string> header_progress_calls;
+  std::vector<lmdj::domain::PerformanceInitialLiveState> header_states;
+  std::uint64_t last_muted_mask{};
+  std::uint64_t last_solo_mask{};
   std::uint32_t apply_failures{};
   std::uint32_t reset_failures{};
   std::uint32_t reset_pending{};
   std::uint32_t reset_attempts{};
+  std::uint32_t header_pending{};
 };
 
 std::shared_ptr<const PerformanceReplayProjection> projection() {
@@ -791,10 +831,140 @@ void test_failed_empty_begin_retains_facade_identity_and_exclusion() {
               nlohmann::json{{"active_replay_id", kReplayId}}));
 }
 
+
+// ---------------------------------------------------------------------------
+// D0/P1 headered replay: the recorded live-control header restores in the
+// begin control stage and no event is scheduled before the applied proof.
+// ---------------------------------------------------------------------------
+
+lmdj::domain::PerformanceInitialLiveState replay_header() {
+  lmdj::domain::PerformanceInitialLiveState header;
+  header.hold = true;
+  header.filter = lmdj::domain::IndependentFilterLiveState{
+      true, false, lmdj::domain::PerformanceFilterType::hp, 800, 250};
+  header.other_fx.at(0) = {true, false, 500};
+  header.muted_mask = 0x5;
+  header.solo_mask = 0x2;
+  return header;
+}
+
+std::shared_ptr<const PerformanceReplayProjection> headered_projection(
+    std::vector<PerformanceReplayBoundary> boundaries,
+    std::uint64_t event_count) {
+  auto value = PerformanceReplayProjection{
+      PerformanceId{kPerformanceId}, 44, 120, true, 50, {}, {},
+      std::move(boundaries), event_count, replay_header()};
+  value.pads.at(0) = ResolvedPad{
+      {0, 0},
+      {std::string(64, 'a'), "audio/wav", 44},
+      std::make_shared<const lmdj::cooker::PcmSample>(
+          lmdj::cooker::PcmSample{48'000, 2, {0, 0}}),
+      {0, 1, lmdj::domain::TriggerMode::one_shot, 1.0F, false},
+  };
+  return std::make_shared<const PerformanceReplayProjection>(
+      std::move(value));
+}
+
+void test_header_recovers_before_any_event() {
+  auto sink = std::make_shared<RecordingSink>();
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const lmdj::facade::ReplayId replay_id{"70000000-0000-4000-8000-000000000010"};
+  const auto begun = controller.begin(
+      replay_id,
+      headered_projection(
+          {PerformanceReplayBoundary{
+              0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}, 1}}},
+          1));
+  LMDJ_CHECK(begun.has_value());
+  // The header restored during begin; no event was scheduled yet.
+  LMDJ_CHECK((sink->calls == std::vector<std::string>{"header"}));
+  LMDJ_CHECK(sink->header_states.size() == 1U);
+  LMDJ_CHECK(sink->header_states.at(0).muted_mask == 0x5);
+  const auto advanced = controller.advance_to(10);
+  LMDJ_CHECK(advanced.has_value());
+  // The Pad applied only after the header's applied proof.
+  LMDJ_CHECK((sink->calls ==
+              std::vector<std::string>{"header", "pad", "reset"}));
+  LMDJ_CHECK(sink->header_progress_calls.size() == 1U);
+}
+
+void test_header_pending_blocks_the_first_event_until_applied() {
+  auto sink = std::make_shared<RecordingSink>();
+  sink->header_pending = 1;
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const lmdj::facade::ReplayId replay_id{"70000000-0000-4000-8000-000000000011"};
+  LMDJ_CHECK(controller
+                 .begin(replay_id,
+                         headered_projection(
+                             {PerformanceReplayBoundary{
+                                 0,
+                                 PerformanceEvent{
+                                     PadHitPerformanceEvent{0, 10, 40, 99}, 1}}},
+                             1))
+                 .has_value());
+  const auto early = controller.advance_to(100);
+  LMDJ_CHECK(early.has_value());
+  LMDJ_CHECK(early.value().state == ReplayState::playing);
+  LMDJ_CHECK(early.value().event_cursor == 0);
+  LMDJ_CHECK((sink->calls == std::vector<std::string>{"header"}));
+  const auto settled = controller.advance_to(100);
+  LMDJ_CHECK(settled.has_value());
+  LMDJ_CHECK(settled.value().event_cursor == 1);
+  LMDJ_CHECK((sink->calls ==
+              std::vector<std::string>{"header", "pad", "reset"}));
+}
+
+void test_zero_event_headered_replay_restores_then_resets() {
+  auto sink = std::make_shared<RecordingSink>();
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const lmdj::facade::ReplayId replay_id{"70000000-0000-4000-8000-000000000012"};
+  const auto begun =
+      controller.begin(replay_id, headered_projection({}, 0));
+  LMDJ_CHECK(begun.has_value());
+  // Zero events still restore the header first; completion waits for the
+  // applied proof and the neutral reset.
+  LMDJ_CHECK(begun.value().state == ReplayState::playing);
+  LMDJ_CHECK((sink->calls == std::vector<std::string>{"header"}));
+  const auto advanced = controller.advance_to(0);
+  LMDJ_CHECK(advanced.has_value());
+  LMDJ_CHECK(advanced.value().state == ReplayState::complete);
+  LMDJ_CHECK((sink->calls ==
+             std::vector<std::string>{"header", "reset"}));
+}
+
+void test_headered_events_reach_the_typed_sinks() {
+  auto sink = std::make_shared<RecordingSink>();
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const lmdj::facade::ReplayId replay_id{"70000000-0000-4000-8000-000000000013"};
+  const auto begun = controller.begin(
+      replay_id,
+      headered_projection(
+          {PerformanceReplayBoundary{
+               0,
+               PerformanceEvent{lmdj::domain::FilterChangePerformanceEvent{
+                                    lmdj::domain::PerformanceFilterPhase::move,
+                                    lmdj::domain::PerformanceFilterType::lp,
+                                    1'200, 100, 5},
+                                2}},
+           PerformanceReplayBoundary{
+               0,
+               PerformanceEvent{lmdj::domain::PadGatesSetPerformanceEvent{
+                                    0x9, 0x1, 6},
+                                3}}},
+          2));
+  LMDJ_CHECK(begun.has_value());
+  const auto advanced = controller.advance_to(10);
+  LMDJ_CHECK(advanced.has_value());
+  LMDJ_CHECK((sink->calls ==
+              std::vector<std::string>{"header", "filter_change",
+                                       "pad_gates", "reset"}));
+  LMDJ_CHECK(sink->last_muted_mask == 0x9);
+  LMDJ_CHECK(sink->last_solo_mask == 0x1);
+}
+
 }  // namespace
 
-int main() {
-  try {
+int main() {  try {
     test_lifecycle_and_silent_pattern_gap();
     test_stop_is_the_only_reset_retry_driver();
     test_explicit_stop_resets_and_publishes_stopped();
@@ -812,6 +982,10 @@ int main() {
     test_failed_stop_does_not_consume_request_identity();
     test_pending_stop_does_not_consume_request_identity();
     test_failed_empty_begin_retains_facade_identity_and_exclusion();
+    test_header_recovers_before_any_event();
+    test_header_pending_blocks_the_first_event_until_applied();
+    test_zero_event_headered_replay_restores_then_resets();
+    test_headered_events_reach_the_typed_sinks();
     std::cout << "performance replay controller tests passed\n";
     return 0;
   } catch (const std::exception& error) {

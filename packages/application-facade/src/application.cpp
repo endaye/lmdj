@@ -182,6 +182,8 @@ const std::map<std::string, OperationKind>& operations() {
       {"performance.fx.gesture", OperationKind::command},
       {"performance.inspect", OperationKind::query},
       {"performance.list", OperationKind::query},
+      {"performance.live.control", OperationKind::command},
+      {"performance.live.status", OperationKind::query},
       {"performance.record.begin", OperationKind::command},
       {"performance.record.event", OperationKind::command},
       {"performance.record.flush", OperationKind::command},
@@ -2391,6 +2393,9 @@ struct Application::Impl {
     std::uint8_t slot{};
     std::uint64_t onset_tick{};
     std::uint8_t velocity{};
+    // Headered profile: the press's durable input sequence, reused by the
+    // PadHit written at release.
+    std::optional<std::uint64_t> input_sequence{};
   };
 
   struct OpenPerformanceFx {
@@ -2412,6 +2417,48 @@ struct Application::Impl {
     std::uint8_t pattern_slot{};
     std::uint64_t target_tick{};
     bool claimed{};
+    // D0/P1 headered profile: the input sequence is frozen at reservation
+    // time and reused by the ACK; legacy launches leave it absent.
+    std::optional<std::uint64_t> frozen_input_sequence{};
+  };
+
+  // D0/P1 new-profile: one engaged FX/Filter binding inside a headered
+  // recording. The logical recording gesture id is durable (checkpoint); the
+  // runtime generation is live-only and verified on every move/release.
+  struct PerformanceRecordingBinding {
+    std::string recording_gesture_id;
+    std::string runtime_generation;
+    std::uint16_t effective_value{};
+  };
+
+  // A prepared-but-unresolved admission retained for its exact retry window:
+  // the frozen tuple is never re-derived (no second read_tick/next), the held
+  // queue cell survives until publish or recovery, and a different payload on
+  // the same identity is a collision.
+  struct PerformanceFrozenAdmission {
+    project_io::PerformanceAdmissionReceipt receipt;
+    // Kernel-side state the candidate produces, re-applied verbatim on a
+    // successful retry.
+    std::vector<domain::PerformanceEvent> resulting_pending_events;
+    std::map<std::string, OpenPerformancePad> resulting_open_pads;
+    std::map<domain::PerformanceFx, PerformanceRecordingBinding>
+        resulting_recording_fx;
+    std::optional<PerformanceRecordingBinding> resulting_filter_binding;
+    bool resulting_hold{};
+    std::uint64_t resulting_last_accepted_tick{};
+    project_io::PerformanceTransientCheckpoint candidate_checkpoint;
+    // The frozen engine translation.
+    std::optional<audio::FxGesture> fx_gesture;
+    std::optional<audio::FilterGesture> filter_gesture;
+    std::optional<audio::PadGatesState> pad_gates;
+    PerformanceLiveControlState resulting_state;
+    std::optional<std::string> assigned_generation;
+    // The still-held queue cell of an unknown-outcome prepared admission;
+    // never published, released only at recovery/stop.
+    std::optional<PerformanceLiveControlReservation> held_reservation;
+    // True once publish succeeded: a later complete-metadata retry must not
+    // enqueue again.
+    bool published{};
   };
 
   struct PerformanceRuntime {
@@ -2430,6 +2477,20 @@ struct Application::Impl {
     std::optional<PatternLaunchOutcome> last_launch_ack;
     std::uint64_t last_accepted_tick{};
     bool recovery_required{};
+    // D0/P1 headered profile. `control_epoch` pins the session to the
+    // Core-issued epoch captured at begin; the fence gates the first
+    // Pad/Pattern admission on the applied header proof.
+    bool headered{};
+    std::string control_epoch{};
+    std::optional<PerformanceControlFence> fence{};
+    bool core_control_ready{};
+    std::uint64_t next_recording_sequence{};
+    // Engaged bindings admitted under this recording (logical + runtime).
+    std::map<domain::PerformanceFx, PerformanceRecordingBinding>
+        recording_fx{};
+    // The independent Filter's open recording gesture, if engaged.
+    std::optional<PerformanceRecordingBinding> recording_filter_binding{};
+    std::optional<PerformanceFrozenAdmission> frozen_admission{};
   };
 
   explicit Impl(ApplicationConfig config)
@@ -2450,6 +2511,7 @@ struct Application::Impl {
         performance_replay_controller(
             std::move(config.performance_replay_controller)),
         performance_gesture_sink(std::move(config.performance_gesture_sink)),
+        performance_live_control(std::move(config.performance_live_control)),
         sample_limits(
             config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
         soundset_transport(std::move(config.soundset_catalog_transport)),
@@ -3864,7 +3926,13 @@ struct Application::Impl {
       std::lock_guard lock(sequence_mutex);
       for (auto &[path_text, runtime] : performance_sessions) {
         const std::filesystem::path path{path_text};
-        const auto closed = close_performance_transients(path, runtime);
+        // Headered sessions close through the project-io owner-loss path at
+        // recovery time (metadata-only, ledger carried); the abandoned
+        // producer writes nothing here.
+        const auto closed =
+            runtime.headered
+                ? foundation::Result<void>::success()
+                : close_performance_transients(path, runtime);
         if (pattern_launch_acknowledger) {
           pattern_launch_acknowledger->cancel(runtime.session_id);
         }
@@ -4156,6 +4224,9 @@ struct Application::Impl {
     if (operation == "performance.fx.gesture") {
       return performance_fx_gesture(request);
     }
+    if (operation == "performance.live.control") {
+      return performance_live_control_command(request);
+    }
     if (operation == "performance.record.launch-request") {
       return performance_launch_request(request);
     }
@@ -4287,6 +4358,9 @@ struct Application::Impl {
     }
     if (operation == "performance.record.status") {
       return performance_status(request);
+    }
+    if (operation == "performance.live.status") {
+      return performance_live_status(request);
     }
     if (operation == "performance.replay.status") {
       return performance_replay_status(request);
@@ -6408,7 +6482,1356 @@ struct Application::Impl {
                             loaded.value().revision);
   }
 
+  // ------------------------------------------------------------------
+  // D0/P1 headered live-control profile (lmdj.project.v5 5.4.1).
+  // ------------------------------------------------------------------
+
+  static std::string digest_uuid(std::string_view seed) {
+    const auto digest = canonical_manifest_digest(seed);
+    auto value = digest.substr(0, 32);
+    value.at(12) = '4';
+    constexpr std::string_view variants = "89ab";
+    value.at(16) = variants.at(
+        static_cast<std::size_t>(
+            std::string_view("0123456789abcdef").find(value.at(16))) %
+        variants.size());
+    return value.substr(0, 8) + "-" + value.substr(8, 4) + "-" +
+           value.substr(12, 4) + "-" + value.substr(16, 4) + "-" +
+           value.substr(20, 12);
+  }
+
+  // The logical recording gesture id is derived from the durable admission
+  // identity, so an exact begin/engage retry reconstructs the same id without
+  // a second allocation.
+  static std::string derived_recording_gesture_id(
+      std::string_view command_id, std::string_view label) {
+    return digest_uuid("lmdj.performance.recording.gesture\n" +
+                       std::string(command_id) + "\n" + std::string(label));
+  }
+
+  static std::string performance_request_fingerprint(
+      const nlohmann::json &request) {
+    auto stripped = request;
+    stripped.erase("project_path");
+    return canonical_manifest_digest(stripped.dump());
+  }
+
+  static std::uint64_t parse_canonical_decimal(
+      const nlohmann::json &request, const char *key) {
+    require(request.at(key).is_string(),
+            std::string(key) + " must be a canonical decimal string");
+    const auto text = request.at(key).get<std::string>();
+    require(!text.empty() &&
+                std::ranges::all_of(
+                    text, [](char c) { return c >= '0' && c <= '9'; }) &&
+                (text.size() == 1 || text.front() != '0'),
+            std::string(key) + " must be a canonical decimal string");
+    std::uint64_t value = 0;
+    for (const char c : text) {
+      const auto digit = static_cast<std::uint64_t>(c - '0');
+      require(value <= (std::numeric_limits<std::uint64_t>::max() - digit) /
+                           10U,
+              std::string(key) + " overflows uint64");
+      value = value * 10U + digit;
+    }
+    return value;
+  }
+
+  static std::string decimal_string(std::uint64_t value) {
+    return std::to_string(value);
+  }
+
+  static const char *performance_fx_name(domain::PerformanceFx fx) {
+    static constexpr std::array<const char *, 8> names{
+        "filter", "delay",   "reverb", "stutter",
+        "gate",   "reverse", "crush",  "cutter"};
+    return names.at(static_cast<std::size_t>(fx));
+  }
+
+  static nlohmann::json admission_receipt_json(
+      const project_io::PerformanceAdmissionReceipt &receipt) {
+    auto sequences = nlohmann::json::array();
+    for (const auto sequence : receipt.event_input_sequences) {
+      sequences.push_back(decimal_string(sequence));
+    }
+    return {
+        {"request_id", receipt.request_id.value()},
+        {"expected_recording_sequence",
+         decimal_string(receipt.expected_recording_sequence)},
+        {"accepted_tick", receipt.accepted_tick},
+        {"input_sequence", decimal_string(receipt.input_sequence)},
+        {"phase",
+         receipt.phase == project_io::PerformanceAdmissionPhase::prepared
+             ? "prepared"
+             : "completed"},
+        {"result",
+         receipt.result == project_io::PerformanceAdmissionResult::published
+             ? "published"
+             : receipt.result ==
+                     project_io::PerformanceAdmissionResult::no_audio
+                 ? "no_audio"
+                 : "not_published"},
+        {"event_input_sequences", std::move(sequences)},
+        {"binding_result",
+         receipt.binding_result.has_value()
+             ? nlohmann::json{
+                   {"fx", performance_fx_name(receipt.binding_result->fx)},
+                   {"recording_gesture_id",
+                    receipt.binding_result->recording_gesture_id}}
+             : nlohmann::json(nullptr)},
+    };
+  }
+
+  static foundation::Result<PerformanceLiveControlIntent>
+  parse_live_intent(const nlohmann::json &intent) {
+    using Intent = PerformanceLiveControlIntent;
+    require(intent.is_object() && intent.contains("kind"),
+            "live control intent kind is required");
+    const auto kind = string_field(intent, "kind");
+    Intent out;
+    const auto generation = [&]() -> std::optional<std::string> {
+      if (!intent.contains("gesture_generation")) {
+        return std::nullopt;
+      }
+      return uuid_field(intent, "gesture_generation");
+    };
+    const auto phase = [&]() {
+      const auto value = string_field(intent, "phase");
+      require(value == "engage" || value == "move",
+              "intent phase must be engage or move");
+      return value == "engage" ? domain::PerformanceFilterPhase::engage
+                               : domain::PerformanceFilterPhase::move;
+    };
+    if (kind == "filter_parameter") {
+      require(
+          intent.contains("phase")
+              ? exact_keys(intent, {"kind", "phase", "parameter", "value"}) ||
+                    exact_keys(intent, {"kind", "phase", "parameter", "value",
+                                        "gesture_generation"})
+              : false,
+          "filter_parameter intent shape is invalid");
+      out.kind = Intent::Kind::filter_parameter;
+      out.phase = phase();
+      const auto parameter = string_field(intent, "parameter");
+      if (parameter == "type") {
+        out.parameter = Intent::FilterParameter::type;
+        const auto type = string_field(intent, "value");
+        require(type == "lp" || type == "hp" || type == "bp",
+                "Filter type is invalid");
+        out.value = type == "lp" ? 0U : type == "hp" ? 1U : 2U;
+      } else if (parameter == "cutoff_hz") {
+        out.parameter = Intent::FilterParameter::cutoff_hz;
+        out.value = unsigned_field(intent, "value", 20'000U);
+      } else if (parameter == "resonance_milli") {
+        out.parameter = Intent::FilterParameter::resonance_milli;
+        out.value = unsigned_field(intent, "value", 1'000U);
+      } else {
+        require(false, "filter_parameter parameter is invalid");
+      }
+      out.gesture_generation = generation();
+      return foundation::Result<PerformanceLiveControlIntent>::success(out);
+    }
+    if (kind == "filter_release") {
+      require(exact_keys(intent, {"kind", "gesture_generation"}),
+              "filter_release intent shape is invalid");
+      out.kind = Intent::Kind::filter_release;
+      out.gesture_generation = generation();
+      return foundation::Result<PerformanceLiveControlIntent>::success(out);
+    }
+    if (kind == "fx_parameter") {
+      require(
+          exact_keys(intent, {"kind", "phase", "fx", "value"}) ||
+              exact_keys(intent, {"kind", "phase", "fx", "value",
+                                  "gesture_generation"}),
+          "fx_parameter intent shape is invalid");
+      out.kind = Intent::Kind::fx_parameter;
+      out.phase = phase();
+      out.fx = performance_fx(string_field(intent, "fx"));
+      out.value = unsigned_field(intent, "value", 1'000U);
+      out.gesture_generation = generation();
+      return foundation::Result<PerformanceLiveControlIntent>::success(out);
+    }
+    if (kind == "fx_release") {
+      require(exact_keys(intent, {"kind", "fx", "gesture_generation"}),
+              "fx_release intent shape is invalid");
+      out.kind = Intent::Kind::fx_release;
+      out.fx = performance_fx(string_field(intent, "fx"));
+      out.gesture_generation = generation();
+      return foundation::Result<PerformanceLiveControlIntent>::success(out);
+    }
+    if (kind == "pad_mute" || kind == "pad_solo") {
+      require(exact_keys(intent, {"kind", "slot", "enabled"}),
+              "pad gate intent shape is invalid");
+      require(intent.at("enabled").is_boolean(),
+              "pad gate enabled must be a boolean");
+      out.kind =
+          kind == "pad_mute" ? Intent::Kind::pad_mute : Intent::Kind::pad_solo;
+      out.slot = static_cast<std::uint8_t>(unsigned_field(intent, "slot", 63U));
+      out.enabled = intent.at("enabled").get<bool>();
+      return foundation::Result<PerformanceLiveControlIntent>::success(out);
+    }
+    if (kind == "clear_pad_gates" || kind == "hold_on" || kind == "hold_off") {
+      require(exact_keys(intent, {"kind"}), "live control intent shape is invalid");
+      out.kind = kind == "clear_pad_gates" ? Intent::Kind::clear_pad_gates
+                 : kind == "hold_on"       ? Intent::Kind::hold_on
+                                           : Intent::Kind::hold_off;
+      return foundation::Result<PerformanceLiveControlIntent>::success(out);
+    }
+    require(false, "live control intent kind is invalid");
+    return foundation::Result<PerformanceLiveControlIntent>::success(out);
+  }
+
+  // Binds the Core-verified Project identity named by the request and returns
+  // its current epoch. A request-carried epoch that does not match is stale:
+  // zero state change, zero enqueue.
+  foundation::Result<std::string> verified_live_epoch(
+      const std::filesystem::path &path,
+      const std::optional<std::string> &requested_epoch) {
+    if (!performance_live_control) {
+      return foundation::Result<std::string>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance live control audio producer is unavailable",
+          {{"reason", "performance_live_control_unavailable"}}));
+    }
+    auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return foundation::Result<std::string>::failure(loaded.error());
+    }
+    auto epoch =
+        performance_live_control->bind_control_target(loaded.value().id.value());
+    if (!epoch.has_value()) {
+      return foundation::Result<std::string>::failure(epoch.error());
+    }
+    if (requested_epoch.has_value() && *requested_epoch != epoch.value()) {
+      return foundation::Result<std::string>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Live control epoch is stale or unbound",
+          {{"reason", "performance_control_epoch_stale"},
+           {"current_control_epoch", epoch.value()}}));
+    }
+    return epoch;
+  }
+
+  void refresh_control_ready(PerformanceRuntime &runtime) {
+    if (!runtime.headered || runtime.core_control_ready ||
+        !runtime.fence.has_value() || !performance_live_control) {
+      return;
+    }
+    switch (performance_live_control->fence_readiness(*runtime.fence)) {
+      case PerformanceFenceReadiness::ready:
+        runtime.core_control_ready = true;
+        break;
+      case PerformanceFenceReadiness::diverged:
+        runtime.recovery_required = true;
+        break;
+      case PerformanceFenceReadiness::pending:
+        break;
+    }
+  }
+
+  foundation::Result<void> verify_session_epoch(
+      const PerformanceRuntime &runtime,
+      const std::string &control_epoch) {
+    if (!performance_live_control) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance live control audio producer is unavailable",
+          {{"reason", "performance_live_control_unavailable"}}));
+    }
+    const auto current = performance_live_control->current_control_epoch();
+    if (!current.has_value() || *current != runtime.control_epoch ||
+        control_epoch != runtime.control_epoch) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Live control epoch is stale or unbound",
+          {{"reason", "performance_control_epoch_stale"}}));
+    }
+    return foundation::Result<void>::success();
+  }
+
+  // The headered checkpoint carries the complete current live state plus the
+  // logical open bindings, so durable recovery never reconstructs state from
+  // the begin header alone.
+  project_io::PerformanceTransientCheckpoint headered_checkpoint(
+      const PerformanceRuntime &runtime,
+      const domain::PerformanceInitialLiveState &live_state) const {
+    project_io::PerformanceTransientCheckpoint checkpoint;
+    checkpoint.hold = runtime.hold;
+    checkpoint.last_accepted_tick = runtime.last_accepted_tick;
+    checkpoint.open_pads.reserve(runtime.open_pads.size());
+    for (const auto &[gesture_id, pad] : runtime.open_pads) {
+      checkpoint.open_pads.push_back(project_io::PerformanceOpenPadTransient{
+          gesture_id, pad.slot, pad.onset_tick, pad.velocity,
+          pad.input_sequence});
+    }
+    std::ranges::sort(
+        checkpoint.open_pads, {}, [](const auto &pad) {
+          return std::pair{pad.slot, pad.gesture_id};
+        });
+    checkpoint.open_fx.reserve(runtime.recording_fx.size());
+    for (const auto &[fx, binding] : runtime.recording_fx) {
+      checkpoint.open_fx.push_back(project_io::PerformanceOpenFxTransient{
+          fx, binding.recording_gesture_id, binding.effective_value,
+          std::nullopt});
+    }
+    if (runtime.recording_filter_binding.has_value()) {
+      const auto &binding = *runtime.recording_filter_binding;
+      const auto &independent =
+          std::get<domain::IndependentFilterLiveState>(live_state.filter);
+      checkpoint.open_filter = project_io::PerformanceOpenFilterTransient{
+          binding.recording_gesture_id, independent.type,
+          independent.cutoff_hz, independent.resonance_milli};
+    }
+    checkpoint.live_state = live_state;
+    return checkpoint;
+  }
+
+  static nlohmann::json fx_bindings_json(const PerformanceRuntime &runtime) {
+    auto bindings = nlohmann::json::array();
+    for (const auto &[fx, binding] : runtime.recording_fx) {
+      bindings.push_back({
+          {"fx", performance_fx_name(fx)},
+          {"gesture_generation", binding.runtime_generation},
+          {"recording_gesture_id", binding.recording_gesture_id},
+      });
+    }
+    if (runtime.recording_filter_binding.has_value()) {
+      bindings.push_back({
+          {"fx", "filter"},
+          {"mode", "independent"},
+          {"gesture_generation",
+           runtime.recording_filter_binding->runtime_generation},
+          {"recording_gesture_id",
+           runtime.recording_filter_binding->recording_gesture_id},
+      });
+    }
+    return bindings;
+  }
+
+  // D0/P1: begin with `control_epoch` selects the headered recording profile.
+  // The fence captures the Core accepted state as the durable header; the
+  // response is pending — Pad/Pattern admissions wait for the applied proof.
+  nlohmann::json performance_begin_headered(const nlohmann::json &request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "session_id", "performance_id", "control_epoch"}),
+        "performance.record.begin request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto performance_id =
+        domain::PerformanceId{uuid_field(request, "performance_id")};
+    const auto command_id = uuid_field(request, "command_id");
+    const auto control_epoch = uuid_field(request, "control_epoch");
+    std::lock_guard lock(sequence_mutex);
+    const auto key = sequence_key(path);
+    if (sequence_sessions.contains(key)) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance recording conflicts with an active Sequence session",
+          {{"reason", "sequence_session_active"}}));
+    }
+    const auto existing = performance_sessions.find(key);
+    if (existing != performance_sessions.end() &&
+        (existing->second.session_id != session_id ||
+         existing->second.performance_id != performance_id)) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance recording session is already active",
+                         {{"reason", "performance_session_active"}}));
+    }
+    if (existing != performance_sessions.end()) {
+      // Exact begin retry: the durable draft and the deterministic logical
+      // mapping are the original ones; no new fence is published.
+      auto &runtime = existing->second;
+      refresh_control_ready(runtime);
+      return success_envelope(
+          {{"performance_id", runtime.performance_id.value()},
+           {"committed_revision", runtime.expected_revision},
+           {"replayed", true},
+           {"profile", "header_input_sequence"},
+           {"control_epoch", runtime.control_epoch},
+           {"core_control_ready", runtime.core_control_ready},
+           {"next_recording_sequence",
+            decimal_string(runtime.next_recording_sequence)},
+           {"fx_bindings", fx_bindings_json(runtime)}},
+          std::nullopt);
+    }
+    const auto epoch = verified_live_epoch(path, control_epoch);
+    if (!epoch.has_value()) {
+      return error_envelope(epoch.error());
+    }
+    // The fence reserves its queue position before any draft exists; a full
+    // queue refuses the begin without consuming an admission.
+    auto fence = performance_live_control->begin_fence(epoch.value());
+    if (!fence.has_value()) {
+      return error_envelope(fence.error());
+    }
+    if (!performance_clock || !performance_input_sequencer) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance Core authorities are unavailable",
+                         {{"reason", "performance_authority_unavailable"}}));
+    }
+    auto anchor_tick = performance_clock->read_tick();
+    if (!anchor_tick.has_value()) {
+      return error_envelope(anchor_tick.error());
+    }
+
+    // Logical recording gesture ids for every engaged binding (deterministic
+    // from the begin command id); frozen-only controls have no open gesture.
+    const auto &header = fence.value().header;
+    PerformanceRuntime runtime{
+        session_id,
+        performance_id,
+        unsigned_field(request, "expected_revision"),
+        1,
+        {},
+        {},
+        {},
+        header.state.hold,
+        {},
+        {},
+        std::nullopt,
+        std::nullopt,
+        anchor_tick.value(),
+        false,
+    };
+    runtime.headered = true;
+    runtime.control_epoch = epoch.value();
+    runtime.fence = fence.value();
+    project_io::PerformanceTransientCheckpoint checkpoint;
+    checkpoint.hold = header.state.hold;
+    checkpoint.last_accepted_tick = anchor_tick.value();
+    checkpoint.live_state = header.state;
+    const auto adopt_fx = [&](std::size_t index) {
+      const auto &stage = header.state.other_fx.at(index);
+      if (!stage.engaged) {
+        return;
+      }
+      const auto fx = static_cast<domain::PerformanceFx>(index + 1);
+      const auto &generation =
+          header.runtime_generations.at(index + 1);
+      PerformanceRecordingBinding binding{
+          derived_recording_gesture_id(command_id, performance_fx_name(fx)),
+          generation.value_or(""),
+          stage.value};
+      checkpoint.open_fx.push_back(project_io::PerformanceOpenFxTransient{
+          fx, binding.recording_gesture_id, stage.value, std::nullopt});
+      runtime.recording_fx.emplace(fx, std::move(binding));
+    };
+    for (std::size_t index = 0; index < header.state.other_fx.size();
+         ++index) {
+      adopt_fx(index);
+    }
+    if (const auto *legacy =
+            std::get_if<domain::LegacyFilterLiveState>(&header.state.filter);
+        legacy != nullptr && legacy->engaged) {
+      const auto &generation =
+          header.runtime_generations.at(0);
+      PerformanceRecordingBinding binding{
+          derived_recording_gesture_id(command_id, "filter"),
+          generation.value_or(""),
+          legacy->value};
+      checkpoint.open_fx.push_back(project_io::PerformanceOpenFxTransient{
+          domain::PerformanceFx::filter, binding.recording_gesture_id,
+          legacy->value, std::nullopt});
+      runtime.recording_fx.emplace(domain::PerformanceFx::filter,
+                                   std::move(binding));
+    } else if (const auto *independent =
+                   std::get_if<domain::IndependentFilterLiveState>(
+                       &header.state.filter);
+               independent != nullptr && independent->engaged) {
+      const auto &generation =
+          header.runtime_generations.at(0);
+      PerformanceRecordingBinding binding{
+          derived_recording_gesture_id(command_id, "filter"),
+          generation.value_or(""),
+          0};
+      checkpoint.open_filter = project_io::PerformanceOpenFilterTransient{
+          binding.recording_gesture_id, independent->type,
+          independent->cutoff_hz, independent->resonance_milli};
+      runtime.recording_filter_binding = std::move(binding);
+    }
+    for (const auto &binding : runtime.recording_fx) {
+      if (binding.second.runtime_generation.empty()) {
+        return error_envelope(sequence_error(
+            ErrorCode::internal_error,
+            "Engaged control has no Core runtime generation at the fence"));
+      }
+    }
+    if (runtime.recording_filter_binding.has_value() &&
+        runtime.recording_filter_binding->runtime_generation.empty()) {
+      return error_envelope(sequence_error(
+          ErrorCode::internal_error,
+          "Engaged control has no Core runtime generation at the fence"));
+    }
+
+    auto begun = projects.begin_performance_draft(
+        path,
+        project_io::BeginPerformanceDraftRequest{
+            {foundation::CommandId{command_id},
+             unsigned_field(request, "expected_revision")},
+            session_id,
+            performance_id,
+            header.state,
+            checkpoint});
+    if (!begun.has_value()) {
+      return error_envelope(begun.error());
+    }
+    auto journal = sequence_journals.read_active_performance(path);
+    if (!journal.has_value() || !journal.value().admission_ledger.has_value()) {
+      return error_envelope(sequence_error(
+          ErrorCode::internal_error,
+          "Headered Performance begin produced no admission ledger"));
+    }
+    if (begun.value().replayed) {
+      // Cross-process begin retry: rebuild from the durable header and
+      // checkpoint; never recapture from the current DSP state. The original
+      // epoch is dead, so admissions refuse stale until a new session.
+      PerformanceRuntime restored{
+          session_id,
+          performance_id,
+          begun.value().committed_revision,
+          journal.value().next_flush_seq,
+          journal.value().pending_events,
+          {},
+          {},
+          false,
+          {},
+          {},
+          std::nullopt,
+          journal.value().last_launch_ack.has_value()
+              ? std::optional<PatternLaunchOutcome>{PatternLaunchOutcome{
+                    session_id,
+                    journal.value().last_launch_ack->request_id,
+                    journal.value().last_launch_ack->pattern_slot,
+                    journal.value().last_launch_ack->effective_tick,
+                    PatternLaunchOutcomeKind::applied}}
+              : std::nullopt,
+          journal.value().transient_checkpoint.has_value()
+              ? journal.value().transient_checkpoint->last_accepted_tick
+              : 0,
+          false,
+      };
+      restored.headered = true;
+      restored.next_recording_sequence =
+          journal.value().admission_ledger->next_recording_sequence;
+      if (journal.value().transient_checkpoint.has_value()) {
+        for (const auto &open :
+             journal.value().transient_checkpoint->open_fx) {
+          restored.recording_fx.emplace(
+              open.fx,
+              PerformanceRecordingBinding{
+                  open.gesture_id, "", open.effective_value});
+        }
+        if (journal.value().transient_checkpoint->open_filter.has_value()) {
+          restored.recording_filter_binding = PerformanceRecordingBinding{
+              journal.value().transient_checkpoint->open_filter->gesture_id,
+              "", 0};
+        }
+        restored.hold = journal.value().transient_checkpoint->hold;
+      }
+      performance_sessions.emplace(key, std::move(restored));
+      const auto &stored = performance_sessions.at(key);
+      return success_envelope(
+          {{"performance_id", performance_id.value()},
+           {"committed_revision", begun.value().committed_revision},
+           {"replayed", true},
+           {"profile", "header_input_sequence"},
+           {"control_epoch", nullptr},
+           {"core_control_ready", false},
+           {"next_recording_sequence",
+            decimal_string(stored.next_recording_sequence)},
+           {"fx_bindings", fx_bindings_json(stored)}},
+          begun.value().committed_revision);
+    }
+    runtime.expected_revision = begun.value().committed_revision;
+    runtime.next_flush_seq = journal.value().next_flush_seq;
+    runtime.next_recording_sequence =
+        journal.value().admission_ledger->next_recording_sequence;
+    performance_clock->anchor(
+        projects.load(path).value().performances.at(performance_id).created_bpm,
+        anchor_tick.value());
+    performance_sessions.emplace(key, std::move(runtime));
+    const auto &stored = performance_sessions.at(key);
+    return success_envelope(
+        {{"performance_id", performance_id.value()},
+         {"committed_revision", begun.value().committed_revision},
+         {"replayed", begun.value().replayed},
+         {"profile", "header_input_sequence"},
+         {"control_epoch", epoch.value()},
+         {"core_control_ready", false},
+         {"next_recording_sequence",
+          decimal_string(stored.next_recording_sequence)},
+         {"fx_bindings", fx_bindings_json(stored)}},
+        begun.value().committed_revision);
+  }
+
+  foundation::Result<void> append_headered_tail(
+      const std::filesystem::path &path,
+      const PerformanceRuntime &runtime,
+      std::uint64_t high_water,
+      const project_io::PerformanceTransientCheckpoint &checkpoint,
+      const project_io::PerformanceAdmissionReceipt &prepared) {
+    return sequence_journals.append_performance_tail(
+        path, runtime.session_id, runtime.performance_id,
+        runtime.expected_revision, high_water, runtime.pending_events,
+        checkpoint,
+        runtime.last_launch_ack.has_value()
+            ? std::optional<project_io::PerformanceLaunchAck>{
+                  project_io::PerformanceLaunchAck{
+                      runtime.last_launch_ack->request_id,
+                      runtime.last_launch_ack->pattern_slot,
+                      runtime.last_launch_ack->effective_tick}}
+            : std::nullopt,
+        prepared);
+  }
+
+  // Appends the `admission_complete` metadata for the pending prepared
+  // admission and refreshes the in-memory ledger mirror from the durable
+  // read-back.
+  foundation::Result<void> complete_headered_admission(
+      const std::filesystem::path &path,
+      PerformanceRuntime &runtime,
+      const project_io::PerformanceAdmissionReceipt &prepared,
+      project_io::PerformanceAdmissionResult result) {
+    auto completed = prepared;
+    completed.phase = project_io::PerformanceAdmissionPhase::completed;
+    completed.result = result;
+    auto written = sequence_journals.complete_performance_admission(
+        path, runtime.session_id, completed);
+    if (!written.has_value()) {
+      return written;
+    }
+    auto journal = sequence_journals.read_active_performance(path);
+    if (!journal.has_value()) {
+      return foundation::Result<void>::failure(journal.error());
+    }
+    runtime.next_recording_sequence =
+        journal.value().admission_ledger->next_recording_sequence;
+    return foundation::Result<void>::success();
+  }
+
+  static nlohmann::json headered_admission_error(
+      std::string_view message, std::string_view reason) {
+    return error_envelope(sequence_error(
+        ErrorCode::invalid_argument, std::string(message),
+        {{"reason", std::string(reason)}}));
+  }
+
+  // The exact-retry / reattach read: the frozen in-process window first, then
+  // the durable ledger. Never enqueues, never allocates a tick or sequence.
+  nlohmann::json headered_admission_lookup_response(
+      const project_io::PerformanceAdmissionLookup &lookup) {
+    switch (lookup.status) {
+      case project_io::PerformanceAdmissionLookupStatus::exact:
+        return success_envelope(
+            {{"admission", admission_receipt_json(*lookup.receipt)},
+             {"replayed", true}},
+            std::nullopt);
+      case project_io::PerformanceAdmissionLookupStatus::collision:
+        return headered_admission_error(
+            "Performance admission identity is bound to another payload",
+            "performance_admission_collision");
+      case project_io::PerformanceAdmissionLookupStatus::retry_expired:
+        return headered_admission_error(
+            "Performance admission window has expired; the original outcome "
+            "is unknown",
+            "performance_recording_retry_expired");
+      case project_io::PerformanceAdmissionLookupStatus::out_of_order:
+        return headered_admission_error(
+            "Performance admission expected sequence is newer than the next "
+            "admission",
+            "performance_admission_out_of_order");
+      case project_io::PerformanceAdmissionLookupStatus::occupied:
+        return headered_admission_error(
+            "another Performance admission is pending",
+            "performance_admission_pending");
+      case project_io::PerformanceAdmissionLookupStatus::fresh:
+        return {};
+      case project_io::PerformanceAdmissionLookupStatus::unavailable:
+        break;
+    }
+    return error_envelope(sequence_error(
+        ErrorCode::internal_error,
+        "Headered Performance session has no durable admission ledger"));
+  }
+
+  // A new-profile-shaped request for a session this process does not own:
+  // query the durable window (active or sealed) and answer the original
+  // receipt's fact. Zero enqueue, zero allocation.
+  nlohmann::json performance_event_reattach(
+      const std::filesystem::path &path,
+      const foundation::SequenceSessionId &session_id,
+      const std::string &event_id,
+      std::uint64_t expected,
+      const std::string &fingerprint) {
+    const auto consult = [&](const project_io::ActivePerformanceJournal
+                                 &journal) -> nlohmann::json {
+      if (!journal.admission_ledger.has_value() ||
+          journal.session_id != session_id) {
+        return {};
+      }
+      return headered_admission_lookup_response(
+          project_io::lookup_performance_admission(
+              journal, foundation::CommandId{event_id}, expected,
+              fingerprint));
+    };
+    const auto active = sequence_journals.read_active_performance(path);
+    if (active.has_value()) {
+      if (auto response = consult(active.value()); !response.is_null()) {
+        return response;
+      }
+    }
+    // A terminal (sealed) session's retained ledger only answers the original
+    // identity: the pending prepared receipt stays an explicit unknown.
+    auto recovery = projects.list_performance_recovery(path);
+    if (recovery.has_value()) {
+      for (const auto &candidate : recovery.value()) {
+        if (auto response = consult(candidate.journal);
+            !response.is_null()) {
+          return response;
+        }
+      }
+    }
+    return headered_admission_error(
+        "Performance session has ended; its admission window is not "
+        "available",
+        "performance_session_ended");
+  }
+
+  // Resumes the frozen admission: re-appends the identical durable candidate
+  // with the frozen tick/sequence (never a second read), then publishes the
+  // frozen engine messages and completes the metadata.
+  nlohmann::json resume_frozen_admission(
+      const std::filesystem::path &path,
+      PerformanceRuntime &runtime) {
+    auto &frozen = *runtime.frozen_admission;
+    if (frozen.published) {
+      // Publish already happened; only the identical complete metadata may
+      // follow. Zero enqueue.
+      auto completed =
+          complete_headered_admission(path, runtime, frozen.receipt,
+                                      project_io::PerformanceAdmissionResult::
+                                          published);
+      if (!completed.has_value()) {
+        if (completed.error().details.is_object() &&
+            completed.error().details.value("reason", "") ==
+                "performance_admission_complete_outcome_unknown") {
+          runtime.recovery_required = true;
+        }
+        return error_envelope(completed.error());
+      }
+      auto finished = std::move(*runtime.frozen_admission);
+      runtime.frozen_admission.reset();
+      runtime.recovery_required = false;
+      return success_envelope(
+          {{"admission", admission_receipt_json(
+                             finished.receipt)},
+           {"replayed", true}},
+          std::nullopt);
+    }
+    std::optional<PerformanceLiveControlReservation> reservation;
+    if (frozen.held_reservation.has_value()) {
+      reservation = std::move(*frozen.held_reservation);
+      frozen.held_reservation.reset();
+    } else if (frozen.fx_gesture.has_value() ||
+               frozen.filter_gesture.has_value() ||
+               frozen.pad_gates.has_value()) {
+      auto reserved = performance_live_control->reserve_live_control_republish(
+          runtime.control_epoch, frozen.fx_gesture, frozen.filter_gesture,
+          frozen.pad_gates, frozen.resulting_state, frozen.assigned_generation);
+      if (!reserved.has_value()) {
+        return error_envelope(reserved.error());
+      }
+      reservation = std::move(reserved.value());
+    }
+    const auto before = runtime;
+    // Recovery proof before any rewrite: if the exact prepared record is
+    // already durable (events, checkpoint, pending receipt and high-water all
+    // equal), the append is skipped entirely; only a proven-absent candidate
+    // is rewritten, byte-identical.
+    auto observed = sequence_journals.read_active_performance(path);
+    if (!observed.has_value()) {
+      return error_envelope(observed.error());
+    }
+    const auto &durable_journal = observed.value();
+    const auto already_durable =
+        durable_journal.pending_events == frozen.resulting_pending_events &&
+        durable_journal.transient_checkpoint.has_value() &&
+        *durable_journal.transient_checkpoint == frozen.candidate_checkpoint &&
+        durable_journal.last_input_sequence.has_value() &&
+        *durable_journal.last_input_sequence == frozen.receipt.input_sequence &&
+        durable_journal.admission_ledger.has_value() &&
+        durable_journal.admission_ledger->pending.has_value() &&
+        *durable_journal.admission_ledger->pending == frozen.receipt;
+    if (!already_durable) {
+      // Apply the frozen overlay before the append so the durable candidate
+      // is byte-identical to the original attempt.
+      runtime.pending_events = frozen.resulting_pending_events;
+      runtime.open_pads = frozen.resulting_open_pads;
+      runtime.recording_fx = frozen.resulting_recording_fx;
+      runtime.recording_filter_binding = frozen.resulting_filter_binding;
+      runtime.hold = frozen.resulting_hold;
+      runtime.last_accepted_tick = frozen.resulting_last_accepted_tick;
+      const auto durable = append_headered_tail(
+          path, runtime, frozen.receipt.input_sequence,
+          frozen.candidate_checkpoint, frozen.receipt);
+      if (!durable.has_value()) {
+        if (performance_tail_outcome_unknown(durable.error())) {
+          // The candidate may be durable; keep everything frozen.
+          runtime.frozen_admission->held_reservation = std::move(reservation);
+          runtime.recovery_required = true;
+        } else {
+          auto restored = std::move(before);
+          restored.frozen_admission = std::move(runtime.frozen_admission);
+          runtime = std::move(restored);
+        }
+        return error_envelope(durable.error());
+      }
+    } else {
+      runtime.pending_events = frozen.resulting_pending_events;
+      runtime.open_pads = frozen.resulting_open_pads;
+      runtime.recording_fx = frozen.resulting_recording_fx;
+      runtime.recording_filter_binding = frozen.resulting_filter_binding;
+      runtime.hold = frozen.resulting_hold;
+      runtime.last_accepted_tick = frozen.resulting_last_accepted_tick;
+    }
+    auto result = project_io::PerformanceAdmissionResult::no_audio;
+    if (reservation.has_value()) {
+      auto published =
+          performance_live_control->publish_live_control(
+              std::move(*reservation));
+      result = published.has_value()
+                   ? project_io::PerformanceAdmissionResult::published
+                   : project_io::PerformanceAdmissionResult::no_audio;
+    }
+    auto completed =
+        complete_headered_admission(path, runtime, frozen.receipt, result);
+    if (!completed.has_value()) {
+      const auto unknown = completed.error().details.is_object() &&
+                           completed.error().details.value("reason", "") ==
+                               "performance_admission_complete_outcome_unknown";
+      // The audio may already be published: freeze, never roll back.
+      runtime.frozen_admission->published = true;
+      if (unknown) {
+        runtime.recovery_required = true;
+      }
+      return error_envelope(completed.error());
+    }
+    auto receipt = frozen.receipt;
+    auto generation = frozen.assigned_generation;
+    runtime.frozen_admission.reset();
+    runtime.recovery_required = false;
+    receipt.phase = project_io::PerformanceAdmissionPhase::completed;
+    receipt.result = result;
+    return success_envelope(
+        {{"admission", admission_receipt_json(receipt)},
+         {"gesture_generation",
+          generation.has_value() ? nlohmann::json(*generation)
+                                 : nlohmann::json(nullptr)},
+         {"replayed", true}},
+        std::nullopt);
+  }
+
+  nlohmann::json performance_event_headered(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "event_id", "event", "control_epoch",
+                                 "expected_recording_sequence"}),
+            "performance.record.event request shape is invalid");
+    require(request.at("event").is_object(), "Performance event is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto event_id = uuid_field(request, "event_id");
+    const auto control_epoch = uuid_field(request, "control_epoch");
+    const auto expected =
+        parse_canonical_decimal(request, "expected_recording_sequence");
+    const auto fingerprint = performance_request_fingerprint(request);
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found == performance_sessions.end() ||
+        found->second.session_id != session_id ||
+        !found->second.headered) {
+      return performance_event_reattach(
+          path, session_id, event_id, expected, fingerprint);
+    }
+    auto &runtime = found->second;
+    if (runtime.frozen_admission.has_value()) {
+      const auto &frozen = runtime.frozen_admission->receipt;
+      if (frozen.request_id.value() != event_id ||
+          frozen.expected_recording_sequence != expected) {
+        return headered_admission_error(
+            "another Performance admission is pending",
+            "performance_admission_pending");
+      }
+      if (fingerprint != frozen.request_fingerprint) {
+        return headered_admission_error(
+            "Performance admission identity is bound to another payload",
+            "performance_admission_collision");
+      }
+      return resume_frozen_admission(path, runtime);
+    }
+    // Receipt lookup precedes any epoch/sequence refusal.
+    {
+      auto journal = sequence_journals.read_active_performance(path);
+      if (!journal.has_value()) {
+        return error_envelope(journal.error());
+      }
+      auto lookup = project_io::lookup_performance_admission(
+          journal.value(), foundation::CommandId{event_id}, expected,
+          fingerprint);
+      if (lookup.status != project_io::PerformanceAdmissionLookupStatus::fresh) {
+        return headered_admission_lookup_response(lookup);
+      }
+    }
+    if (auto epoch_ok = verify_session_epoch(runtime, control_epoch);
+        !epoch_ok.has_value()) {
+      return error_envelope(epoch_ok.error());
+    }
+    if (runtime.recovery_required) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
+    }
+    if (!performance_clock || !performance_input_sequencer) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance Core authorities are unavailable",
+                         {{"reason", "performance_authority_unavailable"}}));
+    }
+    refresh_control_ready(runtime);
+
+    const auto &event = request.at("event");
+    require(event.contains("kind"), "Performance event kind is required");
+    const auto kind = string_field(event, "kind");
+
+    auto before = runtime;
+    PerformanceFrozenAdmission frozen;
+    std::optional<PerformanceLiveControlReservation> reservation;
+    std::optional<PerformanceLiveControlState> resulting_state;
+    std::optional<std::string> assigned_generation;
+    project_io::PerformanceAdmissionResult result =
+        project_io::PerformanceAdmissionResult::no_audio;
+
+    // Step 1 (D0): identity/shape validated above; reserve the queue cell
+    // before any tick or sequence is read. The record route's event kinds
+    // translate to typed intents here; the logical recording binding is
+    // verified against the durable checkpoint ids while the port verifies
+    // the runtime generation.
+    const auto control_kind =
+        kind != "pad_press" && kind != "pad_release";
+    if (control_kind) {
+      using Intent = PerformanceLiveControlIntent;
+      PerformanceLiveControlIntent translated;
+      const auto event_generation = [&]() {
+        return uuid_field(event, "gesture_generation");
+      };
+      if (kind == "fx_engage") {
+        require(exact_keys(event, {"kind", "fx", "value"}),
+                "fx_engage event shape is invalid");
+        translated.kind = Intent::Kind::fx_parameter;
+        translated.phase = domain::PerformanceFilterPhase::engage;
+        translated.fx = performance_fx(string_field(event, "fx"));
+        translated.value = unsigned_field(event, "value", 1000U);
+      } else if (kind == "fx_move") {
+        require(exact_keys(event, {"kind", "fx", "value", "gesture_id",
+                                   "gesture_generation"}),
+                "fx_move event shape is invalid");
+        translated.kind = Intent::Kind::fx_parameter;
+        translated.phase = domain::PerformanceFilterPhase::move;
+        translated.fx = performance_fx(string_field(event, "fx"));
+        translated.value = unsigned_field(event, "value", 1000U);
+        translated.gesture_generation = event_generation();
+        const auto found_binding = runtime.recording_fx.find(translated.fx);
+        if (found_binding == runtime.recording_fx.end() ||
+            uuid_field(event, "gesture_id") !=
+                found_binding->second.recording_gesture_id) {
+          return error_envelope(sequence_error(
+              ErrorCode::invalid_argument,
+              "FX gesture does not match an engaged recording binding",
+              {{"reason", "performance_binding_mismatch"}}));
+        }
+      } else if (kind == "fx_release") {
+        require(exact_keys(event, {"kind", "fx", "gesture_id",
+                                   "gesture_generation"}),
+                "fx_release event shape is invalid");
+        translated.kind = Intent::Kind::fx_release;
+        translated.fx = performance_fx(string_field(event, "fx"));
+        translated.gesture_generation = event_generation();
+        const auto found_binding = runtime.recording_fx.find(translated.fx);
+        if (found_binding == runtime.recording_fx.end() ||
+            uuid_field(event, "gesture_id") !=
+                found_binding->second.recording_gesture_id) {
+          return error_envelope(sequence_error(
+              ErrorCode::invalid_argument,
+              "FX gesture does not match an engaged recording binding",
+              {{"reason", "performance_binding_mismatch"}}));
+        }
+      } else if (kind == "filter_parameter") {
+        const auto with_binding = event.contains("gesture_id");
+        require(
+            exact_keys(event, {"kind", "phase", "parameter", "value"}) ||
+                (with_binding &&
+                 exact_keys(event, {"kind", "phase", "parameter", "value",
+                                    "gesture_id", "gesture_generation"})),
+            "filter_parameter event shape is invalid");
+        translated.kind = Intent::Kind::filter_parameter;
+        const auto phase_value = string_field(event, "phase");
+        require(phase_value == "engage" || phase_value == "move",
+                "filter_parameter phase must be engage or move");
+        translated.phase = phase_value == "engage"
+                               ? domain::PerformanceFilterPhase::engage
+                               : domain::PerformanceFilterPhase::move;
+        const auto parameter = string_field(event, "parameter");
+        if (parameter == "type") {
+          translated.parameter = Intent::FilterParameter::type;
+          const auto type = string_field(event, "value");
+          require(type == "lp" || type == "hp" || type == "bp",
+                  "Filter type is invalid");
+          translated.value = type == "lp" ? 0U : type == "hp" ? 1U : 2U;
+        } else if (parameter == "cutoff_hz") {
+          translated.parameter = Intent::FilterParameter::cutoff_hz;
+          translated.value = unsigned_field(event, "value", 20'000U);
+        } else if (parameter == "resonance_milli") {
+          translated.parameter = Intent::FilterParameter::resonance_milli;
+          translated.value = unsigned_field(event, "value", 1'000U);
+        } else {
+          require(false, "filter_parameter parameter is invalid");
+        }
+        if (with_binding) {
+          translated.gesture_generation = event_generation();
+          if (!runtime.recording_filter_binding.has_value() ||
+              uuid_field(event, "gesture_id") !=
+                  runtime.recording_filter_binding->recording_gesture_id) {
+            return error_envelope(sequence_error(
+                ErrorCode::invalid_argument,
+                "Filter gesture does not match the recording binding",
+                {{"reason", "performance_binding_mismatch"}}));
+          }
+        }
+      } else if (kind == "filter_release") {
+        require(exact_keys(event, {"kind", "gesture_id",
+                                   "gesture_generation"}),
+                "filter_release event shape is invalid");
+        translated.kind = Intent::Kind::filter_release;
+        translated.gesture_generation = event_generation();
+        if (!runtime.recording_filter_binding.has_value() ||
+            uuid_field(event, "gesture_id") !=
+                runtime.recording_filter_binding->recording_gesture_id) {
+          return error_envelope(sequence_error(
+              ErrorCode::invalid_argument,
+              "Filter gesture does not match the recording binding",
+              {{"reason", "performance_binding_mismatch"}}));
+        }
+      } else if (kind == "pad_mute" || kind == "pad_solo") {
+        require(exact_keys(event, {"kind", "slot", "enabled"}),
+                "pad gate event shape is invalid");
+        require(event.at("enabled").is_boolean(),
+                "pad gate enabled must be a boolean");
+        translated.kind = kind == "pad_mute" ? Intent::Kind::pad_mute
+                                             : Intent::Kind::pad_solo;
+        translated.slot =
+            static_cast<std::uint8_t>(unsigned_field(event, "slot", 63U));
+        translated.enabled = event.at("enabled").get<bool>();
+      } else if (kind == "clear_pad_gates" || kind == "hold_on" ||
+                 kind == "hold_off") {
+        require(exact_keys(event, {"kind"}),
+                "live control event shape is invalid");
+        translated.kind = kind == "clear_pad_gates"
+                              ? Intent::Kind::clear_pad_gates
+                          : kind == "hold_on" ? Intent::Kind::hold_on
+                                              : Intent::Kind::hold_off;
+      } else {
+        require(false, "Performance event kind is invalid");
+      }
+      auto reserved = performance_live_control->reserve_live_control(
+          runtime.control_epoch, translated);
+      if (!reserved.has_value()) {
+        return error_envelope(reserved.error());
+      }
+      reservation = std::move(reserved.value());
+      resulting_state = reservation->resulting_state;
+      assigned_generation = reservation->assigned_generation;
+      frozen.fx_gesture = reservation->fx_gesture;
+      frozen.filter_gesture = reservation->filter_gesture;
+      frozen.pad_gates = reservation->pad_gates;
+      frozen.resulting_state = *resulting_state;
+      frozen.assigned_generation = assigned_generation;
+    } else {
+      // Pad admissions produce sound through the trigger path: the fence's
+      // applied header proof must exist first (control-ready only; capture
+      // readiness is the SDK's separate gate).
+      if (!runtime.core_control_ready) {
+        return headered_admission_error(
+            "Performance begin fence is not applied yet",
+            "performance_control_not_ready");
+      }
+    }
+
+    // Step 2: exactly one clock read and one sequence allocation.
+    auto tick = performance_clock->read_tick();
+    if (!tick.has_value()) {
+      return error_envelope(tick.error());
+    }
+    auto input_sequence = performance_input_sequencer->next();
+    if (!input_sequence.has_value()) {
+      return error_envelope(input_sequence.error());
+    }
+
+    // Step 3: freeze the candidate events and the kernel-side delta.
+    std::vector<std::uint64_t> produced_sequences;
+    const auto sequenced = [&](domain::PerformanceEventPayload payload,
+                               std::uint64_t sequence) {
+      runtime.pending_events.push_back(
+          domain::PerformanceEvent{std::move(payload), sequence});
+      produced_sequences.push_back(sequence);
+    };
+    if (kind == "pad_press") {
+      require(exact_keys(event, {"kind", "gesture_id", "slot", "velocity"}),
+              "pad_press event shape is invalid");
+      const auto gesture = uuid_field(event, "gesture_id");
+      require(!runtime.open_pads.contains(gesture),
+              "Pad gesture is already open");
+      const auto velocity = unsigned_field(event, "velocity", 127U);
+      require(velocity >= 1U, "velocity is out of range");
+      runtime.open_pads.emplace(
+          gesture,
+          OpenPerformancePad{
+              static_cast<std::uint8_t>(unsigned_field(event, "slot", 63U)),
+              tick.value(), static_cast<std::uint8_t>(velocity),
+              input_sequence.value()});
+    } else if (kind == "pad_release") {
+      require(exact_keys(event, {"kind", "gesture_id", "slot"}),
+              "pad_release event shape is invalid");
+      const auto gesture = uuid_field(event, "gesture_id");
+      const auto pad = runtime.open_pads.find(gesture);
+      const auto slot = unsigned_field(event, "slot", 63U);
+      require(pad != runtime.open_pads.end() && pad->second.slot == slot,
+              "Pad release does not match an open gesture");
+      // The PadHit carries its press's durable sequence.
+      sequenced(
+          domain::PadHitPerformanceEvent{
+              pad->second.slot, pad->second.onset_tick,
+              tick.value() > pad->second.onset_tick
+                  ? tick.value() - pad->second.onset_tick
+                  : std::uint64_t{1},
+              pad->second.velocity},
+          *pad->second.input_sequence);
+      runtime.open_pads.erase(pad);
+    } else if (kind == "fx_engage") {
+      const auto fx = performance_fx(string_field(event, "fx"));
+      require(!runtime.recording_fx.contains(fx),
+              "Performance FX is already engaged");
+      const auto value =
+          static_cast<std::uint16_t>(unsigned_field(event, "value", 1000U));
+      sequenced(domain::FxEngagePerformanceEvent{fx, value, tick.value()},
+                input_sequence.value());
+      // fx_engage with fx=filter is the legacy scalar binding and lives in
+      // open_fx; the typed independent Filter uses filter_parameter.
+      PerformanceRecordingBinding binding{
+          derived_recording_gesture_id(event_id, performance_fx_name(fx)),
+          assigned_generation.value_or(""), value};
+      runtime.recording_fx.emplace(fx, binding);
+      result = project_io::PerformanceAdmissionResult::published;
+      frozen.receipt.binding_result = project_io::PerformanceAdmissionBinding{
+          fx, binding.recording_gesture_id};
+    } else if (kind == "fx_move") {
+      const auto fx = performance_fx(string_field(event, "fx"));
+      const auto value =
+          static_cast<std::uint16_t>(unsigned_field(event, "value", 1000U));
+      auto &binding = runtime.recording_fx.at(fx);
+      if (value != binding.effective_value) {
+        // No coalescing in the headered profile: every accepted move keeps
+        // its real tick and input sequence.
+        sequenced(domain::FxMovePerformanceEvent{fx, value, tick.value()},
+                  input_sequence.value());
+        binding.effective_value = value;
+        result = project_io::PerformanceAdmissionResult::published;
+      } else {
+        // A no-op move still advances the admission window and stores its
+        // receipt; it produces no Project event.
+        performance_live_control->cancel_live_control(
+            std::move(*reservation));
+        reservation.reset();
+      }
+    } else if (kind == "fx_release") {
+      const auto fx = performance_fx(string_field(event, "fx"));
+      sequenced(domain::FxReleasePerformanceEvent{fx, tick.value()},
+                input_sequence.value());
+      runtime.recording_fx.erase(fx);
+      result = project_io::PerformanceAdmissionResult::published;
+    } else if (kind == "filter_parameter") {
+      const auto &state = std::get<domain::IndependentFilterLiveState>(
+          resulting_state->state.filter);
+      const auto phase = string_field(event, "phase");
+      if (phase == "engage") {
+        sequenced(domain::FilterChangePerformanceEvent{
+                      domain::PerformanceFilterPhase::engage, state.type,
+                      state.cutoff_hz, state.resonance_milli, tick.value()},
+                  input_sequence.value());
+        PerformanceRecordingBinding binding{
+            derived_recording_gesture_id(event_id, "filter"),
+            assigned_generation.value_or(""), 0};
+        runtime.recording_filter_binding = binding;
+        frozen.receipt.binding_result =
+            project_io::PerformanceAdmissionBinding{
+                domain::PerformanceFx::filter,
+                binding.recording_gesture_id};
+      } else {
+        // No coalescing: the move keeps its own tick and sequence.
+        sequenced(domain::FilterChangePerformanceEvent{
+                      domain::PerformanceFilterPhase::move, state.type,
+                      state.cutoff_hz, state.resonance_milli, tick.value()},
+                  input_sequence.value());
+      }
+      result = project_io::PerformanceAdmissionResult::published;
+    } else if (kind == "filter_release") {
+      const auto &state = std::get<domain::IndependentFilterLiveState>(
+          resulting_state->state.filter);
+      sequenced(domain::FilterChangePerformanceEvent{
+                    domain::PerformanceFilterPhase::release, state.type,
+                    state.cutoff_hz, state.resonance_milli, tick.value()},
+                input_sequence.value());
+      runtime.recording_filter_binding.reset();
+      result = project_io::PerformanceAdmissionResult::published;
+    } else if (kind == "pad_mute" || kind == "pad_solo" ||
+               kind == "clear_pad_gates") {
+      const auto muted = resulting_state->state.muted_mask;
+      const auto solo = resulting_state->state.solo_mask;
+      const auto snapshot = performance_live_control->live_control_snapshot();
+      if (muted == snapshot.accepted.state.muted_mask &&
+          solo == snapshot.accepted.state.solo_mask) {
+        performance_live_control->cancel_live_control(
+            std::move(*reservation));
+        reservation.reset();
+      } else {
+        sequenced(domain::PadGatesSetPerformanceEvent{muted, solo,
+                                                      tick.value()},
+                  input_sequence.value());
+        result = project_io::PerformanceAdmissionResult::published;
+      }
+    } else if (kind == "hold_on" || kind == "hold_off") {
+      sequenced(kind == "hold_on"
+                    ? domain::PerformanceEventPayload{
+                          domain::HoldOnPerformanceEvent{tick.value()}}
+                    : domain::PerformanceEventPayload{
+                          domain::HoldOffPerformanceEvent{tick.value()}},
+                input_sequence.value());
+      runtime.hold = kind == "hold_on";
+      result = project_io::PerformanceAdmissionResult::published;
+    } else {
+      require(false, "Performance event kind is invalid");
+    }
+
+    runtime.pending_events = domain::canonical_performance_events(
+        std::move(runtime.pending_events),
+        domain::PerformanceEventProfile::header_input_sequence);
+    runtime.last_accepted_tick = tick.value();
+    frozen.receipt.request_id = foundation::CommandId{event_id};
+    frozen.receipt.expected_recording_sequence = expected;
+    frozen.receipt.request_fingerprint = fingerprint;
+    frozen.receipt.accepted_tick = tick.value();
+    frozen.receipt.input_sequence = input_sequence.value();
+    frozen.receipt.event_input_sequences = produced_sequences;
+    frozen.resulting_pending_events = runtime.pending_events;
+    frozen.resulting_open_pads = runtime.open_pads;
+    frozen.resulting_recording_fx = runtime.recording_fx;
+    frozen.resulting_filter_binding = runtime.recording_filter_binding;
+    frozen.resulting_hold = runtime.hold;
+    frozen.resulting_last_accepted_tick = runtime.last_accepted_tick;
+    frozen.candidate_checkpoint = headered_checkpoint(
+        runtime,
+        resulting_state.has_value() ? resulting_state->state
+                                    : performance_live_control
+                                          ->live_control_snapshot()
+                                          .accepted.state);
+
+    // Step 4: the durable prepared append carries the pending receipt.
+    const auto durable = append_headered_tail(
+        path, runtime, input_sequence.value(), frozen.candidate_checkpoint,
+        frozen.receipt);
+    if (!durable.has_value()) {
+      if (performance_tail_outcome_unknown(durable.error())) {
+        // Unknown: the candidate may be durable. Freeze with the cell held
+        // (never published) until recovery proves it.
+        frozen.held_reservation = std::move(reservation);
+        auto restored = std::move(before);
+        restored.frozen_admission = std::move(frozen);
+        restored.recovery_required = true;
+        runtime = std::move(restored);
+      } else {
+        // Known-absent: release the cell, keep the frozen tuple for the
+        // identical retry; no accepted state moved.
+        if (reservation.has_value()) {
+          performance_live_control->cancel_live_control(
+              std::move(*reservation));
+        }
+        auto restored = std::move(before);
+        restored.frozen_admission = std::move(frozen);
+        runtime = std::move(restored);
+      }
+      return error_envelope(durable.error());
+    }
+
+    // Step 5: publish, then the complete metadata. A publish refusal after a
+    // durable success is admitted-without-audio, never a rollback.
+    if (reservation.has_value()) {
+      auto published =
+          performance_live_control->publish_live_control(
+              std::move(*reservation));
+      if (!published.has_value()) {
+        result = project_io::PerformanceAdmissionResult::no_audio;
+      }
+    }
+    auto completed =
+        complete_headered_admission(path, runtime, frozen.receipt, result);
+    if (!completed.has_value()) {
+      const auto unknown = completed.error().details.is_object() &&
+                           completed.error().details.value("reason", "") ==
+                               "performance_admission_complete_outcome_unknown";
+      frozen.published = true;
+      auto restored = runtime;
+      restored.frozen_admission = std::move(frozen);
+      restored.recovery_required = unknown || restored.recovery_required;
+      runtime = std::move(restored);
+      return error_envelope(completed.error());
+    }
+    auto receipt = frozen.receipt;
+    receipt.phase = project_io::PerformanceAdmissionPhase::completed;
+    receipt.result = result;
+    return success_envelope(
+        {{"event_id", event_id},
+         {"accepted_tick", receipt.accepted_tick},
+         {"input_sequence", decimal_string(receipt.input_sequence)},
+         {"next_recording_sequence",
+          decimal_string(runtime.next_recording_sequence)},
+         {"result",
+          result == project_io::PerformanceAdmissionResult::published
+              ? "published"
+              : "no_audio"},
+         {"coalesced", false},
+         {"gesture_generation",
+          assigned_generation.has_value()
+              ? nlohmann::json(*assigned_generation)
+              : nlohmann::json(nullptr)},
+         {"recording_gesture_id",
+          receipt.binding_result.has_value()
+              ? nlohmann::json(
+                    receipt.binding_result->recording_gesture_id)
+              : nlohmann::json(nullptr)},
+         {"replayed", false}},
+        std::nullopt);
+  }
+
   nlohmann::json performance_begin(const nlohmann::json& request) {
+    if (request.contains("control_epoch")) {
+      return performance_begin_headered(request);
+    }
     require(
         exact_keys(
             request,
@@ -6578,6 +8001,11 @@ struct Application::Impl {
           "Performance session requires recovery",
           {{"reason", "performance_tail_outcome_unknown"}}));
     }
+    if (found->second.frozen_admission.has_value()) {
+      return headered_admission_error(
+          "another Performance admission is pending",
+          "performance_admission_pending");
+    }
     if (found->second.pending_events.empty()) {
       return error_envelope(
           sequence_error(ErrorCode::invalid_argument,
@@ -6645,7 +8073,17 @@ struct Application::Impl {
             "Performance session requires recovery",
             {{"reason", "performance_tail_outcome_unknown"}}));
       }
-      auto closed = close_performance_transients(path, found->second);
+      // A prepared pending admission blocks ordinary finalize; the
+      // recovery-only closure after proven producer loss is the exception.
+      if (found->second.frozen_admission.has_value()) {
+        return headered_admission_error(
+            "another Performance admission is pending",
+            "performance_admission_pending");
+      }
+      const auto closed = found->second.headered
+          ? close_performance_transients_headered(
+                path, found->second, request_id)
+          : close_performance_transients(path, found->second);
       if (!closed.has_value()) {
         return error_envelope(closed.error());
       }
@@ -7265,10 +8703,18 @@ struct Application::Impl {
   service_performance_launch(const std::filesystem::path &path,
                              PerformanceRuntime &runtime) {
     if (runtime.recovery_required) {
-      return foundation::Result<void>::failure(sequence_error(
-          ErrorCode::invalid_argument,
-          "Performance session requires recovery",
-          {{"reason", "performance_tail_outcome_unknown"}}));
+      // A frozen session with no pending launch outcomes has nothing to
+      // service: handler-level checks still gate every mutation, and the
+      // headered exact-retry window resolves its frozen admission there. With
+      // an outcome outstanding the service stays fail-closed.
+      if (!pattern_launch_acknowledger ||
+          !pattern_launch_acknowledger->peek(runtime.session_id).empty()) {
+        return foundation::Result<void>::failure(sequence_error(
+            ErrorCode::invalid_argument,
+            "Performance session requires recovery",
+            {{"reason", "performance_tail_outcome_unknown"}}));
+      }
+      return foundation::Result<void>::success();
     }
     if (!pattern_launch_acknowledger) {
       return foundation::Result<void>::success();
@@ -7335,23 +8781,77 @@ struct Application::Impl {
         return foundation::Result<void>::failure(sequence.error());
       }
       auto before = runtime;
-      runtime.pending_events.push_back(
-          domain::PerformanceEvent{domain::PatternLaunchPerformanceEvent{
-              outcome.pattern_slot, outcome.effective_tick}});
-      runtime.last_launch_ack = outcome;
-      if (runtime.pending_launch.has_value() &&
-          runtime.pending_launch->request_id == outcome.request_id) {
+      if (runtime.headered && runtime.pending_launch.has_value() &&
+          runtime.pending_launch->request_id == outcome.request_id &&
+          runtime.pending_launch->frozen_input_sequence.has_value()) {
+        // Headered profile: the PatternLaunch reuses the sequence frozen at
+        // reservation; the ACK append is an internal admission that names the
+        // original request and consumes no second musical sequence.
+        const auto frozen_sequence =
+            *runtime.pending_launch->frozen_input_sequence;
+        runtime.pending_events.push_back(domain::PerformanceEvent{
+            domain::PatternLaunchPerformanceEvent{
+                outcome.pattern_slot, outcome.effective_tick},
+            frozen_sequence});
+        runtime.last_launch_ack = outcome;
         runtime.pending_launch.reset();
-      }
-      canonicalize_performance_pending(runtime);
-      auto durable =
-          append_performance_runtime_tail(path, runtime, sequence.value());
-      if (!durable.has_value()) {
-        const auto outcome_unknown =
-            performance_tail_outcome_unknown(durable.error());
-        runtime = std::move(before);
-        runtime.recovery_required = outcome_unknown;
-        return durable;
+        runtime.pending_events = domain::canonical_performance_events(
+            std::move(runtime.pending_events),
+            domain::PerformanceEventProfile::header_input_sequence);
+        project_io::PerformanceAdmissionReceipt ack_receipt;
+        ack_receipt.request_id = outcome.request_id;
+        ack_receipt.expected_recording_sequence =
+            runtime.next_recording_sequence;
+        ack_receipt.request_fingerprint = canonical_manifest_digest(
+            "lmdj.performance.launch.ack\n" + outcome.session_id.value() +
+            "\n" + outcome.request_id.value() + "\n" +
+            std::to_string(outcome.pattern_slot) + "\n" +
+            std::to_string(outcome.effective_tick));
+        ack_receipt.accepted_tick = outcome.effective_tick;
+        ack_receipt.input_sequence = sequence.value();
+        ack_receipt.event_input_sequences = {frozen_sequence};
+        const auto checkpoint = headered_checkpoint(
+            runtime,
+            performance_live_control
+                ? performance_live_control->live_control_snapshot()
+                      .accepted.state
+                : domain::PerformanceInitialLiveState{});
+        auto durable = append_headered_tail(
+            path, runtime, sequence.value(), checkpoint, ack_receipt);
+        if (durable.has_value()) {
+          durable = complete_headered_admission(
+              path, runtime, ack_receipt,
+              project_io::PerformanceAdmissionResult::published);
+        }
+        if (!durable.has_value()) {
+          const auto outcome_unknown =
+              performance_tail_outcome_unknown(durable.error()) ||
+              (durable.error().details.is_object() &&
+               durable.error().details.value("reason", "") ==
+                   "performance_admission_complete_outcome_unknown");
+          runtime = std::move(before);
+          runtime.recovery_required = outcome_unknown;
+          return durable;
+        }
+      } else {
+        runtime.pending_events.push_back(
+            domain::PerformanceEvent{domain::PatternLaunchPerformanceEvent{
+                outcome.pattern_slot, outcome.effective_tick}});
+        runtime.last_launch_ack = outcome;
+        if (runtime.pending_launch.has_value() &&
+            runtime.pending_launch->request_id == outcome.request_id) {
+          runtime.pending_launch.reset();
+        }
+        canonicalize_performance_pending(runtime);
+        auto durable =
+            append_performance_runtime_tail(path, runtime, sequence.value());
+        if (!durable.has_value()) {
+          const auto outcome_unknown =
+              performance_tail_outcome_unknown(durable.error());
+          runtime = std::move(before);
+          runtime.recovery_required = outcome_unknown;
+          return durable;
+        }
       }
       auto committed = pattern_launch_acknowledger->commit(
           runtime.session_id, outcome.request_id);
@@ -7373,11 +8873,169 @@ struct Application::Impl {
     return foundation::Result<void>::success();
   }
 
+  // D0/P1 headered closure at recording stop: each synthetic FxRelease /
+  // FilterChange release / HoldOff allocates its own Core sequence in this
+  // admission lock; PadHits reuse their press sequences. Journal-side only —
+  // recording stop retains the live performance state.
+  foundation::Result<void>
+  close_performance_transients_headered(const std::filesystem::path &path,
+                                        PerformanceRuntime &runtime,
+                                        foundation::CommandId request_id) {
+    if (runtime.open_pads.empty() && runtime.recording_fx.empty() &&
+        !runtime.recording_filter_binding.has_value() && !runtime.hold) {
+      return foundation::Result<void>::success();
+    }
+    if (!performance_clock || !performance_input_sequencer) {
+      return foundation::Result<void>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance Core authorities are unavailable",
+                         {{"reason", "performance_authority_unavailable"}}));
+    }
+    auto tick = performance_clock->read_tick();
+    if (!tick.has_value()) {
+      return foundation::Result<void>::failure(tick.error());
+    }
+    auto before = runtime;
+    std::vector<std::uint64_t> event_sequences;
+    std::optional<std::uint64_t> high_water;
+    const auto next_sequence = [&]() -> foundation::Result<std::uint64_t> {
+      auto sequence = performance_input_sequencer->next();
+      if (sequence.has_value()) {
+        high_water = sequence.value();
+      }
+      return sequence;
+    };
+    for (const auto &[gesture_id, pad] : runtime.open_pads) {
+      (void)gesture_id;
+      const auto press_sequence = pad.input_sequence;
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::PadHitPerformanceEvent{
+              pad.slot, pad.onset_tick,
+              tick.value() > pad.onset_tick ? tick.value() - pad.onset_tick
+                                            : std::uint64_t{1},
+              pad.velocity},
+          press_sequence});
+      if (press_sequence.has_value()) {
+        event_sequences.push_back(*press_sequence);
+      }
+    }
+    for (const auto &[fx, binding] : runtime.recording_fx) {
+      (void)binding;
+      auto sequence = next_sequence();
+      if (!sequence.has_value()) {
+        runtime = std::move(before);
+        return foundation::Result<void>::failure(sequence.error());
+      }
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::FxReleasePerformanceEvent{fx, tick.value()},
+          sequence.value()});
+      event_sequences.push_back(sequence.value());
+    }
+    if (runtime.recording_filter_binding.has_value()) {
+      auto sequence = next_sequence();
+      if (!sequence.has_value()) {
+        runtime = std::move(before);
+        return foundation::Result<void>::failure(sequence.error());
+      }
+      const auto snapshot = performance_live_control
+                                ? performance_live_control
+                                      ->live_control_snapshot()
+                                      .accepted.state
+                                : domain::PerformanceInitialLiveState{};
+      const auto &independent =
+          std::get<domain::IndependentFilterLiveState>(snapshot.filter);
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::FilterChangePerformanceEvent{
+              domain::PerformanceFilterPhase::release, independent.type,
+              independent.cutoff_hz, independent.resonance_milli,
+              tick.value()},
+          sequence.value()});
+      event_sequences.push_back(sequence.value());
+    }
+    if (runtime.hold) {
+      auto sequence = next_sequence();
+      if (!sequence.has_value()) {
+        runtime = std::move(before);
+        return foundation::Result<void>::failure(sequence.error());
+      }
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::HoldOffPerformanceEvent{tick.value()}, sequence.value()});
+      event_sequences.push_back(sequence.value());
+    }
+    if (!high_water.has_value()) {
+      // Only PadHits closed (press sequences): the tail high-water still
+      // advances by one internal allocation.
+      auto sequence = next_sequence();
+      if (!sequence.has_value()) {
+        runtime = std::move(before);
+        return foundation::Result<void>::failure(sequence.error());
+      }
+    }
+    runtime.open_pads.clear();
+    runtime.recording_fx.clear();
+    runtime.recording_filter_binding.reset();
+    runtime.hold = false;
+    runtime.last_accepted_tick = tick.value();
+    runtime.pending_events = domain::canonical_performance_events(
+        std::move(runtime.pending_events),
+        domain::PerformanceEventProfile::header_input_sequence);
+    project_io::PerformanceAdmissionReceipt prepared;
+    prepared.request_id = request_id;
+    prepared.expected_recording_sequence = runtime.next_recording_sequence;
+    prepared.request_fingerprint = canonical_manifest_digest(
+        "lmdj.performance.record.stop\n" + runtime.session_id.value() + "\n" +
+        request_id.value() + "\n" + std::to_string(tick.value()));
+    prepared.accepted_tick = tick.value();
+    prepared.input_sequence = *high_water;
+    prepared.event_input_sequences = event_sequences;
+    // The closure is journal-side: the checkpoint records the neutralized
+    // recorded state (HOLD off, gestures closed, tuples retained), never the
+    // still-running live bus.
+    auto closed_state = performance_live_control
+                            ? performance_live_control->live_control_snapshot()
+                                  .accepted.state
+                            : domain::PerformanceInitialLiveState{};
+    closed_state.hold = false;
+    for (auto &gate : closed_state.other_fx) {
+      gate.engaged = false;
+      gate.frozen = false;
+    }
+    if (auto *independent =
+            std::get_if<domain::IndependentFilterLiveState>(
+                &closed_state.filter)) {
+      independent->engaged = false;
+      independent->frozen = false;
+    } else {
+      auto &legacy =
+          std::get<domain::LegacyFilterLiveState>(closed_state.filter);
+      legacy.engaged = false;
+      legacy.frozen = false;
+    }
+    const auto checkpoint = headered_checkpoint(runtime, closed_state);
+    auto durable = append_headered_tail(
+        path, runtime, *high_water, checkpoint, prepared);
+    if (durable.has_value()) {
+      durable = complete_headered_admission(
+          path, runtime, prepared,
+          project_io::PerformanceAdmissionResult::no_audio);
+    }
+    if (!durable.has_value()) {
+      const auto unknown =
+          performance_tail_outcome_unknown(durable.error()) ||
+          (durable.error().details.is_object() &&
+           durable.error().details.value("reason", "") ==
+               "performance_admission_complete_outcome_unknown");
+      runtime = std::move(before);
+      runtime.recovery_required = unknown;
+      return durable;
+    }
+    return foundation::Result<void>::success();
+  }
+
   foundation::Result<void>
   close_performance_transients(const std::filesystem::path &path,
                                PerformanceRuntime &runtime) {
-    if (runtime.open_pads.empty() && runtime.open_fx.empty() && !runtime.hold) {
-      return foundation::Result<void>::success();
+    if (runtime.open_pads.empty() && runtime.open_fx.empty() && !runtime.hold) {      return foundation::Result<void>::success();
     }
     if (!performance_clock || !performance_input_sequencer) {
       return foundation::Result<void>::failure(
@@ -7432,6 +9090,10 @@ struct Application::Impl {
   }
 
   nlohmann::json performance_event(const nlohmann::json &request) {
+    if (request.contains("control_epoch") ||
+        request.contains("expected_recording_sequence")) {
+      return performance_event_headered(request);
+    }
     require(exact_keys(request, {"operation", "project_path", "session_id",
                                  "event_id", "event"}),
             "performance.record.event request shape is invalid");
@@ -7701,7 +9363,318 @@ struct Application::Impl {
     return success_envelope({{"applied", true}}, std::nullopt);
   }
 
+  // D0/P1 sessionless live control: no Project write, identity
+  // (epoch, expected_control_sequence, command_id), one inflight plus the
+  // most recent completed in memory. Shares the recording route's admission
+  // kernel and queue reservation.
+  nlohmann::json performance_live_control_command(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "control_epoch",
+                                 "command_id", "expected_control_sequence",
+                                 "intent"}),
+            "performance.live.control request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto control_epoch = uuid_field(request, "control_epoch");
+    const auto expected =
+        parse_canonical_decimal(request, "expected_control_sequence");
+    const auto fingerprint = performance_request_fingerprint(request);
+    const auto intent = parse_live_intent(request.at("intent"));
+    if (!intent.has_value()) {
+      return error_envelope(intent.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto key = sequence_key(path);
+    const auto recording = performance_sessions.find(key);
+    if (recording != performance_sessions.end() &&
+        recording->second.headered) {
+      return headered_admission_error(
+          "a headered recording session owns live control for this epoch; "
+          "use the recording route",
+          "performance_recording_route_required");
+    }
+    const auto epoch = verified_live_epoch(path, control_epoch);
+    if (!epoch.has_value()) {
+      return error_envelope(epoch.error());
+    }
+    auto &ledger =
+        live_control_ledgers[key + "\n" + epoch.value()];
+    if (expected < ledger.next_control_sequence) {
+      if (ledger.completed_command_id.has_value() &&
+          *ledger.completed_command_id == command_id &&
+          ledger.completed_fingerprint == fingerprint) {
+        return success_envelope(
+            {{"command_id", command_id},
+             {"control_epoch", epoch.value()},
+             {"control_sequence",
+              decimal_string(ledger.completed_sequence)},
+             {"gesture_generation",
+              ledger.completed_generation.has_value()
+                  ? nlohmann::json(*ledger.completed_generation)
+                  : nlohmann::json(nullptr)},
+             {"accepted", true},
+             {"replayed", true}},
+            std::nullopt);
+      }
+      return headered_admission_error(
+          "Live control expected sequence has expired",
+          "performance_control_retry_expired");
+    }
+    if (expected > ledger.next_control_sequence) {
+      return headered_admission_error(
+          "Live control expected sequence is newer than the next admission",
+          "performance_admission_out_of_order");
+    }
+    auto reserved = performance_live_control->reserve_live_control(
+        epoch.value(), intent.value());
+    if (!reserved.has_value()) {
+      return error_envelope(reserved.error());
+    }
+    const auto control_sequence = reserved.value().control_sequence;
+    const auto generation = reserved.value().assigned_generation;
+    auto published = performance_live_control->publish_live_control(
+        std::move(reserved.value()));
+    if (!published.has_value()) {
+      // Known refusal: no state change; the same identity may retry fresh.
+      return error_envelope(published.error());
+    }
+    ledger.next_control_sequence += 1;
+    ledger.completed_command_id = command_id;
+    ledger.completed_fingerprint = fingerprint;
+    ledger.completed_sequence = control_sequence;
+    ledger.completed_generation = generation;
+    const auto snapshot = performance_live_control->live_control_snapshot();
+    return success_envelope(
+        {{"command_id", command_id},
+         {"control_epoch", epoch.value()},
+         {"control_sequence", decimal_string(control_sequence)},
+         {"gesture_generation",
+          generation.has_value() ? nlohmann::json(*generation)
+                                 : nlohmann::json(nullptr)},
+         {"accepted", true},
+         {"applied",
+          snapshot.applied_control_sequence >= control_sequence},
+         {"replayed", false}},
+        std::nullopt);
+  }
+
+  // D0/P1 live status: the Core epoch, accepted and applied state, and the
+  // control sequences. Unavailable never reports a fake neutral state.
+  nlohmann::json performance_live_status(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path"}),
+            "performance.live.status request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    std::lock_guard lock(sequence_mutex);
+    if (!performance_live_control) {
+      return success_envelope(
+          {{"available", false},
+           {"control_epoch", nullptr},
+           {"accepted", nullptr},
+           {"applied", nullptr},
+           {"accepted_control_sequence", nullptr},
+           {"applied_control_sequence", nullptr},
+           {"reset_pending", false},
+           {"begin_pending", false}},
+          std::nullopt);
+    }
+    const auto epoch = verified_live_epoch(path, std::nullopt);
+    if (!epoch.has_value()) {
+      return error_envelope(epoch.error());
+    }
+    const auto snapshot = performance_live_control->live_control_snapshot();
+    auto generations = nlohmann::json::object();
+    for (std::size_t index = 0; index < 8; ++index) {
+      const auto &generation = snapshot.accepted.runtime_generations.at(index);
+      generations[performance_fx_name(
+          static_cast<domain::PerformanceFx>(index))] =
+          generation.has_value() ? nlohmann::json(*generation)
+                                 : nlohmann::json(nullptr);
+    }
+    const auto found = performance_sessions.find(sequence_key(path));
+    const auto begin_pending = found != performance_sessions.end() &&
+                               found->second.headered &&
+                               !found->second.core_control_ready;
+    return success_envelope(
+        {{"available", true},
+         {"control_epoch", epoch.value()},
+         {"accepted",
+          domain::performance_initial_live_state_json(
+              snapshot.accepted.state)},
+         {"applied",
+          domain::performance_initial_live_state_json(
+              snapshot.applied.state)},
+         {"runtime_generations", std::move(generations)},
+         {"accepted_control_sequence",
+          decimal_string(snapshot.accepted_control_sequence)},
+         {"applied_control_sequence",
+          decimal_string(snapshot.applied_control_sequence)},
+         {"reset_pending", false},
+         {"begin_pending", begin_pending}},
+        std::nullopt);
+  }
+
+  // D0/P1 headered launch-request: the input sequence is frozen at
+  // reservation time and the ACK reuses it; the admission completes with an
+  // empty event list and the ACK's later event append rides an internal
+  // admission that names the original request identity.
+  nlohmann::json performance_launch_request_headered(
+      const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "request_id", "pattern_slot",
+                                 "control_epoch",
+                                 "expected_recording_sequence"}),
+            "performance.record.launch-request request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto request_id =
+        foundation::CommandId{uuid_field(request, "request_id")};
+    const auto control_epoch = uuid_field(request, "control_epoch");
+    const auto expected =
+        parse_canonical_decimal(request, "expected_recording_sequence");
+    const auto fingerprint = performance_request_fingerprint(request);
+    const auto slot =
+        unsigned_field(request, "pattern_slot", domain::kPatternSlotCount - 1U);
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found == performance_sessions.end() ||
+        found->second.session_id != session_id ||
+        !found->second.headered) {
+      return performance_event_reattach(
+          path, session_id, request_id.value(), expected, fingerprint);
+    }
+    auto &runtime = found->second;
+    if (runtime.frozen_admission.has_value()) {
+      return headered_admission_error(
+          "another Performance admission is pending",
+          "performance_admission_pending");
+    }
+    {
+      auto journal = sequence_journals.read_active_performance(path);
+      if (!journal.has_value()) {
+        return error_envelope(journal.error());
+      }
+      auto lookup = project_io::lookup_performance_admission(
+          journal.value(), request_id, expected, fingerprint);
+      if (lookup.status != project_io::PerformanceAdmissionLookupStatus::fresh) {
+        return headered_admission_lookup_response(lookup);
+      }
+    }
+    if (auto epoch_ok = verify_session_epoch(runtime, control_epoch);
+        !epoch_ok.has_value()) {
+      return error_envelope(epoch_ok.error());
+    }
+    if (runtime.recovery_required) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
+    }
+    refresh_control_ready(runtime);
+    if (!runtime.core_control_ready) {
+      return headered_admission_error(
+          "Performance begin fence is not applied yet",
+          "performance_control_not_ready");
+    }
+    if (!performance_clock || !performance_input_sequencer ||
+        !pattern_launch_acknowledger) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance launch authorities are unavailable",
+          {{"reason", "performance_launch_authority_unavailable"}}));
+    }
+    auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    if (loaded.value().revision != runtime.expected_revision) {
+      return error_envelope(sequence_error(
+          ErrorCode::revision_conflict,
+          "Performance launch Project revision does not match the active session"));
+    }
+    std::shared_ptr<const cooker::RuntimeSnapshot> resolved_pattern;
+    const auto& occupying_pattern = loaded.value().pattern_slots.at(slot);
+    if (occupying_pattern.has_value()) {
+      auto cooked = cook_project(
+          path, loaded.value(), *occupying_pattern, sample_limits);
+      if (!cooked.has_value()) {
+        return error_envelope(cooked.error());
+      }
+      resolved_pattern = std::move(cooked.value());
+    }
+    auto tick = performance_clock->read_tick();
+    if (!tick.has_value()) {
+      return error_envelope(tick.error());
+    }
+    const auto earliest =
+        ((tick.value() / domain::kBarTicks4x4) + 1U) * domain::kBarTicks4x4;
+    auto reservation = pattern_launch_acknowledger->reserve(
+        session_id, request_id, static_cast<std::uint8_t>(slot), earliest,
+        std::move(resolved_pattern));
+    if (!reservation.has_value()) {
+      return error_envelope(reservation.error());
+    }
+    // The reservation succeeded; freeze exactly one input sequence for the
+    // future PatternLaunch event before the durable prepared append.
+    auto input_sequence = performance_input_sequencer->next();
+    if (!input_sequence.has_value()) {
+      return error_envelope(input_sequence.error());
+    }
+    auto before = runtime;
+    runtime.last_accepted_tick = tick.value();
+    project_io::PerformanceAdmissionReceipt prepared;
+    prepared.request_id = request_id;
+    prepared.expected_recording_sequence = expected;
+    prepared.request_fingerprint = fingerprint;
+    prepared.accepted_tick = tick.value();
+    prepared.input_sequence = input_sequence.value();
+    prepared.event_input_sequences = {};
+    const auto checkpoint = headered_checkpoint(
+        runtime,
+        performance_live_control
+            ? performance_live_control->live_control_snapshot().accepted.state
+            : domain::PerformanceInitialLiveState{});
+    const auto durable = append_headered_tail(
+        path, runtime, input_sequence.value(), checkpoint, prepared);
+    if (!durable.has_value()) {
+      runtime = std::move(before);
+      if (performance_tail_outcome_unknown(durable.error())) {
+        runtime.recovery_required = true;
+      }
+      return error_envelope(durable.error());
+    }
+    auto completed = complete_headered_admission(
+        path, runtime, prepared,
+        project_io::PerformanceAdmissionResult::published);
+    if (!completed.has_value()) {
+      if (completed.error().details.is_object() &&
+          completed.error().details.value("reason", "") ==
+              "performance_admission_complete_outcome_unknown") {
+        runtime.recovery_required = true;
+      }
+      return error_envelope(completed.error());
+    }
+    PendingPerformanceLaunch pending{
+        request_id, static_cast<std::uint8_t>(slot),
+        reservation.value().target_tick, reservation.value().claimed,
+        input_sequence.value()};
+    runtime.pending_launch = pending;
+    runtime.launch_receipts.emplace(request_id.value(),
+                                    std::pair{fingerprint, pending});
+    return success_envelope(
+        {{"request_id", request_id.value()},
+         {"state", "pending"},
+         {"target_tick", pending.target_tick},
+         {"input_sequence", decimal_string(input_sequence.value())},
+         {"next_recording_sequence",
+          decimal_string(runtime.next_recording_sequence)}},
+        std::nullopt);
+  }
+
   nlohmann::json performance_launch_request(const nlohmann::json &request) {
+    if (request.contains("control_epoch") ||
+        request.contains("expected_recording_sequence")) {
+      return performance_launch_request_headered(request);
+    }
     require(exact_keys(request, {"operation", "project_path", "session_id",
                                  "request_id", "pattern_slot"}),
             "performance.record.launch-request request shape is invalid");
@@ -7862,16 +9835,27 @@ struct Application::Impl {
     std::lock_guard lock(sequence_mutex);
     auto found = performance_sessions.find(sequence_key(path));
     if (found != performance_sessions.end()) {
-      const auto &runtime = found->second;
-      return success_envelope(
-          performance_status_json(
-              runtime.recovery_required ? "recovery_required" : "active",
-              runtime.session_id, runtime.performance_id,
-              runtime.expected_revision, runtime.next_flush_seq,
-              runtime.pending_events.size(), runtime.open_pads.size(),
-              runtime.open_fx.size(), runtime.hold, runtime.pending_launch,
-              runtime.last_launch_ack),
-          std::nullopt);
+      auto &runtime = found->second;
+      refresh_control_ready(runtime);
+      auto result = performance_status_json(
+          runtime.recovery_required ? "recovery_required" : "active",
+          runtime.session_id, runtime.performance_id,
+          runtime.expected_revision, runtime.next_flush_seq,
+          runtime.pending_events.size(), runtime.open_pads.size(),
+          runtime.open_fx.size(), runtime.hold, runtime.pending_launch,
+          runtime.last_launch_ack);
+      if (runtime.headered) {
+        result["profile"] = "header_input_sequence";
+        result["control_epoch"] = runtime.control_epoch;
+        result["core_control_ready"] = runtime.core_control_ready;
+        result["next_recording_sequence"] =
+            decimal_string(runtime.next_recording_sequence);
+        result["pending_admission"] =
+            runtime.frozen_admission.has_value()
+                ? admission_receipt_json(runtime.frozen_admission->receipt)
+                : nlohmann::json(nullptr);
+      }
+      return success_envelope(std::move(result), std::nullopt);
     }
     auto journal = sequence_journals.read_active_performance(path);
     if (journal.has_value()) {
@@ -9772,6 +11756,7 @@ struct Application::Impl {
   std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger;
   std::shared_ptr<PerformanceReplayController> performance_replay_controller;
   std::shared_ptr<PerformanceGestureSink> performance_gesture_sink;
+  std::shared_ptr<PerformanceLiveControlSink> performance_live_control;
   std::optional<audio::RuntimePreparationLimits> sample_limits;
   std::shared_ptr<project_io::CatalogTransport> soundset_transport;
   std::shared_ptr<SoundSetCatalogSource> soundset_source;
@@ -9804,6 +11789,17 @@ struct Application::Impl {
   std::shared_ptr<TransportSessionRegistry> transport_sessions =
       std::make_shared<TransportSessionRegistry>();
   std::map<std::string, PerformanceRuntime> performance_sessions;
+  // D0/P1 sessionless live-control window per (Project path, epoch): one
+  // completed admission is retained for exact-retry answers; a live receipt
+  // is never resurrected from a recording ledger.
+  struct LiveControlLedgerEntry {
+    std::uint64_t next_control_sequence{};
+    std::optional<std::string> completed_command_id;
+    std::string completed_fingerprint;
+    std::uint64_t completed_sequence{};
+    std::optional<std::string> completed_generation;
+  };
+  std::map<std::string, LiveControlLedgerEntry> live_control_ledgers;
   std::map<std::string, ReplayIdentity> replay_identities;
   std::map<std::string, ReplayStopReceipt> replay_stop_receipts;
   std::string active_replay_id;

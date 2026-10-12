@@ -5,6 +5,7 @@
 
 #include <lmdj/audio/master_fx.hpp>
 #include <lmdj/cooker/performance_replay.hpp>
+#include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/ids.hpp>
 
 namespace lmdj::facade {
@@ -57,6 +58,24 @@ class PerformanceReplayRuntimeSink {
   virtual foundation::Result<void> apply_fx_gesture(
       audio::FxGesture gesture) = 0;
   virtual foundation::Result<NeutralResetProgress> reset_neutral() = 0;
+  // D0/P1: the headered profile's typed controls reach the same DSP as live
+  // admission. The legacy FxGesture path above is unchanged.
+  virtual foundation::Result<void> apply_filter_change(
+      domain::PerformanceFilterPhase phase,
+      domain::PerformanceFilterType type,
+      std::uint16_t cutoff_hz,
+      std::uint16_t resonance_milli) = 0;
+  virtual foundation::Result<void> apply_pad_gates(
+      std::uint64_t muted_mask,
+      std::uint64_t solo_mask) = 0;
+  // Restores the recorded begin header as one control-stage step before any
+  // Pad/Pattern is scheduled — including a zero-event Performance.
+  virtual foundation::Result<void> apply_initial_live_state(
+      const domain::PerformanceInitialLiveState& state) = 0;
+  // pending until the audio thread has drained every header restoration
+  // control; the replay schedules no event before complete.
+  virtual foundation::Result<NeutralResetProgress>
+  initial_live_state_applied() = 0;
 };
 
 class ReferencePerformanceReplayController final

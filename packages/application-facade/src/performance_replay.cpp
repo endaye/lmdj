@@ -57,6 +57,10 @@ struct ReferencePerformanceReplayController::Impl {
     ReplayRuntimeStatus status;
     std::optional<ReplayState> reset_target;
     bool reset_pollable{};
+    // Headered profile: the recorded live-control header restores in the
+    // begin control stage; no Pad/Pattern/FX event is scheduled before the
+    // sink confirms the audio thread applied it — even for zero events.
+    bool header_pending{};
   };
 
   explicit Impl(std::shared_ptr<PerformanceReplayRuntimeSink> sink_value)
@@ -121,11 +125,22 @@ struct ReferencePerformanceReplayController::Impl {
                 audio::FxGestureKind::hold_on,
                 domain::PerformanceFx::filter,
                 0});
-          } else {
+          } else if constexpr (std::is_same_v<
+                                   Payload,
+                                   domain::HoldOffPerformanceEvent>) {
             return sink->apply_fx_gesture(audio::FxGesture{
                 audio::FxGestureKind::hold_off,
                 domain::PerformanceFx::filter,
                 0});
+          } else if constexpr (std::is_same_v<
+                                   Payload,
+                                   domain::FilterChangePerformanceEvent>) {
+            return sink->apply_filter_change(
+                payload.phase, payload.type, payload.cutoff_hz,
+                payload.resonance_milli);
+          } else {
+            return sink->apply_pad_gates(
+                payload.muted_mask, payload.solo_mask);
           }
         },
         event.payload);
@@ -150,6 +165,29 @@ struct ReferencePerformanceReplayController::Impl {
       active_replay_id.clear();
     }
     return foundation::Result<ReplayRuntimeStatus>::success(entry.status);
+  }
+
+  // Drives the begin fence of a headered replay: true once the audio thread
+  // drained every header restoration control. A failure stops the replay
+  // through the ordinary reset path rather than scheduling events over an
+  // unproven header.
+  foundation::Result<bool> settle_header(
+      const std::string& replay_key,
+      ReplayEntry& entry) {
+    const auto applied = sink->initial_live_state_applied();
+    if (!applied.has_value()) {
+      entry.reset_target = ReplayState::stopped;
+      const auto reset = finish_reset(replay_key, entry);
+      if (!reset.has_value()) {
+        return foundation::Result<bool>::failure(reset.error());
+      }
+      return foundation::Result<bool>::failure(applied.error());
+    }
+    if (applied.value() == NeutralResetProgress::pending) {
+      return foundation::Result<bool>::success(false);
+    }
+    entry.header_pending = false;
+    return foundation::Result<bool>::success(true);
   }
 
   std::shared_ptr<PerformanceReplayRuntimeSink> sink;
@@ -213,6 +251,7 @@ ReferencePerformanceReplayController::begin(
           initial_status,
           std::nullopt,
           false,
+          false,
       });
   if (!created) {
     return foundation::Result<ReplayRuntimeStatus>::failure(replay_error(
@@ -221,7 +260,22 @@ ReferencePerformanceReplayController::begin(
   }
   auto& entry = inserted->second;
   impl_->active_replay_id = key;
-  if (entry.status.event_count == 0) {
+  if (entry.projection->initial_live_state.has_value()) {
+    entry.header_pending = true;
+    const auto applied =
+        impl_->sink->apply_initial_live_state(
+            *entry.projection->initial_live_state);
+    if (!applied.has_value()) {
+      entry.reset_target = ReplayState::stopped;
+      const auto reset = impl_->finish_reset(key, entry);
+      if (!reset.has_value()) {
+        return reset;
+      }
+      return foundation::Result<ReplayRuntimeStatus>::failure(
+          applied.error());
+    }
+  }
+  if (entry.status.event_count == 0 && !entry.header_pending) {
     entry.reset_target = ReplayState::complete;
     return impl_->finish_reset(key, entry);
   }
@@ -277,6 +331,16 @@ ReferencePerformanceReplayController::advance_to(
       return impl_->finish_reset(key, entry);
     }
     return foundation::Result<ReplayRuntimeStatus>::success(entry.status);
+  }
+  if (entry.header_pending) {
+    const auto settled = impl_->settle_header(key, entry);
+    if (!settled.has_value()) {
+      return foundation::Result<ReplayRuntimeStatus>::failure(
+          settled.error());
+    }
+    if (!settled.value()) {
+      return foundation::Result<ReplayRuntimeStatus>::success(entry.status);
+    }
   }
   while (entry.status.event_cursor < entry.status.event_count) {
     const auto cursor = static_cast<std::size_t>(entry.status.event_cursor);

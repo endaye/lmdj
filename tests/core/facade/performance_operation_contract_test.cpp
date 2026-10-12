@@ -76,6 +76,7 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
            "performance.record.begin",
            "performance.record.event",
            "performance.fx.gesture",
+           "performance.live.control",
            "performance.record.launch-request",
            "performance.record.flush",
            "performance.record.stop",
@@ -96,6 +97,7 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
   for (const auto operation : {
            "performance.list",
            "performance.inspect",
+           "performance.live.status",
            "performance.record.status",
            "performance.replay.status",
            "performance.recovery.list",
@@ -133,11 +135,46 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
              "performance.replay.status request shape is invalid");
 }
 
+// D0/P1: the typed live-control wire carries only Core-issued identities —
+// any Host-supplied tick/frame/sequence key breaks the exact-key shape.
+void test_live_control_wire_accepts_only_core_issued_identities() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  const auto base = nlohmann::json{
+      {"operation", "performance.live.control"},
+      {"project_path", (temp.path() / "missing.lmdj").generic_string()},
+      {"control_epoch", "00000000-0000-4000-8000-000000000001"},
+      {"command_id", "00000000-0000-4000-8000-000000000002"},
+      {"expected_control_sequence", "0"},
+      {"intent", {{"kind", "hold_on"}}},
+  };
+  for (const auto *host_key : {"tick", "frame", "input_sequence"}) {
+    auto forged = base;
+    forged[host_key] = 42;
+    const auto response = application.command(forged);
+    LMDJ_CHECK(!response.at("ok").get<bool>());
+    LMDJ_CHECK(response.at("error").at("message") ==
+               "performance.live.control request shape is invalid");
+  }
+  // The exact shape reaches the handler (the missing Project is the domain
+  // failure, not a shape rejection).
+  const auto shaped = application.command(base);
+  LMDJ_CHECK(!shaped.at("ok").get<bool>());
+  LMDJ_CHECK(shaped.at("error").at("message") !=
+             "performance.live.control request shape is invalid");
+  // A malformed sequence string is not a Core identity.
+  auto bad_sequence = base;
+  bad_sequence["expected_control_sequence"] = "007";
+  const auto response = application.command(bad_sequence);
+  LMDJ_CHECK(!response.at("ok").get<bool>());
+}
+
 } // namespace
 
 int main() {
   try {
     test_locked_task4_operations_are_registered_with_exact_kinds();
+    test_live_control_wire_accepts_only_core_issued_identities();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -108,6 +108,225 @@ void check_ok(const nlohmann::json &response) {
   }
 }
 
+// D0/P1 owner-loss fixture: a minimal but honest live-control stub — neutral
+// accepted state, immediately-ready fences, and a publish counter proving the
+// sealed retry never enqueues.
+class StubLiveControl final
+    : public lmdj::facade::PerformanceLiveControlSink {
+public:
+  static constexpr std::string_view kEpoch =
+      "11111111-1111-4111-8111-111111111111";
+
+  std::optional<std::string> current_control_epoch() override {
+    return epoch_;
+  }
+  std::optional<std::string> bound_control_project() override {
+    return bound_;
+  }
+  lmdj::foundation::Result<std::string> bind_control_target(
+      std::string project_uuid) override {
+    if (!epoch_.has_value() || bound_ != project_uuid) {
+      epoch_ = std::string{kEpoch};
+      bound_ = project_uuid;
+    }
+    return lmdj::foundation::Result<std::string>::success(*epoch_);
+  }
+  void invalidate_control_target() override {
+    epoch_.reset();
+    bound_.reset();
+  }
+  lmdj::facade::PerformanceLiveControlSnapshot live_control_snapshot()
+      override {
+    return {state_, state_, sequence_, sequence_, 1};
+  }
+  lmdj::foundation::Result<lmdj::facade::PerformanceLiveControlReservation>
+  reserve_live_control(
+      const std::string& control_epoch,
+      const lmdj::facade::PerformanceLiveControlIntent& intent) override {
+    if (!epoch_.has_value() || *epoch_ != control_epoch) {
+      return lmdj::foundation::Result<
+          lmdj::facade::PerformanceLiveControlReservation>::failure(
+          {lmdj::foundation::ErrorCode::invalid_argument, "stale epoch"});
+    }
+    lmdj::facade::PerformanceLiveControlReservation reservation;
+    auto next = state_;
+    using Kind = lmdj::facade::PerformanceLiveControlIntent::Kind;
+    if (intent.kind == Kind::fx_parameter &&
+        intent.phase == lmdj::domain::PerformanceFilterPhase::engage) {
+      reservation.assigned_generation =
+          "20000000-0000-4000-8000-000000000001";
+      next.state.other_fx
+          .at(static_cast<std::size_t>(intent.fx) - 1)
+          .engaged = true;
+      next.state.other_fx
+          .at(static_cast<std::size_t>(intent.fx) - 1)
+          .value = static_cast<std::uint16_t>(intent.value);
+      reservation.fx_gesture = lmdj::audio::FxGesture{};
+    } else if (intent.kind == Kind::hold_on || intent.kind == Kind::hold_off) {
+      next.state.hold = intent.kind == Kind::hold_on;
+      reservation.fx_gesture = lmdj::audio::FxGesture{};
+    }
+    reservation.resulting_state = next;
+    reservation.control_sequence = sequence_ + 1;
+    return lmdj::foundation::Result<
+        lmdj::facade::PerformanceLiveControlReservation>::success(
+        std::move(reservation));
+  }
+  lmdj::foundation::Result<lmdj::facade::PerformanceLiveControlReservation>
+  reserve_live_control_republish(
+      const std::string&,
+      std::optional<lmdj::audio::FxGesture> fx_gesture,
+      std::optional<lmdj::audio::FilterGesture> filter_gesture,
+      std::optional<lmdj::audio::PadGatesState> pad_gates,
+      lmdj::facade::PerformanceLiveControlState resulting_state,
+      std::optional<std::string> assigned_generation) override {
+    lmdj::facade::PerformanceLiveControlReservation reservation;
+    reservation.fx_gesture = fx_gesture;
+    reservation.filter_gesture = filter_gesture;
+    reservation.pad_gates = pad_gates;
+    reservation.resulting_state = std::move(resulting_state);
+    reservation.assigned_generation = std::move(assigned_generation);
+    reservation.control_sequence = sequence_ + 1;
+    return lmdj::foundation::Result<
+        lmdj::facade::PerformanceLiveControlReservation>::success(
+        std::move(reservation));
+  }
+  lmdj::foundation::Result<void> publish_live_control(
+      lmdj::facade::PerformanceLiveControlReservation reservation) override {
+    ++publish_calls_;
+    state_ = reservation.resulting_state;
+    ++sequence_;
+    return lmdj::foundation::Result<void>::success();
+  }
+  void cancel_live_control(
+      lmdj::facade::PerformanceLiveControlReservation) noexcept override {
+  }
+  lmdj::foundation::Result<lmdj::facade::PerformanceControlFence> begin_fence(
+      const std::string&) override {
+    return lmdj::foundation::Result<
+        lmdj::facade::PerformanceControlFence>::success(
+        lmdj::facade::PerformanceControlFence{sequence_, 1, state_});
+  }
+  lmdj::facade::PerformanceFenceReadiness fence_readiness(
+      const lmdj::facade::PerformanceControlFence&) override {
+    return lmdj::facade::PerformanceFenceReadiness::ready;
+  }
+
+  std::size_t publish_calls() const { return publish_calls_; }
+
+private:
+  std::optional<std::string> epoch_;
+  std::optional<std::string> bound_;
+  lmdj::facade::PerformanceLiveControlState state_{};
+  std::uint64_t sequence_{};
+  std::size_t publish_calls_{};
+};
+
+// Injects one genuinely-unknown tail outcome: the append reports failure
+// after writing, then the read-back also fails once.
+class UnknownTailStorage final
+    : public lmdj::project_io::ProjectStoragePlatform {
+public:
+  UnknownTailStorage()
+      : delegate_(lmdj::project_io::make_default_project_storage_platform()) {}
+
+  void fail_next_performance_tail() { armed_count_ = 2; }
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path &path) override {
+    return delegate_->acquire_writer(path);
+  }
+  lmdj::foundation::Result<void>
+  ensure_directory(const std::filesystem::path &path) override {
+    return delegate_->ensure_directory(path);
+  }
+  lmdj::foundation::Result<bool>
+  exists(const std::filesystem::path &path) const override {
+    return delegate_->exists(path);
+  }
+  lmdj::foundation::Result<std::uint64_t>
+  byte_length(const std::filesystem::path &path) const override {
+    return delegate_->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>>
+  read_complete(const std::filesystem::path &path) const override {
+    if (read_armed_ &&
+        path.generic_string().find("performance.jsonl") !=
+            std::string::npos) {
+      read_armed_ = false;
+      return lmdj::foundation::Result<std::vector<std::byte>>::failure({
+          lmdj::foundation::ErrorCode::io_error,
+          "injected journal read failure",
+      });
+    }
+    return delegate_->read_complete(path);
+  }
+  lmdj::foundation::Result<void>
+  create_immutable(const std::filesystem::path &path,
+                   std::span<const std::byte> bytes) override {
+    return delegate_->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void>
+  replace_complete(const std::filesystem::path &path,
+                   std::span<const std::byte> bytes) override {
+    return delegate_->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void>
+  append_durable(const std::filesystem::path &path,
+                 std::uint64_t valid_prefix_length,
+                 std::span<const std::byte> bytes) override {
+    if (armed_count_ != 0 &&
+        path.generic_string().find("performance.jsonl") !=
+            std::string::npos) {
+      --armed_count_;
+      auto appended =
+          delegate_->append_durable(path, valid_prefix_length, bytes);
+      if (appended.has_value()) {
+        return lmdj::foundation::Result<void>::failure({
+            lmdj::foundation::ErrorCode::io_error,
+            "injected post-write tail failure",
+        });
+      }
+      return appended;
+    }
+    return delegate_->append_durable(path, valid_prefix_length, bytes);
+  }
+  lmdj::foundation::Result<void>
+  remove(const std::filesystem::path &path) override {
+    return delegate_->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>>
+  list_names(const std::filesystem::path &path) const override {
+    return delegate_->list_names(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>>
+  list_directories(const std::filesystem::path &path) const override {
+    return delegate_->list_directories(path);
+  }
+  lmdj::foundation::Result<void>
+  remove_tree(const std::filesystem::path &path) override {
+    return delegate_->remove_tree(path);
+  }
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path &staging,
+      const std::filesystem::path &destination) override {
+    return delegate_->publish_directory_if_absent(staging, destination);
+  }
+  lmdj::foundation::Result<bool>
+  directory_exists(const std::filesystem::path &path) const override {
+    return delegate_->directory_exists(path);
+  }
+  lmdj::foundation::Result<void>
+  validate_managed_tree(const std::filesystem::path &path) const override {
+    return delegate_->validate_managed_tree(path);
+  }
+
+private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> delegate_;
+  std::size_t armed_count_{};
+  mutable bool read_armed_{};
+};
+
 void test_begin_flush_stop_save_and_inspect() {
   TempDirectory temp;
   auto application = make_application(temp.path());
@@ -606,6 +825,167 @@ void test_recovery_queries_are_read_only_while_owner_is_alive() {
   LMDJ_CHECK(std::filesystem::is_empty(bundle / "recovery/sealed"));
 }
 
+// D0/P1 R5 oracle: a prepared admission whose producer is truly lost reaches
+// terminal only through the recovery-only closure/seal; the sealed old retry
+// queries the explicit unknown with zero enqueue; the next Performance starts
+// with its own empty ledger.
+void test_headered_owner_loss_closure_terminal_and_sealed_retry_unknown() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "headered-owner-loss.lmdj";
+  constexpr std::string_view project = "80000000-0000-4000-8000-000000000001";
+  constexpr std::string_view session = "80000000-0000-4000-8000-000000000002";
+  constexpr std::string_view performance =
+      "80000000-0000-4000-8000-000000000003";
+  constexpr std::string_view begin = "80000000-0000-4000-8000-000000000004";
+  constexpr std::string_view event = "80000000-0000-4000-8000-000000000005";
+  auto storage = std::make_shared<UnknownTailStorage>();
+  {
+    lmdj::facade::ApplicationConfig config{
+        temp.path(),
+        nullptr,
+        {},
+        {},
+        std::nullopt,
+        storage,
+        std::make_shared<Clock>(),
+        std::make_shared<Sequencer>(),
+        nullptr,
+        lmdj::facade::make_unavailable_performance_replay_controller(),
+    };
+    config.performance_live_control = std::make_shared<StubLiveControl>();
+    lmdj::facade::Application owner(std::move(config));
+    check_ok(owner.command({{"operation", "project.create"},
+                            {"project_path", bundle.generic_string()},
+                            {"project_id", project},
+                            {"bpm", 120}}));
+    check_ok(owner.command({{"operation", "performance.record.begin"},
+                            {"project_path", bundle.generic_string()},
+                            {"command_id", begin},
+                            {"expected_revision", 0},
+                            {"session_id", session},
+                            {"performance_id", performance},
+                            {"control_epoch",
+                             std::string{StubLiveControl::kEpoch}}}));
+    // One completed admission, then a prepared tail whose durable outcome is
+    // unknown when the owner dies.
+    check_ok(owner.command({
+        {"operation", "performance.record.event"},
+        {"project_path", bundle.generic_string()},
+        {"session_id", session},
+        {"event_id", event},
+        {"event", {{"kind", "hold_on"}}},
+        {"control_epoch", std::string{StubLiveControl::kEpoch}},
+        {"expected_recording_sequence", "0"},
+    }));
+    storage->fail_next_performance_tail();
+    const auto ambiguous = owner.command({
+        {"operation", "performance.record.event"},
+        {"project_path", bundle.generic_string()},
+        {"session_id", session},
+        {"event_id", "80000000-0000-4000-8000-000000000006"},
+        {"event", {{"kind", "hold_off"}}},
+        {"control_epoch", std::string{StubLiveControl::kEpoch}},
+        {"expected_recording_sequence", "1"},
+    });
+    LMDJ_CHECK(!ambiguous.at("ok").get<bool>());
+    LMDJ_CHECK(ambiguous.at("error").at("details").at("reason") ==
+               "performance_tail_outcome_unknown");
+    // The owner dies with the admission frozen and unknown.
+  }
+
+  // The reattach reader only queries: the old retry answers the durable
+  // pending receipt as an explicit unknown and enqueues nothing.
+  auto reader_live = std::make_shared<StubLiveControl>();
+  lmdj::facade::ApplicationConfig reader_config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
+  reader_config.performance_live_control = reader_live;
+  lmdj::facade::Application reader(std::move(reader_config));
+  const auto candidates = reader.query({
+      {"operation", "performance.recovery.list"},
+      {"project_path", bundle.generic_string()},
+  });
+  check_ok(candidates);
+  LMDJ_CHECK(candidates.at("result").at("candidates").size() == 1U);
+  LMDJ_CHECK(candidates.at("result").at("candidates").at(0).at("reason") ==
+             "owner_lost");
+
+  const auto retry_request = nlohmann::json{
+      {"operation", "performance.record.event"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", session},
+      {"event_id", "80000000-0000-4000-8000-000000000006"},
+      {"event", {{"kind", "hold_off"}}},
+      {"control_epoch", std::string{StubLiveControl::kEpoch}},
+      {"expected_recording_sequence", "1"},
+  };
+  const auto retry = reader.command(retry_request);
+  check_ok(retry);
+  LMDJ_CHECK(retry.at("result").at("replayed") == true);
+  LMDJ_CHECK(retry.at("result").at("admission").at("phase") == "prepared");
+  LMDJ_CHECK(retry.at("result").at("admission").at("result") ==
+             "not_published");
+  LMDJ_CHECK(reader_live->publish_calls() == 0);
+
+  // The recovery-only closure/seal brings the lost session to terminal.
+  const auto applied = reader.command({
+      {"operation", "performance.recovery.apply"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "80000000-0000-4000-8000-000000000007"},
+      {"expected_revision", 1},
+      {"session_id", session},
+  });
+  check_ok(applied);
+
+  // After the seal the old identity still only reports its durable unknown.
+  const auto sealed_retry = reader.command(retry_request);
+  check_ok(sealed_retry);
+  LMDJ_CHECK(sealed_retry.at("result").at("replayed") == true);
+  LMDJ_CHECK(sealed_retry.at("result").at("admission").at("phase") ==
+             "prepared");
+  LMDJ_CHECK(reader_live->publish_calls() == 0);
+
+  // The explicit finalize (the ordinary save path) retires the stopped
+  // journal; only then does the next Performance begin with its own empty
+  // ledger, unblocked by the old terminal pending admission.
+  check_ok(reader.command({
+      {"operation", "performance.save"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "80000000-0000-4000-8000-000000000010"},
+      {"expected_revision",
+       applied.at("result").at("committed_revision")},
+      {"performance_id", performance},
+      {"name", "Recovered Take"},
+      {"recording_artifact", nullptr},
+  }));
+  check_ok(reader.command({
+      {"operation", "performance.record.begin"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "80000000-0000-4000-8000-000000000008"},
+      {"expected_revision",
+       applied.at("result").at("committed_revision").get<std::uint64_t>() + 1},
+      {"session_id", "80000000-0000-4000-8000-000000000009"},
+      {"performance_id", "80000000-0000-4000-8000-00000000000a"},
+      {"control_epoch", std::string{StubLiveControl::kEpoch}},
+  }));
+  const auto status = reader.query({
+      {"operation", "performance.record.status"},
+      {"project_path", bundle.generic_string()},
+  });
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("next_recording_sequence") == "0");
+  LMDJ_CHECK(status.at("result").at("core_control_ready") == true);
+}
+
 } // namespace
 
 int main() {
@@ -615,6 +995,7 @@ int main() {
     test_owner_loss_recovery_is_publicly_observable_and_applicable();
     test_flush_replay_crosses_application_process_identity_boundary();
     test_recovery_queries_are_read_only_while_owner_is_alive();
+    test_headered_owner_loss_closure_terminal_and_sealed_retry_unknown();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

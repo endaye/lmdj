@@ -241,6 +241,32 @@ class SilentPerformanceReplayRuntimeSink final
     return foundation::Result<NeutralResetProgress>::success(
         NeutralResetProgress::complete);
   }
+
+  // Headless has no audio producer: headered-replay controls are accepted
+  // into the silent sink and acknowledge immediately (nothing renders).
+  foundation::Result<void> apply_filter_change(
+      domain::PerformanceFilterPhase,
+      domain::PerformanceFilterType,
+      std::uint16_t,
+      std::uint16_t) override {
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<void> apply_pad_gates(
+      std::uint64_t, std::uint64_t) override {
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<void> apply_initial_live_state(
+      const domain::PerformanceInitialLiveState&) override {
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<NeutralResetProgress>
+  initial_live_state_applied() override {
+    return foundation::Result<NeutralResetProgress>::success(
+        NeutralResetProgress::complete);
+  }
 };
 
 class HeadlessPerformanceReplayController final

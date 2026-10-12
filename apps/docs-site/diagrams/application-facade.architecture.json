@@ -125,7 +125,7 @@
     {
       "from": "facade",
       "to": "performance",
-      "label": "20 operations"
+      "label": "22 operations"
     },
     {
       "from": "performance",
@@ -154,7 +154,7 @@
     },
     {
       "title": "Performance authority",
-      "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending."
+      "body": "Twenty-two Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. The headered live-control profile adds one typed admission kernel: a Core-issued epoch binds the verified Project, the begin fence captures the accepted live state as the durable header with logical recording-gesture mapping, and every control runs reserve, durable append with a pending receipt, publish, then admission_complete; exact retries reuse the frozen tuple and an unknown write freezes the session rather than faking completion. Replay restores the header before any Pad, and the neutral terminal waits for every channel's drain, Pad gates included. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending."
     },
     {
       "title": "Runtime boundary",
