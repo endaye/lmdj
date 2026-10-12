@@ -26,6 +26,33 @@ async function installPackagedRecoveryProbe(page) {
     const boundaries = [];
     const runtimeHistory = [];
     const suppressedOutcomes = [];
+    const latestDiagnostics = new Map();
+    const negotiatedProfileGenerations = new Set();
+    const profileFaults = [];
+    const profileCapabilityReplies = [];
+    let armedDiagnostics = null;
+    let armedProfileNegotiated = null;
+    let armedGeneration = null;
+    let profileFault = null;
+    let releaseProfileReply = null;
+    let releaseRequested = null;
+
+    const sameTicket = (left, right) =>
+      left !== null && right !== null && typeof left === "object" &&
+      typeof right === "object" && Object.keys(left).length === 4 &&
+      Object.keys(right).length === 4 && ["command_id", "runtime_generation",
+        "frame_epoch", "ticket"].every(key => left[key] === right[key]);
+    const requestTicket = request => ({command_id: request.payload.command_id,
+      runtime_generation: request.payload.runtime_generation,
+      frame_epoch: request.payload.frame_epoch, ticket: request.payload.input_serial});
+    function releaseHeldOutcome(reason) {
+      releaseRequested = reason;
+      if (profileFault === null || releaseProfileReply === null) return;
+      profileFault.delivery_release = {reason, observed_at_ms: performance.now()};
+      const release = releaseProfileReply;
+      releaseProfileReply = null;
+      release();
+    }
 
     const generationRecord = (generation) => {
       let record = generations.get(generation);
@@ -189,18 +216,83 @@ async function installPackagedRecoveryProbe(page) {
       return transport;
     };
     const transport = Object.freeze({
-      send(...arguments_) {
-        return runtimeTransport().send(...arguments_);
+      async send(...arguments_) {
+        const [request] = arguments_;
+        const generation = currentGeneration;
+        const nativeTransport = runtimeTransport();
+        const diagnostics = latestDiagnostics.get(generation);
+        const selectsProfilePress = suppressNextOutcome &&
+          armedGeneration === generation && profileFault === null &&
+          request?.operation === "pattern.transport.input.request" &&
+          request.payload?.kind === "press" &&
+          armedDiagnostics?.state === "recovering" &&
+          armedDiagnostics.recovery_probe_ready === true &&
+          diagnostics?.state === "recovering";
+        if (selectsProfilePress) {
+          // Reserve this real request before forwarding. No unrelated legacy
+          // notification may stand in for this profile completion.
+          suppressNextOutcome = false;
+          profileFault = {generation, armed_diagnostics: structuredClone(armedDiagnostics),
+            press_request: structuredClone(request),
+            press_ticket: requestTicket(request), admission_response: null,
+            consume_request: null, consume_response: null,
+            held_at_ms: null, delivery_release: null, sdk_failure: null};
+          profileFaults.push(profileFault);
+        }
+        // Every original request and option reaches the original actual
+        // transport unchanged, including the consuming request under proof.
+        const response = await nativeTransport.send(...arguments_);
+        if (request?.operation === "pattern.transport.count-in.capabilities") {
+          profileCapabilityReplies.push({generation, request: structuredClone(request),
+            response: structuredClone(response)});
+        }
+        if (request?.operation === "pattern.transport.count-in.capabilities" &&
+            response?.ok === true && response.request_id === request.request_id &&
+            response.result?.supported === true && response.result.negotiated === true &&
+            response.result.input_capacity > 0) {
+          negotiatedProfileGenerations.add(generation);
+        }
+        const fault = profileFault;
+        if (selectsProfilePress && fault?.generation === generation) {
+          fault.admission_response = structuredClone(response);
+        }
+        if (fault?.generation === generation && fault.consume_response === null &&
+            request?.operation === "pattern.transport.input.inspect" &&
+            request.payload?.consume === true &&
+            sameTicket(fault.press_ticket, {
+              command_id: request.payload.command_id,
+              runtime_generation: request.payload.runtime_generation,
+              frame_epoch: request.payload.frame_epoch, ticket: request.payload.ticket,
+            }) && response?.ok === true && response.request_id === request.request_id &&
+            response.result?.complete === true && response.result.durable_settled === true &&
+            sameTicket(fault.press_ticket, response.result.ticket) &&
+            sameTicket(fault.press_ticket, fault.admission_response?.result?.ticket) &&
+            response.result.native_result?.sequence ===
+              fault.admission_response?.result?.status?.admission?.sequence) {
+          fault.consume_request = structuredClone(request);
+          fault.consume_response = structuredClone(response);
+          fault.held_at_ms = performance.now();
+          // Native has really consumed this exact input. Only delivery of its
+          // unchanged reply to the SDK is delayed; this is no fake ACK/result.
+          suppressedOutcomes.push({generation, kind: "profile-consume-response",
+            ticket: structuredClone(fault.press_ticket)});
+          await new Promise(resolve => {
+            releaseProfileReply = resolve;
+            if (releaseRequested !== null) releaseHeldOutcome(releaseRequested);
+          });
+        }
+        return response;
       },
       subscribe(listener) {
+        const generation = currentGeneration;
         return runtimeTransport().subscribe((notification) => {
           if (
-            suppressNextOutcome &&
+            suppressNextOutcome && armedGeneration === generation &&
             notification?.event === "runtime.trigger_outcomes"
           ) {
             suppressNextOutcome = false;
             suppressedOutcomes.push({
-              generation: currentGeneration,
+              generation,
               sequences: notification.payload?.events?.map(({sequence}) => sequence) ?? [],
             });
             return;
@@ -219,13 +311,25 @@ async function installPackagedRecoveryProbe(page) {
         boundaries.push({generation: currentGeneration + 1, before: counts()});
         currentGeneration += 1;
         generationRecord(currentGeneration);
+        const generation = currentGeneration;
         return {
           transport,
           onDiagnostics(value) {
+            latestDiagnostics.set(generation, {generation, state: value.state,
+              error_code: value.error_code,
+              recovery_probe_ready: value.recovery_probe_ready === true,
+              observed_at_ms: performance.now()});
+            if (profileFault?.generation === generation && profileFault.sdk_failure === null &&
+                value.state === "restart-required" && value.error_code === "HOST_TIMEOUT") {
+              profileFault.sdk_failure = {generation,
+                state: value.state, error_code: value.error_code,
+                observed_at_ms: performance.now()};
+              releaseHeldOutcome("observed-sdk-host-timeout");
+            }
             const last = runtimeHistory.at(-1);
             const next = {
               error_code: value.error_code,
-              generation: currentGeneration,
+              generation,
               state: value.state,
             };
             if (
@@ -241,14 +345,39 @@ async function installPackagedRecoveryProbe(page) {
     });
     window.__creatorRuntimeProbe = Object.freeze({
       armOutcomeSuppression() {
+        const actual = latestDiagnostics.get(currentGeneration);
+        if (actual?.state !== "recovering" || actual.recovery_probe_ready !== true) {
+          throw new Error("Recovery fault requires the actual armed SDK probe window");
+        }
+        const latestReply = profileCapabilityReplies.filter(entry =>
+          entry.generation === currentGeneration).at(-1);
+        const genuinelyUnnegotiated = latestReply !== undefined &&
+          latestReply.response?.request_id === latestReply.request.request_id &&
+          ((latestReply.response.ok === false &&
+            latestReply.response.error?.code === "HOST_PROTOCOL_MISMATCH") ||
+          (latestReply.response.ok === true && latestReply.response.result?.negotiated === false &&
+            typeof latestReply.response.result.supported === "boolean"));
+        if (!negotiatedProfileGenerations.has(currentGeneration) && !genuinelyUnnegotiated) {
+          throw new Error("Recovery fault has no actual negotiated or unnegotiated profile evidence");
+        }
+        armedGeneration = currentGeneration;
+        armedDiagnostics = structuredClone(actual);
+        armedProfileNegotiated = negotiatedProfileGenerations.has(currentGeneration);
+        releaseRequested = null;
         suppressNextOutcome = true;
       },
+      releaseHeldOutcome,
       snapshot() {
         return {
           ...counts(),
           boundaries: structuredClone(boundaries),
           runtime_history: structuredClone(runtimeHistory),
           suppressed_outcomes: structuredClone(suppressedOutcomes),
+          profile_negotiated_generations: [...negotiatedProfileGenerations],
+          profile_capability_replies: structuredClone(profileCapabilityReplies),
+          armed_diagnostics: structuredClone(armedDiagnostics),
+          armed_profile_negotiated: armedProfileNegotiated,
+          profile_faults: structuredClone(profileFaults),
         };
       },
     });
@@ -630,7 +759,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   await page.keyboard.up("KeyZ");
 });
 
-test("packaged recovery timeout cleans one generation before automatic replacement", async ({page, browserName}) => {
+test("packaged recovery timeout cleans one generation before automatic replacement", async ({page, browserName}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await installPackagedRecoveryProbe(page);
@@ -646,63 +775,137 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
   expect(initial.generations[1].midi_listeners).toBe(2);
   expect(initial.generations[1].window_lifecycle_listeners).toBeGreaterThan(0);
 
-  await page.evaluate(() => {
-    window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}));
-    window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
-  });
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
-    timeout: 30_000,
-  });
-  await page.evaluate(() => window.__creatorRuntimeProbe.armOutcomeSuppression());
-  await page.keyboard.press("KeyZ");
-  await expect.poll(() => page.evaluate(() =>
-    window.__creatorRuntimeProbe.snapshot().runtime_history.some((value) =>
-      value.generation === 1 && value.state === "restart-required" &&
-      value.error_code === "HOST_TIMEOUT")), {timeout: 10_000}).toBe(true);
-  await expect(page.getByTestId("creator-phase")).toHaveText("ready", {
-    timeout: 120_000,
-  });
-  await expect(page.getByRole("heading", {name: "Project 00000000"}))
-    .toBeVisible();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
-  await clickCreatorSystemAction(page, "Enable MIDI");
+  try {
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}));
+      window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+    });
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
+      timeout: 30_000,
+    });
+    await page.evaluate(() => window.__creatorRuntimeProbe.armOutcomeSuppression());
+    await page.keyboard.press("KeyZ");
+    await expect.poll(() => page.evaluate(() =>
+      window.__creatorRuntimeProbe.snapshot().runtime_history.some((value) =>
+        value.generation === 1 && value.state === "restart-required" &&
+        value.error_code === "HOST_TIMEOUT")), {timeout: 10_000}).toBe(true);
+    const faultProof = await page.evaluate(() => window.__creatorRuntimeProbe.snapshot());
+    expect(faultProof.armed_diagnostics).toMatchObject({generation: 1,
+      state: "recovering", recovery_probe_ready: true});
+    expect(typeof faultProof.armed_profile_negotiated).toBe("boolean");
+    if (faultProof.profile_negotiated_generations.includes(1)) {
+      // Positive actual negotiation must never pass via the legacy drop path.
+      expect(faultProof.armed_profile_negotiated).toBe(true);
+      expect(faultProof.profile_faults).toHaveLength(1);
+      const fault = faultProof.profile_faults[0];
+      expect(fault.generation).toBe(1);
+      expect(fault.armed_diagnostics).toEqual(faultProof.armed_diagnostics);
+      expect(fault.press_request.operation).toBe("pattern.transport.input.request");
+      expect(fault.press_request.payload.kind).toBe("press");
+      expect(fault.press_ticket).toEqual(fault.admission_response.result.ticket);
+      expect(fault.press_ticket).toEqual(fault.admission_response.result.status.ticket);
+      expect(fault.consume_request.operation).toBe("pattern.transport.input.inspect");
+      expect(fault.consume_request.payload).toEqual({...fault.press_ticket, consume: true});
+      expect(fault.consume_response.request_id).toBe(fault.consume_request.request_id);
+      expect(fault.consume_response.ok).toBe(true);
+      expect(fault.consume_response.result).toMatchObject({ticket: fault.press_ticket,
+        complete: true, durable_settled: true, error: null,
+        admission: fault.admission_response.result.status.admission,
+        native_result: {sequence: fault.admission_response.result.status.admission.sequence,
+          disposition: "voice_started", slot: fault.press_request.payload.slot,
+          held_press_sequence: null}});
+      const native = fault.consume_response.result.native_result;
+      const admission = fault.admission_response.result.status.admission;
+      expect(native.runtime_generation).toBe(fault.press_ticket.runtime_generation);
+      expect(native.frame_epoch).toBe(fault.press_ticket.frame_epoch);
+      expect(native.acceptance_ordinal).toBe(admission.acceptance_ordinal);
+      expect(native.authority).toEqual(admission.authority);
+      expect(Number.isSafeInteger(native.runtime_frame)).toBe(true);
+      expect(native.runtime_frame).toBeGreaterThanOrEqual(0);
+      expect(fault.held_at_ms).not.toBeNull();
+      expect(fault.sdk_failure).toMatchObject({generation: 1,
+        state: "restart-required", error_code: "HOST_TIMEOUT"});
+      expect(fault.sdk_failure.observed_at_ms).toBeGreaterThanOrEqual(fault.held_at_ms);
+      expect(fault.delivery_release.reason).toBe("observed-sdk-host-timeout");
+      expect(fault.delivery_release.observed_at_ms).toBeGreaterThanOrEqual(
+        fault.sdk_failure.observed_at_ms);
+      expect(faultProof.suppressed_outcomes).toEqual([{generation: 1,
+        kind: "profile-consume-response", ticket: fault.press_ticket}]);
+    } else {
+      expect(faultProof.armed_profile_negotiated).toBe(false);
+      expect(faultProof.profile_faults).toEqual([]);
+      const latestReply = faultProof.profile_capability_replies.filter(entry =>
+        entry.generation === 1).at(-1);
+      expect(latestReply).toBeDefined();
+      expect(latestReply.response.request_id).toBe(latestReply.request.request_id);
+      expect((latestReply.response.ok === false &&
+        latestReply.response.error?.code === "HOST_PROTOCOL_MISMATCH") ||
+        (latestReply.response.ok === true && latestReply.response.result?.negotiated === false &&
+          typeof latestReply.response.result.supported === "boolean")).toBe(true);
+      expect(faultProof.suppressed_outcomes).toHaveLength(1);
+      expect(faultProof.suppressed_outcomes[0].generation).toBe(1);
+      expect(faultProof.suppressed_outcomes[0].sequences).toBeInstanceOf(Array);
+      expect(faultProof.suppressed_outcomes[0].sequences.length).toBeGreaterThan(0);
+    }
 
-  await expect.poll(() => page.evaluate(() =>
-    window.__creatorRuntimeProbe.snapshot()), {timeout: 30_000}).toMatchObject({
-    active_generations: [2],
-    created_generations: 2,
-    generations: {
-      1: {
-        audio_contexts: 0,
-        broadcast_channels: 0,
-        midi_listeners: 0,
-        window_lifecycle_listeners: 0,
-      },
-      2: {
-        // Enable MIDI is now an explicit audio wake gesture.
-        audio_contexts: 1,
-        broadcast_channels: initial.generations[1].broadcast_channels,
-        midi_listeners: initial.generations[1].midi_listeners,
-        window_lifecycle_listeners:
-          initial.generations[1].window_lifecycle_listeners,
-      },
-    },
-    suppressed_outcomes: [{generation: 1}],
-  });
-  const replaced = await page.evaluate(() => window.__creatorRuntimeProbe.snapshot());
-  const secondBoundary = replaced.boundaries.find(({generation}) => generation === 2);
-  // Session close owns the AudioContext and BroadcastChannel and therefore
-  // must release them before the replacement factory runs. MIDI and window
-  // listeners belong to Workspace's React effect: their cleanup is required
-  // before the replacement becomes ready (proved by the steady-state snapshot
-  // above), but is intentionally not ordered against pure factory invocation.
-  expect(secondBoundary.before.generations[1].audio_contexts).toBe(0);
-  expect(secondBoundary.before.generations[1].broadcast_channels).toBe(0);
+    await expect(page.getByTestId("creator-phase")).toHaveText("ready", {
+      timeout: 120_000,
+    });
+    await expect(page.getByRole("heading", {name: "Project 00000000"}))
+      .toBeVisible();
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
+    await clickCreatorSystemAction(page, "Enable MIDI");
 
-  await wakeAudioWithPad(page);
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
-    timeout: 30_000,
-  });
+    await expect.poll(() => page.evaluate(() =>
+      window.__creatorRuntimeProbe.snapshot()), {timeout: 30_000}).toMatchObject({
+      active_generations: [2],
+      created_generations: 2,
+      generations: {
+        1: {
+          audio_contexts: 0,
+          broadcast_channels: 0,
+          midi_listeners: 0,
+          window_lifecycle_listeners: 0,
+        },
+        2: {
+          // Enable MIDI is now an explicit audio wake gesture.
+          audio_contexts: 1,
+          broadcast_channels: initial.generations[1].broadcast_channels,
+          midi_listeners: initial.generations[1].midi_listeners,
+          window_lifecycle_listeners:
+            initial.generations[1].window_lifecycle_listeners,
+        },
+      },
+      suppressed_outcomes: [{generation: 1}],
+    });
+    const replaced = await page.evaluate(() => window.__creatorRuntimeProbe.snapshot());
+    const secondBoundary = replaced.boundaries.find(({generation}) => generation === 2);
+    // Session close owns the AudioContext and BroadcastChannel and therefore
+    // must release them before the replacement factory runs. MIDI and window
+    // listeners belong to Workspace's React effect: their cleanup is required
+    // before the replacement becomes ready (proved by the steady-state snapshot
+    // above), but is intentionally not ordered against pure factory invocation.
+    expect(secondBoundary.before.generations[1].audio_contexts).toBe(0);
+    expect(secondBoundary.before.generations[1].broadcast_channels).toBe(0);
+
+    await wakeAudioWithPad(page);
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+      timeout: 30_000,
+    });
+  } finally {
+    // Failure must release the genuine saved reply too. This cleanup does not
+    // assert that the SDK received it or any physical owner was retired.
+    if (!page.isClosed()) {
+      const proof = await page.evaluate(() => {
+        window.__creatorRuntimeProbe.releaseHeldOutcome("test-finally");
+        return window.__creatorRuntimeProbe.snapshot();
+      });
+      await testInfo.attach("actual-recovery-fault-proof", {
+        body: JSON.stringify(proof), contentType: "application/json",
+      });
+    }
+  }
+
 });
 test.describe("synthetic Web MIDI", () => {
   test.beforeEach(async ({page}) => {
