@@ -221,7 +221,14 @@ test("packaged silent held input retains its real release duration through Recor
   await attachCountInPcmObserver(page);
   let clock = await ensureCountInClock(page);
   const before = (await sendCountInHost(page, "project.inspect", {})).project;
-  const playback = before.banks[0].pads[1].playback;
+  const sample = await sendCountInHost(page, "sample.inspect", {slot: {bank: 0, pad: 1}});
+  expect(sample.asset_id).toBe(before.banks[0].pads[1].asset_id);
+  expect(sample.asset_id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(sample.project_revision).toBe(before.revision);
+  const playback = sample.playback;
+  expect(Object.keys(playback)).toEqual(expect.arrayContaining([
+    "trim_start_frame", "trim_end_frame", "trigger_mode", "gain_millidb", "muted",
+  ]));
   await sendCountInHost(page, "sample.update_pad", {command_id: crypto.randomUUID(),
     expected_revision: before.revision, slot: {bank: 0, pad: 1}, playback: {...playback, muted: true}});
   await sendCountInHost(page, "snapshot.reload", {pattern_id: setup.patternId});

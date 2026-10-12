@@ -108,10 +108,13 @@ export async function prepareProductionProject(page, {muted = false} = {}) {
       trim_start_frame: 0, trim_end_frame: 4800, trigger_mode: "gate", gain_millidb: 0, muted,
     }});
   truth = await inspectTruth(page);
-  await sendHost(page, "pattern.events.edit", {command_id: await page.evaluate(() => crypto.randomUUID()),
-    expected_revision: truth.revision, pattern_id: patternId,
-    remove: truth.patterns[patternId].events.map(({slot, onset_tick}) => ({slot, onset_tick})), put: []});
+  const remove = truth.patterns[patternId].events.map(({slot, onset_tick}) => ({slot, onset_tick}));
+  if (remove.length > 0) {
+    await sendHost(page, "pattern.events.edit", {command_id: await page.evaluate(() => crypto.randomUUID()),
+      expected_revision: truth.revision, pattern_id: patternId, remove, put: []});
+  }
   truth = await inspectTruth(page);
+  expect(truth.patterns[patternId].events, "recording starts from actual empty Pattern Truth").toEqual([]);
   await sendHost(page, "sequence.settings.update", {command_id: await page.evaluate(() => crypto.randomUUID()),
     expected_revision: truth.revision, session_id: null, bpm: 120, quantize_enabled: false, swing_percent: 50});
   await sendHost(page, "snapshot.reload", {pattern_id: patternId});

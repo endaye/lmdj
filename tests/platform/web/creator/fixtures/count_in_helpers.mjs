@@ -342,7 +342,8 @@ export async function requestCountIn(page, setup, bars) {
                 !Array.isArray(values) || values.length !== 5)
               throw new Error("actual Host submit arguments differ from the production signature");
             const envelope = JSON.parse(new TextDecoder().decode(
-              new Uint8Array(module.wasmMemory.buffer).subarray(values[0], values[0] + values[1])));
+              Uint8Array.from(new Uint8Array(module.wasmMemory.buffer)
+                .subarray(values[0], values[0] + values[1]))));
             entry = byRequest.get(envelope.request_id);
             if (entry) {
               entry.nativeRequestId = envelope.request_id;
