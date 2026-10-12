@@ -119,13 +119,15 @@ def writes_for(runtime, events):
     """Exact existing journal wire sequence, not a new persistence protocol."""
     prefix = runtime.repo(f"/issues/{runtime.config['issue_number']}")
     previous, writes = None, []
-    for event in events:
+    for count, event in enumerate(events):
         envelope = {"previous": previous, "event": event}
         envelope["digest"] = batch.digest(envelope)
         writes.extend([
-            ["PATCH", prefix, {"body": document(runtime.writer, "checkpoint", {"head": previous, "pending": envelope})}],
+            ["PATCH", prefix, {"body": document(runtime.writer, "checkpoint", {"head": previous, "pending": envelope,
+                "verified": {"head": previous, "count": count}})}],
             ["POST", prefix + "/comments", {"body": document(runtime.writer, "event", envelope)}],
-            ["PATCH", prefix, {"body": document(runtime.writer, "checkpoint", {"head": envelope["digest"], "pending": None})}],
+            ["PATCH", prefix, {"body": document(runtime.writer, "checkpoint", {"head": envelope["digest"], "pending": None,
+                "verified": {"head": envelope["digest"], "count": count + 1}})}],
         ])
         previous = envelope["digest"]
     return writes
@@ -185,7 +187,12 @@ class Probe:
                 for i, (kind, data) in enumerate((
                     ("queue", {"delivery": delivery, "payload": frozen}),
                     ("claim", {"delivery": delivery, "operation": operation})))]
-            writes = writes_for(runtime, events) + [["POST", runtime.repo("/issues"), payload]]
+            # The real Outbox.load authenticates and persists the empty legacy
+            # prefix before queueing. Preparation still performs no writes.
+            upgrade = ["PATCH", runtime.repo(f"/issues/{runtime.config['issue_number']}"),
+                       {"body": document(runtime.writer, "checkpoint", {"head": None,
+                           "pending": None, "verified": {"head": None, "count": 0}})}]
+            writes = [upgrade] + writes_for(runtime, events) + [["POST", runtime.repo("/issues"), payload]]
             expected = {"epoch": epoch, "namespace": namespace, "source_observation": source.observation,
                         "delivery": delivery, "frozen": frozen, "writes": writes}
         expected["scheduler_snapshot"] = scheduler_snapshot
@@ -245,9 +252,11 @@ class SuppressingApi(ReadOnlyApi):
                 prefix = self.writes[0][1]
                 writer = prior["writer"]
                 self.writes.extend([
-                    ["PATCH", prefix, {"body": document(writer, "checkpoint", {"head": previous, "pending": envelope})}],
+                    ["PATCH", prefix, {"body": document(writer, "checkpoint", {"head": previous, "pending": envelope,
+                        "verified": prior["payload"]["verified"]})}],
                     ["POST", prefix + "/comments", {"body": document(writer, "event", envelope)}],
-                    ["PATCH", prefix, {"body": document(writer, "checkpoint", {"head": envelope["digest"], "pending": None})}],
+                    ["PATCH", prefix, {"body": document(writer, "checkpoint", {"head": envelope["digest"], "pending": None,
+                        "verified": {"head": envelope["digest"], "count": prior["payload"]["verified"]["count"] + 1}})}],
                 ])
             raise
         if target:

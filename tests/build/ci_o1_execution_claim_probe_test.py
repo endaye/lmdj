@@ -84,7 +84,8 @@ class ClaimProbeTests(unittest.TestCase):
         self.assertEqual(len(request["selection"]["suites"]), 15)
         self.assertEqual(request["selection"]["kind"], "full")
         self.assertEqual(events[2]["data"]["run"], {"run_id": 17, "attempt": 1})
-        self.assertEqual(journal.anchor.read(), {"head": identity["journal_head"], "pending": None})
+        self.assertEqual(journal.anchor.read(), {"head": identity["journal_head"], "pending": None,
+            "verified": {"head": identity["journal_head"], "count": 3}})
         self.assertFalse((self.f.root / "result.json").exists())
         fresh = self.fresh()
         answer = fresh.reconcile(execute=False)

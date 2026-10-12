@@ -692,3 +692,51 @@ T3h precommit verification: complete CI regression 2,710 tests PASS in
 to main and passes Node syntax checking. AGENTS/CLAUDE remain identical.
 Postcommit Portal and rebuilt Creator targeted execution are required before push;
 their results will be recorded on the PR without rewriting the verified commit.
+
+### T5 — Restore recovery probes after verified-prefix journal changes
+
+Refreshed integration/task base: `171f0f1be1d022b512d38a90a96c789e1aa821c6`
+(2026-10-12). Relates to #1996.
+
+Premise dispositions before editing:
+
+- Already delivered: daily quick policy (#2011, `eda8b66a`), reduced ordinary
+  merge obligations (#2012, `82c010d0`), journal prefix persistence (#2033,
+  `02b7445f`; #2036, `493c82b0`), presentation drift (#2039, `65c38f0b`), and
+  source-refused write boundary (#2050, `58aac406`). Do not repeat them.
+- Outstanding: run 38238760719 job 114777949327 executes product CI but fails
+  the recovery probes. The probe's exact write fence still predicts two-field
+  anchors, while Journal now persists authenticated `verified` prefixes and
+  Outbox.load upgrades legacy anchors. The claim journey also expects the old
+  anchor. Local unmodified recovery suite reproduces 10 failures / 8 errors
+  across 31 tests; this is not a runner timeout.
+- Uncertain: a separate discovery failure reports only runtime_or_summary_error.
+  No causal link to the probe is established; this Task does not claim to fix it.
+  Full-candidate and normal-workday cost acceptance remain open. Existing
+  candidate q1-full-candidate-c2de4-20261012-01 is queued behind an active batch;
+  do not submit duplicate product work or treat skipped jobs as savings.
+
+Declared files: this plan, `scripts/ci/o1_recovery_probe.py`,
+`tests/build/ci_o1_recovery_probe_test.py`, and
+`tests/build/ci_o1_execution_claim_probe_test.py`.
+Update exact planned wire bytes and refusal continuation to include verified
+prefixes; retain read-only preparation, exact write fencing, single business
+POST, successful-receipt-only fault injection, and fresh-runtime recovery.
+The tests must assert the complete new anchors and retain every existing journey
+leg and negative guard. Lowest-tier verification: both owning probe suites plus
+journal/outbox regressions; run the complete CI contract discovery to establish
+that the observed batch failures are repaired. No new gate or timeout change.
+
+#### Version Management
+
+Version impact: none — isolated CI diagnostic protocol compatibility only.
+Documentation impact: none — no change to user commands, storage authority or
+published operational policy; this plan records the repair and verification.
+
+T5 verification: initial owning O1 probe suite 70/70 PASS (15.493 s).
+Final complete CI contract discovery: Ran 2734 tests in 242.300s; PASS with 72
+existing environment skips, exit 0. Complete discovery includes journal and
+outbox regressions and strengthened probe prefix assertions. The original
+31-test red run is retained. Precommit base refresh remains `171f0f1b`; no
+successor touches the premises. No qualifying process pitfall: the exact-wire
+adapter defect is derivable from source and its regression journeys own it.
