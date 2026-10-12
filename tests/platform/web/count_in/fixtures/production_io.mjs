@@ -90,7 +90,40 @@ export async function prepareProductionProject(page, {muted = false} = {}) {
   const projectId = truth.project_id;
   expect(projectId).toMatch(/^[0-9a-f-]{36}$/);
   expect(Array.isArray(truth.pattern_slots), "selection derives from actual Truth slots").toBe(true);
-  const patternId = truth.pattern_slots.find(id => typeof id === "string");
+  expect(truth.pattern_slots).toHaveLength(16);
+  let patternId = truth.pattern_slots.find(id => typeof id === "string");
+  if (patternId === undefined) {
+    // A fresh Creator Project has one real initial Pattern, not yet assigned
+    // to a slot. Assign that existing identity through the public command.
+    expect(truth.pattern_slots).toEqual(Array(16).fill(null));
+    const bootPatterns = Object.keys(truth.patterns);
+    expect(bootPatterns, "fresh boot has exactly one real initial Pattern").toHaveLength(1);
+    const [bootPatternId] = bootPatterns;
+    expect(bootPatternId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const bootPattern = truth.patterns[bootPatternId];
+    expect(bootPattern).toEqual({bars: 1, events: []});
+    const patternSlot = truth.pattern_slots.findIndex(id => id === null);
+    expect(patternSlot).toBeGreaterThanOrEqual(0);
+    const assignedSlots = [...truth.pattern_slots];
+    assignedSlots[patternSlot] = bootPatternId;
+    const beforeRevision = truth.revision;
+    const assigned = await sendHost(page, "pattern.slot.assign", {
+      command_id: await page.evaluate(() => crypto.randomUUID()),
+      expected_revision: beforeRevision, pattern_slot: patternSlot, pattern_id: bootPatternId,
+    });
+    expect(assigned).toMatchObject({pattern_slot: patternSlot, pattern_id: bootPatternId, replayed: false});
+    expect(Number.isSafeInteger(assigned.committed_revision)).toBe(true);
+    expect(assigned.committed_revision).toBeGreaterThan(beforeRevision);
+    expect(assigned.project_revision).toBe(assigned.committed_revision);
+    truth = await inspectTruth(page);
+    expect(truth.project_id).toBe(projectId);
+    expect(truth.revision).toBe(assigned.committed_revision);
+    expect(truth.pattern_slots).toEqual(assignedSlots);
+    expect(Object.keys(truth.patterns)).toEqual([bootPatternId]);
+    expect(truth.patterns[bootPatternId]).toEqual(bootPattern);
+    patternId = truth.pattern_slots[patternSlot];
+    expect(patternId).toBe(bootPatternId);
+  }
   expect(patternId, "Creator's actual boot Project has a selectable Pattern").toBeDefined();
   expect(Object.hasOwn(truth.patterns, patternId)).toBe(true);
   const bytes = pcm16Wav(); // Existing genuine PCM16 fixture, not an AudioContext source.
