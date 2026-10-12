@@ -78,10 +78,20 @@ class WitnessPrTest(pr_fixture.PrTest):
     def test_body_declares_required_task_checks_without_closing_issues(self):
         self.assertEqual(pr_fixture.check_pr_body(self.document["body"]), [])
         for text in ("scripts/docs-site.sh check", "python3 tests/build/ci_change_scope_test.py",
-                     "git diff --cached --check", "/versions/1.0.42.0/", "Version impact: none",
+                     "git diff --cached --check", "Version impact: none",
                      self.spec["witness"]["sha256"], self.spec["witness_receipt_sha256"]):
             self.assertIn(text, self.document["body"])
         self.assertNotIn("releases/tag/", self.document["body"])
+        # The witness Pull Request is evidence-only: it changes no current
+        # portal page, so the documentation-impact gate demands a bare none
+        # declaration, not required with a snapshot route.
+        for line in self.document["body"].splitlines():
+            self.assertNotIn("Affected portal pages:", line)
+        import re as _re
+        impact = _re.search(r"^Documentation impact:\s*(none|required)\s*$",
+                            self.document["body"], _re.M)
+        self.assertIsNotNone(impact)
+        self.assertEqual(impact.group(1), "none")
 
     def test_transport_does_not_offer_other_mutations(self):
         for method, route, body in (("DELETE", "/pulls/99", None), ("PATCH", "/pulls/99", {}),

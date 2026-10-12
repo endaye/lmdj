@@ -57,7 +57,10 @@ def pr_document(spec):
             "verified after merge. No complete-CI pass, releasable intent, tag, Release, deployment "
             "or promotion is claimed.\n\n"
             "Version impact: none\n\nReason: witness evidence only; no new allocation or snapshot rewrite.\n\n"
-            f"Documentation impact: required\n\nAffected portal pages: /versions/{build}/\n\n"
+            "Documentation impact: none\n\n"
+            "Reason: release-operation evidence only; adds no page under apps/docs-site/docs/ "
+            "and changes no portal truth — the witness only binds the already-frozen snapshot "
+            f"to its merged introducing revision.\n\n"
             f"<!-- lmdj-release-witness-pr.v1 {canonical_sha256(spec)} -->\n"),
         "head":"docs/release-witness-" + spec["operation_id"], "base":"main",
         "draft":False, "maintainer_can_modify":False}
