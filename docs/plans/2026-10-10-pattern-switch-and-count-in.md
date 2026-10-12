@@ -1338,3 +1338,38 @@ version or Product Build, changes no Native wire or persisted Contract, and
 performs no release. Documentation impact: required on
 `/core/modules/web-runtime-platform/`, `/platform/web-runtime/` and
 `/hosts/creator-web/`, with design and plan updated in this same Task.
+
+
+## S6 followup — recovery fixture forwards actual terminal ownership
+
+The original complete Creator run on `9c42ca9f` retained its recovery timeout
+failure: the main Chromium group ended with 99 PASS / 1 FAIL / 1 SKIP; the
+remaining groups continued independently. The actual negotiated-profile probe
+was admitted and genuinely consumed. Only delivery of that same completed
+reply was held until the observed SDK HOST_TIMEOUT. The fixture transport
+wrapper omitted the native terminal-ownership accessor, so the SDK could not
+observe its required real owner-release receipt before replacement. Actual
+Native owner release was not proved by that failure trace.
+
+**Task scope:** `tests/platform/web/creator/creator_web_lifecycle.spec.mjs` and
+this plan. Forward the original generation's actual terminal lifecycle through
+the fault wrapper. Preserve the same request/ticket/consume response, original
+failure injection, 240-second test budget, 120-second replacement wait,
+pre-factory closure, generation/listener assertions and final real Pad wake.
+Do not synthesize released state, bypass the injected consuming request,
+invent ACK/F, relax a gate or treat source changes as runtime acceptance.
+
+**Owning verification:** syntax check and the unchanged packaged recovery
+journey against a rebuilt actual candidate. The original failure remains
+recorded. The complete integrated Creator run, legacy failure cleanup,
+production OPFS and physical acceptance retain their own proof obligations.
+Only source work is admitted while the previous full Creator run is active.
+
+**Documentation impact: none.** This fixture-transparency correction does not
+change product behavior, architecture, Portal documented source facts,
+manifests or identities; the plan records its failing premise and owning test.
+
+### Version Management
+
+Version impact: none. This Task changes a test fixture and its plan only;
+public interfaces, persisted Contracts and Product identity remain unchanged.

@@ -30,6 +30,22 @@ async function installPackagedRecoveryProbe(page) {
     const negotiatedProfileGenerations = new Set();
     const profileFaults = [];
     const profileCapabilityReplies = [];
+    const generationTransports = new Map();
+    const terminalTransportHistory = [];
+    const terminalTransportStates = new Map();
+    function observeTerminalTransport(generation, nativeTransport) {
+      const state = {generation, terminated: nativeTransport.terminated,
+        terminal_owner_released: nativeTransport.terminalOwnerReleased};
+      const previous = terminalTransportStates.get(generation);
+      if (!previous || previous.terminated !== state.terminated ||
+          previous.terminal_owner_released !== state.terminal_owner_released) {
+        terminalTransportStates.set(generation, state);
+        terminalTransportHistory.push({...state, observed_at_ms: performance.now()});
+      }
+      return state;
+    }
+    const terminalTransportsSnapshot = () => [...generationTransports].map(
+      ([generation, nativeTransport]) => observeTerminalTransport(generation, nativeTransport));
     let armedDiagnostics = null;
     let armedProfileNegotiated = null;
     let armedGeneration = null;
@@ -210,15 +226,28 @@ async function installPackagedRecoveryProbe(page) {
       value: async () => midiAccess,
     });
 
-    const runtimeTransport = () => {
-      const transport = window.lmdjWebRuntimeHost?.transport;
-      if (!transport) throw new Error("packaged Runtime transport is unavailable");
-      return transport;
-    };
-    const transport = Object.freeze({
-      async send(...arguments_) {
+    function createProbeTransport(generation) {
+      // The factory precedes loadPackagedRuntime. Bind only after the new
+      // script exposes its own Host. Calls follow that same Host's transport
+      // decorators (including the real Pad admission observer), never another
+      // generation's global Host. Terminal receipts retain the original owner.
+      const previousHost = window.lmdjWebRuntimeHost;
+      let boundHost = null;
+      let boundNativeTransport = null;
+      const runtimeTransport = () => {
+        if (boundHost === null) {
+          const candidate = window.lmdjWebRuntimeHost;
+          if (!candidate?.transport || candidate === previousHost) {
+            throw new Error("this generation's packaged Runtime transport is unavailable");
+          }
+          boundHost = candidate;
+          boundNativeTransport = candidate.transport;
+          generationTransports.set(generation, boundNativeTransport);
+        }
+        return boundHost.transport;
+      };
+      async function forwardRequest(lane, arguments_) {
         const [request] = arguments_;
-        const generation = currentGeneration;
         const nativeTransport = runtimeTransport();
         const diagnostics = latestDiagnostics.get(generation);
         const selectsProfilePress = suppressNextOutcome &&
@@ -241,7 +270,7 @@ async function installPackagedRecoveryProbe(page) {
         }
         // Every original request and option reaches the original actual
         // transport unchanged, including the consuming request under proof.
-        const response = await nativeTransport.send(...arguments_);
+        const response = await nativeTransport[lane](...arguments_);
         if (request?.operation === "pattern.transport.count-in.capabilities") {
           profileCapabilityReplies.push({generation, request: structuredClone(request),
             response: structuredClone(response)});
@@ -282,38 +311,56 @@ async function installPackagedRecoveryProbe(page) {
           });
         }
         return response;
-      },
-      subscribe(listener) {
-        const generation = currentGeneration;
-        return runtimeTransport().subscribe((notification) => {
-          if (
-            suppressNextOutcome && armedGeneration === generation &&
-            notification?.event === "runtime.trigger_outcomes"
-          ) {
-            suppressNextOutcome = false;
-            suppressedOutcomes.push({
-              generation,
-              sequences: notification.payload?.events?.map(({sequence}) => sequence) ?? [],
-            });
-            return;
-          }
-          listener(notification);
-        });
-      },
-      subscribeFailure(listener) {
-        return runtimeTransport().subscribeFailure(listener);
-      },
-    });
+      }
+      return Object.freeze({
+        send(...arguments_) { return forwardRequest("send", arguments_); },
+        get sendRetained() {
+          const nativeTransport = boundHost?.transport;
+          return typeof nativeTransport?.sendRetained === "function"
+            ? (...arguments_) => forwardRequest("sendRetained", arguments_)
+            : undefined;
+        },
+        terminate(...arguments_) { return runtimeTransport().terminate(...arguments_); },
+        get terminated() {
+          return boundNativeTransport === null ? undefined
+            : observeTerminalTransport(generation, boundNativeTransport).terminated;
+        },
+        get terminalOwnerReleased() {
+          return boundNativeTransport === null ? undefined
+            : observeTerminalTransport(generation, boundNativeTransport).terminal_owner_released;
+        },
+        subscribe(listener) {
+          return runtimeTransport().subscribe((notification) => {
+            if (
+              suppressNextOutcome && armedGeneration === generation &&
+              notification?.event === "runtime.trigger_outcomes"
+            ) {
+              suppressNextOutcome = false;
+              suppressedOutcomes.push({
+                generation,
+                sequences: notification.payload?.events?.map(({sequence}) => sequence) ?? [],
+              });
+              return;
+            }
+            listener(notification);
+          });
+        },
+        subscribeFailure(listener) {
+          return runtimeTransport().subscribeFailure(listener);
+        },
+      });
+    }
 
     Object.defineProperty(window, "__LMDJ_WEB_HOST_SEAMS__", {
       configurable: false,
       get() {
-        boundaries.push({generation: currentGeneration + 1, before: counts()});
+        boundaries.push({generation: currentGeneration + 1, before: counts(),
+          terminal_transports: terminalTransportsSnapshot()});
         currentGeneration += 1;
         generationRecord(currentGeneration);
         const generation = currentGeneration;
         return {
-          transport,
+          transport: createProbeTransport(generation),
           onDiagnostics(value) {
             latestDiagnostics.set(generation, {generation, state: value.state,
               error_code: value.error_code,
@@ -378,6 +425,8 @@ async function installPackagedRecoveryProbe(page) {
           armed_diagnostics: structuredClone(armedDiagnostics),
           armed_profile_negotiated: armedProfileNegotiated,
           profile_faults: structuredClone(profileFaults),
+          terminal_transports: terminalTransportsSnapshot(),
+          terminal_transport_history: structuredClone(terminalTransportHistory),
         };
       },
     });
@@ -887,6 +936,11 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
     // above), but is intentionally not ordered against pure factory invocation.
     expect(secondBoundary.before.generations[1].audio_contexts).toBe(0);
     expect(secondBoundary.before.generations[1].broadcast_channels).toBe(0);
+    // Read the old Native transport itself, not a resource count or the
+    // replacement's transport. Its formal full-owner receipt must precede
+    // replacement factory invocation.
+    expect(secondBoundary.terminal_transports).toContainEqual({generation: 1,
+      terminated: true, terminal_owner_released: true});
 
     await wakeAudioWithPad(page);
     await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
