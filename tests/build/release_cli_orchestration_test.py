@@ -293,11 +293,21 @@ class ReleaseEntryPointTest(unittest.TestCase):
             journal.create(request)
         return request["id"]
 
-    def candidate_intent_request(self, *, head_sha=None):
+    def candidate_intent_request(self, *, head_sha=None, ordinal=1):
         # Like a request whose candidate cut began and was left outstanding,
         # with its managed cut Pull Request record in the operations journal.
         from tools.release.orchestration import STEPS
-        request_id = self.unfinished_request()
+        unfinished = self.unfinished_request
+        if ordinal != 1:
+            def unfinished():
+                request = {"id": "release-" + str(ordinal) * 16, "repository": "endaye/lmdj",
+                           "actor_id": 4829591, "authority_ref": "issue:1301",
+                           "policy_digest": "a" * 64, "control_revision": CONTROL,
+                           "base_revision": CONTROL, "mode": "new", "requested_tag": None}
+                with RequestJournal(self.journal()) as journal:
+                    journal.create(request)
+                return request["id"]
+        request_id = unfinished()
         head = head_sha or "a" * 40
         with RequestJournal(self.journal()) as journal:
             state = journal.read(request_id)
@@ -483,7 +493,22 @@ class ReleaseEntryPointTest(unittest.TestCase):
             retirement = journal.read_retirement(request_id)["retirement"]
         self.assertEqual(retirement["settled_intent"]["pull_request"], 2073)
         self.assertEqual(retirement["settled_intent"]["head_sha"], head)
+        self.assertFalse(retirement["settled_intent"]["merged"])
         self.assertEqual(self.request_ids(), [])
+
+        # A merged cut is equally terminal and settles with its merge commit.
+        request_id = self.candidate_intent_request(ordinal=2)
+        merged = lambda number: {"number": number, "state": "closed", "merged": True,
+                                 "merge_commit_sha": "c" * 40, "head_sha": head,
+                                 "title": "chore(release): allocate 1.0.64.0 candidate"}
+        code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", pull_request=merged)
+        self.assertEqual(code, 0, report)
+        self.assertIn("pull request #2073: merged at head", report)
+        self.assertIn("c" * 40, report)
+        with RequestJournal(self.journal()) as journal:
+            retirement = journal.read_retirement(request_id)["retirement"]
+        self.assertTrue(retirement["settled_intent"]["merged"])
+        self.assertEqual(retirement["settled_intent"]["merge_commit_sha"], "c" * 40)
 
     def test_retire_unreleased_refuses_an_unsettleable_candidate_intent(self):
         request_id = self.candidate_intent_request()
@@ -491,8 +516,11 @@ class ReleaseEntryPointTest(unittest.TestCase):
         for row in ({"number": 2073, "state": "open", "merged": False,
                      "merge_commit_sha": None, "head_sha": head,
                      "title": "chore(release): allocate 1.0.64.0 candidate"},
+                    {"number": 2073, "state": "open", "merged": False,
+                     "merge_commit_sha": None, "head_sha": head,
+                     "title": "chore(release): allocate 1.0.64.0 candidate"},
                     {"number": 2073, "state": "closed", "merged": True,
-                     "merge_commit_sha": "b" * 40, "head_sha": head,
+                     "merge_commit_sha": "b" * 40, "head_sha": "d" * 40,
                      "title": "chore(release): allocate 1.0.64.0 candidate"},
                     {"number": 2073, "state": "closed", "merged": False,
                      "merge_commit_sha": None, "head_sha": "c" * 40,
@@ -503,7 +531,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
             code, report, _ = self.retire_unreleased(request_id, "1.0.65.0",
                                                      pull_request=lambda number: row)
             self.assertEqual(code, 2)
-            self.assertIn("not closed unmerged", report)
+            self.assertIn("not terminal", report)
             self.assertEqual(self.request_ids(), [request_id])
         # A missing Pull Request far side settles nothing either.
         code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", pull_request=None)

@@ -186,11 +186,12 @@ class RequestJournalTest(unittest.TestCase):
 
     def settled_intent(self, **overrides):
         settled = {"step": "candidate", "operation_id": "f" * 64, "pull_request": 2073,
-                   "head_sha": "a" * 40, "state": "closed", "merged": False}
+                   "head_sha": "a" * 40, "state": "closed", "merged": False,
+                   "merge_commit_sha": None}
         settled.update(overrides)
         return settled
 
-    def test_a_closed_unmerged_cut_pull_request_settles_an_outstanding_candidate_intent(self):
+    def test_a_terminal_cut_pull_request_settles_an_outstanding_candidate_intent(self):
         with RequestJournal(self.root) as journal:
             journal.create(request())
             begun = journal.begin("release-1", STEPS[0])
@@ -202,7 +203,8 @@ class RequestJournalTest(unittest.TestCase):
                 journal.retire("release-1", dict(retirement,
                                                  settled_intent=self.settled_intent()))
             for bad in (self.settled_intent(state="open", operation_id=begun["operation_id"]),
-                        self.settled_intent(merged=True, operation_id=begun["operation_id"]),
+                        self.settled_intent(merged=True, merge_commit_sha=None, operation_id=begun["operation_id"]),
+                        self.settled_intent(merged=False, merge_commit_sha="b" * 40, operation_id=begun["operation_id"]),
                         self.settled_intent(step="verification", operation_id=begun["operation_id"]),
                         self.settled_intent(head_sha="not-a-sha", operation_id=begun["operation_id"]),
                         self.settled_intent(pull_request=0, operation_id=begun["operation_id"])):
@@ -212,6 +214,18 @@ class RequestJournalTest(unittest.TestCase):
             self.assertIsNone(journal.read("release-1"))
             self.assertEqual(record["original"]["transitions"][-1]["status"], "intent")
             self.assertEqual(record["retirement"]["settled_intent"]["pull_request"], 2073)
+            # A merged cut is equally terminal and settles the same way, with
+            # its merge commit pinned.
+            journal.create(dict(request(), id="release-3"))
+            begun = journal.begin("release-3", STEPS[0])
+            merged = dict(self.UNRELEASED, identity="1.0.66.0", superseded_by_build="1.0.67.0",
+                          settled_intent=self.settled_intent(
+                              operation_id=begun["operation_id"], merged=True,
+                              merge_commit_sha="b" * 40))
+            merged["evidence"] = ["[ok] lmdj-v1.0.66.0: no remote tag at 2026-09-28T00:00:00Z"]
+            record = journal.retire("release-3", merged)
+            self.assertIsNone(journal.read("release-3"))
+            self.assertTrue(record["retirement"]["settled_intent"]["merged"])
             # The settled retirement frees admission for a new request.
             self.assertIsNotNone(journal.create(dict(request(), id="release-2")))
 

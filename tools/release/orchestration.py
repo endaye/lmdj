@@ -105,21 +105,23 @@ def _build_triple(value, reason):
 
 
 def _validate_settled_intent(settled):
-    """The closed-unmerged cut Pull Request that settles an outstanding intent.
+    """The terminal cut Pull Request that settles an outstanding intent.
 
-    Only the candidate step's managed cut owns a Pull Request far side, and a
-    Pull Request observed closed and unmerged at its exact recorded head can
-    never merge or review again without a new deliberate action by an actor,
-    which is not an unknown outstanding write of this request. GitHub fills
-    `merge_commit_sha` for closed Pull Requests that never merged, so the
-    merged boolean and the state are the settle facts, not that field.
+    Only the candidate step's managed cut owns a Pull Request far side. A
+    Pull Request observed closed — whether merged or closed unmerged — is
+    terminal: it can never merge, review or close differently again without a
+    new deliberate action by an actor, which is not an unknown outstanding
+    write of this request. The merged boolean names which terminal state was
+    observed, and a merged cut additionally pins its merge commit.
     """
-    _keys(settled, ("step", "operation_id", "pull_request", "head_sha", "state", "merged"))
+    _keys(settled, ("step", "operation_id", "pull_request", "head_sha", "state", "merged",
+                    "merge_commit_sha"))
     if (settled["step"] != "candidate" or not _match(_DIGEST, settled["operation_id"])
             or type(settled["pull_request"]) is not int or settled["pull_request"] <= 0
             or not _match(_SHA, settled["head_sha"]) or settled["state"] != "closed"
-            or settled["merged"] is not False):
-        _fail("settled intent is not a closed-unmerged candidate cut Pull Request")
+            or type(settled["merged"]) is not bool
+            or (settled["merge_commit_sha"] is None) == settled["merged"]):
+        _fail("settled intent is not a terminal candidate cut Pull Request")
 
 
 def _validate_unreleased_retirement(retirement):
