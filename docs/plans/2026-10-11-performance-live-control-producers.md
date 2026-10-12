@@ -328,13 +328,16 @@ oracle，不靠一份 mock SDK 验证真实 C++边界。
 Declared files（完整边界）：
 
 - `packages/web-runtime-platform/src/control_runtime.cpp`
+- `packages/web-runtime-platform/src/bridge.cpp`
 - `packages/web-runtime-platform/web/runtime_types.d.ts`
 - `packages/web-runtime-platform/web/runtime_session.mjs`
 - `packages/web-runtime-platform/web/performance_master_capture.mjs`
 - `packages/web-runtime-platform/web/performance_master_tap_worklet.js`
+- `packages/web-runtime-platform/web/protocol.mjs`
 - `packages/web-runtime-platform/test/performance_bridge_test.cpp`
 - `packages/web-runtime-platform/test/control_runtime_test.cpp`
 - `packages/web-runtime-platform/test/performance_protocol.test.mjs`
+- `packages/web-runtime-platform/test/protocol.test.mjs`
 - `packages/web-runtime-platform/test/runtime_session.test.mjs`
 - `packages/web-runtime-platform/test/performance_master_capture.test.mjs`
 - `packages/web-runtime-platform/test/performance_master_tap_worklet.test.mjs`

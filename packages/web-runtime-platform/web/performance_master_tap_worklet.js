@@ -1,5 +1,21 @@
 const PERFORM_BATCH_FRAMES = 4_800;
 
+// D0/W1: the start handshake carries the begin binding
+// `{control_epoch, session_id, begin_command_id}` (null only for a legacy
+// non-D04 caller) and the worklet answers `started` after actually applying
+// it, before the next process().
+function validTapBinding(binding) {
+  if (binding === null) return true;
+  if (binding === undefined || typeof binding !== "object") return false;
+  const keys = Object.keys(binding).sort();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  return keys.length === 3 &&
+    keys[0] === "begin_command_id" && keys[1] === "control_epoch" &&
+    keys[2] === "session_id" &&
+    uuid.test(binding.begin_command_id) &&
+    uuid.test(binding.control_epoch) && uuid.test(binding.session_id);
+}
+
 function isExactControlMessage(data, type) {
   if (
     data === null ||
@@ -11,6 +27,11 @@ function isExactControlMessage(data, type) {
     return false;
   }
   const keys = Object.keys(data).sort();
+  if (type === "start") {
+    return keys.length === 3 &&
+      keys[0] === "binding" && keys[1] === "generation" && keys[2] === "type" &&
+      validTapBinding(data.binding);
+  }
   return keys.length === 2 &&
     keys[0] === "generation" && keys[1] === "type";
 }
@@ -19,6 +40,7 @@ class PerformanceMasterTapProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.generation = null;
+    this.binding = null;
     this.sequence = 0;
     this.frames = 0;
     this.left = new Float32Array(PERFORM_BATCH_FRAMES);
@@ -26,8 +48,21 @@ class PerformanceMasterTapProcessor extends AudioWorkletProcessor {
     this.port.onmessage = ({data}) => {
       if (isExactControlMessage(data, "start")) {
         this.generation = data.generation;
+        this.binding = data.binding ?? null;
         this.sequence = 0;
         this.frames = 0;
+        // The start is applied: acknowledge before the next process() so the
+        // controller never treats a posted-but-unhandled start as armed.
+        try {
+          this.port.postMessage({
+            type: "started",
+            generation: this.generation,
+            binding: this.binding,
+          });
+        } catch {
+          this.generation = null;
+          this.binding = null;
+        }
       } else if (
         isExactControlMessage(data, "stop") &&
         this.generation !== null &&
@@ -36,6 +71,7 @@ class PerformanceMasterTapProcessor extends AudioWorkletProcessor {
         const generation = this.generation;
         if (!this.flush()) return;
         this.generation = null;
+        this.binding = null;
         try {
           this.port.postMessage({
             type: "stopped",

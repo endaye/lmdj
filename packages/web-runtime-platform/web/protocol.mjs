@@ -38,6 +38,8 @@ export const HOST_OPERATIONS = Object.freeze([
   "performance.record.begin",
   "performance.record.event",
   "performance.fx.gesture",
+  "performance.live.control",
+  "performance.live.status",
   "performance.record.launch-request",
   "performance.record.flush",
   "performance.record.stop",
@@ -144,6 +146,8 @@ const SHORT_OPERATIONS = new Set([
   "sequence.recovery.list",
   "performance.record.event",
   "performance.fx.gesture",
+  "performance.live.control",
+  "performance.live.status",
   "performance.record.launch-request",
   "performance.record.status",
   "performance.recovery.list",
@@ -580,8 +584,7 @@ function validPerformanceGesture(value) {
 
 // Session-free live FX gesture (#1674): the FX subset of
 // validPerformanceGesture without the journal's gesture identity.
-function validPerformanceFxGesture(value) {
-  if (!isPlainObject(value) || typeof value.kind !== "string") {
+function validPerformanceFxGesture(value) {  if (!isPlainObject(value) || typeof value.kind !== "string") {
     return false;
   }
   switch (value.kind) {
@@ -599,6 +602,203 @@ function validPerformanceFxGesture(value) {
     default:
       return false;
   }
+}
+
+// D0/W1 headered live-control wire (lmdj.project.v5 5.4.1): opaque Core
+// sequences are canonical decimal strings — never a JS Number identity, and
+// slot semantics never a JS 32-bit bitwise mask.
+function validOpaqueSequence(value) {
+  return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value) &&
+    value.length <= 20 &&
+    (value.length < 20 || value <= "18446744073709551615");
+}
+
+const PERFORMANCE_FX_NAMES = Object.freeze([
+  "filter", "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter",
+]);
+
+function validLiveControlIntent(value) {
+  if (!isPlainObject(value) || typeof value.kind !== "string") {
+    return false;
+  }
+  switch (value.kind) {
+    case "filter_parameter": {
+      const plain = hasExactKeys(value, ["kind", "phase", "parameter", "value"]);
+      const bound = hasExactKeys(value, ["kind", "phase", "parameter", "value", "gesture_generation"]);
+      if (!plain && !bound) return false;
+      if (bound && !validUuid(value.gesture_generation)) return false;
+      if (value.phase !== "engage" && value.phase !== "move") return false;
+      switch (value.parameter) {
+        case "type":
+          return ["lp", "hp", "bp"].includes(value.value);
+        case "cutoff_hz":
+          return isUnsignedInteger(value.value) && value.value >= 20 &&
+            value.value <= 20_000;
+        case "resonance_milli":
+          return isUnsignedInteger(value.value, 1_000);
+        default:
+          return false;
+      }
+    }
+    case "filter_release":
+      return hasExactKeys(value, ["kind", "gesture_generation"]) &&
+        validUuid(value.gesture_generation);
+    case "fx_parameter": {
+      const plain = hasExactKeys(value, ["kind", "phase", "fx", "value"]);
+      const bound = hasExactKeys(value, ["kind", "phase", "fx", "value", "gesture_generation"]);
+      if (!plain && !bound) return false;
+      if (bound && !validUuid(value.gesture_generation)) return false;
+      if (value.phase !== "engage" && value.phase !== "move") return false;
+      return PERFORMANCE_FX_NAMES.includes(value.fx) &&
+        isUnsignedInteger(value.value, 1_000);
+    }
+    case "fx_release":
+      return hasExactKeys(value, ["kind", "fx", "gesture_generation"]) &&
+        PERFORMANCE_FX_NAMES.includes(value.fx) &&
+        validUuid(value.gesture_generation);
+    case "pad_mute":
+    case "pad_solo":
+      return hasExactKeys(value, ["kind", "slot", "enabled"]) &&
+        isUnsignedInteger(value.slot, 63) && typeof value.enabled === "boolean";
+    case "clear_pad_gates":
+    case "hold_on":
+    case "hold_off":
+      return hasExactKeys(value, ["kind"]);
+    default:
+      return false;
+  }
+}
+
+// The headered recording profile's closed event vocabulary (D0): Pad gestures
+// keep their legacy keys; FX events carry the Core logical/runtime binding
+// pair; the typed Filter and Pad gates are the new kinds.
+function validHeaderedPerformanceEvent(value) {
+  if (!isPlainObject(value) || typeof value.kind !== "string") {
+    return false;
+  }
+  switch (value.kind) {
+    case "pad_press":
+      return hasExactKeys(value, ["kind", "gesture_id", "slot", "velocity"]) &&
+        validUuid(value.gesture_id) && isUnsignedInteger(value.slot, 63) &&
+        isUnsignedInteger(value.velocity, 127) && value.velocity > 0;
+    case "pad_release":
+      return hasExactKeys(value, ["kind", "gesture_id", "slot"]) &&
+        validUuid(value.gesture_id) && isUnsignedInteger(value.slot, 63);
+    case "fx_engage":
+      return hasExactKeys(value, ["kind", "fx", "value"]) &&
+        PERFORMANCE_FX_NAMES.includes(value.fx) &&
+        isUnsignedInteger(value.value, 1_000);
+    case "fx_move":
+      return hasExactKeys(value, ["kind", "fx", "value", "gesture_id", "gesture_generation"]) &&
+        PERFORMANCE_FX_NAMES.includes(value.fx) &&
+        isUnsignedInteger(value.value, 1_000) &&
+        validUuid(value.gesture_id) && validUuid(value.gesture_generation);
+    case "fx_release":
+      return hasExactKeys(value, ["kind", "fx", "gesture_id", "gesture_generation"]) &&
+        PERFORMANCE_FX_NAMES.includes(value.fx) &&
+        validUuid(value.gesture_id) && validUuid(value.gesture_generation);
+    case "filter_parameter": {
+      const plain = hasExactKeys(value, ["kind", "phase", "parameter", "value"]);
+      const bound = hasExactKeys(value, ["kind", "phase", "parameter", "value", "gesture_id", "gesture_generation"]);
+      if (!plain && !bound) return false;
+      if (bound && (!validUuid(value.gesture_id) || !validUuid(value.gesture_generation))) {
+        return false;
+      }
+      if (value.phase !== "engage" && value.phase !== "move") return false;
+      switch (value.parameter) {
+        case "type":
+          return ["lp", "hp", "bp"].includes(value.value);
+        case "cutoff_hz":
+          return isUnsignedInteger(value.value) && value.value >= 20 &&
+            value.value <= 20_000;
+        case "resonance_milli":
+          return isUnsignedInteger(value.value, 1_000);
+        default:
+          return false;
+      }
+    }
+    case "filter_release":
+      return hasExactKeys(value, ["kind", "gesture_id", "gesture_generation"]) &&
+        validUuid(value.gesture_id) && validUuid(value.gesture_generation);
+    case "pad_mute":
+    case "pad_solo":
+      return hasExactKeys(value, ["kind", "slot", "enabled"]) &&
+        isUnsignedInteger(value.slot, 63) && typeof value.enabled === "boolean";
+    case "clear_pad_gates":
+    case "hold_on":
+    case "hold_off":
+      return hasExactKeys(value, ["kind"]);
+    default:
+      return false;
+  }
+}
+
+function validPerformanceLiveState(value) {
+  if (!isPlainObject(value) ||
+      !hasExactKeys(value, ["filter", "hold", "muted_slots", "other_fx", "solo_slots"]) ||
+      typeof value.hold !== "boolean") {
+    return false;
+  }
+  const filter = value.filter;
+  if (!isPlainObject(filter)) return false;
+  const legacy = hasExactKeys(filter, ["engaged", "frozen", "mode", "value"]) &&
+    filter.mode === "legacy";
+  const independent = hasExactKeys(filter, ["cutoff_hz", "engaged", "frozen", "mode", "resonance_milli", "type"]) &&
+    filter.mode === "independent";
+  if (!legacy && !independent) return false;
+  if (typeof filter.engaged !== "boolean" || typeof filter.frozen !== "boolean") {
+    return false;
+  }
+  if (legacy) {
+    if (!isUnsignedInteger(filter.value, 1_000)) return false;
+  } else if (
+    !["lp", "hp", "bp"].includes(filter.type) ||
+    !isUnsignedInteger(filter.cutoff_hz) || filter.cutoff_hz < 20 ||
+    filter.cutoff_hz > 20_000 ||
+    !isUnsignedInteger(filter.resonance_milli, 1_000)
+  ) {
+    return false;
+  }
+  const slots = (list) => Array.isArray(list) &&
+    list.every((slot) => isUnsignedInteger(slot, 63)) &&
+    new Set(list).size === list.length &&
+    list.every((slot, index) => index === 0 || list[index - 1] < slot);
+  if (!slots(value.muted_slots) || !slots(value.solo_slots)) return false;
+  if (!isPlainObject(value.other_fx)) return false;
+  const gates = Object.keys(value.other_fx).sort();
+  const expected = ["crush", "cutter", "delay", "gate", "reverb", "reverse", "stutter"];
+  if (gates.length !== expected.length ||
+      !gates.every((name, index) => name === expected[index])) {
+    return false;
+  }
+  return gates.every((name) => {
+    const gate = value.other_fx[name];
+    return hasExactKeys(gate, ["engaged", "frozen", "value"]) &&
+      typeof gate.engaged === "boolean" && typeof gate.frozen === "boolean" &&
+      isUnsignedInteger(gate.value, 1_000);
+  });
+}
+
+function validAdmissionReceipt(value) {
+  if (!isPlainObject(value)) return false;
+  const binding = value.binding_result;
+  return hasExactKeys(value, [
+    "accepted_tick", "binding_result", "event_input_sequences",
+    "expected_recording_sequence", "input_sequence", "phase", "request_id",
+    "result",
+  ]) &&
+    validUuid(value.request_id) &&
+    validOpaqueSequence(value.expected_recording_sequence) &&
+    isUnsignedInteger(value.accepted_tick) &&
+    validOpaqueSequence(value.input_sequence) &&
+    ["prepared", "completed"].includes(value.phase) &&
+    ["not_published", "published", "no_audio"].includes(value.result) &&
+    Array.isArray(value.event_input_sequences) &&
+    value.event_input_sequences.every(validOpaqueSequence) &&
+    (binding === null || (
+      hasExactKeys(binding, ["fx", "recording_gesture_id"]) &&
+      PERFORMANCE_FX_NAMES.includes(binding.fx) &&
+      validUuid(binding.recording_gesture_id)));
 }
 
 function requirePerformanceOperationPayload(
@@ -632,10 +832,41 @@ function requirePerformanceOperationPayload(
       valid = hasExactKeys(payload, ["performance_id"]) && validUuid(payload.performance_id);
       break;
     case "performance.record.begin":
+      // The headered profile is selected by the extra Core-issued epoch key;
+      // the legacy four-key shape is unchanged.
+      if (Object.hasOwn(payload, "control_epoch")) {
+        valid = commandIdentity(["command_id", "expected_revision", "session_id", "performance_id", "control_epoch"]) &&
+          validUuid(payload.session_id) && validUuid(payload.performance_id) &&
+          validUuid(payload.control_epoch);
+        break;
+      }
       valid = commandIdentity(["command_id", "expected_revision", "session_id", "performance_id"]) &&
         validUuid(payload.session_id) && validUuid(payload.performance_id);
       break;
+    case "performance.live.status":
+      valid = hasExactKeys(payload, []);
+      break;
+    case "performance.live.control":
+      valid = hasExactKeys(payload, ["control_epoch", "command_id", "expected_control_sequence", "intent"]) &&
+        validUuid(payload.control_epoch) && validUuid(payload.command_id) &&
+        payload.command_id !== transportRequestId &&
+        validOpaqueSequence(payload.expected_control_sequence) &&
+        validLiveControlIntent(payload.intent);
+      break;
     case "performance.record.event":
+      if (Object.hasOwn(payload, "control_epoch") ||
+          Object.hasOwn(payload, "expected_recording_sequence")) {
+        valid = hasExactKeys(payload, ["session_id", "event_id", "event", "control_epoch", "expected_recording_sequence"]) &&
+          validUuid(payload.session_id) && validUuid(payload.event_id) &&
+          validUuid(payload.control_epoch) &&
+          validOpaqueSequence(payload.expected_recording_sequence) &&
+          validHeaderedPerformanceEvent(payload.event) &&
+          payload.event_id !== transportRequestId &&
+          (!Object.hasOwn(payload.event, "gesture_id") ||
+            (payload.event.gesture_id !== payload.event_id &&
+             payload.event.gesture_id !== transportRequestId));
+        break;
+      }
       valid = hasExactKeys(payload, ["session_id", "event_id", "event"]) &&
         validUuid(payload.session_id) && validUuid(payload.event_id) &&
         validPerformanceGesture(payload.event) &&
@@ -649,6 +880,16 @@ function requirePerformanceOperationPayload(
         validPerformanceFxGesture(payload.event);
       break;
     case "performance.record.launch-request":
+      if (Object.hasOwn(payload, "control_epoch") ||
+          Object.hasOwn(payload, "expected_recording_sequence")) {
+        valid = hasExactKeys(payload, ["session_id", "request_id", "pattern_slot", "control_epoch", "expected_recording_sequence"]) &&
+          validUuid(payload.session_id) && validUuid(payload.request_id) &&
+          validUuid(payload.control_epoch) &&
+          validOpaqueSequence(payload.expected_recording_sequence) &&
+          payload.request_id !== transportRequestId &&
+          validPatternSlot(payload.pattern_slot);
+        break;
+      }
       valid = hasExactKeys(payload, ["session_id", "request_id", "pattern_slot"]) &&
         validUuid(payload.session_id) && validUuid(payload.request_id) &&
         payload.request_id !== transportRequestId && validPatternSlot(payload.pattern_slot);
@@ -1255,6 +1496,59 @@ function validPerformanceResult(operation, value) {
         Array.isArray(value.performance.events) && value.performance.events.every(validCanonicalPerformanceEvent) &&
         isUnsignedInteger(value.project_revision);
     case "performance.record.begin":
+      // The headered profile's begin carries the fence state and the logical
+      // recording-gesture mapping; the legacy lifecycle shape is unchanged.
+      if (hasExactKeys(value, ["performance_id", "committed_revision", "replayed", "profile", "control_epoch", "core_control_ready", "next_recording_sequence", "fx_bindings", "project_revision"])) {
+        return validUuid(value.performance_id) &&
+          isUnsignedInteger(value.committed_revision) &&
+          typeof value.replayed === "boolean" &&
+          value.profile === "header_input_sequence" &&
+          (value.control_epoch === null || validUuid(value.control_epoch)) &&
+          typeof value.core_control_ready === "boolean" &&
+          validOpaqueSequence(value.next_recording_sequence) &&
+          Array.isArray(value.fx_bindings) &&
+          value.fx_bindings.every((binding) =>
+            (hasExactKeys(binding, ["fx", "gesture_generation", "recording_gesture_id"]) ||
+             hasExactKeys(binding, ["fx", "mode", "gesture_generation", "recording_gesture_id"])) &&
+            PERFORMANCE_FX_NAMES.includes(binding.fx) &&
+            (!Object.hasOwn(binding, "mode") || binding.mode === "independent") &&
+            validUuid(binding.gesture_generation) &&
+            validUuid(binding.recording_gesture_id)) &&
+          value.project_revision === value.committed_revision;
+      }
+      return validLifecycleResult(value);
+    case "performance.live.status": {
+      const unavailable = hasExactKeys(value, ["available", "control_epoch", "accepted", "applied", "accepted_control_sequence", "applied_control_sequence", "reset_pending", "begin_pending", "project_revision"]) &&
+        value.available === false && value.control_epoch === null &&
+        value.accepted === null && value.applied === null &&
+        value.accepted_control_sequence === null &&
+        value.applied_control_sequence === null &&
+        value.reset_pending === false && value.begin_pending === false &&
+        value.project_revision === null;
+      if (unavailable) return true;
+      return hasExactKeys(value, ["available", "control_epoch", "accepted", "applied", "runtime_generations", "accepted_control_sequence", "applied_control_sequence", "reset_pending", "begin_pending", "project_revision"]) &&
+        value.available === true && validUuid(value.control_epoch) &&
+        validPerformanceLiveState(value.accepted) &&
+        validPerformanceLiveState(value.applied) &&
+        isPlainObject(value.runtime_generations) &&
+        hasExactKeys(value.runtime_generations, [...PERFORMANCE_FX_NAMES].sort()) &&
+        [...PERFORMANCE_FX_NAMES].every((name) => {
+          const generation = value.runtime_generations[name];
+          return generation === null || validUuid(generation);
+        }) &&
+        validOpaqueSequence(value.accepted_control_sequence) &&
+        validOpaqueSequence(value.applied_control_sequence) &&
+        typeof value.reset_pending === "boolean" &&
+        typeof value.begin_pending === "boolean" &&
+        value.project_revision === null;
+    }
+    case "performance.live.control":
+      return hasExactKeys(value, ["command_id", "control_epoch", "control_sequence", "gesture_generation", "accepted", "applied", "replayed", "project_revision"]) &&
+        validUuid(value.command_id) && validUuid(value.control_epoch) &&
+        validOpaqueSequence(value.control_sequence) &&
+        (value.gesture_generation === null || validUuid(value.gesture_generation)) &&
+        value.accepted === true && typeof value.applied === "boolean" &&
+        typeof value.replayed === "boolean" && value.project_revision === null;
     case "performance.record.flush":
     case "performance.save":
     case "performance.discard":
@@ -1264,6 +1558,28 @@ function validPerformanceResult(operation, value) {
     case "performance.recording.bind":
       return validLifecycleResult(value);
     case "performance.record.event":
+      // The headered profile's fresh receipt; its replayed exact retry
+      // returns the durable admission record instead.
+      if (hasExactKeys(value, ["admission", "replayed", "project_revision"])) {
+        return validAdmissionReceipt(value.admission) &&
+          value.replayed === true && value.project_revision === null;
+      }
+      if (hasExactKeys(value, ["admission", "gesture_generation", "replayed", "project_revision"])) {
+        return validAdmissionReceipt(value.admission) &&
+          (value.gesture_generation === null || validUuid(value.gesture_generation)) &&
+          value.replayed === true && value.project_revision === null;
+      }
+      if (hasExactKeys(value, ["event_id", "accepted_tick", "input_sequence", "next_recording_sequence", "result", "coalesced", "gesture_generation", "recording_gesture_id", "replayed", "project_revision"])) {
+        return validUuid(value.event_id) &&
+          isUnsignedInteger(value.accepted_tick) &&
+          validOpaqueSequence(value.input_sequence) &&
+          validOpaqueSequence(value.next_recording_sequence) &&
+          ["published", "no_audio"].includes(value.result) &&
+          value.coalesced === false &&
+          (value.gesture_generation === null || validUuid(value.gesture_generation)) &&
+          (value.recording_gesture_id === null || validUuid(value.recording_gesture_id)) &&
+          value.replayed === false && value.project_revision === null;
+      }
       return hasExactKeys(value, ["event_id", "accepted_tick", "input_sequence", "coalesced", "replayed", "project_revision"]) &&
         validUuid(value.event_id) && isUnsignedInteger(value.accepted_tick) &&
         isUnsignedInteger(value.input_sequence) && typeof value.coalesced === "boolean" &&
@@ -1272,6 +1588,13 @@ function validPerformanceResult(operation, value) {
       return hasExactKeys(value, ["applied", "project_revision"]) &&
         value.applied === true && value.project_revision === null;
     case "performance.record.launch-request":
+      if (hasExactKeys(value, ["request_id", "state", "target_tick", "input_sequence", "next_recording_sequence", "project_revision"])) {
+        return validUuid(value.request_id) && value.state === "pending" &&
+          isUnsignedInteger(value.target_tick) &&
+          validOpaqueSequence(value.input_sequence) &&
+          validOpaqueSequence(value.next_recording_sequence) &&
+          value.project_revision === null;
+      }
       return hasExactKeys(value, ["request_id", "state", "target_tick", "project_revision"]) &&
         validUuid(value.request_id) && value.state === "pending" &&
         isUnsignedInteger(value.target_tick) && value.project_revision === null;
@@ -1284,7 +1607,21 @@ function validPerformanceResult(operation, value) {
     case "performance.record.status": {
       const pendingLaunch = value.pending_launch;
       const lastLaunch = value.last_launch_ack;
-      return hasExactKeys(value, ["state", "session_id", "performance_id", "journal_revision", "next_flush_seq", "pending_event_count", "open_pad_gestures", "open_fx_gestures", "hold", "pending_launch", "last_launch_ack", "project_revision"]) &&
+      const legacyKeys = ["state", "session_id", "performance_id", "journal_revision", "next_flush_seq", "pending_event_count", "open_pad_gestures", "open_fx_gestures", "hold", "pending_launch", "last_launch_ack", "project_revision"];
+      // The headered profile reports its fence and admission-window state.
+      const headeredKeys = [...legacyKeys, "profile", "control_epoch", "core_control_ready", "next_recording_sequence", "pending_admission"];
+      const keySet = hasExactKeys(value, legacyKeys) ? legacyKeys
+        : hasExactKeys(value, headeredKeys) ? headeredKeys
+        : null;
+      if (keySet === null) return false;
+      const headered = keySet === headeredKeys;
+      return (!headered ||
+          (value.profile === "header_input_sequence" &&
+           validUuid(value.control_epoch) &&
+           typeof value.core_control_ready === "boolean" &&
+           validOpaqueSequence(value.next_recording_sequence) &&
+           (value.pending_admission === null ||
+             validAdmissionReceipt(value.pending_admission)))) &&
         ["idle", "active", "stopped", "recovery_required"].includes(value.state) &&
         validNullableUuid(value.session_id) && validNullableUuid(value.performance_id) &&
         isUnsignedInteger(value.journal_revision) && isUnsignedInteger(value.next_flush_seq) &&

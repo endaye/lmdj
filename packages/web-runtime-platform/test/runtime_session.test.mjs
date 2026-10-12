@@ -22,6 +22,7 @@ const API = [
   "inspectAttempt",
   "activateAudio",
   "applyFxGesture",
+  "applyPerformanceLiveControl",
   "applyPerformanceRecovery",
   "applySequenceRecovery",
   "assignPatternSlot",
@@ -71,6 +72,7 @@ const API = [
   "movePatternSlot",
   "previewSoundSetMap",
   "stopSoundSetAudition",
+  "queryPerformanceLiveStatus",
   "queryPerformanceRecordingStatus",
   "queryPerformanceReplayStatus",
   "querySampleQuota",
@@ -7536,5 +7538,419 @@ test("Project inspection hands each Pad's Core-resolved colour through unchanged
   await session.start();
   const inspected = await session.inspectProject();
   assert.deepEqual(inspected.project.banks[0].pads, pads);
+  await session.close();
+});
+
+
+// ---------------------------------------------------------------------------
+// D0/W1 typed live-control producer oracles.
+// ---------------------------------------------------------------------------
+
+const LIVE_EPOCH = "40000000-0000-4000-8000-000000000001";
+const LIVE_STATE_WIRE = {
+  hold: false,
+  filter: {mode: "legacy", engaged: false, frozen: false, value: 0},
+  other_fx: Object.fromEntries(
+    ["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"]
+      .map((name) => [name, {engaged: false, frozen: false, value: 0}])),
+  muted_slots: [],
+  solo_slots: [],
+};
+
+test("typed live control serializes exactly and tracks the CAS window", async () => {
+  const operations = [];
+  let liveSequence = 0;
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope);
+      switch (envelope.operation) {
+        case "performance.live.status":
+          return success(envelope, {
+            available: true,
+            control_epoch: LIVE_EPOCH,
+            accepted: LIVE_STATE_WIRE,
+            applied: LIVE_STATE_WIRE,
+            runtime_generations: Object.fromEntries(
+              ["crush", "cutter", "delay", "filter", "gate", "reverse",
+                "reverb", "stutter"].map((name) => [name, null])),
+            accepted_control_sequence: String(liveSequence),
+            applied_control_sequence: String(liveSequence),
+            reset_pending: false,
+            begin_pending: false,
+            project_revision: null,
+          });
+        case "performance.live.control": {
+          // A replayed receipt does not advance the SDK's window.
+          const replayed = envelope.payload.intent.kind === "hold_off";
+          liveSequence += replayed ? 0 : 1;
+          return success(envelope, {
+            command_id: envelope.payload.command_id,
+            control_epoch: envelope.payload.control_epoch,
+            control_sequence: String(liveSequence),
+            gesture_generation: null,
+            accepted: true,
+            applied: false,
+            replayed,
+            project_revision: null,
+          });
+        }
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  const status = await session.queryPerformanceLiveStatus();
+  assert.equal(status.available, true);
+  assert.equal(status.controlEpoch, LIVE_EPOCH);
+  assert.equal(status.accepted.hold, false);
+  assert.equal(status.appliedControlSequence, "0");
+
+  const first = await session.applyPerformanceLiveControl({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "pad_mute", slot: 7, enabled: true},
+  });
+  assert.equal(first.accepted, true);
+  assert.equal(first.replayed, false);
+  const wired = operations.find(
+    ({operation}) => operation === "performance.live.control").payload;
+  assert.deepEqual(wired, {
+    control_epoch: LIVE_EPOCH,
+    command_id: wired.command_id,
+    expected_control_sequence: "0",
+    intent: {kind: "pad_mute", slot: 7, enabled: true},
+  });
+
+  // The same-identity replay does not advance the window.
+  const replayed = await session.applyPerformanceLiveControl({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "hold_off"},
+  });
+  assert.equal(replayed.replayed, true);
+  const third = await session.applyPerformanceLiveControl({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "hold_on"},
+  });
+  assert.equal(third.replayed, false);
+  const envelopes = operations.filter(
+    ({operation}) => operation === "performance.live.control");
+  assert.equal(envelopes[1].payload.expected_control_sequence, "1");
+  assert.equal(envelopes[2].payload.expected_control_sequence, "1");
+
+  // A closed session rejects new inputs without sending anything.
+  await session.close();
+  const before = operations.length;
+  await assert.rejects(
+    session.applyPerformanceLiveControl({
+      controlEpoch: LIVE_EPOCH,
+      intent: {kind: "hold_on"},
+    }),
+    (error) => error.code === "HOST_STATE_INVALID",
+  );
+  assert.equal(operations.length, before);
+});
+
+test("bounded live-input window rejects overflow, never drops releases, and cleanup rejects the waiting input", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000010";
+  const performanceId = "40000000-0000-4000-8000-000000000011";
+  const order = [];
+  let gateResolve = null;
+  let gate = null;
+  const {session} = fixture({
+    send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            project_revision: 1,
+          });
+        case "performance.record.event":
+          order.push(envelope.payload.event.kind);
+          if (gate !== null) await gate;
+          return success(envelope, {
+            event_id: envelope.payload.event_id,
+            accepted_tick: 0,
+            input_sequence: 1,
+            coalesced: false,
+            replayed: false,
+            project_revision: null,
+          });
+        case "performance.record.stop":
+          order.push("stop");
+          return success(envelope, {
+            request_id: envelope.payload.request_id,
+            session_id: sessionId,
+            performance_id: performanceId,
+            state: "stopped",
+            pending_event_count: 0,
+            replayed: false,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.beginPerformanceRecording({
+    sessionId, performanceId, expectedRevision: 0,
+  });
+
+  // The first event inflight holds the gate; one ordinary waits; the next
+  // ordinary input is explicitly refused.
+  gate = new Promise((resolve) => { gateResolve = resolve; });
+  const press = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000020",
+    event: {kind: "pad_press", gestureId: "40000000-0000-4000-8000-000000000021", slot: 1, velocity: 100},
+  });
+  const waiting = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000022",
+    event: {kind: "hold_on"},
+  });
+  await assert.rejects(
+    session.recordPerformanceEvent({
+      sessionId,
+      eventId: "40000000-0000-4000-8000-000000000023",
+      event: {kind: "hold_off"},
+    }),
+    /window is full/,
+  );
+  // The matching release always fits its reserved slot.
+  const release = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000024",
+    event: {kind: "pad_release", gestureId: "40000000-0000-4000-8000-000000000021", slot: 1},
+  });
+  gateResolve();
+  gate = null;
+  await press;
+  await waiting;
+  await release;
+  assert.deepEqual(order, ["pad_press", "hold_on", "pad_release"]);
+  // Let the lane's completion bookkeeping settle before the next window.
+  await drainTasks();
+
+  // The cleanup token rejects a never-admitted waiting input explicitly and
+  // still completes after the admitted work.
+  gate = new Promise((resolve) => { gateResolve = resolve; });
+  const admitted = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000025",
+    event: {kind: "hold_on"},
+  });
+  const cancelled = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000026",
+    event: {kind: "hold_off"},
+  });
+  const stopping = session.stopPerformanceRecording({
+    sessionId,
+    requestId: "40000000-0000-4000-8000-000000000027",
+  });
+  await assert.rejects(cancelled, /cancelled before Core admission/);
+  gateResolve();
+  gate = null;
+  await admitted;
+  await stopping;
+  assert.deepEqual(order.slice(-2), ["hold_on", "stop"]);
+  await session.close();
+});
+
+test("the 65th open Pad gesture is refused without an admission report", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000030";
+  const performanceId = "40000000-0000-4000-8000-000000000031";
+  const {session} = fixture({
+    send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            project_revision: 1,
+          });
+        case "performance.record.event":
+          return success(envelope, {
+            event_id: envelope.payload.event_id,
+            accepted_tick: 0,
+            input_sequence: 1,
+            coalesced: false,
+            replayed: false,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.beginPerformanceRecording({
+    sessionId, performanceId, expectedRevision: 0,
+  });
+  for (let pad = 0; pad < 64; pad += 1) {
+    await session.recordPerformanceEvent({
+      sessionId,
+      eventId: `40000000-0000-4000-8000-${String(pad + 256).padStart(12, "0")}`,
+      event: {
+        kind: "pad_press",
+        gestureId: `40000000-0000-4000-9000-${String(pad + 1).padStart(12, "0")}`,
+        slot: pad,
+        velocity: 100,
+      },
+    });
+  }
+  await assert.rejects(
+    session.recordPerformanceEvent({
+      sessionId,
+      eventId: "40000000-0000-4000-8000-000000000321",
+      event: {
+        kind: "pad_press",
+        gestureId: "40000000-0000-4000-9000-000000000065",
+        slot: 0,
+        velocity: 100,
+      },
+    }),
+    /Too many open Pad gestures/,
+  );
+  await session.close();
+});
+
+test("the dual-ready gate parks recorded inputs until Core-ready and the started ACK both land", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000040";
+  const performanceId = "40000000-0000-4000-8000-000000000041";
+  let coreReady = false;
+  let tapStarted = null;
+  let tapBinding = null;
+  const sentOperations = [];
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    start(sink, binding) {
+      tapBinding = binding;
+      return new Promise((resolve) => {
+        tapStarted = () => resolve({
+          generation: 1,
+          binding,
+          stop: async () => {},
+        });
+      });
+    },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    send: async (envelope) => {
+      sentOperations.push(envelope.operation);
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            profile: "header_input_sequence",
+            control_epoch: LIVE_EPOCH,
+            core_control_ready: false,
+            next_recording_sequence: "0",
+            fx_bindings: [],
+            project_revision: 1,
+          });
+        case "performance.record.status":
+          return success(envelope, {
+            state: "active",
+            session_id: sessionId,
+            performance_id: performanceId,
+            journal_revision: 1,
+            next_flush_seq: 1,
+            pending_event_count: 0,
+            open_pad_gestures: 0,
+            open_fx_gestures: 0,
+            hold: false,
+            pending_launch: null,
+            last_launch_ack: null,
+            profile: "header_input_sequence",
+            control_epoch: LIVE_EPOCH,
+            core_control_ready: coreReady,
+            next_recording_sequence: "0",
+            pending_admission: null,
+            project_revision: null,
+          });
+        case "performance.record.event":
+          return success(envelope, {
+            event_id: envelope.payload.event_id,
+            accepted_tick: 4,
+            input_sequence: "1",
+            next_recording_sequence: "1",
+            result: "no_audio",
+            coalesced: false,
+            gesture_generation: null,
+            recording_gesture_id: null,
+            replayed: false,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+
+  let beginSettled = false;
+  const begin = session.beginPerformanceRecording({
+    sessionId,
+    performanceId,
+    expectedRevision: 0,
+    controlEpoch: LIVE_EPOCH,
+    captureSink: {onBatch() {}, onStopped() {}, onFailure() {}},
+  }).then((value) => {
+    beginSettled = true;
+    return value;
+  });
+  await drainTasks();
+  assert.equal(beginSettled, false);
+
+  // A recorded Pad parks in the window: zero delivery to the Host bridge.
+  const parked = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000042",
+    event: {kind: "pad_press", gestureId: "40000000-0000-4000-8000-000000000043", slot: 2, velocity: 100},
+  });
+  await drainTasks();
+  assert.equal(sentOperations.includes("performance.record.event"), false);
+
+  // Core fence ready first: the capture ACK still holds the gate.
+  coreReady = true;
+  for (let attempt = 0; attempt < 20 && tapBinding === null; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  assert.notEqual(tapBinding, null);
+  assert.equal(tapBinding.control_epoch, LIVE_EPOCH);
+  assert.equal(tapBinding.session_id, sessionId);
+  await drainTasks();
+  assert.equal(beginSettled, false);
+  assert.equal(sentOperations.includes("performance.record.event"), false);
+
+  // The matching started ACK releases both.
+  tapStarted();
+  const begun = await begin;
+  assert.equal(begun.coreControlReady, true);
+  await parked;
+  assert.equal(sentOperations.includes("performance.record.event"), true);
+  const eventEnvelope = sentOperations
+    .map((operation, index) => ({operation, index}))
+    .filter(({operation}) => operation === "performance.record.event");
+  assert.equal(eventEnvelope.length, 1);
   await session.close();
 });

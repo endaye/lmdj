@@ -44,12 +44,20 @@ async function fixture({controllerOptions, onPostMessage, monitor = false} = {})
   const monitorDestination = monitor ? {context, kind: "monitor-gain"} : undefined;
   let node = null;
   globalThis.location = new URL("https://example.test/creator/");
+  const autoAck = controllerOptions?.autoStartAck ?? true;
   globalThis.AudioWorkletNode = class extends StubNode {
     constructor(...arguments_) {
       super(...arguments_);
       node = this;
       this.port.postMessage = (message) => {
         this.messages.push(message);
+        if (autoAck && message.type === "start") {
+          queueMicrotask(() => node.port.onmessage({data: {
+            type: "started",
+            generation: message.generation,
+            binding: message.binding ?? null,
+          }}));
+        }
         onPostMessage?.(message, this);
       };
     }
@@ -102,6 +110,8 @@ async function integratedFixture() {
   });
   const processor = new Processor();
   const result = await fixture({
+    // The real processor answers the started ACK itself.
+    controllerOptions: {autoStartAck: false},
     onPostMessage(message) {
       processor.port.onmessage({data: message});
     },
@@ -199,7 +209,7 @@ test("serializes generations, validates sequences, and contains sink errors", as
     onStopped() { stopped += 1; },
     onFailure() { assert.fail("capture should not fail"); },
   });
-  assert.deepEqual(node.messages, [{type: "start", generation: 1}]);
+  assert.deepEqual(node.messages, [{type: "start", generation: 1, binding: null}]);
   await assert.rejects(controller.start({
     onBatch() {}, onStopped() {}, onFailure() {},
   }), /already active/);
@@ -225,7 +235,7 @@ test("serializes generations, validates sequences, and contains sink errors", as
   const second = await controller.start({
     onBatch() {}, onStopped() { stopped += 1; }, onFailure() {},
   });
-  assert.deepEqual(node.messages.at(-1), {type: "start", generation: 2});
+  assert.deepEqual(node.messages.at(-1), {type: "start", generation: 2, binding: null});
   node.port.onmessage({data: {
     type: "stopped", generation: 1, finalSequence: 1,
   }});
@@ -283,7 +293,7 @@ test("current malformed traffic fails closed while stale traffic stays isolated"
     type: "batch", generation: 1, sequence: 2, channels,
   }});
   assert.deepEqual(node.messages, [
-    {type: "start", generation: 1},
+    {type: "start", generation: 1, binding: null},
     {type: "stop", generation: 1},
   ]);
   assert.deepEqual(terminals, [
@@ -346,7 +356,7 @@ test("malformed stale-shaped events stop the current capture", async () => {
       [generation, "stopped"],
     ]);
     assert.deepEqual(node.messages.slice(-2), [
-      {type: "start", generation},
+      {type: "start", generation, binding: null},
       {type: "stop", generation},
     ]);
     await capture.stop();
@@ -362,7 +372,7 @@ test("malformed stale-shaped events stop the current capture", async () => {
     type: "batch", generation: 7, sequence: 1, channels: stereo(),
   }});
   assert.deepEqual(finalTerminals, []);
-  assert.deepEqual(node.messages.at(-1), {type: "start", generation: 8});
+  assert.deepEqual(node.messages.at(-1), {type: "start", generation: 8, binding: null});
   const stopping = final.stop();
   node.port.onmessage({data: {
     type: "stopped", generation: 8, finalSequence: 0,
@@ -383,7 +393,7 @@ test("malformed active traffic stops processor work and leaves the next generati
   node.port.onmessage({data: {type: "batch"}});
   await first.stop();
   assert.deepEqual(node.messages, [
-    {type: "start", generation: 1},
+    {type: "start", generation: 1, binding: null},
     {type: "stop", generation: 1},
   ]);
   assert.deepEqual(terminals, [
@@ -394,7 +404,8 @@ test("malformed active traffic stops processor work and leaves the next generati
   const input = [new Float32Array(16).fill(0.25)];
   const output = [new Float32Array(16), new Float32Array(16)];
   processor.process([input], [output]);
-  assert.deepEqual(processorMessages.map(({type}) => type), ["stopped"]);
+  assert.deepEqual(processorMessages.map(({type}) => type),
+    ["started", "stopped"]);
 
   const batches = [];
   const second = await controller.start({
@@ -407,7 +418,7 @@ test("malformed active traffic stops processor work and leaves the next generati
   await secondStopping;
   assert.equal(batches.length, 1);
   assert.deepEqual(node.messages.slice(-2), [
-    {type: "start", generation: 2},
+    {type: "start", generation: 2, binding: null},
     {type: "stop", generation: 2},
   ]);
   assert.equal(processorMessages.at(-2).generation, 2);
@@ -435,7 +446,7 @@ test("malformed termination settles even when posting processor stop throws", as
   }});
   await capture.stop();
   assert.deepEqual(node.messages, [
-    {type: "start", generation: 1},
+    {type: "start", generation: 1, binding: null},
     {type: "stop", generation: 1},
   ]);
   assert.deepEqual(terminals, [
@@ -455,7 +466,7 @@ test("non-object active traffic also stops and settles fail-closed", async () =>
   assert.doesNotThrow(() => node.port.onmessage({data: null}));
   await capture.stop();
   assert.deepEqual(node.messages, [
-    {type: "start", generation: 1},
+    {type: "start", generation: 1, binding: null},
     {type: "stop", generation: 1},
   ]);
   assert.deepEqual(terminals, [
@@ -507,7 +518,9 @@ test("stop acknowledgement deadline is injected, cleared, and generation-safe", 
   await stopping;
   assert.deepEqual(terminals, [["first-stopped"]]);
   assert.equal(timers.scheduled.size, 0);
-  assert.deepEqual(timers.cleared, [1]);
+  // The start ACK timer (id 1) cleared at the started ACK; the stop timer
+  // (id 2) cleared at the stopped ACK.
+  assert.deepEqual(timers.cleared, [1, 2]);
   lateCallback();
   assert.deepEqual(terminals, [["first-stopped"]]);
 
@@ -541,4 +554,129 @@ test("stop acknowledgement deadline is injected, cleared, and generation-safe", 
   await thirdStopping;
   assert.deepEqual(terminals.at(-1), ["third-stopped"]);
   assert.equal(timers.scheduled.size, 0);
+});
+
+
+// ---------------------------------------------------------------------------
+// D0/W1 started-ACK oracle: the start promise stays pending until the real
+// applied ACK; wrong binding/generation, duplicates, early batches, close,
+// processor failure and timeout all reject without arming; a late ACK is
+// never inherited.
+// ---------------------------------------------------------------------------
+
+const kBinding = Object.freeze({
+  control_epoch: "10000000-0000-4000-8000-000000000001",
+  session_id: "10000000-0000-4000-8000-000000000002",
+  begin_command_id: "10000000-0000-4000-8000-000000000003",
+});
+const kSink = () => ({onBatch() {}, onStopped() {}, onFailure() {}});
+
+test("start stays pending until the exact started ACK, then arms", async () => {
+  const {controller, node} = await fixture({
+    controllerOptions: {autoStartAck: false},
+  });
+  let settled = null;
+  const starting = controller.start(kSink(), kBinding).then(
+    (capture) => { settled = capture; return capture; });
+  await Promise.resolve();
+  assert.equal(settled, null);
+  assert.deepEqual(node.messages, [
+    {type: "start", generation: 1, binding: kBinding},
+  ]);
+  // A second start while the first is pending is refused outright.
+  await assert.rejects(controller.start(kSink(), kBinding), /already active/);
+  node.port.onmessage({data: {type: "started", generation: 1, binding: kBinding}});
+  const capture = await starting;
+  assert.equal(capture.binding, kBinding);
+  assert.equal(capture.generation, 1);
+  const stopping = capture.stop();
+  node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 0}});
+  await stopping;
+});
+
+test("wrong-binding, duplicate and early-batch ACKs fail the pending start", async () => {
+  for (const bad of [
+    {type: "started", generation: 1, binding: null},
+    {type: "started", generation: 1, binding: kBinding, extra: true},
+    {type: "batch", generation: 1, sequence: 1,
+     channels: [new Float32Array(8), new Float32Array(8)]},
+  ]) {
+    const {controller, node} = await fixture({
+      controllerOptions: {autoStartAck: false},
+    });
+    const terminals = [];
+    const starting = controller.start({
+      onBatch() {}, onStopped() { terminals.push("stopped"); },
+      onFailure() {},
+    }, kBinding);
+    await Promise.resolve();
+    node.port.onmessage({data: bad});
+    await assert.rejects(starting, /not acknowledged/);
+    // The cleanup ran the bounded stop: the processor was told to stop.
+    assert.deepEqual(node.messages.at(-1), {type: "stop", generation: 1});
+    // The pending slot is released: the next generation can start.
+    const retry = controller.start(kSink(), kBinding);
+    await Promise.resolve();
+    assert.deepEqual(node.messages.at(-1), {
+      type: "start", generation: 2, binding: kBinding,
+    });
+    node.port.onmessage({data: {type: "started", generation: 2, binding: kBinding}});
+    const capture = await retry;
+    // The first start's late ACK is not inherited by the second.
+    node.port.onmessage({data: {type: "started", generation: 1, binding: kBinding}});
+    assert.equal(capture.generation, 2);
+    const stopping = capture.stop();
+    node.port.onmessage({data: {type: "stopped", generation: 2, finalSequence: 0}});
+    await stopping;
+    await controller.close();
+  }
+});
+
+test("close, processor failure and timeout reject the pending start", async () => {
+  // close during pending
+  {
+    const {controller} = await fixture({
+      controllerOptions: {autoStartAck: false},
+    });
+    const starting = controller.start(kSink(), kBinding);
+    await Promise.resolve();
+    await controller.close();
+    await assert.rejects(starting, /not acknowledged/);
+  }
+  // processor failure during pending
+  {
+    const {controller} = await fixture({
+      controllerOptions: {autoStartAck: false},
+    });
+    const starting = controller.start(kSink(), kBinding);
+    await Promise.resolve();
+    controller.failProcessor();
+    await assert.rejects(starting, /not acknowledged/);
+    await assert.rejects(controller.start(kSink(), kBinding), /unavailable/);
+  }
+  // the independent start timeout budget
+  {
+    const timers = fakeTimers();
+    const {controller} = await fixture({
+      controllerOptions: {autoStartAck: false, timers: timers.api, startAckTimeoutMs: 37},
+    });
+    const starting = controller.start(kSink(), kBinding);
+    await Promise.resolve();
+    assert.deepEqual(
+      [...timers.scheduled.values()].map(({delay}) => delay), [37]);
+    [...timers.scheduled.values()][0].callback();
+    await assert.rejects(starting, /not acknowledged/);
+  }
+});
+
+test("a legacy null binding still arms, and a malformed binding is refused", async () => {
+  const {controller, node} = await fixture();
+  await assert.rejects(
+    controller.start(kSink(), {control_epoch: "not-a-uuid"}),
+    {name: "TypeError"});
+  const capture = await controller.start(kSink());
+  assert.equal(capture.binding, null);
+  const stopping = capture.stop();
+  node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 0}});
+  await stopping;
 });
