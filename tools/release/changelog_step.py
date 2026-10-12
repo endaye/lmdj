@@ -95,9 +95,9 @@ def pr_document(spec):
                          "deployment or promotion is claimed.\n\n"
                          "Version impact: none\n\n"
                          "Reason: release-operation documentation and ledger evidence only.\n\n"
-                         "Documentation impact: required\n\n"
-                         "Affected portal pages: /versions/"
-                         + spec["product_build"] + "/\n\n"
+                         "Documentation impact: none\n\n"
+                         "Reason: release-operation evidence only; adds no page under "
+                         "apps/docs-site/docs/ and changes no portal truth.\n\n"
                          f"<!-- lmdj-release-changelog-pr.v1 {canonical_sha256(spec)} -->\n"),
                 "head": "docs/release-witness-" + spec["operation_id"], "base": "main",
                 "draft": False, "maintainer_can_modify": False}
