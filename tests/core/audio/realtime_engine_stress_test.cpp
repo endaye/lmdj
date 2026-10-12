@@ -735,6 +735,53 @@ void transports_all_voice_starts_to_concurrent_bounded_drains() {
   LMDJ_CHECK(capture.capture_drops == 0);
 }
 
+void pad_gates_enqueues_race_render_application_and_converge() {
+  constexpr std::uint64_t kUpdates = 50'000;
+  lmdj::audio::RealtimeEngine engine;
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+
+  std::atomic<bool> render_done{false};
+  std::thread renderer([&] {
+    while (!render_done.load(std::memory_order_acquire)) {
+      engine.render(left.data(), right.data(), 1);
+    }
+  });
+
+  // A live performer slams Mute/Solo while the audio thread runs: every
+  // accepted pair must apply in FIFO order, so the final applied state is
+  // the final accepted pair once the render thread catches up.
+  std::uint64_t accepted = 0;
+  std::uint64_t muted = 0;
+  std::uint64_t solo = 0;
+  while (accepted < kUpdates) {
+    muted = (accepted & 1) == 0 ? 0x1 : (std::uint64_t{1} << 63);
+    solo = (accepted & 2) == 0 ? 0 : 0x1;
+    if (engine.enqueue_pad_gates(muted, solo) ==
+        lmdj::audio::FxEnqueueResult::accepted) {
+      ++accepted;
+    } else {
+      std::this_thread::yield();
+    }
+  }
+  while (engine.pad_gates_status().applied.sequence != accepted) {
+    std::this_thread::yield();
+  }
+  render_done.store(true, std::memory_order_release);
+  renderer.join();
+
+  const auto status = engine.pad_gates_status();
+  LMDJ_CHECK(status.accepted_sequence == accepted);
+  LMDJ_CHECK(status.applied.sequence == accepted);
+  LMDJ_CHECK(status.applied.state.muted_mask == muted);
+  LMDJ_CHECK(status.applied.state.solo_mask == solo);
+  LMDJ_CHECK(status.applied.epoch == 1);
+  engine.stop();
+}
+
 void corrupted_voice_state_stream_never_returns_a_partial_drain() {
   std::atomic<lmdj::audio::RuntimeVoiceStateStreamState> state{
       lmdj::audio::RuntimeVoiceStateStreamState::healthy};
@@ -793,5 +840,6 @@ int main() {
   preserves_compact_voice_states_under_spsc_contention();
   preserves_all_trigger_events_under_spsc_contention();
   transports_all_voice_starts_to_concurrent_bounded_drains();
+  pad_gates_enqueues_race_render_application_and_converge();
   corrupted_voice_state_stream_never_returns_a_partial_drain();
 }

@@ -288,10 +288,56 @@ void full_chain_render_is_noexcept_allocation_free_and_lock_free() {
   LMDJ_CHECK(fx.processed_frames == left.size());
 }
 
+void pad_gates_controls_are_allocation_free_and_lock_free() {
+  using lmdj::audio::FxEnqueueResult;
+  using lmdj::audio::RealtimeEngine;
+
+  static_assert(noexcept(std::declval<RealtimeEngine&>().enqueue_pad_gates(
+      0, 0)));
+  static_assert(
+      noexcept(std::declval<const RealtimeEngine&>().pad_gates_status()));
+
+  RealtimeEngine engine;
+  std::array<float, 64> sample{};
+  sample.fill(0.1F);
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+
+  // Gates are voice-level, not an FX stage: no prepared Master FX needed.
+  // Warm up any first-touch queue storage outside the tracked region.
+  std::array<float, 256> left{};
+  std::array<float, 256> right{};
+  LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(engine.pad_gates_status().applied.sequence == 1);
+
+  g_allocations.store(0, std::memory_order_relaxed);
+  g_deallocations.store(0, std::memory_order_relaxed);
+  g_track_allocations.store(true, std::memory_order_relaxed);
+  LMDJ_CHECK(engine.enqueue_pad_gates(0, 0x1) == FxEnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_pad_gates(
+                 0x1 | (std::uint64_t{1} << 63), 0) ==
+             FxEnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_pad_gates(0, 0) == FxEnqueueResult::accepted);
+  engine.render(left.data(), right.data(), left.size());
+  const auto status = engine.pad_gates_status();
+  g_track_allocations.store(false, std::memory_order_relaxed);
+
+  LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
+
+  // The drain applied every accepted pair exactly once and the coherent
+  // applied state caught up with the accepted shadow.
+  LMDJ_CHECK(status.accepted_sequence == 4);
+  LMDJ_CHECK(status.applied.sequence == 4);
+  LMDJ_CHECK(status.applied.epoch == engine.telemetry().start_epoch);
+  LMDJ_CHECK(status.applied.state.muted_mask == 0);
+  LMDJ_CHECK(status.applied.state.solo_mask == 0);
+}
+
 }  // namespace
 
-void* operator new(std::size_t size) { return ordinary_allocation(size); }
-void* operator new[](std::size_t size) { return ordinary_allocation(size); }
+void* operator new(std::size_t size) { return ordinary_allocation(size); }void* operator new[](std::size_t size) { return ordinary_allocation(size); }
 void* operator new(std::size_t size, std::align_val_t alignment) {
   return aligned_allocation(size, static_cast<std::size_t>(alignment));
 }
@@ -326,6 +372,7 @@ int main() {
     lock_syntax_is_confined_to_non_realtime_observers();
     full_chain_render_is_noexcept_allocation_free_and_lock_free();
     typed_filter_controls_are_allocation_free_and_lock_free();
+    pad_gates_controls_are_allocation_free_and_lock_free();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
