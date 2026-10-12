@@ -1339,3 +1339,823 @@ committed source; no earlier input's pass key is reused. The original five
 browser failures, Overview/Replay uncertainty and A1/A2 remain open. No push,
 PR, version allocation, tag, release, deployment or hardware acceptance has
 occurred for I1d.
+
+
+## N13 — 2026-10-12 actual SOURCE integration addendum
+
+### Selected source, owner and premise dispositions
+
+This is the actual initial SOURCE phase, dispatched by Root under Run
+`run_caa371bb58ee`, Task `task_741b77b7f15a`, Dispatch `ctx_c96a4aee61e7`.
+Worker terminal: `term_a90d95a5-8c22-4d84-ba2b-5703bb6aff7f`; coordinator:
+`term_aa87d468-5319-4aef-9fe4-9d8c916dc810`. Own isolated worktree:
+`/Users/endaye/orca/workspaces/lmdj/feat-creator-sample-numeric-main`, UID501.
+Root's fresh local and ls-remote observation at 2026-10-12T01:49:53Z selects
+protected main `02b7445ff035e48c43ea2a66c858f7c9282e6c79`, tree
+`627ed86348f4641506ba14f0e15a8f6c4368548b`, sole parent
+`59da4245ff659ee1ffa2b9cf8e81f44bbc65a196`. Own actual HEAD/tree/parent
+match that selection; starting worktree is clean. Only the newly created own
+branch was renamed from Orca's `endaye/feat-creator-sample-numeric-main` to
+`feat/creator-sample-numeric-main`; no upstream existed or needed unsetting.
+No Root main, foreign worktree, index or remote ref was updated.
+
+Approved behavior comes from the current D03 decision
+`docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md`; the
+historical C0 undecided investigation does not reopen it. At selected main,
+all six displayed values still use ParameterSlider/ValueSlider output without
+a precise entry, and all five new feature paths are absent. This remains the
+outstanding consumer behavior. Existing Sample preview/update/inspection,
+Start/End frame input, touch gestures, rotary 400 ms/SHIFT rules, single
+current-Pad selection, MASTER/ENC4 and SEQ SNAP are already delivered and
+retained. No Assign producer dependency, Contract or DSP change is introduced.
+The four modified production component bases are byte-equal old e220 to this
+selected 02b. The old Portal is not copied; current main is its base.
+
+Root supplied bounded fresh Run/Task and OPEN PR captures: no matching N13
+active Dispatch or PR existed, and #1995 remained OPEN. This is supplied
+launch ownership evidence, not a whole-machine worker census. K1 remains
+frozen at `124110eb0476122963d2e959530dd5d7af67fc4c` with its own 24 files;
+N13 is Root's sole newly admitted SOURCE writer for workspace_shell, both
+Host Portal pages and this followup plan. N13 starts from 02b before K1
+integration, imports no unmerged K1 source and claims none of its acceptance.
+Root must sequence integration and review combined retention on those four
+paths and the original browser journeys before N13 shipping.
+
+### Exact declared files (13)
+
+1. `apps/creator-web/src/components/parameter_slider.tsx`
+2. `apps/creator-web/src/components/sample_controls.tsx`
+3. `apps/creator-web/src/components/sample_parameter_editor.css`
+4. `apps/creator-web/src/components/sample_parameter_editor.tsx`
+5. `apps/creator-web/src/components/sample_surface.tsx`
+6. `apps/creator-web/src/components/value_slider.tsx`
+7. `apps/creator-web/test/sample_numeric_editor.test.tsx`
+8. `apps/creator-web/test/workspace_shell.test.tsx`
+9. `tests/platform/web/creator/creator_web_sample_numeric_editor.spec.mjs`
+10. `apps/docs-site/docs/hosts/creator-web.mdx`
+11. `apps/docs-site/docs/hosts/creator-interactions.mdx`
+12. `docs/plans/2026-10-10-creator-sample-numeric-editor.md`
+13. `docs/plans/2026-10-09-creator-desktop-final-followup.md`
+
+No App/state/encoder/SDK/Assign/bridge/Core/DSP, generic modal, global CSS,
+manifest/lock, wrapper/config/fixture or pitfall edit is included. No cosmetic
+path-count edit is needed: each declared path owns feature, regression source
+or required documentation. Existing App cancellation/history hooks provide
+the numeric consumer boundary; no static scope/API contradiction was found
+in the manual source review. Type/compiler compatibility remains UNRUN.
+
+### Draft custody and source obligations
+
+The read-only retained draft stays at
+`/Users/endaye/Projects/lmdj-wt-creator-sample-numeric-editor`, branch
+`feat/creator-sample-numeric-editor`, HEAD
+`e220c98ca1b0f4a3c08646bfeb328ffa186a263d`. Its eleven staged originals and
+working bytes, zero unstaged delta, binary index (417958 B SHA256
+`9cf60484224a94761d749a286851bb2a2247e334f4928116a23521890be59482`),
+full cached binary patch (84803 B SHA256
+`41a2fd2113802b8efc350da61a0412f74d67d103e30fcacbf6635d4798e823ff`)
+and complete five-entry shared stash list are guarded before/after externally.
+No stash was created/applied/popped/dropped and no old lifecycle was resumed.
+The four numeric stash OIDs remain
+`67c780cf389e6797b1b9460bcfb1fca5dd4b234b`,
+`6f7fdf05b467db21cf48ad40a6af592e5f528419`,
+`a2b55113f4e30f1ee6fd6bc367fdd1b3bd2eb1de`,
+`efa779f45ac4026da7df0a593d0af9d3cbab64fd`; the unrelated fifth entry is kept.
+The numeric plan's full historical 25715 B SHA256
+`dec728b6857176a8bf557fc91d058b69810071e7ecb268fbc59580ba4a065878`
+is a byte-preserved prefix. All old results and negative/UNRUN boundaries
+remain historical, not a fresh-head PASS.
+
+The six-field saved-playback editor retains Volume -60..6 dB/0.1/1000,
+Pitch -24..24 st/0.1/100, Pan -100..100/1/1, Attack 0..2000 ms/1/1,
+Release 0..4000 ms/1/1 (one-shot disabled), Tone -100..100/1/1 with LP/HP
+and -2..2 Off. The audio envelope's 2 ms floor does not change stored 0 ms.
+Existing ModalDialog supplies labels, focus/return focus, inert background,
+Escape and focus trap. Value button/input/actions have 44 px targets; range
+keeps its single associated label and default ValueSlider consumers.
+
+Legal step-aligned input immediately previews through the existing owned
+Sample journey; invalid replacement clears its previous audition and permits
+correction. Apply/Enter settles once, no-op/returned values do not author,
+and pause/blur never save precise input. Render-time captured context guards
+refuse queued preview/submit before passive cleanup. Target/context/page/
+subpage/System/unmount retirement cancels only UNSENT numeric draft/audition;
+SampleSurface uses existing contextual pending/cancel registration and App
+history hook. Already-sent updates retain actual known commit, publication
+failure, conflict or unknown response through existing actions/projection;
+no new command identity, retry or cancellation of a dispatched save is added.
+Native text Undo remains owned by editable input; modal background pointer
+routes are inaccessible, and no in-dialog Project Undo shortcut is invented.
+
+### Owning test source and later verification proposal — all UNRUN
+
+| Full owning selection | Defect fixed by its assertions |
+| --- | --- |
+| `test/sample_numeric_editor.test.tsx` | Six scales/bounds, Apply/Enter once, no-op/invalid/no pause/blur, focus/cancel/one-shot/keyboard isolation, saved-base input, pre-effect queued stale submit and preview, Surface revision-fenced update/refresh/refusal and late preview cancellation. Complete retained test source plus one queued-preview case. |
+| `test/sample_controls.test.tsx` and `test/value_slider.test.tsx` | Complete unchanged conditional controls, units/readouts/labels/focus/44 px and original range release/key/blur/Esc/pointercancel semantics. |
+| `test/sample_encoder.test.ts` | Complete unchanged rotary step/clamp/shared 400 ms lifecycle; explicit numeric confirmation cannot become rotary autosave. |
+| `test/sample_actions.test.ts` | Complete unchanged request normalization, known commit/publication failure/conflict/no automatic retry and authoritative inspection. |
+| `test/workspace_shell.test.tsx` | Complete original file retained as prefix; mounted actual App preview acceptance then page/subpage/Pad/System/blur, Runtime restart and controlled Project/App replacement, old-owner clear and saved playback restoration, late preview/retired submit cannot revive, input text Undo separate from controller history clear-before-Undo, already-sent late published/publication-failed/conflict/unknown response survives page retirement/remount. |
+
+The mounted forced background events are explicitly handler witnesses, not
+native modal pointer reachability. Retired DOM submits prove post-retirement
+ownership; retained component layout-effect cases separately cover the
+pre-passive-cleanup interleave. Controlled different-Project replacement
+uses two real App mounts with their own states/Sessions. Unknown-receipt
+fixtures prove consumer error/no resend, not absence of a native commit.
+Each transition has its own far-side assertion before the next transition.
+No new runner, fixture framework, required gate, timeout or coverage reduction.
+
+After Root separately grants concrete execution, propose from
+`apps/creator-web` with the existing locked toolchain:
+
+```text
+node node_modules/vitest/vitest.mjs run test/sample_numeric_editor.test.tsx test/sample_controls.test.tsx test/value_slider.test.tsx test/sample_encoder.test.ts test/sample_actions.test.ts test/workspace_shell.test.tsx --maxWorkers=1
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+Dependency install, if needed in this skipped-hook worktree, requires separate
+admission. Later Portal check remains `scripts/docs-site.sh check`. Later full
+Creator verification remains the complete original `scripts/creator-web.sh proof`
+with all eight groups: chromium, catalog-chromium, sample-chromium, webkit,
+capture-chromium, capture-denied-chromium, sample-webkit, deployment-chromium.
+Source-only untracked discovery/staging, committed-source binding and shipping
+mechanics belong to later admission; no commit is made merely for discovery.
+
+The complete retained 253-line packaged numeric case is byte-reused, including
+original native forwarding/identity, immediate preview, invalid refusal, >400 ms
+pause with no save, one Apply command/revision/Undo increment, Escape no save,
+actual Undo and Redo, and full saved playback/Truth/history after persisted
+reopen. Original import/quota/parity/tone/history/Delete/encoder/monitor journeys,
+all budgets and far-side assertions are unchanged on this base. Native refusal
+and manufactured-response seams retain their separate labels. Dedicated Sample
+WebKit selection is its existing capability boundary, not proof this new
+Chromium numeric journey ran on native WebKit. Automation does not establish
+physical touch/MIDI/assistive technology, hearing, deployment or release.
+
+## Version Management
+
+Version impact: compatible Creator MINOR debt joins approved followup V1.
+No Product Build, manifest/lock identity, allocation, tag or release is made;
+final SemVer/Build values remain V1's separately admitted settlement. Existing
+version debt is retained. No Contract or source-diagram topology change.
+
+## Documentation Impact
+
+Documentation impact: required
+Affected portal pages: `/hosts/creator-web`, `/hosts/creator-interactions`.
+Reason: six-field precise numeric entry and its distinct preview/save/cancel/
+history boundaries are new current source facts. Sample 4.1/4.3/4.4,
+source/test mapping and pending evidence reflect this subset. Current Portal
+base, MASTER/SEQ SNAP, one-current-Pad and existing touch/rotary/K1 facts are
+retained; Assign/BPM/D04/A1/A2/V1 still need their own delivery and acceptance.
+Portal check is required in a later admitted phase, and remains UNRUN here.
+
+### Observable SOURCE-ready handoff and HOLD
+
+Source preparation accounts for all thirteen candidate paths and supplies the
+missing mounted App test source. External evidence directory:
+`/Users/endaye/Projects/lmdj-followup-evidence/2026-10-12-n13-source-task_741b77b7f15a/`.
+It binds actual base/branch/UID/instructions, final file lengths/SHA256 and Git
+blob IDs, complete binary diff including new-file bytes, finite status, plan
+prefixes, preserved unchanged owning inputs and old before/after guards; the
+source report maps behavior and test/documentation obligations to file/line.
+Root must receive/freeze these actual bytes before deciding verification.
+
+This is SOURCE-ready, not Task-complete or acceptance. All npm/Node/AST/
+compiler/syntax/type/component/native/browser/Portal/proof/emulator/physical/
+hearing/profile/install execution stays HOLD/UNRUN. No staging/commit/push/PR/
+merge/GitHub mutation, Orca scheduling, Goal status change, cleanup or release
+is authorized or performed. D03 native, Linux coverage and Mac evidence have
+separate owners; their finish does not release this HOLD. Root receives one
+blocking source-candidate/report/next-verification question; Task stays ACTIVE
+and no succeeded worker_done is sent for unvalidated Source. Later verification,
+combined K1 retention, shipping, A1/A2/V1/Goal and release remain separate.
+
+## 2026-10-12 N13 Source repair addendum — 14 declared files, validation HOLD
+
+This addendum supersedes the preceding initial13 Source scope and its broad
+sent-result retention claim for the current candidate. It does not rewrite
+historical outcomes. Independent Source review found a concrete P2: selected
+main's SampleSurface Session-change effect erased operationPending and
+reported operation-cancelled after updatePad was already invoked; the late
+update journey then dropped a known committed/publication-failed result.
+The initial mounted sent-result cases retired only the page, while Session
+cases covered UNSENT drafts. Those cases did not establish sent Session
+retention. The original13 candidate/report/full patch remain frozen externally.
+
+Root approved Source repair in msg_882ba54fd407 and exactly one added path,
+apps/creator-web/src/app.tsx, in msg_8583c5db6d2c. Task
+`task_741b77b7f15a`, dispatch `ctx_c96a4aee61e7`, Run
+`run_caa371bb58ee` and the same owned isolated worktree/branch remain ACTIVE.
+Selected base is still HEAD `02b7445ff035e48c43ea2a66c858f7c9282e6c79`,
+tree `627ed86348f4641506ba14f0e15a8f6c4368548b`, sole parent
+`59da4245ff659ee1ffa2b9cf8e81f44bbc65a196`, branch
+`feat/creator-sample-numeric-main`, UID501, no upstream. No main/ref update,
+foreign process action, original draft/stash/index mutation or Goal change
+is authorized by this Source repair.
+
+### Exact revised declared source scope
+
+1. `apps/creator-web/src/components/parameter_slider.tsx`
+2. `apps/creator-web/src/components/sample_controls.tsx`
+3. `apps/creator-web/src/components/sample_parameter_editor.css`
+4. `apps/creator-web/src/components/sample_parameter_editor.tsx`
+5. `apps/creator-web/src/components/sample_surface.tsx`
+6. `apps/creator-web/src/components/value_slider.tsx`
+7. `apps/creator-web/test/sample_numeric_editor.test.tsx`
+8. `apps/creator-web/test/workspace_shell.test.tsx`
+9. `tests/platform/web/creator/creator_web_sample_numeric_editor.spec.mjs`
+10. `apps/docs-site/docs/hosts/creator-web.mdx`
+11. `apps/docs-site/docs/hosts/creator-interactions.mdx`
+12. `docs/plans/2026-10-10-creator-sample-numeric-editor.md`
+13. `docs/plans/2026-10-09-creator-desktop-final-followup.md`
+14. `apps/creator-web/src/app.tsx`
+
+App is necessary because it unmounted SampleSurface on page retirement,
+blocked even automatic same-Project recovery open on a pending update, and
+its existing project-ready reducer reinitializes Sample pending/selection.
+The added optional Surface callback carries consumer update ownership with
+original Project, pending kind/slot/revision and source Session. It is not
+proof of actual wire-send. One existing Surface stays mounted hidden while
+that journey, receipt or projection is genuinely in flight; Capture and
+Sequence conditions remain. Ordinary selector/create/import/new-Project and
+history pending protection continue, including the transient reducer reset.
+Only automatic open with requireSelector=false, the same Project, a different
+Session and the specific original update pending receives the recovery
+exception. No new App shortcut/history contract or second Surface is added.
+
+Surface distinguishes an UNSENT preparation from the invoked update journey,
+retains the original operation identity and result across Session replacement,
+and restores its pending before the existing default selection effect after
+same-Project reopen. It resumes readback/projection without an authoring
+resend or fresh durable command identity. Successful/failure settlement keeps
+ownership until the existing reducer/projection far side. A changed Project
+fences the old result instead of projecting it into the new target; the
+existing reducer handles a changed current Pad without installing the old
+Pad's playback. A queued pre-mutation stop completion checks current Session
+and Project before invoking an update. Native unknown receipt is not called
+cancelled or inferred to mean no commit. Generic state/reducer/SDK/Modal,
+encoder/Assign/Core/DSP/global CSS/wrapper/tool pins remain outside the edits.
+
+All approved six numeric fields/scales/bounds, saved-base editing, immediate
+legal preview, invalid clearing/correction, one Apply/Enter, no-op/no pause/
+blur save, context/late-preview/queued-submit cancellation and input text Undo
+remain. Original ranges, shared rotary400ms/SHIFT, ENC4 monitoring, exact
+Sample selection and the complete253-line numeric browser source remain.
+
+### Owning regression source and later checks — UNRUN
+
+The entire original workspace file and first13 Source tests remain preserved
+as prefixes. Five new mounted App cases use existing mutable Sample storage,
+real App handlers and the actual RuntimeProvider restart-required route.
+Four cover published/publication failure/conflict/unknown; the fifth saves
+Pad A02 and verifies its result cannot become current Pad A01 playback.
+Each observes exactly one original update, a post-authoring old-consumer
+readback/clear boundary, real page retirement into Project, actual successor
+open/reload of the same Project, ordinary Project-action refusal while owned,
+no successor update/preview clear, and the final honest result/playback/Truth.
+Known results additionally hold the successor projection and assert ownership
+is not released merely on receipt arrival. Every transition has a far-side
+assertion before the next one. Manufactured response/shared-storage seams do
+not prove native Session/commit interleaving; that remains UNRUN. Unchanged
+mock storage does not prove an unknown native request never committed.
+
+Complete later light commands remain exactly the six whole owning files and
+full tsc, from apps/creator-web, after separate Root GO:
+
+```text
+node node_modules/vitest/vitest.mjs run test/sample_numeric_editor.test.tsx test/sample_controls.test.tsx test/value_slider.test.tsx test/sample_encoder.test.ts test/sample_actions.test.ts test/workspace_shell.test.tsx --maxWorkers=1
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+No Node syntax/AST helper, filtered test/timeout/threshold change or additional
+required gate is introduced. Portal check and complete original eight Creator
+proof groups remain separate HOLD/UNRUN; all original Sample import/quota/
+parity/tone/history/Delete/encoder/monitor journeys and transition assertions
+remain. Sample WebKit's capability limit is not numeric Chromium execution.
+Physical/hearing/touch/MIDI/assistive/deployment/release evidence remains
+separate. Source repair is not a compiler/component/browser/native PASS.
+
+### Explicitly admitted tooling setup only
+
+Root msg_4af8b500bf7b independently admitted one own locked npm ci. Two distinct
+empty external regular config paths corrected the original unrun duplicate
+/dev/null proposal, based on actual npm config source. Hermes Node26.8.1 and
+npm11.19.0 were read through their real CLI, naturally exiting0. The only
+npm ci naturally exited0 at2026-10-12T03:19:01Z, adding112 packages with source
+package/lock/tool pins unchanged. Normal npm default allowScripts withheld
+optional fsevents2.3.3 installation script and warned devdir is unknown; no
+script approval/helper/retry/update or alternate tool was run. This proves
+installation completion only, not that the withheld script or any test/
+compiler works. Source editing paused across setup; all four actual-current14
+version/install guards match SHA256
+`968425c0e138cc57f3af6cef2aba87e4a34cc3892b6ade39453a8f3a9a328e1e`,
+including old11 staged/working bytes/index/full patches and all five stashes.
+Installed TypeScript7.0.2 and Vitest4.1.11 metadata/entrypoint bytes are bound
+in external readiness/setup-v2; the entrypoints have not executed.
+
+### Frozen evidence, K1 and current acceptance boundary
+
+Initial13 full diff142764 B SHA256
+`6f865d65ecad0573b03bd24d76bc8d3caf6381bc0e0b83764ab1494dd26c55b5`,
+manifest SHA256
+`df12418b373d3c1a1c2347baa2e5639fde7b88021889af05595cefdc98103253`
+and report SHA256
+`9cc00dc1ded38f76a2d3daba3508308f0786f744a11ee9680d0de0756cca77ac`
+remain immutable. Revised14 file bytes/full candidate/delta/guards/report are
+frozen separately under the Task evidence directory's revision-2. The complete
+old numeric plan25715 B prefix and initial plan addenda are retained, not
+relabeled current PASS. Original workspace270529 B and initial13 workspace
+285652 B prefixes, all old11 staged originals/full patch/index and shared
+five stashes remain protected.
+
+No K1 source is imported. Immutable Git path inspection finds App is not
+changed by frozen K1 commit124110eb0476122963d2e959530dd5d7af67fc4c,
+so the four original shared paths remain workspace, two Host pages and the
+followup plan. Root still owns subsequent combined retention review and
+integration sequencing, including K1 browser journeys/helpers; neither K1
+lane receipts nor other owners' native windows accept N13.
+
+## Version Management
+
+Version impact: compatible Creator MINOR debt continues to join the approved
+followup V1 settlement. The Source-only ownership repair adds no Product
+Build, manifest/lock identity, tag, allocation, new Contract or guessed version.
+Historical debt remains; setup does not settle V1 or release readiness.
+
+Documentation impact: required — `/hosts/creator-web` and
+`/hosts/creator-interactions`. Current Sample4.1 ownership/mount/retirement
+rules and Source/test mapping include the bounded App path and initial P2;
+4.3/4.4 numeric fields and existing MASTER/SEQ SNAP/touch/rotary/K1 facts remain.
+No diagram boundary/topology change. Portal check remains required after
+separate admission and UNRUN. Assign/BPM/D04/A1/A2, full Goal acceptance,
+shipping and release remain separate. Task stays ACTIVE for independent
+revised Source review; no staging/commit/push/PR/merge/cleanup or worker_done.
+
+## 2026-10-12 N13 private automatic reopen Source repair — same14, execution HOLD
+
+Root admission `msg_d34ffc850554` at04:12:29Z follows the frozen revised14
+independent Source review (Root-provided19643 B SHA256
+`d35d4d4632f73f9cc10d3d0721405ccb34167660f83bfd10ce185d5bbd5787f7`).
+The prior revised14 candidate remains historical evidence, including its
+P2/UNRUN findings, full source copies, patch, manifest and reports. This
+addendum does not promote that candidate to acceptance or rewrite old results.
+
+Task `task_741b77b7f15a`, dispatch `ctx_c96a4aee61e7`, Run
+`run_caa371bb58ee`, UID501, own worktree
+`/Users/endaye/orca/workspaces/lmdj/feat-creator-sample-numeric-main` and
+branch `feat/creator-sample-numeric-main` remain unchanged and ACTIVE.
+Selected HEAD is `02b7445ff035e48c43ea2a66c858f7c9282e6c79`,
+tree `627ed86348f4641506ba14f0e15a8f6c4368548b`, sole parent
+`59da4245ff659ee1ffa2b9cf8e81f44bbc65a196`; no upstream or integration
+ref update. The resume actual14/index/old11/stash guard matched the previous
+final guard exactly before Source repair.
+
+### Concrete defect and bounded implementation
+
+The prior App exception recognized recovery by kind=open and
+requireSelector=false. Those arguments are also used by ordinary defaultSeed
+install and capture commit. Once a successor Session reopens the same Project,
+these ordinary writers could therefore inherit the retained Sample Update's
+exception while its consumer outcome or projection was still owned.
+
+App now accepts a private finite admission reason whose default is ordinary.
+Only the existing retained automatic reopen branch passes
+retained-sample-reopen. The exception additionally retains the existing open
+kind, requireSelector=false, original Project, different Session and exact
+original pending Update kind/slot/revision checks. Boot create/open and
+ordinary defaultSeed/capture/open/create/import/duplicate remain ordinary
+and retain their owner/pending fence. This changes neither default-seed or
+capture product policy nor their SDK/reducer/public Contract/deadline.
+
+Revised scope remains the same fourteen declared paths:
+1. `apps/creator-web/src/components/parameter_slider.tsx`
+2. `apps/creator-web/src/components/sample_controls.tsx`
+3. `apps/creator-web/src/components/sample_parameter_editor.css`
+4. `apps/creator-web/src/components/sample_parameter_editor.tsx`
+5. `apps/creator-web/src/components/sample_surface.tsx`
+6. `apps/creator-web/src/components/value_slider.tsx`
+7. `apps/creator-web/test/sample_numeric_editor.test.tsx`
+8. `apps/creator-web/test/workspace_shell.test.tsx`
+9. `tests/platform/web/creator/creator_web_sample_numeric_editor.spec.mjs`
+10. `apps/docs-site/docs/hosts/creator-web.mdx`
+11. `apps/docs-site/docs/hosts/creator-interactions.mdx`
+12. `docs/plans/2026-10-10-creator-sample-numeric-editor.md`
+13. `docs/plans/2026-10-09-creator-desktop-final-followup.md`
+14. `apps/creator-web/src/app.tsx`
+
+This Source repair changes App, appends one mounted regression to workspace,
+and appends necessary documentation to both Portal pages and both plans.
+The other eight candidate paths remain byte-identical to prior revised14.
+The prior five mounted recovery cases and complete295508 B workspace prefix
+remain intact; both prior complete plans and Portal pages are also prefixes.
+No cosmetic change is made merely to reach a filename count.
+
+### Meaningful mounted regression source — UNRUN
+
+The new workspace case renders actual App, RuntimeProvider restart and
+defaultSeed controller with existing mutable Sample fixtures. It retains an
+old known update's downstream readback, actually retires the Sample page and
+reopens/reloads the same Project in a distinct successor Session. Only empty
+A02 is a seed target: the controller itself retires the other fifteen occupied
+targets. Active Product Assembly supplies the default identity, and the
+existing manifest supplies the acquisition data rather than guessed identities.
+
+Deferred ordinary acquisition becomes ready while the old result is held.
+After its actual queued controller commit attempt, the case asserts no
+install, no allocated seed request/receipt, exactly one original update, no
+successor update and the ownership/pending UI fence. It then releases the
+old consumer outcome while holding the successor projection and asserts
+that ordinary install is still blocked through that second leg.
+
+After releasing projection, the unchanged controller's ordinary retry must
+install exactly once at the current revision, refresh Project Truth, publish,
+reach ready and advance the projected revision to5 while retaining the saved
+numeric playback. These positive far-side assertions catch a permanent fence.
+Removing the private admission discriminator exposes the ordinary install
+spy and request/journal assertions to a false admission; this failure ability
+is a Source argument, not an executed mutation/RED receipt.
+
+Consumer return values, acquisition and Project storage are controlled seams;
+no native seed/capture commit interleaving, hearing or wire receipt is claimed.
+Native capture dynamics remain UNRUN; its shared ordinary admission is
+protected by the same source discriminator. No prior case, journey leg,
+test selection, timeout or threshold is changed or skipped.
+
+### Source custody and later review / verification
+
+The next frozen Source cut contains all fourteen lengths/SHA256/Git blobs,
+full main-relative binary patch with new file bytes, complete prior-revised14
+delta, frozen source copies, finite changed/untracked list, history prefixes
+and fresh own/old11/index/full-patch/all-five-stash guards. Parent evidence
+remains unchanged. Root receives a peer-review request for that exact cut and
+then separately decides whether to admit the original six complete Vitest
+files and full tsc. The proposed commands remain UNRUN:
+
+```text
+node node_modules/vitest/vitest.mjs run test/sample_numeric_editor.test.tsx test/sample_controls.test.tsx test/value_slider.test.tsx test/sample_encoder.test.ts test/sample_actions.test.ts test/workspace_shell.test.tsx --maxWorkers=1
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+One earlier authorized locked npm ci exited0; Node26.8.1/npm11.19.0 and
+four equal setup guards remain historical actual readiness. Default npm
+allowScripts withheld optional fsevents install and devdir warned; no retry,
+approval, second install, model/config change or helper ran for this repair.
+Vitest/tsc/AST/syntax/Portal/browser/native/build/proof/stage/commit/push/PR/
+merge/cleanup remain HOLD. All eight original Creator proof groups and full
+numeric browser253-line source remain; heavy window, K1 four-path combined
+retention review, A1/A2/V1/Goal acceptance and release remain Root decisions.
+
+## Version Management
+
+Version impact: compatible Creator MINOR debt remains in the approved followup
+V1 settlement. This Source repair makes no Product Build, manifest/lock,
+Module/Host/Provider/Contract identity, tag or allocation change.
+
+Documentation impact: required — `/hosts/creator-web` and
+`/hosts/creator-interactions`. Append-only Source notes identify the second
+P2, the private recovery discriminator and mounted seed negative/positive
+legs. Existing six-field rules, MASTER/SEQ SNAP/single-current-Pad/range/
+rotary/ENC4 and other pending facts remain. No source-diagram topology change;
+Portal check is required after later admission and remains UNRUN.
+
+## 2026-10-12 N13 v4 original-six failure and minimal Source repair
+
+Root `msg_bc0efdf6340a` at 05:44:46Z admits one bounded Source-only repair
+under existing Run `run_caa371bb58ee`, Task `task_741b77b7f15a`, Dispatch
+`ctx_c96a4aee61e7`, worker `term_a90d95a5-8c22-4d84-ba2b-5703bb6aff7f`.
+Own isolated branch remains `feat/creator-sample-numeric-main`, without
+upstream or staged delta; selected HEAD
+`02b7445ff035e48c43ea2a66c858f7c9282e6c79`, tree
+`627ed86348f4641506ba14f0e15a8f6c4368548b`, sole parent
+`59da4245ff659ee1ffa2b9cf8e81f44bbc65a196` are unchanged. This append retains
+the whole prior v3 followup plan prefix and every earlier acceptance boundary.
+K1's source/receipts remain untouched; Root owns later combined integration.
+
+The one separately authorized complete original-six-file Vitest run naturally
+returned1: 5/6 files PASS, 289/292 cases PASS, three workspace failures. Original
+Volume completion rejected duplicate pending; original update/reset remount
+table left Reset disabled; the new seed test hit undefined localStorage before
+fixture/render. Raw evidence leaves actual gesture and expanded `$kind`
+variant UNKNOWN and new seed held/positive journey UNREACHED. Tsc was never
+launched. Keep all eleven original light artifacts and full stdout/stderr;
+prior Source acceptance and historical setup0 do not erase the failure.
+
+Root fully read the independent17710 B cause report SHA256
+`342170910e20470474e0238ea3bf2dcc934cdda7ed0f00659db37821ffed96f9`,
+whole parsed41408 B receipt SHA256
+`d88957449358f4180bc4ba8f9478f530889b1bfe0eec95fa7d4abd662ad8138f`
+and author's11129 B DATA proposal SHA256
+`c6179d6a8ce700c9e28e582ec91292588dc3a3a313cdd400003a88d9121fd1cd`.
+The minimal Source response has only three local behavioral sites:
+
+- `apps/creator-web/src/components/sample_surface.tsx`: bind settlement to
+  the concrete update captured by the same render, checking current identity
+  before pending reinstall, outcome dispatch or ownership clear. Preserve
+  strict reducer initial admission and real successor restoration, original
+  Session receipt/current Pad/revision fences, true failure/conflict/unknown
+  outcome and no authoring resend.
+- The same Surface: detect existing inactive-to-active Sample context only
+  with an owned projection refresh, then restart its existing readback. Hidden
+  settlement continues; exit adds no readback gate or restart. Preserve original
+  four consistency attempts, 25/50/75 ms waits, cleanup, ready/publication and
+  one-mutation boundaries. Required App hidden-retain mount remains exact v3.
+- Only the new appended seed case in
+  `apps/creator-web/test/workspace_shell.test.tsx`: give real App/controller
+  a shared, locally owned Map-backed string/null writable journal using the
+  existing Vitest global stub before all ambient Storage/App access. Finally
+  unmount App before descriptor restoration, including assertion failure.
+  Preserve acquisition0-to1, both independent held install0 far sides and
+  processing/request-null/committedRevision-null checks, final ordinary
+  install exactly1, saved ready/publication revision5 and A01 complete playback.
+  Manufactured test storage does not establish persistent browser proof.
+
+Only these two files plus append-only addenda in this plan and the numeric
+plan differ from v3. All14 remain owned/accounted in the frozen candidate map,
+full binary patch and v3 delta. Ten other candidates, including App SHA256
+`95bef6a00fa1ad985fde45c565e05f2134430fd0ed0eb856f6c49ec576230943`,
+both Portal pages and full253-line numeric browser source remain byte-equal.
+Complete selected02b workspace270529 B and v2 workspace295508 B prefixes
+including five Session cases remain exact; original whole Volume/update/reset
+and every existing test body are preserved. New seed expect expressions keep
+their exact bytes/order. No timer/assertion/timeout/selection weakening,
+reducer relaxation, App/private-reason expansion, SDK/Assign/state/config/
+lock/setup/Nodeflag/storagefile or new public product policy occurs.
+
+V4 Source and fixes are UNRUN. Keep old numeric11 STAGED originals/index/full
+cached patch/five shared stashes, own index, prior source cuts and failed raw
+history. Six field scale/bounds/immediate preview/invalid clearing, one Apply/
+Enter revision/Undo, no pause/blur save, unsent cancel/late context, full range
+release/key/blur/cancel and rotary400ms/SHIFT/ENC4 behavior remain owned.
+The complete six Vitest files still catch these and action/history/retained
+result/projection regressions; no extra gate or short named subset is added.
+
+After independent v4 Source review, Root may separately schedule the same six
+whole Vitest files with maxWorkers1 and original20000/5000 ms budgets; only
+their complete PASS admits full tsc --noEmit. Neither command ran in this v4
+phase. Any failure must stop with full actual raw/natural-wait evidence. Portal
+check, all eight original Creator proof groups, packaged numeric browser
+preview/invalid/refusal/no400ms-save/oneApply/Esc/Undo/Redo/full persisted reopen
+and original Sample import/quota/parity/tone/history/Delete/encoder/monitor
+journeys remain complete and separately HOLD. Current committed-head/K1 four
+shared-path retention review, native/physical/hearing, A1/A2/V1/Goal acceptance
+and release/shipping are Root's later boundaries; a peer finishing grants no
+execution window. No setup/install/helper/compiler/browser/native/Portal/proof,
+stage/commit/push/PR/merge/cleanup, worker_done or Goal mutation is performed.
+
+## Version Management
+
+Version impact: compatible Creator MINOR debt still joins the approved followup
+V1 settlement. No Product Build, manifest/lock/active identity, tag, allocation
+or release is changed by this bounded Source repair.
+
+Documentation impact: required — `/hosts/creator-web` and
+`/hosts/creator-interactions`. Current user behavior and historical v3 Source
+notes remain valid, so no additional Portal edit or diagram topology change
+is needed for the internal recovery/fixture repair. Both Portal paths remain
+in the14-file map and their required later check remains UNRUN; current
+MASTER/SEQ SNAP/single-current-Pad/range/rotary/ENC4 and pending facts remain.
+
+
+## Root continuation and current-main integration — 2026-10-12
+
+The previous v4 Source-only notes are historical. Root assumed this isolated
+Task after its prior dispatch stopped at its capacity fence; no old cache,
+candidate, index, stash or failure evidence was discarded.
+
+The unchanged complete six-file v4 Vitest selection actually passed on
+02b7445ff035e48c43ea2a66c858f7c9282e6c79: 6 files, 292 tests, zero failures,
+actual child exit 0 (69.90 s test duration). Full TypeScript --noEmit then
+returned actual exit 0. Raw logs, PID/group natural exits and preservation
+guards are retained in root-light-v4-original6-tsc-20261012T0814 under the
+existing external N13 evidence directory. Earlier 289-pass/3-fail evidence
+remains historical negative evidence, not a result for this candidate.
+
+Root subsequently fast-forwarded this owned branch to current main
+d21ea97c71da281f89ac78238f6fcceb8b03e638 with no autostash. All 45 intervening
+paths were inspected; they change C++/Python source, tests and documentation,
+but none of the Creator TypeScript, component-test or dependency inputs.
+Those six-file and type-check results therefore remain bound to unchanged
+inputs; they do not establish packaged browser or current Core acceptance.
+
+Only the two declared Portal pages needed overlap resolution. Their reviewed
+union retains current-main Pattern/Sequence/capture/navigation facts and this
+Task's numeric-editor behavior. The other 12 candidate files and all five
+shared stashes were byte-identical before and after integration. Complete
+before/after manifests, preserved14 originals and actual FF exit0 receipts are
+under n13-current-main-integration-20261012T0856 in Root's external checkpoints.
+
+The next precommit boundary is the complete required Portal check, followed
+by exact14 staging, the new-tracked-file ownership suite, whitespace/staged
+inspection and the Task Conventional Commit. The stable Creator proof requires
+a clean committed source; all original eight browser groups and the complete
+new numeric preview/invalid/refusal/no400ms-save/Apply/Esc/Undo/Redo/persisted
+reopen journey remain required after that commit, before delivery. None is
+claimed run or passed here. No timeout, gate, assertion, lane or journey was
+weakened, and no Product Build, release, deployment or cleanup is authorized
+by this continuation.
+
+Version impact: compatible Creator MINOR debt remains in approved V1 settlement;
+this Task allocates no Product Build or manifest identity.
+Documentation impact: required — /hosts/creator-web and
+/hosts/creator-interactions; the complete Portal check remains pending.
+
+
+## 2026-10-12 — exact a492 integration proposal and preserved verification boundaries
+
+This section describes external review DATA prepared for Root. No Source, Git
+index/ref/config, worktree or Orca lifecycle mutation and no test/build/setup
+execution occurred during this reconciliation. It does not itself commit,
+review, ship or accept a new product head.
+
+The complete original N13 Task is committed as
+`e4e0e6e7179862a36b448a53464458d66b372116` (parent
+`d21ea97c71da281f89ac78238f6fcceb8b03e638`). The proposed exact base is
+`a4923f20f78ba6780d1265882669b8a00a762de4`. All fourteen declared paths remain;
+the complete numeric component/source files, 419-line component test,
+583-line mounted App suffix and 253-line native/browser journey are retained.
+Old failed results, Source-only UNRUN records, five recovery cases and the
+ordinary default-seed positive/fenced recovery case remain historical evidence.
+
+The new base includes #2058 four-row mapping, #2061 explicit Cmd/Ctrl+Z Pad01
+conflict, #2065 manual corrections, #2067 journal recovery and #2068 direct
+replay preflight. The workspace test keeps the whole current-main file before
+appending the unchanged N13 suffix. Portal conflicts preserve letters AND
+digits in ordinary dialogs, the precise form's own key propagation, main's
+chapter-10 approved-feature organization and current #2014/#2037 references.
+The current Cmd/Ctrl+Z limitation and open #2060 owner-decision boundary remain;
+no K1 controller guard, modifier choice, additional shortcut or outside-scope
+file is silently introduced here.
+
+Root reports the old fourteen-file input actually passed all six complete
+Vitest files (292 tests), full TypeScript (exit0), and full Portal check (176
+tests, 52 pages, 10 diagrams/20 outputs, 50 routes). These are preserved old-input
+results, not passes for this new base/proposal. The new integration's complete
+six-file component checks, full typecheck and full Portal check are UNRUN.
+The Task's existing complete eight Creator/browser groups, original fixtures,
+far-side legs and new precise native command/preview/Undo/Redo/reopen journey
+remain required and UNRUN; native/physical/hearing/deployment/release claims
+remain separate. No timeout, assertion, lane or journey leg is weakened.
+
+Ordinary PR verification follows the replacement AGENTS.md: Task-relevant
+checks and declared owning journeys remain; a selected batch_only lane alone
+does not require running every complete lane. The old K1 thirteen-selected /
+ten-batch-only receipt obligation is historical, not an ordinary-merge gate.
+Complete-candidate/full verification debt is still recorded separately.
+
+### Version Management
+
+Version impact: the existing compatible Creator MINOR feature debt remains for
+the Goal's V1 settlement. Main's already-delivered incompatible shared-default
+MAJOR/migration debt is not settled or allocated by this N13 integration.
+No Product/Module/Host/Contract identity, Product Build, Assembly lock,
+snapshot, tag, release, deployment or Channel is allocated or guessed.
+
+### Documentation Impact
+
+Documentation impact: required — `/hosts/creator-web/` and
+`/hosts/creator-interactions/`; source facts and integration/evidence boundaries
+are updated in the same fourteen-file proposal. Manifest-derived portal
+identities are not hand entered. Run the original full `scripts/docs-site.sh
+check` on actual admitted integrated Source before a future verified commit.
+
+
+## 2026-10-12 — Root actual current-main Source integration
+
+Root created an isolated owned worktree at exact
+`43f41d2f1cf0f8294568e9964c058d141421aa46` and legal branch
+`feat/creator-sample-numeric-current-main`, preserving the complete clean
+`e4e0e6e7179862a36b448a53464458d66b372116` candidate, its worktree,
+all five stashes and all earlier evidence. The external a492 proposal remains
+historical review DATA. Fresh main includes actual merged #2070, a test-only
+Replay neutral-reset audio-progress correction; all fourteen Task base files
+are byte-identical a492 to43. No numeric implementation premise is delivered
+by that successor, and its Host result is not numeric acceptance.
+
+All fourteen declared paths were independently rehashed before actual Source
+application. The seven numeric/app implementation files, complete419-line
+component test, complete583-line mounted App suffix and complete253-line
+native/browser journey retain their exact e4 bytes; the mounted App file
+retains the complete current-main prefix. Both complete old plan prefixes and
+all historical failures remain. Only current integration/evidence descriptions
+are added here. #2060 modifier policy is still awaiting user decision and is
+not implemented by this Task.
+
+Six complete original component files, full typecheck, full Portal check and
+all eight original Creator/browser groups remain UNRUN for this new actual
+Source. Original deadlines, assertions, native command/preview/Apply/Undo/Redo/
+Esc/context-cancel/reopen legs and physical/hearing boundaries remain intact.
+This Source checkpoint is not a verification, commit, push, review, merge,
+full-candidate, Product Build, snapshot, release or deployment claim.
+
+Version impact: existing compatible Creator feature debt remains for V1;
+no manifest, Contract, Assembly, Build or Channel identity allocated here.
+Documentation impact: required — /hosts/creator-web/ and
+/hosts/creator-interactions/; run the required full Portal check before commit.
+
+## 2026-10-12 — Root current-main light verification
+
+On the actual integrated fourteen-file draft at
+`43f41d2f1cf0f8294568e9964c058d141421aa46`, branch
+`feat/creator-sample-numeric-current-main`, the original complete six-file
+Vitest invocation naturally exited0: six files and292 tests passed, with no
+failure or omitted case. The reported Vitest duration was76.28s; the outer
+recorded process elapsed77.921055s, from12:35:51 to12:37:09 UTC. Full
+`tsc --noEmit` then naturally exited0 in2.215418s. Both ran with the pinned
+Node26.8.1, private locked dependencies, ordinary UID501 and the unchanged
+single-worker setting, assertions and20000/5000ms budgets. The existing Node
+experimental localStorage warning remains in the original stderr.
+
+Before/after all fourteen source bytes, modes and mtimes, branch/HEAD, raw
+index, empty staged set, worktree status and all stash identities matched.
+Full argv, stdout/stderr, process-start observations, actual exits and source
+guards are retained outside the worktree under
+`n13-current-main-light-20261012T1236` in Root's followup evidence. The later
+documentation-only evidence update does not change implementation or tests.
+
+Current full Portal and all eight original Creator/browser proof groups remain
+UNRUN. No numeric packaged/native, physical/hearing, shipping, full-candidate,
+V1, snapshot, release or deployment result is inferred from these component
+and type checks. Historical failures and integration records remain intact.
+
+
+## 2026-10-12 — Root current-main Portal verification
+
+On the actual fourteen-file integration at
+`43f41d2f1cf0f8294568e9964c058d141421aa46`, the complete stable command
+`bash scripts/docs-site.sh check` naturally exited0, 13:39:06–13:40:22 UTC,
+76.437596s, ordinary UID501 and Node26.8.1. All176 tests passed with zero
+failures/skips;52 pages,10 diagram sources/20 outputs,50 routes and internal
+links passed. The current locked Product Build's existing immutable snapshot,
+Host/Release projections, generated source facts and full typecheck/build were
+verified by that unchanged command. This allocates no identity/snapshot/Release
+and does not establish production deployment or physical/hearing acceptance.
+
+The actual whole fourteen-file bytes/modes/mtimes, branch/HEAD, raw index,
+status, five retained stashes and ten pristine Git120000 links remained exact
+before/after; the owned process group naturally became empty. Complete stdout
+16754B SHA256`b1b2cdf963f2f86a8cd96faf099d8bfee4178915aea2c4fb6f55114aebd87f03`,
+stderr1119B SHA256`8faf893639495e3981099bbb86841c9bf779462b4a3c4303ca7c9f6d531c6672`
+and direct exit/guards are retained under
+`/Users/endaye/Projects/lmdj-followup-evidence/2026-10-12-root-checkpoints-0634/n13-current-main-portal-20261012T1342/`.
+Node's optional localStorage warning and npm's update notice are retained; no
+install, global update or warning suppression was performed.
+
+Only the two declared plans receive this factual append and the current N13
+paragraph in`/hosts/creator-web/` records the actual result. This documentation
+update requires another unchanged whole Portal check before commit. The eleven
+other candidate paths, component/typecheck inputs, all original assertions,
+20000/5000ms component budgets and complete253-line browser journey remain exact.
+The eight original Creator proof groups and packaged numeric command/preview/
+Apply/Escape/Undo/Redo/reopen far sides still require their own clean-head proof.
+Physical/hearing,A1/A2,V1,guarded shipping and the overall Goal remain incomplete.
+
+Version impact: the approved compatible Creator MINOR feature debt remains for
+V1; this Task allocates no manifest,Assembly,Contract,Build or Channel identity.
+Documentation impact: required — /hosts/creator-web/ and /hosts/creator-interactions/.
+
+## 2026-10-12 — N13 Native journey and latest-main integration
+
+The clean local Task commit `935428394d5d54b5a89ee7fc9b66e4c66a7cdb3d`
+ran the unchanged `scripts/creator-web.sh proof`, 14:14:53–14:40:44 UTC.
+Real Core/native fixtures, two byte-reproducible Release WASM distributions,
+all75 Vitest suites (1365 tests), typecheck and the original eight browser
+groups ran. The actual proof exit was1:118 browser passes,2 failures and11
+existing capability skips. Complete logs, traces, source/index guards and
+all14 negative-input files are retained outside the worktree. This is not a
+complete Creator PASS.
+
+One failure was the old hardware-layout Q hint, separately fixed by the
+original owner in PR #2085. The new numeric spec's first preview oracle used
+Project's Pad identity/color projection as though it contained playback.
+It now derives all five native playback fields from authoritative
+`sample.inspect`. Complete Project equality, full Sample playback equality,
+revision, exact save payload/identity and every original transition remain;
+no timeout, assertion, fixture, runner or journey leg was weakened.
+
+The corrected complete numeric browser journey naturally passed1/1 in25.3s,
+14:59:47–15:00:17 UTC, against the original clean935 application distribution
+and corrected spec SHA256
+`ba2124c3fbbeb35b914c77821e1655451edb590fa53798fe359cedd4bff67075`.
+Preview, invalid clear, Apply, cancel, Escape, Undo/Redo and persisted reopen
+all executed with real Native receipts. This focused PASS is not a fresh
+clean-head full proof. Evidence roots are `n13-full-creator-proof-20261012T1418`,
+`n13-full-proof-negative-retention-20261012T1456` and
+`n13-browser-oracle-focused-20261012T1504` in Root's external evidence.
+
+Root then integrated exact main
+`f084f3e345b4122e0649907e30eb83f331546887` into this isolated, unpublished
+Task via rebase. Original935/source14/index/spec patch and all existing
+stashes remain retained. PR #2082's delivered shortcut guard and Portal facts,
+#2084's separate deployment compatibility and #2085's one-line hardware
+oracle remain intact; this Task does not repeat them. Its seven implementation
+paths are unchanged by that integration. The live Issue remains #1995;
+precise input still needs this Task's verification/review/shipping. Fresh
+affected six-file/type/Portal checks and a clean integrated full Creator proof
+are the next verification boundaries, not inferred from the earlier runs.
+
+Version impact: no manifest or identity allocation; approved compatible
+Creator feature debt remains for V1. Documentation impact: required —
+/hosts/creator-web/ and /hosts/creator-interactions/. Physical/hearing, A1/A2,
+full-candidate, V1/snapshot, release and deployment remain separate.

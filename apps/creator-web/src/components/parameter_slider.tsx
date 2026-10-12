@@ -13,6 +13,16 @@ export type ParameterField =
   | "releaseMs"
   | "tone";
 
+export interface SampleParameterSpec {
+  label: string;
+  ariaLabel: string;
+  field: ParameterField;
+  min: number;
+  max: number;
+  step: number;
+  scale: number;
+}
+
 interface ParameterSliderProps {
   label: string;
   ariaLabel: string;
@@ -31,6 +41,8 @@ interface ParameterSliderProps {
   onPreview: (playback: Readonly<PadPlayback>) => void;
   onCommit: (playback: Readonly<PadPlayback>) => void;
   onCancel: () => void;
+  onEditValue?: (parameter: SampleParameterSpec) => void;
+  editValueDisabled?: boolean;
 }
 
 export function ParameterSlider({
@@ -49,6 +61,8 @@ export function ParameterSlider({
   onPreview,
   onCommit,
   onCancel,
+  onEditValue,
+  editValueDisabled = false,
 }: ParameterSliderProps) {
   const toStored = (display: number) => Math.round(display * scale);
   const withField = (display: number): Readonly<PadPlayback> => ({
@@ -70,6 +84,10 @@ export function ParameterSlider({
       onPreview={(display) => onPreview(withField(display))}
       onCommit={(display) => onCommit(withField(display))}
       onCancel={onCancel}
+      {...(onEditValue === undefined ? {} : {onEditValue: () => onEditValue({
+        label, ariaLabel, field, min, max, step, scale,
+      })})}
+      editValueDisabled={editValueDisabled}
     />
   );
 }

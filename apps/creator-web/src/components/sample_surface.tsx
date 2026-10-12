@@ -71,6 +71,7 @@ interface SampleSurfaceProps {
   captureBackgrounded?: boolean;
   encodersActive?: boolean;
   onEncodersReady?: (encoders: ContextualEncoders | null) => void;
+  onUpdatePendingChange?: (owner: Readonly<SampleUpdateOwner> | null) => void;
   sequenceCapture?: Readonly<{
     sessionId: string;
     expectedRevision: number;
@@ -119,6 +120,21 @@ const CANCELLED_OUTCOME: ImportOutcome = Object.freeze({
 interface PreviewOwner {
   readonly session: CreatorSampleRuntimeSession;
   readonly slot: number;
+}
+
+// Consumer journey ownership, not evidence that a transport sent a command.
+export interface SampleUpdateOwner {
+  readonly projectId: string;
+  readonly pending: Readonly<SamplePendingAction>;
+  readonly session: CreatorSampleRuntimeSession;
+}
+
+interface PendingSampleUpdate {
+  readonly owner: Readonly<SampleUpdateOwner>;
+  result: Readonly<{kind: "resolution"; resolution: SampleMutationResolution}> |
+    Readonly<{kind: "failure"; error: ReturnType<typeof publicOperationError>}> | null;
+  phase: "waiting" | "projecting" | "failed";
+  projectionSession: CreatorSampleRuntimeSession | null;
 }
 
 
@@ -197,6 +213,7 @@ export function SampleSurface({
   captureBackgrounded = false,
   encodersActive = true,
   onEncodersReady,
+  onUpdatePendingChange,
   sequenceCapture,
 }: SampleSurfaceProps) {
   // #1680: every Sample failure keeps its code and details in Developer
@@ -212,6 +229,11 @@ export function SampleSurface({
   const replaceReturnFocus = useRef<HTMLElement | null>(null);
   const importController = useRef<AbortController | null>(null);
   const operationPending = useRef<Readonly<SamplePendingAction> | null>(null);
+  const pendingUpdate = useRef<PendingSampleUpdate | null>(null);
+  const renderedPendingUpdate = pendingUpdate.current;
+  const [updateSettlementVersion, setUpdateSettlementVersion] = useState(0);
+  const previousProjectionActive = useRef(encodersActive);
+  const [projectionReentryVersion, setProjectionReentryVersion] = useState(0);
   const importPending = useRef<Readonly<SamplePendingAction> | null>(null);
   const previousSession = useRef(session);
   const previewEpoch = useRef(0);
@@ -228,6 +250,9 @@ export function SampleSurface({
   const [pendingCaptureSlot, setPendingCaptureSlot] = useState<number | null>(null);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget | null>(null);
   const sample = state.sample;
+  const projectIdentity = state.project.current?.projectId ?? null;
+  const updateContext = useRef({projectIdentity, session});
+  updateContext.current = {projectIdentity, session};
   const audioSuspended = state.audio.phase !== "running" &&
     state.audio.phase !== "recovering";
   const previousAudioSuspended = useRef(audioSuspended);
@@ -245,6 +270,12 @@ export function SampleSurface({
     cancel: () => encoderCallbacks.current.cancel(),
   });
   const encoderTarget = useRef<string | null>(null);
+  const numericEditorCancel = useRef<(() => void) | null>(null);
+  const [numericEditorOpen, setNumericEditorOpen] = useState(false);
+  const bindNumericEditorCancel = useCallback((cancel: (() => void) | null) => {
+    numericEditorCancel.current = cancel;
+    setNumericEditorOpen(cancel !== null);
+  }, []);
   const [animatedPlayhead, setAnimatedPlayhead] = useState<Readonly<{
     sequence: number;
     sourceFrame: number;
@@ -356,11 +387,12 @@ export function SampleSurface({
     releaseLongSource();
     previousSession.current = session;
     const pending = operationPending.current;
-    operationPending.current = null;
+    const retainedUpdate = pendingUpdate.current?.owner.pending === pending;
+    if (!retainedUpdate) operationPending.current = null;
     importPending.current = null;
     importController.current?.abort();
     importController.current = null;
-    if (pending !== null) {
+    if (pending !== null && !retainedUpdate) {
       dispatch({
         type: "sample-action",
         action: {type: "operation-cancelled", pending},
@@ -368,7 +400,72 @@ export function SampleSurface({
     }
   }, [clearOwnedPreview, dispatch, releaseLongSource, session]);
 
-  const projectIdentity = state.project.current?.projectId ?? null;
+  useEffect(() => {
+    // Pair this render's reducer state with its own operation. An older
+    // passive closure must not restore or settle a later update from the ref.
+    const update = renderedPendingUpdate;
+    if (update === null || pendingUpdate.current !== update) return;
+    const {owner, result} = update;
+    const finish = () => {
+      if (pendingUpdate.current !== update) return;
+      if (operationPending.current === owner.pending) operationPending.current = null;
+      pendingUpdate.current = null;
+      onUpdatePendingChange?.(null);
+      setUpdateSettlementVersion((value) => value + 1);
+    };
+    if (update.projectionSession !== null && update.projectionSession !== session) {
+      // Project reopen can replace the reducer's pending/projection state. The
+      // original receipt remains available; only its readback is resumed.
+      update.phase = "waiting";
+      update.projectionSession = null;
+    }
+    if (projectIdentity !== owner.projectId) {
+      // No result from the old Project is dispatched into a replacement.
+      // Ordinary App Project changes stay fenced while this journey is owned.
+      if (result !== null) finish();
+      return;
+    }
+    if (session === undefined || state.runtime.phase !== "ready" ||
+        state.project.phase !== "ready") return;
+    if (update.phase !== "waiting") {
+      if (state.sampleProjectionRefresh === null && sample.pendingAction === null) finish();
+      return;
+    }
+    if (sample.pendingAction === null) {
+      // This effect precedes the default selection effect. A same-Project
+      // Runtime reopen resets selection and pending together; reinstall the
+      // original pending identity before selecting the current bank's Pad.
+      if (pendingUpdate.current !== update ||
+          (selectedSlot !== null && selectedSlot !== owner.pending.slot)) return;
+      operationPending.current = owner.pending;
+      dispatch({type: "sample-action", action: {type: "pending-began", pending: owner.pending}});
+      return;
+    }
+    if (pendingUpdate.current !== update ||
+        sample.pendingAction.kind !== owner.pending.kind ||
+        sample.pendingAction.slot !== owner.pending.slot ||
+        sample.pendingAction.expectedRevision !== owner.pending.expectedRevision ||
+        state.sampleProjectionRefresh !== null || result === null) return;
+    update.projectionSession = session;
+    operationPending.current = null;
+    if (result.kind === "failure") {
+      update.phase = "failed";
+      dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
+      dispatch({type: "sample-action", action: {type: "preview-cleared"}});
+      dispatch({type: "sample-action", action: {
+        type: "operation-failed", pending: owner.pending, error: result.error,
+      }});
+    } else {
+      update.phase = "projecting";
+      const resolution = result.resolution;
+      dispatch({type: "sample-projection-refresh-started", action: resolution.kind === "committed"
+        ? {type: "mutation-committed", pending: owner.pending,
+            inspect: resolution.inspect, commit: resolution.commit}
+        : {type: "mutation-conflicted", pending: owner.pending, inspect: resolution.inspect}});
+    }
+  }, [dispatch, onUpdatePendingChange, projectIdentity, renderedPendingUpdate,
+    sample.pendingAction, selectedSlot, session, state, updateSettlementVersion]);
+
   const previousProjectIdentity = useRef(projectIdentity);
   useEffect(() => {
     if (previousProjectIdentity.current === projectIdentity) return;
@@ -454,9 +551,20 @@ export function SampleSurface({
   }, [dispatch, inspect, session]);
 
   useEffect(() => {
+    const wasActive = previousProjectionActive.current;
+    previousProjectionActive.current = encodersActive;
+    // A retained hidden surface still settles in the background. Reentry
+    // restarts only its existing readback, as a fresh Sample mount used to.
+    if (encodersActive && !wasActive && state.sampleProjectionRefresh !== null) {
+      setProjectionReentryVersion((value) => value + 1);
+    }
+  }, [encodersActive, state.sampleProjectionRefresh]);
+
+  useEffect(() => {
     const refresh = state.sampleProjectionRefresh;
     const currentProject = state.project.current;
-    if (refresh === null || session === undefined || currentProject === null) return;
+    if (refresh === null || session === undefined || currentProject === null ||
+        state.runtime.phase !== "ready" || state.project.phase !== "ready") return;
     let active = true;
     let retryTimer: number | null = null;
     const waitForRetry = (milliseconds: number) => new Promise<void>((resolve) => {
@@ -510,7 +618,8 @@ export function SampleSurface({
       active = false;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [dispatch, session, state.project.current, state.sampleProjectionRefresh]);
+  }, [dispatch, session, state.project.current, state.project.phase,
+    state.runtime.phase, state.sampleProjectionRefresh, projectionReentryVersion]);
 
   const dispatchResolution = (
     pending: Readonly<SamplePendingAction>,
@@ -552,7 +661,7 @@ export function SampleSurface({
   };
 
   const performUpdate = async (playback: Readonly<PadPlayback>) => {
-    if (session === undefined || inspect === null || sample.pendingAction !== null ||
+    if (session === undefined || inspect === null || projectIdentity === null || sample.pendingAction !== null ||
       operationPending.current !== null) return;
     previewEpoch.current += 1;
     const pending = Object.freeze({
@@ -562,23 +671,37 @@ export function SampleSurface({
     });
     operationPending.current = pending;
     dispatch({type: "sample-action", action: {type: "pending-began", pending}});
-    let mutationStarted = false;
+    let update: PendingSampleUpdate | null = null;
     try {
       if (playback.muted !== inspect.playback.muted) {
         await stopBeforeMutation(inspect.slot);
       }
-      mutationStarted = true;
+      if (operationPending.current !== pending ||
+          updateContext.current.session !== session ||
+          updateContext.current.projectIdentity !== projectIdentity) return;
+      update = {owner: Object.freeze({projectId: projectIdentity, pending, session}),
+        result: null, phase: "waiting", projectionSession: null};
+      pendingUpdate.current = update;
+      onUpdatePendingChange?.(update.owner);
+      setUpdateSettlementVersion((value) => value + 1);
       const resolution = await updateSampleJourney(session, {
         slot: inspect.slot,
         expectedRevision: inspect.projectRevision,
         playback,
       });
-      previewOwner.current = null;
-      if (operationPending.current !== pending) return;
-      dispatchResolution(pending, resolution);
+      if (previewOwner.current?.session === session) previewOwner.current = null;
+      if (pendingUpdate.current !== update) return;
+      update.result = {kind: "resolution", resolution};
+      setUpdateSettlementVersion((value) => value + 1);
     } catch (error) {
-      if (mutationStarted) previewOwner.current = null;
-      else clearOwnedPreview();
+      if (update !== null) {
+        if (previewOwner.current?.session === session) previewOwner.current = null;
+        if (pendingUpdate.current !== update) return;
+        update.result = {kind: "failure", error: recordedFailure("Update Pad", error)};
+        setUpdateSettlementVersion((value) => value + 1);
+        return;
+      }
+      clearOwnedPreview();
       if (operationPending.current !== pending) return;
       operationPending.current = null;
       dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
@@ -888,11 +1011,13 @@ export function SampleSurface({
   const projectUnavailable = state.project.phase !== "ready" ||
     state.project.current === null;
   const actionsDisabled = session === undefined || projectUnavailable || inspect === null ||
-    !selectedAssigned || sample.pendingAction !== null;
+    !selectedAssigned || sample.pendingAction !== null || pendingUpdate.current !== null;
   const encoderDisabled = actionsDisabled || !encodersActive || externalCaptureBusy ||
     captureTarget !== null || state.projectProjectionRefresh !== null ||
     inspect?.slot !== selectedSlot || inspect?.projectRevision !== state.project.current?.revision;
   const encoderKey = `${state.project.current?.projectId}:${inspect?.slot}:${inspect?.assetId}:${inspect?.projectRevision}`;
+  const numericEditingContext = useMemo(() => ({key: encoderKey, session}),
+    [encoderKey, session]);
   const encoderContext = useRef({key: encoderKey, disabled: encoderDisabled});
   encoderContext.current = {key: encoderKey, disabled: encoderDisabled};
   encoderCallbacks.current = {
@@ -927,8 +1052,11 @@ export function SampleSurface({
         case "tone": return Math.abs(playback.tone) <= 2 ? "Off" : `${playback.tone < 0 ? "LP" : "HP"} ${Math.abs(playback.tone)}`;
       }
     };
-    return {pending: encoderTurn.current?.pending() === true,
-      cancel: () => encoderTurn.current?.cancel(),
+    return {pending: encoderTurn.current?.pending() === true || numericEditorOpen,
+      cancel: () => {
+        encoderTurn.current?.cancel();
+        numericEditorCancel.current?.();
+      },
       bindings: Object.fromEntries(group.map((parameter, index) => [index + 1, {
         label: labels[parameter], value: value(parameter), disabled: encoderDisabled || metadata == null,
         onTurn: (detents: number, fine = false) => {
@@ -938,7 +1066,7 @@ export function SampleSurface({
           encoderTurn.current?.turn(parameter, detents, fine, inspect.playback, metadata);
         },
       }]))};
-  }, [encoderGroup, editablePlayback, inspect, encoderKey, encoderDisabled]);
+  }, [encoderGroup, editablePlayback, inspect, encoderKey, encoderDisabled, numericEditorOpen]);
   useEffect(() => {
     onEncodersReady?.(encodersActive ? encoders : null);
     return () => onEncodersReady?.(null);
@@ -981,6 +1109,11 @@ export function SampleSurface({
       page={page}
       padLabel={selectedAddress}
       playback={editablePlayback}
+      savedPlayback={inspect.playback}
+      numericEditingContext={numericEditingContext}
+      numericEditingDisabled={encoderDisabled}
+      onBeginNumericEdit={() => {encoderTurn.current?.cancel(); cancelPreview();}}
+      onNumericEditorReady={bindNumericEditorCancel}
       audioSuspended={audioSuspended}
       disabled={actionsDisabled}
       onPreview={(playback) => {encoderTurn.current?.cancel(); preview(playback);}}
