@@ -32,9 +32,9 @@ test.each(["Enter", " "])("focused empty Pad forwards %j press/release to captur
   fireEvent(pad, down);
   fireEvent.keyDown(pad, {key, repeat: true});
   fireEvent.keyUp(pad, {key});
-  expect(keyDown).toHaveBeenCalledExactlyOnceWith({code: "KeyQ", repeat: false,
+  expect(keyDown).toHaveBeenCalledExactlyOnceWith({code: "KeyZ", repeat: false,
     target: document.body, nativeEvent: down});
-  expect(keyUp).toHaveBeenCalledExactlyOnceWith({code: "KeyQ", repeat: false, target: document.body});
+  expect(keyUp).toHaveBeenCalledExactlyOnceWith({code: "KeyZ", repeat: false, target: document.body});
   expect(choose).not.toHaveBeenCalled();
 });
 
@@ -69,5 +69,5 @@ test("reordered pointer and drop targets keep the Bank's original slot identity"
   const file = new File(["sample"], "sample.wav", {type: "audio/wav"});
   fireEvent.drop(bottomLeft, {dataTransfer: {files: [file]}});
   expect(drop).toHaveBeenCalledExactlyOnceWith(32, file, bottomLeft);
-  expect(bottomLeft.querySelector("kbd")?.textContent).toBe("Q");
+  expect(bottomLeft.querySelector("kbd")?.textContent).toBe("Z");
 });

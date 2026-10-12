@@ -945,7 +945,7 @@ async function replacePadSample(page) {
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
-  const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/});
+  const pad = page.getByRole("button", {name: /^Pad A01 — assigned — Key Z$/});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
   await showSamplePage(page, "Pad");
@@ -1615,7 +1615,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await empty.focus();
   const beforeCaptureBatches = await page.evaluate(() =>
     window.__performMasterBatchProof.length);
-  await page.keyboard.down("KeyQ");
+  await page.keyboard.down("KeyZ");
   await expect(page.getByRole("region", {name: "Pad recording"})).toContainText("recording");
   await page.getByRole("button", {name: "Replay Night Set"}).click();
   await expect(replayStatus).toContainText("playing", {
@@ -1629,7 +1629,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
     timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
     message: "Replay must deliver non-silent PCM to the active Master capture",
   }).toBe(true);
-  await page.keyboard.up("KeyQ");
+  await page.keyboard.up("KeyZ");
   await expectRevisionAfter(page, revision);
   await expect(page.getByRole("button", {name: /^Pad B01 — assigned/})).toBeVisible();
   const captured = await inspectProjectTruth(page);
@@ -2029,7 +2029,7 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
   await installPerformWitnessSample(page);
   await page.getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
-  await page.getByRole("button", {name: /^Pad A01 — assigned — Key Q$/})
+  await page.getByRole("button", {name: /^Pad A01 — assigned — Key Z$/})
     .evaluate((element) => element.click());
   expect(await inspectedPadA1Pan(page)).toBe(0);
   await showSamplePage(page, "Playback");
@@ -2098,8 +2098,8 @@ test("a tone -100 Pad attenuates a bright source in the recorded master output",
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
   // The same witness on two Pads: A1 untouched, A2 low-passed at 100 Hz.
-  await installWitnessOn(page, "Pad A01", "Q");
-  await installWitnessOn(page, "Pad A02", "W");
+  await installWitnessOn(page, "Pad A01", "Z");
+  await installWitnessOn(page, "Pad A02", "X");
   await showSamplePage(page, "Tone / EQ");
   const tone = page.getByRole("slider", {name: "Pad A02 Tone"});
   await tone.dispatchEvent("pointerdown", {pointerId: 91, isPrimary: true, button: 0});

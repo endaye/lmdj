@@ -211,7 +211,7 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A01 Pad Capture"});
@@ -243,7 +243,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   const panel = await recordAtLeast(page, "Pad A01", 1);
   await panel.getByRole("button", {name: "Stop"}).click();
 
@@ -320,7 +320,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true}))
     .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
   // the Pad reads assigned; Trim exposes the saved waveform after returning
@@ -357,7 +357,7 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
   await page.goto("/index.html");
   await importV1SampleProject(page);
   await enterSampleEditor(page);
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   const panel = await recordAtLeast(page, "Pad A01", 1);
 
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
@@ -394,7 +394,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
     timeout: 30_000,
   });
   await enterSampleEditor(page);
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   const panel = await recordAtLeast(page, "Pad A01", 1);
 
   await panel.getByRole("button", {name: "Continue in Sequence"}).click();
@@ -409,7 +409,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
   await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
   const patternId = await selectedSequencePatternId(page);
   const initialEvents = structuredClone(initialTruth.project.patterns[patternId].events);
-  await page.keyboard.press("KeyQ");
+  await page.keyboard.press("KeyZ");
   await expect(panel.getByRole("slider", {name: /^Pad A01 End —/})).toBeVisible({timeout: 30_000});
   // Trimming returns the retained take to a native modal. Its background
   // controls are hidden from the accessibility tree; the actual Record
@@ -424,7 +424,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
   await expect(recordKey(page)).toBeEnabled();
   await recordKey(page).click();
   await expect(page.getByRole("status").filter({has: page.getByTestId("creator-phase"), hasText: "recording"})).toBeVisible();
-  await pressRecordedPad(page, "Pad A02 — assigned — Key W", "KeyW");
+  await pressRecordedPad(page, "Pad A02 — assigned — Key X", "KeyX");
   await recordKey(page).click();
   await expect.poll(async () => (await inspectTransportProjection(page)).playing).toBe(true);
 
@@ -435,7 +435,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   const whileSampling = await inspectTransportProjection(page);
   expect(whileSampling).toMatchObject({engaged: true, playing: true});
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   const replacement = await recordAtLeast(page, "Pad A01", 1);
   await replacement.getByRole("button", {name: "Stop"}).click();
   await expect(replacement.getByRole("slider", {name: /^Pad A01 End —/}))
@@ -449,7 +449,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
     .toContainText("Ready to record into Pad A01", {timeout: 180_000});
   await replacement.getByRole("button", {name: "Close"}).click();
   await expect(replacement).toBeHidden({timeout: 30_000});
-  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true}))
     .toBeVisible({timeout: 30_000});
   const committedTruth = await inspectProjectTruth(page);
   const committedAsset = committedTruth.project.banks[0].pads[0].asset_id;
@@ -475,7 +475,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
     has: page.getByTestId("creator-phase"), hasText: "recording",
   }))
     .toBeVisible({timeout: 30_000});
-  await pressRecordedPad(page, "Pad A01 — assigned — Key Q", "KeyQ");
+  await pressRecordedPad(page, "Pad A01 — assigned — Key Z", "KeyZ");
   await recordKey(page).click();
   await expect(page.getByRole("status").filter({
     has: page.getByTestId("creator-phase"), hasText: "playing",
@@ -552,7 +552,7 @@ test("armed Pad capture excludes the transport journal and never stops playback"
     event.duration_tick > 0 && event.velocity > 0)).toBe(true);
 
   await page.getByRole("button", {name: "Sample"}).click();
-  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true}))
     .toBeVisible({timeout: 30_000});
 });
 
@@ -563,7 +563,7 @@ test("uses queried Bank quota instead of the retired per-Pad capture cap", async
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   // Task #346 removes the old five-second per-Pad commit cap. Record past that
   // boundary and prove the entire buffered take remains selectable while the
   // queried Bank/Project quota is the only commit ceiling.
@@ -583,7 +583,7 @@ test("blur during recording stops capture and keeps the buffer", async ({page}, 
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   const panel = await recordAtLeast(page, "Pad A01", 1);
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
 
@@ -602,7 +602,7 @@ test("a denied microphone permission is explicit and retryable", async ({page}, 
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
   const panel = page.getByRole("dialog", {name: "Pad A01 Pad Capture"});
@@ -626,7 +626,7 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
   await importV1SampleProject(page);
   await enterSampleEditor(page);
 
-  await selectPadWithoutPress(page, "Pad A01 — empty — Key Q");
+  await selectPadWithoutPress(page, "Pad A01 — empty — Key Z");
   const panel = await recordAtLeast(page, "Pad A01", 1);
   await panel.getByRole("button", {name: "Stop"}).click();
   await panel.getByRole("button", {name: "Commit"}).click();
@@ -634,7 +634,7 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true}))
+  await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true}))
     .toBeVisible();
 
   // Only the Artifact bytes and their SHA-256 identity persist: no device
@@ -658,18 +658,18 @@ test("empty Pad microphone press commits one Artifact on release and reopens exa
   await page.getByRole("button", {name: "Back to music", exact: true}).click();
   const pad = page.getByRole("button", {name: /^Pad A01 — empty/});
   const status = page.getByRole("region", {name: "Pad recording"});
-  await pad.focus();await page.keyboard.down("KeyQ");
+  await pad.focus();await page.keyboard.down("KeyZ");
   // Safari permission-query support varies. A preparation press has no take;
   // the next native press is the sole recording owner.
   if ((await status.textContent()).includes("permission")) {
-    await page.keyboard.up("KeyQ");
+    await page.keyboard.up("KeyZ");
     await expect(status).toContainText("Microphone ready");
-    await pad.focus();await page.keyboard.down("KeyQ");
+    await pad.focus();await page.keyboard.down("KeyZ");
   }
   await expect(status).toContainText("recording");
   await expect.poll(async () => Number(/· ([\d.]+) s/.exec(await status.textContent())?.[1] ?? 0)).toBeGreaterThan(.2);
   await expect(recordKey(page)).toBeDisabled();
-  await page.keyboard.up("KeyQ");
+  await page.keyboard.up("KeyZ");
   await expect(page.getByRole("button", {name: /^Pad A01 — assigned/})).toBeVisible({timeout:120_000});
   const after = await inspectProjectTruth(page);
   expect(after.project.revision).toBe(before.project.revision + 1);

@@ -336,7 +336,7 @@ async function expectNativeLoopClear(page, afterSuspend) {
       response.result.state === "audio-suspended" && response.result.changed === true),
   afterSuspend), {timeout: 30_000}).toBe(true);
   await expect(page.getByRole("button", {
-    name: "Pad A01 — assigned — Key Q", exact: true,
+    name: "Pad A01 — assigned — Key Z", exact: true,
   })).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
 }
 
@@ -407,7 +407,7 @@ async function armPadOutcomeObservation(pad) {
 async function latchLoopToggle(page) {
   await expect(page.getByRole("button", {name: "Loop"}))
     .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
-  const pad = page.getByRole("button", {name: "Pad A01 — assigned — Key Q", exact: true});
+  const pad = page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true});
   await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.focus();
   await page.keyboard.down("Enter");
@@ -534,7 +534,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   });
   const pad = page.getByTestId("pad-matrix").getByRole("button", {name: /^Pad A01 — assigned/});
   await armPadOutcomeObservation(pad);
-  await page.keyboard.down("KeyQ");
+  await page.keyboard.down("KeyZ");
   await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
     timeout: 30_000,
   });
@@ -547,7 +547,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
     value.trigger_admitted_count,
     value.trigger_outcome_count,
   ]).toEqual(["running", 2, 2]);
-  await page.keyboard.up("KeyQ");
+  await page.keyboard.up("KeyZ");
 });
 
 test("packaged recovery timeout cleans one generation before automatic replacement", async ({page, browserName}) => {
@@ -574,7 +574,7 @@ test("packaged recovery timeout cleans one generation before automatic replaceme
     timeout: 30_000,
   });
   await page.evaluate(() => window.__creatorRuntimeProbe.armOutcomeSuppression());
-  await page.keyboard.press("KeyA");
+  await page.keyboard.press("KeyZ");
   await expect.poll(() => page.evaluate(() =>
     window.__creatorRuntimeProbe.snapshot().runtime_history.some((value) =>
       value.generation === 1 && value.state === "restart-required" &&

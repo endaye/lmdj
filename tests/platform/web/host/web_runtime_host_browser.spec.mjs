@@ -1228,13 +1228,15 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     keyboardMarker.responses,
     2,
   )).toEqual([
-    { slot: 9, velocity: 100 },
-    { slot: 9, kind: "release" },
+    { slot: 5, velocity: 100 },
+    { slot: 5, kind: "release" },
   ]);
 
   const burstCodes = [
-    "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
-    "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
+    "KeyZ", "KeyX", "KeyC", "KeyV",
+    "KeyA", "KeyS", "KeyD", "KeyF",
+    "KeyQ", "KeyW", "KeyE", "KeyR",
+    "Digit1", "Digit2", "Digit3", "Digit4",
   ];
   const burstMarker = await observationMarker(page);
   await page.evaluate((codes) => {

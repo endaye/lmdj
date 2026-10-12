@@ -32,7 +32,7 @@ const KEYBOARD_CODE_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
   Object.entries(DEFAULT_KEYBOARD_MAPPING).map(([code, localPad]) => [
     localPad,
-    code.replace(/^Key/, ""),
+    code.replace(/^Key|^Digit/, ""),
   ] as const),
 );
 
