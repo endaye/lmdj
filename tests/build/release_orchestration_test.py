@@ -175,7 +175,7 @@ class RequestJournalTest(unittest.TestCase):
     def test_an_outstanding_intent_needs_reconciliation_unless_the_build_is_published(self):
         with RequestJournal(self.root) as journal:
             journal.create(request())
-            journal.begin("release-1", STEPS[0])
+            record = journal.begin("release-1", STEPS[0])
             with self.assertRaisesRegex(JournalError, "outstanding intent"):
                 journal.retire("release-1", self.UNRELEASED)
             # The published, audited Build settles what the intent worked toward;
@@ -183,6 +183,37 @@ class RequestJournalTest(unittest.TestCase):
             record = journal.retire("release-1", self.RETIREMENT)
             self.assertIsNone(journal.read("release-1"))
             self.assertEqual(record["original"]["transitions"][-1]["status"], "intent")
+
+    def settled_intent(self, **overrides):
+        settled = {"step": "candidate", "operation_id": "f" * 64, "pull_request": 2073,
+                   "head_sha": "a" * 40, "state": "closed", "merge_commit_sha": None}
+        settled.update(overrides)
+        return settled
+
+    def test_a_closed_unmerged_cut_pull_request_settles_an_outstanding_candidate_intent(self):
+        with RequestJournal(self.root) as journal:
+            journal.create(request())
+            begun = journal.begin("release-1", STEPS[0])
+            assert begun["step"] == "candidate"
+            retirement = dict(self.UNRELEASED,
+                              settled_intent=self.settled_intent(operation_id=begun["operation_id"]))
+            with self.assertRaisesRegex(JournalError, "outstanding intent"):
+                # A settled proof bound to another operation settles nothing.
+                journal.retire("release-1", dict(retirement,
+                                                 settled_intent=self.settled_intent()))
+            for bad in (self.settled_intent(state="open", operation_id=begun["operation_id"]),
+                        self.settled_intent(merge_commit_sha="b" * 40, operation_id=begun["operation_id"]),
+                        self.settled_intent(step="verification", operation_id=begun["operation_id"]),
+                        self.settled_intent(head_sha="not-a-sha", operation_id=begun["operation_id"]),
+                        self.settled_intent(pull_request=0, operation_id=begun["operation_id"])):
+                with self.assertRaisesRegex(JournalError, "settled intent|outstanding intent"):
+                    journal.retire("release-1", dict(self.UNRELEASED, settled_intent=bad))
+            record = journal.retire("release-1", retirement)
+            self.assertIsNone(journal.read("release-1"))
+            self.assertEqual(record["original"]["transitions"][-1]["status"], "intent")
+            self.assertEqual(record["retirement"]["settled_intent"]["pull_request"], 2073)
+            # The settled retirement frees admission for a new request.
+            self.assertIsNotNone(journal.create(dict(request(), id="release-2")))
 
     def test_completed_requests_are_not_retired(self):
         with RequestJournal(self.root) as journal:

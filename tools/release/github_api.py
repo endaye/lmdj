@@ -252,6 +252,31 @@ class GitHubClient:
             raise GitHubApiError("GitHub branch projection is invalid")
         return BranchProjection(name, protected, sha)
 
+    def get_pull_request(self, repository: str, number: int) -> dict | None:
+        """Read one Pull Request's settle-relevant facts; 404 is None."""
+        _require_repository(repository)
+        if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+            raise GitHubApiError("GitHub pull request identity is invalid")
+        response = self._request("GET", f"/repos/{repository}/pulls/{number}")
+        if response.status == 404:
+            return None
+        document = _json_response(response, {200})
+        if not isinstance(document, dict):
+            raise GitHubApiError("GitHub pull request projection is invalid")
+        head = document.get("head")
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        number_out, state = document.get("number"), document.get("state")
+        merged = document.get("merged")
+        merge_sha = document.get("merge_commit_sha")
+        title = document.get("title")
+        if (not isinstance(number_out, int) or number_out != number
+                or not isinstance(state, str) or not isinstance(merged, bool)
+                or (merge_sha is not None and not _sha(merge_sha))
+                or not _sha(head_sha) or not isinstance(title, str)):
+            raise GitHubApiError("GitHub pull request projection is invalid")
+        return {"number": number_out, "state": state, "merged": merged,
+                "merge_commit_sha": merge_sha, "head_sha": head_sha, "title": title}
+
     def list_runs_for_sha(self, repository: str, sha: str) -> list[RunProjection]:
         _require_repository(repository)
         if not _sha(sha):
