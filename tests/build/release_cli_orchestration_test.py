@@ -293,6 +293,23 @@ class ReleaseEntryPointTest(unittest.TestCase):
             journal.create(request)
         return request["id"]
 
+    def candidate_intent_request(self, *, head_sha=None):
+        # Like a request whose candidate cut began and was left outstanding,
+        # with its managed cut Pull Request record in the operations journal.
+        from tools.release.orchestration import STEPS
+        request_id = self.unfinished_request()
+        head = head_sha or "a" * 40
+        with RequestJournal(self.journal()) as journal:
+            state = journal.read(request_id)
+            begun = journal.begin(request_id, STEPS[0])
+        pr_state = {"number": 2073, "spec": {"operation_id": begun["operation_id"],
+                                             "head_sha": head}}
+        pr_path = (self.journal() / "operations" / request_id / "candidate-transition"
+                   / "cut-pr" / "pr" / "pr-state.json")
+        pr_path.parent.mkdir(parents=True, exist_ok=True)
+        pr_path.write_text(json.dumps(pr_state))
+        return request_id
+
     def retire(self, request_id, tag, *, reserved="1.0.61.0", audit_code="ok",
                disposition="published"):
         from tools.release.audit import AuditFinding, AuditReport
@@ -319,7 +336,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
         return code, output.getvalue(), calls
 
     def retire_unreleased(self, request_id, build, *, reserved="1.0.64.0", on_main="1.0.65.0",
-                          remote_tag=None, disposition=None):
+                          remote_tag=None, disposition=None, pull_request=None):
         from tools.release.candidate import CandidateReservations
         from tools.release.model import Disposition
         from scripts.version import ProductVersion
@@ -329,7 +346,17 @@ class ReleaseEntryPointTest(unittest.TestCase):
             type("Entry", (), {"tag": f"lmdj-v{reserved}", "disposition": Disposition(disposition)})(),)
         git = type("Git", (), {"main_revision": lambda self: "f" * 40,
                                 "remote_tag_object": lambda self, tag: calls.append(tag) or remote_tag})()
-        context = type("Context", (), {"git": git, "ledger": type("Ledger", (), {"entries": entries})()})()
+
+        class GitHub:
+            def get_pull_request(self, repository, number):
+                calls.append(("pulls", number))
+                return pull_request(number) if pull_request is not None else None
+
+        context = type("Context", (), {
+            "git": git, "ledger": type("Ledger", (), {"entries": entries})(),
+            "github": GitHub(),
+            "policy": type("Policy", (), {"repository": "endaye/lmdj"}),
+        })()
         output = io.StringIO()
         with patch.object(CandidateReservations, "recorded", return_value=version(reserved)), \
                 patch.object(CandidateReservations, "version_at", return_value=version(on_main)), \
@@ -438,6 +465,48 @@ class ReleaseEntryPointTest(unittest.TestCase):
             code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", disposition=disposition)
             self.assertEqual(code, 2)
             self.assertIn("releasable or published intent", report)
+        self.assertEqual(self.request_ids(), [request_id])
+
+    def test_retire_unreleased_settles_an_outstanding_candidate_intent_by_a_closed_cut(self):
+        request_id = self.candidate_intent_request()
+        head = "a" * 40
+        closed = lambda number: {"number": number, "state": "closed", "merged": False,
+                                 "merge_commit_sha": None, "head_sha": head,
+                                 "title": "chore(release): allocate 1.0.64.0 candidate"}
+        code, report, calls = self.retire_unreleased(request_id, "1.0.65.0", pull_request=closed)
+        self.assertEqual(code, 0, report)
+        self.assertIn("pull request #2073: closed unmerged", report)
+        self.assertIn(("pulls", 2073), calls)
+        with RequestJournal(self.journal()) as journal:
+            retirement = journal.read_retirement(request_id)["retirement"]
+        self.assertEqual(retirement["settled_intent"]["pull_request"], 2073)
+        self.assertEqual(retirement["settled_intent"]["head_sha"], head)
+        self.assertEqual(self.request_ids(), [])
+
+    def test_retire_unreleased_refuses_an_unsettleable_candidate_intent(self):
+        request_id = self.candidate_intent_request()
+        head = "a" * 40
+        for row in ({"number": 2073, "state": "open", "merged": False,
+                     "merge_commit_sha": None, "head_sha": head,
+                     "title": "chore(release): allocate 1.0.64.0 candidate"},
+                    {"number": 2073, "state": "closed", "merged": True,
+                     "merge_commit_sha": "b" * 40, "head_sha": head,
+                     "title": "chore(release): allocate 1.0.64.0 candidate"},
+                    {"number": 2073, "state": "closed", "merged": False,
+                     "merge_commit_sha": None, "head_sha": "c" * 40,
+                     "title": "chore(release): allocate 1.0.64.0 candidate"},
+                    {"number": 2073, "state": "closed", "merged": False,
+                     "merge_commit_sha": None, "head_sha": head,
+                     "title": "chore(release): allocate 9.9.99.0 candidate"}):
+            code, report, _ = self.retire_unreleased(request_id, "1.0.65.0",
+                                                     pull_request=lambda number: row)
+            self.assertEqual(code, 2)
+            self.assertIn("not closed unmerged", report)
+            self.assertEqual(self.request_ids(), [request_id])
+        # A missing Pull Request far side settles nothing either.
+        code, report, _ = self.retire_unreleased(request_id, "1.0.65.0", pull_request=None)
+        self.assertEqual(code, 2)
+        self.assertIn("cut Pull Request is missing", report)
         self.assertEqual(self.request_ids(), [request_id])
 
     def test_retire_refuses_a_tag_that_is_not_the_reserved_build_before_auditing(self):

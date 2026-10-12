@@ -104,9 +104,29 @@ def _build_triple(value, reason):
     return tuple(int(part) for part in value.split("."))
 
 
+def _validate_settled_intent(settled):
+    """The closed-unmerged cut Pull Request that settles an outstanding intent.
+
+    Only the candidate step's managed cut owns a Pull Request far side, and a
+    Pull Request observed closed and unmerged at its exact recorded head can
+    never merge or review again without a new deliberate action by an actor,
+    which is not an unknown outstanding write of this request.
+    """
+    _keys(settled, ("step", "operation_id", "pull_request", "head_sha", "state", "merge_commit_sha"))
+    if (settled["step"] != "candidate" or not _match(_DIGEST, settled["operation_id"])
+            or type(settled["pull_request"]) is not int or settled["pull_request"] <= 0
+            or not _match(_SHA, settled["head_sha"]) or settled["state"] != "closed"
+            or settled["merge_commit_sha"] is not None):
+        _fail("settled intent is not a closed-unmerged candidate cut Pull Request")
+
+
 def _validate_unreleased_retirement(retirement):
     """A never-published candidate superseded by a newer Build allocated on main."""
-    _keys(retirement, ("superseded_by_build", "identity", "main_revision", "observed_utc", "evidence"))
+    optional = ("settled_intent",) if "settled_intent" in retirement else ()
+    _keys(retirement, ("superseded_by_build", "identity", "main_revision", "observed_utc",
+                       "evidence", *optional))
+    if "settled_intent" in retirement:
+        _validate_settled_intent(retirement["settled_intent"])
     reserved = _build_triple(retirement["identity"], "retirement identity is not a canonical Product Build")
     newer = _build_triple(retirement["superseded_by_build"], "superseding Build is not a canonical Product Build")
     if newer[:2] != reserved[:2] or newer[2] <= reserved[2] or newer[3] != 0 or reserved[3] != 0:
@@ -478,8 +498,16 @@ class RequestJournal(AbstractContextManager):
             _fail("a completed release is history, not a retirement candidate")
         if records and records[-1]["status"] == "intent" and "superseded_by_build" in retirement:
             # A never-published candidate has no far side that settles what an
-            # outstanding operation did; it must be reconciled first.
-            _fail("an outstanding intent needs reconciliation before retirement")
+            # outstanding operation did; it must be reconciled first. The one
+            # exception is the candidate cut intent whose Pull Request the
+            # caller observed closed and unmerged: that observation settles
+            # the only far side the intent owns, and it is retained here.
+            settled = retirement.get("settled_intent")
+            if (records[-1]["step"] != "candidate"
+                    or type(settled) is not dict
+                    or settled.get("step") != records[-1]["step"]
+                    or settled.get("operation_id") != records[-1]["operation_id"]):
+                _fail("an outstanding intent needs reconciliation before retirement")
         # A published supersession may retire over an outstanding intent: the
         # caller proved this request's own Build is published and its exact-tag
         # remote audit passes, which settles every step the intent could still

@@ -397,6 +397,7 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
     entries = [entry for entry in context.ledger.entries if entry.tag == tag]
     if any(entry.disposition in (Disposition.RELEASABLE, Disposition.PUBLISHED) for entry in entries):
         raise CommandError("the reserved Build has a releasable or published intent", detail=tag)
+    settled_intent = _settled_candidate_intent(context, directory, state, str(reserved))
     observed = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     retirement = {
         "superseded_by_build": str(newer),
@@ -409,12 +410,63 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
             f"[ok] {tag}: no releasable or published intent in the ledger",
         ],
     }
+    if settled_intent is not None:
+        retirement["settled_intent"] = settled_intent
+        retirement["evidence"].append(
+            f"[ok] pull request #{settled_intent['pull_request']}: closed unmerged at head "
+            f"{settled_intent['head_sha']} (settles the outstanding candidate intent)")
     for line in retirement["evidence"]:
         print(line)
     with RequestJournal(directory) as journal:
         journal.retire(request_id, retirement, expected_request=request)
     print(f"release request retired: {request_id} ({reserved}, never published) superseded by Build {newer}")
     return 0
+
+
+def _settled_candidate_intent(context, directory, state, reserved):
+    """Observe an outstanding candidate intent's cut Pull Request as settled.
+
+    Returns None when the request has no outstanding intent. Refuses any
+    outstanding intent outside the candidate cut, and any candidate cut whose
+    Pull Request is not verifiably closed and unmerged at its exact recorded
+    head: an open, merged or moved Pull Request leaves the intent unsettled
+    and the retirement fails closed.
+    """
+    import json as _json
+    records = state["transitions"]
+    if not records or records[-1]["status"] != "intent":
+        return None
+    if records[-1]["step"] != "candidate":
+        raise CommandError(
+            "an outstanding intent outside the candidate cut cannot be settled by a closed Pull Request",
+            detail=records[-1]["step"])
+    pr_state_path = (directory / "operations" / state["request"]["id"]
+                     / "candidate-transition" / "cut-pr" / "pr" / "pr-state.json")
+    try:
+        pr_state = _json.loads(pr_state_path.read_text())
+        spec = pr_state["spec"]
+        number = pr_state["number"]
+    except (OSError, KeyError, TypeError, ValueError):
+        raise CommandError(
+            "the outstanding candidate intent has no readable cut Pull Request record",
+            detail=str(pr_state_path)) from None
+    if (not isinstance(number, int) or isinstance(number, bool) or number <= 0
+            or spec.get("operation_id") != records[-1]["operation_id"]):
+        raise CommandError("the recorded cut Pull Request does not bind the outstanding intent")
+    row = context.github.get_pull_request(context.policy.repository, number)
+    if row is None:
+        raise CommandError("the outstanding candidate intent's cut Pull Request is missing",
+                           detail=f"#{number}")
+    expected_title = f"chore(release): allocate {reserved} candidate"
+    if (row["state"] != "closed" or row["merged"] or row["merge_commit_sha"] is not None
+            or row["head_sha"] != spec["head_sha"] or row["title"] != expected_title):
+        raise CommandError(
+            "the outstanding candidate intent's cut Pull Request is not closed unmerged",
+            detail=f"#{number}: state={row['state']} merged={row['merged']} "
+                   f"head={row['head_sha']} title={row['title']!r}")
+    return {"step": "candidate", "operation_id": records[-1]["operation_id"],
+            "pull_request": number, "head_sha": spec["head_sha"],
+            "state": "closed", "merge_commit_sha": None}
 
 
 def format_request_status(root: Path, git, request_id: str | None = None) -> str:
