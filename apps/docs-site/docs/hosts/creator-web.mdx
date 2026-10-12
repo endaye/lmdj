@@ -332,7 +332,9 @@ SHIFT key above the record/play row engages the modifier, ← / → step back an
 forward through the session, and each direction key's lamp lights while its
 direction is available instead of showing a greyed button pair. Desktop parity
 adds Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, leaving native text undo to editable
-fields. The chord explains disabled states, including unfinished recording,
+fields. Creator ignores Ctrl/Meta Pad keydowns before audio activation, selection,
+trigger, Capture or import; Alt/Shift alone retain Pad behavior, and modified
+keyups still release an earlier ordinary press. The chord explains disabled states, including unfinished recording,
 import, recovery and Pattern playback. One drag commits at its existing
 gesture boundary.
 The rail requests Facade history; it keeps no Project snapshot or audio copy.
