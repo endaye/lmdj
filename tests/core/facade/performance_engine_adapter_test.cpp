@@ -1094,6 +1094,372 @@ void test_live_gesture_sink_reaches_the_running_master_bus() {
              std::string::npos);
 }
 
+// D0/P1 typed live-control port against the real engine.
+// ---------------------------------------------------------------------------
+
+lmdj::facade::PerformanceLiveControlIntent mute_slot(std::uint8_t slot,
+                                                     bool enabled) {
+  lmdj::facade::PerformanceLiveControlIntent intent;
+  intent.kind =
+      lmdj::facade::PerformanceLiveControlIntent::Kind::pad_mute;
+  intent.slot = slot;
+  intent.enabled = enabled;
+  return intent;
+}
+
+void test_live_control_epoch_shadow_and_fence_against_real_engine() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto &live = *adapter.live_control;
+
+  // Unbound until a verified Project target binds; binding is idempotent for
+  // the same UUID at the same engine epoch.
+  LMDJ_CHECK(!live.current_control_epoch().has_value());
+  const auto epoch = live.bind_control_target(kProject).value();
+  LMDJ_CHECK(!epoch.empty());
+  LMDJ_CHECK(live.bind_control_target(kProject).value() == epoch);
+  LMDJ_CHECK(live.bound_control_project().value() == kProject);
+
+  // A stale epoch refuses before any reservation.
+  auto stale = live.reserve_live_control(
+      "00000000-0000-4000-8000-000000000000", mute_slot(0, true));
+  LMDJ_CHECK(!stale.has_value());
+
+  // A pad gate admission reaches the engine's accepted and applied masks.
+  auto reservation = live.reserve_live_control(epoch, mute_slot(0, true));
+  LMDJ_CHECK(reservation.has_value());
+  LMDJ_CHECK(reservation.value().resulting_state.state.muted_mask == 0x1);
+  LMDJ_CHECK(live.publish_live_control(std::move(reservation.value()))
+                 .has_value());
+  LMDJ_CHECK(engine.pad_gates_status().accepted.muted_mask == 0x1);
+  auto snapshot = live.live_control_snapshot();
+  LMDJ_CHECK(snapshot.accepted.state.muted_mask == 0x1);
+  LMDJ_CHECK(snapshot.applied.state.muted_mask == 0x0);
+  render(engine, 128);
+  snapshot = live.live_control_snapshot();
+  LMDJ_CHECK(snapshot.applied.state.muted_mask == 0x1);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x1);
+
+  // The fence proves the applied position, not a counter guess: pending until
+  // the drain passes, then ready; a later control does not disturb the proof.
+  auto fence = live.begin_fence(epoch);
+  LMDJ_CHECK(fence.has_value());
+  LMDJ_CHECK(fence.value().header.state.muted_mask == 0x1);
+  LMDJ_CHECK(live.fence_readiness(fence.value()) ==
+             lmdj::facade::PerformanceFenceReadiness::ready);
+
+  auto move = live.reserve_live_control(epoch, mute_slot(1, true));
+  LMDJ_CHECK(move.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(move.value())).has_value());
+  auto second_fence = live.begin_fence(epoch);
+  LMDJ_CHECK(second_fence.has_value());
+  LMDJ_CHECK(second_fence.value().header.state.muted_mask == 0x3);
+  // The fence sits on the unpublished queue position: pending until the
+  // audio thread drains it.
+  LMDJ_CHECK(live.fence_readiness(second_fence.value()) ==
+             lmdj::facade::PerformanceFenceReadiness::pending);
+  // A later control moves the accepted state before the drain.
+  auto third = live.reserve_live_control(epoch, mute_slot(2, true));
+  LMDJ_CHECK(third.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(third.value())).has_value());
+  render(engine, 128);
+  // The state at the fence position (mask 0x3) still matches its header even
+  // though the accepted and applied states have since moved to 0x7.
+  LMDJ_CHECK(live.fence_readiness(second_fence.value()) ==
+             lmdj::facade::PerformanceFenceReadiness::ready);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x7);
+
+  // An engine restart invalidates the epoch and resets the shadow to the
+  // engine's neutral ground truth; the old fence diverges.
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(live.fence_readiness(fence.value()) ==
+             lmdj::facade::PerformanceFenceReadiness::diverged);
+  LMDJ_CHECK(!live.current_control_epoch().has_value());
+  const auto rebound = live.bind_control_target(kProject);
+  LMDJ_CHECK(rebound.has_value() && rebound.value() != epoch);
+  LMDJ_CHECK(live.live_control_snapshot().accepted.state.muted_mask == 0x0);
+  engine.stop();
+}
+
+void test_typed_filter_and_fx_generations_bind_against_real_engine() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto &live = *adapter.live_control;
+  const auto epoch = live.bind_control_target(kProject).value();
+
+  const auto typed_engage = [&]() {
+    lmdj::facade::PerformanceLiveControlIntent intent;
+    intent.kind =
+        lmdj::facade::PerformanceLiveControlIntent::Kind::filter_parameter;
+    intent.phase = lmdj::domain::PerformanceFilterPhase::engage;
+    intent.parameter =
+        lmdj::facade::PerformanceLiveControlIntent::FilterParameter::
+            cutoff_hz;
+    intent.value = 800;
+    return intent;
+  };
+  auto reservation = live.reserve_live_control(epoch, typed_engage());
+  LMDJ_CHECK(reservation.has_value());
+  LMDJ_CHECK(reservation.value().assigned_generation.has_value());
+  const auto generation = *reservation.value().assigned_generation;
+  // The resulting state is the full derived tuple: cutoff patched, the rest
+  // from the approved default tuple.
+  const auto &independent =
+      std::get<lmdj::domain::IndependentFilterLiveState>(
+          reservation.value().resulting_state.state.filter);
+  LMDJ_CHECK(independent.engaged);
+  LMDJ_CHECK(independent.cutoff_hz == 800);
+  LMDJ_CHECK(independent.resonance_milli == 0);
+  LMDJ_CHECK(live.publish_live_control(std::move(reservation.value()))
+                 .has_value());
+  LMDJ_CHECK(engine.filter_control_status().accepted.engaged);
+  LMDJ_CHECK(engine.filter_control_status().accepted.parameters.cutoff_hz ==
+             800);
+
+  // move/release verify the runtime generation; a foreign one is refused.
+  auto bad_move = [&]() {
+    lmdj::facade::PerformanceLiveControlIntent intent;
+    intent.kind =
+        lmdj::facade::PerformanceLiveControlIntent::Kind::filter_parameter;
+    intent.phase = lmdj::domain::PerformanceFilterPhase::move;
+    intent.parameter =
+        lmdj::facade::PerformanceLiveControlIntent::FilterParameter::
+            resonance_milli;
+    intent.value = 250;
+    intent.gesture_generation =
+        "00000000-0000-4000-8000-000000000000";
+    return intent;
+  };
+  LMDJ_CHECK(!live.reserve_live_control(epoch, bad_move()).has_value());
+  auto good_move = bad_move();
+  good_move.gesture_generation = generation;
+  auto moved = live.reserve_live_control(epoch, good_move);
+  LMDJ_CHECK(moved.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(moved.value())).has_value());
+  render(engine, 128);
+  LMDJ_CHECK(
+      engine.filter_control_status().applied.state.parameters.resonance_milli ==
+      250);
+
+  lmdj::facade::PerformanceLiveControlIntent release;
+  release.kind =
+      lmdj::facade::PerformanceLiveControlIntent::Kind::filter_release;
+  release.gesture_generation = generation;
+  auto released = live.reserve_live_control(epoch, release);
+  LMDJ_CHECK(released.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(released.value()))
+                 .has_value());
+  LMDJ_CHECK(!engine.filter_control_status().accepted.engaged);
+  // The binding closed: a further move with the same generation is refused.
+  LMDJ_CHECK(!live.reserve_live_control(epoch, good_move).has_value());
+  engine.stop();
+}
+
+// D0 R3 oracle with the real DSP: pre-begin engaged Delay 500 + HOLD frozen
+// Reverb 700; the fence mapping covers only the engaged Delay, and the fence
+// itself enqueues nothing (no fake engage, no DSP reset).
+void test_begin_fence_adopts_engaged_bindings_without_touching_dsp() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto &live = *adapter.live_control;
+  const auto epoch = live.bind_control_target(kProject).value();
+
+  LMDJ_CHECK(adapter.gesture_sink
+                 ->apply_gesture(lmdj::audio::FxGesture{
+                     lmdj::audio::FxGestureKind::engage,
+                     lmdj::domain::PerformanceFx::delay, 500})
+                 .has_value());
+  LMDJ_CHECK(adapter.gesture_sink
+                 ->apply_gesture(lmdj::audio::FxGesture{
+                     lmdj::audio::FxGestureKind::hold_on,
+                     lmdj::domain::PerformanceFx::filter, 0})
+                 .has_value());
+  LMDJ_CHECK(adapter.gesture_sink
+                 ->apply_gesture(lmdj::audio::FxGesture{
+                     lmdj::audio::FxGestureKind::engage,
+                     lmdj::domain::PerformanceFx::reverb, 700})
+                 .has_value());
+  LMDJ_CHECK(adapter.gesture_sink
+                 ->apply_gesture(lmdj::audio::FxGesture{
+                     lmdj::audio::FxGestureKind::release,
+                     lmdj::domain::PerformanceFx::reverb, 0})
+                 .has_value());
+  const auto enqueued_before = engine.master_fx_telemetry().enqueued_gestures;
+
+  const auto snapshot = live.live_control_snapshot();
+  LMDJ_CHECK(snapshot.accepted.state.hold);
+  LMDJ_CHECK(snapshot.accepted.state.other_fx.at(0).engaged);
+  LMDJ_CHECK(snapshot.accepted.state.other_fx.at(0).value == 500);
+  LMDJ_CHECK(snapshot.accepted.state.other_fx.at(1).frozen);
+  LMDJ_CHECK(!snapshot.accepted.state.other_fx.at(1).engaged);
+  // Only the engaged Delay holds a runtime generation; frozen-only Reverb
+  // has no open binding.
+  LMDJ_CHECK(snapshot.accepted.runtime_generations.at(1).has_value());
+  LMDJ_CHECK(!snapshot.accepted.runtime_generations.at(2).has_value());
+
+  const auto fence = live.begin_fence(epoch);
+  LMDJ_CHECK(fence.has_value());
+  // The fence publishes nothing: no fake engage, no DSP reset.
+  LMDJ_CHECK(engine.master_fx_telemetry().enqueued_gestures ==
+             enqueued_before);
+  LMDJ_CHECK(fence.value().header.state.other_fx.at(0).value == 500);
+  LMDJ_CHECK(fence.value().header.state.other_fx.at(1).frozen);
+  render(engine, 128);
+  LMDJ_CHECK(live.fence_readiness(fence.value()) ==
+             lmdj::facade::PerformanceFenceReadiness::ready);
+  engine.stop();
+}
+
+// D0 neutral terminal oracle: replay stop clears the masks and the typed
+// Filter through real queue drains, and queue pressure keeps the reset
+// pending instead of claiming completion.
+void test_reset_neutral_clears_masks_and_filter_through_real_drains() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto &live = *adapter.live_control;
+  const auto epoch = live.bind_control_target(kProject).value();
+
+  auto gates = live.reserve_live_control(epoch, mute_slot(0, true));
+  LMDJ_CHECK(gates.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(gates.value())).has_value());
+  auto solo = live.reserve_live_control(epoch, [&] {
+    lmdj::facade::PerformanceLiveControlIntent intent;
+    intent.kind =
+        lmdj::facade::PerformanceLiveControlIntent::Kind::pad_solo;
+    intent.slot = 3;
+    intent.enabled = true;
+    return intent;
+  }());
+  LMDJ_CHECK(solo.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(solo.value())).has_value());
+  lmdj::facade::PerformanceLiveControlIntent engage;
+  engage.kind =
+      lmdj::facade::PerformanceLiveControlIntent::Kind::filter_parameter;
+  engage.phase = lmdj::domain::PerformanceFilterPhase::engage;
+  engage.parameter =
+      lmdj::facade::PerformanceLiveControlIntent::FilterParameter::cutoff_hz;
+  engage.value = 800;
+  auto filter = live.reserve_live_control(epoch, engage);
+  LMDJ_CHECK(filter.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(filter.value())).has_value());
+  render(engine, 256);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x1);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.solo_mask ==
+             std::uint64_t{1} << 3);
+  LMDJ_CHECK(engine.filter_control_status().applied.state.engaged);
+
+  // A replay stop drives the extended neutral reset: hold_off + the seven FX
+  // + legacy Filter releases, the typed Filter release and the mask clear,
+  // each confirmed by its own channel's drain counters.
+  const lmdj::facade::ReplayId replay_id{"72000000-0000-4000-8000-000000000020"};
+  LMDJ_CHECK(adapter.replay_controller
+                 ->begin(replay_id,
+                         std::make_shared<const PerformanceReplayProjection>(
+                             PerformanceReplayProjection{
+                                 PerformanceId{kPerformance}, 1, 120, true, 50,
+                                 {}, {}, {}, 0}))
+                 .has_value());
+  // The reset is pending until every channel's drain confirms; polling stop
+  // with real renders drives it to a terminal state without duplication.
+  // (A zero-event replay terminates as complete, an explicit one as stopped;
+  // both pass through the same neutral reset.)
+  bool reached_terminal = false;
+  for (std::size_t attempt = 0; attempt < 64 && !reached_terminal; ++attempt) {
+    const auto polled = adapter.replay_controller->stop(replay_id);
+    LMDJ_CHECK(polled.has_value());
+    reached_terminal = polled.value().state != ReplayState::playing;
+    render(engine, 128);
+  }
+  LMDJ_CHECK(reached_terminal);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x0);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.solo_mask == 0x0);
+  const auto filter_status = engine.filter_control_status();
+  LMDJ_CHECK(!filter_status.applied.state.engaged);
+  LMDJ_CHECK(!filter_status.applied.state.hold);
+  engine.stop();
+}
+
+// D04/D0 lifecycle oracle on the real DSP: HOLD retains a frozen Filter but
+// never the Pad gates — clearing the masks under HOLD leaves the frozen
+// Filter untouched, and the engine lifecycle clears both.
+void test_mask_clear_under_hold_keeps_frozen_filter() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto &live = *adapter.live_control;
+  const auto epoch = live.bind_control_target(kProject).value();
+
+  // HOLD on, typed Filter engaged then released (frozen under HOLD), and a
+  // muted Pad.
+  auto hold = live.reserve_live_control(epoch, [] {
+    lmdj::facade::PerformanceLiveControlIntent intent;
+    intent.kind = lmdj::facade::PerformanceLiveControlIntent::Kind::hold_on;
+    return intent;
+  }());
+  LMDJ_CHECK(hold.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(hold.value())).has_value());
+  lmdj::facade::PerformanceLiveControlIntent engage;
+  engage.kind =
+      lmdj::facade::PerformanceLiveControlIntent::Kind::filter_parameter;
+  engage.phase = lmdj::domain::PerformanceFilterPhase::engage;
+  engage.parameter =
+      lmdj::facade::PerformanceLiveControlIntent::FilterParameter::cutoff_hz;
+  engage.value = 800;
+  auto filter = live.reserve_live_control(epoch, engage);
+  LMDJ_CHECK(filter.has_value());
+  const auto generation = filter.value().assigned_generation;
+  LMDJ_CHECK(live.publish_live_control(std::move(filter.value())).has_value());
+  lmdj::facade::PerformanceLiveControlIntent release;
+  release.kind =
+      lmdj::facade::PerformanceLiveControlIntent::Kind::filter_release;
+  release.gesture_generation = generation;
+  auto released = live.reserve_live_control(epoch, release);
+  LMDJ_CHECK(released.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(released.value()))
+                 .has_value());
+  auto mute = live.reserve_live_control(epoch, mute_slot(2, true));
+  LMDJ_CHECK(mute.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(mute.value())).has_value());
+  render(engine, 256);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x4);
+  LMDJ_CHECK(engine.filter_control_status().applied.state.frozen);
+  LMDJ_CHECK(engine.filter_control_status().applied.state.hold);
+
+  // Leaving Perform clears the masks even under HOLD; the frozen Filter
+  // follows HOLD and stays.
+  lmdj::facade::PerformanceLiveControlIntent clear;
+  clear.kind =
+      lmdj::facade::PerformanceLiveControlIntent::Kind::clear_pad_gates;
+  auto cleared = live.reserve_live_control(epoch, clear);
+  LMDJ_CHECK(cleared.has_value());
+  LMDJ_CHECK(live.publish_live_control(std::move(cleared.value())).has_value());
+  render(engine, 256);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x0);
+  LMDJ_CHECK(engine.filter_control_status().applied.state.frozen);
+  LMDJ_CHECK(
+      engine.filter_control_status().applied.state.parameters.cutoff_hz ==
+      800);
+
+  // The engine lifecycle clears both: restart resets masks and the chain.
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  render(engine, 128);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x0);
+  LMDJ_CHECK(!engine.filter_control_status().applied.state.frozen);
+  LMDJ_CHECK(!engine.filter_control_status().applied.state.hold);
+  engine.stop();
+}
+
 int main() {
   try {
     test_launch_outcomes_are_two_phase_ordered_and_session_isolated();
@@ -1121,6 +1487,11 @@ int main() {
     test_explicit_stop_waits_for_neutral_reset_confirmation();
     test_replay_stop_after_quiescent_engine_stop_stays_stopped();
     test_live_gesture_sink_reaches_the_running_master_bus();
+    test_live_control_epoch_shadow_and_fence_against_real_engine();
+    test_typed_filter_and_fx_generations_bind_against_real_engine();
+    test_begin_fence_adopts_engaged_bindings_without_touching_dsp();
+    test_reset_neutral_clears_masks_and_filter_through_real_drains();
+    test_mask_clear_under_hold_keeps_frozen_filter();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

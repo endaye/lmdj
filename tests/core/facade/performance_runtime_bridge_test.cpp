@@ -244,6 +244,47 @@ void test_silent_headless_reset_completes_without_pending_cycle() {
   LMDJ_CHECK(completed.value().event_cursor == 0);
 }
 
+// D0/P1: the headless bridge has no live-control producer, so a headered
+// replay applies its recorded header through the silent sink and acknowledges
+// immediately — nothing renders, and the events still schedule in order.
+void test_headless_headered_replay_acknowledges_the_silent_header() {
+  auto time = std::make_shared<ScriptedTimeSource>();
+  time->set(5'000'000'000ULL);
+  auto bridge =
+      lmdj::facade::make_headless_performance_runtime_bridge(time);
+  auto headered = std::make_shared<const lmdj::cooker::PerformanceReplayProjection>(
+      lmdj::cooker::PerformanceReplayProjection{
+          lmdj::domain::PerformanceId{kPerformance},
+          9,
+          120,
+          false,
+          50,
+          {},
+          {},
+          {
+              lmdj::cooker::PerformanceReplayBoundary{
+                  0,
+                  lmdj::domain::PerformanceEvent{
+                      lmdj::domain::PadGatesSetPerformanceEvent{
+                          0x3, 0x0, 0},
+                      1}},
+          },
+          1,
+          lmdj::domain::PerformanceInitialLiveState{},
+      });
+  const auto begun =
+      bridge.replay_controller->begin(lmdj::facade::ReplayId{kReplay},
+                                      std::move(headered));
+  LMDJ_CHECK(begun.has_value());
+  // The silent header acknowledges at once; the event still waits for its
+  // musical boundary.
+  LMDJ_CHECK(begun.value().event_cursor == 0);
+  bridge.service();
+  LMDJ_CHECK(bridge.replay_controller->status(lmdj::facade::ReplayId{kReplay})
+                 .value()
+                 .state == lmdj::facade::ReplayState::complete);
+}
+
 }  // namespace
 
 int main() {
@@ -253,6 +294,7 @@ int main() {
     test_transport_latest_wins_exactly_once_and_cancel();
     test_replay_progression_depends_on_elapsed_time_only();
     test_silent_headless_reset_completes_without_pending_cycle();
+    test_headless_headered_replay_acknowledges_the_silent_header();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

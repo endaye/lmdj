@@ -191,6 +191,11 @@ struct ApplicationConfig {
   std::shared_ptr<SoundSetCatalogSource> soundset_catalog_source = nullptr;
   std::optional<project_io::SoundSetStoreLimits> soundset_store_limits =
       std::nullopt;
+  // D0/P1 typed live-control admission port; absent on headless Hosts, where
+  // the new-profile recording begin fails explicitly instead of faking an
+  // applied live state. Appended last per the positional-init rule above.
+  std::shared_ptr<PerformanceLiveControlSink> performance_live_control =
+      nullptr;
 };
 
 struct RuntimeSnapshotRequest {

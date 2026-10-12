@@ -43,6 +43,10 @@ struct EnginePerformanceAdapter {
   std::shared_ptr<PerformanceReplayController> replay_controller;
   std::shared_ptr<PerformanceGestureSink> gesture_sink;
   std::function<void()> service;
+  // D0/P1: the typed live-control admission port (epoch binding, accepted /
+  // applied shadows, reserve/publish, begin fence). Shares the gesture_sink's
+  // sole-producer admission core. Appended last: the aggregate is positional.
+  std::shared_ptr<PerformanceLiveControlSink> live_control;
 };
 
 EnginePerformanceAdapter make_engine_performance_adapter(
