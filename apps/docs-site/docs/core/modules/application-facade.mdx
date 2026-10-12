@@ -232,6 +232,15 @@ correlation。无录音时 admit 失败；pre-fence、closure 后或 owner-lost 
 `performance_replay.hpp`，不再通过完整 `application.hpp` 获得声明。
 ## 4. 架构与数据流
 Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、pending-overlay projection、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有；overlay projection 只复制当前内存事件，不扩大 JSON/C API 或持久化 surface。Performance 录制沿同一路径：Host 提交手势 → Facade 用 `PerformanceClock` 定 tick、用 `PerformanceInputSequencer` 定次序 → Project I/O 在 performance session kind 的 journal 上耐久 append → 返回权威 status；replay 则是 Project Truth → `cook_performance_replay` → `PerformanceReplayController` → Runtime sink 的单向派生流。
+
+直接传入 Replay Controller 的 projection 也须在保留 replay ID 或产生任何
+header、事件、reset 和 transport 副作用前通过 profile 校验。Legacy 不携带
+`input_sequence`，也不接受 typed Filter/Pad gate 事件；headered profile 的每个
+事件都携带唯一序号，同 tick 按序号排序，零和间隔序号仍合法。拒绝返回
+`performance_replay_profile_unsupported`，同一个 ID 可用有效 projection 重试。
+这项校验保留 P1 的 header、typed Filter 和 Pad gate 支持；初始状态完整替换
+与 header ACK 的 epoch/state 核验仍是独立的待办，不能由 profile 校验代替。
+
 ## 5. API 与 Contract 边界
 `sample.update_pad` 与 `sample.inspect` 的 `playback` 在五个必填键之外接受 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键（`reverse`、`pitch_cents`、`pan`、`loop_mode`、`loop_start_frame`、`loop_crossfade_frames`），缺失即缺省、未知键仍拒绝，回读只输出非缺省键；`update_sample_pad` 用 Authoring Domain 的 `is_valid_playback_for_source` 按 WAV 源帧数校验循环点与 crossfade。typed `resolve_sample_preview_playback(SampleInspectResult, PadPlayback)` 把试听交给 Project Cooker 的 `resolve_pad_playback`，所以试听与 Cook 得到同一个 `ResolvedPlayback`（含逐 voice DSP 块），未分配 Pad 返回 `missing_asset`，越界返回 `invalid_argument`。`5.2.0` 的 `attack_ms`、`release_ms`、`tone` 与 `eq` 遵循同一规则：每个值在收窄到 32 位之前先按领域范围检查，所以超出 32 位、收窄后会落回合法区间的值同样被拒绝；`eq` 的每一段要求键完全匹配、`kind` 只能是 `shelf` 或 `cut`，回读只输出出现的频段。这些用例在 `facade.sample_surface.playback_parity` 分片中，以同一个共享 fixture 的 `tone` 变体往返。
 

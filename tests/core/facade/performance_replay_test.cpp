@@ -962,9 +962,96 @@ void test_headered_events_reach_the_typed_sinks() {
   LMDJ_CHECK(sink->last_solo_mask == 0x1);
 }
 
+void check_profile_rejected_without_effects(PerformanceReplayProjection value) {
+  auto sink = std::make_shared<RecordingSink>();
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const auto rejected = controller.begin(
+      ReplayId{kReplayId},
+      std::make_shared<const PerformanceReplayProjection>(std::move(value)));
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(rejected.error().details.at("reason") ==
+             "performance_replay_profile_unsupported");
+  LMDJ_CHECK(sink->calls.empty());
+  LMDJ_CHECK(sink->header_progress_calls.empty());
+  LMDJ_CHECK(!controller.status(ReplayId{kReplayId}).has_value());
+  const auto retry = controller.begin(ReplayId{kReplayId}, projection());
+  LMDJ_CHECK(retry.has_value());
+  LMDJ_CHECK(controller.advance_to(20).has_value());
+  LMDJ_CHECK(controller.status(ReplayId{kReplayId}).value().state ==
+             ReplayState::complete);
+  LMDJ_CHECK((sink->calls ==
+             std::vector<std::string>{"pad", "fx", "fx", "reset"}));
+}
+
+void test_direct_legacy_profile_rejects_sequences_before_effects() {
+  for (const std::uint64_t sequence : {0U, 17U}) {
+    auto value = *projection();
+    value.boundaries.back().event.input_sequence = sequence;
+    check_profile_rejected_without_effects(std::move(value));
+  }
+}
+
+void test_direct_legacy_profile_rejects_typed_actions_before_effects() {
+  for (const auto& event : {
+           PerformanceEvent{lmdj::domain::FilterChangePerformanceEvent{
+               lmdj::domain::PerformanceFilterPhase::engage,
+               lmdj::domain::PerformanceFilterType::lp, 1'200, 100, 30}},
+           PerformanceEvent{
+               lmdj::domain::PadGatesSetPerformanceEvent{1, 2, 30}}}) {
+    auto value = *projection();
+    value.boundaries.back().event = event;
+    check_profile_rejected_without_effects(std::move(value));
+  }
+}
+
+void test_direct_headered_profile_rejects_missing_sequence_before_header() {
+  auto value = *headered_projection(
+      {{0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}}}}, 1);
+  check_profile_rejected_without_effects(std::move(value));
+}
+
+void test_direct_headered_profile_rejects_duplicate_sequence_before_header() {
+  auto value = *headered_projection(
+      {{0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}, 7}},
+       {1, PerformanceEvent{PadHitPerformanceEvent{0, 11, 40, 99}, 7}}}, 2);
+  check_profile_rejected_without_effects(std::move(value));
+}
+
+void test_direct_headered_profile_rejects_reversed_sequence_before_header() {
+  auto value = *headered_projection(
+      {{0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}, 9}},
+       {0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}, 7}}}, 2);
+  check_profile_rejected_without_effects(std::move(value));
+}
+
+void test_direct_headered_profile_keeps_zero_and_gapped_sequences() {
+  auto sink = std::make_shared<RecordingSink>();
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const auto value = headered_projection(
+      {{0, PerformanceEvent{lmdj::domain::PadGatesSetPerformanceEvent{
+               1, 2, 10}, 0}},
+       {0, PerformanceEvent{lmdj::domain::FilterChangePerformanceEvent{
+               lmdj::domain::PerformanceFilterPhase::move,
+               lmdj::domain::PerformanceFilterType::hp, 900, 250, 10}, 17}}}, 2);
+  LMDJ_CHECK(controller.begin(ReplayId{kReplayId}, value).has_value());
+  const auto completed = controller.advance_to(10);
+  LMDJ_CHECK(completed.has_value());
+  LMDJ_CHECK(completed.value().state == ReplayState::complete);
+  LMDJ_CHECK(completed.value().event_cursor == 2);
+  LMDJ_CHECK((sink->calls == std::vector<std::string>{
+               "header", "pad_gates", "filter_change", "reset"}));
+}
+
 }  // namespace
 
 int main() {  try {
+    test_direct_legacy_profile_rejects_sequences_before_effects();
+    test_direct_legacy_profile_rejects_typed_actions_before_effects();
+    test_direct_headered_profile_rejects_missing_sequence_before_header();
+    test_direct_headered_profile_rejects_duplicate_sequence_before_header();
+    test_direct_headered_profile_rejects_reversed_sequence_before_header();
+    test_direct_headered_profile_keeps_zero_and_gapped_sequences();
     test_lifecycle_and_silent_pattern_gap();
     test_stop_is_the_only_reset_retry_driver();
     test_explicit_stop_resets_and_publishes_stopped();

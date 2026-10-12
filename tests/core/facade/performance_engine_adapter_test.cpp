@@ -1460,8 +1460,54 @@ void test_mask_clear_under_hold_keeps_frozen_filter() {
   engine.stop();
 }
 
+void test_direct_profile_refusal_keeps_native_effects_and_identity_empty() {
+  std::vector<PerformanceEvent> unsupported{
+      PerformanceEvent{PadHitPerformanceEvent{0, 240, 240, 100}, 0},
+      PerformanceEvent{lmdj::domain::FilterChangePerformanceEvent{
+          lmdj::domain::PerformanceFilterPhase::engage,
+          lmdj::domain::PerformanceFilterType::hp, 800, 250, 240}},
+      PerformanceEvent{lmdj::domain::PadGatesSetPerformanceEvent{1, 2, 240}},
+  };
+  for (const auto& event : unsupported) {
+    RealtimeEngine engine;
+    prepare_running_engine(engine);
+    auto adapter = lmdj::facade::make_engine_performance_adapter(
+        engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+    auto value = *pad_only_replay_projection(120);
+    value.boundaries.front().event = event;
+    const auto epoch = engine.telemetry().start_epoch;
+    const auto rejected = adapter.replay_controller->begin(
+        ReplayId{kReplay},
+        std::make_shared<const PerformanceReplayProjection>(std::move(value)));
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(rejected.error().details.at("reason") ==
+               "performance_replay_profile_unsupported");
+    adapter.service();
+    LMDJ_CHECK(!adapter.replay_controller->status(ReplayId{kReplay}).has_value());
+    LMDJ_CHECK(engine.telemetry().start_epoch == epoch);
+    LMDJ_CHECK(engine.telemetry().rendered_frames == 0);
+    LMDJ_CHECK(engine.telemetry().started_voices == 0);
+    LMDJ_CHECK(engine.master_fx_telemetry().enqueued_gestures == 0);
+    LMDJ_CHECK(engine.master_fx_telemetry().enqueued_filter_controls == 0);
+    LMDJ_CHECK(engine.master_fx_telemetry().enqueued_tempo_updates == 0);
+    LMDJ_CHECK(engine.pad_gates_status().accepted_sequence == 0);
+    LMDJ_CHECK(adapter.replay_controller
+                   ->begin(ReplayId{kReplay}, pad_only_replay_projection(120))
+                   .has_value());
+    adapter.service();
+    render(engine, 128);
+    adapter.service();
+    LMDJ_CHECK(engine.telemetry().started_voices == 1);
+    LMDJ_CHECK(adapter.replay_controller->status(ReplayId{kReplay})
+                   .value().state == ReplayState::complete);
+    engine.stop();
+  }
+}
+
 int main() {
   try {
+    test_direct_profile_refusal_keeps_native_effects_and_identity_empty();
     test_launch_outcomes_are_two_phase_ordered_and_session_isolated();
     test_applied_boundary_and_clock_reanchor_are_exact();
     test_launch_boundary_follows_the_transport_origin_not_the_recording_anchor();

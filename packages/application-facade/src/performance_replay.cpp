@@ -3,6 +3,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -24,6 +25,36 @@ foundation::Error unavailable_error() {
       "Performance replay Runtime is unavailable",
       {{"reason", "performance_replay_runtime_unavailable"}},
   };
+}
+
+bool supported_replay_profile(
+    const cooker::PerformanceReplayProjection& projection) {
+  const bool headered = projection.initial_live_state.has_value();
+  std::set<std::uint64_t> sequences;
+  std::optional<std::pair<std::uint64_t, std::uint64_t>> previous;
+  for (const auto& boundary : projection.boundaries) {
+    const auto& event = boundary.event;
+    if (headered != event.input_sequence.has_value()) {
+      return false;
+    }
+    if (!headered) {
+      if (std::holds_alternative<domain::FilterChangePerformanceEvent>(
+              event.payload) ||
+          std::holds_alternative<domain::PadGatesSetPerformanceEvent>(
+              event.payload)) {
+        return false;
+      }
+      continue;
+    }
+    const auto sequence = *event.input_sequence;
+    const auto order = std::pair{boundary.offset_tick, sequence};
+    if (!sequences.insert(sequence).second ||
+        (previous.has_value() && order < *previous)) {
+      return false;
+    }
+    previous = order;
+  }
+  return true;
 }
 
 class UnavailablePerformanceReplayController final
@@ -225,6 +256,17 @@ ReferencePerformanceReplayController::begin(
           foundation::ErrorCode::invalid_argument,
           "Performance replay boundaries are not canonical"));
     }
+  }
+  // Direct callers do not necessarily pass through the Cooker/Domain codec.
+  // Validate the whole profile before reserving an identity or applying even
+  // the header; a later invalid event must not leave an audible valid prefix.
+  if (!supported_replay_profile(*projection)) {
+    return foundation::Result<ReplayRuntimeStatus>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Performance replay profile is inconsistent; use unsequenced legacy "
+        "events or unique, canonically ordered headered input sequences",
+        {{"reason", "performance_replay_profile_unsupported"}},
+    });
   }
   std::lock_guard lock(impl_->mutex);
   const auto key = replay_id.value();
