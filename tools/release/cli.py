@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 import sys
 from typing import Callable
@@ -412,9 +413,13 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
     }
     if settled_intent is not None:
         retirement["settled_intent"] = settled_intent
+        disposition = ("merged at head " + settled_intent["head_sha"] +
+                       " as " + settled_intent["merge_commit_sha"]
+                       if settled_intent["merged"]
+                       else "closed unmerged at head " + settled_intent["head_sha"])
         retirement["evidence"].append(
-            f"[ok] pull request #{settled_intent['pull_request']}: closed unmerged at head "
-            f"{settled_intent['head_sha']} (settles the outstanding candidate intent)")
+            f"[ok] pull request #{settled_intent['pull_request']}: {disposition}"
+            " (settles the outstanding candidate intent)")
     for line in retirement["evidence"]:
         print(line)
     with RequestJournal(directory) as journal:
@@ -424,13 +429,13 @@ def _retire_unreleased_request(root: Path, request_id: str, build: str) -> int:
 
 
 def _settled_candidate_intent(context, directory, state, reserved):
-    """Observe an outstanding candidate intent's cut Pull Request as settled.
+    """Observe an outstanding candidate intent's cut Pull Request as terminal.
 
     Returns None when the request has no outstanding intent. Refuses any
     outstanding intent outside the candidate cut, and any candidate cut whose
-    Pull Request is not verifiably closed and unmerged at its exact recorded
-    head: an open, merged or moved Pull Request leaves the intent unsettled
-    and the retirement fails closed.
+    Pull Request is not verifiably closed at its exact recorded head — merged
+    or unmerged, a closed Pull Request is terminal and settles the only far
+    side the intent owns; an open or moved Pull Request fails closed.
     """
     import json as _json
     records = state["transitions"]
@@ -458,15 +463,18 @@ def _settled_candidate_intent(context, directory, state, reserved):
         raise CommandError("the outstanding candidate intent's cut Pull Request is missing",
                            detail=f"#{number}")
     expected_title = f"chore(release): allocate {reserved} candidate"
-    if (row["state"] != "closed" or row["merged"] is not False
-            or row["head_sha"] != spec["head_sha"] or row["title"] != expected_title):
+    if (row["state"] != "closed" or row["head_sha"] != spec["head_sha"]
+            or row["title"] != expected_title
+            or (row["merged"] and not re.fullmatch(
+                r"[0-9a-f]{40}\Z", row["merge_commit_sha"] or ""))):
         raise CommandError(
-            "the outstanding candidate intent's cut Pull Request is not closed unmerged",
+            "the outstanding candidate intent's cut Pull Request is not terminal",
             detail=f"#{number}: state={row['state']} merged={row['merged']} "
                    f"head={row['head_sha']} title={row['title']!r}")
     return {"step": "candidate", "operation_id": records[-1]["operation_id"],
             "pull_request": number, "head_sha": spec["head_sha"],
-            "state": "closed", "merged": False}
+            "state": "closed", "merged": row["merged"],
+            "merge_commit_sha": row["merge_commit_sha"] if row["merged"] else None}
 
 
 def format_request_status(root: Path, git, request_id: str | None = None) -> str:
