@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/commit/eb09b2c25b0ceeed01d6ef788f075e62695e433a
     observed_by: Claude Code (Opus 5)
+  - date: 2026-10-10
+    occurrence: https://github.com/endaye/lmdj/issues/1995
+    observed_by: Codex (agent /root/sample_numeric_editor)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
