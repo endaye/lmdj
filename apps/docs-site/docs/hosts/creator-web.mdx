@@ -115,10 +115,10 @@ System 的 **Project and build details** 保留 Project 完整 ID、revision、P
 
 - **Project** 标题绑定实际打开的 Project，选中另一张卡片不会提前换标题。没有名称投影时显示短 ID。`LOCAL AUTOSAVE` 表达本地自动保存策略，不是所有独立草稿的保存回执；可观察的 Sample 更新、错误、未提交草稿以及“已保存但 audio pending”会覆盖该提示，不虚构保存时间。
 - **Sample** 标题是当前 Pad 地址；右侧显示真实类别，缺少类别但已分配时为 `SAMPLE`，空槽为 `EMPTY`。格式、总时长和已提交裁剪范围配合完整波形显示。切换 Pad 时不沿用上一 Pad 的 inspect。后台更新明确标出实际操作的 Pad；错误提示为 `CHECK LAST ACTION`，表示上一笔 Sample 操作，不能误认为当前 Pad 的错误。Asset ID、源格式／帧数和 revision 收进 **Pad → Sample details**，编辑控件仍保留本地参数值与必要 Pad 上下文。
-- **Sequence** 标题是选中 Pattern 序号；八条轨道显示地址与真实类别／空态，沿用 Project 投影颜色与当前 Pad 高亮。没有素材名称字段时不臆造 KICK／SNARE 等名称。
+- **Sequence** 停止时标题为选中 Pattern 序号，播放中绑定实际正在播放的 Pattern；排队目标在 GROOVE 标题显示，生效前不提前改当前标题。八条轨道显示地址与真实类别／空态，沿用 Project 投影颜色与当前 Pad 高亮。没有素材名称字段时不臆造 KICK／SNARE 等名称。
 - **Perform** 同时显示 `ACKNOWLEDGED SLOT` 和 `QUEUED SLOT`，分别来自同一个 Perform controller 的 `lastLaunchAck` 与 `pendingLaunch`；待切换不会覆盖已确认槽位。没有演奏 launch 排队时，`QUEUED SLOT` 改为命名 transport 待切换目标所在的槽；未分配到槽的目标显示 `QUEUED PATTERN NN`（[#1958](https://github.com/endaye/lmdj/issues/1958)）。确认是 Runtime 回执，不是听感验收。全局 Pattern 的 bar／beat／进度仍来自独立的 Pattern transport，长度取正在播放的 Pattern，停止时取所选 Pattern，不能把它当作 Performance 录音时钟。触摸区保留启动键及分组的就地 Queued／Playing 高亮，重复的页首 cue 和录制 authority 中的 last-launch 段落移除。
 
-所有顶屏保持只读；Sample 裁剪和触摸 Tempo／Swing 的连续草稿同步由独立 #1921 跟进。加载、错误和缺失字段明确降级，完整错误与恢复动作仍在触摸区。未实现的电平表与滤波类型没有被图示代替。
+所有顶屏保持只读；Sample 裁剪和触摸 Tempo／Swing 的连续草稿已同步到顶屏，取消后恢复已提交值，详见下文草稿投影说明。BPM 旋钮的读数预览仍不代表可听即时变速。加载、错误和缺失字段明确降级，完整错误与恢复动作仍在触摸区。未实现的电平表与滤波类型没有被图示代替。
 
 Sample 触摸工作区只保留编辑与采集；Bank 导航和可演奏 Pad 网格统一在左侧实体栏／
 Pad 区。该 Pad 区在 Sample mode 同时提供选中态、空槽选样、拖入／替换，以及原有
@@ -154,9 +154,9 @@ Sample 触摸工作区按当前选中 Pad 分为四个子页：**Trim** 显示�
 **Playback** 放置播放模式、音量、音高、声像与包络，**Tone / EQ** 放置音色与
 均衡器，**Pad** 集中 Add/Replace、Record Sample、Delete、Reset 和颜色。
 空 Pad 的 Trim 页也提供直接 Add Sample；不再有只把焦点移到裁切框的 Edit 按钮。
-全机只有一个当前 Pad（#1961）：在任何页面击打 Pad（鼠标、触控、键盘、MIDI）都会让它成为
+全机只有一个当前 Pad（#1961）：在任何页面正常击打可用 Pad（鼠标、触控、键盘、MIDI）都会让它成为
 Sample 编辑对象和 Sequence 高亮行；Bank 键只切换演奏的 16 个槽，不再把编辑对象换成同号
-Pad，直到下一次击打或 ↑/↓。切换 Pad 时当前子页跟随新的目标，重新进入 Sample 默认打开 Trim。
+Pad，直到下一次击打或 ↑/↓。Record Sample 武装期间仍保持固定采样目标，其他 Pad 的演奏不会将它改走。切换 Pad 时当前子页跟随新的目标，重新进入 Sample 默认打开 Trim。
 切子页时仍在进行的试听草稿取消，键盘手势仍按既有失焦规则完成，已经提交的修改
 保留；导入确认、长素材裁切和
 录音对话框仍由 Sample 工作区持有，不随子页拆分而转移目标。Record Sample
