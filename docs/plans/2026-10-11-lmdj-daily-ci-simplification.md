@@ -740,3 +740,88 @@ outbox regressions and strengthened probe prefix assertions. The original
 31-test red run is retained. Precommit base refresh remains `171f0f1b`; no
 successor touches the premises. No qualifying process pitfall: the exact-wire
 adapter defect is derivable from source and its regression journeys own it.
+
+
+### T6 — Record authenticated recovery and observed PR workload cost
+
+Integration/task base: `43f41d2f1cf0f8294568e9964c058d141421aa46`
+(2026-10-12). Declared files: this plan and
+`.agents/pitfalls/journal-pending-strand-blocks-without-drain.md`.
+
+Premises before editing:
+
+- Already delivered: #2067 (`f3707192`) repairs verified-prefix probe
+  compatibility; its remote PR Contract run 38242604325 now passes every job.
+  #2070 (`43f41d2f`) repairs the Web control replay-neutral frontier observed
+  in batch 38238760719. Inspect the actual successor source/test; do not repeat
+  either repair. The earlier batch runs the older `c2de40b6` target.
+- Outstanding: discovery storage #849 carries pending generation 682, digest
+  `17451d160078cc41769226af703cabacf77059dd642b4d0704a7caa18d733db7`.
+  All 682 raw comments form the anchored chain and exclude the pending event.
+  The existing read-only `Journal.read_committed()` and discovery reducer
+  then authenticate/replay the complete history, confirm unchanged before/after
+  anchors, and prove absence: exit 0, 738 read calls, zero remote writes.
+- Already recovered operationally: existing protected manual
+  `reconcile-pending`, with the committed discovery storage row as
+  `journal_config` and only the audited digest as `batch_request`, succeeds in
+  run [38251223983/1](https://github.com/endaye/lmdj/actions/runs/38251223983).
+  Its retained result says `action=reconciled-pending`, request/state null.
+  The far-side anchor has the same head
+  `a5a99b2b361053e4d3b25d768aae96ca19ad080ebddea7fd6bcf182e03bb1d41`,
+  `pending=null`, and `verified={head: <same head>, count: 682}`. No handwritten
+  Issue edit or repeated POST was used. Future ordinary discovery health is
+  not established by the drain result; recovery drops only an absent intent.
+- Unverified: exact full-candidate success and representative normal-workday
+  sampling with controlled source/toolchain/host and cold/warm cache state.
+  The candidate queued behind batch 38238760719 remains distinct from that
+  batch; failed/cancelled old-target jobs are not release verification.
+
+#### PR workload observation
+
+Use the #2011 merge time, `2026-10-11T12:04:45Z`, as the cut point. Compare
+`[2026-10-10T12:04:45Z, 2026-10-11T12:04:45Z)` with
+`[2026-10-11T12:04:45Z, 2026-10-12T12:04:45Z)`. Enumerate PR Contract runs
+through the authenticated workflow-runs API with complete pagination, then
+fetch the exact latest observed attempt's complete job inventory. Verify each
+API total and unique run/job IDs. Pagination encountered HTTP 502; preserve
+those failed responses and complete the missing exact pages before analysis.
+302 unique runs exist in the wider Oct 10–13 query; 220 lie in the two fixed
+windows. All 220 job inventories were collected without errors.
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| PR workflow runs | 163 | 57 |
+| Successful / failed / cancelled / skipped runs | 122 / 1 / 20 / 20 | 36 / 15 / 1 / 5 |
+| Executed, terminal jobs (success/failure/cancelled) | 546 | 191 |
+| Sum of executed job wall time, minutes | 770.13 | 249.78 |
+| Executed job minutes per workflow run | 4.72 | 4.38 |
+| Executed CI contract jobs (all terminal outcomes) | 65 | 27 |
+| CI contract total job minutes | 508.05 | 162.28 |
+| CI contract job median seconds (all terminal outcomes) | 334 | 250 |
+
+Job wall time is `completed_at - started_at` for actually executed terminal
+jobs. Sum parallel jobs separately; do not label this CPU time, billable
+minutes or end-to-end latency. Keep failures and cancellations in consumption;
+skipped jobs are never passing tests. Per-run observed job time is 7.25% lower,
+but this is a mixed-workload observation, not a causal optimization estimate:
+run volumes, file/risk mix, failures, runner contention and cache states differ.
+The apparent 67.57% decrease in the unnormalized total also reflects 163 versus
+57 runs and must not be reported as savings caused by this change. A
+success-only CI contract median (345 versus 43 seconds) excludes 15 later
+failures and is unsuitable as the overall improvement claim.
+
+The previously recorded Creator n=1 comparison (1,830 versus 140 seconds) is
+still a different-scope warm-cache measurement, about 92.35% lower wall time.
+It does not establish total CI savings. These adjacent windows overlap a
+weekend and a partial weekday; they do not satisfy the representative normal
+workday or matched cold/warm acceptance requirement. Keep #1996 open.
+
+Lowest-tier checks for this evidence Task: pitfall ledger contracts and staged
+whitespace/file scope. Independent exact-head review and normal protected
+merge remain required. No new gate, test selection or timeout is introduced.
+
+#### Version Management
+
+Version impact: none — operational evidence and process ledger only.
+Documentation impact: none — no published portal facts or product identities
+change; this plan records the recovery boundary and measurement limitations.

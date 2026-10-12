@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-10-07
     occurrence: https://github.com/endaye/lmdj/actions/runs/37576127506
     observed_by: Codex
+  - date: 2026-10-12
+    occurrence: https://github.com/endaye/lmdj/actions/runs/38251223983
+    observed_by: Codex
 exit: gate:tests/build/ci_incremental_batch_journal_test.py
 ---
 
@@ -86,3 +89,16 @@ Only after observing `pending:null` was the same candidate request ID and
 target redelivered; run 37576667995 durably admitted the full request. The
 recovery proves scheduler progress, not a passing product verdict or release
 eligibility.
+
+
+On 2026-10-12 the same mechanism recovered the separate discovery journal
+(#849). Background discovery had only reported `runtime_or_summary_error`;
+the anchor still named pending generation 682 from an older writer. A complete
+read-only authenticated replay (682 committed events, 738 read calls) proved
+the exact digest absent and the chain intact. Manual `reconcile-pending` accepts
+the committed discovery storage row through `journal_config`, just as it does
+for the outbox; run 38251223983 succeeded with action `reconciled-pending`.
+The far-side anchor retained its head, cleared pending and persisted verified
+count 682. Do not assume the default scheduler role when recovering another
+journal, and do not turn this recovery into a product pass or evidence that all
+later discovery obligations are resolved.
