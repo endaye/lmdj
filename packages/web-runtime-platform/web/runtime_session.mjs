@@ -1540,6 +1540,7 @@ function createRuntimeSessionController(options = {}) {
   let patternInputSerial = 1n;
   const patternInputOperations = new Map();
   const patternInputHolds = new Map();
+  let nativeInputLifecycleWait = null;
   const patternInputTickets = new Map();
   const patternCountInTickets = new Map();
   const postResponseFailures = new WeakSet();
@@ -2142,6 +2143,18 @@ function createRuntimeSessionController(options = {}) {
     return response.result;
   }
 
+  async function requestInputLifecycle(operation) {
+    const owner = {operation};
+    try {
+      return await boundedRequest(operation, {}, {beforeDispatch: () => {
+        // Mark the actual Host handoff, not time spent in its SDK queue.
+        nativeInputLifecycleWait = owner;
+      }});
+    } finally {
+      if (nativeInputLifecycleWait === owner) nativeInputLifecycleWait = null;
+    }
+  }
+
   function boundedRequest(operation, payload, requestOptions = {}) {
     const startedAt = requestOptions.originalStartedAt ?? monotonicNow();
     const interruptible = SAFETY_INTERRUPTIBLE_HOST_OPERATIONS.has(operation);
@@ -2400,12 +2413,18 @@ function createRuntimeSessionController(options = {}) {
     }
   }
 
-  function trigger(flatSlot, velocity, source = "pointer") {
+  function validateGestureKey(gestureKey) {
+    if (gestureKey !== undefined && (gestureKey === null || typeof gestureKey !== "object"))
+      throw new TypeError("Runtime gesture key must be a local object reference");
+  }
+
+  function trigger(flatSlot, velocity, source = "pointer", gestureKey) {
+    validateGestureKey(gestureKey);
     if (patternInputProfile !== null) {
       // Only the short admission owns the runtime tail. Native/durable
       // completion may remain held while Release, Stop and inspect proceed.
       const startedAt = monotonicNow();
-      return serializeRuntimeAction(() => admitProfileTrigger(flatSlot, velocity, source, startedAt))
+      return serializeRuntimeAction(() => admitProfileTrigger(flatSlot, velocity, source, startedAt, gestureKey))
         .then((entry) => entry === false ? false : entry.completion)
         .then((result) => {
           if (result === false) return false;
@@ -2540,7 +2559,7 @@ function createRuntimeSessionController(options = {}) {
       };
       nextRecoveryEpoch += 1;
       recoveryEpoch = epoch;
-      await boundedRequest("audio.suspend", {});
+      await requestInputLifecycle("audio.suspend");
       if (recoveryEpoch !== epoch || closing) {
         return;
       }
@@ -3253,7 +3272,7 @@ function createRuntimeSessionController(options = {}) {
       // AudioWorklet quantum. Suspending the browser context concurrently can
       // remove that quantum and strand Host quiescence until its deadline.
       // Commit Host quiescence first, then park the browser context.
-      await boundedRequest("audio.suspend", {});
+      await requestInputLifecycle("audio.suspend");
       if (closing || machine.state !== "running") {
         return false;
       }
@@ -4191,13 +4210,20 @@ function createRuntimeSessionController(options = {}) {
     const entry = {ticket, request: Object.freeze({...request}), submitted: false,
       status: null, consumed: false, physicalReleased: false, observerError: null,
       profileConsumer: requestOptions.profileConsumer === true, consumer: null, inspectionTail: null};
+    const retainedOwner = () => request.kind === "release" && request.held === true &&
+      [...patternInputTickets.values()].some(owner => owner.request.kind === "press" &&
+        owner.request.held === true && !owner.physicalReleased && owner.request.slot === request.slot &&
+        owner.ticket.runtimeGeneration === request.runtimeGeneration && owner.ticket.frameEpoch === request.frameEpoch &&
+        owner.status?.admission.sequence === request.heldPressSequence);
+    // A lifecycle RPC can already be waiting for this original physical
+    // owner when its lost admission finally reconciles. Only this profile's
+    // exact matching Release continues independently; new input and ordinary
+    // requests retain host ordering, and actual handoff spends the same budget.
+    const dispatch = entry.profileConsumer && nativeInputLifecycleWait !== null && retainedOwner()
+      ? dispatchBoundedRequest : boundedRequest;
     try {
-      const value = await boundedRequest("pattern.transport.input.request", payload, {...requestOptions,
-        retainedOwner: () => request.kind === "release" && request.held === true &&
-          [...patternInputTickets.values()].some((owner) => owner.request.kind === "press" &&
-            owner.request.held === true && !owner.physicalReleased && owner.request.slot === request.slot &&
-            owner.ticket.runtimeGeneration === request.runtimeGeneration && owner.ticket.frameEpoch === request.frameEpoch &&
-            owner.status?.admission.sequence === request.heldPressSequence),
+      const value = await dispatch("pattern.transport.input.request", payload, {...requestOptions,
+        retainedOwner,
         beforeDispatch: (requestId) => {
           entry.submitted = true;
           patternInputTickets.set(key, entry);
@@ -4394,7 +4420,7 @@ function createRuntimeSessionController(options = {}) {
       });
     });
   }
-  async function admitProfileInput(slot, velocity, source, kind, hold = null, startedAt = monotonicNow()) {
+  async function admitProfileInput(slot, velocity, source, kind, hold = null, startedAt = monotonicNow(), gestureKey = hold?.gestureKey) {
     if (patternInputSerial > BigInt(UNSIGNED_64_MAXIMUM)) throw typedError("HOST_STATE_INVALID", "Pattern input serial exhausted");
     const capacity = patternInputProfile.inputCapacity;
     if (kind === "press" && ([...patternInputOperations.values()].filter((i) => i.kind === "press").length >= capacity ||
@@ -4417,7 +4443,10 @@ function createRuntimeSessionController(options = {}) {
     try {
       admission = await requestPatternInput(request, {deadlineMs: remaining, profileConsumer: true,
         originalStartedAt: startedAt, originalBudgetMs: deadlineForOperation("trigger"),
-        beforeDispatch: () => { submitted = true; }});
+        beforeDispatch: () => {
+          submitted = true;
+          if (kind === "release" && hold.releaseIntent) hold.releaseIntent.dispatched = true;
+        }});
     } catch (error) {
       if (!unknownSubmittedOutcome(error, submitted)) throw error;
       observerError = error;
@@ -4431,6 +4460,7 @@ function createRuntimeSessionController(options = {}) {
     }
     const entry = {ticket: admission.ticket, status: admission.status, slot, velocity, source, kind,
       heldPressSequence: hold?.sequence ?? null, sequence: admission.status?.admission.sequence ?? null,
+      gestureKey, releaseIntent: null,
       unknown: admission.status === null, observerError, rejectObserver: null,
       probeEpoch: machine.state === "recovering" ? recoveryEpoch?.id : null};
     patternInputOperations.set(serial, entry);
@@ -4448,25 +4478,44 @@ function createRuntimeSessionController(options = {}) {
     void entry.completion.catch(() => {});
     return entry;
   }
-  function admitProfileTrigger(slot, velocity, source, startedAt) {
+  function admitProfileTrigger(slot, velocity, source, startedAt, gestureKey) {
     if (!isUnsignedInteger(slot, 63) || !isUnsignedInteger(velocity, 127) || velocity === 0 ||
         !TRIGGER_SOURCES.has(source) || closing || safetyReservation || interruptionReservation ||
         !(machine.state === "running" || (machine.state === "recovering" && recoveryEpoch?.probeWindow)))
       return rejectTrigger();
-    return admitProfileInput(slot, velocity, source, "press", null, startedAt);
+    // Reconciliation preserves the original entry object, including this
+    // opaque local reference. Physical and caller debts both forbid reuse.
+    if (gestureKey !== undefined &&
+        ([...patternInputHolds.values()].some(h => h.gestureKey === gestureKey) ||
+         [...patternInputOperations.values()].some(e => e.kind === "press" && e.gestureKey === gestureKey)))
+      return rejectTrigger();
+    return admitProfileInput(slot, velocity, source, "press", null, startedAt, gestureKey);
   }
-  function admitProfileRelease(slot, source, startedAt) {
-    const hold = [...patternInputHolds.values()].reverse().find((h) =>
-      h.slot === slot && h.source === source && !h.releaseSubmitted);
+  function admitProfileRelease(slot, source, startedAt, gestureKey) {
+    const matching = [...patternInputHolds.values()].reverse().filter(h => h.slot === slot && h.source === source);
+    const hold = gestureKey === undefined
+      ? matching.find(h => !h.releaseSubmitted) ?? matching.find(h => h.releaseIntent !== null)
+      : matching.find(h => h.gestureKey === gestureKey);
     if (!hold) return false;
     return admitProfileHoldRelease(hold, startedAt);
   }
   function admitProfileHoldRelease(hold, startedAt) {
-    const {slot, source} = hold;
+    if (hold.releaseIntent !== null) return {completion: hold.releaseIntent.completion};
     if (hold.releaseSubmitted) return false;
+    const {slot, source} = hold;
+    // Intent is private caller coordination, not Native admission. Reserve it
+    // before resolving a response-lost press, so keyup/cancel/safety share one
+    // release and the first observer budget instead of enqueuing duplicates.
+    const intent = {startedAt, dispatched: false, completion: null};
+    hold.releaseIntent = intent;
+    const refused = error => {
+      // admitProfileInput retains every submitted-unknown admission and sets
+      // releaseSubmitted for it. Its remaining rejection created no release
+      // entry; a later truthful retry may use a new observer budget.
+      if (!hold.releaseSubmitted && hold.releaseIntent === intent) hold.releaseIntent = null;
+      throw error;
+    };
     if (hold.sequence === null) {
-      // Resolve the original admission outside both tails before a correlated
-      // release is possible. Never invent a zero/fallback release sequence.
       const completion = (async () => {
         while (hold.sequence === null) {
           if (retireTerminalOwners()) throw hold.observerError ??
@@ -4475,12 +4524,17 @@ function createRuntimeSessionController(options = {}) {
         }
         const entry = await serializeRuntimeAction(() => admitProfileInput(slot, 0, source, "release", hold, startedAt));
         return entry.completion;
-      })();
-      const observed = observePatternInputDeadline(completion, startedAt);
-      void observed.catch(() => {});
-      return {completion: observed};
+      })().catch(refused);
+      intent.completion = observePatternInputDeadline(completion, startedAt);
+      void intent.completion.catch(() => {});
+      return {completion: intent.completion};
     }
-    return admitProfileInput(slot, 0, source, "release", hold, startedAt);
+    const admission = admitProfileInput(slot, 0, source, "release", hold, startedAt).catch(refused);
+    intent.completion = admission.then(entry => entry.completion);
+    void intent.completion.catch(() => {});
+    // Keep only real short admission in the existing runtime lane. Durable
+    // completion remains outside it; another observer joins the same intent.
+    return admission.then(() => ({completion: intent.completion}));
   }
 
   function queryPatternCountInCapabilities() {
@@ -6037,14 +6091,15 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
-  async function release(flatSlot, source) {
+  async function release(flatSlot, source, gestureKey) {
+    validateGestureKey(gestureKey);
     flatSlotAddress(flatSlot);
     if (!TRIGGER_SOURCES.has(source)) {
       throw new TypeError("Runtime release source is invalid");
     }
     if (patternInputProfile !== null) {
       const startedAt = monotonicNow();
-      return serializeRuntimeAction(() => admitProfileRelease(flatSlot, source, startedAt))
+      return serializeRuntimeAction(() => admitProfileRelease(flatSlot, source, startedAt, gestureKey))
         .then((entry) => entry === false ? false : entry.completion.then(() => true));
     }
     return serializeRuntimeAction(async () => normalizeAccepted(
@@ -6151,7 +6206,7 @@ function createRuntimeSessionController(options = {}) {
     const safety = beginSafetyCleanup("host.close");
     try {
       await safety.promise;
-      await boundedRequest("host.close", {});
+      await requestInputLifecycle("host.close");
       if (reservation.failure) throw reservation.failure;
       await terminalCleanup(reservation);
       if (reservation.failure || fatalReservation !== null || terminalCleanupError !== null) return false;
@@ -6182,14 +6237,14 @@ function createRuntimeSessionController(options = {}) {
           probeReservation === null
         )
       );
-    const releaseInput = (flatSlot, source) => {
+    const releaseInput = (flatSlot, source, gestureKey) => {
       if (suppressInputRelease) {
         return;
       }
-      void release(flatSlot, source).catch(() => {});
+      void release(flatSlot, source, gestureKey).catch(() => {});
     };
-    const cancelInput = (flatSlot, source) => {
-      void release(flatSlot, source).catch(() => {});
+    const cancelInput = (flatSlot, source, gestureKey) => {
+      void release(flatSlot, source, gestureKey).catch(() => {});
       clearPreviewsForCancellation(flatSlot);
     };
     pointerAdapter = createPointerAdapter({

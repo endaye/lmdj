@@ -332,6 +332,7 @@ export interface CreatorRuntimeSession {
     slot: number,
     velocity: number,
     source: RuntimeTriggerSource,
+    gestureKey?: object,
   ): Promise<TriggerAdmission | false>;
   requestMidi(): Promise<boolean>;
   subscribeDiagnostics(listener: (value: RuntimeDiagnostics) => void): () => void;
@@ -354,7 +355,7 @@ export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   deletePad(request: SampleDeleteRequest): Promise<SampleCommit>;
   setSamplePreview(slot: number, playback: PadPlayback): Promise<boolean>;
   clearSamplePreview(slot: number): Promise<boolean>;
-  release(slot: number, source: RuntimeTriggerSource): Promise<boolean>;
+  release(slot: number, source: RuntimeTriggerSource, gestureKey?: object): Promise<boolean>;
   stopPad(slot: number): Promise<boolean>;
   stopAll(): Promise<boolean>;
   retryPrepare(patternId: string): Promise<SnapshotPublication>;

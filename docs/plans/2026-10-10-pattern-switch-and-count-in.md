@@ -982,3 +982,75 @@ original focused journeys and all six S6 count-in cases against an actual
 rebuilt Creator, then run the original full eight-group proof when ready.
 Do not convert an old missing-observer failure into runtime acceptance by
 source inspection, or lower the gate to admission alone.
+
+
+## S6 followup — exact physical gesture ownership
+
+The original eight-group Creator run on `6f1039e5` naturally ended with
+118 PASS / 8 FAIL / 11 SKIP. The separate three-case production I/O proof on
+`178fb6f3` also failed in Project setup before its held-I/O assertions. Preserve
+both original receipts. Neither result permits widening a timeout or removing
+a journey. The original one-second input, five-second opening and 300-second
+stress budgets remain unchanged.
+
+**Declared files.** `packages/web-runtime-platform/web/runtime_session.mjs`,
+`packages/web-runtime-platform/web/runtime_types.d.ts`,
+`packages/web-runtime-platform/test/runtime_session.test.mjs`,
+`apps/creator-web/src/runtime/input_controller.ts`,
+`apps/creator-web/src/runtime/runtime_types.ts`,
+`apps/creator-web/test/input_controller.test.ts`,
+`apps/creator-web/test/workspace_shell.test.tsx`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`, and
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`.
+
+**Behaviour.** An optional local object-reference gesture key joins the existing
+SDK trigger/release calls. It is opaque, never serialized or persisted, and
+changes no Native command or Contract. Only the negotiated input profile can
+promise exact physical correlation. Three-argument calls retain their original
+compatibility behavior. Keyed release selects its exact original hold, never
+the latest same-slot/source hold; live key reuse and key/slot/source mismatch
+refuse before dispatch. Response-loss reconciliation preserves that binding.
+
+One private Release intent is reserved before waiting for an unknown press
+sequence. Keyup, cancel, unkeyed release and SDK safety join that same intent,
+retain its first deadline, and never invent admission, consumption or physical
+retirement. A definite refusal before dispatch may permit a fresh later attempt;
+a submitted unknown outcome retains its real original owner. Physical release
+and original press caller consumption remain independently owed. A matching
+profile Release whose lost press identity reconciles while a lifecycle RPC is
+waiting for it uses its real locally retained continuation, only after actual
+lifecycle handoff, independently of the
+Host request tail. Its short runtime admission ordering and original handoff
+deadline remain; new inputs and unrelated requests cannot use this path.
+
+Creator keeps physical gestures independently of voice state, visual tokens
+and loop latches. It submits exact-key Release after an actual trigger call,
+even if keyup happened while Sample inspection or durable completion waited,
+or after a one-shot voice naturally ended. A gesture with no actual trigger
+call owes no Native release. One-shot/loop-toggle physical Release preserves
+the Native playback semantics; gated modes retain their existing sound cutoff.
+Dispose/adverse cleanup submits physical obligations before abandoning local
+observation. A false SDK return is not a consume ACK.
+
+**Lowest-tier tests and defects caught.** SDK owning tests assert actual request
+identities and consume replies for opposite release order on the same slot and
+source, admission response loss, concurrent keyed/unkeyed/safety releases while
+the press sequence is unknown, original deadline expiry, live key reuse,
+mismatch and genuine retirement. Creator owning tests cover early keyup,
+natural voice completion, preserved loop latch, opposite pointer release order,
+adverse/dispose cleanup and the original legacy fallback. Existing test strictness
+and all original production journeys remain. Run meaningful original-source RED
+and repaired-source GREEN discriminators, the owning SDK/Creator suites and the
+official Portal check before committing. Then run all selected committed-head
+lanes and independent complete current-head review before shipping.
+
+### Version Management
+
+Version impact: additive Web Runtime Platform MINOR debt, included in the
+original unshipped S6 coordinated settlement. The optional exported argument
+is compatible with existing callers. No Native wire, persisted Contract,
+Product Build or Assembly change is allocated by this followup.
+
+Documentation impact: required. Update `/core/modules/web-runtime-platform/`
+and this design/plan in the same Task. Source and unit evidence do not establish
+Native/Bridge/Creator/browser or physical hearing acceptance.

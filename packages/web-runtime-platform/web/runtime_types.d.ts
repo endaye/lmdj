@@ -274,9 +274,10 @@ export interface PatternInputAdmission {
 export interface RuntimeSessionNamespace {
   readonly session: PatternTransportRuntimeSession & MonitorOutputSession &
     WebAudioClockSession & WebPerformanceCaptureSession & Readonly<{
-    trigger(slot: number, velocity: number, source?: "pointer" | "keyboard" | "midi"):
+    /** Opaque local reference; exact hold correlation requires the negotiated input profile. */
+    trigger(slot: number, velocity: number, source?: "pointer" | "keyboard" | "midi", gestureKey?: object):
       Promise<false | Readonly<{sequence: number; slot: number; velocity: number; source: "pointer" | "keyboard" | "midi"}>>;
-    release(slot: number, source: "pointer" | "keyboard" | "midi"): Promise<boolean>;
+    release(slot: number, source: "pointer" | "keyboard" | "midi", gestureKey?: object): Promise<boolean>;
   }>;
   readonly patternTransport: PatternTransportRuntimeSession;
 }

@@ -65,6 +65,7 @@ function fakeMidiAccess(input: ReturnType<typeof fakeMidiInput>) {
 
 function fixture() {
   const triggers: Array<{slot: number; velocity: number; source: string}> = [];
+  const triggerKeys: Array<object | undefined> = [];
   const outcomeListeners = new Set<(outcome: RuntimeOutcome) => void>();
   const hostListeners = new Set<(state: RuntimeHostState) => void>();
   let nextSequence = 1;
@@ -112,7 +113,8 @@ function fixture() {
     reloadSnapshot: async () => ({}),
     activateAudio: async () => true,
     suspendAudio: async () => true,
-    trigger: async (slot, velocity, source) => {
+    trigger: async (slot, velocity, source, gestureKey) => {
+      triggerKeys.push(gestureKey);
       triggers.push({slot, velocity, source});
       return {sequence: nextSequence++, slot, velocity, source};
     },
@@ -148,6 +150,7 @@ function fixture() {
   return {
     session,
     triggers,
+    triggerKeys,
     dispatch(action: CreatorAction) {
       actions.push(action);
       state = creatorReducer(state, action);
@@ -230,6 +233,7 @@ interface SampleFixtureOptions {
 function sampleFixture(options: SampleFixtureOptions = {}) {
   const value = fixture();
   const releases: Array<{slot: number; source: string}> = [];
+  const releaseKeys: Array<object | undefined> = [];
   const stopped: number[] = [];
   const voiceListeners = new Set<(event: RuntimeVoiceState) => void>();
   let stopAllCount = 0;
@@ -261,7 +265,8 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
     deletePad: async () => { throw new Error("unused"); },
     setSamplePreview: async (_slot: number, _playback: PadPlayback) => true,
     clearSamplePreview: async () => true,
-    async release(slot, source) {
+    async release(slot, source, gestureKey) {
+      releaseKeys.push(gestureKey);
       releases.push({slot, source});
       return true;
     },
@@ -309,6 +314,7 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
     session,
     controller,
     releases,
+    releaseKeys,
     stopped,
     stopAllCount: () => stopAllCount,
     inspectCalls,
@@ -1071,7 +1077,7 @@ describe("Creator input controller", () => {
   });
 
   test.each([
-    ["one_shot", false],
+    ["one_shot", true],
     ["gate", true],
     ["loop_gate", true],
   ] as const)(
@@ -1115,7 +1121,7 @@ describe("Creator input controller", () => {
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
     expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
     expect(value.state().pressed.get(0)).toBe("started");
-    expect(value.releases).toEqual([]);
+    expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
 
     expect(value.controller.keyDown({
       code: "KeyZ",
@@ -1128,7 +1134,7 @@ describe("Creator input controller", () => {
     expect(value.stopped).toEqual([0]);
     expect(value.state().pressed.has(0)).toBe(false);
     expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
-    expect(value.releases).toEqual([]);
+    expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
     value.controller.dispose();
   });
 
@@ -1213,7 +1219,7 @@ describe("Creator input controller", () => {
     await settle();
     expect(value.triggers).toHaveLength(2);
     expect(value.stopped).toEqual([]);
-    expect(value.releases).toEqual([]);
+    expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
     expect(value.stopAllCount()).toBe(0);
     value.controller.dispose();
   });
@@ -1238,7 +1244,8 @@ describe("Creator input controller", () => {
       pending.resolve(sampleInspect(0, mode));
       await settle();
       expect(value.triggers).toHaveLength(expectsTrigger ? 1 : 0);
-      expect(value.releases).toEqual([]);
+      expect(value.releases).toEqual(expectsTrigger
+        ? [{slot: 0, source: "keyboard"}] : []);
       expect(value.state().pressed.has(0)).toBe(false);
       value.controller.dispose();
     },
@@ -1673,7 +1680,10 @@ describe("Creator input controller", () => {
     });
     value.controller.keyUp({code: "KeyZ"});
     await settle();
-    expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
+    expect(value.releases).toEqual([
+      {slot: 0, source: "keyboard"}, {slot: 0, source: "keyboard"},
+    ]);
+    expect(value.releaseKeys).toEqual(value.triggerKeys);
     value.controller.dispose();
   });
 
@@ -1705,7 +1715,7 @@ describe("Creator input controller", () => {
   });
 
   test.each(["false", "rejected"] as const)(
-    "fails Runtime state when gate release is %s",
+    "reports an actual gate release error but not a known no-owner %s",
     async (result) => {
       const value = sampleFixture({
         inspectSample: async (slot) => sampleInspect(slot, "gate"),
@@ -1721,13 +1731,14 @@ describe("Creator input controller", () => {
       await settle();
       value.controller.keyUp({code: "KeyZ"});
       await settle();
-      expect(value.actions.at(-1)).toEqual({
-        type: "runtime-changed",
-        phase: result === "rejected" ? "restart-required" : "failed",
-        errorCode: result === "rejected"
-          ? "HOST_TIMEOUT"
-          : "HOST_STATE_INVALID",
-      });
+      if (result === "rejected") {
+        expect(value.actions.at(-1)).toEqual({type: "runtime-changed",
+          phase: "restart-required", errorCode: "HOST_TIMEOUT"});
+      } else {
+        expect(value.actions.filter(action => action.type === "runtime-changed"))
+          .toEqual([]);
+        expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
+      }
       value.controller.dispose();
     },
   );
@@ -2145,4 +2156,238 @@ test("a busy primary pointer cancellation carries its own key while lifecycle ca
   value.controller.clearPressed();
   expect(cancels).toEqual([presses[1], undefined]);
   value.controller.dispose();
+});
+
+
+describe("Creator exact physical gesture ownership", () => {
+  test("submits an early one-shot keyup immediately after trigger invocation before durable completion", async () => {
+    const inspect = deferred<SampleInspect>();
+    const admitted = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+    const value = sampleFixture({inspectSample: () => inspect.promise});
+    const calls: Array<{kind: "press" | "release"; key: object | undefined}> = [];
+    value.session.trigger = (slot, velocity, source, key) => {
+      calls.push({kind: "press", key});
+      return admitted.promise;
+    };
+    value.session.release = async (_slot, _source, key) => {
+      calls.push({kind: "release", key});
+      return true;
+    };
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    expect(calls).toEqual([]);
+    inspect.resolve(sampleInspect(0));
+    await settle();
+    expect(calls.map(call => call.kind)).toEqual(["press", "release"]);
+    expect(calls[0]!.key).toBeDefined();
+    expect(calls[1]!.key).toBe(calls[0]!.key);
+    admitted.resolve({sequence: 1, slot: 0, velocity: 100, source: "keyboard"});
+    await settle();
+    value.controller.dispose();
+    expect(calls).toHaveLength(2);
+  });
+
+  test("keyup after invocation does not wait for trigger completion", async () => {
+    const admitted = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+    const value = sampleFixture();
+    let originalKey: object | undefined;
+    value.session.trigger = (_slot, _velocity, _source, key) => {
+      originalKey = key;
+      return admitted.promise;
+    };
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    expect(originalKey).toBeDefined();
+    value.controller.keyUp({code: "KeyZ"});
+    expect(value.releaseKeys).toEqual([originalKey]);
+    admitted.resolve({sequence: 1, slot: 0, velocity: 100, source: "keyboard"});
+    await settle();
+    value.controller.dispose();
+    expect(value.releaseKeys).toEqual([originalKey]);
+  });
+
+  test.each(["gate", "loop_gate"] as const)("early %s keyup owns no release when inspection prevents trigger", async mode => {
+    const inspect = deferred<SampleInspect>();
+    const value = sampleFixture({inspectSample: () => inspect.promise});
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    inspect.resolve(sampleInspect(0, mode));
+    await settle();
+    expect(value.triggers).toEqual([]);
+    expect(value.releases).toEqual([]);
+    value.controller.dispose();
+    expect(value.releases).toEqual([]);
+  });
+
+  test("natural one-shot voice completion does not erase the later physical keyup", async () => {
+    const value = sampleFixture();
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    value.voice({sequence: 1, slot: 0, state: "completed", runtimeFrame: 128,
+      sourceFrame: 1_000});
+    expect(value.state().pressed.has(0)).toBe(false);
+    expect(value.releases).toEqual([]);
+    value.controller.keyUp({code: "KeyZ"});
+    expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
+    expect(value.releaseKeys[0]).toBe(value.triggerKeys[0]);
+    await settle();
+    value.controller.dispose();
+    expect(value.releases).toHaveLength(1);
+  });
+
+  test("same-Pad pointers release their original keys in reverse press order", async () => {
+    const value = sampleFixture({inspectSample: async slot => sampleInspect(slot, "gate")});
+    const first = {type: "pointerdown", pointerType: "touch", pointerId: 31,
+      isPrimary: true, button: 0, target: document.body};
+    const second = {...first, pointerType: "pen", pointerId: 32};
+    value.controller.pointerDown(first, 0);
+    await settle();
+    value.controller.pointerDown(second, 0);
+    await settle();
+    expect(value.triggerKeys).toHaveLength(2);
+    expect(value.triggerKeys[0]).not.toBe(value.triggerKeys[1]);
+    value.controller.pointerUp({...second, type: "pointerup"}, 0);
+    value.controller.pointerUp({...first, type: "pointerup"}, 0);
+    expect(value.releaseKeys).toEqual([value.triggerKeys[1], value.triggerKeys[0]]);
+    await settle();
+    value.controller.dispose();
+    expect(value.releaseKeys).toHaveLength(2);
+  });
+
+  test("stopping a loop latch cannot erase its still-held physical pointer", async () => {
+    const value = sampleFixture({inspectSample: async slot => sampleInspect(slot, "loop_toggle")});
+    const first = {type: "pointerdown", pointerType: "touch", pointerId: 41,
+      isPrimary: true, button: 0, target: document.body};
+    const second = {...first, pointerType: "pen", pointerId: 42};
+    value.controller.pointerDown(first, 0);
+    await settle();
+    value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
+    value.controller.pointerDown(second, 0);
+    await settle();
+    expect(value.stopped).toEqual([0]);
+    expect(value.triggers).toHaveLength(1);
+    expect(value.state().pressed.has(0)).toBe(false);
+    value.controller.pointerUp({...second, type: "pointerup"}, 0);
+    expect(value.releases).toEqual([]);
+    value.controller.pointerUp({...first, type: "pointerup"}, 0);
+    expect(value.releaseKeys).toEqual(value.triggerKeys);
+    await settle();
+    value.controller.dispose();
+    expect(value.releases).toHaveLength(1);
+  });
+
+  test.each(["blur", "dispose"] as const)("%s pays a physical hold after its voice token has ended", async cleanup => {
+    const value = sampleFixture();
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    value.voice({sequence: 1, slot: 0, state: "completed", runtimeFrame: 128,
+      sourceFrame: 1_000});
+    if (cleanup === "blur") window.dispatchEvent(new Event("blur"));
+    else value.controller.dispose();
+    expect(value.releaseKeys).toEqual(value.triggerKeys);
+    await settle();
+    value.controller.dispose();
+    expect(value.releases).toHaveLength(1);
+  });
+
+  test.each(["false", "malformed", "rejected"] as const)("physical release observes %s honestly", async result => {
+    const value = sampleFixture();
+    value.session.release = async (_slot, _source, key) => {
+      value.releaseKeys.push(key);
+      if (result === "rejected") throw Object.assign(new Error("unknown release"), {code: "HOST_TIMEOUT"});
+      return result === "false" ? false : "accepted" as unknown as boolean;
+    };
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    value.controller.keyUp({code: "KeyZ"});
+    await settle();
+    expect(value.releaseKeys).toEqual(value.triggerKeys);
+    const errors = value.actions.filter(action => action.type === "runtime-changed");
+    expect(errors).toEqual(result === "false" ? [] : [{type: "runtime-changed",
+      phase: result === "rejected" ? "restart-required" : "failed",
+      errorCode: result === "rejected" ? "HOST_TIMEOUT" : "HOST_PROTOCOL_MISMATCH"}]);
+    value.controller.dispose();
+    expect(value.releaseKeys).toHaveLength(1);
+  });
+
+  test("known trigger refusal owns no subsequent physical release", async () => {
+    const value = sampleFixture();
+    value.session.trigger = async () => false;
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.dispose();
+    expect(value.releases).toEqual([]);
+    expect(value.actions.filter(action => action.type === "runtime-changed")).toEqual([]);
+  });
+
+  test("unknown trigger failure retains its key for later physical release", async () => {
+    const value = sampleFixture();
+    let key: object | undefined;
+    value.session.trigger = async (_slot, _velocity, _source, originalKey) => {
+      key = originalKey;
+      throw Object.assign(new Error("admission response lost"), {code: "HOST_TIMEOUT"});
+    };
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    expect(value.actions).toContainEqual({type: "runtime-changed",
+      phase: "restart-required", errorCode: "HOST_TIMEOUT"});
+    value.controller.keyUp({code: "KeyZ"});
+    expect(value.releaseKeys).toEqual([key]);
+    expect(key).toBeDefined();
+    await settle();
+    value.controller.dispose();
+    expect(value.releaseKeys).toHaveLength(1);
+  });
+
+  test("a malformed trigger admission reports protocol failure without losing its physical key", async () => {
+    const value = sampleFixture();
+    let key: object | undefined;
+    value.session.trigger = async (_slot, _velocity, _source, originalKey) => {
+      key = originalKey;
+      return null as unknown as Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>;
+    };
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    expect(value.actions).toContainEqual({type: "runtime-changed",
+      phase: "failed", errorCode: "HOST_PROTOCOL_MISMATCH"});
+    value.controller.keyUp({code: "KeyZ"});
+    expect(key).toBeDefined();
+    expect(value.releaseKeys).toEqual([key]);
+    await settle();
+    value.controller.dispose();
+    expect(value.releaseKeys).toHaveLength(1);
+  });
+
+  test("a synchronous trigger throw keeps the original error and releases only its original key", async () => {
+    const value = sampleFixture();
+    let key: object | undefined;
+    value.session.trigger = (_slot, _velocity, _source, originalKey) => {
+      key = originalKey;
+      throw Object.assign(new Error("synchronous input failure"), {code: "HOST_STATE_INVALID"});
+    };
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    expect(value.actions).toContainEqual({type: "runtime-changed",
+      phase: "failed", errorCode: "HOST_STATE_INVALID"});
+    value.controller.keyUp({code: "KeyZ"});
+    expect(key).toBeDefined();
+    expect(value.releaseKeys).toEqual([key]);
+    await settle();
+    value.controller.dispose();
+    expect(value.releaseKeys).toHaveLength(1);
+  });
+
+  test("the legacy controller keeps its three-argument trigger and requires no release method", async () => {
+    const value = fixture();
+    const trigger = vi.spyOn(value.session, "trigger");
+    const controller = createCreatorInputController({session: value.session,
+      isAssigned: () => true, getActiveBank: () => 0, dispatch: value.dispatch});
+    controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    controller.keyUp({code: "KeyZ"});
+    controller.dispose();
+    expect(trigger).toHaveBeenCalledExactlyOnceWith(0, 100, "keyboard");
+    expect(value.triggerKeys).toEqual([undefined]);
+  });
 });

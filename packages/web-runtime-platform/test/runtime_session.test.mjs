@@ -8309,7 +8309,7 @@ test("total Native dispositions cannot relabel a press as release or a release a
 // Host seam admits once, keeps exact identities, and refuses consumer ACKs
 // until its own input, physical-owner and original count evidence gates pass.
 function retainedConsumerFixture({countMode = "accepted", retainedAvailable = true, loseInputAdmission = false,
-  terminate, beforeAdmission, admissionReply, retainLifecycleUntilInputConsumed = false} = {}) {
+  terminate, beforeAdmission, admissionReply, beforeInputInspect, retainLifecycleUntilInputConsumed = false} = {}) {
   let clock = 0;
   let timerId = 0;
   let failureListener = null;
@@ -8426,6 +8426,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
       return admission(e, {ticket: status.ticket, status});
     }
     if (e.operation === "pattern.transport.input.inspect") {
+      await beforeInputInspect?.(e, retainedLane);
       const entry = inputEntries.get(p.ticket);
       assert.ok(entry, "there must be an actual original input admission");
       assert.equal(p.command_id, entry.status.ticket.command_id);
@@ -9800,5 +9801,192 @@ for (const countOwner of [false, true]) {
     assert.equal(admissions.length, countOwner ? 1 : 0);
     if (admission) await f.session.inspectPatternCountIn(admission.ticket, true);
     assert.equal(await f.session.close(), true);
+  });
+}
+
+
+// Exact local gesture ownership; Native requests and caller consumption remain real.
+test("local gesture key releases two same-slot/source holds in original key order", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.inputComplete = true;
+  const first = Object.freeze({});
+  const second = Object.freeze({});
+  assert.equal((await f.session.trigger(0, 100, "pointer", first)).sequence, 1);
+  assert.equal((await f.session.trigger(0, 100, "pointer", second)).sequence, 2);
+  assert.deepEqual([...f.physicalOwners.keys()], ["1", "2"]);
+  assert.equal(await f.session.release(0, "pointer", first), true);
+  assert.deepEqual([...f.physicalOwners.keys()], ["2"], "keyup pays its own original physical owner");
+  assert.equal(await f.session.release(0, "pointer", second), true);
+  assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+    .map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["press", "2", null], ["release", "3", "1"], ["release", "4", "2"]]);
+  assert.deepEqual([...f.inputConsumed], ["1", "2", "3", "4"]);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture key rejects active reuse and never falls back on key/slot/source mismatch", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.inputComplete = true;
+  const key = {};
+  assert.equal((await f.session.trigger(0, 100, "keyboard", key)).sequence, 1);
+  assert.equal(await f.session.trigger(1, 100, "keyboard", key), false);
+  assert.equal(await f.session.release(1, "keyboard", key), false);
+  assert.equal(await f.session.release(0, "pointer", key), false);
+  assert.equal(await f.session.release(0, "keyboard", {}), false);
+  assert.equal(f.inputEntries.size, 1, "none of the refused calls dispatches Native input");
+  assert.equal(await f.session.release(0, "keyboard", key), true);
+  assert.equal((await f.session.trigger(1, 100, "keyboard", key)).sequence, 3,
+    "the same reference is reusable only after real physical and caller settlement");
+  assert.equal(await f.session.release(1, "keyboard", key), true);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture key refuses null and primitive identity before Native effects", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.inputComplete = true;
+  for (const invalid of [null, 1, "key", true, Symbol("key")]) {
+    await assert.rejects(Promise.resolve().then(() => f.session.trigger(0, 100, "pointer", invalid)), TypeError);
+    await assert.rejects(f.session.release(0, "pointer", invalid), TypeError);
+  }
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture early release joins one original intent while durable input remains held", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  const key = {};
+  const press = f.session.trigger(0, 100, "pointer", key);
+  const release = f.session.release(0, "pointer", key);
+  const repeated = f.session.release(0, "pointer", key);
+  const legacy = f.session.release(0, "pointer");
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+    .map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["release", "2", "1"]]);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.physicalOwners.size, 1);
+  f.state.inputComplete = true;
+  assert.equal((await settleRetainedCall(f, press)).sequence, 1);
+  for (const observation of [release, repeated, legacy])
+    assert.equal(await settleRetainedCall(f, observation), true, "all observers join the actual same release");
+  assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture unknown admission reserves one release before keyup/cancel/safety race", async (t) => {
+  let resolveInspection;
+  const inspection = new Promise(resolve => { resolveInspection = resolve; });
+  const f = retainedConsumerFixture({loseInputAdmission: true,
+    beforeInputInspect: (e) => e.payload.ticket === "1" ? inspection : undefined});
+  t.after(() => { resolveInspection(); f.cancelTimers(); });
+  await activateInputProfile(f);
+  const key = {};
+  await assert.rejects(f.session.trigger(0, 100, "pointer", key), error => error === f.originalError);
+  const release = f.session.release(0, "pointer", key).then(value => ({value}), error => ({error}));
+  const repeated = f.session.release(0, "pointer", key).then(value => ({value}), error => ({error}));
+  const legacy = f.session.release(0, "pointer").then(value => ({value}), error => ({error}));
+  await drainTasks();
+  assert.equal(f.inputEntries.size, 1);
+  assert.equal(f.physicalOwners.size, 1);
+  resolveInspection();
+  await tickRetainedUntil(f, () => f.inputEntries.size >= 2);
+  await f.tick();
+  const actual = [...f.normal, ...f.retained].filter(e => e.operation === "pattern.transport.input.request");
+  assert.deepEqual(actual.map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["release", "2", "1"]]);
+  assert.equal(f.inputConsumed.size, 0);
+  f.state.inputComplete = true;
+  for (const observation of [release, repeated, legacy])
+    assert.deepEqual(await settleRetainedCall(f, observation), {value: true});
+  await tickRetainedUntil(f, () => f.inputConsumed.has("1") && f.inputConsumed.has("2"));
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT", "the original press observer stays failed");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("local gesture repeated release keeps its first deadline and retained consume debt", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.completeInput = p => p.kind === "press" || f.state.inputComplete;
+  const key = {};
+  assert.equal((await f.session.trigger(0, 100, "keyboard", key)).sequence, 1);
+  const first = f.session.release(0, "keyboard", key).then(value => ({value}), error => ({error}));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  await f.tick(700);
+  const second = f.session.release(0, "keyboard", key).then(value => ({value}), error => ({error}));
+  await drainTasks();
+  await f.tick(300);
+  for (const observation of [first, second]) {
+    const outcome = await settleRetainedCall(f, observation);
+    assert.equal(outcome.error?.code, "HOST_TIMEOUT");
+    assert.equal(outcome.error.details.pending, true);
+  }
+  assert.equal(f.inputEntries.size, 2, "observer expiry does not enqueue another release");
+  assert.deepEqual([...f.inputConsumed], ["1"]);
+  assert.equal(f.physicalOwners.size, 1);
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.has("2"));
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(await f.session.close(), true);
+});
+
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  test(`local gesture unsealed unknown release joins explicit ${operation} safety and exact consumes`, async (t) => {
+    let resolveInspection;
+    const inspection = new Promise(resolve => { resolveInspection = resolve; });
+    const loss = Object.assign(new Error("actual admitted press response lost on healthy lane"), {
+      code: "HOST_TIMEOUT", details: {pending: true},
+    });
+    const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true,
+      admissionReply: (e, response) => {
+        if (e.operation === "pattern.transport.input.request" && e.payload.kind === "press") throw loss;
+        return response;
+      }, beforeInputInspect: e => e.payload.ticket === "1" ? inspection : undefined});
+    t.after(() => { resolveInspection(); f.cancelTimers(); });
+    await activateInputProfile(f);
+    const key = {};
+    await assert.rejects(f.session.trigger(0, 100, "pointer", key), error => error === loss);
+    assert.equal(f.transport.terminated, false);
+    assert.equal(f.session.diagnostics().state, "running", "unknown original caller is independent of lifecycle");
+    const release = f.session.release(0, "pointer", key);
+    const repeated = f.session.release(0, "pointer", key);
+    let lifecycleResult = null;
+    const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+      .then(value => { lifecycleResult = value; return value; });
+    await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+    assert.deepEqual(f.state.lifecyclePending[0].tickets, ["1"]);
+    assert.equal(lifecycleResult, null);
+    assert.equal(f.inputConsumed.size, 0);
+    resolveInspection();
+    await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+    assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+      .map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+      [["press", "1", null], ["release", "2", "1"]]);
+    assert.equal(f.physicalOwners.size, 1);
+    f.state.inputComplete = true;
+    assert.equal(await settleRetainedCall(f, release), true);
+    assert.equal(await settleRetainedCall(f, repeated), true);
+    assert.equal(await settleRetainedCall(f, lifecycle), true);
+    assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"], "both original caller debts settle independently");
+    assert.equal(f.physicalOwners.size, 0);
+    assert.equal(f.state.lifecyclePending.length, 0);
+    if (operation === "audio.suspend") {
+      assert.equal(f.session.diagnostics().state, "audio-suspended");
+      assert.equal(await settleRetainedCall(f, f.session.close()), true);
+    }
+    assert.equal(f.state.backendCloses, 1);
   });
 }

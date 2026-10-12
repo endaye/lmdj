@@ -454,3 +454,35 @@ launched a different Pattern. The original request deadline covers the complete 
 or timed-out stop prevents the command. Quiescent Engine Stop has already
 cleared FX, so replay Stop can complete with audio suspended before Project
 replacement. Replay and transport do not play side by side.
+
+
+### S6 本地物理手势身份（修复源码，执行验收未完成）
+
+已有 `trigger(slot, velocity, source, gestureKey?)` 和
+`release(slot, source, gestureKey?)` 可携带同一个本地对象引用。该引用不检查内容、
+不复制、不进入 Native wire 或持久化 Truth；只有已协商 input profile 才提供原
+physical hold 的精确匹配。省略参数保留原调用兼容性，未协商 legacy Host 不获得
+这项匹配保证。活跃或仍欠原 caller consume 的 key 不能复用；key／slot／source
+不匹配不派发输入，也不会退回到最新同槽位输入。
+
+未知 press admission 仍保留原身份并独立 inspect。SDK 在等待实际 sequence 之前
+保留一个私有 Release intent，keyup／cancel／旧调用／safety 共享它和第一次 deadline；
+intent 不代表 Native accepted、consume 或物理 ACK。已派发未知结果不重放；
+真实已知 admission 拒绝后才允许后续新尝试。原一秒预算不因重复观察而重置。
+真实 Release 消费与 press caller 消费分别欠账，只有真实消费／完整独立 retirement
+回执可以各自结清。
+
+Creator 的物理 key 生命周期独立于 Voice、视觉 token 和 loop latch。实际调用
+trigger 后，即使已经 keyup，也立即按原 key 提交 Release，不等待 durable completion。
+one-shot 自然结束或 loop-toggle 保持播放都不能抹去物理义务；Native 继续决定
+这些模式的声音行为。未真正调用 trigger 的动作不制造 Release，dispose／adverse
+cleanup 仍提交已调用输入的物理释放。false 不是消费 ACK，未知错误保留真实 SDK
+owner。该修复保留原五秒开录与 300 秒 stress 预算及所有生产验收旅程。
+
+本段描述待验收修复源码，SDK／Creator 单元回归不等于 Native／Bridge／OPFS／
+全 Creator／听感通过。版本影响为未交付 S6 既有 Web Runtime Platform MINOR 债务，
+不分配 Product Build 或改变 Native／持久化 Contract。
+
+正常 close／suspend 已等待原 owner 时，丢失 admission 随后确认的匹配 profile
+Release 只在 lifecycle 实际 handoff 后使用真实本地 retained press 续接，不排在等待它的 Host 请求后。原 runtime
+短 admission 串行性与实际 handoff 一秒 deadline 不变；新输入与无关请求仍排原队列。

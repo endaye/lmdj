@@ -4177,9 +4177,11 @@ test("rail Bank changes keep the Sample slot until another Pad is chosen", async
 test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", async () => {
   const fixture = mutableSampleRuntimeFixture();
   fixture.assigned.set(20, "44444444-4444-4444-8444-444444444444");
-  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi") =>
+  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi", _gestureKey?: object) =>
     ({sequence: 1, slot, velocity, source}));
   fixture.session.trigger = triggers;
+  const releases = vi.fn(fixture.session.release);
+  fixture.session.release = releases;
   Object.assign(fixture.session, sequenceSessionStubs());
   setRunningAudioFixture(fixture.session);
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
@@ -4201,8 +4203,12 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
   const padA01 = within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A01 — assigned — Key Z"});
   fireEvent(padA01, pointer("pointerdown"));
-  await waitFor(() => expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer"));
+  await waitFor(() => expect(triggers).toHaveBeenCalledTimes(1));
+  const firstKey = triggers.mock.calls[0]![3];
+  expect(firstKey).toEqual(expect.any(Object));
+  expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer", firstKey);
   fireEvent(padA01, pointer("pointerup"));
+  await waitFor(() => expect(releases).toHaveBeenCalledExactlyOnceWith(0, "pointer", firstKey));
   expect(currentPad()).toBe("A01");
 
   // A Bank key only switches the performing slots: the current Pad stays A01
@@ -4218,8 +4224,11 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
   const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad B05 — assigned — Key A"});
   fireEvent(pad, pointer("pointerdown"));
-  await waitFor(() => expect(triggers).toHaveBeenLastCalledWith(20, 100, "pointer"));
-  expect(triggers).toHaveBeenCalledTimes(2);
+  await waitFor(() => expect(triggers).toHaveBeenCalledTimes(2));
+  const secondKey = triggers.mock.calls[1]![3];
+  expect(secondKey).toEqual(expect.any(Object));
+  expect(secondKey).not.toBe(firstKey);
+  expect(triggers).toHaveBeenLastCalledWith(20, 100, "pointer", secondKey);
   expect(currentPad()).toBe("B05");
   expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent)
     .toBe("B05 / SAMPLE");
@@ -4227,6 +4236,8 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
     ?.textContent).toBe("B05");
   expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("B05");
   fireEvent(pad, pointer("pointerup"));
+  await waitFor(() => expect(releases).toHaveBeenCalledTimes(2));
+  expect(releases).toHaveBeenLastCalledWith(20, "pointer", secondKey);
 
   // The Sample edit object is the same current Pad.
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
@@ -4256,7 +4267,7 @@ test("↑/↓ steps the one current Pad into the Sample editor (#1961)", async (
 });
 
 test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate voice", async (releaseEvent) => {
-  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi") =>
+  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi", _gestureKey?: object) =>
     ({sequence: 1, slot, velocity, source}));
   const releases = vi.fn(async () => true);
   const fixture = sampleRuntimeFixture({trigger: triggers, release: releases});
@@ -4276,8 +4287,11 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   };
   fireEvent(pad, pointer("pointerdown"));
   await waitFor(() => expect(triggers).toHaveBeenCalledTimes(1));
+  const key = triggers.mock.calls[0]![3];
+  expect(key).toEqual(expect.any(Object));
+  expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer", key);
   fireEvent(pad, pointer(releaseEvent));
-  await waitFor(() => expect(releases).toHaveBeenCalledExactlyOnceWith(0, "pointer"));
+  await waitFor(() => expect(releases).toHaveBeenCalledExactlyOnceWith(0, "pointer", key));
   expect(pad.getAttribute("data-outcome")).toBe("idle");
 });
 

@@ -883,3 +883,41 @@ Implementation: **Documentation impact: required** on
 official tool and `scripts/docs-site.sh check`. S7 updates the two Creator
 manual routes in its own Task. No immutable Product snapshot or release is
 created by either feature Task.
+
+
+## S6 exact physical gesture followup
+
+Physical input lifetime is independent of audible voice lifetime and Creator
+visual/latch state. The optional SDK-local object-reference `gestureKey` binds
+trigger and release to the original profile hold; it is not a Native wire field
+or Project Truth. An active or response-lost key cannot be reused, and keyed
+release never selects a different same-slot/source hold. Existing unkeyed
+callers retain compatibility and do not acquire an exact-correlation guarantee
+from this argument on legacy, unnegotiated Hosts.
+
+Reserve a private Release intent before asynchronously resolving an unknown
+press sequence. Duplicate physical cleanup and SDK safety share that intent
+and original deadline without manufacturing Native acceptance or consumption.
+A genuine release does not erase a still-pending press caller; only the actual
+consume/retirement receipts discharge their respective debts.
+
+Creator retains a separate physical gesture until keyup/cancel. Voice completion,
+loop latch cleanup and successful Sample stop do not discharge it. After actual
+trigger invocation, an already observed keyup submits matching Release without
+waiting for the trigger's durable completion. One-shot and loop-toggle sound
+behavior stays Native-owned; their matching physical Release still repays input
+ownership. No actual trigger means no Native release obligation.
+
+The original one-second input deadline, five-second opening limit, 300-second
+stress budget and all far-side assertions remain. SDK/Creator unit regressions
+are necessary but cannot replace the original rebuilt production journeys.
+Version impact is additive Web Runtime Platform MINOR debt already carried by
+unshipped S6; no wire, persisted Contract or Product identity changes.
+Documentation impact: required on `/core/modules/web-runtime-platform/`.
+
+An exact profile Release whose original lost admission reconciles during a
+lifecycle wait must continue independently of the Host request tail waiting
+for that owner. Positive local held-press identity, generation/epoch/sequence
+and an actually dispatched close/suspend request authorize only that continuation. It retains short
+runtime admission serialization and its original handoff deadline; new input
+and ordinary requests retain their original queue.
