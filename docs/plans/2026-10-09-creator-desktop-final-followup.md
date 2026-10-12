@@ -2165,3 +2165,47 @@ Version impact: no manifest or identity allocation; approved compatible
 Creator feature debt remains for V1. Documentation impact: required —
 /hosts/creator-web/ and /hosts/creator-interactions/. Physical/hearing, A1/A2,
 full-candidate, V1/snapshot, release and deployment remain separate.
+
+## 2026-10-13 — K2a Project / Sample direction Source preparation
+
+Bounded successor Task:
+[K2a plan](2026-10-13-creator-project-sample-navigation.md). The actual refreshed
+main/base is `9f44298c98b190c20443c79cd62d19045ee06e41`. Its live #1822 body and
+two historical comments, approved October 11 decision, relevant merged
+successors and owning handlers/tests were read before editing. #2006 approved
+K2; #2001/#2090/#2058/#2082 already delivered history, numeric editing and
+keyboard behaviors. The actual mounted direction registry still bound only
+Sequence, Project's hardware list was single-column, and Sample's existing
+page owner was not connected to rail directions. These two remaining consumers
+are the bounded implementation scope; they do not repeat delivered work.
+
+Source now reuses the existing Project selection for left/right neighbors and
+up/down rows of three, renders that same hardware list as three columns, and
+keeps explicit OPEN. Sample up/down uses the existing silent A01–D16 current
+Pad selector; left/right uses its existing four-page state. Context changes
+cancel unsubmitted rotary/numeric previews. Already sent updates retain their
+original owner/results, including an old Pad result after selection changes.
+Project/Sample SHIFT+up/down is unassigned and SHIFT+left/right keeps history.
+Existing Sequence/Perform, ENC4, MIDI, spatial keyboard and Ctrl/Cmd guard
+code remains outside the changed consumers; no global Arrow listener is added.
+
+The one-Task plan declares thirteen paths, including only the necessary
+history-layer locator adaptations in the original browser journeys. All old
+history counts, revision, failure, sound identity and reopen assertions remain.
+New mounted App cases and the actual browser three-column geometry journey
+are Source, not execution results. The browser case checks the fixed touch
+panel at the existing scaled viewports and rejects horizontal overflow;
+jsdom alone cannot prove layout. Source preparation is owned by child Codex
+thread `01a1301f-d080-7b01-a427-39aedff8554c` in its own isolated
+`feat/creator-project-sample-navigation` worktree.
+
+Component, TypeScript, Portal and packaged/browser verification are UNRUN while
+Root owns the shared execution queue. No install/build/test/stage/commit/push/
+PR/merge was performed in this Source phase. The complete Task, Perform/FILTER
+consumer, K2/#1822, physical/hearing, full-candidate and Goal remain open.
+
+Version impact: compatible Creator MINOR debt for the next approved identity
+settlement; no active manifest/Assembly/Contract/Build/Channel change here.
+Documentation impact: required — /platform/input/ and
+/hosts/creator-interactions/; current behavior and remaining Perform debt are
+updated together. Run the owning Task checks and whole Portal before commit.

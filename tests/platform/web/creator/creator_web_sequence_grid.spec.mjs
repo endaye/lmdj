@@ -484,6 +484,7 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   expect(reopened.revision).toBe(final.revision);
   expect(reopened.patterns[patternId].events)
     .toEqual(final.patterns[patternId].events);
+  await page.getByRole("button", {name: /^SHIFT/}).click();
   await expect(page.getByRole("button", {name: "Undo — SHIFT + ←", exact: true}))
     .toBeDisabled();
   await expect(page.getByTestId("authoring-history-status"))
@@ -615,7 +616,7 @@ test("Sequence view controls scroll bars and navigate Pads without changing sele
   await assertViewOnly();
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(physicalKey(page, "Encoder 1 — Select Project")).toBeEnabled();
-  await expect(physicalKey(page, "Up — unassigned until direction mapping is approved")).toBeDisabled();
+  await expect(physicalKey(page, "Previous Project row — ↑")).toBeDisabled();
 });
 
 

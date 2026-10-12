@@ -58,7 +58,12 @@ export interface DirectionStep {
   onForward(): void;
 }
 
-interface PhysicalControlsProps {
+export interface ContextualNavigation {
+  directionStep?: DirectionStep | undefined;
+  padStep?: DirectionStep | undefined;
+}
+
+interface PhysicalControlsProps extends ContextualNavigation {
   activeMode: CreatorMode;
   activeBank: Bank;
   sequenceEnabled?: boolean;
@@ -77,8 +82,6 @@ interface PhysicalControlsProps {
   systemOpen?: boolean;
   systemEntryRef?: Ref<HTMLButtonElement>;
   encoders?: Readonly<Partial<Record<EncoderPosition, EncoderBinding>>>;
-  directionStep?: DirectionStep;
-  padStep?: DirectionStep;
 }
 
 // Pixels of vertical drag per detent.

@@ -44,13 +44,18 @@ function railHistoryKeys(page) {
 }
 async function pressRailUndo(page) {
   const keys = railHistoryKeys(page);
-  await keys.shift.click();
+  await showRailHistoryLayer(page);
   await keys.undo.click();
 }
 async function pressRailRedo(page) {
   const keys = railHistoryKeys(page);
-  await keys.shift.click();
+  await showRailHistoryLayer(page);
   await keys.redo.click();
+}
+
+async function showRailHistoryLayer(page) {
+  const shift = railHistoryKeys(page).shift;
+  if (await shift.getAttribute("aria-pressed") !== "true") await shift.click();
 }
 
 function pcm16Wav({frames = 96_000, sampleRate = 48_000, phase = 0}) {
@@ -865,6 +870,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await page.goto("/index.html");
   await waitForBootProject(page);
   const {undo, redo} = railHistoryKeys(page);
+  await showRailHistoryLayer(page);
   await expect(undo).not.toHaveClass(RAIL_LIT);
   await expect(redo).not.toHaveClass(RAIL_LIT);
   await activateAudio(page);
@@ -872,6 +878,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await commitLongSourceSelection(page);
   await expectProjectRevision(page, 1);
   const imported = (await rawRequest(page, "project.inspect", {})).result.project;
+  await showRailHistoryLayer(page);
   await expect(undo).toHaveClass(RAIL_LIT);
   await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Mute", exact: true}).click();
@@ -881,6 +888,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   // On Sequence, ← without SHIFT steps Patterns (Desktop Final T6); the
   // history lamp and Undo are on the SHIFT layer, still lit across modes.
   await railHistoryKeys(page).shift.click();
+  await showRailHistoryLayer(page);
   await expect(undo).toHaveClass(RAIL_LIT);
   await undo.click();
   await expectProjectRevision(page, 3);
@@ -891,6 +899,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   expect(cleared.assets).toEqual({});
   expect(cleared.banks[0].pads[0].asset_id).toBeNull();
   await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await showRailHistoryLayer(page);
   await expect(redo).toHaveClass(RAIL_LIT);
   await chooseSampleFile(page, "Add Sample to Pad A01", "cancelled.wav", pcm16Wav({frames: 9600}));
   const draft = page.getByRole("dialog", {name: /Pad A01 Long Source/});
@@ -903,6 +912,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
     command_id: crypto.randomUUID(), expected_revision: 3});
   expect(refused.ok).toBe(false);
   expect((await rawRequest(page, "history.inspect", {})).result).toEqual(retained);
+  await showRailHistoryLayer(page);
   await expect(redo).toHaveClass(RAIL_LIT);
   const responseOffset = await page.evaluate(() => window.__sampleProofResponses.length);
   await pressRailRedo(page);
@@ -925,6 +935,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   await showSamplePage(page, "Playback");
   await page.getByRole("button", {name: "Loop", exact: true}).click();
   await expectProjectRevision(page, 8);
+  await showRailHistoryLayer(page);
   await expect(redo).not.toHaveClass(RAIL_LIT);
   const saved = (await rawRequest(page, "project.inspect", {})).result.project;
   await page.getByRole("button", {name: "Project", exact: true}).click();
@@ -937,6 +948,7 @@ test("Creator history preserves sound identity across modes, cancelled edits and
   expect(reopened.session_id).not.toBe(retained.session_id);
   expect(reopened.undo_count).toBe(0);
   expect(reopened.redo_count).toBe(0);
+  await showRailHistoryLayer(page);
   await expect(undo).not.toHaveClass(RAIL_LIT);
   await expect(redo).not.toHaveClass(RAIL_LIT);
   noErrors();
@@ -1450,6 +1462,7 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   expect(reassigned.patterns).toEqual(before.patterns);
   expect(reassigned.banks[0].pads[0].asset_id).not.toBe(oldAsset);
   expect(reassigned.assets[oldAsset].artifact).toEqual(oldArtifact);
+  await showRailHistoryLayer(page);
   await expect(redo).not.toHaveClass(RAIL_LIT);
   await page.reload();
   await waitForProjectReopen(page, reassigned.project_id.slice(0, 8));
