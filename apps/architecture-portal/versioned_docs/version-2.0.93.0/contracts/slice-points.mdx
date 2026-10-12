@@ -1,0 +1,45 @@
+---
+title: Slice Points Contract
+area: contracts
+status: partial
+owners: [core, providers]
+contracts: [lmdj.slice-points.v1]
+source_paths:
+  - contracts/slice-points/lmdj.slice-points.v1.schema.json
+  - contracts/capability/sample.slice.v1.json
+  - tests/conformance/schema_contract_test.py
+  - tests/fixtures/contracts/slice-points
+decision_paths:
+  - docs/prd/decisions/2026-09-09-stage12-contract-candidate.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.slice-points.v1" />
+
+## 已集成的 Contract
+
+此 Contract 已随 Slice 参考 Provider 注册，完整源文件字节和版本绑定到 Assembly Lock。
+C++ 独立消费校验、JSON conformance 和字节回放已验证；Host owner 接线与用户执行流程留给 K5。
+音频 profile 是二进制格式规范，不是验证 WAV 字节的 JSON Schema。
+
+## 字段与验证层
+
+根对象只包含 `contract`、`source_sha256`、`frame_rate`、`points`。每个 point
+要求整数 `frame`，可选有限的 `[0,1]` confidence 和非空 label；拒绝额外字段。
+点数最多 4096，frame 与 rate 限于 JSON 安全整数范围，rate 必须为正。
+
+Schema 固定对象形状和数值范围。字节读取拒绝重复 JSON key、NaN/Infinity、
+非有限数字、坏 UTF-8 和不完整 JSON。消费方的上下文校验保证源 hash/rate 匹配、
+frames 严格递增且小于源 frame_count、label 不超过 128 个 UTF-8 字节。
+这些上下文规则无法只靠 JSON Schema 证明；K1 的向量明确区分各层拒绝。
+
+## 原始坐标与采纳
+
+坐标保留输入采样率。静音/未检测到 onset 可返回空列表，0 与 EOF 不会被强行
+写入 Provider 输出。有 onset 时 Core 后续按 0、onset、EOF 派生完整半开区间；
+无 onset 时零候选。多个区间来自一个输出 Artifact，不要求 SDK 改成多 Candidate。
+
+参考输出采用 UTF-8、字典序键、紧凑 JSON、无 BOM 或尾换行，不输出 confidence/label。
+用户明确选择候选和 Pad 后才采纳；Preview 不改真相，源 Asset 保留。采纳与 lineage
+实现由 L1～L5 承担；本 Contract 定义不会修改 Project 或自动填充 Bank。
