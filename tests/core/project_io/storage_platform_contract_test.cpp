@@ -540,6 +540,37 @@ void test_complete_immutable_append_replace_and_remove_contract() {
   LMDJ_CHECK(platform->remove(path).has_value());
 }
 
+void test_complete_text_read_preserves_bytes_and_fresh_versions() {
+  TempDirectory temp;
+  const auto path = temp.path() / "payload.bin";
+  auto platform = make_default_project_storage_platform();
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  auto lease = platform->acquire_writer(temp.path());
+  LMDJ_CHECK(lease.has_value());
+  const std::string initial{"A\0\xff\r\nZ", 6};
+  LMDJ_CHECK(platform->create_immutable(path, bytes(initial)).has_value());
+  LMDJ_CHECK(reader->read_complete_text(path).value() == initial);
+  LMDJ_CHECK(text(platform->read_complete(path).value()) == initial);
+  LMDJ_CHECK(platform->append_durable(path, initial.size(), bytes("tail")).has_value());
+  LMDJ_CHECK(reader->read_complete_text(path).value() == initial + "tail");
+  LMDJ_CHECK(platform->replace_complete(path, {}).has_value());
+  LMDJ_CHECK(reader->read_complete_text(path).value().empty());
+  LMDJ_CHECK(platform->replace_complete(path, bytes(initial)).has_value());
+  LMDJ_CHECK(reader->read_complete_text(path).value() == initial);
+  const auto link = temp.path() / "link";
+  std::filesystem::create_symlink(path, link);
+  const auto unsafe = reader->read_complete_text(link);
+  LMDJ_CHECK(!unsafe.has_value() && unsafe.error().code == ErrorCode::invalid_project);
+  const auto parent_link = temp.path() / "parent-link";
+  std::filesystem::create_directory_symlink(temp.path(), parent_link);
+  const auto unsafe_parent = reader->read_complete_text(parent_link / "payload.bin");
+  LMDJ_CHECK(!unsafe_parent.has_value() && unsafe_parent.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(platform->remove(path).has_value());
+  const auto missing = reader->read_complete_text(path);
+  LMDJ_CHECK(!missing.has_value() && missing.error().code == ErrorCode::io_error);
+}
+
 void test_append_obeys_supplied_binary_prefix_and_flushes_once() {
   TempDirectory temp;
   const auto bundle = temp.path() / "binary-append.lmdj";
@@ -837,6 +868,33 @@ void test_complete_read_retries_replacement_transient_open() {
   LMDJ_CHECK(absent.error().message == "storage file could not be opened");
 }
 
+void test_complete_text_read_retries_replacement_transient_open() {
+  TempDirectory temp;
+  const auto directory = temp.path() / "retry";
+  const auto path = directory / "pointer.json";
+  auto platform = make_default_project_storage_platform();
+  const auto* text_reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(platform.get());
+  LMDJ_CHECK(text_reader != nullptr);
+  LMDJ_CHECK(platform->ensure_directory(directory).has_value());
+  auto lease = platform->acquire_writer(temp.path());
+  LMDJ_CHECK(lease.has_value());
+  const auto payload = bytes("complete-version");
+  LMDJ_CHECK(platform->create_immutable(path, payload).has_value());
+
+  complete_read_fault_calls = 0;
+  StorageHookGuard hook(fail_first_complete_read_open);
+  const auto observed = text_reader->read_complete_text(path);
+  LMDJ_CHECK(observed.has_value());
+  LMDJ_CHECK(observed.value() == text(payload));
+  LMDJ_CHECK(complete_read_fault_calls >= 2);
+
+  const auto missing = directory / "missing.bin";
+  const auto absent = text_reader->read_complete_text(missing);
+  LMDJ_CHECK(!absent.has_value());
+  LMDJ_CHECK(absent.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(absent.error().message == "storage file could not be opened");
+}
+
 void test_replacement_readers_observe_only_complete_versions() {
   TempDirectory temp;
   const auto directory = temp.path() / "atomic";
@@ -872,6 +930,65 @@ void test_replacement_readers_observe_only_complete_versions() {
               " message=" + observed.error().message);
         }
         if (observed.value() != first && observed.value() != second) {
+          throw std::runtime_error(
+              "racing reader observed a torn version: " +
+              std::to_string(observed.value().size()) + " bytes");
+        }
+      }
+    }));
+  }
+  while (started.load(std::memory_order_acquire) < reader_count) {
+    std::this_thread::yield();
+  }
+  for (std::size_t index = 0; index < 64; ++index) {
+    const auto& replacement = index % 2 == 0 ? second : first;
+    LMDJ_CHECK(platform->replace_complete(path, replacement).has_value());
+  }
+  stopped.store(true, std::memory_order_release);
+  for (auto& reader : readers) {
+    reader.get();
+  }
+}
+
+void test_text_replacement_readers_observe_only_complete_versions() {
+  TempDirectory temp;
+  const auto directory = temp.path() / "atomic";
+  const auto path = directory / "pointer.json";
+  auto platform = make_default_project_storage_platform();
+  const auto* text_reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(platform.get());
+  LMDJ_CHECK(text_reader != nullptr);
+  LMDJ_CHECK(platform->ensure_directory(directory).has_value());
+  auto lease = platform->acquire_writer(temp.path());
+  LMDJ_CHECK(lease.has_value());
+  const std::vector<std::byte> first(256U * 1024U, std::byte{'a'});
+  const std::vector<std::byte> second(256U * 1024U, std::byte{'b'});
+  LMDJ_CHECK(platform->create_immutable(path, first).has_value());
+
+  const auto first_text = text(first);
+  const auto second_text = text(second);
+  constexpr std::size_t reader_count = 4;
+  std::atomic<std::size_t> started{0};
+  std::atomic<bool> stopped{false};
+  std::vector<std::future<void>> readers;
+  readers.reserve(reader_count);
+  for (std::size_t reader_index = 0; reader_index < reader_count;
+       ++reader_index) {
+    readers.push_back(std::async(std::launch::async, [&]() {
+      started.fetch_add(1, std::memory_order_release);
+      while (!stopped.load(std::memory_order_acquire)) {
+        const auto observed = text_reader->read_complete_text(path);
+        // A reader that races a replacement must still see one complete
+        // version. When that fails the message is the whole diagnosis, and
+        // a bare has_value() check throws it away: this failure is rare and
+        // platform-specific, so one occurrence has to be enough to identify
+        // the path that produced it.
+        if (!observed.has_value()) {
+          throw std::runtime_error(
+              "racing reader observed no complete version: code=" +
+              std::to_string(static_cast<int>(observed.error().code)) +
+              " message=" + observed.error().message);
+        }
+        if (observed.value() != first_text && observed.value() != second_text) {
           throw std::runtime_error(
               "racing reader observed a torn version: " +
               std::to_string(observed.value().size()) + " bytes");
@@ -1048,6 +1165,50 @@ void test_complete_read_serializes_compliant_same_inode_mutation() {
   LMDJ_CHECK(observed.value() == after);
 }
 
+void test_complete_text_read_serializes_compliant_same_inode_mutation() {
+  using namespace std::chrono_literals;
+  TempDirectory temp;
+  const auto directory = temp.path() / "stable-read";
+  const auto path = directory / "payload.bin";
+  auto platform = make_default_project_storage_platform();
+  const auto* text_reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(platform.get());
+  LMDJ_CHECK(text_reader != nullptr);
+  LMDJ_CHECK(platform->ensure_directory(directory).has_value());
+  auto lease = platform->acquire_writer(temp.path());
+  LMDJ_CHECK(lease.has_value());
+  const std::vector<std::byte> before(512U * 1024U, std::byte{'a'});
+  const std::vector<std::byte> after(512U * 1024U, std::byte{'b'});
+  LMDJ_CHECK(platform->create_immutable(path, before).has_value());
+
+  const int descriptor = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
+  LMDJ_CHECK(descriptor >= 0);
+  LMDJ_CHECK(::flock(descriptor, LOCK_EX) == 0);
+  const auto first_half = after.size() / 2;
+  LMDJ_CHECK(
+      ::pwrite(descriptor, after.data(), first_half, 0) ==
+      static_cast<ssize_t>(first_half));
+
+  auto reader = std::async(
+      std::launch::async,
+      [text_reader, path]() { return text_reader->read_complete_text(path); });
+  const auto status_while_locked = reader.wait_for(150ms);
+  LMDJ_CHECK(
+      ::pwrite(
+          descriptor,
+          after.data() + first_half,
+          after.size() - first_half,
+          static_cast<off_t>(first_half)) ==
+      static_cast<ssize_t>(after.size() - first_half));
+  LMDJ_CHECK(::fsync(descriptor) == 0);
+  LMDJ_CHECK(::flock(descriptor, LOCK_UN) == 0);
+  LMDJ_CHECK(::close(descriptor) == 0);
+
+  const auto observed = reader.get();
+  LMDJ_CHECK(status_while_locked == std::future_status::timeout);
+  LMDJ_CHECK(observed.has_value());
+  LMDJ_CHECK(observed.value() == text(after));
+}
+
 void test_special_files_are_rejected_without_blocking() {
   using namespace std::chrono_literals;
   TempDirectory temp;
@@ -1062,6 +1223,37 @@ void test_special_files_are_rejected_without_blocking() {
   auto reader = std::async(
       std::launch::async,
       [platform, fifo]() { return platform->read_complete(fifo); });
+  const auto status = reader.wait_for(250ms);
+  if (status != std::future_status::ready) {
+    const int writer = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    LMDJ_CHECK(writer >= 0);
+    LMDJ_CHECK(::close(writer) == 0);
+  }
+  const auto rejected = reader.get();
+  LMDJ_CHECK(status == std::future_status::ready);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::io_error);
+  const auto managed_tree = platform->validate_managed_tree(directory);
+  LMDJ_CHECK(!managed_tree.has_value());
+  LMDJ_CHECK(managed_tree.error().code == ErrorCode::invalid_project);
+}
+
+void test_text_special_files_are_rejected_without_blocking() {
+  using namespace std::chrono_literals;
+  TempDirectory temp;
+  const auto directory = temp.path() / "special";
+  const auto fifo = directory / "payload.fifo";
+  auto platform = make_default_project_storage_platform();
+  const auto* text_reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(platform.get());
+  LMDJ_CHECK(text_reader != nullptr);
+  LMDJ_CHECK(platform->ensure_directory(directory).has_value());
+  auto lease = platform->acquire_writer(temp.path());
+  LMDJ_CHECK(lease.has_value());
+  LMDJ_CHECK(::mkfifo(fifo.c_str(), 0600) == 0);
+
+  auto reader = std::async(
+      std::launch::async,
+      [text_reader, fifo]() { return text_reader->read_complete_text(fifo); });
   const auto status = reader.wait_for(250ms);
   if (status != std::future_status::ready) {
     const int writer = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
@@ -1139,6 +1331,306 @@ void test_symlinks_are_rejected_and_system_failures_are_typed() {
   LMDJ_CHECK(directory_read.error().details.contains("system_error"));
 }
 
+std::filesystem::path create_journal_layout(const std::filesystem::path& bundle) {
+  for (const auto& relative : std::array{
+           "assets", "history/checkpoints", "history/transactions",
+           "recovery/active", "recovery/sealed"}) {
+    std::filesystem::create_directories(bundle / relative);
+  }
+  write_bytes(bundle / "manifest.json", "{\"layout\":1}");
+  write_bytes(bundle / "recovery/active/sequence.jsonl", "retained-journal");
+  return bundle;
+}
+
+void test_journal_layout_requires_each_real_directory_and_manifest() {
+  TempDirectory temp;
+  const auto bundle = create_journal_layout(temp.path() / "project.lmdj");
+  auto platform = make_default_project_storage_platform();
+  const auto* layout = dynamic_cast<const lmdj::project_io::ProjectJournalLayoutValidator*>(platform.get());
+  LMDJ_CHECK(layout != nullptr);
+  LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  const std::array required{
+      bundle, bundle / "assets", bundle / "history",
+      bundle / "history/checkpoints", bundle / "history/transactions",
+      bundle / "recovery", bundle / "recovery/active", bundle / "recovery/sealed"};
+  for (const auto& directory : required) {
+    const auto held = temp.path() / "held-directory";
+    std::filesystem::rename(directory, held);
+    const auto missing = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(!missing.has_value());
+    LMDJ_CHECK(missing.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(missing.error().message == "Sequence Journal managed directory is missing or invalid");
+    LMDJ_CHECK(missing.error().details == nlohmann::json({{"path", directory.generic_string()}}));
+    write_bytes(directory, "regular-directory-substitute");
+    const auto wrong_type = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(!wrong_type.has_value());
+    LMDJ_CHECK(wrong_type.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(wrong_type.error().details.at("path") == directory.generic_string());
+    LMDJ_CHECK(wrong_type.error().message == (directory == bundle
+        ? "managed storage tree root is not a directory"
+        : "Sequence Journal managed directory is missing or invalid"));
+    std::filesystem::remove(directory);
+    std::filesystem::rename(held, directory);
+    LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  }
+  const auto assets = bundle / "assets", history = bundle / "history";
+  const auto held_assets = temp.path() / "held-assets";
+  const auto held_history = temp.path() / "held-history";
+  std::filesystem::rename(assets, held_assets);
+  std::filesystem::rename(history, held_history);
+  const auto first_missing = layout->validate_journal_layout(bundle);
+  LMDJ_CHECK(!first_missing.has_value());
+  LMDJ_CHECK(first_missing.error().details.at("path") == assets.generic_string());
+  std::filesystem::rename(held_assets, assets);
+  const auto second_missing = layout->validate_journal_layout(bundle);
+  LMDJ_CHECK(!second_missing.has_value());
+  LMDJ_CHECK(second_missing.error().details.at("path") == history.generic_string());
+  std::filesystem::rename(held_history, history);
+  LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  const auto manifest = bundle / "manifest.json";
+  const auto held_manifest = temp.path() / "held-manifest";
+  std::filesystem::rename(manifest, held_manifest);
+  for (const bool wrong_type : {false, true}) {
+    if (wrong_type) std::filesystem::create_directory(manifest);
+    const auto rejected = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(rejected.error().message == "Sequence Journal Project manifest is missing or invalid");
+    LMDJ_CHECK(rejected.error().details == nlohmann::json({{"path", manifest.generic_string()}}));
+    if (wrong_type) std::filesystem::remove(manifest);
+  }
+  std::filesystem::rename(held_manifest, manifest);
+  LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+}
+
+void test_journal_layout_rejects_unsafe_tree_before_missing_directory() {
+  TempDirectory temp;
+  const auto bundle = create_journal_layout(temp.path() / "project.lmdj");
+  auto platform = make_default_project_storage_platform();
+  const auto* layout = dynamic_cast<const lmdj::project_io::ProjectJournalLayoutValidator*>(platform.get());
+  LMDJ_CHECK(layout != nullptr);
+  const auto external = temp.path() / "external.bin";
+  write_bytes(external, "external");
+  const auto unused = bundle / "unused-entry";
+  for (const unsigned kind : {0U, 1U, 2U}) {
+    if (kind == 0) std::filesystem::create_symlink(external, unused);
+    if (kind == 1) std::filesystem::create_hard_link(external, unused);
+    if (kind == 2) LMDJ_CHECK(::mkfifo(unused.c_str(), 0600) == 0);
+    const auto assets = bundle / "assets";
+    const auto held = temp.path() / "held-assets";
+    std::filesystem::rename(assets, held);
+    const auto rejected = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(rejected.error().details.at("path") == unused.generic_string());
+    LMDJ_CHECK(rejected.error().message == (kind == 0
+        ? "managed storage tree contains a symbolic link"
+        : kind == 1 ? "managed storage tree contains a hard-linked file"
+                    : "managed storage tree contains a special file"));
+    std::filesystem::remove(unused);
+    const auto missing = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(!missing.has_value());
+    LMDJ_CHECK(missing.error().details.at("path") == assets.generic_string());
+    std::filesystem::rename(held, assets);
+    LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  }
+}
+
+void test_journal_layout_rejects_root_ancestor_and_required_symlinks() {
+  TempDirectory temp;
+  const auto bundle = create_journal_layout(temp.path() / "project.lmdj");
+  auto platform = make_default_project_storage_platform();
+  const auto* layout = dynamic_cast<const lmdj::project_io::ProjectJournalLayoutValidator*>(platform.get());
+  LMDJ_CHECK(layout != nullptr);
+  const auto linked_root = temp.path() / "linked-root";
+  std::filesystem::create_directory_symlink(bundle, linked_root);
+  const auto linked_ancestor = temp.path() / "linked-ancestor";
+  std::filesystem::create_directory_symlink(temp.path(), linked_ancestor);
+  for (const auto& path : std::array{linked_root, linked_ancestor / "project.lmdj"}) {
+    const auto original = platform->validate_managed_tree(path);
+    const auto rejected = layout->validate_journal_layout(path);
+    LMDJ_CHECK(!original.has_value() && !rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == original.error().code);
+    LMDJ_CHECK(rejected.error().message == original.error().message);
+    LMDJ_CHECK(rejected.error().details == original.error().details);
+  }
+  for (const auto& path : std::array{bundle / "assets", bundle / "manifest.json"}) {
+    const auto held = temp.path() / "held-required";
+    std::filesystem::rename(path, held);
+    std::filesystem::create_symlink(held, path);
+    const auto rejected = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(rejected.error().details.at("path") == path.generic_string());
+    LMDJ_CHECK(rejected.error().message == "managed storage tree contains a symbolic link");
+    std::filesystem::remove(path);
+    std::filesystem::rename(held, path);
+    LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  }
+}
+
+std::filesystem::path layout_original, layout_detached, layout_replacement;
+unsigned layout_substitution_calls{};
+
+lmdj::foundation::Result<void> substitute_checked_journal_root(
+    FaultPoint point, const std::filesystem::path& path) {
+  if (point == FaultPoint::journal_layout_checked && path == layout_original) {
+    ++layout_substitution_calls;
+    std::filesystem::rename(layout_original, layout_detached);
+    std::filesystem::rename(layout_replacement, layout_original);
+  }
+  return lmdj::foundation::Result<void>::success();
+}
+
+void test_journal_layout_rejects_valid_named_root_substitution() {
+  TempDirectory temp;
+  const auto bundle = create_journal_layout(temp.path() / "project.lmdj");
+  auto platform = make_default_project_storage_platform();
+  const auto* layout = dynamic_cast<const lmdj::project_io::ProjectJournalLayoutValidator*>(platform.get());
+  LMDJ_CHECK(layout != nullptr);
+  layout_original = bundle;
+  layout_detached = temp.path() / "detached.lmdj";
+  layout_replacement = temp.path() / "replacement.lmdj";
+  layout_substitution_calls = 0;
+  std::filesystem::copy(bundle, layout_replacement, std::filesystem::copy_options::recursive);
+  struct stat original {}, replacement {};
+  LMDJ_CHECK(::stat(bundle.c_str(), &original) == 0);
+  LMDJ_CHECK(::stat(layout_replacement.c_str(), &replacement) == 0);
+  LMDJ_CHECK(original.st_dev != replacement.st_dev || original.st_ino != replacement.st_ino);
+  LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  LMDJ_CHECK(layout->validate_journal_layout(layout_replacement).has_value());
+  const auto original_manifest = text(platform->read_complete(bundle / "manifest.json").value());
+  const auto original_journal = text(platform->read_complete(bundle / "recovery/active/sequence.jsonl").value());
+  {
+    StorageHookGuard hook{substitute_checked_journal_root};
+    const auto rejected = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(layout_substitution_calls == 1);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(rejected.error().message == "Sequence Journal Project root changed during layout validation");
+    LMDJ_CHECK(rejected.error().details == nlohmann::json({{"path", bundle.generic_string()}}));
+  }
+  LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+  for (const auto& path : std::array{bundle, layout_detached}) {
+    LMDJ_CHECK(text(platform->read_complete(path / "manifest.json").value()) == original_manifest);
+    LMDJ_CHECK(text(platform->read_complete(path / "recovery/active/sequence.jsonl").value()) == original_journal);
+  }
+  std::filesystem::remove_all(bundle);
+  std::filesystem::rename(layout_detached, bundle);
+  struct stat restored {};
+  LMDJ_CHECK(::stat(bundle.c_str(), &restored) == 0);
+  LMDJ_CHECK(restored.st_dev == original.st_dev && restored.st_ino == original.st_ino);
+  LMDJ_CHECK(layout->validate_journal_layout(bundle).has_value());
+}
+
+struct JournalManifestLockProbe {
+  std::filesystem::path expected_path;
+  std::filesystem::path observed_path;
+  int calls = 0;
+  int open_result = -1;
+  int open_errno = 0;
+  int exclusive_result = -2;
+  int exclusive_errno = 0;
+  int shared_result = -2;
+  int shared_errno = 0;
+  int close_result = -2;
+  int close_errno = 0;
+};
+
+JournalManifestLockProbe journal_manifest_lock_probe;
+
+lmdj::foundation::Result<void> probe_locked_journal_manifest(
+    FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point != FaultPoint::journal_layout_manifest_locked) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  ++journal_manifest_lock_probe.calls;
+  journal_manifest_lock_probe.observed_path = path;
+  errno = 0;
+  const int descriptor = ::open(
+      path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+  journal_manifest_lock_probe.open_result = descriptor;
+  journal_manifest_lock_probe.open_errno = errno;
+  if (descriptor >= 0) {
+    errno = 0;
+    journal_manifest_lock_probe.exclusive_result =
+        ::flock(descriptor, LOCK_EX | LOCK_NB);
+    journal_manifest_lock_probe.exclusive_errno = errno;
+    errno = 0;
+    journal_manifest_lock_probe.shared_result =
+        ::flock(descriptor, LOCK_SH | LOCK_NB);
+    journal_manifest_lock_probe.shared_errno = errno;
+    errno = 0;
+    journal_manifest_lock_probe.close_result = ::close(descriptor);
+    journal_manifest_lock_probe.close_errno = errno;
+  }
+  // Every successfully opened independent FD is closed before any assertion.
+  // Success here permits the genuine Native descriptor to finish its scope.
+  return lmdj::foundation::Result<void>::success();
+}
+
+void test_journal_layout_holds_and_releases_real_shared_manifest_lock() {
+  TempDirectory temp;
+  const auto bundle = create_journal_layout(temp.path() / "project.lmdj");
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* layout = dynamic_cast<const lmdj::project_io::ProjectJournalLayoutValidator*>(platform.get());
+  LMDJ_CHECK(layout != nullptr);
+  const auto manifest = bundle / "manifest.json";
+  const auto journal = bundle / "recovery/active/sequence.jsonl";
+  const auto manifest_before = platform->read_complete(manifest);
+  const auto journal_before = platform->read_complete(journal);
+  LMDJ_CHECK(manifest_before.has_value());
+  LMDJ_CHECK(journal_before.has_value());
+  journal_manifest_lock_probe = JournalManifestLockProbe{};
+  journal_manifest_lock_probe.expected_path = manifest;
+  {
+    StorageHookGuard hook{probe_locked_journal_manifest};
+    const auto validated = layout->validate_journal_layout(bundle);
+    LMDJ_CHECK(journal_manifest_lock_probe.calls == 1);
+    LMDJ_CHECK(journal_manifest_lock_probe.observed_path ==
+               journal_manifest_lock_probe.expected_path);
+    LMDJ_CHECK(journal_manifest_lock_probe.open_result >= 0);
+    LMDJ_CHECK(journal_manifest_lock_probe.close_result == 0);
+    LMDJ_CHECK(journal_manifest_lock_probe.exclusive_result == -1);
+    LMDJ_CHECK(journal_manifest_lock_probe.exclusive_errno == EWOULDBLOCK ||
+               journal_manifest_lock_probe.exclusive_errno == EAGAIN);
+    LMDJ_CHECK(journal_manifest_lock_probe.shared_result == 0);
+    LMDJ_CHECK(validated.has_value());
+  }
+
+  // A new open description must acquire the lock after the method returns.
+  // This is not the FD used by the callback or by the Native method.
+  JournalManifestLockProbe after_probe;
+  errno = 0;
+  const int after_descriptor = ::open(
+      manifest.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+  after_probe.open_result = after_descriptor;
+  after_probe.open_errno = errno;
+  int after_unlock_result = -2;
+  if (after_descriptor >= 0) {
+    errno = 0;
+    after_probe.exclusive_result = ::flock(after_descriptor, LOCK_EX | LOCK_NB);
+    after_probe.exclusive_errno = errno;
+    if (after_probe.exclusive_result == 0) {
+      after_unlock_result = ::flock(after_descriptor, LOCK_UN);
+    }
+    errno = 0;
+    after_probe.close_result = ::close(after_descriptor);
+    after_probe.close_errno = errno;
+  }
+  LMDJ_CHECK(after_probe.open_result >= 0);
+  LMDJ_CHECK(after_probe.exclusive_result == 0);
+  LMDJ_CHECK(after_unlock_result == 0);
+  LMDJ_CHECK(after_probe.close_result == 0);
+  const auto manifest_after = platform->read_complete(manifest);
+  const auto journal_after = platform->read_complete(journal);
+  LMDJ_CHECK(manifest_after.has_value());
+  LMDJ_CHECK(journal_after.has_value());
+  LMDJ_CHECK(manifest_after.value() == manifest_before.value());
+  LMDJ_CHECK(journal_after.value() == journal_before.value());
+}
+
 }  // namespace
 
 int main() {
@@ -1146,20 +1638,30 @@ int main() {
     test_writer_lease_is_reentrant_per_platform_and_competes_across_instances();
     test_writer_lease_rejects_hard_link_before_changing_permissions();
     test_complete_immutable_append_replace_and_remove_contract();
+    test_complete_text_read_preserves_bytes_and_fresh_versions();
     test_append_obeys_supplied_binary_prefix_and_flushes_once();
     test_immutable_fault_phases_precede_atomic_publication();
     test_path_substitution_never_publishes_a_symlink();
     test_names_use_unsigned_byte_order();
     test_directory_transfer_primitives_are_atomic_and_path_safe();
     test_complete_read_retries_replacement_transient_open();
+    test_complete_text_read_retries_replacement_transient_open();
     test_replacement_readers_observe_only_complete_versions();
+    test_text_replacement_readers_observe_only_complete_versions();
     test_workspace_cache_validates_generated_keys_and_replaces_atomically();
     test_workspace_cache_corruption_is_a_bounded_miss_and_remove_is_idempotent();
     test_workspace_cache_corrupt_read_never_removes_a_concurrent_valid_write();
     test_complete_read_serializes_compliant_same_inode_mutation();
+    test_complete_text_read_serializes_compliant_same_inode_mutation();
     test_special_files_are_rejected_without_blocking();
+    test_text_special_files_are_rejected_without_blocking();
     test_managed_tree_rejects_hard_linked_regular_files();
     test_symlinks_are_rejected_and_system_failures_are_typed();
+    test_journal_layout_requires_each_real_directory_and_manifest();
+    test_journal_layout_rejects_unsafe_tree_before_missing_directory();
+    test_journal_layout_rejects_root_ancestor_and_required_symlinks();
+    test_journal_layout_rejects_valid_named_root_substitution();
+    test_journal_layout_holds_and_releases_real_shared_manifest_lock();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

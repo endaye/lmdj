@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <lmdj/audio/runtime_preparation_limits.hpp>
@@ -1007,7 +1008,16 @@ void test_bridge_service_cadence_settles_pattern_transport() {
   // The request tail released with a pending ticket; no audio receipt or IO
   // settlement was awaited inside the dispatch.
   LMDJ_CHECK(ticket.at("result").at("submit") == "accepted");
-  LMDJ_CHECK(ticket.at("result").at("status").at("phase") == "awaiting_audio");
+  LMDJ_CHECK(ticket.at("result").at("status").at("phase") == "preparing");
+  const auto finish_pending_io = [&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (runtime->pattern_transport_pending()) {
+      LMDJ_CHECK(std::chrono::steady_clock::now() < deadline);
+      render_frames(*runtime, 128);
+      service_periodic(bridge);
+      std::this_thread::yield();
+    }
+  };
 
   // No continuation dispatch at all: the bridge service cadence reenters the
   // controller for short epoch-checked steps until the operation settles.
@@ -1015,6 +1025,10 @@ void test_bridge_service_cadence_settles_pattern_transport() {
     render_frames(*runtime, 128);
     service_periodic(bridge);
   }
+  // The original eight callbacks remain. Dedicated I/O completion is now
+  // asynchronous; only the ordinary cadence advances it, without a caller
+  // continuation dispatch or a fabricated audio/storage completion.
+  finish_pending_io();
   const auto recording = bridge_request(
       bridge, "pattern.transport.inspect", {{"session_id", kSessionId}}, 91);
   LMDJ_CHECK(recording.value("ok", false));
@@ -1031,6 +1045,7 @@ void test_bridge_service_cadence_settles_pattern_transport() {
     render_frames(*runtime, 128);
     service_periodic(bridge);
   }
+  finish_pending_io();
   const auto settled = bridge_request(
       bridge, "pattern.transport.inspect", {{"session_id", kSessionId}}, 93);
   LMDJ_CHECK(settled.at("result").at("recording") == false);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -10,6 +11,7 @@
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/domain/project.hpp>
 #include <lmdj/facade/pattern_transport_ports.hpp>
+#include <lmdj/facade/scheduled_pattern_transport.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/foundation/ids.hpp>
 
@@ -140,13 +142,26 @@ struct PatternTransportOverlay {
   bool operator==(const PatternTransportOverlay&) const = default;
 };
 
+// Independent resource disposition; this never reports a successful take or
+// changes the ordinary transport status. `disposed` requires the original I/O
+// owner's completed owner_lost work, including reconciliation of unknown I/O.
+struct PatternTransportInputOwnerStatus {
+  std::uint64_t runtime_generation{};
+  bool invalidated{};
+  bool disposed{};
+  bool acknowledged{};
+  bool pending{};
+  std::size_t held_correlations{};
+};
+
 // Host-consumable Pattern transport controller: the public ownership wrapper
 // around the internal coordinator. The Facade compilation unit constructs and
 // self-owns the Sequence Journal and Project Store the coordinator needs, so
 // the public signature carries only ports/foundation/audio/std types and a
 // Host never names a Project I/O type or parses a Project bundle.
 //
-// All four operations are short serialized-control-lane steps.
+// The Host serializes controller calls, including const inspection and
+// input-ticket operations, on its control lane.
 // `request` resolves the toggle once and reserves the command/epoch without
 // waiting for audio or IO; `continue_operation` is the reentrant continuation
 // step that inspects an already-published receipt and settles durable effects,
@@ -177,6 +192,8 @@ class PatternTransportController {
   // no recording is open on this controller's session; succeeds with
   // `live_only` when the candidate falls outside the acknowledged
   // admission/cutoff interval. Same control-lane serialization as `request`.
+  // A pending I/O result carries details.pending=true. Continue and inspect
+  // this exact candidate; never enqueue it again or assign a new watermark.
   foundation::Result<PatternAdmissionAdmit> admit(
       const PatternTransportCandidate& candidate);
   // Projects the open recording's pending overlay. Same control-lane
@@ -186,6 +203,8 @@ class PatternTransportController {
   // stays exactly once. `std::nullopt` means there is nothing to publish now —
   // no open recording, a frozen close, or a candidate prefix still awaiting
   // switch reconciliation — and is never a failure of the recording.
+  // A fresh projection crosses the worker cell; details.pending=true means
+  // drive the continuation and query again before using a content generation.
   foundation::Result<std::optional<PatternTransportOverlay>> project_overlay();
   // Publishes the open recording's pending overlay through the Host's
   // `publish_overlay` capability and records the publication generation it
@@ -195,6 +214,37 @@ class PatternTransportController {
   // so the exactly-once argument of the projection carries over: the transfer
   // a close commits is unchanged by any number of overlay publications.
   foundation::Result<void> publish_overlay();
+
+  PatternTransportSubmit request_count_in(const ScheduledPatternTransportRequest&);
+  ScheduledPatternTransportStatus inspect_count_in() const;
+  PatternTransportSubmit cancel_count_in(const ScheduledPatternTransportCancel&);
+  foundation::Result<PatternTransportInputTicket> reserve_input(const PatternTransportInputRequest&);
+  bool bind_input(const PatternTransportInputTicket&, const audio::PatternInputAdmission&);
+  bool complete_input(const audio::PatternInputCompletion&);
+  std::optional<PatternTransportInputStatus> inspect_input(const PatternTransportInputTicket&) const;
+  bool consume_input(const PatternTransportInputTicket&);
+  // Only an unbound reservation may be abandoned after native enqueue refused.
+  bool abandon_input(const PatternTransportInputTicket&);
+  PatternTransportIngressStatus inspect_ingress() const;
+  PatternTransportInputOwnerStatus inspect_input_owner() const;
+  // After actual stopped Native revocation and all accepted consumers settled:
+  // a never-recorded owner uses an actual bound input CommandId with epoch 0;
+  // an already durably closed owner uses its exact retained real closing
+  // request/F identity. The same I/O owner proves absence/disposition. This
+  // neither creates a Journal nor repeats a close or invents transport/F.
+  bool request_input_owner_disposition(std::uint64_t runtime_generation);
+  // Exceptional, serialized owner acknowledgment only. The Host first proves
+  // actual stopped Native quiescence, revokes its unsubmitted physical holds,
+  // and consumes every accepted Native/input ticket through its real consumer.
+  // This retires only this Facade's remaining future-release correlations after
+  // durable owner_lost, with no outstanding work/candidate/ticket. Wrong or
+  // already acknowledged generations refuse. The failed status stays failed.
+  bool acknowledge_input_owner(std::uint64_t runtime_generation);
+  // Drain accepted work before destruction. shutdown_complete observes the
+  // I/O owner thread; the Host separately proves native/audio quiescence.
+  void request_shutdown();
+  bool shutdown_complete() const;
+  PatternTransportExecutorStatus inspect_io() const;
 
  private:
   struct Impl;
@@ -213,5 +263,9 @@ class PatternTransportController {
 // when the Host supplies none.
 std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
     PatternTransportAudioPort& audio, PatternTransportControllerConfig config);
+
+std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
+    PatternTransportAudioPort& audio, ScheduledPatternTransportAudioPort& scheduled,
+    PatternTransportControllerConfig config);
 
 }  // namespace lmdj::facade

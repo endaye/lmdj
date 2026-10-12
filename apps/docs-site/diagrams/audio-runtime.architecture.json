@@ -1,1 +1,218 @@
-{"schema_version":1,"meta":{"title":"Audio Runtime Module","summary":"不可变 Pattern、SEQ SNAP 边界、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出"},"boundaries":[],"components":[{"id":"snapshot","label":"Prepared Pattern","detail":"canonical snapshot / overlay","kind":"host","x":40,"y":170,"width":210,"height":96},{"id":"bank","label":"Pattern / Voice Owners","detail":"origin · retained PCM generations","kind":"core","x":330,"y":170,"width":240,"height":96},{"id":"engine","label":"Realtime Engine","detail":"atomic32 claim · SEQ SNAP","kind":"core","x":640,"y":170,"width":230,"height":96},{"id":"masterfx","label":"Master FX Chain","detail":"fixed 8 stages · single Filter: legacy | typed LP/HP/BP","kind":"core","x":950,"y":170,"width":250,"height":96},{"id":"output","label":"Audio + Status","detail":"device · generation","kind":"host","x":1280,"y":170,"width":230,"height":96},{"id":"control","label":"FX Control Lane","detail":"bounded gesture + tempo + typed filter + pad gates","kind":"core","x":280,"y":380,"width":250,"height":96},{"id":"capture","label":"Capture Ring","detail":"4096 events · lazy storage","kind":"core","x":950,"y":380,"width":250,"height":96},{"id":"writer","label":"Capture Writer","detail":"control drain · session","kind":"host","x":1280,"y":380,"width":230,"height":96},{"id":"transport","label":"Pattern Transport","detail":"control: submit / inspect / ack","kind":"host","x":40,"y":490,"width":280,"height":96},{"id":"receipt","label":"Retained Receipt","detail":"F / origin / identity / cutoff","kind":"core","x":640,"y":380,"width":250,"height":96}],"connections":[{"from":"snapshot","to":"bank"},{"from":"bank","to":"engine","label":"slot token + 64-bit identity"},{"from":"control","to":"engine","label":"bounded control"},{"from":"engine","to":"masterfx","label":"mixed stereo bus"},{"from":"masterfx","to":"output"},{"from":"engine","to":"capture","label":"captured starts"},{"from":"capture","to":"writer","label":""},{"from":"transport","to":"engine","label":"one POD command; before claim"},{"from":"engine","to":"receipt","label":"audio-owned S < F decision"},{"from":"receipt","to":"transport","label":"immutable until acknowledgment"},{"from":"engine","to":"bank","label":""}],"cards":[{"title":"Pattern Transport / Phase","body":"Beat/Bar/End use claimed geometry; audio applies both. Phase keeps voices. Stop ramps; Fence keeps origin."},{"title":"Telemetry","body":"Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff. Runtime-only Facade owns OPEN/BUSY drain; its audio-only consumed counter is not proof of a started Voice."},{"title":"Master FX","body":"Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock. The single Filter stage also has a typed independent branch (TPT SVF, LP/HP/BP, integer Hz cutoff, milli-percent resonance) with bit-exact OFF bypass; accepted control shadow and audio-applied state/sequence/epoch stay separate. Live Mute/Solo is a per-voice gain gate before the shared FX input: both 64-bit masks apply as one atomic pair over the same bounded lane, muted wins over soloed, the audition sentinel is unreachable, and bytes already inside the shared Delay/Reverb decay on their own."},{"title":"Forbidden boundary","body":"No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread. Reclaimed decoded PCM bytes refund Project Banks only; the reserved audition pool contributes no Project reservation refund."}]}
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "Audio Runtime Module",
+    "summary": "S6 源码草稿：ordinary Phase/SNAP、serial60 scheduled cell、独立 input escrow 与 product/cue 输出"
+  },
+  "boundaries": [],
+  "components": [
+    {
+      "id": "snapshot",
+      "label": "Prepared Pattern",
+      "detail": "canonical snapshot / overlay",
+      "kind": "host",
+      "x": 40,
+      "y": 170,
+      "width": 210,
+      "height": 96
+    },
+    {
+      "id": "bank",
+      "label": "Pattern / Voice Owners",
+      "detail": "origin · retained PCM generations",
+      "kind": "core",
+      "x": 330,
+      "y": 170,
+      "width": 240,
+      "height": 96
+    },
+    {
+      "id": "engine",
+      "label": "Realtime Engine",
+      "detail": "atomic32 SNAP · exact S claim",
+      "kind": "core",
+      "x": 640,
+      "y": 170,
+      "width": 230,
+      "height": 96
+    },
+    {
+      "id": "masterfx",
+      "label": "Master FX Chain",
+      "detail": "8 stages · typed/legacy Filter",
+      "kind": "core",
+      "x": 950,
+      "y": 170,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "output",
+      "label": "Product Output",
+      "detail": "master FX · output 0",
+      "kind": "host",
+      "x": 1280,
+      "y": 170,
+      "width": 230,
+      "height": 96
+    },
+    {
+      "id": "control",
+      "label": "FX Control Lane",
+      "detail": "bounded gesture + tempo + typed filter + pad gates",
+      "kind": "core",
+      "x": 280,
+      "y": 380,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "capture",
+      "label": "Capture Ring",
+      "detail": "4096 events · lazy storage",
+      "kind": "core",
+      "x": 950,
+      "y": 380,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "writer",
+      "label": "Capture Writer",
+      "detail": "control drain · session",
+      "kind": "host",
+      "x": 1280,
+      "y": 380,
+      "width": 230,
+      "height": 96
+    },
+    {
+      "id": "transport",
+      "label": "Pattern Transport",
+      "detail": "ordinary + opt-in 2N input",
+      "kind": "host",
+      "x": 40,
+      "y": 380,
+      "width": 210,
+      "height": 96
+    },
+    {
+      "id": "receipt",
+      "label": "Retained e1 / e2",
+      "detail": "actual S / F · independent ACK",
+      "kind": "core",
+      "x": 640,
+      "y": 380,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "schedule",
+      "label": "Scheduled Cell",
+      "detail": "serial60 · Preparing copy · borrow",
+      "kind": "core",
+      "x": 40,
+      "y": 490,
+      "width": 280,
+      "height": 96
+    },
+    {
+      "id": "cue",
+      "label": "Cue PCM Output",
+      "detail": "pointer-free batch · output 1",
+      "kind": "host",
+      "x": 1280,
+      "y": 490,
+      "width": 230,
+      "height": 96
+    }
+  ],
+  "connections": [
+    {
+      "from": "snapshot",
+      "to": "bank"
+    },
+    {
+      "from": "bank",
+      "to": "engine",
+      "label": "slot token + 64-bit identity"
+    },
+    {
+      "from": "control",
+      "to": "engine",
+      "label": "bounded control"
+    },
+    {
+      "from": "engine",
+      "to": "masterfx",
+      "label": "mixed stereo bus"
+    },
+    {
+      "from": "masterfx",
+      "to": "output"
+    },
+    {
+      "from": "engine",
+      "to": "capture",
+      "label": "captured starts"
+    },
+    {
+      "from": "capture",
+      "to": "writer",
+      "label": ""
+    },
+    {
+      "from": "transport",
+      "to": "engine",
+      "label": "one POD command; before claim"
+    },
+    {
+      "from": "engine",
+      "to": "receipt",
+      "label": "audio-owned S < F decision"
+    },
+    {
+      "from": "receipt",
+      "to": "transport",
+      "label": "immutable until acknowledgment"
+    },
+    {
+      "from": "engine",
+      "to": "bank",
+      "label": ""
+    },
+    {
+      "from": "transport",
+      "to": "schedule",
+      "label": "separate companion"
+    },
+    {
+      "from": "schedule",
+      "to": "engine",
+      "label": "C then S = C + bars * B"
+    },
+    {
+      "from": "engine",
+      "to": "cue",
+      "label": "committed spans; render + ACK"
+    }
+  ],
+  "cards": [
+    {
+      "title": "普通与 scheduled transport",
+      "body": "Phase/SNAP 保留；Preparing 独占复制/借用后 Armed。e1=S、真 e2=F；无回填。"
+    },
+    {
+      "title": "输入与退役",
+      "body": "2N FIFO/completion，N ordinary/N held release。press ACK 不结束 hold；pre-S 无录音 lineage。"
+    },
+    {
+      "title": "产品与 cue",
+      "body": "单 typed/legacy Filter。output0 经 Master tap；output1 只接 monitor。两路 PCM 后 batch ACK。"
+    },
+    {
+      "title": "Live Pad Mute/Solo",
+      "body": "FX 前逐 Voice gain gate；64-bit Mute/Solo masks 原子成对应用，muted 优先；audition 不受影响。共享 Delay/Reverb 已有尾音自然衰减。"
+    }
+  ]
+}

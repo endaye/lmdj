@@ -7,6 +7,7 @@
 #include <lmdj/project_io/sequence_journal.hpp>
 
 #include "pattern_transport_controller.hpp"
+#include "pattern_transport_io_owner.hpp"
 
 namespace lmdj::facade {
 namespace {
@@ -64,38 +65,35 @@ class AudioPortBridge final : public detail::PatternTransportAudioPort {
 }  // namespace
 
 struct PatternTransportController::Impl {
+  struct RegistryRetirement {
+    std::function<void()> callback;
+    ~RegistryRetirement() { try { if (callback) callback(); } catch (...) {} }
+  };
   Impl(PatternTransportAudioPort& audio, PatternTransportControllerConfig config,
        std::shared_ptr<project_io::ProjectStoragePlatform> platform,
        std::shared_ptr<project_io::AuthoringHistory> history,
-       std::function<void()> on_destroy)
-      : bridge(audio),
-        // A null platform default-constructs inside both collaborators, which
-        // is exactly the free-function behavior; a caller-owned instance makes
-        // the writer-lease registry shared.
-        journals(platform),
-        store(std::move(platform), std::move(history)),
-        coordinator(bridge, journals, store, std::move(config.bundle),
-                    config.session, std::move(config.project),
-                    std::move(config.pattern), config.runtime_generation),
-        on_destroy(std::move(on_destroy)) {}
+       std::function<void()> on_destroy,
+       ScheduledPatternTransportAudioPort* scheduled)
+      : retirement{std::move(on_destroy)}, bridge(audio),
+        opening(std::make_shared<detail::PatternTransportOpeningPublication>()),
+        executor(config.runtime_generation,
+            [config, platform = std::move(platform), history = std::move(history), opening = opening] {
+              return std::make_unique<detail::PatternTransportIoOwner>(config, platform, history, opening);
+            }),
+        coordinator(bridge, executor, std::move(config), scheduled, opening) {}
   ~Impl() {
-    // The callback contract is infallible (mutex + map erase); an exception
-    // here must still never escape a destructor.
-    try {
-      if (on_destroy) {
-        on_destroy();
-      }
-    } catch (...) {
-    }
+    executor.request_shutdown();
   }
 
   // Declaration order is ownership order: the coordinator references the
-  // bridge, journals and store, so all three outlive it within the Impl.
+  // bridge and executor, so both outlive it within the Impl.
+  // Retire only after the executor has destroyed its owner, including failed startup.
+  RegistryRetirement retirement;
   AudioPortBridge bridge;
-  project_io::SequenceJournal journals;
-  project_io::ProjectStore store;
+  std::shared_ptr<detail::PatternTransportOpeningPublication> opening;
+  PatternTransportExecutor executor;
   detail::PatternTransportCoordinator coordinator;
-  std::function<void()> on_destroy;
+
 };
 
 PatternTransportController::PatternTransportController(
@@ -170,13 +168,14 @@ detail::PatternTransportControllerInternalFactory::make(
     PatternTransportControllerConfig config,
     std::shared_ptr<project_io::ProjectStoragePlatform> platform,
     std::shared_ptr<project_io::AuthoringHistory> history,
-    std::function<void()> on_destroy) {
+    std::function<void()> on_destroy,
+    ScheduledPatternTransportAudioPort* scheduled) {
   return std::unique_ptr<PatternTransportController>(
       new PatternTransportController(
           std::unique_ptr<PatternTransportController::Impl>(
               new PatternTransportController::Impl(
                   audio, std::move(config), std::move(platform),
-                  std::move(history), std::move(on_destroy)))));
+                  std::move(history), std::move(on_destroy), scheduled))));
 }
 
 std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
@@ -184,5 +183,27 @@ std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
   return detail::PatternTransportControllerInternalFactory::make(
       audio, std::move(config), nullptr);
 }
+
+std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
+    PatternTransportAudioPort& audio, ScheduledPatternTransportAudioPort& scheduled,
+    PatternTransportControllerConfig config) {
+  return detail::PatternTransportControllerInternalFactory::make(audio, std::move(config), nullptr, {}, {}, &scheduled);
+}
+PatternTransportSubmit PatternTransportController::request_count_in(const ScheduledPatternTransportRequest& r) { return impl_->coordinator.request_count_in(r); }
+ScheduledPatternTransportStatus PatternTransportController::inspect_count_in() const { return impl_->coordinator.inspect_count_in(); }
+PatternTransportSubmit PatternTransportController::cancel_count_in(const ScheduledPatternTransportCancel& r) { return impl_->coordinator.cancel_count_in(r); }
+foundation::Result<PatternTransportInputTicket> PatternTransportController::reserve_input(const PatternTransportInputRequest& r) { return impl_->coordinator.reserve_input(r); }
+bool PatternTransportController::bind_input(const PatternTransportInputTicket& t, const audio::PatternInputAdmission& a) { return impl_->coordinator.bind_input(t, a); }
+bool PatternTransportController::complete_input(const audio::PatternInputCompletion& c) { return impl_->coordinator.complete_input(c); }
+std::optional<PatternTransportInputStatus> PatternTransportController::inspect_input(const PatternTransportInputTicket& t) const { return impl_->coordinator.inspect_input(t); }
+bool PatternTransportController::consume_input(const PatternTransportInputTicket& t) { return impl_->coordinator.consume_input(t); }
+bool PatternTransportController::abandon_input(const PatternTransportInputTicket& t) { return impl_->coordinator.abandon_input(t); }
+PatternTransportIngressStatus PatternTransportController::inspect_ingress() const { return impl_->coordinator.inspect_ingress(); }
+PatternTransportInputOwnerStatus PatternTransportController::inspect_input_owner() const { return impl_->coordinator.inspect_input_owner(); }
+bool PatternTransportController::request_input_owner_disposition(std::uint64_t generation) { return impl_->coordinator.request_input_owner_disposition(generation); }
+bool PatternTransportController::acknowledge_input_owner(std::uint64_t generation) { return impl_->coordinator.acknowledge_input_owner(generation); }
+void PatternTransportController::request_shutdown() { impl_->coordinator.request_shutdown(); }
+bool PatternTransportController::shutdown_complete() const { return impl_->coordinator.shutdown_complete(); }
+PatternTransportExecutorStatus PatternTransportController::inspect_io() const { return impl_->coordinator.inspect_io(); }
 
 }  // namespace lmdj::facade

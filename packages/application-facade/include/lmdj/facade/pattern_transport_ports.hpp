@@ -43,6 +43,13 @@ class PatternTransportWorkOwner {
   virtual ~PatternTransportWorkOwner() = default;
   virtual PatternTransportWorkCompletion execute(const PatternTransportWorkRequest&) = 0;
 };
+// Optional reconciliation capability keeps the original owner vtable frozen.
+// Reconciliation reads actual durable state; it never blindly repeats execute.
+class PatternTransportWorkReconciler {
+ public:
+  virtual ~PatternTransportWorkReconciler() = default;
+  virtual PatternTransportWorkCompletion reconcile(const PatternTransportWorkRequest&) = 0;
+};
 struct PatternTransportExecutorStatus {
   bool ready{};
   bool shutdown_requested{};
@@ -72,8 +79,15 @@ class PatternTransportExecutor final {
   PatternTransportExecutor(const PatternTransportExecutor&) = delete;
   PatternTransportExecutor& operator=(const PatternTransportExecutor&) = delete;
   PatternTransportWorkSubmit submit(const PatternTransportWorkRequest& request);
+  // Separate resource disposition: epoch is exactly zero (no transport/F
+  // authority), payload is exactly {"op":"owner_lost"}, and CommandId is
+  // the coordinator's original accepted input. All cell/generation/step and
+  // reconciliation rules remain; the ordinary transport epoch floor is kept.
+  PatternTransportWorkSubmit submit_owner_disposition(
+      const PatternTransportWorkRequest& request);
   PatternTransportExecutorStatus inspect() const;
   bool consume(const PatternTransportWorkIdentity& identity);
+  bool reconcile(const PatternTransportWorkIdentity& identity);
   void request_shutdown();
  private:
   struct Impl;

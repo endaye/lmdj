@@ -427,6 +427,7 @@ class ProofHandler(BaseHTTPRequestHandler):
         expected_hashes: dict[str, str],
         catalog_upstream: str | None = None,
         catalog_upstream_file: Path | None = None,
+        test_audio_observer: bytes | None = None,
         verbose: bool = False,
         csp: str = CSP,
         **kwargs,
@@ -436,6 +437,7 @@ class ProofHandler(BaseHTTPRequestHandler):
         self.expected_hashes = expected_hashes
         self.catalog_upstream = catalog_upstream
         self.catalog_upstream_file = catalog_upstream_file
+        self.test_audio_observer = test_audio_observer
         self.verbose = verbose
         super().__init__(*args, **kwargs)
 
@@ -544,6 +546,19 @@ class ProofHandler(BaseHTTPRequestHandler):
         if self.headers.get("Range") is not None:
             self._status(404, include_body)
             return
+        # Only the explicit loopback proof invocation supplies this observer.
+        # Freeze its bytes at server creation. Product assets still pass the
+        # unchanged manifest/hash gate, and CSP stays identical to deployment.
+        if self.path == "/__lmdj-test__/audio-observer.js" and self.test_audio_observer is not None:
+            payload = self.test_audio_observer
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if include_body:
+                self.wfile.write(payload)
+            return
         suffix = self._catalog_suffix()
         if suffix is not None:
             self._serve_catalog(suffix, include_body)
@@ -596,6 +611,7 @@ def make_server(
     verbose: bool = False,
     catalog_upstream: str | None = None,
     catalog_upstream_file: Path | None = None,
+    test_audio_observer_file: Path | None = None,
 ) -> ProofServer:
     requested_root = root.expanduser()
     if not requested_root.is_absolute():
@@ -609,6 +625,17 @@ def make_server(
     root = requested_root.resolve(strict=True)
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ServerError("the proof server is loopback-only")
+    test_audio_observer = None
+    if test_audio_observer_file is not None:
+        observer = test_audio_observer_file.absolute()
+        test_audio_observer = read_file_no_follow(observer.parent, observer.name)
+        if (observer.suffix != ".js" or test_audio_observer is None or
+                not 0 < len(test_audio_observer) <= 65_536):
+            raise ServerError("test audio observer must be a regular JavaScript file of at most 65536 bytes")
+        try:
+            test_audio_observer.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise ServerError("test audio observer must be UTF-8") from error
     if port < 0 or port > 65_535:
         raise ServerError("port must be between 0 and 65535")
     if catalog_upstream is not None and catalog_upstream_file is not None:
@@ -642,6 +669,7 @@ def make_server(
             expected_hashes=expected_hashes,
             catalog_upstream=catalog_base,
             catalog_upstream_file=catalog_upstream_file,
+            test_audio_observer=test_audio_observer,
             verbose=verbose,
             csp=CREATOR_CSP if manifest.get("host_id") == "creator-web" else CSP,
         ),
@@ -674,6 +702,10 @@ def parse_arguments(argv: list[str], require_verifier: bool) -> argparse.Namespa
         ),
     )
     parser.add_argument("--ready-file", type=Path)
+    parser.add_argument(
+        "--test-audio-observer-file", type=Path,
+        help="explicit loopback proof-only AudioWorklet observer; does not change the distribution or CSP",
+    )
     parser.add_argument("--ready-nonce")
     return parser.parse_args(argv)
 
@@ -710,6 +742,7 @@ def main(
             options.verbose,
             options.catalog_upstream,
             options.catalog_upstream_file,
+            options.test_audio_observer_file,
         )
     except (OSError, ServerError) as error:
         print(f"web proof server error: {error}", file=sys.stderr)

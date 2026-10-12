@@ -21,18 +21,97 @@ def require_uncorrelatable_response_fail_closed(
     runtime_pre_source: str,
     label: str,
 ) -> None:
-    correlation = re.search(
-        r"const pending = pendingRequests\.get\(message\.request_id\);.*?"
-        r"else\s*\{\s*failClosed\(transportFailure\(\s*"
-        r'"HOST_PROTOCOL_MISMATCH".*?\)\);\s*return;\s*\}\s*\}\s*'
-        r"else\s*\{\s*for\s*\(const subscriber of notificationSubscribers\)",
-        runtime_pre_source,
-        re.DOTALL,
+    # Only the local response/notification fork, not global failClosed semantics,
+    # JavaScript binding provenance or retained-owner release, is checked here.
+    lexical = re.compile(
+        '"(?:\\\\.|[^"\\\\])*"|\\\'(?:\\\\.|[^\\\'\\\\])*\\\'|`(?:\\\\.|[^`\\\\])*`|/\\*[\\s\\S]*?\\*/|//[^\\n]*|[A-Za-z_$][\\w$]*|\\d[\\w]*|===|!==|&&|\\|\\||[^\\s]'
     )
-    require(
-        correlation is not None,
-        f"{label} Browser Main response correlation branch is missing",
-    )
+
+    def tokens(text: str) -> tuple[str, ...]:
+        return tuple(t for t in lexical.findall(text) if not t.startswith(("//", "/*")))
+
+    def check(value: bool) -> None:
+        require(value, f"{label} Browser Main response correlation branch is missing")
+
+    def group(ts: tuple[str, ...], start: int) -> tuple[tuple[str, ...], int]:
+        pairs = {"(": ")", "[": "]", "{": "}"}
+        check(start < len(ts) and ts[start] in pairs)
+        stack = [pairs[ts[start]]]
+        for n in range(start + 1, len(ts)):
+            if ts[n] in pairs:
+                stack.append(pairs[ts[n]])
+            elif ts[n] in pairs.values():
+                check(bool(stack) and ts[n] == stack.pop())
+                if not stack:
+                    return ts[start + 1:n], n + 1
+        check(False)
+        raise AssertionError("unreachable")
+
+    def if_arm(ts: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+        check(ts[:2] == ("if", "("))
+        condition, end = group(ts, 1)
+        check(end < len(ts) and ts[end] == "{")
+        arm, end = group(ts, end)
+        return condition, arm, ts[end:]
+
+    source = tokens(runtime_pre_source)
+    declaration = ("function", "pollTransport", "(", ")", "{")
+    matches = [n for n in range(len(source)) if source[n:n + len(declaration)] == declaration]
+    check(len(matches) == 1)
+    poll, _ = group(source, matches[0] + len(declaration) - 1)
+    # The current owned block has no templates; they are not parsed as effects.
+    check(not any(t.startswith("`") for t in poll))
+    fork = tokens('if (typeof message.request_id === "string")')
+    matches = [n for n in range(len(poll)) if poll[n:n + len(fork)] == fork]
+    check(len(matches) == 1)
+    _, response, tail = if_arm(poll[matches[0]:])
+    check(tail[:2] == ("else", "{"))
+    notification, notification_end = group(tail, 1)
+
+    # Both lookup and removal identify this response, not its operation name.
+    check(len(response) >= 2 and response[0] in {"const", "let"})
+    pending = response[1]
+    check(pending not in {"message", "pendingRequests"})
+    lookup = tokens(f"{response[0]} {pending} = pendingRequests.get(message.request_id);")
+    check(response[:len(lookup)] == lookup)
+    condition, tracked, rest = if_arm(response[len(lookup):])
+    check(condition == (pending,))
+    removal = tokens("pendingRequests.delete(message.request_id);")
+    check(tracked[:len(removal)] == removal and "notificationSubscribers" not in tracked)
+    check(rest[:2] == ("else", "if"))
+    condition, abandoned, rest = if_arm(rest[1:])
+    check(condition == tokens("abandonedRequestIds.delete(message.request_id)") and not abandoned)
+    check(rest[:2] == ("else", "{"))
+    unknown, end = group(rest, 1)
+    check(end == len(rest))
+
+    # One existing failClosed call, followed by no return or the current
+    # redundant guard. No reachable arbitrary early exit is optional.
+    call = tokens('failClosed(transportFailure("HOST_PROTOCOL_MISMATCH",')
+    check(unknown[:len(call)] == call)
+    check(len(unknown) > len(call) and unknown[len(call)].startswith(('"', "'")))
+    suffix = unknown[len(call) + 1:]
+    if suffix[:1] == (",",):
+        suffix = suffix[1:]
+    check(suffix[:3] == (")", ")", ";"))
+    suffix = suffix[3:]
+    check(not suffix or suffix == tokens("if (!transportTerminated) return;"))
+
+    check(notification[:2] == ("for", "("))
+    header, end = group(notification, 1)
+    check(len(header) == 4 and header[0] in {"const", "let"} and
+          header[1] != "message" and header[2:] == ("of", "notificationSubscribers"))
+    check(end < len(notification) and notification[end] == "{")
+    notify, end = group(notification, end)
+    check(end == len(notification) and notify == tokens(f"{header[1]}(message);"))
+    # Reject a new local early exit between this fork and the existing poll
+    # continuation. This is not a global worker/receipt provenance proof.
+    continuation = tail[notification_end:]
+    # A final void return after rescheduling cannot skip the continuation.
+    if continuation[-6:] == tokens("scheduleTransportPoll(); return;"):
+        continuation = continuation[:-2]
+    check(not any(t in {"return", "throw", "break", "continue"}
+                  for t in continuation))
 
 
 def main() -> int:
@@ -975,27 +1054,56 @@ def main() -> int:
         runtime_pre_source,
         "source",
     )
-    missing_return_source = runtime_pre_source.replace(
-        "            return;\n          }\n        } else {",
-        "          }\n        } else {",
-        1,
+    # Local correlation witnesses; existing real Native/browser/OPFS tests
+    # retain owner-release acceptance. No owner-provenance claim is made here.
+    for mutation_name, original, replacement in (
+        ('tracked-response-wrong-id-lookup', 'pendingRequests.get(message.request_id)', 'pendingRequests.get(message.operation)'),
+        ('tracked-response-wrong-id-removal', 'pendingRequests.delete(message.request_id)', 'pendingRequests.delete(message.operation)'),
+        ('abandoned-response-wrong-id-removal', 'abandonedRequestIds.delete(message.request_id)', 'abandonedRequestIds.delete(message.operation)'),
+        ('unknown-response-does-not-call-failClosed', '            failClosed(transportFailure(\n              "HOST_PROTOCOL_MISMATCH",', '            void(transportFailure(\n              "HOST_PROTOCOL_MISMATCH",'),
+        ('response-dispatched-as-notification', 'pendingRequests.get(message.request_id)', '(notificationSubscribers.forEach((subscriber) => subscriber(message)), pendingRequests.get(message.request_id))'),
+        ('unknown-response-unconditional-return', '            failClosed(transportFailure(\n              "HOST_PROTOCOL_MISMATCH",', '            return failClosed(transportFailure(\n              "HOST_PROTOCOL_MISMATCH",'),
+        ('sealed-continuation-unconditional-return', '    if (transportTerminated) reapAbandonedControlRequests();', '    if (transportTerminated) return;'),
+    ):
+        require(runtime_pre_source.count(original) == 1,
+                f"source-boundary {mutation_name} mutation anchor is missing or ambiguous")
+        mutated_source = runtime_pre_source.replace(original, replacement, 1)
+        require(mutated_source != runtime_pre_source,
+                f"source-boundary {mutation_name} mutation was not applied")
+        mutation_label = f"{mutation_name} mutation"
+        try:
+            require_uncorrelatable_response_fail_closed(mutated_source, mutation_label)
+        except AssertionError as error:
+            require(
+                str(error) == f"{mutation_label} Browser Main response correlation branch is missing",
+                f"source-boundary {mutation_name} failed for a different defect: {error}",
+            )
+        else:
+            raise AssertionError(f"Web Host source boundary accepted {mutation_name} mutation")
+    # Actual current failClosed synchronously seals before returning. Its
+    # redundant guard may be absent; no negative anchor depends on that guard.
+    dead_guard = "            if (!transportTerminated) return;\n"
+    guard_count = runtime_pre_source.count(dead_guard)
+    require(guard_count in {0, 1}, "source-boundary dead-guard positive anchor is ambiguous")
+    if guard_count == 1:
+        without_dead_guard = runtime_pre_source.replace(dead_guard, "", 1)
+        require(without_dead_guard != runtime_pre_source,
+                "source-boundary dead-guard positive control was not applied")
+        require_uncorrelatable_response_fail_closed(without_dead_guard, "removed-dead-guard positive control")
+    final_poll_tail = "    scheduleTransportPoll();\n  }\n\n  function retainedOwnerRequest"
+    final_return_tail = "    scheduleTransportPoll();\n    return;\n  }\n\n  function retainedOwnerRequest"
+    plain_count = runtime_pre_source.count(final_poll_tail)
+    return_count = runtime_pre_source.count(final_return_tail)
+    require(plain_count + return_count == 1,
+            "source-boundary final-return positive anchor is missing or ambiguous")
+    original_tail, replacement_tail = (
+        (final_poll_tail, final_return_tail) if plain_count == 1
+        else (final_return_tail, final_poll_tail)
     )
-    require(
-        missing_return_source != runtime_pre_source,
-        "source-boundary terminal-return mutation was not applied",
-    )
-    try:
-        require_uncorrelatable_response_fail_closed(
-            missing_return_source,
-            "missing-return mutation",
-        )
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError(
-            "Web Host source boundary accepted a missing-pending branch "
-            "without its terminal return"
-        )
+    final_return_control = runtime_pre_source.replace(original_tail, replacement_tail, 1)
+    require(final_return_control != runtime_pre_source,
+            "source-boundary final-return positive control was not applied")
+    require_uncorrelatable_response_fail_closed(final_return_control, "final-void-return positive control")
     require(
         re.search(
             r"const\s+TERMINAL_OWNER_RELEASE_GRACE_MS\s*=\s*5_000\s*;",

@@ -152,6 +152,26 @@ if (typeof globalThis.window !== "undefined") {
     contextHandle,
     outputDestinationHandle = contextHandle,
   ) {
+    return startAudioWorkletOutputs(
+      contextHandle, outputDestinationHandle, 0);
+  }
+
+  function startAudioWorkletWithCountIn(
+    contextHandle, outputDestinationHandle, cueDestinationHandle,
+  ) {
+    if (!Number.isInteger(cueDestinationHandle) || cueDestinationHandle <= 0 ||
+        cueDestinationHandle === outputDestinationHandle ||
+        audioNodes.get(cueDestinationHandle)?.contextHandle !== contextHandle) {
+      return Promise.reject(
+        new TypeError("a distinct registered cue monitor handle is required"));
+    }
+    return startAudioWorkletOutputs(
+      contextHandle, outputDestinationHandle, cueDestinationHandle);
+  }
+
+  function startAudioWorkletOutputs(
+    contextHandle, outputDestinationHandle, cueDestinationHandle,
+  ) {
     if (
       !Number.isInteger(contextHandle) ||
       contextHandle <= 0 ||
@@ -175,7 +195,8 @@ if (typeof globalThis.window !== "undefined") {
     if (startRecord !== null) {
       if (
         startRecord.contextHandle !== contextHandle ||
-        startRecord.outputDestinationHandle !== outputDestinationHandle
+        startRecord.outputDestinationHandle !== outputDestinationHandle ||
+        startRecord.cueDestinationHandle !== cueDestinationHandle
       ) {
         return Promise.reject(
           new TypeError("the AudioWorklet is bound to another output graph"));
@@ -188,8 +209,10 @@ if (typeof globalThis.window !== "undefined") {
       while (!host.runtimeInitialized && performance.now() < deadline) {
         await delay(2);
       }
-      const result = Module["_lmdj_web_audio_start"](
-        contextHandle, outputDestinationHandle);
+      const result = cueDestinationHandle === 0
+        ? Module["_lmdj_web_audio_start"](contextHandle, outputDestinationHandle)
+        : Module["_lmdj_web_audio_start_with_count_in"](
+            contextHandle, outputDestinationHandle, cueDestinationHandle);
       if (result === -4 || result === -5) {
         return waitForUnsupportedFailure();
       }
@@ -205,7 +228,7 @@ if (typeof globalThis.window !== "undefined") {
             ok: true,
             sampleRate: context.sampleRate,
             inputs: 0,
-            outputs: 1,
+            outputs: cueDestinationHandle === 0 ? 1 : 2,
             channels: 2,
             frames: 128,
           };
@@ -221,7 +244,7 @@ if (typeof globalThis.window !== "undefined") {
           ok: true,
           sampleRate: context.sampleRate,
           inputs: 0,
-          outputs: 1,
+          outputs: cueDestinationHandle === 0 ? 1 : 2,
           channels: 2,
           frames: 128,
         };
@@ -230,7 +253,9 @@ if (typeof globalThis.window !== "undefined") {
       Module["_lmdj_web_audio_bootstrap_timeout"]();
       return committedFatalResult();
     })();
-    startRecord = {contextHandle, outputDestinationHandle, promise};
+    startRecord = {
+      contextHandle, outputDestinationHandle, cueDestinationHandle, promise,
+    };
     return promise;
   }
 
@@ -254,6 +279,11 @@ if (typeof globalThis.window !== "undefined") {
   const transportEncoder = new TextEncoder();
   const transportDecoder = new TextDecoder("utf-8", {fatal: true});
   const pendingRequests = new Map();
+  // Accepted RPCs whose public observer failed still have a real Bridge
+  // response consumer. Draining that response never consumes a Native ticket.
+  const abandonedRequestIds = new Set();
+  // Same finite request owner budget as ControlBridge's existing 16 slots.
+  const RETAINED_RPC_OWNER_LIMIT = 16;
   const notificationSubscribers = new Set();
   const failureSubscribers = new Set();
   const TERMINAL_OWNER_RELEASE_GRACE_MS = 5_000;
@@ -335,7 +365,7 @@ if (typeof globalThis.window !== "undefined") {
 
   function abortPendingRequest(requestId, pending) {
     if (
-      transportTerminated ||
+      (transportTerminated && !pending.retained) ||
       pendingRequests.get(requestId) !== pending ||
       pending.abortError !== null
     ) {
@@ -372,9 +402,11 @@ if (typeof globalThis.window !== "undefined") {
   }
 
   function completeTerminalCleanup() {
-    if (terminalCleanupCompleted) return;
+    if (terminalCleanupCompleted || !terminalOwnerReleased ||
+        pendingRequests.size !== 0) return;
     terminalCleanupCompleted = true;
     window.clearTimeout(terminalAckTimeout);
+    abandonedRequestIds.clear();
     terminateRuntimeWorkers();
     try {
       terminalChannel.close();
@@ -386,22 +418,29 @@ if (typeof globalThis.window !== "undefined") {
   }
 
   function releaseTerminalOwner() {
+    if (terminalCleanupCompleted) return;
+    window.clearTimeout(terminalAckTimeout);
+    if (consumeTerminalOwnerRelease()) {
+      completeTerminalCleanup();
+      if (terminalCleanupCompleted) return;
+    }
     try {
       terminalChannel.postMessage({
         type: "release-and-close",
         token: terminalToken,
       });
     } catch {
-      completeTerminalCleanup();
-      return;
+      // A lost channel is not a physical/caller/IO release receipt. Keep the
+      // actual owner and retry its existing authenticated retirement request.
     }
     terminalAckTimeout = window.setTimeout(() => {
-      consumeTerminalOwnerRelease();
-      completeTerminalCleanup();
+      releaseTerminalOwner();
     }, TERMINAL_OWNER_RELEASE_GRACE_MS);
+    scheduleTransportPoll();
   }
 
   function consumeTerminalOwnerRelease() {
+    if (terminalOwnerReleased) return true;
     let released;
     try {
       released = Module.ccall(
@@ -413,8 +452,8 @@ if (typeof globalThis.window !== "undefined") {
     } catch {
       return false;
     }
-    if (released !== 0 && released !== 1) return false;
-    terminalOwnerReleased = released === 1;
+    if (released !== 1) return false;
+    terminalOwnerReleased = true;
     return true;
   }
 
@@ -436,11 +475,15 @@ if (typeof globalThis.window !== "undefined") {
     const entries = [...pendingRequests.entries()];
     pendingRequests.clear();
     for (const [requestId, pending] of entries) {
+      abandonedRequestIds.add(requestId);
       cancelControlRequest(requestId);
       window.clearTimeout(pending.timeout);
       detachPendingAbort(pending);
       pending.reject(error);
     }
+    // Existing consumers must see the original failure while the real Host
+    // remains alive to service their exact retained inspect/release/consume.
+    deliverTerminalFailure();
     releaseTerminalOwner();
     return true;
   }
@@ -455,6 +498,35 @@ if (typeof globalThis.window !== "undefined") {
     if (!consumeTerminalOwnerRelease()) return;
     completeTerminalCleanup();
   });
+
+  function rejectRetainedRequest(requestId, pending, error) {
+    if (pendingRequests.get(requestId) !== pending) return;
+    pendingRequests.delete(requestId);
+    abandonedRequestIds.add(requestId);
+    cancelControlRequest(requestId);
+    window.clearTimeout(pending.timeout);
+    detachPendingAbort(pending);
+    // This RPC was submitted. Neither its deadline nor cancellation proves
+    // that an existing input or count-in consumer acknowledged its ticket.
+    error.details = Object.freeze({...error.details, pending: true});
+    pending.reject(error);
+    scheduleTransportPoll();
+  }
+
+  function reapAbandonedControlRequests() {
+    if (!host.runtimeInitialized) return;
+    for (const requestId of abandonedRequestIds) {
+      try {
+        const status = Module.ccall(
+          "lmdj_web_host_cancel_request", "number", ["string", "number"],
+          [requestId, requestId.length]);
+        if (status === -1) abandonedRequestIds.delete(requestId);
+        // A real not-found receipt retires only this RPC lookup. Native and
+        // SDK consumer identities remain retained independently. An exception
+        // is not a receipt and cannot free any budget.
+      } catch {}
+    }
+  }
 
   function linearizeRequestDeadline(requestId, pending) {
     const remaining = pending.deadlineAt - performance.now();
@@ -475,7 +547,11 @@ if (typeof globalThis.window !== "undefined") {
       const settlementRemaining =
         pending.settlementDeadlineAt - performance.now();
       if (settlementRemaining <= 0) {
-        failClosed(restartRequiredFailure());
+        if (pending.retained) {
+          rejectRetainedRequest(requestId, pending, restartRequiredFailure());
+        } else {
+          failClosed(restartRequiredFailure());
+        }
         return false;
       }
       pending.timeout = window.setTimeout(
@@ -484,22 +560,25 @@ if (typeof globalThis.window !== "undefined") {
       );
       return true;
     }
-    failClosed(transportFailure(
-      "HOST_TIMEOUT", "formal Web Host request timed out"));
+    const error = transportFailure(
+      "HOST_TIMEOUT", "formal Web Host request timed out");
+    if (pending.retained) rejectRetainedRequest(requestId, pending, error);
+    else failClosed(error);
     return false;
   }
 
   function onRequestDeadline(requestId) {
     const pending = pendingRequests.get(requestId);
-    if (!pending || transportTerminated) return;
+    if (!pending || (transportTerminated && !pending.retained)) return;
     linearizeRequestDeadline(requestId, pending);
   }
 
   function scheduleTransportPoll() {
     if (
-      transportTerminated ||
+      terminalCleanupCompleted ||
       pollScheduled ||
-      (!pendingRequests.size && !notificationSubscribers.size)
+      (!transportTerminated && !pendingRequests.size &&
+       !notificationSubscribers.size)
     ) {
       return;
     }
@@ -509,7 +588,7 @@ if (typeof globalThis.window !== "undefined") {
 
   function pollTransport() {
     pollScheduled = false;
-    if (transportTerminated) return;
+    if (terminalCleanupCompleted) return;
     if (!host.runtimeInitialized) {
       scheduleTransportPoll();
       return;
@@ -542,12 +621,15 @@ if (typeof globalThis.window !== "undefined") {
             } else {
               pending.resolve(message);
             }
+          } else if (abandonedRequestIds.delete(message.request_id)) {
+            // Consume only the actual Bridge response envelope. The SDK's
+            // independently retained Native/input/count-in owner remains.
           } else {
             failClosed(transportFailure(
               "HOST_PROTOCOL_MISMATCH",
               "formal Web Host response request ID is not pending",
             ));
-            return;
+            if (!transportTerminated) return;
           }
         } else {
           for (const subscriber of notificationSubscribers) {
@@ -569,110 +651,174 @@ if (typeof globalThis.window !== "undefined") {
       _free(requiredPointer);
       _free(output);
     }
+    if (transportTerminated) reapAbandonedControlRequests();
+    if (transportTerminated && consumeTerminalOwnerRelease()) {
+      completeTerminalCleanup();
+    }
     scheduleTransportPoll();
+  }
+
+  function retainedOwnerRequest(request) {
+    const exactKeys = (value, keys) => value !== null &&
+      typeof value === "object" && !Array.isArray(value) &&
+      Object.keys(value).length === keys.length &&
+      keys.every((key) => Object.hasOwn(value, key));
+    if (!exactKeys(request, ["protocol_version", "request_id", "operation", "payload"]) ||
+        request.protocol_version !== 1 || typeof request.request_id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.request_id)) {
+      return false;
+    }
+    const payload = request.payload;
+    switch (request.operation) {
+      case "pattern.transport.input.inspect":
+        return exactKeys(payload,
+          ["command_id", "runtime_generation", "frame_epoch", "ticket", "consume"]);
+      case "pattern.transport.count-in.inspect":
+        return exactKeys(payload, ["session_id", "command_id", "runtime_generation",
+          "frame_epoch", "schedule_serial", "consume"]);
+      case "pattern.transport.count-in.cancel":
+        return exactKeys(payload, ["session_id", "project_id", "command_id",
+          "start_command_id", "runtime_generation", "frame_epoch", "schedule_serial",
+          "expected_epoch", "intent"]);
+      case "pattern.transport.inspect":
+        return exactKeys(payload, ["session_id"]);
+      case "pattern.transport.input.request":
+        return exactKeys(payload, ["command_id", "runtime_generation", "frame_epoch",
+          "input_serial", "slot", "velocity", "kind", "held", "held_press_sequence"]) &&
+          payload.kind === "release" && typeof payload.held_press_sequence === "string";
+      default:
+        return false;
+    }
+  }
+
+  function sendTransportRequest(request, options = {}, retained = false) {
+    if (!retained && transportTerminated) {
+      return Promise.reject(terminalTransportError);
+    }
+    const notAdmitted = retained ? {pending: false} : {};
+    if (retained && (!transportTerminated || terminalCleanupCompleted ||
+        terminalOwnerReleased || !retainedOwnerRequest(request) ||
+        pendingRequests.size + abandonedRequestIds.size >= RETAINED_RPC_OWNER_LIMIT ||
+        (options.sidecar !== undefined && options.sidecar.byteLength !== 0))) {
+      return Promise.reject(transportFailure(
+        "HOST_STATE_INVALID", "retained Web Host owner request is unavailable",
+        notAdmitted));
+    }
+    if (!host.runtimeInitialized || pendingRequests.has(request.request_id) ||
+        abandonedRequestIds.has(request.request_id)) {
+      return Promise.reject(transportFailure(
+        "HOST_STATE_INVALID",
+        "formal Web Host transport is unavailable", notAdmitted,
+      ));
+    }
+    if (options.sidecar !== undefined &&
+        !(options.sidecar instanceof Uint8Array)) {
+      return Promise.reject(transportFailure(
+        "HOST_PROTOCOL_MISMATCH",
+        "formal Web Host sidecar is invalid", notAdmitted,
+      ));
+    }
+    if (options.cancelQuery === true && options.signal?.aborted === true) {
+      const error = transportAbortError();
+      if (retained) error.details = Object.freeze(notAdmitted);
+      return Promise.reject(error);
+    }
+    const envelope = transportEncoder.encode(JSON.stringify(request));
+    const sidecar = options.sidecar ?? new Uint8Array();
+    const deadlineMs = Number.isFinite(options.deadlineMs)
+      ? Math.min(0xffff_ffff, Math.max(0, options.deadlineMs))
+      : 30_000;
+    const deadlineAt = performance.now() + deadlineMs;
+    const envelopePointer = envelope.byteLength === 0
+      ? 0
+      : _malloc(envelope.byteLength);
+    const sidecarPointer = sidecar.byteLength === 0
+      ? 0
+      : _malloc(sidecar.byteLength);
+    if ((envelope.byteLength !== 0 && envelopePointer === 0) ||
+        (sidecar.byteLength !== 0 && sidecarPointer === 0)) {
+      if (sidecarPointer !== 0) _free(sidecarPointer);
+      if (envelopePointer !== 0) _free(envelopePointer);
+      return Promise.reject(transportFailure(
+        "HOST_STATE_INVALID",
+        "formal Web Host transport is unavailable", notAdmitted,
+      ));
+    }
+    let submitted;
+    try {
+      if (envelope.byteLength !== 0) {
+        HEAPU8.set(envelope, envelopePointer);
+      }
+      if (sidecar.byteLength !== 0) {
+        HEAPU8.set(sidecar, sidecarPointer);
+      }
+      submitted = Module.ccall(
+        "lmdj_web_host_submit",
+        "number",
+        ["number", "number", "number", "number", "number"],
+        [
+          envelopePointer,
+          envelope.byteLength,
+          sidecarPointer,
+          sidecar.byteLength,
+          performance.timeOrigin + deadlineAt,
+        ],
+      );
+    } catch (error) {
+      if (!retained) throw error;
+      abandonedRequestIds.add(request.request_id);
+      scheduleTransportPoll();
+      return Promise.reject(transportFailure(
+        "HOST_STATE_INVALID", "retained Web Host submit outcome is unknown",
+        {pending: true}));
+    } finally {
+      if (sidecarPointer !== 0) _free(sidecarPointer);
+      if (envelopePointer !== 0) _free(envelopePointer);
+    }
+    if (submitted !== 0) {
+      return Promise.reject(transportFailure(
+        submitted === 1 || submitted === 2
+          ? "HOST_PROTOCOL_MISMATCH"
+          : "HOST_STATE_INVALID",
+        "formal Web Host request was rejected", notAdmitted,
+      ));
+    }
+    return new Promise((resolve, reject) => {
+      const pending = {
+        resolve,
+        reject,
+        retained,
+        timeout: 0,
+        deadlineAt,
+        deadlineLinearized: false,
+        settlementDeadlineAt: null,
+        abortError: null,
+        abortSignal: null,
+        abortListener: null,
+      };
+      pendingRequests.set(request.request_id, pending);
+      if (options.cancelQuery === true && options.signal !== undefined) {
+        pending.abortSignal = options.signal;
+        pending.abortListener = () =>
+          abortPendingRequest(request.request_id, pending);
+        options.signal.addEventListener("abort", pending.abortListener, {
+          once: true,
+        });
+        if (options.signal.aborted === true) pending.abortListener();
+      }
+      if (pending.abortError === null) {
+        linearizeRequestDeadline(request.request_id, pending);
+      }
+      scheduleTransportPoll();
+    });
   }
 
   const transport = Object.freeze({
     send(request, options = {}) {
-      if (transportTerminated) {
-        return Promise.reject(terminalTransportError);
-      }
-      if (!host.runtimeInitialized || pendingRequests.has(request.request_id)) {
-        return Promise.reject(transportFailure(
-          "HOST_STATE_INVALID",
-          "formal Web Host transport is unavailable",
-        ));
-      }
-      if (options.sidecar !== undefined &&
-          !(options.sidecar instanceof Uint8Array)) {
-        return Promise.reject(transportFailure(
-          "HOST_PROTOCOL_MISMATCH",
-          "formal Web Host sidecar is invalid",
-        ));
-      }
-      if (options.cancelQuery === true && options.signal?.aborted === true) {
-        return Promise.reject(transportAbortError());
-      }
-      const envelope = transportEncoder.encode(JSON.stringify(request));
-      const sidecar = options.sidecar ?? new Uint8Array();
-      const deadlineMs = Number.isFinite(options.deadlineMs)
-        ? Math.min(0xffff_ffff, Math.max(0, options.deadlineMs))
-        : 30_000;
-      const deadlineAt = performance.now() + deadlineMs;
-      const envelopePointer = envelope.byteLength === 0
-        ? 0
-        : _malloc(envelope.byteLength);
-      const sidecarPointer = sidecar.byteLength === 0
-        ? 0
-        : _malloc(sidecar.byteLength);
-      if ((envelope.byteLength !== 0 && envelopePointer === 0) ||
-          (sidecar.byteLength !== 0 && sidecarPointer === 0)) {
-        if (sidecarPointer !== 0) _free(sidecarPointer);
-        if (envelopePointer !== 0) _free(envelopePointer);
-        return Promise.reject(transportFailure(
-          "HOST_STATE_INVALID",
-          "formal Web Host transport is unavailable",
-        ));
-      }
-      let submitted;
-      try {
-        if (envelope.byteLength !== 0) {
-          HEAPU8.set(envelope, envelopePointer);
-        }
-        if (sidecar.byteLength !== 0) {
-          HEAPU8.set(sidecar, sidecarPointer);
-        }
-        submitted = Module.ccall(
-          "lmdj_web_host_submit",
-          "number",
-          ["number", "number", "number", "number", "number"],
-          [
-            envelopePointer,
-            envelope.byteLength,
-            sidecarPointer,
-            sidecar.byteLength,
-            performance.timeOrigin + deadlineAt,
-          ],
-        );
-      } finally {
-        if (sidecarPointer !== 0) _free(sidecarPointer);
-        if (envelopePointer !== 0) _free(envelopePointer);
-      }
-      if (submitted !== 0) {
-        return Promise.reject(transportFailure(
-          submitted === 1 || submitted === 2
-            ? "HOST_PROTOCOL_MISMATCH"
-            : "HOST_STATE_INVALID",
-          "formal Web Host request was rejected",
-        ));
-      }
-      return new Promise((resolve, reject) => {
-        const pending = {
-          resolve,
-          reject,
-          timeout: 0,
-          deadlineAt,
-          deadlineLinearized: false,
-          settlementDeadlineAt: null,
-          abortError: null,
-          abortSignal: null,
-          abortListener: null,
-        };
-        pendingRequests.set(request.request_id, pending);
-        if (options.cancelQuery === true && options.signal !== undefined) {
-          pending.abortSignal = options.signal;
-          pending.abortListener = () =>
-            abortPendingRequest(request.request_id, pending);
-          options.signal.addEventListener("abort", pending.abortListener, {
-            once: true,
-          });
-          if (options.signal.aborted === true) pending.abortListener();
-        }
-        if (pending.abortError === null) {
-          linearizeRequestDeadline(request.request_id, pending);
-        }
-        scheduleTransportPoll();
-      });
+      return sendTransportRequest(request, options);
+    },
+    sendRetained(request, options = {}) {
+      return sendTransportRequest(request, options, true);
     },
     subscribe(listener) {
       if (typeof listener !== "function") {
@@ -786,6 +932,7 @@ if (typeof globalThis.window !== "undefined") {
     registerAudioNode,
     audioCallbackHeartbeat,
     startAudioWorklet,
+    startAudioWorkletWithCountIn,
     connectAudioWorkletDirect,
     transport,
     ...(deadlineProof === undefined ? {} : {deadlineProof}),
@@ -1238,6 +1385,51 @@ if (typeof globalThis.window !== "undefined") {
 
       engineRenderCalls() {
         return Module["_lmdj_web_audio_test_render_calls"]();
+      },
+
+      armPhysicalFenceBarrier(stages) {
+        return Module["_lmdj_web_audio_test_physical_fence_arm"](stages) === 1;
+      },
+
+      releasePhysicalFenceBarrier(stages) {
+        return Module["_lmdj_web_audio_test_physical_fence_release"](stages) === 1;
+      },
+
+      physicalFenceState() {
+        const cueBatch = Module["_lmdj_web_audio_test_physical_fence_cue_batch"]();
+        const cuePendingBatch = Module["_lmdj_web_audio_test_physical_fence_pending_cue_batch"]();
+        if (!Number.isSafeInteger(cueBatch) || cueBatch < 0 ||
+            !Number.isSafeInteger(cuePendingBatch) || cuePendingBatch < 0)
+          throw new Error("physical fence batch identity exceeds the guarded numeric observation");
+        return {
+          stage: Module["_lmdj_web_audio_test_physical_fence_stage"]() >>> 0,
+          cueBatch, cuePendingBatch,
+          borrows: Module["_lmdj_web_audio_test_physical_fence_borrows"]() >>> 0,
+          physicalQuiescent: Module["_lmdj_web_audio_test_physically_quiescent"]() === 1,
+          gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
+          callbackInFlight: Module["_lmdj_web_audio_test_in_flight"](),
+          fatal: fatalNames[Module["_lmdj_web_audio_fatal"]()] ?? null,
+        };
+      },
+
+      requestPhysicalTerminalDrain() {
+        return Module["_lmdj_web_audio_test_request_physical_terminal_drain"]() === 1;
+      },
+
+      async runPhysicalFenceQuiescenceWait(timeoutMs) {
+        const startedAt = performance.now();
+        if (Module["_lmdj_web_audio_test_physical_quiescence_wait"](timeoutMs) !== 1)
+          throw new Error("actual physical fence wait was rejected");
+        // Same finite watchdog as the existing operational diagnostic. The
+        // real control wait retains its original two equal timeout budgets.
+        while (performance.now() < startedAt + 500) {
+          const serialized = Module.ccall(
+            "lmdj_web_audio_test_quiescence_timeout_result", "string", [], []);
+          if (serialized) return {...JSON.parse(serialized),
+            observed_wall_ms: performance.now() - startedAt};
+          await delay(2);
+        }
+        return {completed: false, observed_wall_ms: performance.now() - startedAt};
       },
 
       preactivationState() {

@@ -1530,6 +1530,493 @@ void admission_exact_retry_and_collisions() {
   f.rejected_unchanged([&] { return f.journal.append_admission_candidate(f.bundle, SequenceSessionId{uuid_for(99)}, f.preparation.identity, f.press); });
 }
 
+void admission_warm_writer_enforces_new_candidate_byte_budget() {
+  for (const auto prefix_bytes : {std::size_t{0},
+      kSequenceAdmissionCandidateBytes, kSequenceAdmissionCandidateBytes + 1}) {
+    AdmissionFixture f;
+    auto second = f.press;
+    second.watermark++;
+    second.runtime_frame++;
+    second.press_sequence++;
+    const auto first_size = lmdj::foundation::canonical_json(
+        admission_candidate_json(f.press)).size();
+    const auto second_size = lmdj::foundation::canonical_json(
+        admission_candidate_json(second)).size();
+    f.preparation.candidate_byte_limit =
+        static_cast<std::uint32_t>(first_size + second_size - 1);
+    f.prepare();
+    LMDJ_CHECK(f.candidate(f.press).has_value());
+    if (prefix_bytes != 0) {
+      // Valid blank records test both the private boundary and cold fallback.
+      // Both candidates still enter through the actual public writer API.
+      auto bytes = read_text(f.path());
+      LMDJ_CHECK(bytes.size() < kSequenceAdmissionCandidateBytes);
+      bytes.resize(prefix_bytes, '\n');
+      write_text(f.path(), bytes);
+    }
+    const auto bytes = read_text(f.path());
+    // Do not call Fixture::state/rejected_unchanged here: its fresh default
+    // platform would replace this writer's parsing checkpoint.
+    const auto before = f.journal.read_active(f.bundle);
+    LMDJ_CHECK(before.has_value() && before.value().admission);
+    LMDJ_CHECK(before.value().admission->candidates == std::vector{f.press});
+    LMDJ_CHECK(!before.value().admission->closure);
+    const auto rejected = f.candidate(second);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(rejected.error().message == "admission capacity exhausted");
+    LMDJ_CHECK(rejected.error().details.at("journal_retained") == true);
+    LMDJ_CHECK(read_text(f.path()) == bytes);
+    const auto after = f.journal.read_active(f.bundle);
+    LMDJ_CHECK(after.has_value() && after.value().admission);
+    LMDJ_CHECK(after.value() == before.value());
+  }
+}
+
+void admission_warm_writer_transfer_and_retries_keep_exact_byte_budget() {
+  AdmissionFixture f;
+  f.press.runtime_frame = 800; // This prefix is excluded by the real fence.
+  auto second = f.press;
+  second.watermark++;
+  second.press_sequence++;
+  auto third = second;
+  third.watermark++;
+  third.press_sequence++;
+  const auto first_size = lmdj::foundation::canonical_json(
+      admission_candidate_json(f.press)).size();
+  const auto second_size = lmdj::foundation::canonical_json(
+      admission_candidate_json(second)).size();
+  const auto third_size = lmdj::foundation::canonical_json(
+      admission_candidate_json(third)).size();
+  f.preparation.candidate_byte_limit =
+      static_cast<std::uint32_t>(second_size + third_size + 1);
+  LMDJ_CHECK(first_size + second_size < f.preparation.candidate_byte_limit);
+  f.prepare();
+  f.retain();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  LMDJ_CHECK(f.candidate(second).has_value());
+  const auto before_transfer = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(before_transfer.has_value() && before_transfer.value().admission);
+  LMDJ_CHECK(!before_transfer.value().admission->closure);
+  const auto transfer = f.transfer(false); // Consume just the first candidate.
+  LMDJ_CHECK(f.transfer(transfer).has_value());
+  const auto after_transfer = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(after_transfer.has_value() && after_transfer.value().admission);
+  LMDJ_CHECK(after_transfer.value().admission->candidates == std::vector{second});
+  LMDJ_CHECK(after_transfer.value().admission->transfers == std::vector{transfer});
+  LMDJ_CHECK(after_transfer.value().pending_events.empty());
+  LMDJ_CHECK(!after_transfer.value().admission->closure);
+
+  // The historical exact retry must not occupy a new candidate byte budget.
+  const auto transferred_bytes = read_text(f.path());
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  LMDJ_CHECK(read_text(f.path()) == transferred_bytes);
+  const auto after_retry = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(after_retry.has_value() && after_retry.value().admission);
+  LMDJ_CHECK(after_retry.value() == after_transfer.value());
+  auto collision = f.press;
+  collision.velocity++;
+  const auto collided = f.candidate(collision);
+  LMDJ_CHECK(!collided.has_value());
+  LMDJ_CHECK(collided.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(collided.error().message == "consumed candidate collision");
+  LMDJ_CHECK(read_text(f.path()) == transferred_bytes);
+  const auto after_collision = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(after_collision.has_value() && after_collision.value().admission);
+  LMDJ_CHECK(after_collision.value() == after_transfer.value());
+
+  // The consumed bytes alone become available; existing bytes stay counted.
+  LMDJ_CHECK(f.candidate(third).has_value());
+  const auto filled = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(filled.has_value() && filled.value().admission);
+  LMDJ_CHECK(filled.value().admission->candidates ==
+      (std::vector{second, third}));
+  LMDJ_CHECK(!filled.value().admission->closure);
+  auto fourth = third;
+  fourth.watermark++;
+  fourth.press_sequence++;
+  const auto filled_bytes = read_text(f.path());
+  const auto rejected = f.candidate(fourth);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(rejected.error().message == "admission capacity exhausted");
+  LMDJ_CHECK(read_text(f.path()) == filled_bytes);
+  const auto after_rejection = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(after_rejection.has_value() && after_rejection.value().admission);
+  LMDJ_CHECK(after_rejection.value() == filled.value());
+}
+
+void admission_warm_writer_rechecks_current_project_before_append() {
+  for (bool corrupt_checkpoint : {false, true}) {
+    AdmissionFixture f;
+    f.prepare();
+    LMDJ_CHECK(f.candidate(f.press).has_value());
+    auto second = f.press;
+    second.watermark++;
+    second.runtime_frame++;
+    second.press_sequence++;
+    const auto bytes = read_text(f.path());
+    const auto manifest_path = f.bundle / "manifest.json";
+    const auto manifest_bytes = read_text(manifest_path);
+    auto manifest = nlohmann::json::parse(manifest_bytes);
+    const auto checkpoint_path = f.bundle /
+        manifest.at("head_checkpoint").get<std::string>();
+    const auto checkpoint_bytes = read_text(checkpoint_path);
+    const auto before = f.journal.read_active(f.bundle);
+    LMDJ_CHECK(before.has_value() && before.value().admission);
+    if (corrupt_checkpoint) {
+      auto checkpoint = nlohmann::json::parse(checkpoint_bytes);
+      checkpoint["project_id"] = uuid_for(99);
+      write_text(checkpoint_path, lmdj::foundation::canonical_json(checkpoint));
+    } else {
+      manifest["head_checkpoint"] = "history/checkpoints/99.json";
+      write_text(manifest_path, lmdj::foundation::canonical_json(manifest));
+    }
+    const auto rejected = f.candidate(second);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(rejected.error().details.at("journal_retained") == true);
+    LMDJ_CHECK(read_text(f.path()) == bytes);
+    if (corrupt_checkpoint) write_text(checkpoint_path, checkpoint_bytes);
+    else write_text(manifest_path, manifest_bytes);
+    const auto restored = f.journal.read_active(f.bundle);
+    LMDJ_CHECK(restored.has_value() && restored.value().admission);
+    LMDJ_CHECK(restored.value() == before.value());
+    LMDJ_CHECK(f.candidate(second).has_value());
+    const auto appended = f.journal.read_active(f.bundle);
+    LMDJ_CHECK(appended.has_value() && appended.value().admission);
+    LMDJ_CHECK(appended.value().admission->candidates ==
+        (std::vector{f.press, second}));
+    LMDJ_CHECK(!appended.value().admission->closure);
+  }
+}
+
+void admission_warm_writer_uses_changed_manifest_checkpoint_path() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto before = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(before.has_value() && before.value().admission);
+  const auto journal_bytes = read_text(f.path());
+  const auto manifest_path = f.bundle / "manifest.json";
+  auto manifest = nlohmann::json::parse(read_text(manifest_path));
+  const auto old_checkpoint = f.bundle /
+      manifest.at("head_checkpoint").get<std::string>();
+  auto checkpoint = nlohmann::json::parse(read_text(old_checkpoint));
+  const auto next_revision = manifest.at("head_revision").get<std::uint64_t>() + 1;
+  const auto next_relative = std::string{"history/checkpoints/"} +
+      std::to_string(next_revision) + ".json";
+  const auto next_path = f.bundle / next_relative;
+  manifest["head_revision"] = next_revision;
+  manifest["head_checkpoint"] = next_relative;
+  checkpoint["revision"] = next_revision;
+  checkpoint["project_id"] = uuid_for(99);
+  write_text(next_path, lmdj::foundation::canonical_json(checkpoint));
+  write_text(manifest_path, lmdj::foundation::canonical_json(manifest));
+  auto second = f.press;
+  second.watermark++;
+  second.runtime_frame++;
+  second.press_sequence++;
+  const auto rejected = f.candidate(second);
+  lmdj::test::check(!rejected.has_value(),
+      "warm writer validates the checkpoint selected by the fresh manifest");
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(rejected.error().details.at("journal_retained") == true);
+  LMDJ_CHECK(read_text(f.path()) == journal_bytes);
+  // This is the existing minimal admission validator, not ProjectStore.load
+  // or acceptance of a complete authoring-history revision.
+  checkpoint["project_id"] = std::string{kProjectId};
+  write_text(next_path, lmdj::foundation::canonical_json(checkpoint));
+  const auto restored = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(restored.has_value() && restored.value().admission);
+  LMDJ_CHECK(restored.value() == before.value());
+  LMDJ_CHECK(f.candidate(second).has_value());
+  const auto appended = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(appended.has_value() && appended.value().admission);
+  LMDJ_CHECK(appended.value().admission->candidates ==
+      (std::vector{f.press, second}));
+  LMDJ_CHECK(!appended.value().admission->closure);
+}
+
+class AdmissionProjectReadFault {
+ public:
+  explicit AdmissionProjectReadFault(const std::filesystem::path& path) {
+    selected_path_ = path;
+    invocations_ = 0;
+    testing::set_fault_hook(fail_current_project_read);
+  }
+  ~AdmissionProjectReadFault() {
+    testing::set_fault_hook(nullptr);
+    selected_path_.clear();
+  }
+  std::size_t invocations() const { return invocations_; }
+  AdmissionProjectReadFault(const AdmissionProjectReadFault&) = delete;
+  AdmissionProjectReadFault& operator=(const AdmissionProjectReadFault&) = delete;
+ private:
+  inline static std::filesystem::path selected_path_;
+  inline static std::size_t invocations_{};
+  static lmdj::foundation::Result<void> fail_current_project_read(
+      FaultPoint point, const std::filesystem::path& path) {
+    if (point != FaultPoint::complete_read || path != selected_path_) {
+      return lmdj::foundation::Result<void>::success();
+    }
+    ++invocations_;
+    return lmdj::foundation::Result<void>::failure(lmdj::foundation::Error{
+        ErrorCode::io_error, "injected current Project complete read failure",
+        {{"path", path.generic_string()}, {"reason", "current_project_read_fault"}}});
+  }
+};
+
+void admission_warm_writer_requires_current_project_reads() {
+  for (bool checkpoint_read : {false, true}) {
+    for (bool over_bound_project : {false, true}) {
+      AdmissionFixture f;
+      f.prepare();
+      LMDJ_CHECK(f.candidate(f.press).has_value());
+      const auto manifest_path = f.bundle / "manifest.json";
+      auto manifest_bytes = read_text(manifest_path);
+      const auto manifest = nlohmann::json::parse(manifest_bytes);
+      const auto checkpoint_path = f.bundle /
+          manifest.at("head_checkpoint").get<std::string>();
+      if (over_bound_project) {
+        // Valid JSON whitespace alone exceeds the unchanged private total
+        // bound, without changing the original manifest/checkpoint identity.
+        LMDJ_CHECK(manifest_bytes.size() < kSequenceAdmissionCandidateBytes);
+        manifest_bytes.resize(kSequenceAdmissionCandidateBytes + 1, ' ');
+        write_text(manifest_path, manifest_bytes);
+      }
+      const auto before = f.journal.read_active(f.bundle);
+      LMDJ_CHECK(before.has_value() && before.value().admission);
+      const auto journal_bytes = read_text(f.path());
+      const auto required_path = checkpoint_read ? checkpoint_path : manifest_path;
+      auto second = f.press;
+      second.watermark++;
+      second.runtime_frame++;
+      second.press_sequence++;
+      {
+        // Keep the actual file, tree and byte_length intact. Only its exact
+        // real complete_read faults; an early Journal/tree failure is not proof.
+        AdmissionProjectReadFault fault(required_path);
+        const auto rejected = f.candidate(second);
+        lmdj::test::check(!rejected.has_value(),
+            "warm writer requires real current manifest and checkpoint reads");
+        LMDJ_CHECK(fault.invocations() > 0);
+        LMDJ_CHECK(rejected.error().code == ErrorCode::io_error);
+        LMDJ_CHECK(rejected.error().message == "injected current Project complete read failure");
+        LMDJ_CHECK(rejected.error().details == nlohmann::json({
+            {"path", required_path.generic_string()}, {"reason", "current_project_read_fault"}}));
+        LMDJ_CHECK(read_text(f.path()) == journal_bytes);
+      }
+      const auto restored = f.journal.read_active(f.bundle);
+      LMDJ_CHECK(restored.has_value() && restored.value().admission);
+      LMDJ_CHECK(restored.value() == before.value());
+      LMDJ_CHECK(f.candidate(second).has_value());
+      const auto appended = f.journal.read_active(f.bundle);
+      LMDJ_CHECK(appended.has_value() && appended.value().admission);
+      LMDJ_CHECK(appended.value().admission->candidates ==
+          (std::vector{f.press, second}));
+      LMDJ_CHECK(!appended.value().admission->closure);
+    }
+  }
+}
+
+void admission_fresh_prefix_edit_replaces_previously_read_state() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto original = read_text(f.path());
+  const auto before = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(before.has_value());
+  LMDJ_CHECK(before.value().admission->candidates == std::vector{f.press});
+
+  // A same-length edit with a valid checksum must replace previously parsed
+  // state. A byte-length, timestamp or stale-document shortcut would miss it.
+  auto changed = f.press;
+  changed.press_sequence++;
+  rewrite_last_record(f.path(), [&](auto& envelope) {
+    envelope["payload"]["data"]["press_sequence"] = changed.press_sequence;
+    envelope["checksum"] = sha256(lmdj::foundation::canonical_json(
+        envelope.at("payload")));
+  });
+  const auto rewritten = read_text(f.path());
+  LMDJ_CHECK(rewritten.size() == original.size());
+  LMDJ_CHECK(rewritten != original);
+  const auto fresh = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(fresh.has_value());
+  LMDJ_CHECK(fresh.value().admission->candidates == std::vector{changed});
+  LMDJ_CHECK(!f.candidate(f.press).has_value());
+  LMDJ_CHECK(read_text(f.path()) == rewritten);
+  LMDJ_CHECK(f.candidate(changed).has_value());
+  LMDJ_CHECK(read_text(f.path()) == rewritten);
+}
+
+void admission_conflicting_suffix_keeps_original_record_evidence() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto original = read_text(f.path());
+  LMDJ_CHECK(f.journal.read_active(f.bundle).has_value());
+  const auto previous = original.rfind('\n', original.size() - 2);
+  LMDJ_CHECK(previous != std::string::npos);
+  auto envelope = nlohmann::json::parse(
+      original.substr(previous + 1, original.size() - previous - 2));
+  // The immutable prefix is still identical. Only the new record conflicts
+  // with a candidate already in the fully replayed prefix.
+  envelope["payload"]["data"]["press_sequence"] = f.press.press_sequence + 1;
+  envelope["checksum"] = sha256(lmdj::foundation::canonical_json(
+      envelope.at("payload")));
+  const auto changed = original +
+      lmdj::foundation::canonical_json(envelope) + "\n";
+  write_text(f.path(), changed);
+  const auto rejected = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  expect_corrupt_record_evidence(rejected.error(), f.path(), original.size(),
+      changed.size(), "sequence_journal_record_invalid");
+  LMDJ_CHECK(!f.candidate(f.press).has_value());
+  LMDJ_CHECK(read_text(f.path()) == changed);
+}
+
+void admission_appended_suffix_keeps_replayed_candidate_byte_bound() {
+  AdmissionFixture f;
+  auto second = f.press;
+  second.watermark++;
+  second.runtime_frame++;
+  second.press_sequence++;
+  const auto first_size = lmdj::foundation::canonical_json(
+      admission_candidate_json(f.press)).size();
+  const auto second_size = lmdj::foundation::canonical_json(
+      admission_candidate_json(second)).size();
+  f.preparation.candidate_byte_limit =
+      static_cast<std::uint32_t>(first_size + second_size - 1);
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto original = read_text(f.path());
+  LMDJ_CHECK(f.journal.read_active(f.bundle).has_value());
+  const auto previous = original.rfind('\n', original.size() - 2);
+  LMDJ_CHECK(previous != std::string::npos);
+  auto envelope = nlohmann::json::parse(
+      original.substr(previous + 1, original.size() - previous - 2));
+  envelope["payload"]["data"] = admission_candidate_json(second);
+  envelope["checksum"] = sha256(lmdj::foundation::canonical_json(
+      envelope.at("payload")));
+  const auto oversized = original +
+      lmdj::foundation::canonical_json(envelope) + "\n";
+  write_text(f.path(), oversized);
+  const auto rejected = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  expect_corrupt_record_evidence(rejected.error(), f.path(), original.size(),
+      oversized.size(), "sequence_journal_record_invalid");
+  LMDJ_CHECK(read_text(f.path()) == oversized);
+}
+
+void admission_shorter_fresh_prefix_removes_previously_read_suffix() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto shorter = read_text(f.path());
+  auto second = f.press;
+  second.watermark++;
+  second.runtime_frame++;
+  second.press_sequence++;
+  LMDJ_CHECK(f.candidate(second).has_value());
+  const auto before = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(before.has_value());
+  LMDJ_CHECK(before.value().admission->candidates ==
+      (std::vector{f.press, second}));
+  write_text(f.path(), shorter);
+  const auto fresh = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(fresh.has_value());
+  LMDJ_CHECK(fresh.value().admission->candidates == std::vector{f.press});
+  LMDJ_CHECK(f.candidate(second).has_value());
+  const auto restored = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(restored.has_value());
+  LMDJ_CHECK(restored.value() == before.value());
+}
+
+void admission_torn_suffix_keeps_original_record_evidence() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto original = read_text(f.path());
+  LMDJ_CHECK(f.journal.read_active(f.bundle).has_value());
+  const auto torn = original + "{\"payload\":";
+  write_text(f.path(), torn);
+  const auto rejected = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  expect_corrupt_record_evidence(rejected.error(), f.path(), original.size(),
+      torn.size(), "sequence_journal_torn_tail");
+  LMDJ_CHECK(!f.candidate(f.press).has_value());
+  LMDJ_CHECK(read_text(f.path()) == torn);
+}
+
+void admission_unchanged_prefix_rechecks_current_project() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  const auto journal_bytes = read_text(f.path());
+  const auto manifest_path = f.bundle / "manifest.json";
+  const auto manifest_bytes = read_text(manifest_path);
+  auto manifest = nlohmann::json::parse(manifest_bytes);
+  const auto checkpoint_path = f.bundle /
+      manifest.at("head_checkpoint").get<std::string>();
+  const auto checkpoint_bytes = read_text(checkpoint_path);
+  const auto before = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(before.has_value());
+
+  manifest["head_checkpoint"] = "history/checkpoints/99.json";
+  write_text(manifest_path, lmdj::foundation::canonical_json(manifest));
+  const auto invalid_manifest = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(!invalid_manifest.has_value());
+  LMDJ_CHECK(invalid_manifest.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(invalid_manifest.error().details.at("journal_retained") == true);
+  LMDJ_CHECK(read_text(f.path()) == journal_bytes);
+  write_text(manifest_path, manifest_bytes);
+  const auto restored_manifest = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(restored_manifest.has_value());
+  LMDJ_CHECK(restored_manifest.value() == before.value());
+
+  auto checkpoint = nlohmann::json::parse(checkpoint_bytes);
+  checkpoint["project_id"] = uuid_for(99);
+  write_text(checkpoint_path, lmdj::foundation::canonical_json(checkpoint));
+  const auto invalid_checkpoint = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(!invalid_checkpoint.has_value());
+  LMDJ_CHECK(invalid_checkpoint.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(invalid_checkpoint.error().details.at("journal_retained") == true);
+  LMDJ_CHECK(read_text(f.path()) == journal_bytes);
+  write_text(checkpoint_path, checkpoint_bytes);
+  const auto restored_checkpoint = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(restored_checkpoint.has_value());
+  LMDJ_CHECK(restored_checkpoint.value() == before.value());
+}
+
+void admission_large_fresh_prefix_keeps_later_records_visible() {
+  AdmissionFixture f;
+  f.prepare();
+  LMDJ_CHECK(f.candidate(f.press).has_value());
+  LMDJ_CHECK(f.journal.read_active(f.bundle).has_value());
+  auto bytes = read_text(f.path());
+  // Blank records are already valid grammar. Crossing the private parse
+  // bound must not pair a truncated byte prefix with full-file replay state.
+  LMDJ_CHECK(bytes.size() < 1024U * 1024U);
+  bytes.resize(1024U * 1024U + 1, '\n');
+  write_text(f.path(), bytes);
+  const auto large = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(large.has_value());
+  LMDJ_CHECK(large.value().admission->candidates == std::vector{f.press});
+  auto second = f.press;
+  second.watermark++;
+  second.runtime_frame++;
+  second.press_sequence++;
+  LMDJ_CHECK(f.candidate(second).has_value());
+  const auto appended = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(appended.has_value());
+  LMDJ_CHECK(appended.value().admission->candidates ==
+      (std::vector{f.press, second}));
+  const auto repeated = f.journal.read_active(f.bundle);
+  LMDJ_CHECK(repeated.has_value());
+  LMDJ_CHECK(repeated.value() == appended.value());
+}
+
 void admission_timing_profiles_reopen_and_cannot_rewrite_input() {
   AdmissionFixture f;
   f.preparation.quantize_enabled = true;
@@ -1756,6 +2243,65 @@ void admission_transfer_requires_authority_and_replaces_once() {
   f.rejected_unchanged([&] { return f.transfer(t); });
 }
 
+void admission_oldest_prefix_replays_after_multiple_transfers() {
+  AdmissionFixture f;
+  f.prepare();
+  f.retain();
+  std::vector<SequenceAdmissionCandidate> oldest;
+  for (unsigned batch = 0; batch < 3; ++batch) {
+    auto first = f.press;
+    first.watermark = 10 + batch * 10;
+    first.runtime_frame = 800; // Excluded by the actual admission fence.
+    auto second = first;
+    second.watermark++;
+    second.press_sequence++;
+    LMDJ_CHECK(f.candidate(first).has_value());
+    LMDJ_CHECK(f.candidate(second).has_value());
+    if (batch == 0) oldest = {first, second};
+    auto transfer = f.transfer(false);
+    transfer.transfer_id = CommandId{uuid_for(100 + batch)};
+    transfer.first_watermark = first.watermark;
+    transfer.last_watermark = second.watermark;
+    const auto prefix = nlohmann::json::array({
+        admission_candidate_json(first), admission_candidate_json(second)});
+    transfer.candidates_sha256 = sha256(lmdj::foundation::canonical_json(prefix));
+    transfer.candidate_receipts = {
+        {first.watermark, sha256(lmdj::foundation::canonical_json(prefix.at(0)))},
+        {second.watermark, sha256(lmdj::foundation::canonical_json(prefix.at(1)))}};
+    LMDJ_CHECK(f.transfer(transfer).has_value());
+    LMDJ_CHECK(f.state().admission->candidates.empty());
+    LMDJ_CHECK(f.state().admission->transfers.size() == batch + 1);
+  }
+  // Both receipts belong to the oldest of three real durable transfers.
+  for (const auto& candidate : oldest) {
+    f.retry_unchanged([&] { return f.candidate(candidate); });
+    auto changed = candidate;
+    changed.velocity++;
+    f.rejected_unchanged([&] { return f.candidate(changed); });
+  }
+  auto missing = f.press;
+  missing.watermark = 25; // Below the frontier, absent from every receipt.
+  f.rejected_unchanged([&] { return f.candidate(missing); });
+  auto frontier = f.press;
+  frontier.watermark = 31;
+  frontier.runtime_frame = 800;
+  frontier.press_sequence++;
+  f.retry_unchanged([&] { return f.candidate(frontier); });
+  auto fresh = f.press;
+  fresh.watermark = 32;
+  LMDJ_CHECK(f.candidate(fresh).has_value());
+  f.retry_unchanged([&] { return f.candidate(fresh); });
+  auto changed = fresh;
+  changed.press_sequence++;
+  f.rejected_unchanged([&] { return f.candidate(changed); });
+  const auto reopened = SequenceJournal{}.read_active(f.bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == f.state());
+  LMDJ_CHECK(reopened.value().admission->transfers.size() == 3);
+  LMDJ_CHECK(reopened.value().admission->candidates == std::vector{fresh});
+  LMDJ_CHECK(!reopened.value().admission->closure);
+}
+
 void admission_excluded_prefix_preserves_sequence_and_checkpoint() {
   AdmissionFixture f;
   f.press.runtime_frame = 800; // Before the admission fence at frame 900.
@@ -1902,12 +2448,13 @@ void admission_unsupported_formats_are_retained() {
 }
 
 void admission_unknown_sync_requires_durable_retry() {
-  for (unsigned which = 0; which < 4; ++which) {
+  for (unsigned which = 0; which < 5; ++which) {
     AdmissionFixture f;
     f.prepare();
     if (which == 2) { LMDJ_CHECK(f.candidate(f.press).has_value()); f.retain(); }
     if (which == 3) f.retain();
     auto operation = [&]() {
+      if (which == 4) return f.journal.set_state(f.bundle, f.session, SequenceSessionState::owner_lost);
       if (which == 0) return f.candidate(f.press);
       if (which == 1) return f.journal.retain_admission_fence(f.bundle, f.session, f.preparation.identity, f.fence());
       if (which == 3) return f.journal.retain_admission_timing_profile(
@@ -1920,8 +2467,16 @@ void admission_unknown_sync_requires_durable_retry() {
       LMDJ_CHECK(!operation().has_value());
       LMDJ_CHECK(read_text(f.path()).size() > prefix.size());
       // Readable bytes after write-before-fsync do not establish durability.
-      // Retry must finish the sync, and remain unknown while that still fails.
-      f.rejected_unchanged(operation);
+      // Warm the same reader before retry: reused parsing still cannot make
+      // an unknown write durable while its real sync continues to fail.
+      const auto written = read_text(f.path());
+      const auto visible = f.journal.read_active(f.bundle);
+      LMDJ_CHECK(visible.has_value());
+      LMDJ_CHECK(!operation().has_value());
+      LMDJ_CHECK(read_text(f.path()) == written);
+      const auto retried = f.journal.read_active(f.bundle);
+      LMDJ_CHECK(retried.has_value());
+      LMDJ_CHECK(retried.value() == visible.value());
     }
     f.retry_unchanged(operation);
     if (which == 2) {
@@ -2489,6 +3044,180 @@ void sequence_snapshot_requires_flush_record_grammar() {
   }
 }
 
+// Transparent real Native delegator. Absence of the companion intentionally
+// exercises the old full layout fallback; no Journal receipt is fabricated.
+struct LegacyJournalLayoutPlatform : ProjectStoragePlatform {
+  std::shared_ptr<ProjectStoragePlatform> inner{make_default_project_storage_platform()};
+  mutable std::vector<std::filesystem::path> trees, directories, lengths;
+  mutable unsigned reads{};
+  void reset_observations() const { trees.clear(); directories.clear(); lengths.clear(); reads = 0; }
+  lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(const std::filesystem::path& p) override { return inner->acquire_writer(p); }
+  lmdj::foundation::Result<void> ensure_directory(const std::filesystem::path& p) override { return inner->ensure_directory(p); }
+  lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override { return inner->exists(p); }
+  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override { lengths.push_back(p); return inner->byte_length(p); }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override { ++reads; return inner->read_complete(p); }
+  lmdj::foundation::Result<void> create_immutable(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner->create_immutable(p, b); }
+  lmdj::foundation::Result<void> replace_complete(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner->replace_complete(p, b); }
+  lmdj::foundation::Result<void> append_durable(const std::filesystem::path& p, std::uint64_t n, std::span<const std::byte> b) override { return inner->append_durable(p, n, b); }
+  lmdj::foundation::Result<void> remove(const std::filesystem::path& p) override { return inner->remove(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(const std::filesystem::path& p) const override { return inner->list_names(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(const std::filesystem::path& p) const override { return inner->list_directories(p); }
+  lmdj::foundation::Result<void> remove_tree(const std::filesystem::path& p) override { return inner->remove_tree(p); }
+  lmdj::foundation::Result<void> publish_directory_if_absent(const std::filesystem::path& a, const std::filesystem::path& b) override { return inner->publish_directory_if_absent(a, b); }
+  lmdj::foundation::Result<bool> directory_exists(const std::filesystem::path& p) const override { directories.push_back(p); return inner->directory_exists(p); }
+  lmdj::foundation::Result<void> validate_managed_tree(const std::filesystem::path& p) const override { trees.push_back(p); return inner->validate_managed_tree(p); }
+};
+
+struct SupportedTextReadPlatform final : LegacyJournalLayoutPlatform,
+                                       ProjectStorageTextReader {
+  std::filesystem::path refuse_path;
+  mutable std::vector<std::filesystem::path> text_reads;
+  lmdj::foundation::Result<std::string> read_complete_text(const std::filesystem::path& p) const override {
+    text_reads.push_back(p);
+    if (p == refuse_path) return lmdj::foundation::Result<std::string>::failure(
+        lmdj::foundation::Error{ErrorCode::io_error, "injected complete text read failure",
+                               {{"path", p.generic_string()}}});
+    const auto* reader = dynamic_cast<const ProjectStorageTextReader*>(inner.get());
+    LMDJ_CHECK(reader != nullptr);
+    return reader->read_complete_text(p);
+  }
+};
+
+void test_sequence_text_reader_propagates_each_current_read_failure() {
+  AdmissionFixture f;
+  f.prepare();
+  const auto platform = std::make_shared<SupportedTextReadPlatform>();
+  SequenceJournal journal{platform};
+  const auto before = journal.read_active(f.bundle);
+  LMDJ_CHECK(before.has_value() && before.value().admission);
+  const auto journal_bytes = read_text(f.path());
+  const auto manifest = nlohmann::json::parse(read_text(f.bundle / "manifest.json"));
+  const std::array paths{f.path(), f.bundle / "manifest.json",
+                        f.bundle / manifest.at("head_checkpoint").get<std::string>()};
+  for (const auto& path : paths) {
+    platform->reset_observations();
+    platform->text_reads.clear();
+    platform->refuse_path = path;
+    const auto refused = journal.read_active(f.bundle);
+    LMDJ_CHECK(!refused.has_value());
+    LMDJ_CHECK(refused.error().code == ErrorCode::io_error);
+    LMDJ_CHECK(refused.error().message == "injected complete text read failure");
+    LMDJ_CHECK(refused.error().details == nlohmann::json({{"path", path.generic_string()}}));
+    LMDJ_CHECK(!platform->text_reads.empty() && platform->text_reads.back() == path);
+    LMDJ_CHECK(platform->reads == 0); // A present companion error never falls back.
+    LMDJ_CHECK(read_text(f.path()) == journal_bytes);
+    platform->refuse_path.clear();
+    const auto restored = journal.read_active(f.bundle);
+    LMDJ_CHECK(restored.has_value() && restored.value() == before.value());
+  }
+  LMDJ_CHECK(journal.append_admission_candidate(
+      f.bundle, f.session, f.preparation.identity, f.press).has_value());
+  const auto appended = journal.read_active(f.bundle);
+  LMDJ_CHECK(appended.has_value() && appended.value().admission);
+  LMDJ_CHECK(appended.value().admission->candidates == std::vector{f.press});
+  // A new legacy consumer must observe the same actual appended state.
+  const auto legacy_platform = std::make_shared<LegacyJournalLayoutPlatform>();
+  const auto legacy = SequenceJournal{legacy_platform}.read_active(f.bundle);
+  LMDJ_CHECK(legacy.has_value() && legacy.value() == appended.value());
+  LMDJ_CHECK(legacy_platform->reads == 3);
+}
+
+struct SupportedJournalLayoutPlatform final : LegacyJournalLayoutPlatform,
+                                            ProjectJournalLayoutValidator {
+  mutable unsigned layout_calls{};
+  bool refuse_layout{};
+  lmdj::foundation::Result<void> validate_journal_layout(const std::filesystem::path& p) const override {
+    ++layout_calls;
+    if (refuse_layout) return lmdj::foundation::Result<void>::failure(lmdj::foundation::Error{
+        ErrorCode::invalid_project, "injected supported journal layout refusal", {{"path", p.generic_string()}}});
+    const auto* layout = dynamic_cast<const ProjectJournalLayoutValidator*>(inner.get());
+    LMDJ_CHECK(layout != nullptr);
+    return layout->validate_journal_layout(p);
+  }
+};
+
+void expect_complete_legacy_layout(const LegacyJournalLayoutPlatform& platform,
+                                   const std::filesystem::path& bundle) {
+  LMDJ_CHECK(platform.trees == std::vector<std::filesystem::path>{bundle});
+  const std::vector<std::filesystem::path> required{
+      bundle, bundle / "assets", bundle / "history", bundle / "history/checkpoints",
+      bundle / "history/transactions", bundle / "recovery", bundle / "recovery/active", bundle / "recovery/sealed"};
+  LMDJ_CHECK(platform.directories == required);
+  LMDJ_CHECK(platform.lengths == std::vector<std::filesystem::path>{bundle / "manifest.json"});
+}
+
+void test_sequence_reader_legacy_layout_fallback_keeps_all_required_paths() {
+  TempDirectory temp{"legacy-layout"};
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  const auto platform = std::make_shared<LegacyJournalLayoutPlatform>();
+  SequenceJournal journal{platform};
+  begin(journal, bundle);
+  platform->reset_observations();
+  const auto before = journal.read_active(bundle);
+  LMDJ_CHECK(before.has_value());
+  expect_complete_legacy_layout(*platform, bundle);
+  const auto bytes = read_text(bundle / "recovery/active/sequence.jsonl");
+  const auto directory = bundle / "history/transactions";
+  std::filesystem::remove(directory);
+  const auto missing = journal.read_active(bundle);
+  LMDJ_CHECK(!missing.has_value());
+  LMDJ_CHECK(missing.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(missing.error().details.at("path") == directory.generic_string());
+  LMDJ_CHECK(read_text(bundle / "recovery/active/sequence.jsonl") == bytes);
+  std::filesystem::create_directory(directory);
+  const auto restored = journal.read_active(bundle);
+  LMDJ_CHECK(restored.has_value() && restored.value() == before.value());
+}
+
+void test_sequence_reader_supported_layout_failure_never_falls_back() {
+  TempDirectory temp{"supported-layout"};
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  const auto platform = std::make_shared<SupportedJournalLayoutPlatform>();
+  SequenceJournal journal{platform};
+  begin(journal, bundle);
+  platform->reset_observations();
+  const auto before = journal.read_active(bundle);
+  LMDJ_CHECK(before.has_value());
+  LMDJ_CHECK(platform->layout_calls == 1);
+  LMDJ_CHECK(platform->trees.empty() && platform->directories.empty() && platform->lengths.empty());
+  const auto bytes = read_text(bundle / "recovery/active/sequence.jsonl");
+  platform->reset_observations();
+  platform->layout_calls = 0;
+  platform->refuse_layout = true;
+  const auto rejected = journal.read_active(bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(rejected.error().message == "injected supported journal layout refusal");
+  LMDJ_CHECK(rejected.error().details == nlohmann::json({{"path", bundle.generic_string()}}));
+  LMDJ_CHECK(platform->layout_calls == 1 && platform->reads == 0);
+  LMDJ_CHECK(platform->trees.empty() && platform->directories.empty() && platform->lengths.empty());
+  LMDJ_CHECK(read_text(bundle / "recovery/active/sequence.jsonl") == bytes);
+  platform->refuse_layout = false;
+  const auto restored = journal.read_active(bundle);
+  LMDJ_CHECK(restored.has_value() && restored.value() == before.value());
+}
+
+void test_sequence_begin_and_performance_reader_keep_original_layout_path() {
+  TempDirectory temp{"begin-performance-layout"};
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  const auto platform = std::make_shared<SupportedJournalLayoutPlatform>();
+  platform->refuse_layout = true;
+  SequenceJournal journal{platform};
+  begin(journal, bundle);
+  LMDJ_CHECK(platform->layout_calls == 0);
+  expect_complete_legacy_layout(*platform, bundle);
+  platform->reset_observations();
+  const auto performance = journal.read_active_performance(bundle);
+  LMDJ_CHECK(!performance.has_value());
+  LMDJ_CHECK(performance.error().code == ErrorCode::not_found);
+  LMDJ_CHECK(performance.error().details.at("path") == (bundle / "recovery/active/performance.jsonl").generic_string());
+  LMDJ_CHECK(platform->layout_calls == 0);
+  expect_complete_legacy_layout(*platform, bundle);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2498,6 +3227,10 @@ int main(int argc, char** argv) {
       return 0;
     }
     test_shared_fingerprint_vectors_are_exact_bytes();
+    test_sequence_reader_legacy_layout_fallback_keeps_all_required_paths();
+    test_sequence_text_reader_propagates_each_current_read_failure();
+    test_sequence_reader_supported_layout_failure_never_falls_back();
+    test_sequence_begin_and_performance_reader_keep_original_layout_path();
     admission_switch_requires_retained_boundary();
     admission_ordinary_switch_continues_through_terminal();
     admission_ordinary_switch_continues_through_terminal(true);
@@ -2512,6 +3245,18 @@ int main(int argc, char** argv) {
     sequence_active_requires_event_arrays();
     admission_candidate_reopens();
     admission_exact_retry_and_collisions();
+    admission_warm_writer_enforces_new_candidate_byte_budget();
+    admission_warm_writer_transfer_and_retries_keep_exact_byte_budget();
+    admission_warm_writer_rechecks_current_project_before_append();
+  admission_warm_writer_uses_changed_manifest_checkpoint_path();
+  admission_warm_writer_requires_current_project_reads();
+    admission_fresh_prefix_edit_replaces_previously_read_state();
+    admission_conflicting_suffix_keeps_original_record_evidence();
+    admission_appended_suffix_keeps_replayed_candidate_byte_bound();
+    admission_shorter_fresh_prefix_removes_previously_read_suffix();
+    admission_torn_suffix_keeps_original_record_evidence();
+    admission_unchanged_prefix_rechecks_current_project();
+    admission_large_fresh_prefix_keeps_later_records_visible();
     admission_timing_profiles_reopen_and_cannot_rewrite_input();
     admission_timing_profile_cannot_backdate_a_transferred_checkpoint();
     admission_snapshot_rechecks_profile_against_earlier_input();
@@ -2520,6 +3265,7 @@ int main(int argc, char** argv) {
     admission_final_slot_closes_atomically();
     admission_fences_are_independent_immutable_decisions();
     admission_transfer_requires_authority_and_replaces_once();
+    admission_oldest_prefix_replays_after_multiple_transfers();
     admission_excluded_prefix_preserves_sequence_and_checkpoint();
     admission_held_press_terminal_reopens_flushes_and_completes();
     admission_torn_records_and_write_failures_preserve_bytes();

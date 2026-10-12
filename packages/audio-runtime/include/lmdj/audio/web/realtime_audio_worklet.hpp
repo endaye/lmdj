@@ -73,6 +73,14 @@ class RealtimeAudioWorklet final {
   RealtimeAudioWorkletStart start_on_browser_main(
       std::int32_t audio_context_handle,
       std::int32_t output_destination_handle) noexcept;
+  // Additive startup: output 0 is the product tap; output 1 is a distinct
+  // monitoring destination. The legacy two-argument symbol remains intact.
+  // Repeating startup must match all three handles and the output profile.
+  RealtimeAudioWorkletStart start_with_count_in_on_browser_main(
+      std::int32_t audio_context_handle,
+      std::int32_t output_destination_handle,
+      std::int32_t cue_destination_handle) noexcept;
+  bool has_count_in_output() const noexcept;
   bool connect_direct_output_on_browser_main(
       std::int32_t audio_context_handle,
       std::int32_t output_destination_handle = 0) noexcept;
@@ -80,6 +88,13 @@ class RealtimeAudioWorklet final {
   foundation::Result<void> begin_rendering() noexcept;
   foundation::Result<void> await_quiescent(
       std::uint32_t timeout_ms) noexcept;
+  // Seal callback resource admission without replacing the original Host or
+  // adapter failure. Terminal operational requests continue to fail.
+  void request_terminal_drain() noexcept;
+  // Actual admitted callback-body last-use proof. Paused proof requires
+  // serialized control to keep admission paused during Engine mutation.
+  // Neither state proves backend node retirement or permits Impl destruction.
+  bool physically_quiescent() const noexcept;
 
   bool ready() const noexcept;
   std::uint64_t acknowledged_generation() const noexcept;
@@ -109,9 +124,24 @@ class RealtimeAudioWorklet final {
   bool generation_matches_for_conformance(
       std::uint64_t expected_generation) const noexcept;
   bool mark_callback_in_flight_for_conformance() noexcept;
+  // Arm once before the actual callback; release bits independently, without
+  // re-arming between stages. 1 = actual cue take before ACK; 2 = epilogue.
+  // The stage getter's sticky bit 31 marks an expired, INVALID witness.
+  void arm_physical_fence_barrier_for_conformance(
+      std::uint32_t stages) noexcept;
+  void release_physical_fence_barrier_for_conformance(
+      std::uint32_t stages) noexcept;
+  std::uint32_t physical_fence_barrier_stage_for_conformance() const noexcept;
+  std::uint64_t physical_fence_cue_batch_for_conformance() const noexcept;
+  std::uint64_t physical_fence_pending_cue_batch_for_conformance() const noexcept;
+  std::uint32_t physical_fence_borrow_count_for_conformance() const noexcept;
 #endif
 
  private:
+  RealtimeAudioWorkletStart start_on_browser_main_impl(
+      std::int32_t audio_context_handle,
+      std::int32_t output_destination_handle,
+      std::int32_t cue_destination_handle) noexcept;
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

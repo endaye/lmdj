@@ -35,6 +35,8 @@ enum class FaultPoint {
   sequence_journal_completion,
   sequence_journal_deletion,
   complete_read,
+  journal_layout_checked,
+  journal_layout_manifest_locked,
 };
 
 using FaultHook = foundation::Result<void> (*)(

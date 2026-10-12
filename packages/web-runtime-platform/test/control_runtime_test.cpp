@@ -38,6 +38,7 @@
 #include <lmdj/facade/mutation_publish_scope.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
 
@@ -485,16 +486,23 @@ Json check_exact_success(
   return result;
 }
 
-void wait_until(auto predicate) {
+void wait_until(auto predicate,
+    const std::source_location& location = std::source_location::current()) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (!predicate()) {
     if (std::chrono::steady_clock::now() >= deadline) {
-      throw std::runtime_error("timed out waiting for Audio test state");
+      throw std::runtime_error(std::string(location.file_name()) + ":" +
+          std::to_string(location.line()) + ": timed out waiting for Audio test state in " +
+          location.function_name());
     }
     std::this_thread::yield();
   }
 }
+
+Json dispatch_retained_for_test(ControlRuntime& runtime, std::string_view operation,
+    const Json& payload, std::span<const std::byte> sidecar,
+    ControlRuntime::AbsoluteRequestDeadline deadline);
 
 class ContinuousAudioDriver final {
  public:
@@ -506,11 +514,20 @@ class ContinuousAudioDriver final {
   ContinuousAudioDriver(const ContinuousAudioDriver&) = delete;
   ContinuousAudioDriver& operator=(const ContinuousAudioDriver&) = delete;
 
-  void stop() noexcept {
+  void request_stop() noexcept {
     running_.store(false, std::memory_order_release);
+  }
+
+  void stop() noexcept {
+    request_stop();
     if (thread_.joinable()) {
       thread_.join();
     }
+    joined_.store(true, std::memory_order_release);
+  }
+
+  bool joined() const noexcept {
+    return joined_.load(std::memory_order_acquire);
   }
 
   bool stopped() const noexcept {
@@ -542,6 +559,7 @@ class ContinuousAudioDriver final {
 
   RealtimeEngine& engine_;
   std::atomic<bool> running_{true};
+  std::atomic<bool> joined_{false};
   std::atomic<std::uint64_t> started_callbacks_{0};
   std::atomic<std::uint64_t> completed_callbacks_{0};
   std::thread thread_;
@@ -615,6 +633,7 @@ struct FakeCoordinator final {
     if (self.acknowledgement_delay_polls == 0) {
       self.acknowledged = self.begin_acknowledgement;
     }
+    if (self.after_begin) self.after_begin();
     return lmdj::foundation::Result<void>::success();
   }
 
@@ -647,6 +666,9 @@ struct FakeCoordinator final {
     if (self.driver != nullptr) {
       self.driver->stop();
     }
+    if (self.one_shot_context != nullptr) {
+      self.stop_one_shot(self.one_shot_context);
+    }
     if (self.engine != nullptr) {
       self.observed_capture_idle =
           self.engine->capture_telemetry().state == CaptureState::idle;
@@ -655,7 +677,9 @@ struct FakeCoordinator final {
           lmdj::audio::RealtimeState::running;
     }
     self.quiescence_established =
-        self.driver == nullptr || self.driver->stopped();
+        self.one_shot_context != nullptr
+            ? self.one_shot_joined(self.one_shot_context)
+            : self.driver == nullptr || self.driver->stopped();
     if (self.engine != nullptr) {
       self.callback_count_at_quiescence =
           self.engine->telemetry().callback_count;
@@ -699,6 +723,26 @@ struct FakeCoordinator final {
     return self.acknowledged;
   }
 
+  static void request_physical_drain(void* context) noexcept {
+    auto& self = *static_cast<FakeCoordinator*>(context);
+    if (self.driver != nullptr) self.driver->request_stop();
+    if (self.one_shot_context != nullptr && self.request_one_shot_stop != nullptr)
+      self.request_one_shot_stop(self.one_shot_context);
+  }
+
+  static bool callback_thread_joined(void* context) noexcept {
+    const auto& self = *static_cast<FakeCoordinator*>(context);
+    if (self.one_shot_context != nullptr && self.one_shot_joined != nullptr)
+      return self.one_shot_joined(self.one_shot_context);
+    return self.driver != nullptr && self.driver->joined();
+  }
+
+  lmdj::web_runtime::detail::AudioPhysicalQuiescenceCapability
+  physical_seam() noexcept {
+    return {this, &FakeCoordinator::request_physical_drain,
+            &FakeCoordinator::callback_thread_joined};
+  }
+
   AudioQuiescenceCoordinator seam() noexcept {
     return AudioQuiescenceCoordinator{
         this,
@@ -710,6 +754,11 @@ struct FakeCoordinator final {
   }
 
   ContinuousAudioDriver* driver = nullptr;
+  std::function<void()> after_begin;
+  void* one_shot_context = nullptr;
+  void (*stop_one_shot)(void*) noexcept = nullptr;
+  void (*request_one_shot_stop)(void*) noexcept = nullptr;
+  bool (*one_shot_joined)(void*) noexcept = nullptr;
   RealtimeEngine* engine = nullptr;
   bool succeed = true;
   bool begin_succeed = true;
@@ -774,15 +823,46 @@ class OneShotAudioDriver final {
   }
 
   ~OneShotAudioDriver() {
+    stop();
+    if (coordinator_ != nullptr && coordinator_->one_shot_context == this) {
+      coordinator_->one_shot_context = nullptr;
+      coordinator_->stop_one_shot = nullptr;
+      coordinator_->request_one_shot_stop = nullptr;
+      coordinator_->one_shot_joined = nullptr;
+    }
+  }
+
+  void bind(FakeCoordinator& coordinator) {
+    LMDJ_CHECK(coordinator.one_shot_context == nullptr ||
+               coordinator.one_shot_context == this);
+    coordinator_ = &coordinator;
+    coordinator.one_shot_context = this;
+    coordinator.stop_one_shot = [](void* context) noexcept {
+      static_cast<OneShotAudioDriver*>(context)->stop();
+    };
+    coordinator.request_one_shot_stop = [](void* context) noexcept {
+      static_cast<OneShotAudioDriver*>(context)->request_stop();
+    };
+    coordinator.one_shot_joined = [](void* context) noexcept {
+      return static_cast<OneShotAudioDriver*>(context)->joined_;
+    };
+  }
+
+  void request_stop() noexcept {
     stop_requested_.store(true, std::memory_order_release);
     {
       std::lock_guard lock(mutex_);
       stopped_ = true;
     }
     changed_.notify_all();
+  }
+
+  void stop() noexcept {
+    request_stop();
     if (thread_.joinable()) {
       thread_.join();
     }
+    joined_ = true; // Written only after the actual callback thread is joined.
   }
 
   void render_one() { render_frames(128); }
@@ -801,6 +881,11 @@ class OneShotAudioDriver final {
     std::lock_guard lock(mutex_);
     ++permits_;
     changed_.notify_all();
+  }
+
+  std::size_t completed_callbacks() {
+    std::lock_guard lock(mutex_);
+    return completed_; // Incremented only after the actual backend callback returns.
   }
 
   void schedule_bank_transition() {
@@ -887,6 +972,8 @@ class OneShotAudioDriver final {
   std::uint32_t frame_count_ = 128;
   std::atomic<bool> stop_requested_{false};
   bool stopped_ = false;
+  bool joined_ = false;
+  FakeCoordinator* coordinator_ = nullptr;
   std::thread thread_;
 };
 
@@ -1882,7 +1969,8 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
   LMDJ_CHECK(recovery.at("candidates").at(0).at("reason") == "owner_lost");
 }
 
-void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay() {
+void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(
+    bool expired_original_request = false) {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(runtime->dispatch("project.create", create_payload(), {}));
@@ -1904,6 +1992,7 @@ void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay() {
       {}));
 
   OneShotAudioDriver audio(runtime->engine());
+  audio.bind(coordinator);
   check_success(runtime->dispatch(
       "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   audio.render_one();
@@ -1917,6 +2006,26 @@ void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay() {
   check_exact_success(
       lmdj::web_runtime::testing::fail_next_pattern_publication(*runtime),
       {"armed"});
+  if (expired_original_request) {
+    const auto reclaimed = runtime->engine().pattern_telemetry().reclaimed_patterns;
+    check_error(runtime->dispatch("host.status", Json::object(), {},
+        ControlRuntime::AbsoluteRequestDeadline{
+            std::chrono::steady_clock::now() - std::chrono::milliseconds(1)}),
+        "HOST_TIMEOUT");
+    LMDJ_CHECK(runtime->failed());
+    LMDJ_CHECK(!coordinator.called);
+    LMDJ_CHECK(runtime->engine().telemetry().state ==
+               lmdj::audio::RealtimeState::running);
+    LMDJ_CHECK(runtime->engine().current_pattern_has_overlay());
+    runtime->service_pattern_transport();
+    LMDJ_CHECK(!coordinator.called);
+    LMDJ_CHECK(runtime->engine().telemetry().state ==
+               lmdj::audio::RealtimeState::running);
+    LMDJ_CHECK(runtime->engine().current_pattern_has_overlay());
+    LMDJ_CHECK(runtime->engine().pattern_telemetry().reclaimed_patterns == reclaimed);
+    LMDJ_CHECK(!runtime->pattern_transport_shutdown_complete());
+    return;
+  }
   runtime->fail_and_seal("test_owner_loss_cleanup_failure");
 
   LMDJ_CHECK(runtime->failed());
@@ -2251,6 +2360,7 @@ void test_stop_fails_closed_if_target_applies_between_cancel_queries() {
       switching.at("effective_runtime_frame").get<std::uint64_t>();
 
   OneShotAudioDriver audio(runtime->engine());
+  audio.bind(coordinator);
   while (runtime->engine().telemetry().rendered_frames < boundary) {
     audio.render_one();
   }
@@ -2296,6 +2406,16 @@ void test_stop_fails_closed_if_target_applies_between_cancel_queries() {
   LMDJ_CHECK(!runtime->engine().current_pattern_id().has_value());
   LMDJ_CHECK(inspect_project(temp.path(), kProjectId).at("project_revision") ==
              1);
+  const auto successful_awaits = coordinator.await_calls;
+  LMDJ_CHECK(successful_awaits != 0);
+  coordinator.succeed = false;
+  runtime->fail_and_seal("test_preserve_same_activation_successful_quiescence");
+  runtime->service_pattern_transport();
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(coordinator.await_calls == successful_awaits);
+  LMDJ_CHECK(runtime->engine().telemetry().state ==
+             lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
 }
 
 void test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary() {
@@ -2708,8 +2828,29 @@ void test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history() {
     audible = audible || std::any_of(left.begin(),left.end(),[](float value) { return value != 0; });
   }
   LMDJ_CHECK(audible);
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  {
+    // Keep a real callback owner alive across the newly submitted Stop.
+    // The coordinator joins it before the actual lifecycle Native stop.
+    ContinuousAudioDriver audio(runtime->engine());
+    coordinator.driver = &audio;
+    struct ResetDriver {
+      FakeCoordinator& coordinator;
+      ~ResetDriver() { coordinator.driver = nullptr; }
+    } reset_driver{coordinator};
+    const auto suspended = check_exact_success(dispatch_retained_for_test(
+        *runtime, "audio.suspend", Json::object(), {},
+        ControlRuntime::AbsoluteRequestDeadline{
+            std::chrono::steady_clock::now() + std::chrono::seconds(1)}),
+        {"state", "changed", "stopped_sequence_id"});
+    LMDJ_CHECK((suspended == Json{{"state", "audio-suspended"},
+        {"changed", true}, {"stopped_sequence_id", nullptr}}));
+    LMDJ_CHECK(audio.stopped() && coordinator.quiescence_established);
+    LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::stopped);
+    LMDJ_CHECK(!runtime->pattern_transport_pending());
+  }
+  check_success(dispatch_retained_for_test(*runtime, "host.close", Json::object(), {},
+      ControlRuntime::AbsoluteRequestDeadline{
+          std::chrono::steady_clock::now() + std::chrono::seconds(10)}));
   runtime = make_runtime(temp.path());
   check_success(runtime->dispatch("project.open", {{"project_id",kProjectId},{"pattern_id",kPatternId}}, {}));
   LMDJ_CHECK(truth() == reassigned);
@@ -4231,16 +4372,21 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, failure.seam())
             .has_value());
+    LMDJ_CHECK(
+        lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess::install(
+            *runtime, failure.physical_seam()).has_value());
     check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     ContinuousAudioDriver driver(runtime->engine());
     failure.driver = &driver;
     failure.engine = &runtime->engine();
+    LMDJ_CHECK(!driver.joined());
     check_error(
         runtime->dispatch("audio.suspend", Json::object(), {}),
         "INTERNAL_ERROR");
     LMDJ_CHECK(failure.called);
     LMDJ_CHECK(failure.quiescence_established);
     LMDJ_CHECK(driver.stopped());
+    LMDJ_CHECK(driver.joined());
     LMDJ_CHECK(failure.observed_engine_running);
     LMDJ_CHECK(
         runtime->engine().telemetry().callback_count ==
@@ -4337,6 +4483,8 @@ void test_audio_activation_rechecks_deadline_after_generation_ack() {
         "HOST_TIMEOUT");
     LMDJ_CHECK(coordinator.begin_calls == 1);
     LMDJ_CHECK(coordinator.acknowledgement_calls == 0);
+    LMDJ_CHECK(!coordinator.called);
+    runtime->service_pattern_transport();
     LMDJ_CHECK(!coordinator.called);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
@@ -6200,12 +6348,13 @@ void test_bridge_cancelled_before_dispatch_skips_facade_work() {
 
   const auto proof = bridge->deadline_proof_state(request_id);
   LMDJ_CHECK((proof & (1 << 9)) == 0);
-  LMDJ_CHECK(bridge->terminal_release_ready());
+  LMDJ_CHECK(!bridge->terminal_release_ready());
   const auto response = poll_message(*bridge);
   LMDJ_CHECK(response.at("request_id") == request_id);
   LMDJ_CHECK(response.at("ok") == false);
   LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
   proxy.pump_one();
+  LMDJ_CHECK(bridge->terminal_release_ready());
   LMDJ_CHECK(std::filesystem::is_empty(
       temp.path() / "projects" /
       (std::string(kProjectId) + ".lmdj") / "assets"));
@@ -6431,7 +6580,7 @@ void test_bridge_parks_foreign_control_tasks_during_a_dispatch() {
   proxy.pump_one();
   LMDJ_CHECK(parked_during_dispatch);
   LMDJ_CHECK(counter.runs == 0);
-  LMDJ_CHECK(bridge->terminal_release_ready());
+  LMDJ_CHECK(!bridge->terminal_release_ready());
   LMDJ_CHECK(poll_message(*bridge).at("request_id") == request_id);
 
   // Re-proxied after the dispatch returned; it runs on its own mailbox turn.
@@ -6439,6 +6588,10 @@ void test_bridge_parks_foreign_control_tasks_during_a_dispatch() {
     proxy.pump_one();
   }
   LMDJ_CHECK(counter.runs == 1);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  LMDJ_CHECK(!proxy.tasks.empty());
+  proxy.pump_one();
+  LMDJ_CHECK(bridge->terminal_release_ready());
   LMDJ_CHECK(!bridge->failed());
 }
 
@@ -6698,6 +6851,130 @@ void test_bridge_passes_the_absolute_caller_deadline_into_audio_activation() {
   std::size_t required = 0;
   LMDJ_CHECK(
       bridge->poll(output, required) == BridgePollStatus::failed);
+}
+
+void test_failed_activation_keeps_queued_rpc_and_retirement_service_alive() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(8);
+  import_and_assign(*runtime, wav, kAssetId, 9970, 9971, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  coordinator.begin_stale_acknowledgement = 0;
+  coordinator.acknowledgement_delay_polls =
+      std::numeric_limits<std::uint32_t>::max();
+  coordinator.acknowledgement_poll_delay_ms = 10;
+  std::unique_ptr<ContinuousAudioDriver> driver;
+  // begin runs after the real Engine start. Failure never starts a producer.
+  coordinator.after_begin = [&] {
+    driver = std::make_unique<ContinuousAudioDriver>(runtime->engine());
+    coordinator.driver = driver.get();
+  };
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(
+      *runtime, coordinator.seam()).has_value());
+  LMDJ_CHECK(lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess::install(
+      *runtime, coordinator.physical_seam()).has_value());
+  FakeRuntimeClock clock;
+  clock.advance_per_read = std::chrono::milliseconds(10);
+  LMDJ_CHECK(ControlRuntimeClockAccess::install(
+      *runtime, clock.seam()).has_value());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  struct Cleanup {
+    std::unique_ptr<ControlRuntime>& runtime;
+    std::unique_ptr<ControlBridge>& bridge;
+    std::unique_ptr<ContinuousAudioDriver>& driver;
+    FakeCoordinator& coordinator;
+    ~Cleanup() {
+      if (driver) driver->stop();
+      bridge.reset();
+      runtime.reset();
+      coordinator.driver = nullptr;
+    }
+  } cleanup{runtime, bridge, driver, coordinator};
+
+  const auto started = std::chrono::steady_clock::now();
+  clock.current = started;
+  const auto activation_id = uuid(9972);
+  const auto queued_id = uuid(9973);
+  LMDJ_CHECK(bridge->submit(encode(request(activation_id,
+      "audio.activate", Json::object())), {}, started + std::chrono::milliseconds(100)) ==
+      BridgeSubmitStatus::accepted);
+  LMDJ_CHECK(bridge->submit(encode(request(queued_id,
+      "host.status", Json::object())), {}) == BridgeSubmitStatus::accepted);
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+  proxy.pump_one();
+  LMDJ_CHECK(runtime->failed() && bridge->failed());
+  LMDJ_CHECK(driver && !driver->joined());
+  LMDJ_CHECK(runtime->engine().telemetry().callback_count != 0);
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  LMDJ_CHECK(coordinator.await_calls == 0);
+  LMDJ_CHECK(proxy.tasks.size() == 1);
+  proxy.pump_one(); // The already-accepted B still receives its frozen error.
+  LMDJ_CHECK(proxy.tasks.empty());
+
+  const auto activation = poll_message(*bridge);
+  check_exact_keys(activation, {"protocol_version", "request_id", "ok", "error"});
+  LMDJ_CHECK(activation.at("protocol_version") == 1);
+  LMDJ_CHECK(activation.at("request_id") == activation_id);
+  LMDJ_CHECK(activation.at("ok") == false);
+  LMDJ_CHECK(activation.at("error") == (Json{{"code", "HOST_TIMEOUT"},
+      {"message", "host request timed out"}, {"details", Json::object()}}));
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+  const auto release_activation = proxy.tasks.front();
+  proxy.tasks.erase(proxy.tasks.begin());
+
+  const auto queued = poll_message(*bridge);
+  check_exact_keys(queued, {"protocol_version", "request_id", "ok", "error"});
+  LMDJ_CHECK(queued.at("protocol_version") == 1);
+  LMDJ_CHECK(queued.at("request_id") == queued_id);
+  LMDJ_CHECK(queued.at("ok") == false);
+  LMDJ_CHECK(queued.at("error") == (Json{{"code", "HOST_STATE_INVALID"},
+      {"message", "operation is unavailable"}, {"details", Json::object()}}));
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+  const auto release_queued = proxy.tasks.back();
+  proxy.tasks.pop_back();
+  LMDJ_CHECK(release_activation.function == release_queued.function);
+  LMDJ_CHECK(release_activation.argument != release_queued.argument);
+  LMDJ_CHECK(proxy.tasks.front().function != release_activation.function);
+  LMDJ_CHECK(bridge->submit(encode(request(uuid(9974),
+      "host.status", Json::object())), {}) == BridgeSubmitStatus::queue_full);
+
+  const auto service_failed_poll = [&] {
+    std::array<std::byte, 1> output{};
+    std::size_t required = 1;
+    LMDJ_CHECK(bridge->poll(output, required) == BridgePollStatus::failed);
+    LMDJ_CHECK(required == 0 && proxy.tasks.size() == 1);
+    const auto before = proxy.capture_drains;
+    proxy.pump_one();
+    LMDJ_CHECK(proxy.capture_drains == before + 1);
+    LMDJ_CHECK(proxy.tasks.empty());
+  };
+  service_failed_poll();
+  LMDJ_CHECK(!driver->joined());
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  service_failed_poll(); // B must not disable the next short continuation.
+  driver->stop(); // Only this actual thread join supplies physical quiescence.
+  LMDJ_CHECK(driver->joined());
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  service_failed_poll(); // Actual Host continuation now performs Native stop.
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(bridge->failed() && coordinator.await_calls == 0);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  proxy.run_as_control(release_activation);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  proxy.run_as_control(release_queued);
+  LMDJ_CHECK(bridge->terminal_release_ready());
+  LMDJ_CHECK(proxy.tasks.empty());
 }
 
 void test_bridge_rechecks_deadline_before_error_publication() {
@@ -7026,16 +7303,80 @@ Json pattern_transport_request_payload(
   };
 }
 
+// Test-only adapter for the production short-turn continuation. It retains
+// the original absolute budget and candidate; it never re-enqueues a trigger.
+// The existing two-second harness watchdog and all far-side assertions remain.
+Json dispatch_retained_for_test(ControlRuntime& runtime, std::string_view operation,
+    const Json& payload, std::span<const std::byte> sidecar,
+    ControlRuntime::AbsoluteRequestDeadline deadline) {
+  static std::atomic<std::uint32_t> next_rpc{1'000'000};
+  const auto original_rpc = uuid(next_rpc.fetch_add(1, std::memory_order_relaxed));
+  auto response = runtime.dispatch(operation, payload, sidecar, deadline, original_rpc);
+  if (operation == "pattern.transport.request" && response.value("ok", false) &&
+      response.at("result").at("status").at("phase") == "preparing") {
+    wait_until([&] {
+      const auto status = runtime.dispatch("pattern.transport.inspect",
+          {{"session_id", payload.at("session_id")}}, {}, deadline);
+      check_success(status);
+      response["result"]["status"] = status.at("result");
+      return status.at("result").at("phase") != "preparing";
+    });
+    return response;
+  }
+  const auto pending = [&](const Json& result) {
+    return !result.value("ok", false) && runtime.owns_pending_pattern_rpc(original_rpc, operation);
+  };
+  if (!pending(response)) return response;
+  wait_until([&] {
+    if (operation == "trigger") {
+      const auto terminal = runtime.inspect_legacy_trigger(original_rpc);
+      if (!terminal) return false;
+      response = *terminal;
+      static_cast<void>(runtime.inspect_legacy_trigger(original_rpc, true));
+      return true;
+    }
+    runtime.service_pattern_transport();
+    // Re-enter only the same guarded lifecycle operation and same deadline.
+    // A pinned test clock stays pinned; ordinary expiry retains failed owners.
+    response = runtime.dispatch(operation, payload, sidecar, deadline, original_rpc);
+    return !pending(response);
+  });
+  return response;
+}
+
+Json dispatch_retained_for_test(ControlRuntime& runtime, std::string_view operation,
+    const Json& payload, std::span<const std::byte> sidecar,
+    std::function<std::chrono::steady_clock::time_point()> now = [] {
+      return std::chrono::steady_clock::now();
+    }) {
+  const auto budget = operation == "host.close" ? std::chrono::seconds(10)
+      : operation == "audio.suspend" || operation == "trigger" ? std::chrono::seconds(1)
+      : std::chrono::seconds(30);
+  return dispatch_retained_for_test(runtime, operation, payload, sidecar,
+      ControlRuntime::AbsoluteRequestDeadline{now() + budget});
+}
+
 Json pattern_transport_inspect(
     ControlRuntime& runtime,
     std::string_view session_id) {
-  return check_exact_success(
+  auto status = check_exact_success(
       runtime.dispatch(
           "pattern.transport.inspect", {{"session_id", session_id}}, {}),
       {"engaged", "playing", "recording", "phase", "runtime_generation",
        "transport_epoch", "origin_frame", "runtime_frame", "command_id",
        "publication_pending", "error", "current_pattern_id",
        "pending_switch"});
+  if (status.at("phase") == "flushing" || status.at("phase") == "reconciling") {
+    wait_until([&] {
+      status = check_exact_success(runtime.dispatch(
+          "pattern.transport.inspect", {{"session_id", session_id}}, {}),
+          {"engaged", "playing", "recording", "phase", "runtime_generation",
+           "transport_epoch", "origin_frame", "runtime_frame", "command_id",
+           "publication_pending", "error", "current_pattern_id", "pending_switch"});
+      return status.at("phase") != "flushing" && status.at("phase") != "reconciling";
+    });
+  }
+  return status;
 }
 
 // Each inspection turn drives one bounded continuation step; a render between
@@ -7046,6 +7387,13 @@ Json settle_pattern_transport(
     OneShotAudioDriver& audio,
     std::string_view session_id) {
   for (unsigned step = 0; step < 8; ++step) {
+    // The original eight render legs cannot race a newly asynchronous real
+    // Store/Journal preparation. Keep their cadence and the existing two-second
+    // fixture bound, observing actual worker completion before each leg.
+    wait_until([&] {
+      static_cast<void>(pattern_transport_inspect(runtime, session_id));
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(runtime);
+    });
     audio.render_one();
     auto status = pattern_transport_inspect(runtime, session_id);
     if (status.at("phase") == "idle" &&
@@ -7068,17 +7416,17 @@ std::unique_ptr<ControlRuntime> grid_edit_runtime(
     TempDirectory& temp, FakeCoordinator& coordinator,
     std::uint32_t sample_frames = 2'400) {
   auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   auto wav = mono_pcm16_wav(sample_frames);
   for (std::size_t frame = 0; frame < sample_frames; ++frame) {
     write_u16(wav, 44 + frame * 2, 8192);
   }
   import_and_assign(*runtime, wav, kAssetId, 9600, 9601, 0);
-  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
   coordinator.begin_acknowledgement =
       runtime->engine().bank_telemetry().accepted_publications;
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   coordinator.engine = &runtime->engine();
   coordinator.observe_engine_generation = true;
   return runtime;
@@ -7097,7 +7445,7 @@ Json grid_edit(std::uint32_t command, std::uint64_t revision, Json remove,
 }
 
 void play_grid_transport(ControlRuntime& runtime, std::uint32_t command) {
-  check_success(runtime.dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, command, 1, "play_stop"), {}));
   std::array<float, 128> left{}, right{};
   for (unsigned step = 0; step < 8; ++step) {
@@ -7237,7 +7585,7 @@ void test_an_undo_during_a_replay_publishes_nothing_over_it() {
   {
     // Undo republishes the Bank, whose acknowledgement needs audio running.
     ContinuousAudioDriver audio(engine);
-    check_success(runtime->dispatch("history.undo", {{"session_id", session},
+    check_success(dispatch_retained_for_test(*runtime, "history.undo", {{"session_id", session},
         {"command_id", uuid(9687)}, {"expected_revision", revision + 1}}, {}));
   }
   LMDJ_CHECK(grid_truth_events(*runtime) == 0);
@@ -7265,11 +7613,11 @@ void test_a_bpm_change_during_a_replay_publishes_nothing_over_it() {
 // Creates and loads a second Project while the first one's replay plays.
 // A Project is replaced only with audio suspended.
 void switch_grid_project(ControlRuntime& runtime) {
-  check_success(runtime.dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime.dispatch("project.create",
+  check_success(dispatch_retained_for_test(runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(runtime, "project.create",
       create_payload(uuid(9697), kNextPatternId), {}));
-  check_success(runtime.dispatch("snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
-  check_success(runtime.dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(runtime, "snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
+  check_success(dispatch_retained_for_test(runtime, "audio.activate", Json::object(), {}));
   static_cast<void>(render_grid_frames(runtime.engine(), 128));
 }
 
@@ -7283,11 +7631,11 @@ void test_a_project_switch_during_a_replay_publishes_its_own_view() {
   begin_grid_replay(*runtime);
   switch_grid_project(*runtime);
   LMDJ_CHECK(runtime->engine().current_pattern_id()->value() == kNextPatternId);
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch("project.open", {{"project_id", kProjectId},
+  check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "project.open", {{"project_id", kProjectId},
       {"pattern_id", kPatternId}, {"pattern_transport", true}}, {}));
   LMDJ_CHECK(replay_state(*runtime) == "stopped");
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   static_cast<void>(render_grid_frames(runtime->engine(), 128));
   const auto revision = runtime->dispatch("project.inspect", Json::object(), {})
       .at("result").at("project").at("revision").get<std::uint64_t>();
@@ -7306,19 +7654,19 @@ void test_opening_another_project_stops_replay_before_replacement() {
   static_cast<void>(record_grid_performance(*runtime, 2, 2'400));
   // Make another Project available, then return to the recorded Project.
   switch_grid_project(*runtime);
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch("project.open", {{"project_id", kProjectId},
+  check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "project.open", {{"project_id", kProjectId},
       {"pattern_id", kPatternId}, {"pattern_transport", true}}, {}));
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   begin_grid_replay(*runtime);
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch("project.open", {{"project_id", uuid(9697)},
+  check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "project.open", {{"project_id", uuid(9697)},
       {"pattern_id", kNextPatternId}}, {}));
   LMDJ_CHECK(runtime->engine().current_pattern_id()->value() == kNextPatternId);
-  check_success(runtime->dispatch("project.open", {{"project_id", kProjectId},
+  check_success(dispatch_retained_for_test(*runtime, "project.open", {{"project_id", kProjectId},
       {"pattern_id", kPatternId}, {"pattern_transport", true}}, {}));
   LMDJ_CHECK(replay_state(*runtime) == "stopped");
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   static_cast<void>(render_grid_frames(runtime->engine(), 128));
   static_cast<void>(runtime->service_performance());
   LMDJ_CHECK(replay_state(*runtime) == "stopped");
@@ -7332,9 +7680,9 @@ std::uint64_t prepare_transport_replay(
   check_success(runtime.dispatch("pattern.create", {{"command_id", uuid(9710)},
       {"expected_revision", revision}, {"pattern_id", kNextPatternId}, {"bars", 1}}, {}));
   ++revision;
-  check_success(runtime.dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime.dispatch("snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
-  check_success(runtime.dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(runtime, "snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
+  check_success(dispatch_retained_for_test(runtime, "audio.activate", Json::object(), {}));
   static_cast<void>(render_grid_frames(runtime.engine(), 128));
   if (transport_playing) play_grid_transport(runtime, 9711);
   begin_grid_replay(runtime);
@@ -7358,7 +7706,7 @@ Json dispatch_transport_after_replay(ControlRuntime& runtime, const Json& payloa
   Json response;
   std::atomic<bool> done{false};
   std::jthread control([&] {
-    response = runtime.dispatch("pattern.transport.request", payload, {},
+    response = dispatch_retained_for_test(runtime, "pattern.transport.request", payload, {},
         ControlRuntime::AbsoluteRequestDeadline{
             std::chrono::steady_clock::now() + std::chrono::seconds(2)});
     done.store(true, std::memory_order_release);
@@ -7442,10 +7790,10 @@ void test_record_after_replay_records_into_the_selected_pattern() {
   const auto status = settle_pattern_transport(*runtime, audio, kSequenceSessionId);
   LMDJ_CHECK(status.at("playing") == true);
   LMDJ_CHECK(status.at("recording") == true);
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   audio.render_one();
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9716, 2, "record"), {}));
   const auto settled = settle_pattern_transport(*runtime, audio, kSequenceSessionId);
   LMDJ_CHECK(settled.at("recording") == false);
@@ -7464,7 +7812,7 @@ void test_transport_replay_stop_timeout_starts_no_transport() {
   static_cast<void>(prepare_transport_replay(*runtime, false));
   const auto before = runtime->dispatch("project.inspect", Json::object(), {});
   const auto publications = runtime->engine().pattern_telemetry().accepted_publications;
-  const auto response = runtime->dispatch("pattern.transport.request",
+  const auto response = dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9717, 1, "record"), {},
       ControlRuntime::AbsoluteRequestDeadline{
           std::chrono::steady_clock::now() + std::chrono::milliseconds(10)});
@@ -7492,7 +7840,7 @@ void test_a_pad_delete_during_a_replay_stops_only_the_live_voice() {
   // the next render.
   static_cast<void>(render_grid_frames(engine, 128));
   LMDJ_CHECK(engine.telemetry().active_voices == 1);
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
   static_cast<void>(render_grid_frames(engine, 128));
   LMDJ_CHECK(engine.telemetry().active_voices == 2);
   // The Bank's acknowledgement needs audio. A continuous driver renders for
@@ -7664,11 +8012,17 @@ void test_pattern_length_and_copy_refuse_while_recording_and_keep_truth() {
     return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
   };
   const auto before = truth();
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9738, 1, "record"), {}));
   std::array<float, 128> left{}, right{};
   bool recording = false;
   for (unsigned step = 0; step < 8 && !recording; ++step) {
+    // Observe the real worker before this original callback leg. Waiting does
+    // not manufacture another frame or weaken the recording-state assertion.
+    wait_until([&] {
+      static_cast<void>(pattern_transport_inspect(*runtime, kSequenceSessionId));
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+    });
     runtime->engine().render(left.data(), right.data(), 128);
     const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
     recording = status.at("recording") == true && status.at("phase") == "idle";
@@ -7691,7 +8045,7 @@ void test_pattern_length_and_copy_refuse_while_the_transport_settles() {
   auto runtime = grid_edit_runtime(temp, coordinator);
   const auto before =
       runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9743, 1, "play_stop"), {}));
   LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("phase") != "idle");
   const auto refused = check_error(
@@ -7742,11 +8096,17 @@ void test_pattern_events_edit_refusals_keep_truth() {
   check_error(runtime->dispatch("pattern.events.edit",
       grid_edit(9609, 2, Json::array({{{"slot", slot(0, 3)}, {"onset_tick", 0}}}),
                 Json::array()), {}), "NOT_FOUND");
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9610, 1, "record"), {}));
   std::array<float, 128> left{}, right{};
   bool recording = false;
   for (unsigned step = 0; step < 8 && !recording; ++step) {
+    // Observe the real worker before this original callback leg. Waiting does
+    // not manufacture another frame or weaken the recording-state assertion.
+    wait_until([&] {
+      static_cast<void>(pattern_transport_inspect(*runtime, kSequenceSessionId));
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+    });
     runtime->engine().render(left.data(), right.data(), 128);
     const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
     recording = status.at("recording") == true && status.at("phase") == "idle";
@@ -7769,7 +8129,7 @@ void test_pattern_events_edit_refuses_while_the_transport_settles() {
   TempDirectory temp;
   FakeCoordinator coordinator;
   auto runtime = grid_edit_runtime(temp, coordinator);
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9612, 1, "play_stop"), {}));
   LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("phase") != "idle");
   const auto response = runtime->dispatch("pattern.events.edit",
@@ -7904,11 +8264,17 @@ void test_pad_colour_set_refused_while_recording_keeps_truth() {
     return runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
   };
   const auto before = truth();
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9724, 1, "record"), {}));
   std::array<float, 128> left{}, right{};
   bool recording = false;
   for (unsigned step = 0; step < 8 && !recording; ++step) {
+    // Observe the real worker before this original callback leg. Waiting does
+    // not manufacture another frame or weaken the recording-state assertion.
+    wait_until([&] {
+      static_cast<void>(pattern_transport_inspect(*runtime, kSequenceSessionId));
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+    });
     runtime->engine().render(left.data(), right.data(), 128);
     const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
     recording = status.at("recording") == true && status.at("phase") == "idle";
@@ -7973,7 +8339,7 @@ void test_pattern_events_edit_after_stop_publishes_immediately() {
   FakeCoordinator coordinator;
   auto runtime = grid_edit_runtime(temp, coordinator);
   play_grid_transport(*runtime, 9620);
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9621, 2, "play_stop"), {}));
   auto& engine = runtime->engine();
   for (unsigned step = 0; step < 8; ++step) {
@@ -8132,9 +8498,15 @@ void test_pattern_events_edit_deferral_waits_out_a_recording() {
   auto& engine = runtime->engine();
   const auto deferral = defer_a_grid_edit(*runtime, 9639);
   const auto record = [&](std::uint32_t command, std::uint64_t epoch, bool recording) {
-    check_success(runtime->dispatch("pattern.transport.request",
+    check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
         pattern_transport_request_payload(kSequenceSessionId, command, epoch, "record"), {}));
     for (unsigned step = 0; step < 64; ++step) {
+      // The fixed callback journey is not an I/O completion clock. Drain the
+      // actual retained worker work before this same original callback leg.
+      wait_until([&] {
+        runtime->service_pattern_transport();
+        return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+      });
       static_cast<void>(render_grid_frames(engine, 128));
       runtime->service_pattern_transport();
       const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
@@ -8143,7 +8515,9 @@ void test_pattern_events_edit_deferral_waits_out_a_recording() {
         return;
       }
     }
-    throw std::runtime_error("Pattern transport recording did not settle");
+    throw std::runtime_error("Pattern transport recording did not settle for command " +
+        std::to_string(command) + " epoch " + std::to_string(epoch) + ": " +
+        pattern_transport_inspect(*runtime, kSequenceSessionId).dump());
   };
   record(9645, 2, true);
   // The recording owns its publications: past the first voice's end, the
@@ -8165,8 +8539,18 @@ void test_pattern_events_edit_deferral_survives_an_audio_interruption() {
   auto runtime = grid_edit_runtime(temp, coordinator, 192'000);
   auto& engine = runtime->engine();
   const auto deferral = defer_a_grid_edit(*runtime, 9647);
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  {
+    ContinuousAudioDriver audio(engine);
+    coordinator.driver = &audio;
+    struct ResetDriver {
+      FakeCoordinator& coordinator;
+      ~ResetDriver() { coordinator.driver = nullptr; }
+    } reset_driver{coordinator};
+    check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+    LMDJ_CHECK(audio.stopped() && coordinator.quiescence_established);
+    LMDJ_CHECK(engine.telemetry().state == lmdj::audio::RealtimeState::stopped);
+  }
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   // The interruption retires the transport engagement; the swap still lands
   // without a Play.
   static_cast<void>(serve_until_swapped(*runtime, deferral.generation, 9'600));
@@ -8257,7 +8641,7 @@ void test_retained_transport_replay_survives_pending_stopped_publication() {
   play_grid_transport(*runtime, 9840);
   const auto stop = pattern_transport_request_payload(
       kSequenceSessionId, 9841, 2, "play_stop");
-  check_success(runtime->dispatch("pattern.transport.request", stop, {}));
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request", stop, {}));
   for (unsigned step = 0; step < 8; ++step) {
     static_cast<void>(render_grid_frames(engine, 128));
     const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
@@ -8277,7 +8661,7 @@ void test_retained_transport_replay_survives_pending_stopped_publication() {
   // Both the newest and an older retained identity reconcile against their
   // original Facade ledger before a new-publication admission fence applies.
   for (const auto& retained : {stop, play}) {
-    const auto response = runtime->dispatch("pattern.transport.request", retained, {});
+    const auto response = dispatch_retained_for_test(*runtime, "pattern.transport.request", retained, {});
     LMDJ_CHECK(response.value("ok", false));
     const auto replay = check_exact_success(
         response,
@@ -8289,7 +8673,7 @@ void test_retained_transport_replay_survives_pending_stopped_publication() {
   }
   auto changed = stop;
   changed["intent"] = "record";
-  check_error(runtime->dispatch("pattern.transport.request", changed, {}),
+  check_error(dispatch_retained_for_test(*runtime, "pattern.transport.request", changed, {}),
               "INVALID_ARGUMENT");
 
   const auto fresh_play = pattern_transport_request_payload(
@@ -8298,7 +8682,7 @@ void test_retained_transport_replay_survives_pending_stopped_publication() {
       kSequenceSessionId, 9844, 3, "record");
   fresh_record["expected_revision"] = 3;
   for (const auto& fresh : {fresh_play, fresh_record}) {
-    const auto refused = runtime->dispatch("pattern.transport.request", fresh, {});
+    const auto refused = dispatch_retained_for_test(*runtime, "pattern.transport.request", fresh, {});
     check_error(refused, "HOST_STATE_INVALID");
     LMDJ_CHECK(refused.at("error").at("message") ==
                "a Pattern publication is pending");
@@ -8320,7 +8704,7 @@ void test_retained_transport_replay_survives_pending_stopped_publication() {
   LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
   LMDJ_CHECK(engine.pattern_telemetry().current_generation == pending);
   LMDJ_CHECK(check_exact_success(
-      runtime->dispatch("pattern.transport.request", fresh_play, {}),
+      dispatch_retained_for_test(*runtime, "pattern.transport.request", fresh_play, {}),
       {"session_id", "command_id", "submit", "status"}).at("submit") == "accepted");
   for (unsigned step = 0; step < 8; ++step) {
     static_cast<void>(render_grid_frames(engine, 128));
@@ -8337,21 +8721,21 @@ void test_retained_transport_replay_survives_pending_stopped_publication() {
 void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "project.create", create_payload(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 770, 771, 0);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
 
   // Without the Project-open negotiation marker the transport operations are
   // refused and legacy Sequence recording keeps its journal meaning.
   check_error(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 772, 1,
                                             "record"),
@@ -8369,16 +8753,16 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 773, 774, 0);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(runtime->engine());
 
   const auto disengaged =
@@ -8387,7 +8771,7 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   LMDJ_CHECK(disengaged.at("playing") == false);
 
   const auto& ticket = check_exact_success(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 775, 1,
                                             "record"),
@@ -8404,7 +8788,7 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   // A new mutation while the operation is unresolved is busy; an exact replay
   // returns the retained operation.
   check_error(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 776, 2,
                                             "play_stop"),
@@ -8412,7 +8796,7 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
       "HOST_STATE_INVALID");
   LMDJ_CHECK(
       check_exact_success(
-          runtime->dispatch(
+          dispatch_retained_for_test(*runtime,
               "pattern.transport.request",
               pattern_transport_request_payload(kSequenceSessionId, 775, 1,
                                                 "record"),
@@ -8423,10 +8807,10 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   // Live input stays serviceable while the admission completion is held: the
   // pre-fence press/release are live-only and journaled nowhere.
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 96}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 96}}, {}),
       {"sequence", "status"});
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
 
   const auto recording =
@@ -8436,7 +8820,7 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   LMDJ_CHECK(recording.at("command_id") == uuid(775));
   const auto recording_history = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
   LMDJ_CHECK(recording_history.at("disabled_reason") == "sequence_session_active");
-  check_error(runtime->dispatch("history.undo", {{"session_id",recording_history.at("session_id")},
+  check_error(dispatch_retained_for_test(*runtime, "history.undo", {{"session_id",recording_history.at("session_id")},
       {"command_id",uuid(9540)}, {"expected_revision",2}}, {}), "HOST_STATE_INVALID");
 
 
@@ -8466,12 +8850,12 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   // journaling response is not reported before durability, so the durable
   // candidates must already exist when the trigger responses return.
   const auto& press = check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}),
       {"sequence", "status"});
   LMDJ_CHECK(press.at("status") == "enqueued");
   audio.render_one();
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
   const auto bundle =
       temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
@@ -8496,14 +8880,25 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   // Record-off: storage settlement and the committed-Pattern publication are
   // held as separate completions.
   check_exact_success(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 778, 2,
                                             "record"),
           {}),
       {"session_id", "command_id", "submit", "status"});
+  wait_until([&] {
+    static_cast<void>(pattern_transport_inspect(*runtime, kSequenceSessionId));
+    return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+  });
   audio.render_one();
-  const auto settled = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  // The one original callback establishes F. Actual asynchronous cutoff and
+  // close I/O must finish before the first idle observation; stop at that
+  // observation so the independent publication remains outstanding.
+  Json settled;
+  wait_until([&] {
+    settled = pattern_transport_inspect(*runtime, kSequenceSessionId);
+    return settled.at("phase") == "idle";
+  });
   LMDJ_CHECK(settled.at("phase") == "idle");
   LMDJ_CHECK(settled.at("recording") == false);
   LMDJ_CHECK(settled.at("playing") == true);
@@ -8515,7 +8910,7 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   // payload is invalid rather than a second toggle.
   LMDJ_CHECK(
       check_exact_success(
-          runtime->dispatch(
+          dispatch_retained_for_test(*runtime,
               "pattern.transport.request",
               pattern_transport_request_payload(kSequenceSessionId, 778, 2,
                                                 "record"),
@@ -8523,7 +8918,7 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
           {"session_id", "command_id", "submit", "status"})
           .at("submit") == "replayed");
   check_error(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 778, 2,
                                             "play_stop"),
@@ -8546,16 +8941,16 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   // gates the live trigger path.
   auto voices = runtime->engine().telemetry().started_voices;
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}),
       {"sequence", "status"});
   audio.render_one();
   LMDJ_CHECK(runtime->engine().telemetry().started_voices > voices);
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
 
   check_exact_success(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 779, 3,
                                             "play_stop"),
@@ -8568,18 +8963,18 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
 
   voices = runtime->engine().telemetry().started_voices;
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}),
       {"sequence", "status"});
   audio.render_one();
   LMDJ_CHECK(runtime->engine().telemetry().started_voices > voices);
   check_exact_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}),
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
   const auto recorded_history = runtime->dispatch("history.inspect", Json::object(), {}).at("result");
   LMDJ_CHECK(recorded_history.at("undo_count") == 3); // import, assign, one recorded segment
   LMDJ_CHECK(recorded_history.at("can_undo") == true);
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch("history.undo", {{"session_id",recorded_history.at("session_id")},
+  check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "history.undo", {{"session_id",recorded_history.at("session_id")},
       {"command_id",uuid(9541)}, {"expected_revision",recorded_history.at("project_revision")}}, {}));
   const auto after_undo = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
   LMDJ_CHECK(after_undo.at("patterns").at(kPatternId).at("events").empty());
@@ -8592,21 +8987,21 @@ void test_pattern_transport_suspend_barrier_settles_recording() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 780, 781, 0);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   ContinuousAudioDriver driver(runtime->engine());
   coordinator.engine = &runtime->engine();
   coordinator.driver = &driver;
 
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 782, 1, "record"),
       {}));
@@ -8615,9 +9010,9 @@ void test_pattern_transport_suspend_barrier_settles_recording() {
     return status.at("recording") == true && status.at("phase") == "idle";
   });
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
 
   // Explicit Suspend enters the shutdown barrier: acknowledged Pattern Stop,
   // admission closure and journal settlement complete before audio stops.
@@ -8630,7 +9025,7 @@ void test_pattern_transport_suspend_barrier_settles_recording() {
   LMDJ_CHECK(
       ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
   const auto& suspended = check_exact_success(
-      runtime->dispatch("audio.suspend", Json::object(), {}),
+      dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}, [&] { return clock.current; }),
       {"state", "changed", "stopped_sequence_id"});
   LMDJ_CHECK(suspended.at("state") == "audio-suspended");
   LMDJ_CHECK(suspended.at("changed") == true);
@@ -8664,12 +9059,12 @@ void test_pattern_transport_suspend_barrier_settles_recording() {
 
   // Disposal re-enters the same barrier (already settled) and closes cleanly;
   // a fresh runtime then reopens the Project with the committed events.
-  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "host.close", Json::object(), {}));
   LMDJ_CHECK(runtime->pattern_transport_pending() == false);
   driver.stop();
   runtime.reset();
   auto reopened = make_runtime(temp.path());
-  check_success(reopened->dispatch(
+  check_success(dispatch_retained_for_test(*reopened,
       "project.open",
       {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
       {}));
@@ -8688,22 +9083,22 @@ void test_pattern_transport_unknown_closure_blocks_clean_suspend() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 783, 784, 0);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(runtime->engine());
 
   // Record live input durably first, then stop rendering so the barrier's
   // Pattern Stop receipt never arrives: the closure is unknown and Suspend
   // must fail instead of claiming a clean barrier.
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 785, 1, "record"),
       {}));
@@ -8711,11 +9106,11 @@ void test_pattern_transport_unknown_closure_blocks_clean_suspend() {
       settle_pattern_transport(*runtime, audio, kSequenceSessionId);
   LMDJ_CHECK(recording.at("recording") == true);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
 
-  const auto suspended = runtime->dispatch("audio.suspend", Json::object(), {});
+  const auto suspended = dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {});
   LMDJ_CHECK(suspended.value("ok", true) == false);
   LMDJ_CHECK(runtime->failed());
 
@@ -8736,7 +9131,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 810, 811, 0);
   // The final leg records a second Pad: the domain merge keys Pattern events
@@ -8754,7 +9149,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
        {"pattern_id", kPatternB},
        {"bars", 1}},
       {}));
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
@@ -8762,12 +9157,12 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
           .has_value());
   coordinator.engine = &runtime->engine();
   coordinator.observe_engine_generation = true;
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   ContinuousAudioDriver driver(runtime->engine());
 
   std::uint64_t epoch = 1;
   const auto request = [&](std::uint32_t command, std::string_view intent) {
-    return runtime->dispatch(
+    return dispatch_retained_for_test(*runtime,
         "pattern.transport.request",
         pattern_transport_request_payload(
             kSequenceSessionId, command, epoch++, intent),
@@ -8790,9 +9185,9 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   check_success(request(813, "record"));
   settled(idle_recording);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
   check_success(request(814, "record"));
   settled(idle_settled);
   check_success(request(815, "play_stop"));
@@ -8805,7 +9200,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   // that authority and make this test pass while the Creator requests epoch 1.
   const auto before_reload =
       pattern_transport_inspect(*runtime, kSequenceSessionId);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternB}}, {}));
   driver.wait_for_next_callback();
   const auto after_reload =
@@ -8835,7 +9230,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   // the first refusal deterministic.
   bool refused_once = false;
   wait_until([&] {
-    const auto attempt = runtime->dispatch(
+    const auto attempt = dispatch_retained_for_test(*runtime,
         "pattern.transport.request",
         pattern_transport_request_payload(
             kSequenceSessionId, 816, epoch, "record"),
@@ -8851,9 +9246,9 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   ++epoch;
   settled(idle_recording);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
   check_success(request(817, "record"));
   settled(idle_settled);
   {
@@ -8871,7 +9266,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   // stays intact.
   // A late ticket for the pre-selection Stop still names a retained command;
   // replay must not apply that Stop to the now-playing new Pattern.
-  const auto old_stop_replay = runtime->dispatch(
+  const auto old_stop_replay = dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(
           kSequenceSessionId, 815,
@@ -8882,7 +9277,7 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
   LMDJ_CHECK(old_stop_replay.at("result").at("submit") == "replayed");
   LMDJ_CHECK(old_stop_replay.at("result").at("status").at("playing") == true);
   check_error(
-      runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}),
+      dispatch_retained_for_test(*runtime, "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
       "HOST_STATE_INVALID");
   check_success(request(818, "play_stop"));
   settled([](const auto& s) {
@@ -8895,17 +9290,17 @@ void test_transport_reload_rebinds_engagement_without_bricking() {
 
   // Suspended: the reload retires the engagement; re-activation re-arms the
   // Engine port and the next request re-engages on the fresh generation.
-  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   epoch = 1;  // A re-armed generation restarts the epoch sequence.
   check_success(request(821, "record"));
   settled(idle_recording);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 1}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 1}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 1}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 1}, {"kind", "release"}}, {}));
   check_success(request(822, "record"));
   settled(idle_settled);
   const auto truth = inspect_project(temp.path(), kProjectId);
@@ -8923,7 +9318,7 @@ void test_transport_record_after_applied_switch_retargets() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 840, 841, 0);
   constexpr std::string_view kPatternB =
@@ -8935,18 +9330,18 @@ void test_transport_record_after_applied_switch_retargets() {
        {"pattern_id", kPatternB},
        {"bars", 1}},
       {}));
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   ContinuousAudioDriver driver(runtime->engine());
 
   std::uint64_t epoch = 1;
   const auto request = [&](std::uint32_t command, std::string_view intent) {
-    return runtime->dispatch(
+    return dispatch_retained_for_test(*runtime,
         "pattern.transport.request",
         pattern_transport_request_payload(
             kSequenceSessionId, command, epoch++, intent),
@@ -8975,7 +9370,7 @@ void test_transport_record_after_applied_switch_retargets() {
   // The #1370 coordination still holds: a playing-state cross-identity reload
   // is refused honestly and leaves the engagement intact.
   check_error(
-      runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternB}}, {}),
+      dispatch_retained_for_test(*runtime, "snapshot.reload", {{"pattern_id", kPatternB}}, {}),
       "HOST_STATE_INVALID");
   LMDJ_CHECK(!runtime->failed());
 
@@ -9044,9 +9439,9 @@ void test_transport_record_after_applied_switch_retargets() {
   LMDJ_CHECK(journal.value().admission->admission_fence->pattern_id ==
              lmdj::foundation::PatternId{std::string(kPatternB)});
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
   check_success(request(846, "record"));
   settled(idle_settled);
   const auto status = pattern_transport_inspect(*runtime, kSequenceSessionId);
@@ -9076,7 +9471,7 @@ std::unique_ptr<ControlRuntime> switch_test_runtime(
     unsigned current_bars = 1, unsigned target_bars = 1) {
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 9830, 9831, 0);
   check_success(runtime->dispatch(
@@ -9101,13 +9496,13 @@ std::unique_ptr<ControlRuntime> switch_test_runtime(
          {"pattern_id", kPatternId}, {"bars", current_bars}}, {}));
   }
   check_success(
-      runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+      dispatch_retained_for_test(*runtime, "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   coordinator.begin_acknowledgement =
       runtime->engine().bank_telemetry().accepted_publications;
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   coordinator.engine = &runtime->engine();
   coordinator.observe_engine_generation = true;
   return runtime;
@@ -9145,7 +9540,7 @@ void test_stopped_snapshot_selection_applies_before_the_next_play() {
   for (const auto selected : {kSwitchPatternB, kPatternId}) {
     {
       ContinuousAudioDriver audio(engine);
-      check_success(runtime->dispatch(
+      check_success(dispatch_retained_for_test(*runtime,
           "snapshot.reload", {{"pattern_id", selected}}, {}));
     }
     static_cast<void>(render_grid_frames(engine, 128));
@@ -9172,6 +9567,13 @@ Json settled_transport_status(
   std::array<float, 128> left{};
   std::array<float, 128> right{};
   for (unsigned step = 0; step < 16; ++step) {
+    // Preserve all sixteen original callback legs. Real asynchronous Journal
+    // preparation/closure must finish within the existing two-second fixture
+    // bound before the next leg can establish its actual audio receipt.
+    wait_until([&] {
+      static_cast<void>(pattern_transport_inspect(runtime, kSequenceSessionId));
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(runtime);
+    });
     engine.render(left.data(), right.data(), 128);
     const auto status =
         pattern_transport_inspect(runtime, kSequenceSessionId);
@@ -9237,7 +9639,7 @@ void test_transport_current_pattern_withdraws_both_exact_authorities() {
   LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
   LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
   LMDJ_CHECK(engine.pattern_telemetry().pending_generation == 0);
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 10104, 2, "play_stop"), {}));
   const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
     return status.at("playing") == false && status.at("phase") == "idle";
@@ -9288,7 +9690,7 @@ void test_transport_current_pattern_cancel_race_requeues_after_predecessor_appli
   LMDJ_CHECK(engine.current_pattern_id()->value() == kPatternId);
   LMDJ_CHECK(engine.current_pattern_origin_frame() == 48'000);
   LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 10114, 2, "play_stop"), {}));
   const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
     return status.at("playing") == false && status.at("phase") == "idle";
@@ -9351,7 +9753,7 @@ void test_transport_predecessor_press_after_successor_claim_queues_behind_succes
   LMDJ_CHECK(engine.current_pattern_id()->value() == kSwitchPatternB);
   LMDJ_CHECK(engine.current_pattern_origin_frame() == 240'000);
   LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 10124, 2, "play_stop"), {}));
   const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
     return status.at("playing") == false && status.at("phase") == "idle";
@@ -9403,7 +9805,7 @@ void test_transport_latest_successor_prepublication_handoff_retains_stop_authori
   LMDJ_CHECK(observed->pending_switches[1]->pattern_id.value() == fourth);
   LMDJ_CHECK(observed->pending_switches[1]->activation_frame == 240'000);
   const auto accepted = engine.pattern_telemetry().accepted_publications;
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 10136, 2, "play_stop"), {}));
   const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
     return status.at("playing") == false && status.at("phase") == "idle";
@@ -9508,7 +9910,7 @@ void test_transport_stop_cancels_each_snap_and_both_claimed_authorities() {
     const auto successor = check_exact_success(runtime->dispatch("pattern.transport.switch",
         transport_switch_request(kSwitchPatternC, 9932, snap), {}),
         {"pattern_id", "activation_frame"});
-    check_success(runtime->dispatch("pattern.transport.request",
+    check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
         pattern_transport_request_payload(kSequenceSessionId, 9933, 2, "play_stop"), {}));
     const auto stopped = settled_transport_status(*runtime, engine, [](const auto& status) {
       return status.at("playing") == false && status.at("phase") == "idle";
@@ -9804,7 +10206,7 @@ void test_transport_stop_before_the_boundary_cancels_the_switch() {
       switched.at("activation_frame").get<std::uint64_t>() >
       engine.telemetry().rendered_frames);
 
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9814, 2,
                                         "play_stop"),
@@ -9845,7 +10247,7 @@ void test_transport_stop_cancels_an_audio_claimed_switch() {
   static_cast<void>(render_grid_frames(engine, 512));
   LMDJ_CHECK(engine.telemetry().rendered_frames < boundary);
 
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9882, 2,
                                         "play_stop"),
@@ -9874,7 +10276,7 @@ void test_transport_stop_cancels_a_switch_queued_after_record_off() {
   auto runtime = switch_test_runtime(temp, coordinator, false);
   auto& engine = runtime->engine();
   play_grid_transport(*runtime, 9890);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9891, 2,
                                         "record"),
@@ -9883,11 +10285,11 @@ void test_transport_stop_cancels_a_switch_queued_after_record_off() {
     return status.at("recording") == true && status.at("phase") == "idle";
   });
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   static_cast<void>(render_grid_frames(engine, 128));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
-  check_success(runtime->dispatch(
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9892, 3,
                                         "record"),
@@ -9910,7 +10312,7 @@ void test_transport_stop_cancels_a_switch_queued_after_record_off() {
   static_cast<void>(render_grid_frames(engine, 512));
   LMDJ_CHECK(engine.telemetry().rendered_frames < boundary);
 
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9894, 4,
                                         "play_stop"),
@@ -9947,7 +10349,7 @@ void test_transport_record_after_an_applied_switch_records_the_new_pattern() {
       pattern_transport_inspect(*runtime, kSequenceSessionId)
           .at("current_pattern_id") == kSwitchPatternB);
 
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9818, 2,
                                         "record"),
@@ -9956,13 +10358,13 @@ void test_transport_record_after_an_applied_switch_records_the_new_pattern() {
     return status.at("recording") == true && status.at("phase") == "idle";
   });
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   // Advance the render clock between the press and the release, as live
   // input does, so the pair admits as a held note.
   static_cast<void>(render_grid_frames(engine, 128));
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
-  check_success(runtime->dispatch(
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9819, 3,
                                         "record"),
@@ -10021,7 +10423,7 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   // Production EnginePatternTransportPort must carry canceled B into the
   // fence, then open a fresh A admission from that receipt. This is not a
   // recording-time Pattern switch and grants no S3 permission.
-  const auto ticket = check_exact_success(runtime->dispatch("pattern.transport.request",
+  const auto ticket = check_exact_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 10143, 2, "record"), {}),
       {"session_id", "command_id", "submit", "status"});
   LMDJ_CHECK(ticket.at("submit") == "accepted");
@@ -10030,8 +10432,8 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   LMDJ_CHECK(ticket.at("status").at("current_pattern_id") == kPatternId);
   const auto before_receipt = lmdj::project_io::SequenceJournal{}.read_active(bundle);
   LMDJ_CHECK(!before_receipt.has_value() && before_receipt.error().code == lmdj::foundation::ErrorCode::not_found);
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 96}}, {}));
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 96}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
   const auto live_only = lmdj::project_io::SequenceJournal{}.read_active(bundle);
   LMDJ_CHECK(!live_only.has_value() && live_only.error().code == lmdj::foundation::ErrorCode::not_found);
   LMDJ_CHECK(engine.telemetry().rendered_frames == 129); // No receipt or early admission.
@@ -10062,9 +10464,9 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   LMDJ_CHECK(admission.applied_switches.empty()); // Canceled B predates this admission.
   LMDJ_CHECK(inspect_project(temp.path(), kProjectId).at("result").at("project") == truth_before);
 
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   render_switch_frames_exact(engine, 128);
-  check_success(runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  check_success(dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
   const auto retained = lmdj::project_io::SequenceJournal{}.read_active(bundle);
   LMDJ_CHECK(retained.has_value() && retained.value().admission);
   const auto& candidates = retained.value().admission->candidates;
@@ -10074,7 +10476,7 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   LMDJ_CHECK(candidates[0].velocity == 100);
   LMDJ_CHECK(candidates[1].kind == lmdj::project_io::SequenceCandidateKind::release);
   LMDJ_CHECK(candidates[1].watermark == 11 && candidates[1].press_sequence == 10);
-  check_success(runtime->dispatch("pattern.transport.request",
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 10144, 3, "record"), {}));
   const auto settled = settled_transport_status(*runtime, engine, [](const auto& status) {
     return status.at("recording") == false && status.at("phase") == "idle" &&
@@ -10104,7 +10506,7 @@ void test_transport_switch_refused_while_recording_and_while_stopped() {
   auto& engine = runtime->engine();
   play_grid_transport(*runtime, 9820);
 
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9821, 2,
                                         "record"),
@@ -10120,7 +10522,7 @@ void test_transport_switch_refused_while_recording_and_while_stopped() {
   LMDJ_CHECK(
       refused_recording.at("details").at("reason") ==
       "pattern_transport_recording");
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9823, 3,
                                         "record"),
@@ -10129,7 +10531,7 @@ void test_transport_switch_refused_while_recording_and_while_stopped() {
     return status.at("recording") == false && status.at("phase") == "idle" &&
            status.at("publication_pending") == false;
   });
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9824, 4,
                                         "play_stop"),
@@ -10187,7 +10589,7 @@ void test_transport_stop_spends_a_deferred_switch_without_publishing() {
       lmdj::foundation::PatternId{std::string(kSwitchPatternB)});
 
   // Stop settles with the blocker applied before its cutoff.
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9843, 2,
                                         "play_stop"),
@@ -10350,7 +10752,7 @@ void test_transport_record_refuses_a_pending_transport_switch() {
       transport_switch_request(kSwitchPatternB, 9852), {}));
 
   const auto refused = check_error(
-      runtime->dispatch(
+      dispatch_retained_for_test(*runtime,
           "pattern.transport.request",
           pattern_transport_request_payload(kSequenceSessionId, 9853, 2,
                                             "record"),
@@ -10395,18 +10797,18 @@ void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(
-      runtime->dispatch("project.create", create_opted_in_project(), {}));
+      dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
   const auto wav = mono_pcm16_wav(2'400);
   import_and_assign(*runtime, wav, kAssetId, 790, 791, 0);
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(runtime->engine());
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 792, 1, "record"),
       {}));
@@ -10414,10 +10816,10 @@ void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
       settle_pattern_transport(*runtime, audio, kSequenceSessionId);
   LMDJ_CHECK(recording.at("recording") == true);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   audio.render_one();
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
 
   // The capture-style Sample commit keeps its legacy busy guard: honestly
   // rejected while the transport journal is open, and the journal — owned by
@@ -10445,10 +10847,10 @@ void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
   LMDJ_CHECK(journal.value().admission.has_value());
   LMDJ_CHECK(journal.value().admission->candidates.size() == 2);
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
   audio.render_one();
   check_success(
-      runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+      dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
 
   // Once the recording settles (journal completed and removed), the same
   // Sample commit is admitted again.
@@ -10458,7 +10860,7 @@ void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
     LMDJ_CHECK(pending_journal.has_value());
     LMDJ_CHECK(pending_journal.value().admission->candidates.size() == 4);
   }
-  check_success(runtime->dispatch(
+  check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 795, 2, "record"),
       {}));
@@ -10500,18 +10902,18 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
   {
     auto runtime = make_runtime(temp.path());
     check_success(
-        runtime->dispatch("project.create", create_opted_in_project(), {}));
+        dispatch_retained_for_test(*runtime, "project.create", create_opted_in_project(), {}));
     const auto wav = mono_pcm16_wav(2'400);
     import_and_assign(*runtime, wav, kAssetId, 800, 801, 0);
-    check_success(runtime->dispatch(
+    check_success(dispatch_retained_for_test(*runtime,
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    check_success(dispatch_retained_for_test(*runtime, "audio.activate", Json::object(), {}));
     OneShotAudioDriver audio(runtime->engine());
-    check_success(runtime->dispatch(
+    check_success(dispatch_retained_for_test(*runtime,
         "pattern.transport.request",
         pattern_transport_request_payload(kSequenceSessionId, 802, 1, "record"),
         {}));
@@ -10519,10 +10921,10 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
         settle_pattern_transport(*runtime, audio, kSequenceSessionId);
     LMDJ_CHECK(recording.at("recording") == true);
     check_success(
-        runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+        dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
     audio.render_one();
     check_success(
-        runtime->dispatch("trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+        dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
 
     // Listing while the owner is live never seals its journal.
     const auto& live = check_exact_success(
@@ -10531,7 +10933,7 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
         {"candidates", "project_revision"});
     LMDJ_CHECK(live.at("candidates").empty());
     check_success(
-        runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+        dispatch_retained_for_test(*runtime, "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
 
     // Owner loss without a Close: destruction settles nothing transport-owned.
   }
@@ -10548,7 +10950,7 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
   LMDJ_CHECK(orphaned.value().admission->candidates.size() == 3);
 
   auto reopened = make_runtime(temp.path());
-  check_success(reopened->dispatch(
+  check_success(dispatch_retained_for_test(*reopened,
       "project.open",
       {{"project_id", kProjectId},
        {"pattern_id", kPatternId},
@@ -10606,9 +11008,9 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*reopened, coordinator.seam())
           .has_value());
-  check_success(reopened->dispatch("audio.activate", Json::object(), {}));
+  check_success(dispatch_retained_for_test(*reopened, "audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(reopened->engine());
-  check_success(reopened->dispatch(
+  check_success(dispatch_retained_for_test(*reopened,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 803, 1, "record"),
       {}));
@@ -10617,10 +11019,1475 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
   LMDJ_CHECK(recording.at("recording") == true);
 }
 
+Json companion_input_request(const Json& capability, std::uint32_t command,
+    std::string serial, bool release = false, Json correlation = nullptr) {
+  return {{"command_id", uuid(command)}, {"runtime_generation", capability.at("runtime_generation")},
+      {"frame_epoch", capability.at("frame_epoch")}, {"input_serial", std::move(serial)},
+      {"slot", 0}, {"velocity", release ? 0 : 100}, {"kind", release ? "release" : "press"},
+      {"held", true}, {"held_press_sequence", std::move(correlation)}};
+}
+Json companion_input_inspection(const Json& ticket, bool consume = false) {
+  auto payload = ticket;
+  payload["consume"] = consume;
+  return payload;
+}
+void test_pattern_input_pre_engagement_exact_replay_and_future_release() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto before = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", true}}, {}));
+  LMDJ_CHECK(before.at("negotiated") == true);
+  import_and_assign(*runtime, mono_pcm16_wav(2'400), kAssetId, 9900, 9901, 0);
+  check_success(runtime->dispatch("sample.update_pad", {{"command_id", uuid(9905)},
+      {"expected_revision", 2}, {"slot", slot(0, 0)},
+      {"playback", playback_payload(0, 2'400, "gate", 0, true)}}, {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  LMDJ_CHECK(capability.at("runtime_generation") != before.at("runtime_generation"));
+  LMDJ_CHECK(capability.at("frame_epoch").is_string());
+  const auto press = companion_input_request(capability, 9902, "1");
+  const auto accepted = check_exact_success(runtime->dispatch("pattern.transport.input.request", press, {}),
+      {"ticket", "status"});
+  const auto enqueued = runtime->engine().telemetry().enqueued_events;
+  const auto replay = check_locked_success_result(runtime->dispatch("pattern.transport.input.request", press, {}));
+  LMDJ_CHECK(replay.at("ticket") == accepted.at("ticket"));
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == enqueued);
+  auto changed = press;
+  changed["velocity"] = 99;
+  check_error(runtime->dispatch("pattern.transport.input.request", changed, {}), "HOST_STATE_INVALID");
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("engaged") == false);
+  OneShotAudioDriver driver(runtime->engine());
+  driver.render_one();
+  const auto result = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(result.at("complete") == true);
+  LMDJ_CHECK(result.at("durable_settled") == true);
+  LMDJ_CHECK(result.at("retained") == false);
+  LMDJ_CHECK(result.at("native_result").at("disposition") == "muted_no_voice");
+  LMDJ_CHECK(result.at("admission").at("authority").at("recording") == false);
+  LMDJ_CHECK(result.at("admission").at("authority").at("schedule_serial").is_null());
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  check_error(runtime->dispatch("pattern.transport.input.request", press, {}), "HOST_STATE_INVALID");
+  check_error(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}), "HOST_STATE_INVALID");
+  const auto release = companion_input_request(capability, 9903, "2", true,
+      result.at("admission").at("sequence"));
+  const auto release_ticket = check_locked_success_result(runtime->dispatch("pattern.transport.input.request", release, {}));
+  driver.render_one();
+  const auto released = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(release_ticket.at("ticket"), true), {}));
+  LMDJ_CHECK(released.at("native_result").at("held_press_sequence") == result.at("admission").at("sequence"));
+  LMDJ_CHECK(released.at("retained") == false);
+  LMDJ_CHECK(released.at("native_result").at("disposition") == "release_no_voice");
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 0);
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == enqueued + 1);
+  auto exhausted = companion_input_request(capability, 9904, "18446744073709551615");
+  check_error(runtime->dispatch("pattern.transport.input.request", exhausted, {}), "HOST_STATE_INVALID");
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == enqueued + 1);
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
+}
+void test_pattern_input_profile_strict_decimal_and_pending_shutdown_owners() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  check_success(runtime->dispatch("pattern.transport.count-in.capabilities", {{"negotiate", true}}, {}));
+  import_and_assign(*runtime, mono_pcm16_wav(2'400), kAssetId, 9910, 9911, 0);
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  auto request = companion_input_request(capability, 9912, "1");
+  for (const auto field : {"runtime_generation", "frame_epoch", "input_serial"}) {
+    for (const auto malformed : {"0", "01", "1\n", "1\r\n", "18446744073709551616"}) {
+      auto bad = request;
+      bad[field] = malformed;
+      check_error(runtime->dispatch("pattern.transport.input.request", bad, {}), "HOST_PROTOCOL_MISMATCH");
+    }
+  }
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request", request, {}));
+  const auto pending = runtime->dispatch("host.close", Json::object(), {});
+  LMDJ_CHECK(pending.at("ok") == false);
+  LMDJ_CHECK(pending.at("error").at("code") == "IO_ERROR");
+  LMDJ_CHECK(pending.at("error").at("details") == Json::object());
+  LMDJ_CHECK(runtime->pattern_transport_pending());
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!runtime->pattern_transport_shutdown_complete());
+  OneShotAudioDriver driver(runtime->engine());
+  driver.render_one();
+  const auto complete = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(complete.at("complete") == true);
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  // Press completion and a finished sound do not authorize physical disposal.
+  const auto still_owned = runtime->dispatch("host.close", Json::object(), {});
+  LMDJ_CHECK(still_owned.at("ok") == false);
+  LMDJ_CHECK(still_owned.at("error").at("code") == "IO_ERROR");
+  LMDJ_CHECK(still_owned.at("error").at("details") == Json::object());
+  LMDJ_CHECK(runtime->pattern_transport_pending());
+  const auto release = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9913, "2", true, complete.at("admission").at("sequence")), {}));
+  driver.render_one();
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(release.at("ticket"), true), {}));
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
+}
+
+void test_pattern_input_failed_observer_retains_original_deadline_and_physical_release() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  check_success(runtime->dispatch("pattern.transport.count-in.capabilities", {{"negotiate", true}}, {}));
+  import_and_assign(*runtime, mono_pcm16_wav(2'400), kAssetId, 9920, 9921, 0);
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  FakeRuntimeClock clock;
+  clock.current = std::chrono::steady_clock::now();
+  LMDJ_CHECK(ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9922, "1"), {},
+      ControlRuntime::AbsoluteRequestDeadline{clock.current + std::chrono::milliseconds(100)}));
+  clock.current += std::chrono::milliseconds(101);
+  const auto expired = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket")), {}));
+  LMDJ_CHECK(expired.at("expired") == true);
+  LMDJ_CHECK(expired.at("complete") == false);
+  LMDJ_CHECK(expired.at("native_result").is_null());
+  const auto enqueued = runtime->engine().telemetry().enqueued_events;
+  runtime->fail_and_seal("test_lifecycle_observer_expired");
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  check_error(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9923, "2"), {}), "HOST_STATE_INVALID");
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == enqueued);
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  driver.render_one();
+  const auto press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(press.at("complete") == true);
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  const auto release = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9924, "2", true, press.at("admission").at("sequence")), {}));
+  driver.render_one();
+  const auto disposed = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(release.at("ticket"), true), {}));
+  LMDJ_CHECK(disposed.at("complete") == true);
+  LMDJ_CHECK(disposed.at("native_result").at("held_press_sequence") == press.at("admission").at("sequence"));
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == enqueued + 1);
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 0);
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  runtime->service_pattern_transport(); // Observe the real joined legacy stop.
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(runtime->failed()); // Physical disposal is not a clean Host close.
+}
+
+std::unique_ptr<ControlRuntime> exceptional_input_runtime(
+    TempDirectory& temp, FakeCoordinator& coordinator,
+    bool physical_thread_join = false) {
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  check_success(runtime->dispatch("pattern.transport.count-in.capabilities", {{"negotiate", true}}, {}));
+  import_and_assign(*runtime, mono_pcm16_wav(2'400), kAssetId, 9940, 9941, 0);
+  check_success(runtime->dispatch("sample.update_pad", {{"command_id", uuid(9942)},
+      {"expected_revision", 2}, {"slot", slot(0, 0)},
+      {"playback", playback_payload(0, 2'400, "gate", 0, true)}}, {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  if (physical_thread_join) LMDJ_CHECK(
+      lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess::install(
+          *runtime, coordinator.physical_seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  return runtime;
+}
+
+void test_exceptional_live_only_owner_ack_requires_native_and_ticket_consumers() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9943, "1"), {}));
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().retained_completions == 1);
+  const auto actual = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket")), {}));
+  LMDJ_CHECK(actual.at("native_result").at("disposition") == "invalidated_before_consume");
+  LMDJ_CHECK(actual.at("error").is_object());
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation + 1));
+  coordinator.succeed = false;
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  coordinator.succeed = true;
+  LMDJ_CHECK(runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 0);
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("engaged") == false);
+  auto observer = make_application(temp.path());
+  const auto recovery = observer.list_sequence_recovery({temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj")});
+  LMDJ_CHECK(recovery.has_value() && recovery.value().empty()); // No invented Journal/session owner.
+}
+
+void test_exceptional_owner_ack_preserves_original_queued_release_completion() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9950, "1"), {}));
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  driver.render_one();
+  const auto press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(press.at("native_result").at("disposition") == "muted_no_voice");
+  const auto release = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9951, "2", true, press.at("admission").at("sequence")), {}));
+  const auto enqueued = runtime->engine().telemetry().enqueued_events;
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().retained_completions == 1);
+  const auto native = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(release.at("ticket")), {}));
+  LMDJ_CHECK(native.at("native_result").at("disposition") == "invalidated_before_consume");
+  LMDJ_CHECK(native.at("native_result").at("held_press_sequence") == press.at("admission").at("sequence"));
+  LMDJ_CHECK(native.at("error").is_object());
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  const auto consumed = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(release.at("ticket"), true), {}));
+  LMDJ_CHECK(consumed == native);
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == enqueued);
+  LMDJ_CHECK(runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete() && runtime->failed());
+  check_error(runtime->dispatch("host.close", Json::object(), {}), "HOST_STATE_INVALID");
+}
+
+void test_exceptional_recorded_silent_owner_ack_keeps_failed_recovery_prefix() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9960, 1, "record"), {}));
+  LMDJ_CHECK(settle_pattern_transport(*runtime, driver, kSequenceSessionId).at("recording") == true);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9961, "1"), {}));
+  driver.render_one();
+  Json press;
+  wait_until([&] {
+    press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted.at("ticket")), {}));
+    return press.at("complete") == true;
+  });
+  LMDJ_CHECK(press.at("retained") == true);
+  LMDJ_CHECK(press.at("native_result").at("disposition") == "muted_no_voice");
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  wait_until([&] { return runtime->acknowledge_pattern_input_owner_quiescent(generation); });
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  wait_until([&] { runtime->service_pattern_transport(); return runtime->pattern_transport_shutdown_complete(); });
+  const auto failed = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(failed.at("phase") == "error" && failed.at("error").is_object());
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  check_error(runtime->dispatch("host.close", Json::object(), {}), "HOST_STATE_INVALID");
+  auto observer = make_application(temp.path());
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  // The failed Host still owns its real bundle writer lease. Physical audio
+  // and transport retirement do not pretend that the whole Host was closed.
+  const auto held_writer = observer.acquire_project_writer(bundle);
+  LMDJ_CHECK(!held_writer.has_value());
+  runtime.reset(); // Actual Host destruction releases the writer before reopen.
+  const auto recovery = observer.list_sequence_recovery({temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj")});
+  LMDJ_CHECK(recovery.has_value() && recovery.value().size() == 1);
+  LMDJ_CHECK(recovery.value()[0].reason == "owner_lost");
+}
+
+void test_exceptional_never_recorded_engagement_uses_real_no_journal_disposition() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9970, 1, "play_stop"), {}));
+  const auto playing = settle_pattern_transport(*runtime, driver, kSequenceSessionId);
+  LMDJ_CHECK(playing.at("playing") == true && playing.at("recording") == false);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9971, "1"), {}));
+  driver.render_one();
+  Json press;
+  wait_until([&] {
+    press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted.at("ticket")), {}));
+    return press.at("complete") == true;
+  });
+  LMDJ_CHECK(press.at("retained") == false);
+  LMDJ_CHECK(press.at("admission").at("authority").at("recording") == false);
+  LMDJ_CHECK(press.at("admission").at("authority").at("transport_epoch").is_null());
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().retained_completions == 1);
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation + 1));
+  // One real Native revocation precedes the separate worker's absence proof.
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 0);
+  LMDJ_CHECK(!runtime->pattern_transport_shutdown_complete());
+  wait_until([&] { return runtime->acknowledge_pattern_input_owner_quiescent(generation); });
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  wait_until([&] { runtime->service_pattern_transport(); return runtime->pattern_transport_shutdown_complete(); });
+  const auto failed = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(failed.at("phase") == "error" && failed.at("error").is_object());
+  LMDJ_CHECK(failed.at("recording") == false);
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  auto observer = make_application(temp.path());
+  const auto recovery = observer.list_sequence_recovery({temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj")});
+  LMDJ_CHECK(recovery.has_value() && recovery.value().empty());
+  check_error(runtime->dispatch("host.close", Json::object(), {}), "HOST_STATE_INVALID");
+}
+
+void test_exceptional_pre_engagement_hold_keeps_its_original_live_only_owner() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9980, "1"), {}));
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  driver.render_one();
+  const auto press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  LMDJ_CHECK(press.at("retained") == false);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("engaged") == false);
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9981, 1, "play_stop"), {}));
+  LMDJ_CHECK(settle_pattern_transport(*runtime, driver, kSequenceSessionId).at("recording") == false);
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  wait_until([&] { return runtime->acknowledge_pattern_input_owner_quiescent(generation); });
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete() && runtime->failed());
+  auto observer = make_application(temp.path());
+  const auto recovery = observer.list_sequence_recovery({temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj")});
+  LMDJ_CHECK(recovery.has_value() && recovery.value().empty());
+}
+
+void test_exceptional_after_real_record_off_preserves_f_and_committed_truth() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9990, 1, "record"), {}));
+  LMDJ_CHECK(settle_pattern_transport(*runtime, driver, kSequenceSessionId).at("recording") == true);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 9991, "1"), {}));
+  driver.render_one();
+  wait_until([&] {
+    return check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted.at("ticket")), {})).at("complete") == true;
+  });
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9992, 2, "record"), {}));
+  driver.render_one();
+  const auto real_f = runtime->engine().inspect_pattern_transport_receipt(generation, 2);
+  LMDJ_CHECK(real_f && real_f->epoch == 2 && real_f->playing);
+  const auto closed = settle_pattern_transport(*runtime, driver, kSequenceSessionId);
+  LMDJ_CHECK(closed.at("recording") == false && closed.at("transport_epoch") == real_f->epoch);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation + 1));
+  wait_until([&] { return runtime->acknowledge_pattern_input_owner_quiescent(generation); });
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  wait_until([&] { runtime->service_pattern_transport(); return runtime->pattern_transport_shutdown_complete(); });
+  const auto failed = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(failed.at("phase") == "error" && failed.at("error").is_object());
+  LMDJ_CHECK(failed.at("transport_epoch") == real_f->epoch);
+  LMDJ_CHECK(failed.at("origin_frame") == real_f->origin_frame);
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  auto observer = make_application(temp.path());
+  const auto recovery = observer.list_sequence_recovery({temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj")});
+  LMDJ_CHECK(recovery.has_value() && recovery.value().empty()); // The real close already committed.
+  check_error(runtime->dispatch("host.close", Json::object(), {}), "HOST_STATE_INVALID");
+}
+
+struct CountInOwnerAudioBackend {
+  RealtimeEngine& engine;
+  std::atomic<bool> cue_consumers_acknowledged{true};
+  std::atomic<bool> hold_next_callback{false};
+  std::atomic<bool> callback_held{false};
+  std::atomic<bool> release_held_callback{true};
+  OneShotAudioBackend seam() {
+    return {this,
+        [](void* context) noexcept {
+          return static_cast<CountInOwnerAudioBackend*>(context)->engine.bank_telemetry();
+        },
+        [](void* context, float* left, float* right, std::uint32_t frames) noexcept {
+          auto& backend = *static_cast<CountInOwnerAudioBackend*>(context);
+          backend.engine.render(left, right, frames);
+          const auto held = backend.hold_next_callback.exchange(false, std::memory_order_acq_rel);
+          if (held) {
+            // Genuine callback remains in flight before its output consumer
+            // and return. This seam is inert in every other owner journey.
+            backend.callback_held.store(true, std::memory_order_release);
+            while (!backend.release_held_callback.load(std::memory_order_acquire))
+              std::this_thread::yield();
+          }
+          lmdj::audio::CountInCueBatch cues;
+          if (backend.engine.take_count_in_cue_batch_audio(cues) &&
+              !backend.engine.acknowledge_count_in_cue_batch_audio(cues.batch_id))
+            backend.cue_consumers_acknowledged.store(false);
+          if (held) backend.callback_held.store(false, std::memory_order_release);
+        }};
+  }
+};
+
+Json companion_count_in_inspection(const Json& ticket, bool consume = false) {
+  auto payload = ticket;
+  payload["consume"] = consume;
+  return payload;
+}
+
+Json start_count_in_owner_journey(ControlRuntime& runtime, FakeCoordinator& coordinator,
+    OneShotAudioDriver& driver, unsigned command) {
+  using lmdj::web_runtime::detail::ControlRuntimeCountInOutputAccess;
+  // Native/component output seam only; this is not a packaged worklet/PCM proof.
+  driver.bind(coordinator); // Operational quiescence joins the actual cue consumer.
+  LMDJ_CHECK(ControlRuntimeCountInOutputAccess::install(runtime,
+      {&coordinator, [](void*) noexcept { return true; }}).has_value());
+  const auto capability = check_locked_success_result(runtime.dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto accepted = check_locked_success_result(runtime.dispatch("pattern.transport.count-in.request",
+      {{"session_id", kSequenceSessionId}, {"project_id", kProjectId}, {"command_id", uuid(command)},
+       {"runtime_generation", capability.at("runtime_generation")},
+       {"frame_epoch", capability.at("frame_epoch")}, {"schedule_serial", "1"},
+       {"expected_epoch", "1"}, {"bars", 1}, {"expected_revision", nullptr}}, {}));
+  const auto ticket = accepted.at("ticket");
+  check_error(runtime.dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+  driver.render_one();
+  const auto armed = check_locked_success_result(runtime.dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  const auto start = armed.at("count_in").at("start_frame").get<std::uint64_t>();
+  LMDJ_CHECK(start >= runtime.engine().telemetry().rendered_frames);
+  while (runtime.engine().telemetry().rendered_frames <= start) {
+    const auto frames = std::min<std::uint64_t>(128,
+        start - runtime.engine().telemetry().rendered_frames + 1);
+    driver.render_frames(static_cast<std::uint32_t>(frames));
+  }
+  Json applied;
+  wait_until([&] {
+    applied = check_locked_success_result(runtime.dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {}));
+    return applied.at("opening_complete") == true;
+  });
+  LMDJ_CHECK(applied.at("start_receipt").at("result") == "applied");
+  LMDJ_CHECK(applied.at("start_receipt").at("effective_frame") == start);
+  LMDJ_CHECK(applied.at("cancel_receipt").is_null());
+  check_error(runtime.dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+  return ticket;
+}
+
+void cancel_count_in_owner_journey(ControlRuntime& runtime, const Json& ticket, unsigned command) {
+  auto request = ticket;
+  request["start_command_id"] = request.at("command_id");
+  request["command_id"] = uuid(command);
+  request["project_id"] = kProjectId;
+  request["expected_epoch"] = "2";
+  request["intent"] = "play_stop";
+  check_success(runtime.dispatch("pattern.transport.count-in.cancel", request, {}));
+}
+
+// Native decorator for one real opening create; it returns only the inner
+// operation's actual result. Unwind must release it before Runtime/driver joins.
+class HeldCountInOpeningStorage final
+    : public lmdj::project_io::ProjectStoragePlatform,
+      public lmdj::project_io::ProjectStorageTextReader,
+      public lmdj::project_io::ProjectJournalLayoutValidator {
+ public:
+  struct Observation {
+    std::filesystem::path path;
+    std::thread::id worker;
+    bool entered{}, delegated{}, returned{}, succeeded{};
+  };
+  explicit HeldCountInOpeningStorage(std::filesystem::path bundle)
+      : bundle_(std::move(bundle)) {}
+  void arm() { std::lock_guard lock(mutex_); armed_ = true; released_ = false; observation_ = {}; }
+  void release() noexcept { std::lock_guard lock(mutex_); released_ = true; changed_.notify_all(); }
+  Observation inspect() const { std::lock_guard lock(mutex_); return observation_; }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& p, std::span<const std::byte> b) override {
+    bool selected = false;
+    {
+      std::unique_lock lock(mutex_);
+      const auto relative = p.lexically_relative(bundle_);
+      if (armed_ && p.filename() == "sequence.jsonl" && !relative.empty() && *relative.begin() != "..") {
+        armed_ = false;
+        selected = true;
+        observation_ = {p, std::this_thread::get_id(), true};
+        changed_.notify_all();
+        changed_.wait(lock, [&] { return released_; });
+        observation_.delegated = true;
+      }
+    }
+    auto result = inner_->create_immutable(p, b);
+    if (selected) {
+      std::lock_guard lock(mutex_);
+      observation_.returned = true;
+      observation_.succeeded = result.has_value();
+      changed_.notify_all();
+    }
+    return result;
+  }
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& p) override { return inner_->acquire_writer(p); }
+  lmdj::foundation::Result<void> ensure_directory(const std::filesystem::path& p) override { return inner_->ensure_directory(p); }
+  lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override { return inner_->exists(p); }
+  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override { return inner_->byte_length(p); }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override { return inner_->read_complete(p); }
+  lmdj::foundation::Result<std::string> read_complete_text(const std::filesystem::path& p) const override {
+    const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageTextReader*>(inner_.get());
+    LMDJ_CHECK(reader != nullptr);
+    return reader->read_complete_text(p);
+  }
+  lmdj::foundation::Result<void> validate_journal_layout(const std::filesystem::path& p) const override {
+    const auto* layout = dynamic_cast<const lmdj::project_io::ProjectJournalLayoutValidator*>(inner_.get());
+    LMDJ_CHECK(layout != nullptr);
+    return layout->validate_journal_layout(p);
+  }
+  lmdj::foundation::Result<void> replace_complete(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner_->replace_complete(p, b); }
+  lmdj::foundation::Result<void> append_durable(const std::filesystem::path& p, std::uint64_t n, std::span<const std::byte> b) override { return inner_->append_durable(p, n, b); }
+  lmdj::foundation::Result<void> remove(const std::filesystem::path& p) override { return inner_->remove(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(const std::filesystem::path& p) const override { return inner_->list_names(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(const std::filesystem::path& p) const override { return inner_->list_directories(p); }
+  lmdj::foundation::Result<void> remove_tree(const std::filesystem::path& p) override { return inner_->remove_tree(p); }
+  lmdj::foundation::Result<void> publish_directory_if_absent(const std::filesystem::path& from, const std::filesystem::path& to) override { return inner_->publish_directory_if_absent(from, to); }
+  lmdj::foundation::Result<bool> directory_exists(const std::filesystem::path& p) const override { return inner_->directory_exists(p); }
+  lmdj::foundation::Result<void> validate_managed_tree(const std::filesystem::path& p) const override { return inner_->validate_managed_tree(p); }
+ private:
+  const std::filesystem::path bundle_;
+  const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_{
+      lmdj::project_io::make_default_project_storage_platform()};
+  mutable std::mutex mutex_;
+  std::condition_variable changed_;
+  Observation observation_;
+  bool armed_{}, released_{};
+};
+
+void test_known_deadline_failed_count_in_consumes_only_after_real_stop_and_all_owners_settle() {
+  using namespace lmdj::web_runtime::detail;
+  TempDirectory temp;
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  auto storage = std::make_shared<HeldCountInOpeningStorage>(bundle);
+  auto config = make_application_config(temp.path());
+  config.storage_platform = storage;
+  auto created = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  check_success(runtime->dispatch("pattern.transport.count-in.capabilities", {{"negotiate", true}}, {}));
+  auto wav = mono_pcm16_wav(2'400);
+  for (std::size_t frame = 0; frame < 2'400; ++frame) write_u16(wav, 44 + frame * 2, 8192);
+  import_and_assign(*runtime, wav, kAssetId, 10030, 10031, 0);
+  // A real looping DSP voice survives the count-in. Its 900 ms typed release
+  // outlives the Release receipt, exposing an ACK that mistakes logical input
+  // settlement for the audio thread's final voice use.
+  auto playback = parity_playback_payload("tone");
+  playback["trim_start_frame"] = 0;
+  playback["trim_end_frame"] = 2'400;
+  playback["trigger_mode"] = "loop_gate";
+  playback["release_ms"] = 900;
+  check_success(runtime->dispatch("sample.update_pad", {{"command_id", uuid(10032)},
+      {"expected_revision", 2}, {"slot", slot(0, 0)},
+      {"playback", playback}}, {}));
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  CountInOwnerAudioBackend backend{runtime->engine()};
+  OneShotAudioDriver driver(backend.seam());
+  driver.bind(coordinator);
+  // Component output capability only; no packaged worklet/acoustic claim.
+  LMDJ_CHECK(ControlRuntimeCountInOutputAccess::install(*runtime,
+      {&coordinator, [](void*) noexcept { return true; }}).has_value());
+  struct UnblockOnExit {
+    HeldCountInOpeningStorage& storage;
+    ~UnblockOnExit() { storage.release(); }
+  } unblock_on_exit{*storage};
+  const auto initial_truth = inspect_project(temp.path(), kProjectId);
+  const auto initial_history = check_locked_success_result(runtime->dispatch("history.inspect", Json::object(), {}));
+  const auto initial_revisions = ControlRuntimeSnapshotAccess::read(*runtime);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(capability.at("runtime_generation").get<std::string>());
+  // A real pre-engagement live-only press supplies a physical hold, while the
+  // following count-in itself receives no input and must retain an empty take.
+  const auto accepted_press = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 10033, "1"), {}));
+  driver.render_one();
+  Json press;
+  wait_until([&] {
+    press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted_press.at("ticket")), {}));
+    return press.at("complete") == true;
+  });
+  press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted_press.at("ticket"), true), {}));
+  LMDJ_CHECK(press.at("retained") == false && press.at("admission").at("authority").at("recording") == false);
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  storage->arm();
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.request",
+      {{"session_id", kSequenceSessionId}, {"project_id", kProjectId}, {"command_id", uuid(10034)},
+       {"runtime_generation", capability.at("runtime_generation")}, {"frame_epoch", capability.at("frame_epoch")},
+       {"schedule_serial", "1"}, {"expected_epoch", "1"}, {"bars", 1}, {"expected_revision", nullptr}}, {}));
+  const auto ticket = accepted.at("ticket");
+  const auto ticket_generation = std::stoull(ticket.at("runtime_generation").get<std::string>());
+  const auto ticket_frame_epoch = std::stoull(ticket.at("frame_epoch").get<std::string>());
+  const auto ticket_serial = std::stoull(ticket.at("schedule_serial").get<std::string>());
+  LMDJ_CHECK(ticket_generation == generation);
+  const auto scheduled_settled = [&] {
+    return runtime->engine().scheduled_pattern_record_settled(
+        ticket_generation, ticket_frame_epoch, ticket_serial);
+  };
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID"); // No Applied S or Stop.
+  driver.render_one();
+  const auto armed = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  const auto s = armed.at("count_in").at("start_frame").get<std::uint64_t>();
+  LMDJ_CHECK(s >= runtime->engine().telemetry().rendered_frames);
+  while (runtime->engine().telemetry().rendered_frames <= s) {
+    const auto frames = std::min<std::uint64_t>(128, s - runtime->engine().telemetry().rendered_frames + 1);
+    driver.render_frames(static_cast<std::uint32_t>(frames));
+  }
+  Json started;
+  wait_until([&] {
+    started = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {}));
+    return storage->inspect().entered && started.at("start_receipt").is_object();
+  });
+  const auto held = storage->inspect();
+  LMDJ_CHECK(held.worker != std::this_thread::get_id() && !held.delegated && !held.returned);
+  LMDJ_CHECK(started.at("opening_pending") == true && started.at("opening_complete") == false);
+  LMDJ_CHECK(started.at("start_receipt").at("result") == "applied");
+  LMDJ_CHECK(started.at("start_receipt").at("effective_frame") == s &&
+      started.at("start_receipt").at("origin_frame") == s);
+  LMDJ_CHECK(started.at("cancel_receipt").is_null());
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::idle(*runtime));
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+  std::this_thread::sleep_for(lmdj::facade::kScheduledPatternOpeningDeadline + std::chrono::milliseconds{1});
+  const auto provisional = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  LMDJ_CHECK(provisional.at("error") == (Json{{"code", "IO_ERROR"},
+      {"message", "project storage operation failed"},
+      {"details", {{"reason", "pattern_transport_opening_expired"}}}}));
+  LMDJ_CHECK(provisional.at("opening_pending") == true && provisional.at("opening_complete") == false);
+  LMDJ_CHECK(provisional.at("start_receipt") == started.at("start_receipt"));
+  LMDJ_CHECK(provisional.at("cancel_receipt").is_null());
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID"); // Actual F not rendered yet.
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::idle(*runtime));
+  const auto f = runtime->engine().telemetry().rendered_frames;
+  driver.render_one();
+  Json stopped;
+  wait_until([&] {
+    stopped = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {}));
+    return stopped.at("cancel_receipt").is_object();
+  });
+  LMDJ_CHECK(stopped.at("start_receipt") == started.at("start_receipt"));
+  LMDJ_CHECK(stopped.at("cancel_receipt").at("result") == "applied" &&
+      stopped.at("cancel_receipt").at("effective_frame") == f && f > s &&
+      stopped.at("cancel_receipt").at("origin_frame") == s && stopped.at("cancel_receipt").at("playing") == false);
+  LMDJ_CHECK(stopped.at("opening_pending") == true && !ControlRuntimePatternIoAccess::idle(*runtime));
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID"); // F does not settle real IO.
+  storage->release();
+  Json failed;
+  wait_until([&] {
+    failed = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {}));
+    return failed.at("opening_pending") == false && ControlRuntimePatternIoAccess::idle(*runtime);
+  });
+  LMDJ_CHECK(storage->inspect().delegated && storage->inspect().returned && storage->inspect().succeeded);
+  LMDJ_CHECK(failed.at("error") == (Json{{"code", "INVALID_ARGUMENT"}, {"message", "request is invalid"},
+      {"details", {{"reason", "admission_opening_deadline_elapsed"}, {"journal_retained", true}}}}));
+  LMDJ_CHECK(failed.at("opening_complete") == false && failed.at("ticket") == ticket);
+  LMDJ_CHECK(failed.at("start_receipt") == started.at("start_receipt") &&
+      failed.at("cancel_receipt") == stopped.at("cancel_receipt"));
+  const auto ordinary = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(ordinary.at("phase") == "error" && ordinary.at("recording") == false && ordinary.at("playing") == false);
+  LMDJ_CHECK(!runtime->failed() && !scheduled_settled());
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().held_release_reservations == 1);
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID"); // Physical hold still belongs to its live owner.
+  LMDJ_CHECK(check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {})) == failed);
+  const auto accepted_release = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 10035, "2", true, press.at("admission").at("sequence")), {}));
+  driver.render_one();
+  Json release;
+  wait_until([&] {
+    release = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted_release.at("ticket")), {}));
+    return release.at("complete") == true;
+  });
+  LMDJ_CHECK(release.at("native_result").at("held_press_sequence") == press.at("admission").at("sequence"));
+  LMDJ_CHECK(release.at("native_result").at("disposition") == "release_applied");
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID"); // Separate release consumer still owns its ticket.
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted_release.at("ticket"), true), {}));
+  const auto native = runtime->engine().pattern_input_profile_status();
+  LMDJ_CHECK(native.enabled && native.runtime_generation == generation &&
+      native.ordinary_pending == 0 && native.held_release_reservations == 0 && native.retained_completions == 0);
+  // All real input debts are gone, but the genuine DSP Release tail still
+  // owns a voice. Positive telemetry establishes this fixture only; the exact
+  // audio-published settlement query, never zero-voice telemetry, gates ACK.
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices > 0);
+  LMDJ_CHECK(!scheduled_settled() && ControlRuntimePatternIoAccess::idle(*runtime));
+  {
+    struct ReleaseCallbackOnExit {
+      CountInOwnerAudioBackend& backend;
+      ~ReleaseCallbackOnExit() {
+        backend.release_held_callback.store(true, std::memory_order_release);
+      }
+    } release_callback_on_exit{backend}; // Unblocks before the driver's joining destructor on failure.
+    const auto callbacks_before_hold = driver.completed_callbacks();
+    backend.release_held_callback.store(false, std::memory_order_release);
+    backend.hold_next_callback.store(true, std::memory_order_release);
+    driver.schedule_one();
+    wait_until([&] { return backend.callback_held.load(std::memory_order_acquire); });
+    LMDJ_CHECK(driver.completed_callbacks() == callbacks_before_hold);
+    const auto held_native = runtime->engine().pattern_input_profile_status();
+    LMDJ_CHECK(held_native.ordinary_pending == 0 && held_native.held_release_reservations == 0 &&
+        held_native.retained_completions == 0);
+    LMDJ_CHECK(runtime->engine().telemetry().active_voices > 0 && !scheduled_settled());
+    // Control consumes concurrently with this real callback's lifetime. A
+    // completed Release ticket must not grant ACK across its remaining tail.
+    check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+    LMDJ_CHECK(check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {})) == failed);
+    LMDJ_CHECK(backend.callback_held.load(std::memory_order_acquire) &&
+        driver.completed_callbacks() == callbacks_before_hold);
+    backend.release_held_callback.store(true, std::memory_order_release);
+    wait_until([&] { return driver.completed_callbacks() == callbacks_before_hold + 1; });
+    LMDJ_CHECK(!backend.callback_held.load(std::memory_order_acquire) &&
+        backend.cue_consumers_acknowledged.load());
+  }
+  wait_until([&] {
+    driver.render_one();
+    runtime->service_pattern_transport();
+    return scheduled_settled() && ControlRuntimePatternIoAccess::idle(*runtime);
+  }); // Actual voice/cue/borrow last use, still within the original two-second helper.
+  const auto prefix = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(prefix.has_value() && prefix.value().admission && prefix.value().admission->closure);
+  LMDJ_CHECK(prefix.value().admission->closure->reason == lmdj::project_io::SequenceAdmissionCloseReason::deadline);
+  LMDJ_CHECK(!prefix.value().admission->closure->last_retained_watermark &&
+      !prefix.value().admission->admission_fence && !prefix.value().admission->cutoff_fence);
+  LMDJ_CHECK(prefix.value().admission->candidates.empty() && prefix.value().admission->transfers.empty() &&
+      prefix.value().pending_events.empty() && prefix.value().flushes.empty() && !prefix.value().admission->completed);
+  const auto journal_bytes = read_bytes(held.path);
+  const auto inventory = build_project_bundle_fixture(bundle, kProjectId);
+  const auto final = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  LMDJ_CHECK(final == failed && ControlRuntimePatternIoAccess::idle(*runtime));
+  const auto settled_history = check_locked_success_result(runtime->dispatch("history.inspect", Json::object(), {}));
+  auto expected_history = initial_history;
+  expected_history["disabled_reason"] = "pattern_transport_busy";
+  expected_history["can_undo"] = false;
+  expected_history["can_redo"] = false;
+  LMDJ_CHECK(settled_history == expected_history);
+  const auto final_ordinary = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  for (const auto* field : {"engaged", "playing", "recording", "phase", "runtime_generation", "transport_epoch",
+      "origin_frame", "command_id", "publication_pending", "error", "current_pattern_id", "pending_switch"})
+    LMDJ_CHECK(final_ordinary.at(field) == ordinary.at(field));
+  LMDJ_CHECK(final_ordinary.at("runtime_frame") == runtime->engine().telemetry().rendered_frames &&
+      final_ordinary.at("runtime_frame").get<std::uint64_t>() >= ordinary.at("runtime_frame").get<std::uint64_t>());
+  for (const auto* field : {"session_id", "command_id", "runtime_generation", "frame_epoch", "schedule_serial"}) {
+    auto foreign = companion_count_in_inspection(ticket, true);
+    foreign[field] = std::string_view(field) == "session_id" || std::string_view(field) == "command_id"
+        ? uuid(10036) : std::to_string(std::stoull(ticket.at(field).get<std::string>()) + 1);
+    check_error(runtime->dispatch("pattern.transport.count-in.inspect", foreign, {}), "HOST_STATE_INVALID");
+    LMDJ_CHECK(check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {})) == final);
+  }
+  LMDJ_CHECK(check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {})) == final);
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+  LMDJ_CHECK(!runtime->failed() && runtime->pattern_transport_pending() && !runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId) == final_ordinary);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == initial_truth);
+  const auto final_history = check_locked_success_result(runtime->dispatch("history.inspect", Json::object(), {}));
+  LMDJ_CHECK(final_history == settled_history);
+  const auto revisions = ControlRuntimeSnapshotAccess::read(*runtime);
+  LMDJ_CHECK(revisions.project_revision == initial_revisions.project_revision &&
+      revisions.runtime_revision == initial_revisions.runtime_revision);
+  LMDJ_CHECK(read_bytes(held.path) == journal_bytes);
+  const auto after_inventory = build_project_bundle_fixture(bundle, kProjectId);
+  LMDJ_CHECK(after_inventory.index == inventory.index && after_inventory.entries == inventory.entries &&
+      after_inventory.digest == inventory.digest);
+  LMDJ_CHECK(backend.cue_consumers_acknowledged.load());
+  driver.stop();
+  runtime->engine().stop();
+  runtime.reset(); // End the actual owner lifetime before genuine recovery.
+  auto observer = make_application(temp.path());
+  const auto recovered = observer.list_sequence_recovery({bundle});
+  LMDJ_CHECK(recovered.has_value() && recovered.value().size() == 1);
+  LMDJ_CHECK(recovered.value()[0].session_id.value() == kSequenceSessionId &&
+      recovered.value()[0].pattern_id.value() == kPatternId && recovered.value()[0].bars == 1 &&
+      recovered.value()[0].reason == "owner_lost" && recovered.value()[0].event_count == 0);
+  const auto sealed = lmdj::project_io::SequenceJournal{}.list_recoverable(bundle);
+  LMDJ_CHECK(sealed.has_value() && sealed.value().size() == 1 && sealed.value()[0].reason == "owner_lost");
+  auto expected = prefix.value();
+  expected.state = lmdj::project_io::SequenceSessionState::owner_lost;
+  LMDJ_CHECK(sealed.value()[0].journal == expected);
+  const auto no_active = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(!no_active.has_value() && no_active.error().code == lmdj::foundation::ErrorCode::not_found);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == initial_truth);
+  const auto reopened_inventory = build_project_bundle_fixture(bundle, kProjectId);
+  auto reopened = make_application(temp.path());
+  const auto recovered_again = reopened.list_sequence_recovery({bundle});
+  LMDJ_CHECK(recovered_again.has_value() && recovered_again.value().size() == 1 &&
+      recovered_again.value()[0].session_id == recovered.value()[0].session_id &&
+      recovered_again.value()[0].pattern_id == recovered.value()[0].pattern_id &&
+      recovered_again.value()[0].bars == recovered.value()[0].bars &&
+      recovered_again.value()[0].reason == recovered.value()[0].reason && recovered_again.value()[0].event_count == 0);
+  LMDJ_CHECK(lmdj::project_io::SequenceJournal{}.list_recoverable(bundle).value() == sealed.value());
+  const auto final_inventory = build_project_bundle_fixture(bundle, kProjectId);
+  LMDJ_CHECK(final_inventory.index == reopened_inventory.index && final_inventory.entries == reopened_inventory.entries &&
+      final_inventory.digest == reopened_inventory.digest);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == initial_truth);
+}
+
+void test_exceptional_count_in_receipt_requires_owner_and_caller_ack() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  CountInOwnerAudioBackend backend{runtime->engine()};
+  OneShotAudioDriver driver(backend.seam());
+  const auto ticket = start_count_in_owner_journey(*runtime, coordinator, driver, 10000);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto generation = std::stoull(ticket.at("runtime_generation").get<std::string>());
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 10001, "1"), {}));
+  driver.render_one();
+  wait_until([&] {
+    return check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted.at("ticket")), {})).at("complete") == true;
+  });
+  // Set up a real queued projection owned by this controller. Its accepted
+  // withdrawal defers the ordinary cutoff; missing audio receipt alone would
+  // not distinguish a submitted command from this genuinely unsent intent.
+  wait_until([&] {
+    runtime->service_pattern_transport();
+    return runtime->engine().pattern_telemetry().pending_generation != 0;
+  });
+  const auto overlay = runtime->engine().pattern_transport_observation();
+  LMDJ_CHECK(overlay && !overlay->pending_switches[0] && overlay->pending_switches[1]);
+  LMDJ_CHECK(overlay->pending_switches[1]->generation ==
+      runtime->engine().pattern_telemetry().pending_generation);
+  const auto cancelled_publications = runtime->engine().pattern_telemetry().canceled_publications;
+  const auto before_cancel_frame = runtime->engine().telemetry().rendered_frames;
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto revisions = lmdj::web_runtime::detail::ControlRuntimeSnapshotAccess::read(*runtime);
+  cancel_count_in_owner_journey(*runtime, ticket, 10002);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().canceled_publications == cancelled_publications + 1);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(runtime->engine().telemetry().rendered_frames == before_cancel_frame);
+  runtime->fail_and_seal("explicit_test_owner_loss");
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(coordinator.seam().await_quiescent(&coordinator, 1).has_value());
+  runtime->engine().stop();
+  Json failed;
+  wait_until([&] {
+    runtime->service_pattern_transport();
+    failed = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {}));
+    return failed.at("cancel_receipt").is_object() && failed.at("error").is_object();
+  });
+  LMDJ_CHECK(failed.at("start_receipt").at("result") == "applied");
+  LMDJ_CHECK(failed.at("cancel_receipt").at("result") == "refused");
+  LMDJ_CHECK(failed.at("cancel_receipt").at("effective_frame").is_null());
+  LMDJ_CHECK(failed.at("cancel_receipt").at("origin_frame").is_null());
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("transport_epoch") == 1);
+  auto wrong = companion_count_in_inspection(ticket, true);
+  wrong["command_id"] = uuid(10003);
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect", wrong, {}), "HOST_STATE_INVALID");
+  wrong = companion_count_in_inspection(ticket, true);
+  wrong["runtime_generation"] = std::to_string(generation + 1);
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect", wrong, {}), "HOST_STATE_INVALID");
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().pattern_input_profile_status().retained_completions == 1);
+  check_success(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  wait_until([&] { return runtime->acknowledge_pattern_input_owner_quiescent(generation); });
+  LMDJ_CHECK(!runtime->acknowledge_pattern_input_owner_quiescent(generation));
+  LMDJ_CHECK(runtime->engine().scheduled_pattern_record_quiescent());
+  LMDJ_CHECK(!runtime->pattern_transport_shutdown_complete()); // Caller still owns the real failed receipt.
+  LMDJ_CHECK(runtime->pattern_transport_pending());
+  const auto before_consume = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  const auto acknowledged = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}));
+  LMDJ_CHECK(acknowledged == before_consume);
+  LMDJ_CHECK(acknowledged.at("start_receipt") == failed.at("start_receipt"));
+  LMDJ_CHECK(acknowledged.at("cancel_receipt") == failed.at("cancel_receipt"));
+  LMDJ_CHECK(acknowledged.at("error") == failed.at("error"));
+  check_error(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID");
+  wait_until([&] { runtime->service_pattern_transport(); return runtime->pattern_transport_shutdown_complete(); });
+  LMDJ_CHECK(runtime->failed() && backend.cue_consumers_acknowledged.load());
+  const auto after = lmdj::web_runtime::detail::ControlRuntimeSnapshotAccess::read(*runtime);
+  LMDJ_CHECK(after.project_revision == revisions.project_revision && after.runtime_revision == revisions.runtime_revision);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  const auto prefix = lmdj::project_io::SequenceJournal{}.read_active(temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj"));
+  LMDJ_CHECK(prefix.has_value() && prefix.value().state == lmdj::project_io::SequenceSessionState::owner_lost);
+  LMDJ_CHECK(prefix.value().admission && !prefix.value().admission->cutoff_fence);
+  LMDJ_CHECK(prefix.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("phase") == "error");
+  check_error(runtime->dispatch("host.close", Json::object(), {}), "HOST_STATE_INVALID");
+}
+
+void test_normal_count_in_close_consumption_precedes_retirement() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator);
+  CountInOwnerAudioBackend backend{runtime->engine()};
+  OneShotAudioDriver driver(backend.seam());
+  const auto ticket = start_count_in_owner_journey(*runtime, coordinator, driver, 10010);
+  const auto capability = check_locked_success_result(runtime->dispatch(
+      "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+  const auto accepted = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 10011, "1"), {}));
+  driver.render_one();
+  wait_until([&] {
+    return check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(accepted.at("ticket")), {})).at("complete") == true;
+  });
+  const auto press = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(accepted.at("ticket"), true), {}));
+  const auto release = check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+      companion_input_request(capability, 10012, "2", true, press.at("admission").at("sequence")), {}));
+  driver.render_one();
+  wait_until([&] {
+    return check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(release.at("ticket")), {})).at("complete") == true;
+  });
+  const auto released = check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+      companion_input_inspection(release.at("ticket"), true), {}));
+  LMDJ_CHECK(released.at("native_result").at("held_press_sequence") == press.at("admission").at("sequence"));
+  LMDJ_CHECK(released.at("native_result").at("disposition") == "release_no_voice");
+  cancel_count_in_owner_journey(*runtime, ticket, 10013);
+  const auto ordinary = settle_pattern_transport(*runtime, driver, kSequenceSessionId);
+  LMDJ_CHECK(ordinary.at("recording") == false && ordinary.at("phase") == "idle");
+  const auto closed = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  LMDJ_CHECK(closed.at("start_receipt").at("result") == "applied");
+  LMDJ_CHECK(closed.at("cancel_receipt").at("result") == "applied");
+  LMDJ_CHECK(closed.at("cancel_receipt").at("effective_frame").is_number_unsigned());
+  LMDJ_CHECK(closed.at("cancel_receipt").at("origin_frame") == closed.at("start_receipt").at("origin_frame"));
+  LMDJ_CHECK(closed.at("error").is_null() && closed.at("opening_complete") == true);
+  LMDJ_CHECK(runtime->pattern_transport_pending()); // Idle resources cannot spend the caller's ticket.
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto history = check_locked_success_result(runtime->dispatch("history.inspect", Json::object(), {}));
+  const auto revisions = lmdj::web_runtime::detail::ControlRuntimeSnapshotAccess::read(*runtime);
+  const auto pending = check_error(runtime->dispatch("audio.suspend", Json::object(), {}), "IO_ERROR");
+  LMDJ_CHECK(pending.at("details") == Json::object());
+  LMDJ_CHECK(runtime->pattern_transport_pending());
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {})) == closed);
+  LMDJ_CHECK(check_locked_success_result(runtime->dispatch("history.inspect", Json::object(), {})) == history);
+  const auto after = lmdj::web_runtime::detail::ControlRuntimeSnapshotAccess::read(*runtime);
+  LMDJ_CHECK(after.project_revision == revisions.project_revision && after.runtime_revision == revisions.runtime_revision);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  check_success(dispatch_retained_for_test(*runtime, "audio.suspend", Json::object(), {}));
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete() && !runtime->failed());
+  LMDJ_CHECK(!runtime->pattern_transport_pending());
+  LMDJ_CHECK(backend.cue_consumers_acknowledged.load());
+}
+
+void bridge_timeout_keeps_the_real_count_in_caller_receipt(bool before_dispatch) {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = exceptional_input_runtime(temp, coordinator, true);
+  CountInOwnerAudioBackend backend{runtime->engine()};
+  OneShotAudioDriver driver(backend.seam());
+  const auto ticket = start_count_in_owner_journey(*runtime, coordinator, driver, 10020);
+  cancel_count_in_owner_journey(*runtime, ticket, 10021);
+  const auto ordinary = settle_pattern_transport(*runtime, driver, kSequenceSessionId);
+  LMDJ_CHECK(ordinary.at("recording") == false && ordinary.at("phase") == "idle");
+  const auto closed = check_locked_success_result(runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket), {}));
+  LMDJ_CHECK(closed.at("start_receipt").at("result") == "applied");
+  LMDJ_CHECK(closed.at("cancel_receipt").at("result") == "applied");
+  LMDJ_CHECK(closed.at("cancel_receipt").at("effective_frame").is_number_unsigned());
+  LMDJ_CHECK(runtime->pattern_transport_pending());
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  const auto revisions = lmdj::web_runtime::detail::ControlRuntimeSnapshotAccess::read(*runtime);
+  FakeProxy proxy;
+  if (!before_dispatch) proxy.response_delay_ms = 1'050; // Existing one-second envelope budget.
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(10022);
+  const auto encoded = encode(request(request_id, "host.status", Json::object()));
+  const auto submitted = before_dispatch
+      ? bridge->submit(encoded, {}, std::chrono::steady_clock::now())
+      : bridge->submit(encoded, {});
+  LMDJ_CHECK(submitted == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  proxy.response_delay_ms = 0;
+  const auto timeout = poll_message(*bridge);
+  LMDJ_CHECK(timeout.at("request_id") == request_id && timeout.at("ok") == false);
+  LMDJ_CHECK(timeout.at("error").at("code") == "HOST_TIMEOUT");
+  LMDJ_CHECK(runtime->failed() && runtime->pattern_transport_pending());
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(bridge->failed());
+  LMDJ_CHECK(bridge->poll(output, required) == BridgePollStatus::failed);
+
+  // The same real Bridge must still admit the legitimate exact-ticket ACK;
+  // a direct Runtime call would miss premature envelope terminalization.
+  const auto consume_id = uuid(10023);
+  const auto consume = encode(request(consume_id, "pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true)));
+  LMDJ_CHECK(bridge->submit(consume, {}) == BridgeSubmitStatus::accepted);
+  Json acknowledged;
+  wait_until([&] {
+    if (!proxy.tasks.empty()) proxy.pump_one();
+    const auto polled = bridge->poll(output, required);
+    if (polled != BridgePollStatus::message) {
+      LMDJ_CHECK(polled == BridgePollStatus::failed);
+      LMDJ_CHECK(runtime->pattern_transport_pending());
+      LMDJ_CHECK(!bridge->terminal_release_ready());
+      return false;
+    }
+    const auto envelope = Json::parse(reinterpret_cast<const char*>(output.data()),
+        reinterpret_cast<const char*>(output.data() + required));
+    if (!envelope.contains("request_id")) return false;
+    LMDJ_CHECK(envelope.at("request_id") == consume_id && envelope.at("ok") == true);
+    acknowledged = envelope.at("result");
+    return true;
+  });
+  LMDJ_CHECK(acknowledged == closed);
+  const auto original_await_calls = coordinator.await_calls;
+  driver.stop();
+  LMDJ_CHECK(coordinator.one_shot_joined(&driver));
+  LMDJ_CHECK(runtime->engine().telemetry().state ==
+             lmdj::audio::RealtimeState::running);
+  wait_until([&] {
+    runtime->service_pattern_transport();
+    if (!proxy.tasks.empty()) proxy.pump_one();
+    return bridge->terminal_release_ready();
+  });
+  LMDJ_CHECK(coordinator.await_calls == original_await_calls);
+  LMDJ_CHECK(runtime->engine().telemetry().state ==
+             lmdj::audio::RealtimeState::stopped);
+  const auto after = lmdj::web_runtime::detail::ControlRuntimeSnapshotAccess::read(*runtime);
+  LMDJ_CHECK(after.project_revision == revisions.project_revision && after.runtime_revision == revisions.runtime_revision);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  LMDJ_CHECK(runtime->failed() && bridge->failed() &&
+             backend.cue_consumers_acknowledged.load());
+  check_error(runtime->dispatch("host.close", Json::object(), {}), "HOST_STATE_INVALID");
+}
+
+void test_bridge_pre_dispatch_timeout_keeps_count_in_caller_ack_serviceable() {
+  bridge_timeout_keeps_the_real_count_in_caller_receipt(true);
+}
+
+void test_bridge_post_dispatch_timeout_keeps_count_in_caller_ack_serviceable() {
+  bridge_timeout_keeps_the_real_count_in_caller_receipt(false);
+}
+
+// Test-only decorator: the worker reaches the real append entry point, then
+// waits before delegating that exact path/prefix/byte span to real storage.
+class HeldLegacyCandidateStorage final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  struct Observation {
+    std::filesystem::path path;
+    std::uint64_t prefix{};
+    std::vector<std::byte> bytes;
+    std::thread::id worker;
+    bool entered{}, delegated{}, returned{}, succeeded{}, expired{};
+  };
+  explicit HeldLegacyCandidateStorage(std::filesystem::path bundle)
+      : bundle_(std::move(bundle)) {}
+  void arm() {
+    std::lock_guard lock(mutex_);
+    observation_ = {};
+    released_ = false;
+    armed_ = true;
+    deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  }
+  void release() noexcept {
+    std::lock_guard lock(mutex_);
+    released_ = true;
+    changed_.notify_all();
+  }
+  Observation inspect() const {
+    std::lock_guard lock(mutex_);
+    return observation_;
+  }
+  bool held() const {
+    std::lock_guard lock(mutex_);
+    return observation_.entered && !released_ && !observation_.delegated &&
+        !observation_.expired;
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path, std::uint64_t prefix,
+      std::span<const std::byte> bytes) override {
+    bool selected = false;
+    {
+      std::unique_lock lock(mutex_);
+      const auto relative = path.lexically_relative(bundle_);
+      const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      if (armed_ && path.filename() == "sequence.jsonl" &&
+          !relative.empty() && *relative.begin() != ".." &&
+          text.find("admission-candidate") != std::string::npos) {
+        armed_ = false; // Hold exactly the first candidate after explicit arming.
+        selected = true;
+        observation_ = {path, prefix, {bytes.begin(), bytes.end()},
+            std::this_thread::get_id(), true};
+        changed_.notify_all();
+        if (!changed_.wait_until(lock, deadline_, [&] { return released_; }))
+          observation_.expired = true;
+        observation_.delegated = true;
+      }
+    }
+    // Timeout only releases the bounded test gate; even then the real append
+    // runs, and the main-thread expired assertion fails. No fake IO result.
+    auto result = inner_->append_durable(path, prefix, bytes);
+    if (selected) {
+      std::lock_guard lock(mutex_);
+      observation_.returned = true;
+      observation_.succeeded = result.has_value();
+      changed_.notify_all();
+    }
+    return result;
+  }
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& p) override { return inner_->acquire_writer(p); }
+  lmdj::foundation::Result<void> ensure_directory(const std::filesystem::path& p) override { return inner_->ensure_directory(p); }
+  lmdj::foundation::Result<bool> exists(const std::filesystem::path& p) const override { return inner_->exists(p); }
+  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& p) const override { return inner_->byte_length(p); }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(const std::filesystem::path& p) const override { return inner_->read_complete(p); }
+  lmdj::foundation::Result<void> create_immutable(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner_->create_immutable(p, b); }
+  lmdj::foundation::Result<void> replace_complete(const std::filesystem::path& p, std::span<const std::byte> b) override { return inner_->replace_complete(p, b); }
+  lmdj::foundation::Result<void> remove(const std::filesystem::path& p) override { return inner_->remove(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(const std::filesystem::path& p) const override { return inner_->list_names(p); }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(const std::filesystem::path& p) const override { return inner_->list_directories(p); }
+  lmdj::foundation::Result<void> remove_tree(const std::filesystem::path& p) override { return inner_->remove_tree(p); }
+  lmdj::foundation::Result<void> publish_directory_if_absent(const std::filesystem::path& from, const std::filesystem::path& to) override { return inner_->publish_directory_if_absent(from, to); }
+  lmdj::foundation::Result<bool> directory_exists(const std::filesystem::path& p) const override { return inner_->directory_exists(p); }
+  lmdj::foundation::Result<void> validate_managed_tree(const std::filesystem::path& p) const override { return inner_->validate_managed_tree(p); }
+ private:
+  const std::filesystem::path bundle_;
+  const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_{
+      lmdj::project_io::make_default_project_storage_platform()};
+  mutable std::mutex mutex_;
+  std::condition_variable changed_;
+  std::chrono::steady_clock::time_point deadline_;
+  Observation observation_;
+  bool armed_{}, released_{};
+};
+
+void test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(
+    bool expire_then_reuse = false) {
+  using namespace lmdj::web_runtime::detail;
+  struct ControlTurns {
+    struct Turn { void (*function)(void*) noexcept; void* argument; };
+    std::vector<Turn> pending;
+    static bool schedule(void* context, void (*function)(void*) noexcept, void* argument) noexcept {
+      try { static_cast<ControlTurns*>(context)->pending.push_back({function, argument}); return true; }
+      catch (...) { return false; }
+    }
+    static bool on_control(void*) noexcept { return true; }
+    void one() {
+      if (pending.empty()) return;
+      const auto turn = pending.front();
+      pending.erase(pending.begin());
+      turn.function(turn.argument);
+    }
+  } turns;
+  TempDirectory temp;
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  auto storage = std::make_shared<HeldLegacyCandidateStorage>(bundle);
+  auto config = make_application_config(temp.path());
+  config.storage_platform = storage;
+  auto created = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  import_and_assign(*runtime, mono_pcm16_wav(2'400), kAssetId, 9930, 9931, 0);
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9932, 1, "record"), {}));
+  LMDJ_CHECK(settle_pattern_transport(*runtime, audio, kSequenceSessionId).at("recording") == true);
+  ControlBridge bridge(*runtime, {&turns, &ControlTurns::schedule, &ControlTurns::on_control,
+      nullptr, nullptr, nullptr});
+  const auto submit = [&](std::uint32_t request, const Json& payload,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) {
+    const auto encoded = Json{{"protocol_version", 1}, {"request_id", uuid(request)},
+        {"operation", "trigger"}, {"payload", payload}}.dump();
+    LMDJ_CHECK(bridge.submit({reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()}, {}, deadline) ==
+        BridgeSubmitStatus::accepted);
+  };
+  std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+  std::size_t required = 0;
+  const auto before = runtime->engine().telemetry().enqueued_events;
+  // Declared after Bridge/audio/runtime: unwind releases IO before any join.
+  struct UnblockOnExit {
+    HeldLegacyCandidateStorage& storage;
+    ~UnblockOnExit() { storage.release(); }
+  } unblock_on_exit{*storage};
+  storage->arm(); // Opening/activation have already settled through real IO.
+  const auto observer_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+  submit(9933, {{"slot", 0}, {"velocity", 100}},
+      expire_then_reuse ? std::optional{observer_deadline} : std::nullopt);
+  turns.one(); // Native accepted; its original I/O candidate still owns the RPC.
+  wait_until([&] { return storage->inspect().entered; });
+  const auto blocked = storage->inspect();
+  LMDJ_CHECK(blocked.worker != std::this_thread::get_id());
+  LMDJ_CHECK(storage->held()); // The actual append is entered but undelegated.
+  const auto prefix = storage->read_complete(blocked.path);
+  LMDJ_CHECK(prefix.has_value() && prefix.value().size() == blocked.prefix);
+  const auto undurable = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(undurable.has_value() && undurable.value().admission);
+  LMDJ_CHECK(undurable.value().admission->candidates.empty());
+  LMDJ_CHECK(runtime->owns_pending_pattern_rpc(uuid(9933), "trigger"));
+  LMDJ_CHECK(!runtime->owns_pending_pattern_rpc(uuid(9934), "trigger"));
+  LMDJ_CHECK(!runtime->owns_pending_pattern_rpc(uuid(9933), "host.close"));
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == before + 1);
+  LMDJ_CHECK(runtime->pattern_transport_pending());
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::empty);
+  // poll schedules the next real service turn; the dispatch's earlier turn
+  // may already have run while the worker reached the held append boundary.
+  LMDJ_CHECK(!turns.pending.empty());
+  turns.one();
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::empty);
+  LMDJ_CHECK(storage->held());
+  if (expire_then_reuse) {
+    const auto receive_error = [&](std::string_view expected_code) {
+      Json response;
+      wait_until([&] {
+        turns.one();
+        const auto polled = bridge.poll(output, required);
+        LMDJ_CHECK(polled != BridgePollStatus::failed);
+        if (polled != BridgePollStatus::message) return false;
+        const auto envelope = Json::parse(reinterpret_cast<const char*>(output.data()),
+            reinterpret_cast<const char*>(output.data() + required));
+        if (!envelope.contains("request_id")) return false;
+        LMDJ_CHECK(envelope.at("request_id") == uuid(9933));
+        check_exact_keys(envelope, {"protocol_version", "request_id", "ok", "error"});
+        LMDJ_CHECK(envelope.at("protocol_version") == 1 && envelope.at("ok") == false);
+        response = envelope.at("error");
+        return true;
+      });
+      check_exact_keys(response, {"code", "message", "details"});
+      if (response.at("code") != expected_code) {
+        const auto location = std::source_location::current();
+        throw std::runtime_error(std::string(location.file_name()) + ":" +
+            std::to_string(location.line()) + ": expired legacy RPC reuse expected " +
+            std::string(expected_code) + ", actual " + response.dump());
+      }
+      LMDJ_CHECK(response.at("code") == expected_code);
+      LMDJ_CHECK(response.at("details") == Json::object());
+      return response;
+    };
+    // Real caller expiry consumes only its observer; the actual append stays held.
+    receive_error("HOST_TIMEOUT");
+    wait_until([&] {
+      turns.one();
+      const auto state = bridge.cancel(uuid(9933));
+      LMDJ_CHECK(state == BridgeCancelStatus::not_found || state == BridgeCancelStatus::publish_claimed);
+      return state == BridgeCancelStatus::not_found; // Actual response release freed its RPC slot.
+    });
+    LMDJ_CHECK(storage->held() && runtime->pattern_transport_pending());
+    LMDJ_CHECK(runtime->inspect_legacy_trigger(uuid(9933)).has_value());
+    submit(9933, {{"slot", 0}, {"velocity", 90}});
+    receive_error("IO_ERROR"); // A new refusal must not acquire the old expired ticket.
+    LMDJ_CHECK(!runtime->owns_pending_pattern_rpc(uuid(9933), "trigger"));
+    LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == before + 1);
+    const auto still_undurable = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+    LMDJ_CHECK(still_undurable.has_value() && still_undurable.value().admission &&
+        still_undurable.value().admission->candidates.empty());
+    LMDJ_CHECK(storage->held());
+  }
+  storage->release();
+  wait_until([&] { return storage->inspect().returned; });
+  const auto durable = storage->inspect();
+  LMDJ_CHECK(durable.succeeded && !durable.expired);
+  const auto actual_bytes = storage->read_complete(blocked.path);
+  auto expected_bytes = prefix.value();
+  expected_bytes.insert(expected_bytes.end(), blocked.bytes.begin(), blocked.bytes.end());
+  LMDJ_CHECK(actual_bytes.has_value() && actual_bytes.value() == expected_bytes);
+  const auto receive = [&](std::uint32_t request) {
+    Json response;
+    wait_until([&] {
+      turns.one();
+      const auto result = bridge.poll(output, required);
+      LMDJ_CHECK(result != BridgePollStatus::failed);
+      if (result != BridgePollStatus::message) return false;
+      auto envelope = Json::parse(reinterpret_cast<const char*>(output.data()),
+          reinterpret_cast<const char*>(output.data() + required));
+      if (!envelope.contains("request_id")) return false;
+      LMDJ_CHECK(envelope.at("request_id") == uuid(request));
+      check_exact_keys(envelope, {"protocol_version", "request_id", "ok", "result"});
+      LMDJ_CHECK(envelope.at("protocol_version") == 1);
+      LMDJ_CHECK(envelope.at("ok") == true);
+      response = envelope.at("result");
+      return true;
+    });
+    return response;
+  };
+  if (!expire_then_reuse) {
+    const auto press = receive(9933);
+    check_exact_keys(press, {"sequence", "status"});
+    LMDJ_CHECK(press.at("status") == "enqueued");
+    LMDJ_CHECK(press.at("sequence") == 1);
+  } else {
+    wait_until([&] { return !runtime->inspect_legacy_trigger(uuid(9933)).has_value(); });
+  }
+  LMDJ_CHECK(!runtime->owns_pending_pattern_rpc(uuid(9933), "trigger"));
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == before + 1);
+  const auto journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(journal.has_value() && journal.value().admission);
+  LMDJ_CHECK(journal.value().admission->candidates.size() == 1);
+  const auto original = journal.value().admission->candidates.front();
+  LMDJ_CHECK(original.watermark == 10 && original.press_sequence == 10);
+  audio.render_one();
+  submit(9934, {{"slot", 0}, {"kind", "release"}});
+  const auto release = receive(9934);
+  check_exact_keys(release, {"accepted"});
+  LMDJ_CHECK(release.at("accepted") == true);
+  const auto paired = lmdj::project_io::SequenceJournal{}.read_active(bundle);
+  LMDJ_CHECK(paired.has_value() && paired.value().admission->candidates.size() == 2);
+  LMDJ_CHECK(paired.value().admission->candidates.front() == original);
+  LMDJ_CHECK(paired.value().admission->candidates.back().press_sequence == original.press_sequence);
+  LMDJ_CHECK(runtime->engine().telemetry().enqueued_events == before + 2);
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 9935, 2, "play_stop"), {}));
+  LMDJ_CHECK(settle_pattern_transport(*runtime, audio, kSequenceSessionId).at("playing") == false);
+  check_success(dispatch_retained_for_test(*runtime, "host.close", Json::object(), {}));
+  wait_until([&] { turns.one(); return turns.pending.empty(); });
+  LMDJ_CHECK(bridge.terminal_release_ready());
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(true);
+    test_bridge_pre_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
+    test_bridge_post_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
+    test_pattern_input_pre_engagement_exact_replay_and_future_release();
+    test_pattern_input_profile_strict_decimal_and_pending_shutdown_owners();
+    test_pattern_input_failed_observer_retains_original_deadline_and_physical_release();
+    test_exceptional_live_only_owner_ack_requires_native_and_ticket_consumers();
+    test_exceptional_owner_ack_preserves_original_queued_release_completion();
+    test_exceptional_recorded_silent_owner_ack_keeps_failed_recovery_prefix();
+    test_exceptional_never_recorded_engagement_uses_real_no_journal_disposition();
+    test_exceptional_pre_engagement_hold_keeps_its_original_live_only_owner();
+    test_exceptional_after_real_record_off_preserves_f_and_committed_truth();
+    test_known_deadline_failed_count_in_consumes_only_after_real_stop_and_all_owners_settle();
+    test_exceptional_count_in_receipt_requires_owner_and_caller_ack();
+    test_normal_count_in_close_consumption_precedes_retirement();
+    test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable();
+    test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(true);
     test_stopped_snapshot_selection_applies_before_the_next_play();
     test_retained_transport_replay_survives_pending_stopped_publication();
     test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
@@ -10750,6 +12617,7 @@ int main() {
     test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
     test_bridge_preserves_a_pre_deadline_publication_claim_to_settlement();
     test_bridge_passes_the_absolute_caller_deadline_into_audio_activation();
+    test_failed_activation_keeps_queued_rpc_and_retirement_service_alive();
     test_bridge_rechecks_deadline_before_error_publication();
     test_internal_audio_activation_timeout_is_terminal_after_response();
     test_bridge_preserves_error_responses_for_an_externally_failed_runtime();

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Application Facade Module",
-    "summary": "Native Host 与共享 Web Runtime Platform 的唯一 Core 入口"
+    "summary": "唯一 Core 入口；S6 源码草稿以 serialized control + 单一 I/O owner 保留真实录音身份"
   },
   "boundaries": [],
   "components": [
@@ -39,7 +39,7 @@
     {
       "id": "facade",
       "label": "Application Facade",
-      "detail": "Project · Sample · Sequence · Performance",
+      "detail": "shared history · registry",
       "kind": "core",
       "x": 680,
       "y": 250,
@@ -95,6 +95,36 @@
       "y": 100,
       "width": 280,
       "height": 96
+    },
+    {
+      "id": "controller",
+      "label": "Transport Control",
+      "detail": "e1/e2 · N ordinary / N release",
+      "kind": "core",
+      "x": 680,
+      "y": 430,
+      "width": 280,
+      "height": 96
+    },
+    {
+      "id": "io",
+      "label": "Single I/O Owner",
+      "detail": "Store/Journal/leases · lifecycle",
+      "kind": "core",
+      "x": 1010,
+      "y": 100,
+      "width": 250,
+      "height": 96
+    },
+    {
+      "id": "ticket",
+      "label": "Exact Work Cell",
+      "detail": "64 KiB · exact work identity",
+      "kind": "core",
+      "x": 1310,
+      "y": 100,
+      "width": 230,
+      "height": 96
     }
   ],
   "connections": [
@@ -141,24 +171,39 @@
       "from": "runtime-only",
       "to": "modules",
       "label": "Cooker + Audio only"
+    },
+    {
+      "from": "facade",
+      "to": "controller",
+      "label": "ordinary + companion"
+    },
+    {
+      "from": "controller",
+      "to": "io",
+      "label": "async turns; actual S opens"
+    },
+    {
+      "from": "io",
+      "to": "ticket",
+      "label": "retained effect / readback"
     }
   ],
   "cards": [
     {
-      "title": "Dependencies",
-      "body": "Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK. Host owner selector → Facade → SDK policy/binding/budget gates → Project IO verified Asset read under one writer lease → owned source/sink. Session grants reset on restart; durable Attempts never contain Project paths or alter Truth. Persist intent before execute. One live Attempt per Job; short owner lease publishes stable Set, ordered history, active pointer and supersession atomically. Recover only recorded Attempts; verify terminal bytes on each read. Project Truth remains unchanged."
+      "title": "Facade / I/O owner",
+      "body": "Host 只用 Facade；Runtime-only 无 IO/Provider。worker 独占 Store/Journal/lease；S 前无 I/O。"
     },
     {
-      "title": "Candidate adoption / runtime export",
-      "body": "One active set, explicit sorted Pad targets. Hold Workspace eligibility through bounded interval materialization, final-binding Bank/generation quota and one Project commit. Recheck Project/source identity under the writer. Retain source and terminal lineage; no Index adopted write and no public receipt replay. Cancel exact pending Attempt; discard active Set with durable tombstone. Share mutation ownership with adoption; late cancelled success never publishes. Keep immutable history/blobs, no GC or TTL. Runtime export: Expected Project ID/revision + one Pattern + extra live Pads. Load verified Truth, narrow a detached value, Cook and encode; return opaque bytes plus complete identity. No Project write or runtime publication. Candidate audition holds active eligibility through verified bounded PCM selection and final source/revision checks; transient prepared PCM only, no files or Truth writes. CLI/MCP return metadata; Native/Web own actual voice admission and stop. One Project session history is shared by every Store and the transport controller. Hosts inspect and request Undo/Redo; they own no snapshots."
+      "title": "独立录音 release",
+      "body": "Native + durable 才 complete。press ticket 消费后保留 release correlation；真 S/F、exact readback。"
     },
     {
       "title": "Performance authority",
-      "body": "Twenty-two Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction. The headered live-control profile adds one typed admission kernel: a Core-issued epoch binds the verified Project, the begin fence captures the accepted live state as the durable header with logical recording-gesture mapping, and every control runs reserve, durable append with a pending receipt, publish, then admission_complete; exact retries reuse the frozen tuple and an unknown write freezes the session rather than faking completion. Replay restores the header before any Pad, and the neutral terminal waits for every channel's drain, Pad gates included. Staged transport executor: one bounded retained ticket binds generation/epoch/command/step. Worker owns work and lease destruction; Control submit/inspect never waits for IO. Consume after reconciliation; unknown never authorizes retry. Global integration pending."
+      "body": "Core epoch 绑定 verified Project；header 保存 live state。reserve → durable → publish → complete；unknown 冻结，replay 先还原 header。"
     },
     {
-      "title": "Runtime boundary",
-      "body": "Budget Engine plus 2176-state receipt-bounded storage. Acquire consumption, drain states, retire receipts. OPEN/BUSY drain before reclaim. Control-only Pad summary is an owned, allocation-free canonical 64-slot value; Host profile does not narrow Core capacity. Cardputer serial control owns load and receipts; its audio task alone renders. Device join and physical silence remain separate from Core stopped. No physical-device proof. Live overlay publication is coordinator-owned: the Host contributes the publish capability, the admission journal retains the applied generation, and the cutoff names it (#1550)."
+      "title": "shutdown 与验收",
+      "body": "request_shutdown 后等 I/O stopped；Native/cue/hold 独立静止。原旅程保留；S6 执行 UNVERIFIED。"
     }
   ]
 }

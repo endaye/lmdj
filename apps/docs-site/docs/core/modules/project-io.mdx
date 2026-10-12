@@ -34,7 +34,7 @@ Application Facade 使用；Host 不直接解析 bundle。
 ## 8. 测试与证据
 Project store、v1/v2/v3/v4→v5 migration、atomic Sample transaction、Sequence journal/receipt/recovery、durable tail reload/flush consumption、失败 F1 被成功累积 F2 supersede、F0 先完成时 32 条等价 retry inverse resolve、original A+B replay 与 residual-only collision、versioned serialize/reload/legacy recovery、post-commit same-bundle retry/restart reconcile、无 later flush 的 A+B/A+A'+B/equivalent-only pending-tail residual、非等价 flush residual 提取、torn/checksum/sequence/canonical corruption 的统一 fail-closed evidence、writer-lease 内 direct-authoring refusal/settings rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试；`performance_journal_test.cpp`、`performance_lifecycle_test.cpp`、`performance_rebase_test.cpp` 与 `session_mutual_exclusion_test.cpp` 覆盖 performance session kind、draft 生命周期、rebase 记录与会话互斥；其中另覆盖 `5.4.1` headered profile 的 begin/tail/complete round-trip、有界 admission 窗口（C1→C2→reattach exact/collision/retry_expired 零重复 enqueue）、写入未知的 present/absent 恢复、torn/checksum 拒绝、ledger 不随 flush/recovery 丢失、owner-loss closure/seal 保留 unknown pending、以及 legacy journal 绝不升级出 ledger。`project_bundle_transfer_test.cpp` 的 duplicate 用例覆盖复制的新身份、Artifact 字节、全新 history、双向独立性、重开、busy、复制期间持有源 lease、journal/目标已存在/非法身份拒绝、Artifact 损坏、发布失败、配额、取消与残留 staging 恢复。
 ## 9. 限制与下一门禁
-全局 Pattern transport 的 Facade/runtime/Creator 接入仍待实现；以下 admission 的 Chromium OPFS 证据只是存储验收的一部分，双浏览器完整验收与端到端录制验收均未完成。
+scheduled 录音／count-in 的 Facade/runtime/Creator 完整验收仍待完成；以下 admission 的 Chromium OPFS 证据只是存储验收的一部分，双浏览器完整验收与端到端录制验收均未完成。
 云同步和协同冲突策略未批准，不能从本地存储能力推断。持久化正确性由自动化证明，不构成任何设备、听感或物理演奏验收。
 ## 10. 版本身份
 版本和依赖由 `module.json`/Assembly Lock 派生。
@@ -55,6 +55,46 @@ control watermark、Pattern/publication、revision 以及 frame/精确 tick nume
 保留完整 profile history，并重验锚点不早于 watermark 边界之前仍保留的候选或
 transfer checkpoint；后续 transfer 与 terminal cutoff 不反向限制历史设置。
 append 回应未知时精确重试仍须完成真实 sync。
+相同 session 的重复 `set_state` 也在原 writer lease 内对现有有效前缀执行空追加与
+真实 sync；可读的 `owner_lost` 状态不能代替耐久确认。持续 sync 失败保留失败，
+不在每次重试时追加相同 state 记录。
+
+S6 staged parser 在 worker 线程内保留单个已验证前缀，只有一次 fresh complete read 的
+完整字节包含逐字节相同前缀时才复用其派生解析状态；新增记录仍校验 envelope、
+checksum、顺序和 admission codec，修改或截短前缀会完整重验。真实 replay 得出的未解决
+canonical candidate bytes 传给 writer；transfer 只扣掉实际消费的 prefix，历史精确重试
+不占新预算，碰撞仍拒绝。
+当前 manifest 与它派生的 checkpoint 每次完整重读；只有 path 与完整字节相同才复用原
+解析事实，调用者 Project ID 每次比较。Journal、manifest、checkpoint 的 retained raw
+字段共用原 1 MiB 上限，余量不足就冷解析；读取、解析或身份失败会清掉该私有解析缓存。
+这不是峰值内存上限，也不替代 ProjectStore 的完整 authoring/history 校验。writer lease
+与真实 append/empty-append sync 保持独立；缓存不持久化，也不进入 Project Truth。
+这些源码优化旨在减少重复解析和一次 layout 检查中的重复路径遍历，不证明写入耐久、
+deadline 成功、音频效果或 ACK。原 64 轮压力测试的超时记录保留；新 layout、Project
+路径／精确读取故障恢复回归及当前候选的完整验收仍待执行。
+
+Native 的可选 `ProjectJournalLayoutValidator` 独立于现有 storage base，不新增原 vtable
+槽。仅 Sequence checked read 发现该能力：不支持时执行完整原 helper，支持但失败时直接
+保留失败；Sequence begin 的入口 layout 检查、sealed document 校验与 Performance 仍走
+原 helper。begin 已有的 active-Sequence 错误详情查询仍按 Sequence checked-read 路由。
+每次调用重新安全
+打开根目录、递归拒绝整个 managed tree 中的 symlink、特殊文件及 hardlink，并检查原八个
+目录及真实打开、共享锁内重核身份和非负长度的 manifest。同一次调用复用临时父目录
+descriptor；返回前重新按名字安全打开根目录，比较 device/inode/type 以拒绝根替换。
+该能力不缓存 descriptor 或成功结果，不授予 writer lease、耐久 ACK 或全树原子视图；
+后续实际完整读取、writer lease 与 sync 保持原路径。OPFS 保留原 fallback。新测试以真实
+文件系统反例检查缺失／错误类型、未使用的危险条目及有效根替换，并以独立真实文件
+锁检查共享共存、排他拒绝和返回后释放；它们尚未执行，不构成 Native 或浏览器通过。
+
+可选 `ProjectStorageTextReader` 为 Sequence Journal、manifest 与 checkpoint 的每次完整
+读取提供保持全部字节的字符串缓冲区，避免先构造、销毁逐字节 vector 再复制成字符串。
+它不解码 UTF-8、不转换换行或截断 NUL，也不缓存文件内容。Native 与原 `read_complete`
+共用安全路径遍历、regular-file 检查、共享锁、完整 `pread`、读取后 metadata 校验及原
+replacement-transient 重试；只有返回缓冲区的表示不同。原 storage vtable 不变，不支持
+该 companion 的平台继续走完整 byte-vector 回退路径；支持但失败时直接传播原错误。
+Performance 保留原 byte-vector 路径。该能力不授予写入、耐久或 ACK 权限；当前源码候选
+仍须通过 owning storage、Journal 与完整 S6 验证。
+
 v1/v2/未知 Sequence discriminator 拒绝读取并保留原字节，不自动迁移或删除；
 Performance journal 与 Project Truth Contract 不因这些字段改变。
 

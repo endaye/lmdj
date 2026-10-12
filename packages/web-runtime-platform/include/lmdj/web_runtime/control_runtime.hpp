@@ -22,8 +22,11 @@ namespace lmdj::web_runtime {
 
 namespace detail {
 class ControlRuntimeAudioAccess;
+class ControlRuntimeCountInOutputAccess;
+class ControlRuntimePhysicalAudioAccess;
 class ControlRuntimeClockAccess;
 class ControlRuntimeSnapshotAccess;
+class ControlRuntimePatternIoAccess;
 }
 
 struct SequenceBarBoundaryEvent {
@@ -60,6 +63,18 @@ class ControlRuntime final {
       const nlohmann::json& payload,
       std::span<const std::byte> sidecar,
       AbsoluteRequestDeadline deadline);
+  nlohmann::json dispatch(
+      std::string_view operation, const nlohmann::json& payload,
+      std::span<const std::byte> sidecar, AbsoluteRequestDeadline deadline,
+      std::string_view original_request_id);
+  // Internal deferred legacy RPC result. No new wire operation/event: the
+  // Bridge returns the original frozen response after actual admission.
+  std::optional<nlohmann::json> inspect_legacy_trigger(
+      std::string_view original_request_id, bool consume = false);
+  // Internal exact-request continuation ownership. Public error redaction
+  // deliberately removes pending/ticket metadata and is not this authority.
+  bool owns_pending_pattern_rpc(
+      std::string_view original_request_id, std::string_view operation) const;
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
   foundation::Result<void> drain_capture();
@@ -70,8 +85,21 @@ class ControlRuntime final {
   // calls this so a pending operation settles off the dispatch tail.
   void service_pattern_transport() noexcept;
   bool pattern_transport_pending() const noexcept;
+  // A separate lifetime gate: idle transport is not worker/Native ownership
+  // release. Call only after the audio coordinator proved no callback in flight.
+  bool pattern_transport_shutdown_complete() const noexcept;
+  // Exceptional resource acknowledgment, never ordinary Stop/timeout/close
+  // success. Requires failed owner disposition, actual stopped Native state,
+  // real revocation and every accepted input's normal consumer acknowledgment.
+  // Short turns may return false while the original I/O owner still drains.
+  bool acknowledge_pattern_input_owner_quiescent(
+      std::uint64_t runtime_generation) noexcept;
   bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;
+  // A Bridge timeout keeps its original immutable budget through terminal
+  // continuations; this overload is internal and introduces no wire schema.
+  void fail_and_seal(std::string_view cause,
+                     AbsoluteRequestDeadline original_deadline) noexcept;
   bool failed() const noexcept;
   audio::RealtimeEngine& engine() noexcept;
 
@@ -81,8 +109,11 @@ class ControlRuntime final {
 
   std::shared_ptr<Impl> impl_;
   friend class detail::ControlRuntimeAudioAccess;
+  friend class detail::ControlRuntimeCountInOutputAccess;
+  friend class detail::ControlRuntimePhysicalAudioAccess;
   friend class detail::ControlRuntimeClockAccess;
   friend class detail::ControlRuntimeSnapshotAccess;
+  friend class detail::ControlRuntimePatternIoAccess;
 };
 
 namespace detail {
@@ -113,6 +144,36 @@ class ControlRuntimeAudioAccess final {
       AudioQuiescenceCoordinator coordinator) noexcept;
 };
 
+// Companion capability preserves the original audio-coordinator layout.
+// The callback observes the actual immutable worklet graph on control.
+struct CountInOutputCapability {
+  void* context;
+  bool (*available)(void* context) noexcept;
+};
+
+class ControlRuntimeCountInOutputAccess final {
+ public:
+  static foundation::Result<void> install(
+      ControlRuntime& runtime, CountInOutputCapability capability) noexcept;
+};
+
+// Operational failure and physical callback retirement are independent.
+// This companion leaves AudioQuiescenceCoordinator's existing ABI intact.
+// It proves protected audio consumers drained, not backend deregistration or
+// permission to destroy the adapter/context.
+struct AudioPhysicalQuiescenceCapability {
+  void* context;
+  void (*request_terminal_drain)(void* context) noexcept;
+  bool (*physically_quiescent)(void* context) noexcept;
+};
+
+class ControlRuntimePhysicalAudioAccess final {
+ public:
+  static foundation::Result<void> install(
+      ControlRuntime& runtime,
+      AudioPhysicalQuiescenceCapability capability) noexcept;
+};
+
 class ControlRuntimeClockAccess final {
  public:
   static foundation::Result<void> install(
@@ -124,6 +185,13 @@ class ControlRuntimeSnapshotAccess final {
  public:
   static ControlRuntimeSnapshotTruth read(
       const ControlRuntime& runtime) noexcept;
+};
+
+// Native conformance observes the real Facade worker before its next fixed
+// audio cadence leg. This read never substitutes for completion/consumption.
+class ControlRuntimePatternIoAccess final {
+ public:
+  static bool idle(const ControlRuntime& runtime) noexcept;
 };
 
 inline constexpr std::size_t kBridgeMaximumEnvelopeBytes = 65'536;
@@ -191,6 +259,13 @@ class ControlBridge final {
   bool defer_while_dispatching(
       void (*function)(void*) noexcept, void* argument) noexcept;
   bool terminal_release_ready() const noexcept;
+  // Close the last retained RPC admission before transferring the terminal
+  // owner. A concurrent actual submit keeps this gate pending.
+  bool seal_terminal_admission() noexcept;
+  // Resource-only control turn; remains available after Bridge failure and
+  // never acknowledges an input/caller ticket on behalf of its consumer.
+  // False means the original dispatch still owns the serialized Runtime.
+  bool service_terminal_retirement() noexcept;
   bool failed() const noexcept;
 
  private:

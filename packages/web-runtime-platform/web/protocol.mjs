@@ -76,6 +76,12 @@ export const HOST_OPERATIONS = Object.freeze([
   "pattern.transport.request",
   "pattern.transport.switch",
   "pattern.transport.inspect",
+  "pattern.transport.count-in.capabilities",
+  "pattern.transport.count-in.request",
+  "pattern.transport.count-in.inspect",
+  "pattern.transport.count-in.cancel",
+  "pattern.transport.input.request",
+  "pattern.transport.input.inspect",
   "sequence.record.begin",
   "sequence.capture.disarm",
   "sequence.record.event",
@@ -132,6 +138,12 @@ export const HOST_NOTIFICATIONS = Object.freeze([
 const OPERATION_SET = new Set(HOST_OPERATIONS);
 const NOTIFICATION_SET = new Set(HOST_NOTIFICATIONS);
 const SHORT_OPERATIONS = new Set([
+  "pattern.transport.input.request",
+  "pattern.transport.input.inspect",
+  "pattern.transport.count-in.capabilities",
+  "pattern.transport.count-in.request",
+  "pattern.transport.count-in.inspect",
+  "pattern.transport.count-in.cancel",
   "host.status",
   "audio.activate",
   "audio.suspend",
@@ -151,6 +163,21 @@ const SHORT_OPERATIONS = new Set([
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+export const PATTERN_COUNT_IN_SERIAL_MAXIMUM = "1152921504606846975";
+export const UNSIGNED_64_MAXIMUM = "18446744073709551615";
+
+// Whole-string decimal identities never pass through a JS Number. A negative
+// lookahead for any character enforces the actual end, including LF and CRLF.
+export function isCanonicalNonzeroDecimal(value, maximum = UNSIGNED_64_MAXIMUM) {
+  return typeof value === "string" && /^[1-9][0-9]*(?![\s\S])/.test(value) &&
+    (value.length < maximum.length ||
+      (value.length === maximum.length && value <= maximum));
+}
+
+function isCanonicalCountInUuid(value) {
+  return typeof value === "string" && value.length === 36 && UUID_PATTERN.test(value);
+}
 
 export class HostProtocolError extends Error {
   constructor(code, message, details = {}) {
@@ -917,6 +944,61 @@ function requireSampleOperationPayload(operation, payload) {
         (hasExactKeys(payload, ["slot", "kind"]) &&
           isUnsignedInteger(payload.slot, 63) &&
           payload.kind === "release");
+      break;
+    case "pattern.transport.input.request":
+      valid = hasExactKeys(payload, ["command_id", "runtime_generation", "frame_epoch", "input_serial",
+        "slot", "velocity", "kind", "held", "held_press_sequence"]) &&
+        isCanonicalCountInUuid(payload.command_id) && isCanonicalNonzeroDecimal(payload.runtime_generation) &&
+        isCanonicalNonzeroDecimal(payload.frame_epoch) && isCanonicalNonzeroDecimal(payload.input_serial) &&
+        isUnsignedInteger(payload.slot, 63) && isUnsignedInteger(payload.velocity, 127) &&
+        typeof payload.held === "boolean" &&
+        ((payload.kind === "press" && payload.velocity > 0 && payload.held_press_sequence === null) ||
+         (payload.kind === "release" && payload.velocity === 0 && payload.held &&
+          isCanonicalNonzeroDecimal(payload.held_press_sequence)));
+      break;
+    case "pattern.transport.input.inspect":
+      valid = hasExactKeys(payload, ["command_id", "runtime_generation", "frame_epoch", "ticket", "consume"]) &&
+        isCanonicalCountInUuid(payload.command_id) && isCanonicalNonzeroDecimal(payload.runtime_generation) &&
+        isCanonicalNonzeroDecimal(payload.frame_epoch) && isCanonicalNonzeroDecimal(payload.ticket) &&
+        typeof payload.consume === "boolean";
+      break;
+    case "pattern.transport.count-in.capabilities":
+      valid = hasExactKeys(payload, ["negotiate"]) &&
+        typeof payload.negotiate === "boolean";
+      break;
+    case "pattern.transport.count-in.request":
+      valid = hasExactKeys(payload, [
+        "session_id", "project_id", "command_id", "runtime_generation",
+        "frame_epoch", "schedule_serial", "expected_epoch", "bars", "expected_revision",
+      ]) && isCanonicalCountInUuid(payload.session_id) &&
+        isCanonicalCountInUuid(payload.project_id) && isCanonicalCountInUuid(payload.command_id) &&
+        isCanonicalNonzeroDecimal(payload.runtime_generation) &&
+        isCanonicalNonzeroDecimal(payload.frame_epoch) &&
+        isCanonicalNonzeroDecimal(payload.schedule_serial, PATTERN_COUNT_IN_SERIAL_MAXIMUM) &&
+        isCanonicalNonzeroDecimal(payload.expected_epoch) &&
+        (payload.bars === 1 || payload.bars === 2) &&
+        (payload.expected_revision === null || isUnsignedInteger(payload.expected_revision));
+      break;
+    case "pattern.transport.count-in.inspect":
+      valid = hasExactKeys(payload, [
+        "session_id", "command_id", "runtime_generation", "frame_epoch", "schedule_serial", "consume",
+      ]) && isCanonicalCountInUuid(payload.session_id) && isCanonicalCountInUuid(payload.command_id) &&
+        isCanonicalNonzeroDecimal(payload.runtime_generation) &&
+        isCanonicalNonzeroDecimal(payload.frame_epoch) &&
+        isCanonicalNonzeroDecimal(payload.schedule_serial, PATTERN_COUNT_IN_SERIAL_MAXIMUM) &&
+        typeof payload.consume === "boolean";
+      break;
+    case "pattern.transport.count-in.cancel":
+      valid = hasExactKeys(payload, [
+        "session_id", "project_id", "command_id", "start_command_id", "runtime_generation",
+        "frame_epoch", "schedule_serial", "expected_epoch", "intent",
+      ]) && isCanonicalCountInUuid(payload.session_id) && isCanonicalCountInUuid(payload.project_id) &&
+        isCanonicalCountInUuid(payload.command_id) && isCanonicalCountInUuid(payload.start_command_id) &&
+        isCanonicalNonzeroDecimal(payload.runtime_generation) &&
+        isCanonicalNonzeroDecimal(payload.frame_epoch) &&
+        isCanonicalNonzeroDecimal(payload.schedule_serial, PATTERN_COUNT_IN_SERIAL_MAXIMUM) &&
+        isCanonicalNonzeroDecimal(payload.expected_epoch) &&
+        (payload.intent === "record" || payload.intent === "play_stop");
       break;
     case "pattern.transport.request":
       valid =

@@ -19,7 +19,9 @@ PatternTransportWorkCompletion unknown(const char* reason) {
   return {PatternTransportWorkOutcome::unknown, {}, failure(reason)};
 }
 bool valid(const PatternTransportWorkCompletion& result) {
-  if (result.payload.size() > kPatternTransportWorkPayloadBytes) return false;
+  const auto error_bytes = result.error ? result.error->message.size() + result.error->details.dump().size() : 0;
+  if (result.payload.size() > kPatternTransportWorkPayloadBytes ||
+      error_bytes > kPatternTransportWorkPayloadBytes - result.payload.size()) return false;
   switch (result.outcome) {
     case PatternTransportWorkOutcome::success: return !result.error;
     case PatternTransportWorkOutcome::refused:
@@ -52,14 +54,20 @@ struct PatternTransportExecutor::Impl {
     std::unique_lock lock(mutex);
     ready = true;
     for (;;) {
-      changed.wait(lock, [&] { return shutdown || (request && !completion); });
-      if (request && !completion) {
+      changed.wait(lock, [&] { return shutdown || (request && (!completion || reconciliation)); });
+      if (request && (!completion || reconciliation)) {
         // Retain the original payload in the cell for exact duplicate checks.
         const auto work = *request;
+        const auto readback = reconciliation;
+        reconciliation = false;
         lock.unlock();
         PatternTransportWorkCompletion result;
         try {
-          result = owner->execute(work);
+          if (readback) {
+            if (auto* reconciler = dynamic_cast<PatternTransportWorkReconciler*>(owner.get()))
+              result = reconciler->reconcile(work);
+            else result = unknown("pattern_transport_work_reconciliation_unsupported");
+          } else result = owner->execute(work);
           if (!valid(result)) result = unknown("pattern_transport_work_invalid_result");
         } catch (...) {
           // execute may already have committed. Exceptions are unknown, never
@@ -84,6 +92,7 @@ struct PatternTransportExecutor::Impl {
   bool ready{};
   bool shutdown{};
   bool stopped{};
+  bool reconciliation{};
   std::uint64_t last_step{};
   std::uint64_t last_epoch{};
   std::optional<PatternTransportWorkRequest> request;
@@ -132,12 +141,43 @@ PatternTransportExecutorStatus PatternTransportExecutor::inspect() const {
           impl_->request ? std::optional{impl_->request->identity} : std::nullopt,
           impl_->completion, impl_->startup_error};
 }
+PatternTransportWorkSubmit PatternTransportExecutor::submit_owner_disposition(
+    const PatternTransportWorkRequest& request) {
+  const auto& identity = request.identity;
+  // Canonical exact bytes make this bounded resource path unusable for any
+  // authoring operation, extra field, duplicate key or malformed payload.
+  if (!identity.step || identity.transport_epoch != 0 ||
+      !domain::is_valid_uuid(identity.command_id.value()) ||
+      request.payload != R"({"op":"owner_lost"})") return PatternTransportWorkSubmit::invalid;
+  std::lock_guard lock(impl_->mutex);
+  if (identity.runtime_generation != impl_->generation) return PatternTransportWorkSubmit::stale;
+  if (impl_->request && impl_->request->identity == identity)
+    return *impl_->request == request ? PatternTransportWorkSubmit::replayed : PatternTransportWorkSubmit::invalid;
+  if (impl_->shutdown || impl_->stopped || !impl_->ready) return PatternTransportWorkSubmit::unavailable;
+  if (impl_->request) return PatternTransportWorkSubmit::busy;
+  if (identity.step <= impl_->last_step) return PatternTransportWorkSubmit::stale;
+  impl_->request = request;
+  impl_->last_step = identity.step;
+  // No transport authority was supplied. Preserve last_epoch exactly.
+  impl_->changed.notify_one();
+  return PatternTransportWorkSubmit::accepted;
+}
 bool PatternTransportExecutor::consume(const PatternTransportWorkIdentity& identity) {
   std::lock_guard lock(impl_->mutex);
   if (!impl_->request || impl_->request->identity != identity || !impl_->completion)
     return false;
   impl_->request.reset();
   impl_->completion.reset();
+  return true;
+}
+bool PatternTransportExecutor::reconcile(const PatternTransportWorkIdentity& identity) {
+  std::lock_guard lock(impl_->mutex);
+  if (!impl_->request || impl_->request->identity != identity || !impl_->completion ||
+      impl_->completion->outcome != PatternTransportWorkOutcome::unknown ||
+      impl_->shutdown || impl_->stopped || impl_->reconciliation) return false;
+  impl_->completion.reset();
+  impl_->reconciliation = true;
+  impl_->changed.notify_one();
   return true;
 }
 void PatternTransportExecutor::request_shutdown() {

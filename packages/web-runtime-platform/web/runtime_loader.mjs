@@ -30,13 +30,10 @@ export async function defaultRuntimeTerminator({
 }) {
   let transportTerminated = false;
   let transportTermination = null;
-  try {
-    if (typeof runtime?.transport?.terminate === "function") {
-      transportTermination = Promise.resolve(runtime.transport.terminate());
-      transportTerminated = true;
-    }
-  } catch {
-    // Fall through to direct Worker termination.
+  if (typeof runtime?.transport?.terminate === "function") {
+    // A failed formal retirement cannot authorize a direct kill or detach.
+    transportTermination = Promise.resolve(runtime.transport.terminate());
+    transportTerminated = true;
   }
   if (!transportTerminated) {
     const workers = new Set(runtime?.workers ?? []);
@@ -63,18 +60,24 @@ export async function defaultRuntimeTerminator({
   }
 
   if (transportTermination !== null) {
-    await transportTermination.catch(() => {});
+    await transportTermination;
+    if (runtime.transport.terminalOwnerReleased === false) {
+      const error = new Error("formal Runtime owner is still retained");
+      error.code = "HOST_STATE_INVALID";
+      error.details = Object.freeze({pending: true});
+      throw error;
+    }
   }
 
-  await Promise.resolve()
-    .then(() => runtime?.worklet?.disconnect?.())
-    .catch(() => {});
-  await Promise.resolve()
-    .then(() => runtime?.worklet?.port?.close?.())
-    .catch(() => {});
+  await runtime?.worklet?.disconnect?.();
+  await runtime?.worklet?.port?.close?.();
   if (audioContext && audioContext.state !== "closed") {
-    await Promise.resolve()
-      .then(() => audioContext.close())
-      .catch(() => {});
+    await audioContext.close();
+    if (audioContext.state !== "closed") {
+      const error = new Error("AudioContext did not confirm backend closure");
+      error.code = "HOST_STATE_INVALID";
+      error.details = Object.freeze({pending: true});
+      throw error;
+    }
   }
 }

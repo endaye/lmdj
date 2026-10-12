@@ -1,7 +1,7 @@
 ---
 title: Web Runtime Platform
 area: core
-status: implemented
+status: partial
 owners: [core, web, audio]
 module: web-runtime-platform
 source_paths:
@@ -16,6 +16,10 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <DiagramFrame title="Web Runtime Platform Module" diagramId="web-runtime-platform" />
 
+S6 当前为**源码草稿，执行验收 UNVERIFIED**。Native、Facade、Worklet 与 Host/SDK
+companion 的 source wiring 不等于 packaged OPFS、实际 PCM、完整 Portal 或设备验收。
+历史自动化证据只属于原版本与原旅程；S7 Creator 偏好/控件仍在后续 Task。
+
 ## 1. 目的与非职责
 为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
 ## 2. 当前实现状态
@@ -25,7 +29,7 @@ Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。
 ## 3. 所有权与依赖
 只依赖 Application Facade 与 Audio Runtime；当前身份由 Build Identity 派生。Bundle reader 接受 Project v5 transfer，旧 v1/v2/v3/v4 输入继续由 Core 迁移。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
 ## 4. 架构与数据流
-Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Runtime Session 的 `createProject` 在串行 Project action 上发出 `project.create`，先校验调用方给出的 Project/Pattern 身份、BPM 与 Bar 数，再只接受指名同一身份、revision 0 的结果；`duplicateProject({sourceProjectId, projectId})` 在同一串行 lane 上发出 `project.duplicate`，发送前拒绝非法或相同的身份，只接受指名新身份、revision 0 的 Local Project summary；Host 只复制、不替换当前打开的 Project、writer lease 或 Runtime，调用方另行 `openProject` 打开副本。Host 在 running、有 active Sequence 或未完成 Sample import 时以 `HOST_STATE_INVALID` 拒绝，另一标签页持有源 Project 时返回 `PROJECT_BUSY`，目标身份已被使用时返回 `DUPLICATE_ID`；源 Project 有未完成录制（含崩溃 owner 留下的 active Journal）时返回 `HOST_STATE_INVALID` 与 “source Project has an unfinished recording”，而不是被通用 sanitizer 还原成请求无效。发布前 deadline 已过则不发布任何副本，由 bridge 报告 `HOST_TIMEOUT`。Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。全局 Pattern transport 的 live overlay 发布由 Facade 协调器在控制节拍上驱动：Platform 实现 `publish_overlay` 能力（prepare 走 Runtime Snapshot），service tick 持续服务开着的录音，同 Pattern 的排队发布在落地前 coalesce，Record-off 等待其落地后在边界外结算——无 beat restart。
+Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Runtime Session 的 `createProject` 在串行 Project action 上发出 `project.create`，先校验调用方给出的 Project/Pattern 身份、BPM 与 Bar 数，再只接受指名同一身份、revision 0 的结果；`duplicateProject({sourceProjectId, projectId})` 在同一串行 lane 上发出 `project.duplicate`，发送前拒绝非法或相同的身份，只接受指名新身份、revision 0 的 Local Project summary；Host 只复制、不替换当前打开的 Project、writer lease 或 Runtime，调用方另行 `openProject` 打开副本。Host 在 running、有 active Sequence 或未完成 Sample import 时以 `HOST_STATE_INVALID` 拒绝，另一标签页持有源 Project 时返回 `PROJECT_BUSY`，目标身份已被使用时返回 `DUPLICATE_ID`；源 Project 有未完成录制（含崩溃 owner 留下的 active Journal）时返回 `HOST_STATE_INVALID` 与 “source Project has an unfinished recording”，而不是被通用 sanitizer 还原成请求无效。发布前 deadline 已过则不发布任何副本，由 bridge 报告 `HOST_TIMEOUT`。Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。全局 Pattern transport 的 live overlay 发布由 Facade 协调器在控制节拍上驱动：Platform 实现 `publish_overlay` 能力（prepare 走 Runtime Snapshot），service tick 持续服务开着的录音，同 Pattern 的排队发布在落地前 coalesce，Record-off 可撤回尚未被 audio claim 的 overlay 后提交；已 claim 的 publication 保留原 busy/边界结算——无 beat restart。
 ## 5. API 与 Contract 边界
 Platform 校验 canonical distribution manifest，但该同构建协议不是公开跨版本 Contract。`1.0.44.0` 的 manifest gate 要求恰好十三项 resource limit：`decoded_float_pcm_bytes_per_bank` 67108864、`decoded_float_pcm_bytes_total` 134217728、`decoded_float_pcm_bytes_resident` 268435456、`imported_wav_bytes` 68157440、`ingest_channels` 2、`ingest_decoded_frames` 43200000、`ingest_source_bytes` 104857600、`perform_recording_frames` 86400000、`perform_recording_queue_batches` 32，以及本 Build 新增的四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1048576、`maximum_soundset_blob_bytes` 68157440、`maximum_soundset_unique_bytes` 268435456 与 `maximum_soundset_staging_bytes` 536870912；键集是精确匹配，多一项默认值即拒绝，每一项都必须是正的安全整数并逐值比对。这正是 Platform 本次取 MAJOR 的依据：一份在 `1.0.43.0` 下合法的分发清单，在本 Build 的 gate 下被拒绝。四项上限是 Host 容量事实，经 `ApplicationConfig` 到达 Core；浏览器侧 Catalog 对象的暂存缓冲是另一回事，不在 manifest 内。资产清单同样精确：声明 `compatible_hosts` 的 Creator 分发必须恰好携带一个 `perform_master_tap_worklet` 角色的资产，诊断 Host 分发必须为零；重复路径、缺失或错误的角色计数、非法 digest 与资产路径，都是 fail-closed 的 inventory 缺陷而不是可容忍的默认值；resource limit、Emscripten 身份与 host allowlist 也逐项精确比对。更早的不可变分发包保留各自的精确身份，不被回溯要求携带 Stage 10 字段。Project Bundle 与 WAV sidecar 只通过 Facade 的 bounded streaming API 进入 Core，Browser 不解析 Project/WAV。
 Creator 资产集合由实际 Host manifest 与生成的 `expected_assets` 选择。
@@ -92,13 +96,143 @@ engagement 的 vendored 绑定变陈旧时，下一次 Record 由 Facade 协调�
 journal（#1403），事件直接提交到引擎当前 Pattern，不再以确定性 fence 错配停驻
 error phase；录制中（journal 活跃）永不重锚，跨 switch 结清仍由 close 机制拥有。
 
-Creator 默认入口（T4）、六态的完整产品旅程验收、以及物理 MIDI/触控/声学听感验收仍未交付；
-本页的绿色只覆盖原生 Host/bridge 套件、Node Runtime Session 回归与真实 Chromium
-Wasm/OPFS 浏览器旅程。
+上述 T0/T3 历史证据只覆盖其原生 Host/bridge、Node Runtime Session 与真实 Chromium
+Wasm/OPFS 范围。Creator 入口与六态完整旅程以所属 Task 的实际证据为准；物理
+MIDI/触控/声学听感另行验收，旧绿色不能升级为下述 S6 生产路径的执行结果。
 
 自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收；Perform 录制与 master tap 的自动化绿色只证明消息形状、状态机与分发身份，物理验收仍为 deferred。分发门禁通过也不代表已经产生不可变快照、标签、Release、部署或 Channel 提升，这些是各自独立的后续授权边界。
+### S6 strict companion 协议与同一 SDK owner（source draft）
+
+旧 `pattern.transport.request`/`.inspect` 的 exact key sets、ordinary command/receipt/
+DTO、旧 audio port vtable 与 audio-coordinator shape 保留；新能力通过独立 accessor、
+profile 与 companion codecs 增加，protocol envelope 仍为 1。opt-in Session 在 stopped/
+quiescent activation、任何 live Pad 前协商 Native input profile；running 时不迁移队列。
+
+当前公共 SDK 方法与 wire operation 的对应如下（public 字段用 camelCase，wire 用 snake_case）：
+
+| 公共方法 | Host operation / 结果 |
+| --- | --- |
+| `queryPatternCountInCapabilities()` | `pattern.transport.count-in.capabilities`，wire `{negotiate: boolean}`；公开查询使用 false，activation 的内部协商使用 true。 |
+| `requestPatternCountIn(request)` | `pattern.transport.count-in.request` → `{submit, ticket, status}`，只作短 admission。 |
+| `inspectPatternCountIn(ticket, consume=false)` | `pattern.transport.count-in.inspect` → retained status。 |
+| `cancelPatternCountIn(request)` | `pattern.transport.count-in.cancel` → `{submit, ticket, status}`，ticket 仍指向原 start。 |
+| `requestPatternInput(request)` | `pattern.transport.input.request` → `{ticket, status}`，reserve/enqueue/bind 后短返回。 |
+| `inspectPatternInput(ticket, consume=false)` | `pattern.transport.input.inspect` → Native 与 durable 的 retained status。 |
+
+capability wire result 恰含 `supported, negotiated, output_ready, runtime_generation,
+frame_epoch, next_serial, input_capacity`。legacy 单输出不具备 cue capability 时明确不支持
+count-in；正常普通 transport 仍可用。public `outputReady` 同时要求 Host 与 Session 图已就绪。
+
+count-in request wire 恰含 `session_id, project_id, command_id, runtime_generation,
+frame_epoch, schedule_serial, expected_epoch, bars, expected_revision`；bars 仅 1/2，revision
+可 null。inspect 恰含 `session_id, command_id, runtime_generation, frame_epoch,
+schedule_serial, consume`；cancel 恰含 `session_id, project_id, command_id, start_command_id,
+runtime_generation, frame_epoch, schedule_serial, expected_epoch, intent`，intent 为
+`record`/`play_stop`。status 分开给 `ticket, count_in, start_receipt, cancel_receipt,
+opening_pending, opening_complete, error`。native timing 尚未发布时 C/S（`count_in_frame/start_frame`）
+为 null；Preparing 可先发布计划 timing，actual e1 Applied receipt 才证明真实 start，opening_complete
+又是另一项 durable 进展。cancelled/refused receipt 没有 effective/origin frame。
+
+首次打开超时的 count-in status 保留限定的类型化原因：未结算时为
+`IO_ERROR / pattern_transport_opening_expired`，同一真实 I/O owner 耐久确认拒绝后为
+`INVALID_ARGUMENT / admission_opening_deadline_elapsed`，并保留真实的
+`journal_retained: true`。若原错误带有 `closure_unresolved` 或 `retryable` 的 true 标记，
+该标记仍向调用方传递，不能当成最终拒绝；普通操作的错误 sanitizer 保持原规则。
+最终拒绝的 ticket 只在原 S、真实 Stop F、I/O 结算、全部输入消费者与物理 hold/cue/voice
+清零后可确认一次。这个正常运行中的失败确认不要求销毁 owner，不把 `opening_complete`
+改成 true，也不清除错误或恢复 Journal；未知 I/O 与未释放输入仍阻止确认。
+
+input.request 的当前**精确九键**为：
+
+```text
+command_id, runtime_generation, frame_epoch, input_serial, slot,
+velocity, kind, held, held_press_sequence
+```
+
+press 的 velocity 为 1..127，held_press_sequence 为 null；release velocity=0、held=true，
+held_press_sequence 必须是实际 press sequence。input.inspect 恰含：
+
+```text
+command_id, runtime_generation, frame_epoch, ticket, consume
+```
+
+Host retained ticket 保留整个 original payload。只在实际 Native accepted 后推进
+input acceptance floor；拒绝不推进，精确 replay 必须 whole payload 相同，consumed/stale
+serial 不可再 enqueue。耗尽拒绝，并为已有 physical holds 保留可用 release 身份。
+
+wire input status 恰含 `ticket, admission, native_result, durable_settled, retained,
+complete, expired, error`。admission 保留实际 `sequence, acceptance_ordinal, authority`；
+native_result 为 null 或 exact generation/frame epoch/sequence、held_press_sequence、ordinal、
+runtime_frame、slot、authority、disposition。Native terminal dispositions 完整覆盖
+voice_started/capacity、toggle_stopped、muted_no_voice、release_applied/no_voice、
+invalidated_before_consume。`complete` 仅在 Native result 与 durable settlement 都成立时为真；
+仍须检查 error。`retained` 说明实际 recording admission，不是 FIFO accepted。
+
+pre-S Native recording=false、serial/epoch=0 明确无 recording lineage；wire 对缺少的
+schedule_serial/transport_epoch/held_press_sequence 输出 null，不补造非零 authority。
+保留真实 generation、frame epoch、sequence、ordinal，pending count-in context 独立存在。
+非零 uint64 generation/epoch/input_serial/ticket/sequence 与 uint60 schedule_serial 都用
+canonical whole decimal string：拒绝 leading zero、LF/CRLF、overflow、stale 和隐式 Number
+转换。runtime/effective/origin frame 等 Number 必须 safe integer，超界 typed refuse。
+Project5.4.1 的 whole-string input_sequence Contract 不变。
+
+Native 2N physical FIFO/completion 与 N ordinary/N future-release escrow，Facade N ordinary/
+N held-release metadata、Host/SDK retained tickets 分别有固定额度；不扩大原 16 Bridge RPC
+slots，也不关闭 Asyncify dispatch gate。普通 admit 若返回 `details.pending=true`，Host
+保存同一 candidate/result，continuation 后继续；不得重 enqueue 或改 watermark/correlation。
+projection pending 等 fresh generation，不用 stale cache 伪装当前 overlay。
+legacy RPC 的响应在既有 pool 中延后结算，dispatch 可继续服务其他短 turns；保存的
+候选、真实 effect/readback identity 与原预算不变，不另建控制 owner。
+
+短 request turns 释放 `hostRequestTail` 与 `runtimeActionTail`；public `trigger`/`release`
+在两条 tail 外等待 total Native completion 与必要 durable disposition，Stop/inspect/
+reserved release 可在 begin/append 被 hold 时继续。保持一秒 Pad 与 Applied 后才开始的
+五秒 opening 预算，inspect/retry 不重置。五秒只限制首次打开录音；真实 admission fence
+耐久完成后，录音持续到 Record-off/Stop，积压中的真实匹配 Release 仍须耐久结算。
+expiry 留住 effect/ticket/hold，不是取消或回收。
+press ticket 消费后 physical 和 recording release reservations 继续存活，分别由实际
+release 或其真实 owner cutoff/revocation 结算；静音、toggle 和 voice 结束都不足以释放。
+
+旧 public trigger 的安全 sequence 仍返回 numeric result，release 保留 boolean；接受的
+sequence 超过 Number 安全域时观察者得到类型化失败并保留完整十进制身份，绝不四舍五入
+或重复 enqueue。additive input APIs 始终保留 canonical string。`runtime.session` 发布的是
+`createRuntimeSession` 返回的**同一个 frozen public Session**，`runtime.patternTransport`
+只是同 owner 的方法集合；它们不建立第二个 controller、I/O owner 或 mutable Session。
+
+新 SDK 探测旧 Host 的 valid-unknown companion operation 时得到 unsupported，ordinary
+operations 继续；malformed envelope、错误身份或 extra key 仍为协议失败。旧 SDK 的冻结
+strict decoder 与新 Host 的普通响应兼容测试源码已保留，执行仍待验证。
+
+正常 shutdown 先得到真 e2F/录音 disposition，再 Engine.stop、排空 cue/input/voice、
+处置 physical holds，`request_shutdown` 后确认实际 executor stopped 才析构 control。
+异常 unsent e2 Refused 没有 F/origin，必须保留实际 S/前缀并走 owner-loss/recovery，不能
+宣称 clean closure；逻辑 ACK 不替代 Native borrow/cue consumer/physical hold quiescence。
+
+Host 的 additive nonvirtual quiescent input-owner ACK 保留实际 generation 与所有
+Host/Native/Facade completion、Release 与 correlation 责任。真正 stopped 后才执行
+Native revoke，核对 escrow 清零，再等待同 Facade I/O owner 的 disposition 与 exact-once
+ACK；未知结果仍可观察，不能清掉 held ledger 冒充完成。未录制过的 owner 也经实际
+Journal readback 确认不存在，不伪造 transport epoch、cutoff F 或 clean-close 收据。
+该资源回收入口不新增 SDK wire operation，也不改变旧 transport DTO/vtable。
+
+Worklet 的 additive `startAudioWorkletWithCountIn` 使用 context/product/cue 三元身份；
+两个 stereo/128 输出分别是 product→master tap→capture/resample 与 monitor、cue→monitor。
+cue 不录制，监听 gain 同时影响两路，单输出旧 startup/direct recovery 与幂等路由保留。
+paused 两路 zero 且 Engine clock 不推进。normal 1200 Hz/accent 1800 Hz 的 immutable
+1920-frame kernel 起点为零。四/八 forced cues 保留每 Bar 首拍 accent、其余 normal，
+另有可选 MET-enabled S accent；首非零 PCM 是 marker+1。S7 的偏好、Record lamp/
+countdown 和 JS handoff 尚未交付。
+
+本次仅静态对齐源码与文档。完整 S6 要运行 strict decoder/replay/exhaustion、early total
+completion、独立 saturation、held production begin/append 下的控制与真实松开、原 crash/
+recovery/shutdown/reacquire、Truth/reopen，并用独立校准 raw PCM 验证两路实际输出及 cue
+不进 capture/resample。旧孤立 executor OPFS、S4 Creator 118 PASS 或历史 CI 不替代这些
+S6 验收；物理设备和听感仍分别记录。
+
 ## 10. 版本身份
-版本和依赖由 `module.json` 与 Product Assembly Lock 派生。
+版本和依赖由 `module.json` 与 Product Assembly Lock 派生。S6 companion/profile 保留旧
+wire/DTO/coordinator layout，staged MINOR debt 待协调 settlement 与兼容验收；本草稿不
+分配 Module、Product Build 或 Assembly 身份。Native Engine ABI 的 MAJOR debt 独立保留。
 
 ## Provider 控制面
 

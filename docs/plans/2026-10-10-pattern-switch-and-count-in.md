@@ -230,14 +230,374 @@ introduced by this preparation.
   unsupported probing leaves ordinary operations usable. Serial/epoch identity
   uses exact decimal strings across JS. No Host timer invents an origin.
 
-**Refreshed premises.** At actual S4 merge
-`e220c98ca1b0f4a3c08646bfeb328ffa186a263d`, S1/S2/S4 are delivered; scheduled
+**Refreshed premises.** The original implementation base is actual main
+`96802c0f8764d04cbf3d3c913e82292a01284ac9`, including S4's actual merge
+`e220c98ca1b0f4a3c08646bfeb328ffa186a263d`, F1/#2014's merge
+`a61ab819686ad896a3192e4a4bce1541ae55676d`, and the #2019 design preparation.
+S1/S2/S4 are delivered; scheduled
 Record, production-controller I/O ownership and native cue/SDK wiring remain
 outstanding. Existing executor OPFS and ordinary recording journeys are
-retained. #1958/#1959 are decision-only closures. Refresh concurrent F1's actual
-main integration before overlapping Engine/Audio Portal edits. The addendum
+retained. #1958/#1959 are decision-only closures. Preserve F1's typed Filter
+accepted/applied epoch channel, quiescent reset and single stage alongside S4.
+The addendum
 names the owning files, exact lifetime/receipt protocol and every lowest-tier
 test and far-side acceptance leg before code.
+
+The 2026-10-11 follow-up refreshed remote main to
+`67d66bf20d7701d339ab2554ac2090bae78ec483`. #2008 delivered the independent
+Performance Launch origin fix for #1974 after this Task's explicit `96802c0f`
+base. Its four changed files do not overlap this S6 draft. After confirming all
+four paths were pristine and the index empty, the Task worktree fast-forwarded
+to `67d66bf2`; the uncommitted S6 draft is retained. Historical draft proofs
+remain bound to their original `96802c0f` head. Recheck the mixed
+Pattern/Performance acceptance on the final S6 candidate before shipping.
+
+**2026-10-11 opening and retained-I/O follow-up.** The owner confirmed that the
+existing 5000 ms deadline bounds first recording admission only. A retry keeps
+its original start; 4999 ms may open and 5000 ms cannot first open. Only a real
+successful durable fence completion before that boundary proves that the take
+already opened. Readable bytes after an unknown write do not prove durability
+or its completion time. An exact proven opening may be replayed after the
+boundary, and subsequent Press/Release remain recordable until the user's
+actual Record-off/Stop cutoff. Preserve the original capacities, byte limits,
+Pad deadlines, storage/owner-loss rules and every close/reopen/Truth leg.
+
+The production ordinary capability port also binds every Record opening to one
+coherent observation and its actual Native receipt: a real Apply during I/O
+preflight cannot pair an old preparation with a new Pattern/generation fence.
+The focused regression forces that transition before the first submit and
+checks the refreshed receipt, durable Journal identity, ACK ordering, real
+Release, Stop and complete reopened Truth. Legacy ports retain their old path.
+
+The original owning run retained four actual failures: the newly added test's
+scheduled-publication premise, the unchanged 30-second normal and 3-second
+per-input pressure budgets, and an old fixed-callback recording fixture's
+unsettled recording result. Actual worker completion is a fixture premise to
+verify; the original log alone does not establish its cause. These failures
+remain private evidence; they are not a passing Task. Keep the fixture's 64
+callbacks and verify actual worker completion, while repairing the parser's
+observed repeated immutable-prefix work and keeping
+1024/512 capacities and the full 64-repeat pressure journey. The parser repair
+additionally declares `packages/project-io/src/sequence_journal.cpp`,
+`tests/core/project_io/sequence_journal_test.cpp`, and the current portal route
+`/core/modules/project-io/`. It reuses only a bounded private fully validated
+prefix after comparing its exact bytes with a fresh read; changed/truncated
+bytes, new records, current Project identity, leases and real durable sync keep
+their original validation. Its tests must warm the parser and then change the
+prefix with a valid checksum, add a conflicting/torn suffix, truncate the file,
+and change Project metadata. It cannot cache a successful write or ACK.
+
+Remote main was refreshed to `9ffd1f71121a04dbfdb393822a8af72a3ae11ae9`.
+#2010 retains the original Perform replay/Launch journeys with their independent
+MASTER and transient sampling repairs; do not repeat or drop them. #2021 at
+`9555be7b85db214acb73ed4afac564064d7f8e9e` delivers the separate Performance
+live-control profile/ledger in the shared Project I/O source. It does not
+deliver the S6 Pattern scheduled-start, admission or cue work. Preserve that
+new shared source and its tests during integration, then rebuild and validate
+the final candidate. Historical draft results remain bound to their recorded
+67d66bf2 source hashes, not this refreshed main.
+
+The owned draft was then archived by complete file bytes and SHA256 before a
+fast-forward to actual main `6fa983261e2740f5773598cda1491dfb1eb21468`.
+#2026 changes historical CI evidence names only and adds no S6 product work.
+The retained source was applied without dropping its private stash. The three
+overlapping paths (`sequence_journal.cpp`, its module page and
+`creator-web.sh`) equal independently reconstructed three-way merges; all
+other 78 owned file bytes remained unchanged. This is source preservation,
+not a verification result. Rebuild the owning Pattern and Performance Journal
+tests against this actual integration base.
+
+The frozen first completion-publication draft has two unresolved source-level
+findings: a worker can capture an in-time durable completion and be preempted
+before publishing it while Control accepts an automatic real Stop; a delivered
+successful completion can also consume its work cell before clearing a prior
+timer-only failure. The existing delayed-delivery witness pauses after
+publication and cannot prove either earlier interleaving. This draft is not
+accepted and its original evidence remains retained.
+
+The corrective private protocol uses the owner's completion clock as the
+logical opening decision, after the actual durable API succeeds. Capture that
+clock, validate the original deadline and publish the exact opening decision
+in one short shared critical section; allocate/copy beforehand and perform no
+storage work in that section. Control only tries to acquire it, never waits
+for I/O, and cannot issue an automatic Stop while that decision is protected.
+The original held, not-yet-durable begin still expires under the unchanged
+5000 ms budget and produces its real Stop. Clear only a provisional timer
+failure while consuming an exact successful completion, before losing its
+work identity; never revoke an accepted user or automatic e2. This makes no
+claim about the physical filesystem sync instant. Deterministically pause
+inside the decision and at successful consumption, retain the original expiry
+journey, and prove the complete Press/Release/Stop/reopen path on a rebuilt
+artifact before accepting the correction. No public ABI or Contract change is
+introduced by this private repair.
+
+This corrective witness additionally declares
+`packages/application-facade/src/pattern_opening_test_seam.hpp` and the already
+owned `packages/application-facade/CMakeLists.txt`. The existing Facade test
+names and budgets stay unchanged. Build an explicit testable Facade variant
+from the same production sources for the owning count-in regression; ordinary
+Core, Creator and Host targets keep the production library with no seam.
+Use a typed atomic gate after an actual positive completion clock, inside the
+decision guard before publication. It must not supply fabricated durability or
+replace the real worker, Native receipts, correlated input or reopened Truth.
+Prefer the real steady clock for this gate; the existing direct Admission
+fake-clock cases separately prove the 4999/5000 boundary. A successful
+completion-consumption witness must retain its exact originating work identity
+and state which interleaving was actually reached. No static-library symbol
+override, new product capability, widened deadline or shortened journey is
+part of the test variant.
+
+**2026-10-11 rebuilt owner-loss and repeated-cutoff correction.** The fresh
+actual-main native owning run returned 8 PASS / 3 FAIL. CountIn component and
+stress kept their original post-open owner-loss assertion red; the temporary
+diagnostic confirmed `scheduled_record_owner_invalidated` when shutdown first
+requested a cutoff after a completed opening. A newly accepted shutdown intent
+for that opened owner retains the existing recording-owner classification;
+explicit scheduled cancellation keeps its original scheduled-owner failure,
+including when a later shutdown observes it. Mark this private cause before
+the actual request, since it can synchronously inspect Native refusal, and
+withdraw the mark unless the request is accepted. Preserve the actual refused
+e2, missing F, retained prefix and recovery. The first rebuilt correction's
+opening-only classification failed the original explicit-cancel oracle before
+reaching the new repeated-recording test; retain that negative and its strict
+assertion. Pending opening failure keeps the scheduled-owner classification.
+The original Host reload journey also remained red. Its real failing second
+Record-off, command 817, submitted a cutoff carrying the previous recording's
+epoch 2 / Pattern A / generation 1 against the actual current preparation
+epoch 4 / Pattern B / generation 5. This is stale cutoff reuse, separate from
+the already verified ordinary opening receipt repair. On accepting each new
+ordinary recording cutoff, clear the previous operation's cutoff observer and
+wait for that pending request's real receipt before authoring its fence.
+The strict rebuilt two-recording regression additionally fails on the actual
+second Pattern B Press, command 816: the previous active cutoff also filters
+new input before Record-off. Retire active `close_cutoff`/`cutoff_done` at the
+next genuine ordinary Record receipt, alongside its new start frame and epoch.
+Keep old F during closed/preparing input settlement and preserve the separate
+closed-owner request/F pair's existing physical-recovery lifecycle; clearing
+F immediately on close success would lose that late-input boundary.
+`tests/core/facade/pattern_transport_controller_test.cpp` additionally owns a
+deterministic two-recording regression that holds the real callback for the
+second cutoff, asserts no stale cutoff I/O, then releases the callback and
+finishes both original Press/Release/Record-off/reopened Truth legs. Preserve
+all original tests and budgets; these private corrections have no new ABI or
+Contract/version identity. Documentation impact remains required for the
+already declared Facade route. Temporary diagnostic sources were restored to
+their exact captured working bytes with fresh mtimes; all diagnostic failures
+remain retained and the corrected artifact must be rebuilt.
+
+
+**Current integration and remaining proof.** The owned draft was preserved
+before the next safe fast-forward to actual main
+`6423a596360f64a0def1e33c37bd1551b0de838e`. #2027's six Sound Set golden paths
+were pristine; all 81 other owned file bytes remained identical, and the Audio
+Runtime page matched the independently merged source. Preserve all earlier
+negative logs and draft identities. This base update is not a runtime result.
+
+The exceptional direct-Stop regression now establishes genuinely unsubmitted
+ordinary work using a coherent real pending Pattern publication; absence of a
+receipt alone did not establish that premise. Its actual ordinary submit must
+refuse before queue acceptance and leave no cutoff F. Already submitted work
+keeps the unchanged Native quiescent-cutoff behavior. The owner-loss history
+oracle checks all original registry fields and the actual active Sequence
+session's public availability. The original Host recording journey retains all
+16 render legs and now waits for the actual I/O owner to become idle before
+checking each leg's original far-side recording predicate; idle itself is not
+a durability receipt. A known final opening refusal clears its private pending
+flag before consuming the exact work cell; unknown and retryable effects keep
+that cell and flag. The deadline regression checks the real terminal error,
+missing pending I/O, actual start/cancel receipts, retained Journal and complete
+unchanged Truth. These corrections remain in their already declared files.
+
+The Sequence-only parser returns its replay-validated outstanding canonical
+candidate byte count to the actual writer rather than re-encoding the entire
+candidate vector before each append. A transferred prefix subtracts only its
+consumed candidates; historical exact retry is neutral and a collision still
+refuses. The unchanged private 1 MiB parse-prefix bound is separate from the
+public candidate byte limit. Added same-writer regressions cover a one-byte
+overflow after warming, exact-bound and over-bound cold reads, transfer/retry/
+collision, and fresh invalid manifest/checkpoint bytes followed by restoration
+and a new real append. Their original Journal component passed; deliberately
+omitting the returned count failed the new strict assertion on a freshly
+rebuilt artifact, and restoring/rebuilding passed again. The original eight
+Project I/O tests and 20-case count-in component also passed on this draft.
+The original 64-repeat count-in stress run still timed out at its unchanged
+300-second budget, so S6 remains incomplete. Further parsing reduction must
+retain the fresh under-lease reads, full byte comparison, current Project
+identity, actual durable sync, all original capacities/deadlines and every
+recording/reopen leg; source reviews or bounded passing components do not
+replace that full acceptance.
+
+**Private input-expiry scan and completed component proof.** The adopted
+controller keeps a private conservative earliest-start hint for unfinished,
+unexpired inputs. Each drive still reads the existing steady clock; a scan is
+needed only when that hint reaches the unchanged one-second input deadline.
+A due scan retains all 2048 cells and rebuilds the minimum remaining start;
+removal or completion can leave an earlier hint and only cause an extra scan.
+A fresh reservation incorporates its actual original start, while exact replay
+does not reset it. The added real-I/O regression holds durable append across
+mixed input ages, checks sticky expiry **after** actual durable completion and
+before either consumer retires the ticket, then exercises a timely fresh input,
+a fresh expired input, real Stop and complete reopened Truth. It adds one
+3.003-second wait journey outside the unchanged 16-case, 64-repeat loop. Fresh
+Project/Journal reads, writer leases, durable sync, real correlated Release,
+Stop/reopen and the five-second **opening-only** budget remain unchanged, as do
+the one-second input deadline, three-second waits, capacities and original
+30/300-second component/stress limits.
+
+After independent source review and adoption, the actual rebuild exited zero
+and the complete 21-case component passed in 26.49 seconds within its original
+30-second budget. That revision retained every prior 20/1028 journey and
+extended the totals to 21/1029.
+Separate rebuilt opening-cleanup and busy-guard mutation checks completed
+build/negative-test/restore-build/restore-test exits 0/8/0/0 on the prior
+Controller/test blobs (`0a717`/`500c`), failing their exact named assertions and
+restoring the complete 20-case PASS. The first helper's parser-only exit 1 is
+retained alongside Root's independent raw-artifact proof; these old receipts
+do not certify the new scanner. The new full 64-repeat run also ended in an
+actual 300.02-second timeout, with CTest and its wrapper exiting 8. Its planned
+1029-case total is not a completed-case count. Both full-run failures remain. S6 is incomplete: this component
+result and private source optimization do not establish full stress, complete
+Task or product acceptance, and no S6 Task commit, PR or merge has been made.
+
+**Current source-gate follow-up.** A subsequent safe fast-forward to actual
+main `08330f29c2889cfa54f5cee90e8d42da50593fc7` changed only the pristine
+Creator package-test file from #2028; all 82 owned draft files stayed byte
+identical. The SDK's three Node 26 test files passed 273 tests, and the explicit
+observer-server routing unit test passed. These mock/routing results do not
+prove Browser Main, production OPFS, PCM or hearing. The original source
+checks returned one pass and two failures. The taxonomy failure matched 203
+missing configured native registrations; an actual read-only CTest query
+confirmed their absent command fields. The complete dev build then succeeded
+and the unchanged taxonomy passed. Preserve the original failed receipt.
+
+The additionally declared Host source check was repaired in
+`apps/web-runtime-host/test/web_host_source_boundary_test.py`, and its original
+`host.web_source_boundary` check passed on the restored draft. Preserve the
+earlier failure. The repair preserves pending,
+exact abandoned-ID and unknown-response separation, rejection of unknown
+responses, disjoint notifications, sealed polling, and actual owner-release
+and pending-request fences before worker retirement. Its lowest-tier check is
+`host.web_source_boundary`, including strict applied-and-rejected source
+mutations for response identity and unknown-response sealing. The original
+check is an association boundary; a larger static JavaScript parser or whole
+owner-body equality does not prove global owner-release provenance. Sealed
+polling and real owner/RPC fences remain product requirements, with their
+original Native, Host and browser owner journeys retained. Generated pre-JS
+and the existing complete browser failure journey remain separate owning
+checks; each assertion names the defect its layer actually observes. Do not change product code, labels, budgets
+or test selection to satisfy this check. This private test repair adds no
+version debt or Product Build. Documentation impact remains required for the
+already declared Web Runtime route. S6 remains incomplete and uncommitted.
+
+**Advisory input lookup and real-owner regression.** The adopted lookup stores
+only a private last-slot index. Every hit revalidates bounds, occupancy and the
+complete runtime-generation/CommandId/ticket identity; misses retain the full
+original scan. The Host still serializes all calls, including const inspection,
+on its Control lane. The real-owner regression retains A/B, consumes A, reuses
+its ordinary slot for real C, and rejects old A and each single-field foreign
+ticket through inspect, bind and consume without changing the legitimate
+Native, durable or consumer state. It then delivers all three real correlated
+Releases, obtains actual Stop F and acknowledgment, and checks complete
+independently expected reopened Truth plus strict Journal not-found. It adds
+one case outside the original unchanged 16-case, 64-repeat loop.
+
+Both production and opening-testable libraries were freshly rebuilt. The
+complete 22-case component passed in 26.68 seconds, within the original
+30-second limit. The subsequent original full 64-repeat run still timed out
+at 300.02 seconds, with CTest and its wrapper exiting 8; the planned 1030 cases
+were not reported complete. A bounded two-second sample of that same owned
+binary is diagnostic only and its overhead is recorded. These source changes
+and component evidence do not establish a performance improvement or complete
+stress acceptance. All previous failures, original budgets, capacities,
+Release/Stop/reopen journeys and remaining Web/Creator/sanitizer checks stay
+required. S6 is still incomplete, uncommitted and unmerged.
+
+**Bounded timing diagnosis and Native layout scope.** A temporary opt-in main
+wrapper timed the unchanged original 16-by-64 stress body. The actual full run
+still timed out at 300.03 seconds with CTest exit 8: 46 complete rounds and the
+first five functions of round 47 returned; its metadata-pressure function
+began without returning. None of the six once-only cases was reached. The 46
+returned metadata functions took 254.549462 seconds of 294.225559 seconds of
+paired wall time. This is case-level diagnosis, not CPU or stress acceptance.
+The original working source was restored with a fresh mtime, the actual target
+was rebuilt successfully, and the resource window was released. Failures remain.
+
+The existing source-bound sample contains repeated secure path traversal
+during fresh Journal checks; it does not prove a unique cause or speedup.
+Before implementation, additionally declare
+`packages/project-io/include/lmdj/project_io/storage_platform.hpp`,
+`packages/project-io/src/native/storage_platform.cpp`,
+`packages/project-io/src/testing_hooks.hpp`, and
+`tests/core/project_io/storage_platform_contract_test.cpp`. These four clean
+files extend the owned map from 83 to 87. Changes also use the already declared
+Sequence Journal, real Facade count-in fixture, plan, S6 design and
+`/core/modules/project-io/` documentation.
+
+The optional `ProjectJournalLayoutValidator` companion preserves the existing
+storage-platform vtable. Only the Sequence branch of checked reads discovers
+it: absent capability retains the complete original helper; supported failure
+remains failure. The entry layout check at Sequence begin and all Performance
+paths keep their original helper. An existing active-Sequence error-details
+lookup still uses the Sequence checked-read path. Native repeats full secure managed-tree validation (including hardlinks
+and special files), all eight typed directories, and real regular manifest
+open/shared flock/locked identity recheck/nonnegative length. It securely
+reopens the named root before success to reject replacement. Descriptors are
+per-call, not cached authority or an atomic whole-tree view. The real Facade
+fixture explicitly delegates genuine Native capability; OPFS imports are unchanged.
+
+Lowest-tier verification is `project_io.storage_platform`, including actual
+unsafe/missing/wrong-type layout and test-only root rename/substitution, plus
+a real independent manifest descriptor proving shared-lock coexistence,
+exclusive refusal during validation and exclusive access after return. This
+witness catches a missing lock, wrong lock mode or incorrect lock lifetime.
+Sequence capability-failure and unsupported-platform fallback witnesses remain.
+The private post-layout and in-lock hooks are compiled only in the existing
+testable variant.
+Preserve all original Project I/O owners, changed-Project/complete-read faults,
+warm/cold byte limits, unknown replay sync, actual leases, the complete 22-case
+component and original 64-repeat/1030-case stress under 30/300 seconds. Keep all
+ordinary inputs, reserved Release, Stop, reopened Truth and consumer/ACK legs.
+This prospective source scope is unexecuted and does not clear FAIL.
+
+**Latest integration base refresh.** Before the next Native phase, the actual
+remote `main` was `a5bc444be23edf4d4d14378e3ff60c3c8bf037fc`, containing
+#2001's Creator history navigation repair. The S6 branch fast-forwarded to that
+commit: its four upstream paths did not overlap the 87 declared S6 files, and
+all 87 draft file bytes and the empty staging state were preserved during the
+refresh. Retain this Creator baseline in later complete acceptance. This source
+integration does not clear the original full-stress failure or establish a
+new Native, Portal or Creator pass. Earlier source-ready receipts on
+`08330f29c2889cfa54f5cee90e8d42da50593fc7` are historical; the next resource
+admission must bind a fresh source manifest on the current branch head.
+
+### S6 current-head review follow-up: running failed-ticket consumption
+
+The independent complete review of local candidate `75cf45c9` confirmed that
+the known final opening-refusal ACK calls a quiescent-only Engine query while
+the callback remains running. Ordinary Stop F and real Release completion do
+not end a live Pad's release tail. Native42 and Portal results for the frozen
+candidate remain historical passes; they do not dismiss this concurrency defect.
+Fresh main `0664296156c0736d4f61282b910b3d5bd3d8be37` delivers only the independent
+Replay neutral enqueue-order repair (#2066); its four paths do not overlap this
+repair. Keep the original clean candidate and live OPFS installer unchanged.
+
+This follow-up declares `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`,
+`packages/audio-runtime/src/realtime_engine.cpp`, its existing `testing_hooks.hpp`,
+`tests/core/audio/realtime_engine_test.cpp`,
+`tests/core/audio/pattern_count_in_stress_test.cpp`,
+`packages/web-runtime-platform/src/control_runtime.cpp`,
+`packages/web-runtime-platform/test/control_runtime_test.cpp`, this plan, the
+S6 design addendum, and `/core/modules/audio-runtime/` Portal source. Add a
+serialized-control-safe exact generation/frame-epoch/serial settled query with
+an audio-published last-use marker. It gates logical failed-ticket consumption
+only, never reclamation, stopped-device authority or physical callback retirement.
+Keep every original identity, S/F, I/O, cue/borrow and input-owner debt check.
+Lowest-tier verification is the complete Audio Engine test, concurrent count-in
+stress and original complete Host test, including callback-epilogue, long-tail,
+foreign-identity and fresh-input invalidation assertions. Retain their budgets
+and selection, and run the original full Portal check before shipping.
+Version impact: no additional change beyond S6's already declared Audio Runtime
+MAJOR. Documentation impact: required; affected page `/core/modules/audio-runtime/`.
 
 ## S7 — count-in in Creator
 
@@ -255,7 +615,7 @@ test and far-side acceptance leg before code.
 ## Known gaps outside this plan
 
 - **Bar maths.** The engine repeats one rounded Bar (`origin + n × bar_frames`). Sequence, Performance and the Creator metronome round each boundary separately. At BPMs where a Bar is not a whole number of frames, a switch boundary and a metronome downbeat can differ by a frame per Bar. [#1973](https://github.com/endaye/lmdj/issues/1973) tracks it.
-- **Performance launch clock.** A launch during a Performance recording targets the Performance clock's Bar, which is anchored at Performance begin rather than at the transport origin. [#1974](https://github.com/endaye/lmdj/issues/1974) tracks aligning it with SEQ SNAP.
+- **Performance launch clock — delivered outside this plan.** [#1974](https://github.com/endaye/lmdj/issues/1974)'s transport-origin alignment was merged through #2008 at `67d66bf20d7701d339ab2554ac2090bae78ec483`. S6 retains that independent result; it does not repeat the implementation.
 
 ## Verification
 
@@ -276,6 +636,154 @@ Portal. S4's native extension also owns Core and Web Runtime alongside Creator
 and Portal: the recorded classifier selects full mode, 13 lanes and 10
 batch-only lanes. This observation does not override the canonical selector.
 
+**Native complete-text-read performance correction (owning Native checks passed).** The unchanged
+whole22 component passed at 26.744 seconds while the previous whole64 stress
+still failed at 300.03 seconds. A subsequent same-native-process stack sample
+of the original component (26.220 seconds, sampler exit0) found substantial
+Debug byte-vector element construction/destruction. The new optional
+`ProjectStorageTextReader` keeps the old storage vtable and returns the same
+fresh complete bytes as an owning string. Native shares the original fault,
+replacement retry, safe path traversal, lock, pread and metadata revalidation
+implementation between both buffer types. Sequence checked reads and their
+current Project reads select this capability; absent platforms and Performance
+retain the old vector path. A present capability failure propagates unchanged.
+No cached descriptor, read receipt, new persisted schema, deadline or capacity
+is introduced. Owning tests add complete arbitrary-byte/empty/replacement,
+transient retry, real same-inode lock, FIFO/symlink, and each Journal/manifest/
+checkpoint failure with actual subsequent append and legacy reread.
+
+The rebuilt storage contract, Journal component, Journal stress and whole22
+Facade component passed their unchanged 30-second limits. A rebuilt mutation
+that swallowed a present text-reader error failed the new Journal refusal
+assertion; exact restoration and fresh recompilation passed the original
+Journal component. The 1024-input settle phase fell from 5.249831 to 2.372913
+seconds with the same 6168 complete reads and 503175670 returned bytes.
+The subsequent original full64 stress passed in 239.51 seconds (CTest exit0;
+wrapper wall time 240.407 seconds) under the unchanged 300-second limit.
+All 64 rounds of 16 cases and six tail cases completed in their original
+order: 1030 paired BEGIN/END markers. Source, binary and index stayed unchanged
+during the run, and the owned process group exited. Diagnostic instrumentation
+remained enabled and charged to the same budget. Preserve every earlier
+full-stress failure. This proves this Native draft's owning checks; Portal,
+broader S6 platform/sanitizer validation and full current-head review remain
+outstanding. S6 is still incomplete and uncommitted.
+
+**Current-main integration and remaining review findings.** The S6 worktree
+fast-forwarded from `a5bc444be23edf4d4d14378e3ff60c3c8bf037fc` to actual main
+`c2de40b6471a40b830980d6ce88fdb600988437c`, preserving the complete 87-file
+draft and a private preservation stash. The semantic union retains main's
+live Pad Mute/Solo and Performance control admission changes. A new actual
+Mute/Solo press-and-release journey first failed because live gating left a
+successfully consumed silent input marked invalidated; assigning its real
+`muted_no_voice` result fixed both gate scenarios. The original component
+then passed all 23 cases. The subsequent 42-test Native/Facade/Host/Project
+I/O selection ended with 41 PASS and one Host failure. Its unchanged
+300-second Facade stress passed in 240.65 seconds, with all 1031 cases
+completing in order. The remaining Host failure is the replay-to-Pattern
+helper's two-second request timeout before its second audio quantum; it is
+separate from the full-stress budget. The helper now observes the actual final
+neutral Pad-clear acceptance on the serialized control thread before the first
+quantum, covering the preceding legacy and independent Filter commands. It
+preserves the original two-second request, two quanta and all three replay
+journeys. A fresh build and one complete original Host check passed in 56.94
+seconds, with the entire 87-file candidate unchanged during that run. Another
+owner's compilation was observed on the same machine and recorded; this is
+Host-specific evidence, not whole-Task or cross-platform acceptance.
+
+Independent source review also found that readable candidate/transfer or
+closure bytes could retire unknown I/O work without confirming sync. The
+candidate reconciliation now replays the exact existing Journal record under
+its real writer lease; persistent sync failure keeps the input unconsumable.
+Only the explicit Native test variant selects the existing fault-enabled
+Project I/O library. The real write-before-sync failure regression, including
+same-ticket recovery, physical Release, Stop and complete reopened Truth,
+passes in the full 24-case component. Rebuilding the original owner against
+the same final test fails its durable-consumption assertion; restoring and
+rebuilding the repair passes in 24.54 seconds. The later cutoff regression
+first needed to distinguish the opening's remaining projection work from the
+actual Stop command. With that observation corrected, the same test fails
+against readable-only cutoff completion and passes that case after exact
+durable replay. Owner-loss completion likewise now requires actual durable
+replay; repeating an identical Journal state syncs the existing prefix instead
+of appending it again. The Journal byte-growth regression fails before that
+repair and its complete component passes afterward in 10.04 seconds. The
+complete Facade component passes all 26 cases in 24.62 seconds, including
+persistent sync failure, bounded bytes, physical hold separation and complete
+owner-loss recovery into Truth. Three further direct-worker component cases
+cover historical transfer receipts, an absent candidate with a real failed-sync
+closure, and a readable overlay generation. Each creates actual Native input
+and Journal state, fails the real sync during execute, reconciles the identical
+request on the same owner, and retains unknown until sync succeeds. They retain
+the original 26 journeys and continue through real Stop/close, complete reopened
+Truth, absent active Journal, exact-once Native consumption and balanced leases.
+The full 29-case component passes in 24.66 seconds. Three separately rebuilt
+readable-only mutations each fail in their corresponding new unknown assertion;
+restoring and recompiling the exact production source passes all 29 in 24.69
+seconds. The complete test file is identical across these four contrast runs,
+and all 87 changed/new source files, HEAD and index are frozen within each run.
+The historical-transfer case proves worker idempotent replay, not Controller
+resubmission through an occupied work cell. These targeted results do not
+replace the combined owning, stress, Web or sanitizer acceptance on the final
+candidate.
+
+The SDK separately froze transient worker errors as physical input identity.
+It now freezes only a completed result's final error, including final success,
+while retaining immutable admission and Native completion checks. Both
+in-deadline recovery and recovery after the original observer timeout consume
+the exact original ticket once and preserve its real Release. The complete
+related Node suites passed 279 tests with no failures or skips. A further SDK
+repair permits only the original provisional opening expiry to become a known
+deadline refusal, retaining immutable start/Stop receipts and final error.
+Its complete related Node suites pass 303 tests; independent delta review has
+no findings. The Host now preserves only the specific opening-deadline error
+reason and true unresolved/retryable flags while keeping the generic sanitizer
+unchanged. A known final refusal can be consumed once only after its original
+S and real Stop F agree and all real I/O, physical holds, Native completions and
+Host input consumers settle. The new real-storage journey first exposed the
+missing wire reason. Subsequent test corrections distinguish callback-dependent
+runtime frames and error-state history availability from immutable evidence;
+actual history payloads confirm unchanged contents and the required busy state.
+All intermediate failures remain recorded. The freshly rebuilt original full
+Host test passes in 62.66 seconds, including held-owner and release-consumer
+refusals, all five foreign identities, one successful acknowledgment, rejection
+of a second acknowledgment, unchanged full Truth/history/Journal inventory,
+and actual owner-loss recovery followed by a stable second reopen. The late
+first-opening OPFS journey remains unverified: an opening first completed after
+five seconds must remain refused, never be relabeled `openingComplete`.
+The independent 87-file source review is
+complete, but its findings, later deltas, rebuilt platform acceptance and final
+committed-head shipping obligations remain open. A fresh read-only main check
+at `f3707192e63acb3277cf83bbdde018074847a7cc` found only two intervening commits,
+with no S6 implementation overlap; this Task remains based on `c2de40b6`.
+
+**Precommit integration checkpoint.** The subsequent original 42-registration
+Native selection passed all 42 with no failures. Its Facade stress completed
+all 1037 cases in 232.81 seconds under the unchanged 300-second budget. A
+separate freshly rebuilt mutation disabling only known-refusal consumption
+failed at the exact caller acknowledgment; restoring the production source
+and rebuilding passed the unchanged complete Host test in 60.75 seconds.
+The original full Portal check passed in 41.86 seconds: 176 tests, all current
+pages/diagrams, snapshot validation, typecheck/build and 50 routes/links.
+These are the retained `c2de40b6`-based draft results, not proof of a later head.
+
+A fresh main read then found #2068's direct Replay profile preflight and
+#2070's Replay-to-Pattern fixture repair. Both are already delivered and must
+not be reimplemented. The worktree fast-forwarded to
+`db6776df18445a6c6d64315e840e88face3c062b`, preserving the complete S6 draft.
+The combined Portal paragraph retains both the worker-owned overlay and the
+new preflight facts. The test uses main's explicit audio-progress helper,
+including all FX/Filter/Pad-gate far-side assertions, with S6's retained-RPC
+adapter for asynchronous I/O. The duplicate receipt-clock helper is removed;
+all original caller journeys and the two-second request budget remain.
+Owning Native and Portal verification must be rerun on this semantic union.
+
+Submission additionally declares `scripts/ci/scope_policy.json` for the six
+new proof/decoder paths lacking ownership and `CMakePresets.json` for coverage's
+existing busy-spinning stress exclusion rule. The staged ownership suite and
+explicit coverage selector inspection are their lowest-tier checks; full
+Native stress remains required. No new gate, version identity, Product Build,
+release operation or acceptance waiver is introduced.
+
 ## Version Management
 
 Version impact: none in planning/design preparation Pull Requests (documentation only). The implementation Tasks owe the following debt at the next coordinated version settlement:
@@ -289,6 +797,10 @@ Version impact: none in planning/design preparation Pull Requests (documentation
   concrete Engine ABI; `application-facade` and `web-runtime-platform` MINOR
   while companion APIs/Pimpl additions preserve old public layouts/vtables,
   exact legacy wire schemas and unnegotiated event streams.
+  `project-io` additionally owes MINOR debt for the compatible optional Journal
+  layout and complete-text-read companions, including the private parser/admission repair. The existing
+  storage-platform vtable and persisted schemas remain unchanged; reassess debt
+  if implementation breaks that boundary. No version is allocated here.
 
 S2's stopped-selection integration repair also owes `web-runtime-platform`
 PATCH debt. It uses an existing engine capability and changes no API, ABI,

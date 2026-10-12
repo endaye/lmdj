@@ -11,6 +11,9 @@ import {
   MAX_ENVELOPE_BYTES,
   MAX_SAMPLE_IMPORT_BYTES,
   PROTOCOL_VERSION,
+  PATTERN_COUNT_IN_SERIAL_MAXIMUM,
+  UNSIGNED_64_MAXIMUM,
+  isCanonicalNonzeroDecimal,
   HostProtocolError,
   createProtocolTransport,
   createRequestEnvelope,
@@ -94,6 +97,59 @@ async function sha256Hex(bytes) {
 function expectCode(code) {
   return (error) => error instanceof HostProtocolError && error.code === code;
 }
+
+test("count-in decimal identities preserve exact 64-bit values and refuse trailing line endings", () => {
+  assert.equal(isCanonicalNonzeroDecimal(UNSIGNED_64_MAXIMUM), true);
+  assert.equal(isCanonicalNonzeroDecimal(PATTERN_COUNT_IN_SERIAL_MAXIMUM,
+    PATTERN_COUNT_IN_SERIAL_MAXIMUM), true);
+  for (const value of ["0", "01", "-1", "+1", "1.0", "1e2", "1\n", "1\r\n",
+    "18446744073709551616", " 1", "1 ", 1, 1n, null, {}]) {
+    assert.equal(isCanonicalNonzeroDecimal(value), false, String(value));
+  }
+  assert.equal(isCanonicalNonzeroDecimal("1152921504606846976",
+    PATTERN_COUNT_IN_SERIAL_MAXIMUM), false);
+});
+
+test("count-in companion codecs round-trip exact identities within the original short deadline", () => {
+  const identity = {session_id: requestIdFor(230), command_id: requestIdFor(231),
+    runtime_generation: UNSIGNED_64_MAXIMUM, frame_epoch: UNSIGNED_64_MAXIMUM,
+    schedule_serial: PATTERN_COUNT_IN_SERIAL_MAXIMUM};
+  const calls = [
+    ["capabilities", {negotiate: true}],
+    ["request", {...identity, project_id: requestIdFor(232),
+      expected_epoch: UNSIGNED_64_MAXIMUM, bars: 2, expected_revision: null}],
+    ["inspect", {...identity, consume: false}],
+    ["cancel", {...identity, project_id: requestIdFor(232),
+      start_command_id: requestIdFor(233), expected_epoch: UNSIGNED_64_MAXIMUM, intent: "play_stop"}],
+  ];
+  for (const [suffix, payload] of calls) {
+    const operation = `pattern.transport.count-in.${suffix}`;
+    const envelope = createRequestEnvelope({operation, payload, crypto: webcrypto});
+    assert.deepEqual(decodeRequestEnvelope(encode(envelope)), envelope);
+    assert.equal(deadlineForOperation(operation), 1_000);
+    assert.equal(envelope.protocol_version, 1);
+  }
+});
+
+test("count-in requests refuse lossy identities, invalid Bars and added legacy fields", () => {
+  const payload = {session_id: requestIdFor(230), project_id: requestIdFor(232),
+    command_id: requestIdFor(231), runtime_generation: "1", frame_epoch: "1",
+    schedule_serial: "1", expected_epoch: "1", bars: 1, expected_revision: 0};
+  const invalid = [
+    ...[0, 3, "1", null].map((bars) => ({...payload, bars})),
+    {...payload, intent: "record"},
+    {...payload, session_id: `${payload.session_id}\n`},
+    {...payload, expected_revision: Number.MAX_SAFE_INTEGER + 1},
+  ];
+  for (const field of ["runtime_generation", "frame_epoch", "schedule_serial", "expected_epoch"]) {
+    for (const value of ["0", "01", "1\n", "1\r\n", 1, "18446744073709551616"])
+      invalid.push({...payload, [field]: value});
+  }
+  invalid.push({...payload, schedule_serial: "1152921504606846976"});
+  for (const value of invalid) assert.throws(() => createRequestEnvelope({
+    operation: "pattern.transport.count-in.request", payload: value, crypto: webcrypto,
+  }), expectCode("HOST_PROTOCOL_MISMATCH"));
+});
 
 test("Pattern transport switch accepts optional SEQ SNAP and the legacy payload", () => {
   const legacy = {pattern_id: requestIdFor(220), request_id: requestIdFor(221)};
@@ -204,6 +260,12 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "pattern.transport.request",
     "pattern.transport.switch",
     "pattern.transport.inspect",
+    "pattern.transport.count-in.capabilities",
+    "pattern.transport.count-in.request",
+    "pattern.transport.count-in.inspect",
+    "pattern.transport.count-in.cancel",
+    "pattern.transport.input.request",
+    "pattern.transport.input.inspect",
     "sequence.record.begin",
     "sequence.capture.disarm",
     "sequence.record.event",
@@ -689,8 +751,37 @@ test("creates lowercase request IDs only through injected crypto", () => {
   );
 });
 
+test("strict companion input preserves whole uint64 identities and physical release correlation", () => {
+  const payload = {command_id: REQUEST_ID, runtime_generation: "18446744073709551615",
+    frame_epoch: "9007199254740993", input_serial: "18446744073709551615", slot: 63,
+    velocity: 127, kind: "press", held: true, held_press_sequence: null};
+  const decode = (p) => decodeRequestEnvelope(encode(request({operation: "pattern.transport.input.request", payload: p})));
+  assert.deepEqual(decode(payload).payload, payload);
+  assert.deepEqual(decode({...payload, kind: "release", velocity: 0,
+    held_press_sequence: "9007199254740993"}).payload.held_press_sequence, "9007199254740993");
+  for (const bad of ["0", "01", "1\n", "1\r\n", "18446744073709551616", 1, -1])
+    for (const field of ["runtime_generation", "frame_epoch", "input_serial"])
+      assert.throws(() => decode({...payload, [field]: bad}), expectCode("HOST_PROTOCOL_MISMATCH"));
+  for (const p of [{...payload, velocity: 0}, {...payload, held_press_sequence: "1"},
+    {...payload, kind: "release", velocity: 0}, {...payload, kind: "release", velocity: 0,
+      held: false, held_press_sequence: "1"}, {...payload, extra: null}])
+    assert.throws(() => decode(p), expectCode("HOST_PROTOCOL_MISMATCH"));
+  const inspection = {command_id: REQUEST_ID, runtime_generation: "18446744073709551615",
+    frame_epoch: "9007199254740993", ticket: "18446744073709551615", consume: false};
+  assert.deepEqual(decodeRequestEnvelope(encode(request({operation: "pattern.transport.input.inspect",
+    payload: inspection}))).payload, inspection);
+  assert.throws(() => decodeRequestEnvelope(encode(request({operation: "pattern.transport.input.inspect",
+    payload: {...inspection, ticket: "1\n"}}))), expectCode("HOST_PROTOCOL_MISMATCH"));
+});
+
 test("uses exact operation-class deadlines", () => {
   for (const operation of [
+    "pattern.transport.count-in.capabilities",
+    "pattern.transport.count-in.request",
+    "pattern.transport.count-in.inspect",
+    "pattern.transport.count-in.cancel",
+    "pattern.transport.input.request",
+    "pattern.transport.input.inspect",
     "host.status",
     "audio.activate",
     "audio.suspend",
@@ -714,6 +805,12 @@ test("uses exact operation-class deadlines", () => {
     (operation) =>
       operation !== "host.close" &&
       ![
+        "pattern.transport.count-in.capabilities",
+        "pattern.transport.count-in.request",
+        "pattern.transport.count-in.inspect",
+        "pattern.transport.count-in.cancel",
+    "pattern.transport.input.request",
+    "pattern.transport.input.inspect",
         "host.status",
         "audio.activate",
         "audio.suspend",

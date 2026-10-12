@@ -19,6 +19,15 @@ struct RealtimeEngineAudioAccess {
         engine.voice_state_stream_state_.load(std::memory_order_acquire),
     };
   }
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+  // Unlike Status's audio-owned Bank field, this guarded observation reads
+  // only an atomic publication. Serialized harness control may inspect it
+  // while the actual cue consumer is held, without taking or acknowledging it.
+  static std::uint64_t pending_cue_batch_for_conformance(
+      const RealtimeEngine& engine) noexcept {
+    return engine.cue_batch_pending_.load(std::memory_order_acquire);
+  }
+#endif
 };
 
 }  // namespace lmdj::audio::detail
