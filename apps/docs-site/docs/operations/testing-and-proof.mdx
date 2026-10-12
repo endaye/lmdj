@@ -397,6 +397,14 @@ queued，由普通路径从冻结载荷逐字节重新推导同一 claim 和 POS
 receipt 与线上唯一受信桶、冻结正文、可信 bot 作者、managed 标记完全一致时，经现有 reducer
 校验写入普通 `delivered` 事件。已 ack 的写入只能用 receipt 结算；queued、delivered、refused
 状态的投递不在此操作范围。该操作自身绝不发起业务 POST，也不读取或改动 scheduler journal。
+重规划与已入账投递意图的兼容比较只覆盖报告身份与受保护投递元数据：`key`/`observation`、
+套件/失败类别与 policy/evidence 身份（由 observation digest 前像及 managed 记录的
+`management` 字段双重绑定）、`causal_order`，以及 `assignee`/`labels`/`severity`/`title`。
+展示模板（`summary`/`detail`/`issue_body`/`comment_body`）允许随代码演进：仅新增展示行
+不阻塞后续新观察入队，已入账记录仍按其冻结字节投递——queued 重放使用入账的
+`FrozenReport` 载荷，delivered 不重发。受保护字段的真实变化在首个新业务写之前以封闭
+`report-conflict` 诊断 fail-closed；账本 reducer 的重复事件检查、冻结 POST 内容和精确
+回执的字节级一致性校验不因此放宽，历史字节、digest/key 与 claim 永不被重写。
 每次自动收集至多一条新 batch 观察，但完整历史鉴权的 API 工作并非一条请求。
 新增巡检每小时四次机会，其完成仍经过现有 relay，须统计完整链路的 API 和 runner 成本。
 relay 可以独立恢复真实的新 main 工作；不能把“报告巡检本身不运行测试”解释成整个间接链

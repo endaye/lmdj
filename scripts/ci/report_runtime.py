@@ -28,6 +28,43 @@ def require(ok, why):
         raise ValueError("why: " + why + "; remedy: reconcile exact authenticated report inputs; do not replay a business POST or alter scheduler progress")
 
 
+class ReportConflictError(Exception):
+    """A replanned report conflicts with a journaled delivery's protected identity."""
+
+
+# Protected identity and delivery metadata compared when a replanned report
+# meets an already journaled delivery. summary/detail/issue_body/comment_body
+# are the presentation template and legitimately evolve (#2034); the observation
+# digest's preimage already binds epoch, request/control/policy identity, suite,
+# failure class and evidence digest, so equal observations pin the evidence
+# facts the prose renders. report_outbox keeps the byte-exact check for the
+# reducer, the frozen POST and the exact receipt; this planning-side comparison
+# never rewrites stored bytes.
+_PROTECTED_FROZEN_FIELDS = ("key", "observation", "title", "severity", "labels", "management", "causal_order")
+
+
+def _require_replan_compatible(stored, payload):
+    """Fail closed when replanning changes a journaled delivery's identity."""
+    def protected(value):
+        require(isinstance(value, dict) and isinstance(value.get("fields"), dict),
+                "journaled report payload is not a closed frozen object")
+        fields = dict(value["fields"])
+        # Same historical-default normalization as report_outbox's byte check.
+        for name, default in report_outbox._FROZEN_FIELD_DEFAULTS.items():
+            fields.setdefault(name, default)
+        return {name: fields.get(name) for name in _PROTECTED_FROZEN_FIELDS}, value.get("assignee")
+    left, left_assignee = protected(stored)
+    right, right_assignee = protected(payload)
+    changed = [name for name in _PROTECTED_FROZEN_FIELDS if left[name] != right[name]]
+    if left_assignee != right_assignee:
+        changed = [*changed, "assignee"]
+    if changed:
+        raise ReportConflictError(
+            "why: replanned report changes protected " + "/".join(changed)
+            + " under an existing observation; remedy: reconcile exact authenticated report inputs;"
+            " do not replay a business POST or alter scheduler progress")
+
+
 class ReadOnlyAnchor:
     def __init__(self, anchor):
         self.anchor = anchor
@@ -361,15 +398,15 @@ class ReportRuntime:
                 require(len(matches) <= 1, "historical v1 observation has duplicate frozen deliveries")
                 legacy = matches[0] if matches else None
             effective_planned.append(report_outbox.FrozenReport(legacy["payload"]) if legacy else report)
-        # Validate every body before the first business write. Existing entries
-        # never consume the new-observation budget, including ambiguous claims.
+        # Validate protected identity before the first business write; the
+        # presentation template may drift. Existing entries never consume the
+        # new-observation budget, including ambiguous claims.
         missing = []
         for report in effective_planned:
             key = batch.digest({"key": report.key, "observation": report.observation})
             payload = report_outbox.freeze(report, reporting.DEFAULT_ASSIGNEE)
             if key in state["deliveries"]:
-                require(report_outbox.frozen_payload_equal(state["deliveries"][key]["payload"], payload),
-                        "report body changed under an existing observation")
+                _require_replan_compatible(state["deliveries"][key]["payload"], payload)
             else:
                 missing.append(report)
         outcomes = [outbox.deliver(self.api, report) for report in missing[:limit]]
