@@ -110,6 +110,9 @@ class ProbeTests(unittest.TestCase):
         anchor = json.loads(self.f.scheduler_http.issue["body"])["payload"]
         self.assertEqual(anchor["pending"]["event"], prepared["expected"]["event"])
         self.assertIsNone(anchor["head"])
+        # The fence and Journal could share a wrong predicted prefix. Pin the
+        # independently known empty prefix before this first append commits.
+        self.assertEqual(anchor["verified"], {"head": None, "count": 0})
         fresh = self.fresh()
         answer = fresh.scheduler.reconcile(execute=False)
         self.assertNotEqual(answer["action"], "execute")
@@ -117,7 +120,8 @@ class ProbeTests(unittest.TestCase):
         self.assertIsNone(answer["state"]["active"])
         self.assertEqual([e["type"] for e in fresh.scheduler.journal().load()], ["observe"])
         self.assertEqual(json.loads(self.f.scheduler_http.issue["body"])["payload"],
-                         {"head": anchor["pending"]["digest"], "pending": None})
+                         {"head": anchor["pending"]["digest"], "pending": None,
+                          "verified": {"head": anchor["pending"]["digest"], "count": 1}})
         snapshot = deepcopy(self.writes())
         self.f.make().scheduler.reconcile(execute=False)
         self.assertEqual(self.writes(), snapshot)
@@ -128,6 +132,13 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaises(self.module.ControlledFailure):
             self.probe.execute(prepared)
         self.assertEqual(len(self.f.api.issues), 1)
+        anchor = json.loads(self.f.outbox_http.issue["body"])["payload"]
+        self.assertEqual(anchor, {"head": anchor["head"], "pending": None,
+            "verified": {"head": anchor["head"], "count": 2}})
+        # Independent protocol facts: one empty-prefix upgrade, then queue and
+        # claim each use intent/POST/commit, then exactly one business POST.
+        self.assertEqual([call[0] for call in self.writes()],
+                         ["PATCH", "PATCH", "POST", "PATCH", "PATCH", "POST", "PATCH", "POST"])
         issue = self.f.api.issues[0]
         self.assertEqual(issue["body"], prepared["expected"]["frozen"]["issue_body"])
         self.assertIn("not another product defect", issue["body"])
@@ -268,6 +279,9 @@ class ProbeTests(unittest.TestCase):
             self.probe.execute(self.probe.prepare(self.request(self.module.B)))
         self.assertEqual(self.f.api.issues, [])
         self.assertEqual([e["type"] for e in self.f.make().storage.journal().load()], ["queue", "claim", "refused"])
+        anchor = json.loads(self.f.outbox_http.issue["body"])["payload"]
+        self.assertEqual(anchor, {"head": anchor["head"], "pending": None,
+            "verified": {"head": anchor["head"], "count": 3}})
         self.assertEqual(self.fresh().execute("drain")["status"], "needs-reconciliation")
 
     def test_original_503_and_timeout_leave_claim_without_fake_success(self):
