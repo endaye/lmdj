@@ -68,12 +68,25 @@ const CUT_FILES = [
   'products/lmdj/assembly.lock.json',
   'products/lmdj/generated/web-runtime-identity.json',
   'products/lmdj/generated/web-runtime-identity.mjs',
+  'products/lmdj/src/cardputer_assembly.cpp',
   'products/lmdj/src/compiled_assembly.cpp',
   'products/lmdj/version.json',
+  'apps/cardputer-host/CMakeLists.txt',
 ];
 
 test('a candidate cut carrying its own Build snapshot satisfies required without a current page edit', () => {
   assert.deepEqual(checkDocumentationImpact({body: CUT_BODY, changedFiles: CUT_FILES, productBuild: '1.0.64.0'}), []);
+});
+
+test('a cut syncing the hand-copied cardputer identity literals stays a candidate cut', () => {
+  // version_test.py requires the cardputer literals to mirror the manifests on
+  // every Build bump; a cut carrying only that sync must not be forced into a
+  // spurious current-page edit.
+  assert.deepEqual(checkDocumentationImpact({
+    body: CUT_BODY,
+    changedFiles: [...CUT_FILES.slice(0, -1), 'apps/cardputer-host/CMakeLists.txt', 'products/lmdj/src/cardputer_assembly.cpp'],
+    productBuild: '1.0.64.0',
+  }), []);
 });
 
 test('a cut that also changes other source still needs a current page edit', () => {

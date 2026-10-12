@@ -10,8 +10,10 @@ const execFileAsync = promisify(execFile);
 
 // The files a candidate cut writes: regenerated Product identity plus the
 // immutable snapshot. Current pages derive every identity from the manifests,
-// so a cut that touches nothing else has no current page to edit.
-const CUT_IDENTITY_FILE = /^products\/lmdj\/(?:version\.json|assembly(?:\.lock)?\.json|src\/compiled_assembly\.cpp|generated\/web-runtime-identity\.(?:json|mjs))$/;
+// so a cut that touches nothing else has no current page to edit. The
+// hand-copied cardputer identity literals are part of that cascade:
+// tests/build/version_test.py fails any Build bump that leaves them behind.
+const CUT_IDENTITY_FILE = /^(?:products\/lmdj\/(?:version\.json|assembly(?:\.lock)?\.json|src\/(?:compiled|cardputer)_assembly\.cpp|generated\/web-runtime-identity\.(?:json|mjs))|apps\/cardputer-host\/CMakeLists\.txt)$/;
 const PRODUCT_BUILD = /^(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){3}$/;
 
 function isCandidateCut(changedFiles, productBuild) {
