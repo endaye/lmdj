@@ -9402,6 +9402,8 @@ struct Application::Impl {
       if (ledger.completed_command_id.has_value() &&
           *ledger.completed_command_id == command_id &&
           ledger.completed_fingerprint == fingerprint) {
+        const auto snapshot =
+            performance_live_control->live_control_snapshot();
         return success_envelope(
             {{"command_id", command_id},
              {"control_epoch", epoch.value()},
@@ -9412,6 +9414,8 @@ struct Application::Impl {
                   ? nlohmann::json(*ledger.completed_generation)
                   : nlohmann::json(nullptr)},
              {"accepted", true},
+             {"applied",
+              snapshot.applied_control_sequence >= ledger.completed_sequence},
              {"replayed", true}},
             std::nullopt);
       }
