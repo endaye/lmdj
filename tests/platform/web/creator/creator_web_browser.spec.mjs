@@ -121,7 +121,7 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
   for (const bank of ["A", "B", "C", "D"]) {
     await page.getByRole("button", {name: `Bank ${bank}`}).click();
     const pads = page.getByRole("button", {
-      name: /^Pad [A-D]\d+ — assigned — Key [QWERTYUIASDFGHJK]$/,
+      name: /^Pad [A-D]\d+ — assigned — Key [ZXCVASDFQWER1234]$/,
     });
     await expect(pads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {
@@ -150,10 +150,10 @@ test("physical key order addresses the matching Bank-A Pads and preserves the fu
   await importProject(page);
   await activate(page);
   const keys = [
-    ["KeyQ", "Q"], ["KeyW", "W"], ["KeyE", "E"], ["KeyR", "R"],
-    ["KeyT", "T"], ["KeyY", "Y"], ["KeyU", "U"], ["KeyI", "I"],
+    ["KeyZ", "Z"], ["KeyX", "X"], ["KeyC", "C"], ["KeyV", "V"],
     ["KeyA", "A"], ["KeyS", "S"], ["KeyD", "D"], ["KeyF", "F"],
-    ["KeyG", "G"], ["KeyH", "H"], ["KeyJ", "J"], ["KeyK", "K"],
+    ["KeyQ", "Q"], ["KeyW", "W"], ["KeyE", "E"], ["KeyR", "R"],
+    ["Digit1", "1"], ["Digit2", "2"], ["Digit3", "3"], ["Digit4", "4"],
   ];
   for (const [index, [code, key]] of keys.entries()) {
     const pad = page.getByRole("button", {
@@ -182,7 +182,7 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   await page.goto("/index.html");
   await importProject(page);
   await activate(page);
-  await page.keyboard.press("KeyQ");
+  await page.keyboard.press("KeyZ");
   await expect.poll(async () => {
     const value = await downloadReport(page);
     return [value.trigger_admitted_count, value.trigger_outcome_count];
@@ -230,7 +230,7 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
 
 test("boot creates a stored Project, New Project adds one, and a reload reopens the last", async ({page}) => {
   test.setTimeout(180_000);
-  const emptyPads = page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/});
+  const emptyPads = page.getByRole("button", {name: /^Pad A\d+ — empty — Key [ZXCVASDFQWER1234]$/});
   const sampleKey = page.getByRole("button", {name: "Sample", exact: true});
 
   // The generic proof server has no default-kit Catalog. Boot still owns its
@@ -240,7 +240,7 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   await waitForBootProject(page);
   await expect(sampleKey).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("pad-matrix").getByRole("button", {
-    name: /^Pad A\d+ — .* — Key [QWERTYUIASDFGHJK]$/,
+    name: /^Pad A\d+ — .* — Key [ZXCVASDFQWER1234]$/,
   })).toHaveCount(16);
   const firstTruth = (await inspectProject(page)).project;
   expect(firstTruth.banks[0].pads).toHaveLength(16);

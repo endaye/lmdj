@@ -30,7 +30,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。在全局 Pattern transport 已 engaged 且录音中的 session，同一 trigger 路径在 enqueue 接受后把 press/release 注入 transport coordinator 的 admission 候选：watermark 单调分配、release 携带其归属 press 的 correlation；这一注入不改变返回给输入侧的 successful/failed/unknown 结果，unknown 输入绝不自动重 trigger。
 
-Creator 当前默认键盘 mapping 使用 `KeyboardEvent.code`：`Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，`A S D F G H J K` 对应 Pad 9–16。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。[四排空间映射](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)已批准但尚未接线：1234／QWER／ASDF／ZXCV 分别对应 13–16／09–12／05–08／01–04；当前仍是 Q=01，不能按未来键表操作。
+Creator 当前默认键盘 mapping 使用 `KeyboardEvent.code`，按[已批准的四排空间映射](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)接线：`1 2 3 4` 对应当前 Bank 的 Pad 13–16，`Q W E R` 对应 Pad 9–12，`A S D F` 对应 Pad 5–8，`Z X C V` 对应 Pad 1–4。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
 
 Creator 左栏按 2026-10-09 决策绑定旋钮，上屏持续显示当前功能和值。
 

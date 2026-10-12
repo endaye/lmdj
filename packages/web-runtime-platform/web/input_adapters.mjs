@@ -10,22 +10,22 @@ function createGestureKey() {
 }
 
 export const DEFAULT_KEYBOARD_MAPPING = Object.freeze({
-  KeyQ: 0,
-  KeyW: 1,
-  KeyE: 2,
-  KeyR: 3,
-  KeyT: 4,
-  KeyY: 5,
-  KeyU: 6,
-  KeyI: 7,
-  KeyA: 8,
-  KeyS: 9,
-  KeyD: 10,
-  KeyF: 11,
-  KeyG: 12,
-  KeyH: 13,
-  KeyJ: 14,
-  KeyK: 15,
+  Digit1: 12,
+  Digit2: 13,
+  Digit3: 14,
+  Digit4: 15,
+  KeyQ: 8,
+  KeyW: 9,
+  KeyE: 10,
+  KeyR: 11,
+  KeyA: 4,
+  KeyS: 5,
+  KeyD: 6,
+  KeyF: 7,
+  KeyZ: 0,
+  KeyX: 1,
+  KeyC: 2,
+  KeyV: 3,
 });
 
 

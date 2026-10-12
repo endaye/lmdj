@@ -79,7 +79,7 @@ Project、Sample、Perform、Sound Sets 和 System 的普通按钮在 44 设计�
 Creator 的 4×4 Pad 矩阵采用 MPC 式排列：左下角 01、右下角 04、
 左上角 13、右上角 16；每行从左到右，再向上一行。Bank A–D 与
 Sound Set 安装预览使用相同的显示顺序。Pad 地址、素材绑定、Pattern
-引用及 MIDI 映射仍由稳定槽位决定；电脑快捷键跟随槽位（Q 对应当前
+引用及 MIDI 映射仍由稳定槽位决定；电脑快捷键跟随槽位（Z 对应当前
 Bank 的 01），Tab 按屏幕从上到下、从左到右访问可用 Pad。
 Sequence 的 ↑/↓ 仍按 A01–D16 选择当前 Pad。自动化验证显示位置和
 输入目标；真实触控、物理 MIDI 与听音验收仍须单独记录。
@@ -148,7 +148,7 @@ Gate／Loop Gate、取消、后台与 Session 替换会阻止迟到的发声。�
 
 ## 演奏边界
 
-Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按四排空间布局映射：`1 2 3 4` 对应当前 Bank 的 Pad 13–16，`Q W E R` 对应 Pad 9–12，`A S D F` 对应 Pad 5–8，`Z X C V` 对应 Pad 1–4；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。播放头只消费已快照的 Voice render bounds 与 session-local 观察时间，不写 Project Truth、Runtime Snapshot 或音频线程；并发/retrigger 时最新开始的选中-Pad Voice 获得显示所有权。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
 
 Sample 触摸工作区按当前选中 Pad 分为四个子页：**Trim** 显示波形与裁切，
 **Playback** 放置播放模式、音量、音高、声像与包络，**Tone / EQ** 放置音色与

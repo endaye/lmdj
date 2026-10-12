@@ -319,8 +319,8 @@ test("global Pattern transport plays, overdubs, survives navigation, stops, and 
   // playing → Record: overdub admission of live Pad input.
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
-  await page.keyboard.press("KeyW");
+  await page.keyboard.press("KeyZ");
+  await page.keyboard.press("KeyX");
   await awaitRenderedPresses(page, 2);
   // Nothing is committed while recording is open.
   expect((await inspectTruth(page)).patterns[patternId].events).toHaveLength(0);
@@ -404,8 +404,8 @@ test("records notes and sees them on both grids after reopen", async ({page, bro
 
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
-  await page.keyboard.press("KeyW");
+  await page.keyboard.press("KeyZ");
+  await page.keyboard.press("KeyX");
   await awaitRenderedPresses(page, 2);
   await recordKey(page).click();
   await transportStatus(page, "playing");
@@ -503,7 +503,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
   await expect(page.getByTestId("audio-state"))
     .toHaveText("Audio running", {timeout: 30_000});
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyQ");
+  await page.keyboard.press("KeyZ");
   await awaitRenderedPresses(page, 1);
 
   // The Record-off ticket response is lost after the native side accepted
@@ -616,7 +616,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
     console.log("DEBUG alerts:", await page.locator("[role=alert]").allTextContents());
     throw error;
   }
-  await page.keyboard.press("KeyW");
+  await page.keyboard.press("KeyX");
   await awaitRenderedPresses(page, 2);
   await recordKey(page).click();
   await transportStatus(page, "playing");
@@ -700,11 +700,11 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   // Keep the press open through owner loss. A completed press/release has
   // its real duration; only the interrupted held note guarantees the attack
   // tail asserted after Keep recording below.
-  await page.keyboard.down("KeyQ");
+  await page.keyboard.down("KeyZ");
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
-  await page.keyboard.up("KeyQ");
+  await page.keyboard.up("KeyZ");
   const prompt = page.getByRole("region", {name: "Interrupted recording"});
   await expect(prompt).toContainText("A recording stopped before it was saved (1 in Sequence)",
     {timeout: 60_000});
@@ -750,13 +750,13 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   // Leave the press open: owner-loss recovery finalizes an interrupted held
   // one-shot with its attack tail. A completed press/release records its real
   // duration and cannot establish this precondition.
-  await page.keyboard.down("KeyQ");
+  await page.keyboard.down("KeyZ");
   // The admission must be durable before the reload, or the recovery
   // assertion would be testing an empty journal instead of owner loss.
   await awaitAdmittedPresses(page, 1);
 
   await reopenProject(page);
-  await page.keyboard.up("KeyQ");
+  await page.keyboard.up("KeyZ");
   const lostTruth = await inspectTruth(page);
   // Nothing was committed: the unresolved admission never reaches truth.
   expect(lostTruth.revision).toBe(imported.revision);
@@ -788,7 +788,7 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
     .toHaveText("Audio running", {timeout: 30_000});
   await recordKey(page).click();
   await transportStatus(page, "recording");
-  await page.keyboard.press("KeyW");
+  await page.keyboard.press("KeyX");
   await awaitRenderedPresses(page, 1);
   await recordKey(page).click();
   await transportStatus(page, "playing");

@@ -88,7 +88,7 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   await expect(bankB).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(bankB).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("button", {name: /^Pad B\d+ — assigned — Key [QWERTYUIASDFGHJK]$/}))
+  await expect(page.getByRole("button", {name: /^Pad B\d+ — assigned — Key [ZXCVASDFQWER1234]$/}))
     .toHaveCount(16);
 });
 
@@ -156,7 +156,7 @@ for (const viewport of [
     await waitForBootProject(page);
     // This proof has no Catalog upstream: first-project slots fail explicitly
     // and cannot masquerade as empty or playable Pads.
-    await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [QWERTYUIASDFGHJK]$/}))
+    await expect(page.getByRole("button", {name: /^Pad A\d+ — failed — Key [ZXCVASDFQWER1234]$/}))
       .toHaveCount(16);
     expect(await page.evaluate(() =>
       document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -172,7 +172,7 @@ for (const viewport of [
     await (await chooserPromise).setFiles(bundle);
     await expect(page.getByRole("heading", {name: "Project 00000000"}))
       .toBeVisible({timeout: 120_000});
-    const pads = page.getByRole("button", {name: /^Pad A\d+ — assigned — Key [QWERTYUIASDFGHJK]$/});
+    const pads = page.getByRole("button", {name: /^Pad A\d+ — assigned — Key [ZXCVASDFQWER1234]$/});
     await expect(pads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {
       const box = await pads.nth(index).boundingBox();
@@ -200,7 +200,7 @@ for (const viewport of [
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
       "SHIFT — engage the Undo/Redo layer",
-      "Record", "Play/Stop", "Pad A13 — assigned — Key G",
+      "Record", "Play/Stop", "Pad A13 — assigned — Key 1",
     ];
     const focusOrder = [];
     for (let index = 0; index < expectedFocusOrder.length; index += 1) {
@@ -224,7 +224,7 @@ for (const viewport of [
       "accept",
       ".wav,.mp3,.m4a,.aac,.flac,audio/wav,audio/wave,audio/mpeg,audio/mp4,audio/aac,audio/flac",
     );
-    const samplePads = page.getByRole("button", {name: /^Pad A\d+ — assigned — Key [QWERTYUIASDFGHJK]$/});
+    const samplePads = page.getByRole("button", {name: /^Pad A\d+ — assigned — Key [ZXCVASDFQWER1234]$/});
     await expect(samplePads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {
       const box = await samplePads.nth(index).boundingBox();

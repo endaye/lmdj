@@ -153,8 +153,10 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   expect(screen.queryByText(/untitled/i)).toBeNull();
   expect(screen.queryByText(/beat\.lmdj/i)).toBeNull();
   const keys = [
-    "Q", "W", "E", "R", "T", "Y", "U", "I",
-    "A", "S", "D", "F", "G", "H", "J", "K",
+    "Z", "X", "C", "V",
+    "A", "S", "D", "F",
+    "Q", "W", "E", "R",
+    "1", "2", "3", "4",
   ];
   for (const [index, key] of keys.entries()) {
     expect(screen.getByRole("button", {
@@ -162,8 +164,8 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
     })).toBeTruthy();
   }
   expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
-    .toEqual(["G", "H", "J", "K", "A", "S", "D", "F",
-      "T", "Y", "U", "I", "Q", "W", "E", "R"]);
+    .toEqual(["1", "2", "3", "4", "Q", "W", "E", "R",
+      "A", "S", "D", "F", "Z", "X", "C", "V"]);
 
   expect(screen.queryByRole("button", {name: "Activate audio"})).toBeNull();
   // The brand mark is the System entry and the rail's first stop.
@@ -178,7 +180,7 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   expect(projectMode.hasAttribute("aria-current")).toBe(false);
   expect(screen.getByRole("heading", {name: "Sample editor"})).toBeTruthy();
   expect(screen.getAllByRole("button", {
-    name: /^Pad A(?:0[1-9]|1[0-6]) — empty — Key [QWERTYUIASDFGHJK]$/,
+    name: /^Pad A(?:0[1-9]|1[0-6]) — empty — Key [ZXCVASDFQWER1234]$/,
   })).toHaveLength(16);
   expect(within(screen.getByRole("complementary", {name: "Physical controls"}))
     .getByRole("button", {name: "Bank A"})).toBeTruthy();
@@ -292,7 +294,7 @@ test("keeps Sample editing in touch and one Bank row and Pad matrix on the rail"
     .getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
   expect(screen.getByText("Tap a Pad to preview")).toBeTruthy();
   const visiblePads = screen.getAllByRole("button", {
-    name: /^Pad A(?:0[1-9]|1[0-6]) — (?:assigned|empty) — Key [QWERTYUIASDFGHJK]$/,
+    name: /^Pad A(?:0[1-9]|1[0-6]) — (?:assigned|empty) — Key [ZXCVASDFQWER1234]$/,
   });
   expect(visiblePads).toHaveLength(16);
   for (const pad of visiblePads) {
@@ -427,7 +429,7 @@ test("bounds and escapes Replace display names, warns, cancels, and restores foc
   render(<App initialState={assigned} />);
   const sampleMode = screen.getByRole("button", {name: "Sample"});
   await userEvent.click(sampleMode);
-  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Z"});
   pad.focus();
   const sourceName = `${"<img src=x onerror=private>".repeat(8)}.wav`;
   fireEvent.drop(pad, {
@@ -489,7 +491,7 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
 
   selectSamplePage("Pad");
@@ -525,7 +527,7 @@ test("audio recovery keeps an open capture panel instead of discarding it", asyn
   await screen.findByText("Audio running");
 
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   selectSamplePage("Pad");
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
@@ -1225,14 +1227,14 @@ test.each(["pointer", "keyboard", "midi"])("Candidate preparation blocks %s Pad 
       } else if (source === "midi") {
         midiMessage(0x90);
       } else {
-        fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+        fireEvent.keyDown(window, {key: "z", code: "KeyZ"});
 
       }
     });
     await act(async () => {
       if (source === "pointer") fireEvent.pointerUp(pad, {pointerId: 1, pointerType: "mouse", button: 0});
       else if (source === "midi") midiMessage(0x80);
-      else fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+      else fireEvent.keyUp(window, {key: "z", code: "KeyZ"});
     });
   };
   await press();
@@ -1383,7 +1385,7 @@ test.each(["update", "reset"] as const)(
     }
     await waitFor(() => expect(operationCount).toBe(1));
     await userEvent.click(screen.getByRole("button", {
-      name: `Pad A${String(selectedAfter + 1).padStart(2, "0")} — empty — Key ${"QWERTYUIASDFGHJK"[selectedAfter]}`,
+      name: `Pad A${String(selectedAfter + 1).padStart(2, "0")} — empty — Key ${"ZXCVASDFQWER1234"[selectedAfter]}`,
     }));
 
     if (kind === "update") {
@@ -1447,7 +1449,7 @@ test("atomically refreshes full Project truth on a real mutation conflict", asyn
     "Project changed; review and try again",
   );
   expect(updateCount).toBe(1);
-  expect(screen.getByRole("button", {name: "Pad A02 — assigned — Key W"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Pad A02 — assigned — Key X"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(revisionCell()?.textContent).toBe("4");
   expect(screen.getByText("Pads").nextElementSibling?.textContent).toBe("2 / 64");
@@ -1504,7 +1506,7 @@ test("converges committed Sample and Project truth across interleaved revisions"
   await screen.findByText("Audio running");
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
-  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   await userEvent.upload(input, wavFile("interleaved.wav"));
@@ -1512,8 +1514,8 @@ test("converges committed Sample and Project truth across interleaved revisions"
 
   await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
   expect(screen.queryByRole("alert")).toBeNull();
-  expect(screen.getByRole("button", {name: "Pad A04 — assigned — Key R"})).toBeTruthy();
-  expect(screen.getByRole("button", {name: "Pad A05 — assigned — Key T"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Pad A04 — assigned — Key V"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Pad A05 — assigned — Key A"})).toBeTruthy();
   expect(screen.getByText("Audio running")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(revisionCell()?.textContent).toBe("6");
@@ -1578,7 +1580,7 @@ test.each([
       ).toBeTruthy();
       expect(screen.getByText("Creator unavailable").closest("[role=alert]")?.textContent ?? "")
         .not.toContain(code);
-      const pad = screen.getByRole("button", {name: "Pad A01 — empty — Key Q"});
+      const pad = screen.getByRole("button", {name: "Pad A01 — empty — Key Z"});
       expect(pad.hasAttribute("disabled")).toBe(true);
       const settledReads = projectReads;
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -1762,7 +1764,7 @@ test("keeps pre-commit Sample import abort ownership on unmount", async () => {
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
-  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
   await userEvent.upload(input, wavFile("abort.wav"));
@@ -1840,7 +1842,7 @@ test.each([
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
-  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+  const pad = screen.getByRole("button", {name: "Pad A01 — assigned — Key Z"});
   pad.focus();
 
   fireEvent.keyDown(pad, {key, code, repeat: false});
@@ -2027,7 +2029,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
 
-  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
   await screen.findByRole("button", {name: "Add Sample to Pad A02"});
   const sampleInput = container.querySelector<HTMLInputElement>(".sample-file-input");
@@ -2039,11 +2041,11 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   await commitLongSourceSelection();
   await expectSelectedAsset("44444444-4444-4444-8444-444444444444");
 
-  await userEvent.click(screen.getByRole("button", {name: "Pad A03 — empty — Key E"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A03 — empty — Key C"}));
   const importedPad = await screen.findByRole("button", {
-    name: "Pad A02 — assigned — Key W",
+    name: "Pad A02 — assigned — Key X",
   });
-  expect(screen.getByRole("button", {name: "Pad A04 — assigned — Key R"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Pad A04 — assigned — Key V"})).toBeTruthy();
   importedPad.focus();
   fireEvent.keyDown(importedPad, {key: "Enter", code: "Enter", repeat: false});
   await waitFor(() => expect(triggers).toEqual([1]));
@@ -2078,7 +2080,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
-  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
 
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
@@ -2088,7 +2090,7 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   fireEvent.change(input, {target: {files: []}});
   expect(importCount).toBe(0);
 
-  const pad = screen.getByRole("button", {name: "Pad A02 — empty — Key W"});
+  const pad = screen.getByRole("button", {name: "Pad A02 — empty — Key X"});
   fireEvent.drop(pad, {
     dataTransfer: {files: [new File(["not-wav"], "private-source.mp3", {
       type: "audio/mpeg",
@@ -2219,7 +2221,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     setRunningAudioFixture(fixture.session);
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
-    fireEvent.keyDown(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"}), {
+    fireEvent.keyDown(screen.getByRole("button", {name: "Pad A01 — assigned — Key Z"}), {
       key: "Enter",
       code: "Enter",
       repeat: false,
@@ -2248,7 +2250,7 @@ test.each(["mute", "reset", "replace", "delete"] as const)(
     await waitFor(() => expect(order).toEqual([`stop:0`, `${kind}:0`]));
     expect(fixture.revision).toBe(4);
     if (kind === "delete") {
-      await screen.findByRole("button", {name: "Pad A01 — empty — Key Q"});
+      await screen.findByRole("button", {name: "Pad A01 — empty — Key Z"});
       expect(screen.queryByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeNull();
       expect(screen.queryByRole("slider", {name: "Pad A01 Volume"})).toBeNull();
     }
@@ -2661,7 +2663,7 @@ test("renders the hardware shell with a read-only overview and no fallback to a 
   expect(screen.queryByRole("button", {name: "Hardware layout"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Activate audio"})).toBeNull();
   expect(within(screen.getByRole("region", {name: "Pad matrix"}))
-    .getByRole("button", {name: "Pad A01 — empty — Key Q"})).toBeTruthy();
+    .getByRole("button", {name: "Pad A01 — empty — Key Z"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current"))
     .toBe("page");
   expect(screen.getByText("Project 11111111")).toBeTruthy();
@@ -2752,7 +2754,7 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   // This fixture's snapshot assigns A1, so the identity carried across every
   // mode switch below is slot, assignment and key hint together.
   const padA1 = () => within(padMatrix()).getByRole("button", {
-    name: "Pad A01 — assigned — Key Q",
+    name: "Pad A01 — assigned — Key Z",
   });
   expect(padA1()).toBeTruthy();
   expect(within(touch()).queryByText(/stays on the existing workspace/i)).toBeNull();
@@ -4161,7 +4163,7 @@ test("rail Bank changes keep the Sample slot until another Pad is chosen", async
   // (#1961).
   expect(within(pads).queryByRole("button", {pressed: true})).toBeNull();
   expect(screen.getByRole("button", {name: "Add Sample to Pad A03"})).toBeTruthy();
-  await userEvent.click(within(pads).getByRole("button", {name: "Pad B04 — empty — Key R"}));
+  await userEvent.click(within(pads).getByRole("button", {name: "Pad B04 — empty — Key V"}));
   expect(screen.getByRole("button", {name: "Add Sample to Pad B04"})).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Bank A"}));
   expect(screen.getByRole("button", {name: "Add Sample to Pad B04"})).toBeTruthy();
@@ -4197,7 +4199,7 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
 
   // Striking A01 establishes the one current Pad.
   const padA01 = within(screen.getByRole("region", {name: "Pad matrix"}))
-    .getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+    .getByRole("button", {name: "Pad A01 — assigned — Key Z"});
   fireEvent(padA01, pointer("pointerdown"));
   await waitFor(() => expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer"));
   fireEvent(padA01, pointer("pointerup"));
@@ -4214,7 +4216,7 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
 
   // Striking B05 makes it the one current Pad on both surfaces.
   const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
-    .getByRole("button", {name: "Pad B05 — assigned — Key T"});
+    .getByRole("button", {name: "Pad B05 — assigned — Key A"});
   fireEvent(pad, pointer("pointerdown"));
   await waitFor(() => expect(triggers).toHaveBeenLastCalledWith(20, 100, "pointer"));
   expect(triggers).toHaveBeenCalledTimes(2);
@@ -4264,7 +4266,7 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
   const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
-    .getByRole("button", {name: "Pad A01 — assigned — Key Q"});
+    .getByRole("button", {name: "Pad A01 — assigned — Key Z"});
   const pointer = (type: string) => {
     const event = new MouseEvent(type, {bubbles: true, button: 0});
     Object.defineProperties(event, {
@@ -4805,7 +4807,7 @@ test("Delete cancels a pending import and ignores its late completion", async ()
   await waitFor(() => expect(importSignal).toBeDefined());
   // Delete here belongs to the retained long-source dialog; the pages are inert.
   await userEvent.click(screen.getByRole("button", {name: "Delete Pad A01"}));
-  await screen.findByRole("button", {name: "Pad A01 — empty — Key Q"});
+  await screen.findByRole("button", {name: "Pad A01 — empty — Key Z"});
   expect(requests).toEqual([{slot: 0, expectedRevision: 3}]);
   await act(async () => lateImport.resolve({committedRevision: 5,
     runtimeRevision: 5, runtimePublished: true, snapshotError: null}));
@@ -4837,7 +4839,7 @@ test("Delete failure remains visible and does not project an empty Pad", async (
   expect(deleteLog.getByText("IO_ERROR")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
   expect(screen.getByText("33333333-3333-4333-8333-333333333333", {selector: ".sample-details dd"})).toBeTruthy();
-  expect(screen.getByRole("button", {name: "Pad A01 — assigned — Key Q"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Pad A01 — assigned — Key Z"})).toBeTruthy();
   expect(fixture.revision).toBe(3);
 });
 
@@ -4955,7 +4957,7 @@ test("Delete invalidates a decoding source and discards its eventual result", as
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await expectSelectedAsset("33333333-3333-4333-8333-333333333333");
-    await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key W"}));
+    await userEvent.click(screen.getByRole("button", {name: "Pad A02 — empty — Key X"}));
   await userEvent.click(await screen.findByRole("button", {name: "Add Sample to Pad A02"}));
     await userEvent.upload(container.querySelector<HTMLInputElement>(".sample-file-input")!, wavFile("decoding.wav"));
     await waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
@@ -4967,7 +4969,7 @@ test("Delete invalidates a decoding source and discards its eventual result", as
     await act(async () => decoded.resolve({length: 8, numberOfChannels: 1,
       sampleRate: 48_000, getChannelData: () => new Float32Array(8)} as unknown as AudioBuffer));
     expect(screen.queryByRole("dialog", {name: "Pad A02 Long Source"})).toBeNull();
-    expect(screen.getByRole("button", {name: "Pad A02 — empty — Key W"})).toBeTruthy();
+    expect(screen.getByRole("button", {name: "Pad A02 — empty — Key X"})).toBeTruthy();
   } finally { decode.mockRestore(); }
 });
 
@@ -5294,8 +5296,8 @@ test("output-volume restore visibly gates musical input until the same session r
     expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
     expect(screen.getByRole("button", {name: /^Play\/Stop/})).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", {name: "Record"})).toHaveProperty("disabled", true);
-    fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
-    fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    fireEvent.keyDown(window, {key: "z", code: "KeyZ"});
+    fireEvent.keyUp(window, {key: "z", code: "KeyZ"});
     expect(activate).not.toHaveBeenCalled();
     expect(trigger).not.toHaveBeenCalled();
     expect(requestTransport).not.toHaveBeenCalled();
@@ -5312,12 +5314,12 @@ test("output-volume restore visibly gates musical input until the same session r
     // jsdom cannot provide browser-trusted activation. Use the established
     // running-audio seam for the far-side musical admission after restore.
     publishRunning();
-    fireEvent.keyDown(window, {key: "q", code: "KeyQ"});
+    fireEvent.keyDown(window, {key: "z", code: "KeyZ"});
     await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
     expect(trigger.mock.calls[0]![0]).toBe(0);
     expect(trigger.mock.calls[0]![2]).toBe("keyboard");
     expect(pad.getAttribute("data-outcome")).toBe("admitted");
-    fireEvent.keyUp(window, {key: "q", code: "KeyQ"});
+    fireEvent.keyUp(window, {key: "z", code: "KeyZ"});
     expect(fixture.revision).toBe(3);
   } finally {
     rendered.unmount();

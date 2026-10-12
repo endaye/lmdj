@@ -346,8 +346,8 @@ describe("Creator input controller", () => {
       return activation.promise;
     }});
     const nativeEvent = {isTrusted: true};
-    value.controller.keyDown({code: "KeyQ", nativeEvent});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyZ", nativeEvent});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(events).toEqual([nativeEvent]);
     expect(value.triggers).toEqual([]);
@@ -365,8 +365,8 @@ describe("Creator input controller", () => {
         ...sampleInspect(slot).playback, triggerMode: mode,
       }}),
     });
-    value.controller.keyDown({code: "KeyQ", isTrusted: true});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyZ", isTrusted: true});
+    value.controller.keyUp({code: "KeyZ"});
     activation.resolve(true);
     await settle();
     expect(value.triggers).toEqual([]);
@@ -390,12 +390,12 @@ describe("Creator input controller", () => {
   test("a refused activation permits a fresh gesture retry", async () => {
     let attempts = 0;
     const value = sampleFixture({activateAudioForGesture: async () => ++attempts > 1});
-    value.controller.keyDown({code: "KeyQ", isTrusted: true});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyZ", isTrusted: true});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(value.triggers).toEqual([]);
-    value.controller.keyDown({code: "KeyQ", isTrusted: true});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyZ", isTrusted: true});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(attempts).toBe(2);
     expect(value.triggers).toHaveLength(1);
@@ -664,10 +664,10 @@ describe("Creator input controller", () => {
       onPerformancePadEvent: (event, source) => observed.push({event, source}),
     });
 
-    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
+    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyZ"}));
     window.dispatchEvent(new Event("blur"));
     window.dispatchEvent(new Event("blur"));
-    window.dispatchEvent(new KeyboardEvent("keyup", {code: "KeyQ"}));
+    window.dispatchEvent(new KeyboardEvent("keyup", {code: "KeyZ"}));
     controller.clearPressed();
     controller.dispose();
 
@@ -741,12 +741,12 @@ describe("Creator input controller", () => {
         });
 
         expect(controller.keyDown({
-          code: "KeyQ",
+          code: "KeyZ",
           repeat: false,
           target: document.body,
         }), value.name).toBe(true);
         value.close(controller);
-        controller.keyUp({code: "KeyQ", target: document.body});
+        controller.keyUp({code: "KeyZ", target: document.body});
         controller.clearPressed();
         controller.dispose();
         controller.dispose();
@@ -876,9 +876,9 @@ describe("Creator input controller", () => {
       },
     });
 
-    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.body}))
+    expect(controller.keyDown({code: "KeyZ", repeat: false, target: document.body}))
       .toBe(true);
-    expect(controller.keyUp({code: "KeyQ", target: document.body})).toBe(true);
+    expect(controller.keyUp({code: "KeyZ", target: document.body})).toBe(true);
     await settle();
 
     expect(identityCalls).toBe(0);
@@ -896,7 +896,7 @@ describe("Creator input controller", () => {
     });
 
     expect(value.controller.keyDown({
-      code: "KeyW",
+      code: "KeyX",
       repeat: false,
       target: document.body,
     })).toBe(true);
@@ -934,7 +934,7 @@ describe("Creator input controller", () => {
   test("selects an assigned unavailable Pad without triggering or file intent", () => {
     const value = sampleFixture({isAvailable: () => false});
     expect(value.controller.keyDown({
-      code: "KeyQ",
+      code: "KeyZ",
       repeat: false,
       target: document.body,
     })).toBe(true);
@@ -943,7 +943,7 @@ describe("Creator input controller", () => {
     expect(value.filePickIntents).toEqual([]);
     expect(value.inspectCalls).toEqual([]);
     expect(value.state().pressed.has(0)).toBe(false);
-    expect(value.controller.keyUp({code: "KeyQ"})).toBe(true);
+    expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
     expect(value.releases).toEqual([]);
     value.controller.dispose();
   });
@@ -959,7 +959,7 @@ describe("Creator input controller", () => {
         inspectSample: async (slot) => sampleInspect(slot, mode),
       });
       expect(value.controller.keyDown({
-        code: "KeyQ",
+        code: "KeyZ",
         repeat: false,
         target: document.body,
       })).toBe(true);
@@ -970,7 +970,7 @@ describe("Creator input controller", () => {
       ]);
       expect(value.state().pressed.get(0)).toBe("admitted");
 
-      expect(value.controller.keyUp({code: "KeyQ"})).toBe(true);
+      expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
       await settle();
       expect(value.state().pressed.has(0)).toBe(false);
       expect(value.releases).toEqual(expectsRelease
@@ -985,18 +985,18 @@ describe("Creator input controller", () => {
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
     expect(value.controller.keyDown({
-      code: "KeyQ",
+      code: "KeyZ",
       repeat: false,
       target: document.body,
     })).toBe(true);
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    expect(value.controller.keyUp({code: "KeyQ"})).toBe(true);
+    expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
     expect(value.state().pressed.get(0)).toBe("started");
     expect(value.releases).toEqual([]);
 
     expect(value.controller.keyDown({
-      code: "KeyQ",
+      code: "KeyZ",
       repeat: false,
       target: document.body,
     })).toBe(true);
@@ -1005,7 +1005,7 @@ describe("Creator input controller", () => {
     expect(value.inspectCalls).toEqual([0]);
     expect(value.stopped).toEqual([0]);
     expect(value.state().pressed.has(0)).toBe(false);
-    expect(value.controller.keyUp({code: "KeyQ"})).toBe(true);
+    expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
     expect(value.releases).toEqual([]);
     value.controller.dispose();
   });
@@ -1014,11 +1014,11 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
 
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
 
     expect(value.triggers).toHaveLength(1);
@@ -1030,15 +1030,15 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     value.controller.clearPressed();
     await settle();
     expect(value.stopAllCount()).toBe(0);
     expect(value.state().pressed.size).toBe(0);
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(1);
     expect(value.stopped).toEqual([0]);
@@ -1049,14 +1049,14 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     value.controller.clearPressed();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
     await settle();
 
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
 
     expect(value.triggers).toHaveLength(1);
@@ -1068,7 +1068,7 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "gate"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.controller.clearPressed();
     await settle();
@@ -1082,12 +1082,12 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     window.dispatchEvent(new Event("blur"));
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(2);
     expect(value.stopped).toEqual([]);
@@ -1107,12 +1107,12 @@ describe("Creator input controller", () => {
       const pending = deferred<SampleInspect>();
       const value = sampleFixture({inspectSample: () => pending.promise});
       expect(value.controller.keyDown({
-        code: "KeyQ",
+        code: "KeyZ",
         repeat: false,
         target: document.body,
       })).toBe(true);
       expect(value.inspectCalls).toEqual([0]);
-      expect(value.controller.keyUp({code: "KeyQ"})).toBe(true);
+      expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
       pending.resolve(sampleInspect(0, mode));
       await settle();
       expect(value.triggers).toHaveLength(expectsTrigger ? 1 : 0);
@@ -1129,10 +1129,10 @@ describe("Creator input controller", () => {
         ? first.promise
         : Promise.resolve(sampleInspect(slot, "one_shot")),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyW", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyW"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyX", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyX"});
     await settle();
 
     expect(value.inspectCalls).toEqual([0]);
@@ -1157,10 +1157,10 @@ describe("Creator input controller", () => {
           : Promise.resolve(sampleInspect(slot, "one_shot"));
       },
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
 
     expect(value.inspectCalls).toEqual([0]);
@@ -1185,10 +1185,10 @@ describe("Creator input controller", () => {
           : Promise.resolve(sampleInspect(slot, "loop_toggle"));
       },
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
 
     first.resolve(sampleInspect(0, "loop_toggle"));
@@ -1207,10 +1207,10 @@ describe("Creator input controller", () => {
         ? first.promise
         : Promise.resolve(sampleInspect(slot, "one_shot")),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyW", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyW"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyX", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyX"});
     value.controller.clearPressed();
     await settle();
 
@@ -1282,9 +1282,9 @@ describe("Creator input controller", () => {
       } as never,
     });
 
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
     value.controller.dispose();
@@ -1310,11 +1310,11 @@ describe("Creator input controller", () => {
       } as never,
     });
 
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(2);
     expect(value.stopped).toEqual([]);
@@ -1328,9 +1328,9 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: () => (call++ === 0 ? first.promise : second.promise),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     first.resolve(sampleInspect(0, "gate"));
     await settle();
     expect(value.triggers).toEqual([]);
@@ -1340,7 +1340,7 @@ describe("Creator input controller", () => {
     expect(value.triggers).toEqual([
       {slot: 0, velocity: 100, source: "keyboard"},
     ]);
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
     value.controller.dispose();
@@ -1350,12 +1350,12 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "one_shot", null),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toEqual([]);
     expect(value.filePickIntents).toEqual([{slot: 0, source: "keyboard"}]);
     expect(value.state().pressed.has(0)).toBe(false);
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     value.controller.dispose();
   });
 
@@ -1366,9 +1366,9 @@ describe("Creator input controller", () => {
         isRuntimeCurrent: () => false,
         inspectSample: async (slot) => sampleInspect(slot, savedMode),
       });
-      value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+      value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
       await settle();
-      value.controller.keyUp({code: "KeyQ"});
+      value.controller.keyUp({code: "KeyZ"});
       await settle();
       expect(value.inspectCalls).toEqual([]);
       expect(value.triggers).toEqual([
@@ -1406,11 +1406,11 @@ describe("Creator input controller", () => {
       isRuntimeCurrent: () => runtimeCurrent,
       inspectSample: () => pending.promise,
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     runtimeCurrent = false;
     pending.resolve(sampleInspect(0, "one_shot"));
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(value.triggers).toHaveLength(1);
     expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
@@ -1421,12 +1421,12 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_capacity", runtimeFrame: 128});
     expect(value.state().pressed.get(0)).toBe("capacity");
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(2);
     expect(value.inspectCalls).toEqual([0, 0]);
@@ -1441,10 +1441,10 @@ describe("Creator input controller", () => {
         return {...inspected, playback: {...inspected.playback, muted: true}};
       },
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(2);
     expect(value.inspectCalls).toEqual([0, 0]);
@@ -1460,13 +1460,13 @@ describe("Creator input controller", () => {
       isAvailable: () => available,
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     assigned = false;
     available = false;
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(1);
     expect(value.stopped).toEqual([0]);
@@ -1479,7 +1479,7 @@ describe("Creator input controller", () => {
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
     expect(value.voiceListenerCount()).toBe(1);
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
     value.voice({
@@ -1490,7 +1490,7 @@ describe("Creator input controller", () => {
       sourceFrame: 100,
     });
     expect(value.state().sample.voices).toHaveLength(1);
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     value.voice({
       sequence: 1,
       slot: 0,
@@ -1499,7 +1499,7 @@ describe("Creator input controller", () => {
       sourceFrame: 100,
     });
     expect(value.state().sample.voices).toHaveLength(0);
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(2);
     expect(value.stopped).toEqual([]);
@@ -1511,10 +1511,10 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     value.voice({
       sequence: 99,
       slot: 0,
@@ -1522,7 +1522,7 @@ describe("Creator input controller", () => {
       runtimeFrame: 256,
       sourceFrame: 100,
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(1);
     expect(value.stopped).toEqual([0]);
@@ -1537,10 +1537,10 @@ describe("Creator input controller", () => {
         inspectCount++ === 0 ? "one_shot" : "gate",
       ),
     });
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.voice({
       sequence: 1,
@@ -1549,7 +1549,7 @@ describe("Creator input controller", () => {
       runtimeFrame: 256,
       sourceFrame: 100,
     });
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
     value.controller.dispose();
@@ -1563,14 +1563,14 @@ describe("Creator input controller", () => {
       value.stopped.push(slot);
       return false;
     };
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyQ"});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyZ"});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toHaveLength(1);
     expect(value.stopped).toEqual([0, 0]);
@@ -1595,9 +1595,9 @@ describe("Creator input controller", () => {
         }
         return false;
       };
-      value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+      value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
       await settle();
-      value.controller.keyUp({code: "KeyQ"});
+      value.controller.keyUp({code: "KeyZ"});
       await settle();
       expect(value.actions.at(-1)).toEqual({
         type: "runtime-changed",
@@ -1625,7 +1625,7 @@ describe("Creator input controller", () => {
     ],
   ])("does not trigger when inspect is %s", async (_label, inspectSample, code) => {
     const value = sampleFixture({inspectSample});
-    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
     await settle();
     expect(value.triggers).toEqual([]);
     expect(value.state().pressed.has(0)).toBe(false);
@@ -1634,7 +1634,7 @@ describe("Creator input controller", () => {
       phase: "failed",
       errorCode: code,
     });
-    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyUp({code: "KeyZ"});
     value.controller.dispose();
   });
 
@@ -1644,13 +1644,13 @@ describe("Creator input controller", () => {
     });
     unavailable.session.trigger = async () => false;
     expect(unavailable.controller.keyDown({
-      code: "KeyQ",
+      code: "KeyZ",
       repeat: false,
       target: document.body,
     })).toBe(true);
     await settle();
     expect(unavailable.state().pressed.has(0)).toBe(false);
-    unavailable.controller.keyUp({code: "KeyQ"});
+    unavailable.controller.keyUp({code: "KeyZ"});
     await settle();
     expect(unavailable.releases).toEqual([]);
     unavailable.controller.dispose();
@@ -1660,7 +1660,7 @@ describe("Creator input controller", () => {
       throw Object.assign(new Error("unavailable"), {code: "HOST_STATE_INVALID"});
     };
     expect(failed.controller.keyDown({
-      code: "KeyQ",
+      code: "KeyZ",
       repeat: false,
       target: document.body,
     })).toBe(true);
@@ -1671,7 +1671,7 @@ describe("Creator input controller", () => {
       phase: "failed",
       errorCode: "HOST_STATE_INVALID",
     });
-    failed.controller.keyUp({code: "KeyQ"});
+    failed.controller.keyUp({code: "KeyZ"});
     failed.controller.dispose();
   });
 
@@ -1686,23 +1686,23 @@ describe("Creator input controller", () => {
       dispatch: value.dispatch,
     });
 
-    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.body})).toBe(true);
-    expect(controller.keyDown({code: "KeyQ", repeat: true, target: document.body})).toBe(false);
-    expect(controller.keyDown({code: "KeyW", repeat: false, target: document.body})).toBe(false);
-    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.createElement("input")})).toBe(false);
+    expect(controller.keyDown({code: "KeyZ", repeat: false, target: document.body})).toBe(true);
+    expect(controller.keyDown({code: "KeyZ", repeat: true, target: document.body})).toBe(false);
+    expect(controller.keyDown({code: "KeyX", repeat: false, target: document.body})).toBe(false);
+    expect(controller.keyDown({code: "KeyZ", repeat: false, target: document.createElement("input")})).toBe(false);
     await settle();
     expect(value.triggers).toEqual([{slot: 32, velocity: 100, source: "keyboard"}]);
     expect(value.state().pressed.get(32)).toBe("admitted");
 
     value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
     expect(value.state().pressed.get(32)).toBe("started");
-    expect(controller.keyUp({code: "KeyQ"})).toBe(true);
+    expect(controller.keyUp({code: "KeyZ"})).toBe(true);
     expect(value.state().pressed.has(32)).toBe(false);
 
     for (const [code, slot] of [
-      ["KeyI", 39],
-      ["KeyA", 40],
-      ["KeyK", 47],
+      ["KeyF", 39],
+      ["KeyQ", 40],
+      ["Digit4", 47],
     ] as const) {
       expect(controller.keyDown({code, repeat: false, target: document.body})).toBe(true);
       await settle();
@@ -1712,7 +1712,7 @@ describe("Creator input controller", () => {
 
     bank = 3;
     value.selectBank(bank);
-    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.body})).toBe(true);
+    expect(controller.keyDown({code: "KeyZ", repeat: false, target: document.body})).toBe(true);
     await settle();
     expect(value.triggers.at(-1)?.slot).toBe(48);
     controller.dispose();
@@ -1848,8 +1848,10 @@ describe("Creator input controller", () => {
       dispatch: value.dispatch,
     });
     const codes = [
-      "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
-      "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
+      "Digit1", "Digit2", "Digit3", "Digit4",
+      "KeyQ", "KeyW", "KeyE", "KeyR",
+      "KeyA", "KeyS", "KeyD", "KeyF",
+      "KeyZ", "KeyX", "KeyC", "KeyV",
     ];
     expect(Object.keys(DEFAULT_KEYBOARD_MAPPING)).toEqual(codes);
     for (const code of codes) {
@@ -1868,7 +1870,7 @@ describe("Creator input controller", () => {
         runtimeFrame: 128,
       });
     }
-    expect(value.state().pressed.get(15)).toBe("capacity");
+    expect(value.state().pressed.get(3)).toBe("capacity");
     controller.clearPressed();
     expect(value.state().pressed.size).toBe(0);
     controller.dispose();
@@ -1882,15 +1884,15 @@ describe("Creator input controller", () => {
       isAssigned: (slot) => slot === 0,
       dispatch: value.dispatch,
     });
-    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
+    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyZ"}));
     await settle();
     expect(value.triggers).toHaveLength(1);
     expect(value.state().pressed.get(0)).toBe("admitted");
     window.dispatchEvent(new Event("blur"));
     expect(value.state().pressed.size).toBe(0);
     controller.dispose();
-    window.dispatchEvent(new KeyboardEvent("keyup", {code: "KeyQ"}));
-    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
+    window.dispatchEvent(new KeyboardEvent("keyup", {code: "KeyZ"}));
+    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyZ"}));
     await settle();
     expect(value.triggers).toHaveLength(1);
   });
@@ -1915,7 +1917,7 @@ describe("Creator input controller", () => {
       dispatch: value.dispatch,
     });
     try {
-      window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
+      window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyZ"}));
       await settle();
       expect(value.triggers).toHaveLength(1);
       expect(value.state().pressed.get(0)).toBe("admitted");
@@ -1928,7 +1930,7 @@ describe("Creator input controller", () => {
       expect(value.state().pressed.size).toBe(0);
 
       setVisibility("visible");
-      window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
+      window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyZ"}));
       await settle();
       expect(value.triggers).toHaveLength(2);
       expect(value.state().pressed.get(0)).toBe("admitted");
@@ -1956,8 +1958,8 @@ describe("Creator input controller", () => {
     expect(controller.pointerDown({type: "pointerdown", isPrimary: true, button: 0,
       pointerId: 1, target: document.body}, 32)).toBe(true);
     controller.pointerUp({type: "pointerup", pointerId: 1, target: document.body}, 32);
-    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.body})).toBe(true);
-    controller.keyUp({code: "KeyQ", target: document.body});
+    expect(controller.keyDown({code: "KeyZ", repeat: false, target: document.body})).toBe(true);
+    controller.keyUp({code: "KeyZ", target: document.body});
     expect(await controller.enableMidi()).toBe(true);
     midiInput.emit([0x90, 36, 100]);
     expect(stops).toEqual([
@@ -1980,7 +1982,7 @@ test("an unavailable streaming Pad neither wakes audio nor opens the empty-Pad p
     canUsePad: slot => slot !== 0,
     activateAudioForGesture: () => {activations++; return Promise.resolve(true);},
   });
-  controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+  controller.keyDown({code: "KeyZ", repeat: false, target: document.body});
   expect(value.triggers).toHaveLength(0);
   expect(activations).toBe(0);
   controller.dispose();
@@ -2009,7 +2011,7 @@ test("a busy primary pointer cancellation carries its own key while lifecycle ca
   const value = sampleFixture({isAssigned: () => false,
     onEmptyPadPress: (_slot, key) => {presses.push(key); return true;},
     onEmptyPadCancel: key => {cancels.push(key);}});
-  value.controller.keyDown({type: "keydown", code: "KeyQ", repeat: false, target: document.body});
+  value.controller.keyDown({type: "keydown", code: "KeyZ", repeat: false, target: document.body});
   const event = {type: "pointerdown", pointerType: "mouse", isPrimary: true,
     button: 0, pointerId: 77, target: document.createElement("button")};
   value.controller.pointerDown(event, 1);
