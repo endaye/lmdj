@@ -947,3 +947,31 @@ no public API, Native wire, persisted Contract or Product identity changes.
 Documentation impact: required on `/core/modules/web-runtime-platform/`.
 Source and owning units do not grant rebuilt packaged recovery replacement,
 full Creator, Native/Bridge/browser/OPFS/physical or release acceptance.
+
+## Failed legacy Pattern engagement shutdown
+
+Ordinary Pattern playback may engage a real I/O executor without negotiating
+the Native input profile. After failure, actual callback-last-use retirement
+and Native stopped state authorize continuation of controller shutdown for
+that engagement independently of the negotiated input-owner ACK. Generation
+zero or a disabled input profile must not strand the executor. Its real worker
+destroys its I/O owner before publishing stopped; idle transport telemetry is
+not that receipt.
+
+The negotiated input-owner ACK retains its existing generation, completion,
+held-release and owner-disposition checks. Requesting shutdown neither invents
+that ACK nor retires a recorded candidate, opening ticket, original Bridge
+response or physical hold. Original response consumption and its actual
+release continuation still precede terminal owner release. Independent writer
+reacquisition and complete Truth/Artifact reopen remain separate far-side
+assertions; a Native conformance worker-stop observation does not prove OPFS
+or browser ownership release.
+
+The correctness repair and additive internal read-only conformance observer
+remain within the unshipped S6 version settlement. Existing layouts, wire
+schemas, persisted Contracts and Product identity do not change. The owning
+regression retains the original budgets and rebuilds the old production flow
+and repaired flow with the same observer and complete original test suite.
+Documentation impact: required on `/core/modules/web-runtime-platform/`.
+Source describes the required behavior; current rebuilt runtime and physical
+acceptance must be recorded separately.

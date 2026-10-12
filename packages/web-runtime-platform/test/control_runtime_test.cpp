@@ -12467,10 +12467,137 @@ void test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(
   LMDJ_CHECK(bridge.terminal_release_ready());
 }
 
+// An ordinary legacy Play has no negotiated Pattern input generation. Failed
+// cleanup must nevertheless retire its real I/O owner, after physical audio
+// last use and before the original Bridge consumer can release the Host.
+void test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release() {
+  using lmdj::web_runtime::detail::ControlRuntimePatternIoAccess;
+  using lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess;
+
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 10510, 10511, 0);
+  check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  const auto truth = inspect_project(temp.path(), kProjectId);
+
+  OneShotAudioDriver driver(runtime->engine());
+  driver.bind(coordinator);
+  FakeProxy proxy;
+  std::unique_ptr<ControlBridge> bridge;
+  // In particular, an old-production RED at the worker wait below must join
+  // the actual callback before destroying Bridge/Runtime and their owners.
+  struct Cleanup {
+    OneShotAudioDriver& driver;
+    std::unique_ptr<ControlBridge>& bridge;
+    std::unique_ptr<ControlRuntime>& runtime;
+    ~Cleanup() {
+      driver.stop();
+      bridge.reset();
+      runtime.reset();
+    }
+  } cleanup{driver, bridge, runtime};
+  coordinator.engine = &runtime->engine();
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+  LMDJ_CHECK(ControlRuntimePhysicalAudioAccess::install(
+      *runtime, coordinator.physical_seam()).has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+
+  // Keep the existing Play/inspection/render cadence. Deliberately do not
+  // negotiate count-in or input capabilities: this is the ordinary opt-in path.
+  check_success(dispatch_retained_for_test(*runtime, "pattern.transport.request",
+      pattern_transport_request_payload(kSequenceSessionId, 10512, 1, "play_stop"), {}));
+  const auto playing = settle_pattern_transport(*runtime, driver, kSequenceSessionId);
+  LMDJ_CHECK(playing.at("engaged") == true && playing.at("playing") == true);
+  LMDJ_CHECK(playing.at("recording") == false && playing.at("phase") == "idle");
+  LMDJ_CHECK(playing.at("publication_pending") == false);
+  LMDJ_CHECK(!runtime->engine().pattern_input_profile_status().enabled);
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::stopped(*runtime));
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  LMDJ_CHECK(driver.completed_callbacks() != 0);
+
+  bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(10513);
+  LMDJ_CHECK(bridge->submit(encode(request(request_id, "host.status", Json::object())),
+      {}, std::chrono::steady_clock::now()) == BridgeSubmitStatus::accepted);
+  LMDJ_CHECK(proxy.tasks.size() == 1);
+  proxy.pump_one(); // The real expired envelope seals Runtime and freezes HOST_TIMEOUT.
+  LMDJ_CHECK(proxy.tasks.empty());
+  LMDJ_CHECK(runtime->failed() && bridge->failed());
+  LMDJ_CHECK(coordinator.await_calls == 0);
+  LMDJ_CHECK(!FakeCoordinator::callback_thread_joined(&coordinator));
+  runtime->service_pattern_transport();
+  // A physical stop request is not callback last use, Native Stop or worker exit.
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!ControlRuntimePatternIoAccess::stopped(*runtime));
+  LMDJ_CHECK(!runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+
+  driver.stop(); // Actual callback-thread join, independent of all terminal flags.
+  LMDJ_CHECK(FakeCoordinator::callback_thread_joined(&coordinator));
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::running);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  runtime->service_pattern_transport();
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  wait_until([&] {
+    runtime->service_pattern_transport();
+    // This is the real executor's post-owner-reset publication, not idle and
+    // not a claim that the I/O thread itself has already been joined.
+    return ControlRuntimePatternIoAccess::stopped(*runtime);
+  });
+  LMDJ_CHECK(runtime->engine().telemetry().state == lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(runtime->pattern_transport_shutdown_complete());
+  LMDJ_CHECK(!runtime->engine().pattern_input_profile_status().enabled);
+  LMDJ_CHECK(coordinator.await_calls == 0);
+  LMDJ_CHECK(!bridge->terminal_release_ready()); // Original response is still unpolled.
+
+  const auto response = poll_message(*bridge);
+  check_exact_keys(response, {"protocol_version", "request_id", "ok", "error"});
+  LMDJ_CHECK(response.at("protocol_version") == 1);
+  LMDJ_CHECK(response.at("request_id") == request_id && response.at("ok") == false);
+  LMDJ_CHECK(response.at("error") == (Json{{"code", "HOST_TIMEOUT"},
+      {"message", "host request timed out"}, {"details", Json::object()}}));
+  // poll queues the original consumer-release thunk before the real service.
+  // Preserve that exact thunk while running only the latter continuation.
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+  const auto original_consumer_release = proxy.tasks.front();
+  proxy.tasks.erase(proxy.tasks.begin());
+  LMDJ_CHECK(proxy.tasks.front().function != original_consumer_release.function);
+  LMDJ_CHECK(!bridge->terminal_release_ready());
+  proxy.pump_one();
+  LMDJ_CHECK(proxy.tasks.empty());
+  LMDJ_CHECK(!bridge->terminal_release_ready()); // Poll alone does not pay caller debt.
+  proxy.run_as_control(original_consumer_release);
+  LMDJ_CHECK(bridge->terminal_release_ready());
+  LMDJ_CHECK(coordinator.await_calls == 0);
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+
+  auto observer = make_application(temp.path());
+  const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
+  LMDJ_CHECK(!observer.acquire_project_writer(bundle).has_value());
+  bridge.reset();
+  runtime.reset(); // Actual owner/controller destruction joins the I/O worker.
+  {
+    const auto writer = observer.acquire_project_writer(bundle);
+    LMDJ_CHECK(writer.has_value());
+  }
+  auto reopened = make_runtime(temp.path());
+  check_success(reopened->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId) == truth);
+  check_success(reopened->dispatch("host.close", Json::object(), {}));
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release();
     test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(true);
     test_bridge_pre_dispatch_timeout_keeps_count_in_caller_ack_serviceable();
     test_bridge_post_dispatch_timeout_keeps_count_in_caller_ack_serviceable();

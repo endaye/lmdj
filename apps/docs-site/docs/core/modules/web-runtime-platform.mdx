@@ -239,6 +239,17 @@ ACK；未知结果仍可观察，不能清掉 held ledger 冒充完成。未录�
 Journal readback 确认不存在，不伪造 transport epoch、cutoff F 或 clean-close 收据。
 该资源回收入口不新增 SDK wire operation，也不改变旧 transport DTO/vtable。
 
+普通 Pattern Play 可以在未协商 Native input profile 的旧 Host 中拥有真实 I/O
+worker。失败后，实际 callback-last-use 和 Native stopped 允许独立请求并继续该
+controller 的 shutdown；generation 为零或 profile disabled 不能跳过这一步。
+真实 worker 在销毁 I/O owner 后才发布 stopped，idle telemetry 不替代该回执。
+协商 profile 的 input-owner ACK 仍保留原 generation、held Release、completion
+及 owner disposition 检查。此 shutdown 请求不伪造 ACK/F，也不解除原 Bridge
+响应消费与 release continuation；独立 writer reacquire、完整 Truth/Artifact
+reopen 和浏览器 OPFS 验收仍需各自真实证据。新增内部只读 conformance observer
+只观察真实 executor stopped，不修改既有 wire schema、DTO/vtable 或 Product 身份。
+此处描述修复源码的义务，不表示当前候选的执行或物理验收已通过。
+
 Worklet 的 additive `startAudioWorkletWithCountIn` 使用 context/product/cue 三元身份；
 两个 stereo/128 输出分别是 product→master tap→capture/resample 与 monitor、cue→monitor。
 cue 不录制，监听 gain 同时影响两路，单输出旧 startup/direct recovery 与幂等路由保留。

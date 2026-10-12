@@ -192,6 +192,9 @@ class ControlRuntimeSnapshotAccess final {
 class ControlRuntimePatternIoAccess final {
  public:
   static bool idle(const ControlRuntime& runtime) noexcept;
+  // The actual executor publishes stopped only after its worker-owned I/O
+  // owner is destroyed. Idle and a terminal Host flag cannot replace it.
+  static bool stopped(const ControlRuntime& runtime) noexcept;
 };
 
 inline constexpr std::size_t kBridgeMaximumEnvelopeBytes = 65'536;

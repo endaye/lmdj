@@ -7156,8 +7156,19 @@ void ControlRuntime::service_pattern_transport() noexcept {
     // An audio interruption retires the engagement but not a deferral.
     impl_->service_pattern_inputs();
     if (impl_->state == Impl::State::failed &&
-        impl_->engine.telemetry().state == audio::RealtimeState::stopped)
+        impl_->engine.telemetry().state == audio::RealtimeState::stopped) {
+      // The controller's real I/O worker also belongs to an unnegotiated
+      // legacy Play engagement. Its shutdown intent cannot depend on a
+      // negotiated Pattern input generation or spend any physical/caller ACK.
+      if (impl_->transport && !impl_->transport->shutdown_requested) {
+        auto& engagement = *impl_->transport;
+        engagement.controller->request_shutdown();
+        engagement.shutdown_requested = true;
+        if (!engagement.count_in_ticket_consumed)
+          engagement.count_in_cancel_pending = true;
+      }
       static_cast<void>(impl_->acknowledge_pattern_input_owner_quiescent(impl_->input_ledger_generation));
+    }
     impl_->retry_deferred_pattern_edit();
     // The queued playing-state switch follows native apply on the same
     // cadence; native audio already owns any claimed-safe successor.
@@ -7417,6 +7428,17 @@ bool detail::ControlRuntimePatternIoAccess::idle(
     const auto status = runtime.impl_->transport->controller->inspect_io();
     return !status.ticket &&
            (status.ready || status.stopped || status.startup_error.has_value());
+  } catch (...) {
+    return false;
+  }
+}
+
+bool detail::ControlRuntimePatternIoAccess::stopped(
+    const ControlRuntime& runtime) noexcept {
+  try {
+    // No engagement is not evidence that an admitted worker has stopped.
+    return runtime.impl_->transport && runtime.impl_->transport->controller &&
+        runtime.impl_->transport->controller->inspect_io().stopped;
   } catch (...) {
     return false;
   }

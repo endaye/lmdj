@@ -1098,3 +1098,57 @@ wire, persisted Contract, Product Build or Assembly change.
 
 Documentation impact: required on `/core/modules/web-runtime-platform/`, with
 this design/plan updated in the same Task.
+
+## S6 followup — failed legacy engagement still shuts down its worker
+
+The independent review of `9c42ca9faeb2dc63ab6139fc2206b09b84060ea1`
+confirmed a P1 source premise: an opted-in ordinary Pattern Play with the
+count-in input profile unnegotiated can settle to idle, then fail on an
+unrelated Bridge deadline. The failed service path requests controller shutdown
+only inside the negotiated input-owner acknowledgement. Generation zero and a
+disabled profile return before that request, leaving the actual executor alive
+and the Bridge terminal-release gate permanently closed. This remains
+outstanding in the reviewed S6 candidate `9c42ca9f`, assembled on the read
+integration base `e2d3aaf740d08e917867a6594c689b97e0d3da2b`. That base's release
+cuts do not contain this S6 producer; they do not supersede the candidate fix.
+
+Declared files: `packages/web-runtime-platform/src/control_runtime.cpp`,
+`packages/web-runtime-platform/include/lmdj/web_runtime/control_runtime.hpp`,
+`packages/web-runtime-platform/test/control_runtime_test.cpp`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`, and
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`.
+
+After actual failed audio retirement reaches Native stopped, request genuine
+shutdown of any engaged Pattern controller independently of whether a profile
+input owner exists. Keep its original count-in caller debt and every physical,
+Native input, worker, facade and Bridge-consumer gate. The request is intent,
+never a substitute Stop, worker exit, physical acknowledgement or F receipt.
+
+The lowest-tier regression keeps the legacy profile disabled and exercises
+ordinary Play, the original Bridge timeout, actual callback-thread last use,
+Native Stop, observed executor stopped, the original response and its release
+thunk, terminal release, independent writer acquisition and unchanged reopened
+Truth. A narrow read-only detail companion observes the actual executor's
+stopped state separately from idle or Host terminal state. Root runs the
+unchanged owning Native binary against rebuilt original/fixed production flow;
+fresh-mtime restoration, actual rebuild exits and the failure inside this test
+are required. Existing deadlines and all original tests remain. Full Portal
+precedes commit. Actual Web/OPFS and current complete candidate acceptance are
+separate evidence, not inferred from the Native fixture. The original complete
+Creator run naturally exited 1 with 125 PASS / 1 FAIL / 11 SKIP on `9c42ca9f`;
+its recovery replacement failure remains recorded. Sequential rebuilt Native
+discrimination then failed the original flow at this regression's actual
+worker-stop wait and passed the repaired complete Host binary. This is owning
+Native evidence only. Ordinary Record held in preparation at Native stop has
+a separately identified inherited settlement gap and remains a followup;
+this idle Play regression does not cover it.
+
+### Version Management
+
+Version impact: correctness and additive internal conformance-observer debt in
+the already declared unshipped Web Runtime Platform MINOR settlement. Existing
+object layouts, wire and persisted Contracts remain compatible. No Product
+Build or Assembly identity is allocated by this followup.
+
+Documentation impact: required on `/core/modules/web-runtime-platform/`, with
+this design/plan updated in the same Task.
