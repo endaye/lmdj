@@ -1694,28 +1694,26 @@ class EnginePerformanceReplaySink final : public PerformanceReplayRuntimeSink {
 
     // Neutral covers every live channel: HOLD off, the seven non-Filter FX
     // and the legacy Filter released, the independent Filter released when
-    // it is active, and both Pad gate masks cleared. Queue pressure keeps
-    // the reset pending; the cursor resumes without duplicating gestures.
+    // it is active, and both Pad gate masks cleared. The gate masks and the
+    // typed Filter release queue before the legacy gesture burst: the
+    // gesture counter is the batch's only externally visible progress, so
+    // once it moves the whole batch is already queued and a single audio
+    // drain acknowledges every channel. Queue pressure keeps the reset
+    // pending; the cursor resumes without duplicating controls.
     constexpr auto legacy_gesture_count = audio::kFxChainOrder.size() + 1;
-    while (reset_cursor_ < legacy_gesture_count) {
-      const auto gesture =
-          reset_cursor_ == 0
-              ? audio::FxGesture{audio::FxGestureKind::hold_off,
-                                 domain::PerformanceFx::filter, 0}
-              : audio::FxGesture{audio::FxGestureKind::release,
-                                 audio::kFxChainOrder.at(reset_cursor_ - 1), 0};
-      const auto published = live_core_->publish_legacy_gesture(gesture, false);
-      if (!published.has_value()) {
-        if (reset_queue_full(published.error())) {
+    if (reset_cursor_ == 0) {
+      const auto gates = live_core_->publish_pad_gates(0, 0);
+      if (!gates.has_value()) {
+        if (reset_queue_full(gates.error())) {
           return foundation::Result<NeutralResetProgress>::success(
               NeutralResetProgress::pending);
         }
         return foundation::Result<NeutralResetProgress>::failure(
-            published.error());
+            gates.error());
       }
       ++reset_cursor_;
     }
-    if (reset_cursor_ == legacy_gesture_count) {
+    if (reset_cursor_ == 1) {
       const auto snapshot = live_core_->live_control_snapshot();
       if (const auto* independent =
               std::get_if<domain::IndependentFilterLiveState>(
@@ -1736,15 +1734,22 @@ class EnginePerformanceReplaySink final : public PerformanceReplayRuntimeSink {
       }
       ++reset_cursor_;
     }
-    if (reset_cursor_ == legacy_gesture_count + 1) {
-      const auto gates = live_core_->publish_pad_gates(0, 0);
-      if (!gates.has_value()) {
-        if (reset_queue_full(gates.error())) {
+    while (reset_cursor_ < legacy_gesture_count + 2) {
+      const auto gesture_index = reset_cursor_ - 2;
+      const auto gesture =
+          gesture_index == 0
+              ? audio::FxGesture{audio::FxGestureKind::hold_off,
+                                 domain::PerformanceFx::filter, 0}
+              : audio::FxGesture{audio::FxGestureKind::release,
+                                 audio::kFxChainOrder.at(gesture_index - 1), 0};
+      const auto published = live_core_->publish_legacy_gesture(gesture, false);
+      if (!published.has_value()) {
+        if (reset_queue_full(published.error())) {
           return foundation::Result<NeutralResetProgress>::success(
               NeutralResetProgress::pending);
         }
         return foundation::Result<NeutralResetProgress>::failure(
-            gates.error());
+            published.error());
       }
       ++reset_cursor_;
     }

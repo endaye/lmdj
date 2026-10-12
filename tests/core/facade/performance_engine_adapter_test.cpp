@@ -988,13 +988,18 @@ void test_reset_queue_pressure_continues_without_duplicate_gestures() {
                lmdj::audio::FxEnqueueResult::accepted);
   }
   const auto before = engine.master_fx_telemetry().enqueued_gestures;
+  const auto gates_before = engine.pad_gates_status().accepted_sequence;
   auto adapter = lmdj::facade::make_engine_performance_adapter(
       engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
   const auto begun = adapter.replay_controller->begin(
       ReplayId{kReplay}, empty_replay_projection());
   LMDJ_CHECK(begun.has_value());
   LMDJ_CHECK(begun.value().state == ReplayState::playing);
-  LMDJ_CHECK(engine.master_fx_telemetry().enqueued_gestures == before + 4);
+  // The gate masks queue ahead of the legacy gesture burst, so a Host that
+  // watches the gesture counter only ever sees a fully queued batch. The
+  // masks take the first free cell; three of the four remain for gestures.
+  LMDJ_CHECK(engine.pad_gates_status().accepted_sequence == gates_before + 1);
+  LMDJ_CHECK(engine.master_fx_telemetry().enqueued_gestures == before + 3);
 
   render(engine, 128);
   adapter.service();
@@ -1357,9 +1362,9 @@ void test_reset_neutral_clears_masks_and_filter_through_real_drains() {
              std::uint64_t{1} << 3);
   LMDJ_CHECK(engine.filter_control_status().applied.state.engaged);
 
-  // A replay stop drives the extended neutral reset: hold_off + the seven FX
-  // + legacy Filter releases, the typed Filter release and the mask clear,
-  // each confirmed by its own channel's drain counters.
+  // A replay stop drives the extended neutral reset: the mask clear and the
+  // typed Filter release queue first, then hold_off + the seven FX + legacy
+  // Filter releases, each confirmed by its own channel's drain counters.
   const lmdj::facade::ReplayId replay_id{"72000000-0000-4000-8000-000000000020"};
   LMDJ_CHECK(adapter.replay_controller
                  ->begin(replay_id,
