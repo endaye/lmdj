@@ -7,7 +7,7 @@ import {
 import {useReportFailure} from "../runtime/diagnostics_context";
 import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import {createSampleEncoderTurn, type SampleEncoderParameter} from "../state/sample_encoder";
-import type {ContextualEncoders} from "./physical_controls";
+import type {ContextualEncoders, ContextualNavigation} from "./physical_controls";
 
 import {ConfirmationDialog, SampleControls} from "./sample_controls";
 import {WaveformEditor} from "./waveform_editor";
@@ -54,6 +54,11 @@ import {
 } from "../state/creator_state";
 import {padAddress, slotAddress} from "../state/view_model";
 
+const SAMPLE_PAGES = [
+  ["trim", "Trim"], ["playback", "Playback"], ["tone", "Tone / EQ"], ["pad", "Pad"],
+] as const;
+type SamplePage = typeof SAMPLE_PAGES[number][0];
+
 interface SampleSurfaceProps {
   padColourControls?: ReactNode;
   state: CreatorState;
@@ -71,6 +76,7 @@ interface SampleSurfaceProps {
   captureBackgrounded?: boolean;
   encodersActive?: boolean;
   onEncodersReady?: (encoders: ContextualEncoders | null) => void;
+  onNavigationReady?: (navigation: ContextualNavigation | null) => void;
   onUpdatePendingChange?: (owner: Readonly<SampleUpdateOwner> | null) => void;
   sequenceCapture?: Readonly<{
     sessionId: string;
@@ -213,6 +219,7 @@ export function SampleSurface({
   captureBackgrounded = false,
   encodersActive = true,
   onEncodersReady,
+  onNavigationReady,
   onUpdatePendingChange,
   sequenceCapture,
 }: SampleSurfaceProps) {
@@ -223,7 +230,7 @@ export function SampleSurface({
     reportFailure(operation, error);
     return publicOperationError(error);
   };
-  const [page, setPage] = useState<"trim" | "playback" | "tone" | "pad">("trim");
+  const [page, setPage] = useState<SamplePage>("trim");
   const input = useRef<HTMLInputElement | null>(null);
   const fileSlot = useRef<number | null>(null);
   const replaceReturnFocus = useRef<HTMLElement | null>(null);
@@ -750,10 +757,36 @@ export function SampleSurface({
     );
   };
 
-  const cancelPreview = () => {
+  const cancelPreview = useCallback(() => {
     dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
     clearOwnedPreview();
-  };
+  }, [dispatch, clearOwnedPreview]);
+  const selectPage = useCallback((target: SamplePage) => {
+    if (!encodersActive || page === target) return;
+    encoderTurn.current?.cancel();
+    numericEditorCancel.current?.();
+    cancelPreview();
+    setPage(target);
+  }, [encodersActive, page, cancelPreview]);
+  const navigation = useMemo<ContextualNavigation>(() => {
+    const index = SAMPLE_PAGES.findIndex(([target]) => target === page);
+    return {directionStep: {
+      backLabel: "Previous Sample page — ←", forwardLabel: "Next Sample page — →",
+      backAvailable: index > 0, forwardAvailable: index < SAMPLE_PAGES.length - 1,
+      onBack: () => {
+        const target = SAMPLE_PAGES[index - 1]?.[0];
+        if (target !== undefined) selectPage(target);
+      },
+      onForward: () => {
+        const target = SAMPLE_PAGES[index + 1]?.[0];
+        if (target !== undefined) selectPage(target);
+      },
+    }};
+  }, [page, selectPage]);
+  useEffect(() => {
+    onNavigationReady?.(encodersActive ? navigation : null);
+    return () => onNavigationReady?.(null);
+  }, [onNavigationReady, encodersActive, navigation]);
 
   const reset = async () => {
     if (session === undefined || inspect === null || sample.pendingAction !== null ||
@@ -1140,20 +1173,10 @@ export function SampleSurface({
       </header>
 
       <nav className="sample-page-nav" aria-label="Sample pages">
-        {([
-          ["trim", "Trim"],
-          ["playback", "Playback"],
-          ["tone", "Tone / EQ"],
-          ["pad", "Pad"],
-        ] as const).map(([target, label]) => (
+        {SAMPLE_PAGES.map(([target, label]) => (
           <button key={target} type="button"
             aria-current={page === target ? "page" : undefined}
-            onClick={() => {
-              if (page === target) return;
-              encoderTurn.current?.cancel();
-              cancelPreview();
-              setPage(target);
-            }}>
+            onClick={() => selectPage(target)}>
             {label}
           </button>
         ))}

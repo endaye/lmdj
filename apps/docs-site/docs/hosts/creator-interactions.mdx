@@ -178,8 +178,8 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - 单击旋钮没有额外动作。
 - ENC1–3 随页面和参数组变化，见 Project、Sample、Sequence 和 Perform 的控件速查卡。System／Sound Sets／Slice 的 ENC1–3 未分配。上屏持续显示四个当前功能和数值。
 - ENC4 在所有页面固定为 Output Volume：每格 1%，范围 0–100%，默认 100%，可恢复已记住的 0%。监听会话和偏好恢复就绪后才可转动。它立即改变本设备监听，包括节拍器；音量存 IndexedDB，不写 Project／Undo，也不改变录音、重采样或导出电平。
-- 当前 ↑↓ 只在 Sequence 导航当前 Pad；Project／Sample／Perform 的普通方向映射已批准、尚未接线，见[第 2 章](#planned)。
-- ← → 不按 SHIFT 时只在 Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。
+- ↑↓ 在 Sample／Sequence 选择当前 Pad，在 Project 的三列列表选择上一／下一行。Project／Sample 的 SHIFT＋↑↓ 未分配；Perform 的普通方向映射仍待接线，见[第 2 章](#planned)。
+- ← → 不按 SHIFT 时在 Project 选择相邻项、Sample 切现有子页、Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。左栏方向按钮不接管文本输入或聚焦旋钮的键盘方向键。
 - Sample 工程参数转动时立即预览，同一 Pad 的多参数停转 400 ms 后合并为一次保存／Undo。转回起点不保存。Sequence ENC3 的 BPM 当前只有即时读数预览，播放和节拍器仍等提交后发布；可听即时预览尚未实现。
 - Sample 作者锁定、Sequence 录音或传输结算时，相关工程参数旋钮不可用，未提交的预览作废；ENC4 保持监听职责。
 - 未提交的 Sample／BPM 旋钮草稿在离页、切 Pad／Project／Pattern、打开 System、Escape 或 Undo／Redo 前取消。下一轮从已保存的值开始；已经发出的请求保留真实结算结果。
@@ -281,7 +281,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | Record count-in | ● 始终控制 Pattern 事件录音，当前停止时按下立即开始。 | 停止时按 ● 可选 Off／1／2 小节预备拍，默认 Off；录音过程中不重新 count-in。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
 | Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
-| 三页普通方向导航 | 普通方向键目前只在 Sequence 接线。 | Project ←/→ 选相邻项、↑/↓ 按三列移一行，OPEN 才打开；Sample ↑/↓ 选 Pad、←/→ 切四子页；Perform ↑/↓ 选 Pad、←/→ 切 PRIMARY／FILTER／MORE 并保持效果。选择不演奏、不保存；切编辑上下文取消未提交预览。SHIFT＋↑/↓ 暂不分配。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
+| 三页普通方向导航 | Project ←/→ 选相邻项、↑/↓ 在三列列表移一行，OPEN 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。 | Perform ↑/↓ 选 Pad、←/→ 切 PRIMARY／FILTER／MORE 并保持效果仍待接线与验收；Project／Sample 接线不关闭完整 K2 或 #1822。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | Perform 独立滤波 | 底层音频能力已加入；Creator 仍是旧单值 Filter。 | 主组为 Cutoff／Delay／Reverb；FILTER 组为 LP／HP／BP、Cutoff、Resonance。初始 OFF，LP／20 kHz／0%；参数完整录制和回放。需要剩余接线与验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | 底层 64-Pad 门控已加入；Creator 尚无实时按钮及完整录放流程。 | 多 Solo、Mute 优先；切 Bank／Pattern 保持，离开 Perform／换工程清空；录制起点状态和后续变化。立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
@@ -295,14 +295,14 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 控件 | 在 Project 页的作用 |
 | --- | --- |
 | ENC1／ENC2 | ENC1 每格选一个 Project；ENC2 每格按一张卡片加间距的高度滚动触摸区列表，不改选择。只选中不会打开。ENC3 未分配。 |
-| 其余左栏 | ENC4 监听音量；↑↓ 和不按 SHIFT 的 ← → 不可用。SHIFT + ← →、Play/Stop、Record、Bank 见[第 1 章](#global)。 |
+| 其余左栏 | ENC4 监听音量；←/→ 选相邻工程，↑/↓ 按三列移一行，只选择；首尾停止，最后一行不足三项时钳位到现有项。SHIFT＋↑/↓ 未分配。SHIFT + ← →、Play/Stop、Record、Bank 见[第 1 章](#global)。 |
 | 16 个 Pad | 演奏；Sample 的所选 Pad 跟着变。空 Pad 可按住采样。 |
 | 上屏 | 已打开 Project 的短身份、保存方式、待处理状态、Pattern 与 Pad 数量、音频和 MIDI 状态。 |
 | 触摸区 | Project 卡片、新建、打开、导入、复制和 Sound Sets 入口。 |
 
 上屏补充：
 
-- 点卡片或转 ENC1 只改变选择；上屏项目身份仍是已打开的 Project，选择旋钮的读数随选择变化。
+- 点三列卡片、转 ENC1 或按普通方向只改变同一个选择；上屏项目身份仍是已打开的 Project，选择旋钮的读数随选择变化。OPEN PROJECT 才打开。
 - 名称只显示公开字段；没有名称时显示短 Project ID 或 Pad 地址和类别。
 - `LOCAL AUTOSAVE` 只表示保存方式，不表示所有草稿都已保存，也不显示虚构的时间。
 - 上屏的 Project 短身份可供读屏软件读取。
@@ -327,7 +327,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 控件 | 在 Sample 页的作用 |
 | --- | --- |
 | ENC1／ENC2／ENC3 | Trim / Pitch 组为 Start／End／Pitch；Pad Sound 组为 Pad Volume／Pan／Tone。组键在触摸区，见 [4.1](#sample-rules)。 |
-| 其余左栏 | ENC4 监听音量；↑↓ 和不按 SHIFT 的 ← → 不可用。SHIFT + ← →、Play/Stop、Record 见[第 1 章](#global)。 |
+| 其余左栏 | ENC4 监听音量；↑/↓ 按 A01–D16 选择当前 Pad，首尾停止，必要时同步 Bank；不演奏、不保存。←/→ 按 Trim／Playback／Tone / EQ／Pad 切现有子页，首尾停止。SHIFT＋↑/↓ 未分配。SHIFT + ← →、Play/Stop、Record 见[第 1 章](#global)。 |
 | Bank | 只换可演奏的 16 个槽，编辑对象保持原地址（选 A03 后切 Bank B 仍编辑 A03）。Record Sample 的采样目标也保持原 Pad，录音不会写到新 Bank。 |
 | 按已分配的 Pad | 选中它（白边加绿点）并按触发模式演奏。触摸区保持当前子页，显示新 Pad 的参数。选择本身不保存。 |
 | 按空 Pad | 按住采样，见 [1.9](#pad-capture)；不支持时只选中空槽。 |
@@ -343,7 +343,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - 第一次进入 Sample 显示 Trim。
 - 换 Pad、换 Bank 或从 System 按 Back to music 回来，保持当前子页。
 - 普通离开 Sample 再回来，回到 Trim。Record Sample 面板、Sequence 中的裁剪覆盖层，以及更新 consumer／结果读回／投影仍在结算的场合保留同一个 SampleSurface；结算完成后沿用普通挂载规则。
-- 切子页会取消还没完成的试听草稿；range 已按失焦规则保存的数值保留。精确输入的失焦不保存。
+- 触摸页签或左栏普通 ←/→ 切子页都先取消未提交旋钮／精确输入试听；↑/↓ 换 Pad 使用同一取消入口。range 已按失焦规则保存的数值保留，精确输入的失焦不保存；已发出的保存仍保留原结算结果。
 - 子页切换只改视图，不保存内容，也不演奏。
 - 拖动参数时预览，松手、键盘步进结束或失焦时保存一次。
 - 拖动中按 Escape 或手势被取消，放弃这次修改。
@@ -811,3 +811,7 @@ N13 的 mounted App 测试源码补齐 page／subpage／Pad／System／blur、co
 首版 N13 Source review 的 P2 是 Session-change 路径把在途 update 标成 cancelled，丢弃后续已知结果；Root 批准的 14 文件修订增加 `app.tsx` 的有限 ownership／隐藏挂载／同 Project recovery open，保留原 Capture／Sequence 条件与普通 Project pending 保护。新增 mounted App 源码在已知 authoring 返回后的旧 consumer 读回处设关卡，经真实 RuntimeProvider 重开同 Project，再检查新 Session 投影结束前仍受保护、四类结果保持原意、只有一次 update 调用，以及 Pad A02 结果不成为 Pad A01 playback。返回值与共享 storage 是制造的 consumer fixture，native Session／commit interleave 仍 UNRUN。一次锁定依赖安装与源码／index／旧草稿／stash 保全观察已完成；npm 默认 allowScripts 未运行可选 fsevents 脚本，未审批或重试。component／type／Portal／browser 与正式验收继续 UNRUN，修订候选待独立 Source review。
 
 revised14 review 又识别出普通 defaultSeed／capture 与自动 reopen 共用 `open + requireSelector=false` 的 P2。下一 Source cut 只给 retained automatic reopen 分支增加私有显式 admission，原 Project／不同 Session／精确 pending Update 身份检查及普通写入栅栏保留。新增 mounted App defaultSeed 源码经真实 RuntimeProvider 同 Project 重开，在旧已知结果和 successor 投影仍持有时完成 deferred acquisition，分别断言普通 install 未调用；释放两腿后，普通 install／Truth refresh／publication 必须继续且仅一次。原五个 recovery cases、数值规则及历史失败／UNRUN 记录不改写。consumer fixture 不证明 native seed／capture 动态交错；所有验证及 shipping 仍 HOLD，锁定安装实际0和默认未运行的可选脚本 warning 不变。
+
+**K2a Source 阶段**
+
+Project／Sample 普通方向接线与硬件三列列表在独立 K2a Task 准备；mounted App 回归和原 hardware-layout 的真实三列、缩放命中／无横向溢出旅程已补源码，原 history／failure／reopen 各腿保留并通过实际 SHIFT 层读取。component／type／Portal／browser 执行仍 UNRUN，等待独占验证窗口；这些源码事实不表示 Task 已交付、布局已验证、Perform/FILTER 已接线、K2/#1822 已完成或物理／听感通过。[Task 与验证边界](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-13-creator-project-sample-navigation.md)。

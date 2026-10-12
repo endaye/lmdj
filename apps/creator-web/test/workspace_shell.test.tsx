@@ -78,6 +78,11 @@ function selectSamplePage(name: "Trim" | "Playback" | "Tone / EQ" | "Pad") {
   expect(button.getAttribute("aria-current")).toBe("page");
 }
 
+function showHistoryLayer() {
+  const shift = screen.getByRole("button", {name: /^SHIFT/});
+  if (shift.getAttribute("aria-pressed") !== "true") fireEvent.click(shift);
+}
+
 // The technical identity moved to Pad > Sample details. Preserve the complete
 // identity assertion and return to the original editor page before its journey.
 async function expectSelectedAsset(assetId: string): Promise<void> {
@@ -5218,7 +5223,7 @@ test("Sample encoders preview together, fine-adjust and save one Pad change afte
   } finally {vi.useRealTimers();}
 });
 
-test.each(["page", "Sample subpage", "Pad", "System", "Esc", "blur"])("%s navigation cancels unsubmitted Sample encoder edits", async (boundary) => {
+test.each(["page", "Sample subpage", "Pad", "Sample Pad direction", "Sample page direction", "System", "Esc", "blur"])("%s navigation cancels unsubmitted Sample encoder edits", async (boundary) => {
   const fixture = mutableSampleRuntimeFixture();
   const update = vi.fn(fixture.session.updatePad);
   fixture.session.updatePad = update;
@@ -5234,6 +5239,8 @@ test.each(["page", "Sample subpage", "Pad", "System", "Esc", "blur"])("%s naviga
     if (boundary === "page") fireEvent.click(screen.getByRole("button", {name: "Project"}));
     else if (boundary === "Sample subpage") selectSamplePage("Tone / EQ");
     else if (boundary === "Pad") fireEvent.click(screen.getByRole("button", {name: /^Pad A02 —/}));
+    else if (boundary === "Sample Pad direction") fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+    else if (boundary === "Sample page direction") fireEvent.click(screen.getByRole("button", {name: "Next Sample page — →"}));
     else if (boundary === "System") fireEvent.click(screen.getByRole("button", {name: "System"}));
     else if (boundary === "Esc") fireEvent.keyDown(window, {key: "Escape"});
     else fireEvent.blur(window);
@@ -5413,7 +5420,9 @@ test("Undo cancels the Sample turn before restoring history instead of saving th
     canUndo: true, canRedo: false, undoCount: 1, redoCount: 0,
     undoLabel: "Import sample", redoLabel: "", disabledReason: ""}), undoAuthoring: undo, redoAuthoring: vi.fn()});
   await enterEncoderSample(fixture);
+  showHistoryLayer();
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"}).classList.contains("is-lit")).toBe(true));
+  fireEvent.click(screen.getByRole("button", {name: /^SHIFT/}));
   vi.useFakeTimers();
   try {
     fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 3 — Pitch"}), {key: "ArrowUp"});
@@ -5441,6 +5450,7 @@ test("pure page navigation preserves ready Undo without another authority read",
   const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
   try {
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     await flushAsyncTurns();
     const reads = inspect.mock.calls.length;
@@ -5480,12 +5490,14 @@ test("discarding the last Performance recovery refreshes Undo without a revision
   try {
     const region = await interruptedRegion();
     await screen.findByText("Resolve the pending recording recovery first.");
+    showHistoryLayer();
     expect(undo().classList.contains("is-lit")).toBe(false);
     const reads = inspect.mock.calls.length;
     await userEvent.click(within(region).getByRole("button", {name: "Discard…"}));
     await userEvent.click(within(region).getByRole("button", {name: "Discard recording"}));
     await within(region).findByText("The interrupted recording was discarded.");
     expect(discard).toHaveBeenCalledTimes(1);
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     expect(inspect.mock.calls.length).toBeGreaterThan(reads);
     expect(fixture.revision).toBe(3);
@@ -5514,6 +5526,7 @@ test("transport publication settlement refreshes Undo without a phase, revision 
     await flushAsyncTurns();
     const reads = inspect.mock.calls.length;
     publicationPending = false;
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     expect(inspect.mock.calls.length).toBeGreaterThan(reads);
     expect(fixture.revision).toBe(3);
@@ -5540,6 +5553,7 @@ test("page navigation retries blocked history while focus still refreshes ready 
     const blockedReads = inspect.mock.calls.length;
     blocked = false;
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     expect(inspect.mock.calls.length).toBeGreaterThan(blockedReads);
     const readyReads = inspect.mock.calls.length;
@@ -5548,6 +5562,7 @@ test("page navigation retries blocked history while focus still refreshes ready 
     expect(inspect).toHaveBeenCalledTimes(readyReads);
     fireEvent.focus(window);
     await waitFor(() => expect(inspect).toHaveBeenCalledTimes(readyReads + 1));
+    showHistoryLayer();
     expect(undo().classList.contains("is-lit")).toBe(true);
   } finally {rendered.unmount();}
 });
@@ -5573,14 +5588,17 @@ test("page navigation rechecks ready history after a reported authoring failure"
     selectSamplePage("Playback");
     await userEvent.click(await screen.findByRole("button", {name: "Reverse"}));
     await screen.findByRole("alert");
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     await flushAsyncTurns();
     const reads = inspect.mock.calls.length;
     inspect.mockImplementation(() => held.promise);
     await userEvent.click(screen.getByRole("button", {name: "Project"}));
     expect(inspect).toHaveBeenCalledTimes(reads + 1);
+    showHistoryLayer();
     expect(undo().classList.contains("is-lit")).toBe(false);
     await act(async () => {held.resolve(historyStatus);});
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     expect(fixture.revision).toBe(3);
   } finally {
@@ -5633,17 +5651,20 @@ test.each(["another Project", "returning to the same Project", "replacement Runt
       await userEvent.click(await screen.findByRole("button", {name: `Select Project ${summary.projectId.slice(0, 8)}`}));
       await userEvent.click(await screen.findByRole("button", {name: `Open Project ${summary.projectId.slice(0, 8)}`}));
       await screen.findByRole("heading", {name: `Project ${summary.projectId.slice(0, 8)}`});
+      showHistoryLayer();
       await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
       await flushAsyncTurns();
     };
     try {
       await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+      showHistoryLayer();
       await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
       await reportFailure(1);
       if (replacement === "replacement Runtime Session") {
         await act(async () => hostListener?.({state: "restart-required", errorCode: null, errorDetails: {}}));
         await waitFor(() => expect(created).toBe(2));
         await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+        showHistoryLayer();
         await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
       } else {
         await open(secondSummary);
@@ -5660,6 +5681,7 @@ test.each(["another Project", "returning to the same Project", "replacement Runt
       await userEvent.click(screen.getByRole("button", {name: "Sample"}));
       await flushAsyncTurns();
       expect(inspect).toHaveBeenCalledTimes(reads);
+      showHistoryLayer();
       expect(undo().classList.contains("is-lit")).toBe(true);
       await userEvent.click(screen.getByRole("button", {name: "Project"}));
       expect(inspect).toHaveBeenCalledTimes(reads);
@@ -5669,8 +5691,10 @@ test.each(["another Project", "returning to the same Project", "replacement Runt
       await reportFailure(2);
       await userEvent.click(screen.getByRole("button", {name: "Sample"}));
       expect(inspect).toHaveBeenCalledTimes(reads + 1);
+      showHistoryLayer();
       expect(undo().classList.contains("is-lit")).toBe(false);
       await act(async () => {held.resolve(historyStatus);});
+      showHistoryLayer();
       await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     } finally {
       rendered.unmount();
@@ -5729,11 +5753,13 @@ test("a new Project Pad capture failure re-arms its own history navigation", asy
   const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
   try {
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     await userEvent.click(screen.getByRole("button", {name: "Open local"}));
     await userEvent.click(await screen.findByRole("button", {name: "Select Project 44444444"}));
     await userEvent.click(await screen.findByRole("button", {name: "Open Project 44444444"}));
     await screen.findByRole("heading", {name: "Project 44444444"});
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     await flushAsyncTurns();
     const pad = screen.getByRole("button", {name: /^Pad A02 — empty/});
@@ -5749,6 +5775,7 @@ test("a new Project Pad capture failure re-arms its own history navigation", asy
     expect(importTake.mock.calls[0]![1]).toMatchObject({slot: 1, expectedRevision: 3});
     await waitFor(() => expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull());
     expect(stopTrack).toHaveBeenCalledOnce();
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     await userEvent.click(screen.getByRole("button", {name: "System"}));
     expect(screen.getByText("Developer diagnostics (1)", {selector: "summary"})).toBeTruthy();
@@ -5758,8 +5785,10 @@ test("a new Project Pad capture failure re-arms its own history navigation", asy
     inspect.mockImplementation(() => held.promise);
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     expect(inspect).toHaveBeenCalledTimes(reads + 1);
+    showHistoryLayer();
     expect(undo().classList.contains("is-lit")).toBe(false);
     await act(async () => {held.resolve(historyStatus());});
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
   } finally {
     rendered.unmount();
@@ -5783,11 +5812,13 @@ test("navigation retains history inspection after a Slice adoption fails after u
   fixture.adopt.mockImplementationOnce(() => pending.promise);
   const undo = () => screen.getByRole("button", {name: "Undo — SHIFT + ←"});
   try {
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     await userEvent.click(screen.getByRole("button", {name: "Adopt selected slices"}));
     await waitFor(() => expect(fixture.adopt).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("button", {name: "Project"}));
     await flushAsyncTurns();
+    showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
     const reads = inspect.mock.calls.length;
     // The request was issued by the retired Slice component. Its local catch
@@ -5801,6 +5832,7 @@ test("navigation retains history inspection after a Slice adoption fails after u
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     expect(inspect).toHaveBeenCalledTimes(reads + 1);
     await screen.findByText("Checking whether the last change was saved…");
+    showHistoryLayer();
     expect(undo().classList.contains("is-lit")).toBe(false);
     expect(fixture.revision).toBe(3);
   } finally {
@@ -5838,7 +5870,7 @@ async function openAppNumericVolume() {
   return screen.getByRole("spinbutton", {name: "Pad A01 Volume value"});
 }
 
-test.each(["page", "Sample subpage", "Pad", "System", "blur"] as const)(
+test.each(["page", "Sample subpage", "Pad", "Sample Pad direction", "Sample page direction", "System", "blur"] as const)(
   "%s retires an unsent precise App draft without late preview or submit revival", async (boundary) => {
     const fixture = mutableSampleRuntimeFixture();
     const saved = fixture.playbacks.get(0)!;
@@ -5853,6 +5885,8 @@ test.each(["page", "Sample subpage", "Pad", "System", "blur"] as const)(
       : boundary === "Sample subpage" ? within(screen.getByRole("navigation", {name: "Sample pages"}))
         .getByRole("button", {name: "Tone / EQ"})
       : boundary === "Pad" ? screen.getByRole("button", {name: /^Pad A02 —/})
+      : boundary === "Sample Pad direction" ? screen.getByRole("button", {name: "Next Pad — ↓"})
+      : boundary === "Sample page direction" ? screen.getByRole("button", {name: "Next Sample page — →"})
       : boundary === "System" ? screen.getByRole("button", {name: "System"}) : null;
     const input = await openAppNumericVolume();
     const retiredForm = input.closest("form")!;
@@ -5888,6 +5922,7 @@ test.each(["page", "Sample subpage", "Pad", "System", "blur"] as const)(
     if (boundary === "page") await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     else if (boundary === "System") await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
     else if (boundary === "Pad") await userEvent.click(screen.getByRole("button", {name: /^Pad A01 —/}));
+    else if (boundary === "Sample Pad direction") fireEvent.click(screen.getByRole("button", {name: "Previous Pad — ↑"}));
     selectSamplePage("Playback");
     await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent).toBe("0.0 dB"));
     expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toHaveProperty("value", "0");
@@ -5990,6 +6025,7 @@ test("App Project-history activation cancels precise input before Undo while foc
   Object.assign(fixture.session, {inspectAuthoringHistory: async () => historyStatus(),
     undoAuthoring: undo, redoAuthoring: vi.fn()});
   await enterEncoderSample(fixture);
+  showHistoryLayer();
   await waitFor(() => expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"}).classList.contains("is-lit")).toBe(true));
   const input = await openAppNumericVolume();
   const retiredForm = input.closest("form")!;
@@ -6020,8 +6056,9 @@ test("App Project-history activation cancels precise input before Undo while foc
   await waitFor(() => expect(revisionCell()?.textContent).toBe("4"));
 });
 
-test.each(["published", "publication failure", "conflict", "unknown"] as const)(
-  "a sent precise save retains its late %s result across App page retirement", async (outcome) => {
+test.each((["published", "publication failure", "conflict", "unknown"] as const).flatMap(outcome =>
+  (["page", "Sample Pad direction", "Sample page direction"] as const).map(boundary => ({outcome, boundary}))))(
+  "a sent precise save retains its late $outcome result across $boundary retirement", async ({outcome, boundary}) => {
     const fixture = mutableSampleRuntimeFixture();
     const saved = fixture.playbacks.get(0)!;
     const gate = deferred<SampleCommit>();
@@ -6037,8 +6074,18 @@ test.each(["published", "publication failure", "conflict", "unknown"] as const)(
       playback: {...saved, gainMillidb: -3_200}}));
     expect(screen.queryByRole("dialog")).toBeNull();
     // Modal is closed after Apply; this navigation is an ordinary UI action.
-    await userEvent.click(screen.getByRole("button", {name: "Project"}));
-    expect(revisionCell()?.textContent).toBe("3");
+    if (boundary === "page") {
+      await userEvent.click(screen.getByRole("button", {name: "Project"}));
+      expect(revisionCell()?.textContent).toBe("3");
+    } else {
+      await userEvent.click(screen.getByRole("button", {name: boundary === "Sample Pad direction"
+        ? "Next Pad — ↓" : "Next Sample page — →"}));
+      expect(document.querySelector(".selected-sample strong")?.textContent)
+        .toBe(boundary === "Sample Pad direction" ? "Pad A02" : "Pad A01");
+      if (boundary === "Sample page direction") expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+        .getByRole("button", {name: "Tone / EQ"}).getAttribute("aria-current")).toBe("page");
+      expect(fixture.revision).toBe(3);
+    }
     expect(update).toHaveBeenCalledTimes(1);
     let observedPlayback = saved;
     if (outcome === "published" || outcome === "publication failure") {
@@ -6059,6 +6106,12 @@ test.each(["published", "publication failure", "conflict", "unknown"] as const)(
       await act(async () => gate.reject(Object.assign(new Error("Receipt unknown"), {code: "HOST_TIMEOUT"})));
     }
     await waitFor(() => expect(clear).toHaveBeenCalledWith(0));
+    if (boundary === "Sample Pad direction") {
+      expect(document.querySelector(".selected-sample strong")?.textContent).toBe("Pad A02");
+      expect(fixture.inspectSample(1).assetId).toBeNull();
+      expect(fixture.inspectSample(1).playback.gainMillidb).toBe(0);
+      await userEvent.click(screen.getByRole("button", {name: "Previous Pad — ↑"}));
+    }
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     selectSamplePage("Playback");
     await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent)
@@ -6410,4 +6463,167 @@ test("ordinary default seed waits for the retained Sample update and successor p
   } finally {
     try {rendered?.unmount();} finally {vi.unstubAllGlobals();}
   }
+});
+
+test("Project directions select adjacent cards and three-column rows; only OPEN opens", async () => {
+  const summaries = [listedSummary, ...Array.from({length: 7}, (_, index) => {
+    const digit = (index + 4).toString(16);
+    return {...listedSummary,
+      projectId: `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`};
+  })];
+  let openedId = listedSummary.projectId;
+  const open = vi.fn(async (projectId: string) => {openedId = projectId; return {};});
+  const fixture = runtimeFixture({listLocalProjects: async () => summaries, openProject: open});
+  const inspect = fixture.session.inspectProject;
+  fixture.session.inspectProject = async () => {
+    const value = await inspect();
+    if (value === null || typeof value !== "object" || !("project" in value) ||
+        value.project === null || typeof value.project !== "object") {
+      throw new TypeError("The Project fixture has no inspection projection");
+    }
+    return {...value, project: {...value.project, project_id: openedId}};
+  };
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Next Project — →"})).toHaveProperty("disabled", false));
+  const opened = open.mock.calls.length;
+  const reads = [...fixture.calls];
+  const selected = () => Array.from(document.querySelectorAll(".project-card"),
+    card => [card.getAttribute("aria-label"), card.getAttribute("aria-pressed")]);
+  const expectSelection = (index: number) => {
+    expect(selected()).toEqual(summaries.map((summary, cardIndex) =>
+      [`Select Project ${summary.projectId.slice(0, 8)}`, String(cardIndex === index)]));
+    expect(open).toHaveBeenCalledTimes(opened);
+    expect(fixture.calls).toEqual(reads);
+  };
+  expect(getComputedStyle(document.querySelector(".local-projects")!).gridTemplateColumns)
+    .toBe("repeat(3, minmax(0, 1fr))"); // jsdom style seam; browser owns painted geometry.
+  expectSelection(0);
+  expect(screen.getByRole("button", {name: "Previous Project — ←"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Previous Project row — ↑"})).toHaveProperty("disabled", true);
+  for (const [name, index] of [
+    ["Next Project — →", 1], ["Next Project row — ↓", 4], ["Next Project row — ↓", 7],
+    ["Previous Project row — ↑", 4], ["Previous Project — ←", 3], ["Previous Project row — ↑", 0],
+    ["Next Project — →", 1], ["Next Project — →", 2], ["Next Project row — ↓", 5],
+    ["Next Project row — ↓", 7],
+  ] as const) {
+    fireEvent.click(screen.getByRole("button", {name}));
+    expectSelection(index);
+    expect(screen.getByRole("button", {name: "Previous Project row — ↑"}))
+      .toHaveProperty("disabled", index < 3);
+  }
+  for (const name of ["Next Project — →", "Next Project row — ↓"]) {
+    const key = screen.getByRole("button", {name});
+    expect(key).toHaveProperty("disabled", true);
+    fireEvent.click(key);
+    expectSelection(7);
+  }
+  await userEvent.click(screen.getByRole("button", {name: "Open Project aaaaaaaa"}));
+  await waitFor(() => expect(open).toHaveBeenCalledTimes(opened + 1));
+  expect(open.mock.lastCall?.[0]).toBe(summaries[7]!.projectId);
+  await screen.findByRole("heading", {name: "Project aaaaaaaa"});
+});
+
+test("Sample directions silently select A01–D16 with Sequence's shared Pad and Bank rules", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const trigger = vi.spyOn(fixture.session, "trigger");
+  const activate = vi.spyOn(fixture.session, "activateAudio");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  const truth = fixture.inspectProject();
+  Object.assign(fixture.session, sequenceSessionStubs());
+  const runAudio = controlledSampleAudio(fixture.session);
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
+  runAudio();
+  const current = () => document.querySelector(".selected-sample strong")?.textContent;
+  const up = screen.getByRole("button", {name: "Previous Pad — ↑"});
+  expect(up).toHaveProperty("disabled", true);
+  fireEvent.click(up);
+  expect(current()).toBe("Pad A01");
+  for (let slot = 1; slot < 64; slot += 1) {
+    fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+    const bank = "ABCD"[Math.floor(slot / 16)]!;
+    expect(current()).toBe(`Pad ${bank}${String(slot % 16 + 1).padStart(2, "0")}`);
+    expect(screen.getByRole("button", {name: `Bank ${bank}`}).getAttribute("aria-current")).toBe("page");
+  }
+  const down = screen.getByRole("button", {name: "Next Pad — ↓"});
+  expect(down).toHaveProperty("disabled", true);
+  fireEvent.click(down);
+  expect(current()).toBe("Pad D16");
+  fireEvent.click(screen.getByRole("button", {name: "Previous Pad — ↑"}));
+  expect(current()).toBe("Pad D15");
+  await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+  await screen.findByTestId("sequence-grid");
+  expect(within(screen.getByTestId("sequence-overview")).getByText("Pad").nextElementSibling?.textContent)
+    .toBe("D15");
+  expect(document.querySelector(".sequence-grid-row[data-current-pad] .sequence-grid-pad")?.textContent)
+    .toBe("D15");
+  expect(trigger).not.toHaveBeenCalled();
+  expect(activate).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.inspectProject()).toEqual(truth);
+});
+
+test("Sample left/right uses the existing page selection without sound or Truth changes", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const trigger = vi.spyOn(fixture.session, "trigger");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  const truth = fixture.inspectProject();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
+  const previous = () => screen.getByRole("button", {name: "Previous Sample page — ←"});
+  const next = () => screen.getByRole("button", {name: "Next Sample page — →"});
+  const expectPage = (name: string) => expect(within(screen.getByRole("navigation", {name: "Sample pages"}))
+    .getByRole("button", {name}).getAttribute("aria-current")).toBe("page");
+  expectPage("Trim");
+  expect(previous()).toHaveProperty("disabled", true);
+  for (const name of ["Playback", "Tone / EQ", "Pad"]) {
+    fireEvent.click(next());
+    expectPage(name);
+  }
+  expect(next()).toHaveProperty("disabled", true);
+  fireEvent.click(next());
+  expectPage("Pad");
+  for (const name of ["Tone / EQ", "Playback", "Trim"]) {
+    fireEvent.click(previous());
+    expectPage(name);
+  }
+  selectSamplePage("Tone / EQ");
+  fireEvent.click(previous());
+  expectPage("Playback"); // Touch page selection and rail use the same state.
+  fireEvent.click(next());
+  expectPage("Tone / EQ");
+  expect(document.querySelector(".selected-sample strong")?.textContent).toBe("Pad A01");
+  expect(trigger).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.inspectProject()).toEqual(truth);
+});
+
+test.each(["Project", "Sample"])("%s SHIFT leaves up/down unassigned and left/right on history", async (mode) => {
+  const fixture = mutableSampleRuntimeFixture();
+  const trigger = vi.spyOn(fixture.session, "trigger");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: mode}));
+  const current = document.querySelector(".selected-sample strong")?.textContent;
+  const selectedProjects = Array.from(document.querySelectorAll(".project-card"), card => card.getAttribute("aria-pressed"));
+  showHistoryLayer();
+  for (const name of ["Up — unassigned until direction mapping is approved", "Down — unassigned until direction mapping is approved"]) {
+    const key = screen.getByRole("button", {name});
+    expect(key).toHaveProperty("disabled", true);
+    fireEvent.click(key);
+  }
+  expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Redo — SHIFT + →"})).toHaveProperty("disabled", true);
+  expect(document.querySelector(".selected-sample strong")?.textContent).toBe(current);
+  expect(Array.from(document.querySelectorAll(".project-card"), card => card.getAttribute("aria-pressed")))
+    .toEqual(selectedProjects);
+  expect(trigger).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.revision).toBe(3);
 });

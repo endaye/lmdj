@@ -130,11 +130,17 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   // Undo/Redo is the SHIFT + ← / → chord on the direction row; the lamp, not
   // a greyed button pair, reports availability, and nothing sits outside the
   // console frame.
+  await expect(keys.getByRole("button", {name: "Previous Sample page — ←", exact: true}))
+    .toBeDisabled();
+  await expect(keys.getByRole("button", {name: "Next Sample page — →", exact: true}))
+    .toBeEnabled();
+  await keys.getByRole("button", {name: /^SHIFT/}).click();
   const undoKey = keys.getByRole("button", {name: "Undo — SHIFT + ←", exact: true});
   await expect(undoKey).toBeDisabled();
   await expect(undoKey).not.toHaveClass(/\bis-lit\b/);
   await expect(keys.getByRole("button", {name: "Redo — SHIFT + →", exact: true}))
     .toBeDisabled();
+  await keys.getByRole("button", {name: /^SHIFT/}).click();
   await expect(page.getByTestId("authoring-history")).toHaveCount(0);
   await expect(keys.getByRole("button", {name: "Project", exact: true})).toBeVisible();
   await expect(keys.getByRole("button", {name: "Sample", exact: true})).toBeVisible();
@@ -275,6 +281,82 @@ async function inspectTruth(page) {
     window.lmdjWebRuntimeHost.inspection.inspectProject());
   return inspected.project;
 }
+
+test("Project arrows follow the rendered three-column list and only OPEN changes Project", async ({page}) => {
+  await page.goto("/");
+  await waitForBootProject(page);
+  const keys = page.getByTestId("physical-controls");
+  const touch = page.getByTestId("touch-workspace");
+  // Four real local Projects expose a complete row and a shorter final row.
+  // Create them through the existing UI, not a cloned DOM or fake inventory.
+  for (let index = 0; index < 3; index += 1) {
+    const before = await inspectTruth(page);
+    await keys.getByRole("button", {name: "Project", exact: true}).click();
+    await page.getByRole("button", {name: "New Project", exact: true}).click();
+    await expect.poll(async () => (await inspectTruth(page)).project_id,
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).not.toBe(before.project_id);
+    await waitForBootProject(page);
+  }
+  await keys.getByRole("button", {name: "Project", exact: true}).click();
+  const cards = touch.locator(".project-card");
+  await expect(cards).toHaveCount(4);
+  const labels = await cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-label")));
+  const expectSelection = async (index) => {
+    await expect.poll(() => cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-pressed"))))
+      .toEqual([0, 1, 2, 3].map(cardIndex => String(cardIndex === index)));
+  };
+  const before = await inspectTruth(page);
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
+    await page.setViewportSize(viewport);
+    await touch.evaluate(element => {element.scrollTop = 0;});
+    await expectConsoleFitsStage(page);
+    const geometry = await touch.evaluate(element => ({
+      width: element.clientWidth, scrollWidth: element.scrollWidth,
+      cards: [...element.querySelectorAll(".project-card")].map(card => ({
+        rect: card.getBoundingClientRect().toJSON(), width: card.clientWidth, scrollWidth: card.scrollWidth,
+      })),
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+    for (const card of geometry.cards) expect(card.scrollWidth).toBeLessThanOrEqual(card.width);
+    const [first, second, third, fourth] = geometry.cards.map(card => card.rect);
+    expect(second.left).toBeGreaterThan(first.right);
+    expect(third.left).toBeGreaterThan(second.right);
+    expect(second.top).toBeCloseTo(first.top, 0);
+    expect(third.top).toBeCloseTo(first.top, 0);
+    expect(fourth.left).toBeCloseTo(first.left, 0);
+    expect(fourth.top).toBeGreaterThan(first.bottom);
+    await cards.nth(1).scrollIntoViewIfNeeded();
+    const target = await cards.nth(1).boundingBox();
+    const hit = await page.evaluate(({x, y}) =>
+      document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
+    {x: target.x + target.width / 2, y: target.y + target.height / 2});
+    expect(hit).toBe(labels[1]);
+    await cards.nth(0).click();
+    await expectSelection(0);
+    await expect(keys.getByRole("button", {name: "Previous Project row — ↑", exact: true})).toBeDisabled();
+    await keys.getByRole("button", {name: "Next Project — →", exact: true}).click();
+    await expectSelection(1);
+    expect(await inspectTruth(page)).toEqual(before);
+    await keys.getByRole("button", {name: "Next Project row — ↓", exact: true}).click();
+    await expectSelection(3);
+    await expect(keys.getByRole("button", {name: "Next Project row — ↓", exact: true})).toBeDisabled();
+    expect(await inspectTruth(page)).toEqual(before);
+    await keys.getByRole("button", {name: "Previous Project row — ↑", exact: true}).click();
+    await expectSelection(0);
+    expect(await inspectTruth(page)).toEqual(before);
+  }
+  const currentIndex = await cards.evaluateAll(elements => elements.findIndex(element =>
+    element.parentElement.getAttribute("aria-current") === "true"));
+  expect(currentIndex).toBeGreaterThanOrEqual(0);
+  const targetIndex = currentIndex === 3 ? 0 : 3;
+  await cards.nth(targetIndex).click();
+  expect(await inspectTruth(page)).toEqual(before);
+  const selectedId = labels[targetIndex].slice("Select Project ".length);
+  await page.getByRole("button", {name: `Open Project ${selectedId}`, exact: true}).click();
+  await expect(page.getByRole("heading", {name: `Project ${selectedId}`, exact: true}))
+    .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  expect((await inspectTruth(page)).project_id.slice(0, 8)).toBe(selectedId);
+});
 
 test("commits Tempo only on release and keeps Project Truth across a reload", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});

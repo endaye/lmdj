@@ -1,6 +1,6 @@
 import {userMessage} from "../state/error_messages";
-import {useEffect, useMemo, useRef, useState, type ChangeEvent} from "react";
-import type {ContextualEncoders} from "./physical_controls";
+import {useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent} from "react";
+import type {ContextualEncoders, ContextualNavigation} from "./physical_controls";
 
 import type {
   CreatorState,
@@ -27,6 +27,7 @@ interface ProjectSurfaceProps {
   onDuplicate?: () => void;
   encodersActive?: boolean;
   onEncodersReady?: (encoders: ContextualEncoders | null) => void;
+  onNavigationReady?: (navigation: ContextualNavigation | null) => void;
 }
 
 export function formatBytes(bytes: number): string {
@@ -72,6 +73,7 @@ export function ProjectSurface({
   onDuplicate,
   encodersActive = true,
   onEncodersReady,
+  onNavigationReady,
 }: ProjectSurfaceProps) {
   const project = state.project.current;
   const showChooser = project === null || showLocalProjects;
@@ -96,19 +98,19 @@ export function ProjectSurface({
     ?? projects[0]
     ?? null;
   const selectedIndex = selected === null ? -1 : projects.indexOf(selected);
+  const selectProjectBy = useCallback((steps: number) => {
+    if (!encodersActive || importing || projects.length === 0 || !Number.isFinite(steps)) return;
+    setSelectedId((current) => {
+      const index = projects.findIndex((item) => item.projectId === current);
+      const next = projects[Math.max(0, Math.min(projects.length - 1,
+        (index < 0 ? selectedIndex : index) + Math.trunc(steps)))];
+      return next?.projectId ?? current;
+    });
+  }, [encodersActive, importing, projects, selectedIndex]);
   const encoders = useMemo<ContextualEncoders>(() => ({bindings: {
     1: {label: "Select Project", value: selectedIndex < 0 ? "—" : String(selectedIndex + 1).padStart(2, "0"),
       disabled: projects.length === 0 || importing,
-      onTurn: (detents) => {
-        if (!encodersActive || importing || projects.length === 0) return;
-        if (!Number.isFinite(detents)) return;
-        setSelectedId((current) => {
-          const index = projects.findIndex((item) => item.projectId === current);
-          const next = projects[Math.max(0, Math.min(projects.length - 1,
-            (index < 0 ? selectedIndex : index) + Math.trunc(detents)))];
-          return next?.projectId ?? current;
-        });
-      }},
+      onTurn: selectProjectBy},
     2: {label: "Scroll Projects", value: `${Math.round(listPosition)} px`, disabled: projects.length === 0,
       onTurn: (detents) => {
         if (!encodersActive) return;
@@ -120,11 +122,30 @@ export function ProjectSurface({
           viewport.scrollTop + detents * row));
         setListPosition(viewport.scrollTop);
       }},
-  }}), [encodersActive, importing, projects, selectedIndex, listPosition]);
+  }}), [encodersActive, importing, projects, selectedIndex, listPosition, selectProjectBy]);
   useEffect(() => {
     onEncodersReady?.(encodersActive ? encoders : null);
     return () => onEncodersReady?.(null);
   }, [onEncodersReady, encodersActive, encoders]);
+  const navigation = useMemo<ContextualNavigation>(() => ({
+    directionStep: {
+      backLabel: "Previous Project — ←", forwardLabel: "Next Project — →",
+      backAvailable: !importing && selectedIndex > 0,
+      forwardAvailable: !importing && selectedIndex >= 0 && selectedIndex < projects.length - 1,
+      onBack: () => selectProjectBy(-1), onForward: () => selectProjectBy(1),
+    },
+    padStep: {
+      backLabel: "Previous Project row — ↑", forwardLabel: "Next Project row — ↓",
+      backAvailable: !importing && selectedIndex >= 3,
+      forwardAvailable: !importing && selectedIndex >= 0 &&
+        Math.floor(selectedIndex / 3) < Math.floor((projects.length - 1) / 3),
+      onBack: () => selectProjectBy(-3), onForward: () => selectProjectBy(3),
+    },
+  }), [importing, selectedIndex, projects.length, selectProjectBy]);
+  useEffect(() => {
+    onNavigationReady?.(encodersActive ? navigation : null);
+    return () => onNavigationReady?.(null);
+  }, [onNavigationReady, encodersActive, navigation]);
   useEffect(() => {
     const viewport = surface.current?.closest<HTMLElement>('[aria-label="Touch workspace"]');
     if (viewport === null || viewport === undefined) return;

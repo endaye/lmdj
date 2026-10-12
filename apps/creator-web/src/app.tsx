@@ -37,7 +37,7 @@ import type {CreatorMode} from "./components/creator_mode";
 import {OverviewDisplay} from "./components/overview_display";
 import {PadColourControls} from "./components/pad_colour_controls";
 import {PadSurface} from "./components/pad_surface";
-import {PhysicalControls, type ContextualEncoders, type EncoderBinding, type EncoderPosition} from "./components/physical_controls";
+import {PhysicalControls, type ContextualEncoders, type ContextualNavigation, type EncoderBinding, type EncoderPosition} from "./components/physical_controls";
 import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {ProjectTouchWorkspace} from "./components/project_touch_workspace";
@@ -426,6 +426,10 @@ function Workspace({
   const [projectEncoders, setProjectEncoders] = useState<ContextualEncoders | null>(null);
   const [sampleEncoders, setSampleEncoders] = useState<ContextualEncoders | null>(null);
   const [performEncoders, setPerformEncoders] = useState<ContextualEncoders | null>(null);
+  const [projectNavigation, setProjectNavigation] = useState<ContextualNavigation | null>(null);
+  const [sampleNavigation, setSampleNavigation] = useState<ContextualNavigation | null>(null);
+  const bindProjectNavigation = useCallback((value: ContextualNavigation | null) => setProjectNavigation(value), []);
+  const bindSampleNavigation = useCallback((value: ContextualNavigation | null) => setSampleNavigation(value), []);
   const sampleEncodersRef = useRef<ContextualEncoders | null>(null);
   const bindProjectEncoders = useCallback((value: ContextualEncoders | null) => setProjectEncoders(value), []);
   const bindSampleEncoders = useCallback((value: ContextualEncoders | null) => {
@@ -3014,6 +3018,18 @@ function Workspace({
               systemOpen={systemOpen}
               systemEntryRef={systemEntry}
               encoders={encoderBindings}
+              {...(activeMode === "project" && !systemOpen ? {
+                directionStep: projectNavigation?.directionStep,
+                padStep: railShift ? undefined : projectNavigation?.padStep,
+              } : activeMode === "sample" && !systemOpen ? {
+                directionStep: sampleNavigation?.directionStep,
+                padStep: railShift ? undefined : {
+                  backLabel: "Previous Pad — ↑", forwardLabel: "Next Pad — ↓",
+                  backAvailable: padNavigationAvailable && sequenceCurrentPad > 0,
+                  forwardAvailable: padNavigationAvailable && sequenceCurrentPad < 63,
+                  onBack: () => stepSequencePad(-1), onForward: () => stepSequencePad(1),
+                },
+              } : {})}
               {...(activeMode === "sequence" && !systemOpen && sequenceProject !== null ? {
                 padStep: {
                   backLabel: "Previous Pad — ↑",
@@ -3193,6 +3209,7 @@ function Workspace({
                 <ProjectTouchWorkspace
                   encodersActive={!systemOpen}
                   onEncodersReady={bindProjectEncoders}
+                  onNavigationReady={bindProjectNavigation}
                   state={state}
                   canOpen={canOpenProject}
                   canImport={canImportProject}
@@ -3378,6 +3395,7 @@ function Workspace({
                   ) : null}
                   encodersActive={activeMode === "sample" && !systemOpen}
                   onEncodersReady={bindSampleEncoders}
+                  onNavigationReady={bindSampleNavigation}
                   state={state}
                   externalCaptureBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                     recording || !["idle", "saved", "discarded"].includes(historyPerformPhase)}
