@@ -5828,3 +5828,586 @@ test("Project encoder selection does not open a Project until explicit OPEN", as
   await userEvent.click(screen.getByRole("button", {name: "Open Project 55555555"}));
   await waitFor(() => expect(open).toHaveBeenCalledTimes(before + 1));
 });
+
+
+// N13: mounted App ownership witnesses use the existing mutable Host fixture.
+// Its accepted preview is a component seam, not browser activation or hearing.
+async function openAppNumericVolume() {
+  selectSamplePage("Playback");
+  await userEvent.click(screen.getByRole("button", {name: "Edit Pad A01 Volume"}));
+  return screen.getByRole("spinbutton", {name: "Pad A01 Volume value"});
+}
+
+test.each(["page", "Sample subpage", "Pad", "System", "blur"] as const)(
+  "%s retires an unsent precise App draft without late preview or submit revival", async (boundary) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const saved = fixture.playbacks.get(0)!;
+    const latePreview = deferred<boolean>();
+    const preview = vi.spyOn(fixture.session, "setSamplePreview")
+      .mockResolvedValueOnce(true).mockImplementationOnce(() => latePreview.promise);
+    const clear = vi.spyOn(fixture.session, "clearSamplePreview");
+    const update = vi.spyOn(fixture.session, "updatePad");
+    await enterEncoderSample(fixture);
+    // Keep the actual rendered App targets before ModalDialog makes them inert.
+    const route = boundary === "page" ? screen.getByRole("button", {name: "Project"})
+      : boundary === "Sample subpage" ? within(screen.getByRole("navigation", {name: "Sample pages"}))
+        .getByRole("button", {name: "Tone / EQ"})
+      : boundary === "Pad" ? screen.getByRole("button", {name: /^Pad A02 —/})
+      : boundary === "System" ? screen.getByRole("button", {name: "System"}) : null;
+    const input = await openAppNumericVolume();
+    const retiredForm = input.closest("form")!;
+    fireEvent.change(input, {target: {value: "-3.2"}});
+    await waitFor(() => expect(preview).toHaveBeenCalledExactlyOnceWith(0, {...saved, gainMillidb: -3_200}));
+    await flushAsyncTurns();
+    expect(screen.getByRole("slider", {name: "Pad A01 Volume", hidden: true})).toHaveProperty("value", "-3.2");
+    expect(update).not.toHaveBeenCalled();
+    expect(fixture.playbacks.get(0)).toEqual(saved);
+    fireEvent.change(input, {target: {value: "-4.8"}});
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
+    expect(preview.mock.calls[1]).toEqual([0, {...saved, gainMillidb: -4_800}]);
+    if (route === null) fireEvent.blur(window);
+    else {
+      expect(route.closest("[inert]")).not.toBeNull();
+      // Forced handler dispatch, not a native pointer journey: modal background
+      // navigation is physically unreachable. This witnesses App cancellation.
+      fireEvent.click(route);
+    }
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(clear).toHaveBeenCalledExactlyOnceWith(0));
+    expect(update).not.toHaveBeenCalled();
+    expect(fixture.revision).toBe(3);
+    expect(fixture.playbacks.get(0)).toEqual(saved);
+    // A retired DOM submit is a post-retirement handler witness. The retained
+    // numeric component cases separately submit before passive context cleanup.
+    fireEvent.submit(retiredForm);
+    await act(async () => {latePreview.resolve(true);});
+    await flushAsyncTurns();
+    expect(update).not.toHaveBeenCalled();
+    expect(preview).toHaveBeenCalledTimes(2);
+    expect(clear).toHaveBeenCalledTimes(1);
+    if (boundary === "page") await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    else if (boundary === "System") await userEvent.click(screen.getByRole("button", {name: "Back to music"}));
+    else if (boundary === "Pad") await userEvent.click(screen.getByRole("button", {name: /^Pad A01 —/}));
+    selectSamplePage("Playback");
+    await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent).toBe("0.0 dB"));
+    expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toHaveProperty("value", "0");
+    expect(fixture.inspectSample(0).playback).toEqual(saved);
+    expect(update).not.toHaveBeenCalled();
+  },
+);
+
+test.each(["same Project", "different Project"] as const)(
+  "App context replacement into %s clears the old precise owner without touching the new Session", async (replacement) => {
+    const first = mutableSampleRuntimeFixture();
+    const second = mutableSampleRuntimeFixture();
+    const projectId = replacement === "same Project" ? listedSummary.projectId
+      : "44444444-4444-4444-8444-444444444444";
+    second.session.listLocalProjects = async () => [{...second.summary(), projectId}];
+    second.session.inspectProject = async () => {
+      const value = second.inspectProject();
+      return {...value, project: {...value.project, project_id: projectId}};
+    };
+    let publish!: (state: RuntimeHostState) => void;
+    first.session.subscribeHostState = (listener) => {publish = listener; return () => {};};
+    const latePreview = deferred<boolean>();
+    const preview = vi.spyOn(first.session, "setSamplePreview")
+      .mockResolvedValueOnce(true).mockImplementationOnce(() => latePreview.promise);
+    const oldClear = vi.spyOn(first.session, "clearSamplePreview");
+    const newClear = vi.spyOn(second.session, "clearSamplePreview");
+    const oldUpdate = vi.spyOn(first.session, "updatePad");
+    const newUpdate = vi.spyOn(second.session, "updatePad");
+    const sessions = [first.session, second.session];
+    let created = 0;
+    const factory = () => sessions[created++]!;
+    const rendered = render(<App key="first" initialState={ready} runtimeFactory={factory} />);
+    await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await expectSelectedAsset(first.assigned.get(0)!);
+    act(() => {
+      setRunningAudioFixture(first.session);
+      publish({state: "running", errorCode: null, errorDetails: {}});
+    });
+    const input = await openAppNumericVolume();
+    const retiredForm = input.closest("form")!;
+    fireEvent.change(input, {target: {value: "-3.2"}});
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+    await flushAsyncTurns();
+    expect(screen.getByRole("slider", {name: "Pad A01 Volume", hidden: true})).toHaveProperty("value", "-3.2");
+    fireEvent.change(input, {target: {value: "-4.8"}});
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
+    if (replacement === "same Project") {
+      await act(async () => publish({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+    } else {
+      // Controlled Project/App replacement, not a modal-background pointer
+      // route. Both real App mounts use their own Session and Project state.
+      const replacementState: CreatorState = {...ready, project: {phase: "ready",
+        projects: [{...second.summary(), projectId}],
+        current: {...ready.project.current!, ...second.summary(), projectId}}};
+      rendered.rerender(<App key="second" initialState={replacementState} runtimeFactory={factory} />);
+    }
+    await waitFor(() => expect(created).toBe(2));
+    await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(oldClear).toHaveBeenCalledExactlyOnceWith(0));
+    expect(oldUpdate).not.toHaveBeenCalled();
+    expect(newUpdate).not.toHaveBeenCalled();
+    fireEvent.submit(retiredForm);
+    await act(async () => {latePreview.resolve(true);});
+    await flushAsyncTurns();
+    expect(oldClear).toHaveBeenCalledTimes(1);
+    expect(newClear).not.toHaveBeenCalled();
+    expect(oldUpdate).not.toHaveBeenCalled();
+    expect(newUpdate).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(screen.getByRole("heading", {name: `Project ${projectId.slice(0, 8)}`})).toBeTruthy();
+    expect(revisionCell()?.textContent).toBe("3");
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    selectSamplePage("Playback");
+    await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent).toBe("0.0 dB"));
+    expect(first.playbacks.get(0)!.gainMillidb).toBe(0);
+    expect(second.playbacks.get(0)!.gainMillidb).toBe(0);
+  },
+);
+
+test("App Project-history activation cancels precise input before Undo while focused text Undo stays local", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const saved = fixture.playbacks.get(0)!;
+  const order: string[] = [];
+  const preview = vi.spyOn(fixture.session, "setSamplePreview");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  const clear = vi.spyOn(fixture.session, "clearSamplePreview").mockImplementation(async (slot) => {
+    order.push(`clear:${slot}`); return true;
+  });
+  const historyStatus = () => ({sessionId: "history", projectRevision: fixture.revision,
+    canUndo: fixture.revision === 3, canRedo: fixture.revision === 4,
+    undoCount: fixture.revision === 3 ? 1 : 0, redoCount: fixture.revision === 4 ? 1 : 0,
+    undoLabel: "Import sample", redoLabel: "Import sample", disabledReason: ""});
+  const undo = vi.fn(async () => {
+    order.push("undo"); fixture.revision += 1;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  });
+  Object.assign(fixture.session, {inspectAuthoringHistory: async () => historyStatus(),
+    undoAuthoring: undo, redoAuthoring: vi.fn()});
+  await enterEncoderSample(fixture);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"}).classList.contains("is-lit")).toBe(true));
+  const input = await openAppNumericVolume();
+  const retiredForm = input.closest("form")!;
+  fireEvent.change(input, {target: {value: "-3.2"}});
+  await waitFor(() => expect(preview).toHaveBeenCalledExactlyOnceWith(0, {...saved, gainMillidb: -3_200}));
+  await flushAsyncTurns();
+  // Native text Undo is not replaced with Project Undo. jsdom's event witness
+  // establishes ownership/default handling, not a browser text undo stack.
+  expect(fireEvent.keyDown(input, {key: "z", code: "KeyZ", ctrlKey: true})).toBe(true);
+  expect(undo).not.toHaveBeenCalled();
+  expect(clear).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  // Controller-originated global event reaches the existing owned App history
+  // route. This is not an invented in-dialog shortcut or an inert rail click.
+  fireEvent.keyDown(window, {key: "z", code: "KeyZ", ctrlKey: true});
+  await waitFor(() => expect(undo).toHaveBeenCalledTimes(1));
+  expect(order).toEqual(["clear:0", "undo"]);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(update).not.toHaveBeenCalled();
+  fireEvent.submit(retiredForm);
+  await flushAsyncTurns();
+  expect(update).not.toHaveBeenCalled();
+  expect(undo).toHaveBeenCalledExactlyOnceWith({sessionId: "history",
+    commandId: expect.any(String), expectedRevision: 3});
+  expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent).toBe("0.0 dB");
+  expect(fixture.playbacks.get(0)).toEqual(saved);
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await waitFor(() => expect(revisionCell()?.textContent).toBe("4"));
+});
+
+test.each(["published", "publication failure", "conflict", "unknown"] as const)(
+  "a sent precise save retains its late %s result across App page retirement", async (outcome) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const saved = fixture.playbacks.get(0)!;
+    const gate = deferred<SampleCommit>();
+    const update = vi.spyOn(fixture.session, "updatePad").mockImplementation(() => gate.promise);
+    const preview = vi.spyOn(fixture.session, "setSamplePreview");
+    const clear = vi.spyOn(fixture.session, "clearSamplePreview");
+    await enterEncoderSample(fixture);
+    const input = await openAppNumericVolume();
+    fireEvent.change(input, {target: {value: "-3.2"}});
+    await waitFor(() => expect(preview).toHaveBeenCalledExactlyOnceWith(0, {...saved, gainMillidb: -3_200}));
+    await userEvent.click(screen.getByRole("button", {name: "Apply Volume"}));
+    await waitFor(() => expect(update).toHaveBeenCalledExactlyOnceWith({slot: 0, expectedRevision: 3,
+      playback: {...saved, gainMillidb: -3_200}}));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Modal is closed after Apply; this navigation is an ordinary UI action.
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(revisionCell()?.textContent).toBe("3");
+    expect(update).toHaveBeenCalledTimes(1);
+    let observedPlayback = saved;
+    if (outcome === "published" || outcome === "publication failure") {
+      observedPlayback = {...saved, gainMillidb: -3_200};
+      fixture.playbacks.set(0, observedPlayback); fixture.revision = 4;
+      await act(async () => gate.resolve({committedRevision: 4,
+        runtimeRevision: outcome === "published" ? 4 : 3,
+        runtimePublished: outcome === "published", snapshotError: outcome === "published" ? null
+          : {code: "COOK_FAILED", message: "The sound was saved but is not ready to play yet.", details: {}}}));
+    } else if (outcome === "conflict") {
+      observedPlayback = {...saved, pitchCents: 100};
+      fixture.playbacks.set(0, observedPlayback); fixture.revision = 4;
+      await act(async () => gate.reject(Object.assign(new Error("Project changed"), {code: "REVISION_CONFLICT"})));
+    } else {
+      // Lost receipt is only a consumer seam. Unchanged fixture storage does
+      // not prove the native request did not commit; the retained error is the
+      // evidence. There is no automatic resend or new durable identity here.
+      await act(async () => gate.reject(Object.assign(new Error("Receipt unknown"), {code: "HOST_TIMEOUT"})));
+    }
+    await waitFor(() => expect(clear).toHaveBeenCalledWith(0));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    selectSamplePage("Playback");
+    await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent)
+      .toBe(outcome === "published" || outcome === "publication failure" ? "-3.2 dB" : "0.0 dB"));
+    if (outcome === "publication failure") {
+      expect(screen.getByRole("button", {name: "Retry Prepare"})).toBeTruthy();
+      expect(screen.getByText("The sound was saved but is not ready to play yet.")).toBeTruthy();
+    } else if (outcome === "conflict") {
+      expect(screen.getByText("Project changed; review and try again")).toBeTruthy();
+      expect(screen.getByRole("slider", {name: "Pad A01 Pitch"})).toHaveProperty("value", "1");
+    } else if (outcome === "unknown") {
+      expect(screen.getByRole("alert").textContent).toContain("The change took too long.");
+      expect(screen.queryByRole("button", {name: "Retry Prepare"})).toBeNull();
+    } else expect(screen.queryByRole("alert")).toBeNull();
+    await flushAsyncTurns();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(fixture.inspectSample(0).playback).toEqual(observedPlayback);
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    await waitFor(() => expect(revisionCell()?.textContent).toBe(outcome === "unknown" ? "3" : "4"));
+    expect(update).toHaveBeenCalledTimes(1);
+  },
+);
+
+// Manufactured consumer responses/storage with the real mounted App and
+// RuntimeProvider restart route. Native Session/commit interleaving is UNRUN;
+// these assertions do not turn the fixture's return into a native receipt.
+test.each([
+  {outcome: "published", slot: 0},
+  {outcome: "publication failure", slot: 0},
+  {outcome: "conflict", slot: 0},
+  {outcome: "unknown", slot: 0},
+  {outcome: "published", slot: 1},
+] as const)(
+  "sent Pad $slot precise input retains its $outcome outcome through page retirement and same-Project Runtime replacement", async ({outcome, slot}) => {
+    const first = mutableSampleRuntimeFixture();
+    const second = mutableSampleRuntimeFixture();
+    const savedPad0 = first.playbacks.get(0)!;
+    if (slot === 1) {
+      first.assigned.set(1, first.assigned.get(0)!);
+      first.playbacks.set(1, {...savedPad0, gainMillidb: 1_000});
+    }
+    const saved = first.playbacks.get(slot)!;
+    const finalPlayback = {...saved, gainMillidb: -3_200};
+    const conflictingPlayback = {...saved, pitchCents: 100};
+    const oldInspect = deferred<ReturnType<typeof first.inspectSample>>();
+    const oldClear = deferred<boolean>();
+    const newProjection = deferred<ReturnType<typeof first.inspectProject>>();
+    const downstreamStarted = vi.fn();
+    let commandReturned = false;
+    let newProjectReads = 0;
+    let publish!: (state: RuntimeHostState) => void;
+    first.session.subscribeHostState = (listener) => {publish = listener; return () => {};};
+    const inspect = vi.spyOn(first.session, "inspectSample").mockImplementation(async (slot) => {
+      if (commandReturned) {downstreamStarted(slot); return oldInspect.promise;}
+      return first.inspectSample(slot);
+    });
+    vi.spyOn(first.session, "clearSamplePreview").mockImplementation(async () => {
+      if (outcome === "unknown" && commandReturned) {
+        downstreamStarted(slot); return oldClear.promise;
+      }
+      return true;
+    });
+    const update = vi.spyOn(first.session, "updatePad").mockImplementation(async (request) => {
+      commandReturned = true;
+      if (outcome === "unknown") {
+        throw Object.assign(new Error("Receipt unknown"), {code: "HOST_TIMEOUT"});
+      }
+      first.revision = 4;
+      first.playbacks.set(request.slot, outcome === "conflict" ? conflictingPlayback : request.playback);
+      if (outcome === "conflict") {
+        throw Object.assign(new Error("Project changed"), {code: "REVISION_CONFLICT"});
+      }
+      return {committedRevision: 4, runtimeRevision: outcome === "published" ? 4 : 3,
+        runtimePublished: outcome === "published", snapshotError: outcome === "published" ? null
+          : {code: "COOK_FAILED", message: "The sound was saved but is not ready to play yet.", details: {}}};
+    });
+    // Separate Session objects read the same manufactured Project storage.
+    // Only the old Session's post-command readback is held; the replacement
+    // must actually open the Project through App's existing recovery route.
+    second.session.listLocalProjects = async () => [first.summary()];
+    second.session.inspectSample = async (slot) => first.inspectSample(slot);
+    second.session.queryWaveform = first.session.queryWaveform;
+    const replacementInspect = vi.spyOn(second.session, "inspectProject").mockImplementation(async () => {
+      newProjectReads += 1;
+      return newProjectReads === 1 ? first.inspectProject() : newProjection.promise;
+    });
+    const replacementOpen = vi.spyOn(second.session, "openProject");
+    const replacementUpdate = vi.spyOn(second.session, "updatePad");
+    const replacementClear = vi.spyOn(second.session, "clearSamplePreview");
+    const sessions = [first.session, second.session];
+    let created = 0;
+    render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+    await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await expectSelectedAsset(first.assigned.get(0)!);
+    act(() => {
+      setRunningAudioFixture(first.session);
+      publish({state: "running", errorCode: null, errorDetails: {}});
+    });
+    let input: HTMLElement;
+    if (slot === 1) {
+      await userEvent.click(screen.getByRole("button", {name: /^Pad A02 —/}));
+      selectSamplePage("Playback");
+      await userEvent.click(screen.getByRole("button", {name: "Edit Pad A02 Volume"}));
+      input = await screen.findByRole("spinbutton", {name: "Pad A02 Volume value"});
+    } else input = await openAppNumericVolume();
+    fireEvent.change(input, {target: {value: "-3.2"}});
+    await userEvent.click(screen.getByRole("button", {name: "Apply Volume"}));
+    await waitFor(() => expect(update).toHaveBeenCalledExactlyOnceWith({slot,
+      expectedRevision: 3, playback: finalPlayback}));
+    await waitFor(() => expect(downstreamStarted).toHaveBeenCalledWith(slot));
+    expect(commandReturned).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    if (outcome !== "unknown") expect(inspect).toHaveBeenLastCalledWith(slot);
+    expect(first.revision).toBe(outcome === "unknown" ? 3 : 4);
+    // Apply has closed the modal. Project navigation is a real reachable route.
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(revisionCell()?.textContent).toBe("3");
+    expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+    expect(update).toHaveBeenCalledTimes(1);
+    await act(async () => publish({state: "restart-required",
+      errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+    await waitFor(() => expect(created).toBe(2));
+    await waitFor(() => expect(replacementOpen).toHaveBeenCalledExactlyOnceWith(
+      listedSummary.projectId, listedSummary.patternId));
+    await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(revisionCell()?.textContent).toBe(outcome === "unknown" ? "3" : "4"));
+    expect(replacementInspect).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Open local"})).toHaveProperty("disabled", true);
+    await userEvent.click(screen.getByRole("button", {name: "New Project"}));
+    await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+    expect(second.calls).not.toContain("createProject");
+    expect(replacementOpen).toHaveBeenCalledTimes(1);
+    expect(replacementUpdate).not.toHaveBeenCalled();
+    expect(replacementClear).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+    // Release only the old consumer's downstream boundary, after the actual
+    // replacement has reopened the same Project. There is no authoring retry.
+    await act(async () => {
+      if (outcome === "unknown") oldClear.resolve(true);
+      else oldInspect.resolve(first.inspectSample(slot));
+    });
+    if (outcome !== "unknown") {
+      await waitFor(() => expect(replacementInspect).toHaveBeenCalledTimes(2));
+      // Receiving a known authoring result is not the final projection leg.
+      expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+      expect(replacementUpdate).not.toHaveBeenCalled();
+      await act(async () => newProjection.resolve(first.inspectProject()));
+    }
+    await waitFor(() => expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", false));
+    expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+    expect(revisionCell()?.textContent).toBe(outcome === "unknown" ? "3" : "4");
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(replacementUpdate).not.toHaveBeenCalled();
+    expect(replacementClear).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    selectSamplePage("Playback");
+    await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"}).textContent)
+      .toBe(slot === 0 && (outcome === "published" || outcome === "publication failure") ? "-3.2 dB" : "0.0 dB"));
+    if (outcome === "publication failure") {
+      expect(screen.getByRole("button", {name: "Retry Prepare"})).toBeTruthy();
+      expect(screen.getByText("The sound was saved but is not ready to play yet.")).toBeTruthy();
+    } else if (outcome === "conflict") {
+      expect(screen.getByText("Project changed; review and try again")).toBeTruthy();
+      expect(screen.getByRole("slider", {name: "Pad A01 Pitch"})).toHaveProperty("value", "1");
+    } else if (outcome === "unknown") {
+      expect(screen.getByRole("alert").textContent).toContain("The change took too long.");
+      expect(screen.queryByRole("button", {name: "Retry Prepare"})).toBeNull();
+      // Unchanged mock storage does not prove the timed-out native command
+      // never committed. The retained unknown result and no resend are facts.
+    } else expect(screen.queryByRole("alert")).toBeNull();
+    await flushAsyncTurns();
+    expect(first.inspectSample(slot).playback).toEqual(outcome === "unknown" ? saved
+      : outcome === "conflict" ? conflictingPlayback : finalPlayback);
+    if (slot === 1) {
+      // Runtime reopen selects the current bank's first Pad. The old Pad A02
+      // result must refresh Truth without becoming Pad A01's playback.
+      expect(first.inspectSample(0).playback).toEqual(savedPad0);
+      expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toHaveProperty("value", "0");
+      await userEvent.click(screen.getByRole("button", {name: /^Pad A02 —/}));
+      await waitFor(() => expect(screen.getByRole("button", {name: "Edit Pad A02 Volume"}).textContent).toBe("-3.2 dB"));
+    }
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(replacementUpdate).not.toHaveBeenCalled();
+    expect(created).toBe(2);
+  },
+);
+
+import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
+import {claimDefaultSeed, DEFAULT_SEED_KEY, readDefaultSeed} from "../src/state/default_seed";
+
+test("ordinary default seed waits for the retained Sample update and successor projection before installing once", async () => {
+  // Real App/RuntimeProvider/default-seed controller; consumer responses and
+  // shared Project storage are manufactured. Native seed/capture interleaving
+  // remains UNRUN. Product identity is derived from the active Assembly.
+  const storageValues = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => storageValues.get(String(key)) ?? null,
+    setItem: (key: string, value: string) => {storageValues.set(String(key), String(value));},
+    removeItem: (key: string) => {storageValues.delete(String(key));},
+  };
+  const first = mutableSampleRuntimeFixture();
+  const second = mutableSampleRuntimeFixture();
+  const assetId = first.assigned.get(0)!;
+  // A02 is the only empty default target. The real controller retires the
+  // other occupied targets rather than this test skipping controller work.
+  for (let slot = 2; slot < 16; slot++) first.assigned.set(slot, assetId);
+  const saved = first.playbacks.get(0)!;
+  const finalPlayback = {...saved, gainMillidb: -3_200};
+  const oldInspect = deferred<ReturnType<typeof first.inspectSample>>();
+  const newProjection = deferred<ReturnType<typeof first.inspectProject>>();
+  const seedAcquisition = deferred<void>();
+  const downstreamStarted = vi.fn();
+  let commandReturned = false;
+  let newProjectReads = 0;
+  let publish!: (state: RuntimeHostState) => void;
+  first.session.subscribeHostState = (listener) => {publish = listener; return () => {};};
+  vi.spyOn(first.session, "inspectSample").mockImplementation(async (slot) => {
+    if (commandReturned) {downstreamStarted(slot); return oldInspect.promise;}
+    return first.inspectSample(slot);
+  });
+  const update = vi.spyOn(first.session, "updatePad").mockImplementation(async (request) => {
+    commandReturned = true;
+    first.revision = 4;
+    first.playbacks.set(request.slot, request.playback);
+    return {committedRevision: 4, runtimeRevision: 4, runtimePublished: true, snapshotError: null};
+  });
+  second.session.listLocalProjects = async () => [first.summary()];
+  second.session.inspectSample = async (slot) => first.inspectSample(slot);
+  second.session.queryWaveform = first.session.queryWaveform;
+  const replacementInspect = vi.spyOn(second.session, "inspectProject").mockImplementation(async () => {
+    newProjectReads += 1;
+    return newProjectReads === 2 ? newProjection.promise : first.inspectProject();
+  });
+  const replacementOpen = vi.spyOn(second.session, "openProject");
+  const replacementUpdate = vi.spyOn(second.session, "updatePad");
+  const manifest = JSON.parse(readFileSync(
+    `../../products/lmdj/assets/default-kit/manifest/${CREATOR_DEFAULT_SOUND_SET.manifestSha256}`, "utf8"));
+  const acquire = vi.fn(async (request: typeof CREATOR_DEFAULT_SOUND_SET & {slotIndex: number}) => {
+    await seedAcquisition.promise;
+    const slot = manifest.slots[request.slotIndex];
+    return {...CREATOR_DEFAULT_SOUND_SET, slot: {slot: slot.slot, artifact: {
+      sha256: slot.artifact.sha256, mediaType: slot.artifact.media_type,
+      byteLength: slot.artifact.byte_length,
+    }}};
+  });
+  const install = vi.fn(async (request: typeof CREATOR_DEFAULT_SOUND_SET & {
+    slotIndex: number; bankId: number; commandId: string; expectedRevision: number;
+  }) => {
+    expect(first.revision).toBe(request.expectedRevision);
+    expect(first.assigned.has(request.slotIndex)).toBe(false);
+    first.assigned.set(request.slotIndex, assetId);
+    first.playbacks.set(request.slotIndex, first.inspectSample(request.slotIndex).playback);
+    first.revision += 1;
+    return {...CREATOR_DEFAULT_SOUND_SET, bankId: request.bankId,
+      committedRevision: first.revision, replayed: false,
+      installed: [{slotIndex: request.slotIndex, pad: request.slotIndex}], collisions: [], kept: []};
+  });
+  vi.spyOn(second.session, "reloadSnapshot").mockImplementation(async (patternId) => {
+    second.calls.push("reloadSnapshot");
+    return {project_id: listedSummary.projectId, project_revision: first.revision,
+      pattern_id: patternId, runtime_ready: true, generation: first.revision, snapshot_error: null};
+  });
+  Object.assign(second.session, {acquireSoundSetSlot: acquire, installSoundSetSlot: install,
+    describeSoundSetCatalog: async () => ({catalogAvailable: true, sets: []})});
+  const sessions = [first.session, second.session];
+  let created = 0;
+  let rendered: ReturnType<typeof render> | null = null;
+  try {
+    // Vitest retains the exact previous global descriptor for finally. App
+    // and the real seed controller use this case's same writable journal.
+    vi.stubGlobal("localStorage", storage);
+    localStorage.removeItem(DEFAULT_SEED_KEY);
+    expect(claimDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET, listedSummary.projectId)).not.toBeNull();
+    rendered = render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+    await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await expectSelectedAsset(assetId);
+    act(() => {
+      setRunningAudioFixture(first.session);
+      publish({state: "running", errorCode: null, errorDetails: {}});
+    });
+    const input = await openAppNumericVolume();
+    fireEvent.change(input, {target: {value: "-3.2"}});
+    await userEvent.click(screen.getByRole("button", {name: "Apply Volume"}));
+    await waitFor(() => expect(update).toHaveBeenCalledExactlyOnceWith({slot: 0,
+      expectedRevision: 3, playback: finalPlayback}));
+    await waitFor(() => expect(downstreamStarted).toHaveBeenCalledWith(0));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+    await act(async () => publish({state: "restart-required",
+      errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+    await waitFor(() => expect(created).toBe(2));
+    await waitFor(() => expect(replacementOpen).toHaveBeenCalledExactlyOnceWith(
+      listedSummary.projectId, listedSummary.patternId));
+    await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(revisionCell()?.textContent).toBe("4"));
+    await waitFor(() => expect(acquire).toHaveBeenCalledExactlyOnceWith({
+      ...CREATOR_DEFAULT_SOUND_SET, slotIndex: 1,
+    }));
+    expect(replacementInspect).toHaveBeenCalledTimes(1);
+    expect(install).not.toHaveBeenCalled();
+    expect(readDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET)?.slots[1]?.phase).toBe("loading");
+    // Make the actual ordinary acquisition ready while the old known result
+    // still awaits readback. Flush its queued commit attempt, not a UI helper.
+    await act(async () => seedAcquisition.resolve(undefined));
+    await flushAsyncTurns();
+    expect(readDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET)?.slots[1])
+      .toMatchObject({phase: "processing", request: null, committedRevision: null});
+    expect(install).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(replacementUpdate).not.toHaveBeenCalled();
+    expect(replacementInspect).toHaveBeenCalledTimes(1);
+    expect(first.assigned.has(1)).toBe(false);
+    expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+    // Receipt arrival starts a separate successor projection leg. Ordinary
+    // seed admission must stay blocked through that far side as well.
+    await act(async () => oldInspect.resolve(first.inspectSample(0)));
+    await waitFor(() => expect(replacementInspect).toHaveBeenCalledTimes(2));
+    await flushAsyncTurns();
+    expect(install).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(replacementUpdate).not.toHaveBeenCalled();
+    expect(first.revision).toBe(4);
+    expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+    expect(readDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET)?.slots[1]?.request).toBeNull();
+    await act(async () => newProjection.resolve(first.inspectProject()));
+    // The unchanged controller retries its ordinary admission, then completes
+    // install/refresh/publication. This positive leg prevents a permanent fence.
+    await waitFor(() => expect(install).toHaveBeenCalledExactlyOnceWith({
+      ...CREATOR_DEFAULT_SOUND_SET, slotIndex: 1, bankId: 0, expectedRevision: 4,
+      commandId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+    }));
+    await waitFor(() => expect(readDefaultSeed(localStorage, CREATOR_DEFAULT_SOUND_SET)?.slots[1])
+      .toMatchObject({phase: "ready", committedRevision: 5}));
+    await waitFor(() => expect(revisionCell()?.textContent).toBe("5"));
+    await waitFor(() => expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", false));
+    expect(screen.getByText("Default sounds · 1 ready")).toBeTruthy();
+    expect(first.assigned.get(1)).toBe(assetId);
+    expect(first.inspectSample(0).playback).toEqual(finalPlayback);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(replacementUpdate).not.toHaveBeenCalled();
+    expect(replacementOpen).toHaveBeenCalledTimes(1);
+    expect(created).toBe(2);
+  } finally {
+    try {rendered?.unmount();} finally {vi.unstubAllGlobals();}
+  }
+});

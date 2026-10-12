@@ -41,7 +41,7 @@ import {PhysicalControls, type ContextualEncoders, type EncoderBinding, type Enc
 import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {ProjectTouchWorkspace} from "./components/project_touch_workspace";
-import {SampleSurface} from "./components/sample_surface";
+import {SampleSurface, type SampleUpdateOwner} from "./components/sample_surface";
 import {SequenceTouchWorkspace} from "./components/sequence_touch_workspace";
 import {
   isSoundSetSession,
@@ -380,6 +380,12 @@ function Workspace({
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [sampleUpdateOwner, setSampleUpdateOwner] = useState<Readonly<SampleUpdateOwner> | null>(null);
+  const sampleUpdateOwnerRef = useRef<Readonly<SampleUpdateOwner> | null>(null);
+  const sampleUpdatePendingChanged = useCallback((owner: Readonly<SampleUpdateOwner> | null) => {
+    sampleUpdateOwnerRef.current = owner;
+    setSampleUpdateOwner(owner);
+  }, []);
   const [padColourBusy, setPadColourBusy] = useState(false);
   // A refusal belongs to the Pad it was made on, so it is not shown under
   // another Pad's controls after the selection moves.
@@ -1077,7 +1083,7 @@ function Workspace({
           }
           return;
         }
-        const token = beginProjectAction("open", false);
+        const token = beginProjectAction("open", false, "retained-sample-reopen");
         if (!token) return;
         dispatch({type: "project-opening"});
         const summary = projects.find(({projectId, patternId}) =>
@@ -1309,10 +1315,20 @@ function Workspace({
   const beginProjectAction = (
     kind: "open" | "import" | "create" | "duplicate",
     requireSelector = true,
+    admission: "ordinary" | "retained-sample-reopen" = "ordinary",
   ): ProjectActionToken | null => {
+    const samplePending = stateRef.current.sample.pendingAction;
+    const updateOwner = sampleUpdateOwnerRef.current;
+    const recoveringSampleUpdate = admission === "retained-sample-reopen" &&
+      kind === "open" && !requireSelector && updateOwner !== null &&
+      session !== updateOwner.session &&
+      updateOwner.projectId === stateRef.current.project.current?.projectId &&
+      updateOwner.pending.kind === "update" &&
+      samplePending?.kind === "update" && samplePending.slot === updateOwner.pending.slot &&
+      samplePending.expectedRevision === updateOwner.pending.expectedRevision;
     if (!session || projectActions.busy ||
       sampleRetryAction.current !== null ||
-      stateRef.current.sample.pendingAction !== null) return null;
+      ((samplePending !== null || updateOwner !== null) && !recoveringSampleUpdate)) return null;
     if (requireSelector) {
       const allowed = kind === "open"
         ? selectCanOpenProject(stateRef.current)
@@ -2682,21 +2698,25 @@ function Workspace({
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
+    sampleUpdateOwner === null &&
     selectCanOpenProject(state);
   const canImportProject = session !== undefined &&
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
+    sampleUpdateOwner === null &&
     selectCanImportProject(state);
   const canCreateProject = session !== undefined &&
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
+    sampleUpdateOwner === null &&
     selectCanCreateProject(state);
   const canDuplicateProject = session !== undefined &&
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
+    sampleUpdateOwner === null &&
     selectCanDuplicateProject(state);
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
@@ -2893,6 +2913,7 @@ function Workspace({
     disabledReason: state.project.phase !== "ready" ? "Open a Project to use its history." :
       state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
       state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
+      sampleUpdateOwner !== null ||
       state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
       !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
       historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
@@ -3325,18 +3346,19 @@ function Workspace({
                   Open a Project with candidate or Sound Set support.
                 </p>
               )}
-              {/* One Sample surface, on the same terms the retired workspace
-                  shell used: shown in Sample mode, carried hidden while an
+              {/* One Sample surface: shown in Sample mode, carried hidden while an
                   armed capture, an open trim overlay or a Sequence-side
-                  projection refresh must survive a mode switch, and unmounted
-                  otherwise so a return to Sample resumes on a fresh mount. */}
+                  projection refresh must survive a mode switch, or while its
+                  update journey still owns receipt/projection settlement. */}
               {(activeMode === "sample" ||
+                sampleUpdateOwner !== null ||
                 armedCaptureSlot !== null ||
                 trimOverlayOpen ||
                 (activeMode === "sequence" && state.sampleProjectionRefresh !== null)) ? (
               <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
                 hidden={activeMode !== "sample" && !trimOverlayOpen}>
                 <SampleSurface
+                  onUpdatePendingChange={sampleUpdatePendingChanged}
                   padColourControls={activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
                     state.project.current !== null ? (
                     <PadColourControls

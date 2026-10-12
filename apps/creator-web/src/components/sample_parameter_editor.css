@@ -1,0 +1,40 @@
+.sample-controls .sample-parameter-value {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sample-parameter-editor form {
+  display: grid;
+  gap: 12px;
+}
+
+.sample-parameter-input {
+  display: grid;
+  gap: 8px;
+}
+
+.sample-parameter-input input {
+  min-width: 44px;
+  min-height: 44px;
+  width: 100%;
+  padding: 8px;
+  font: inherit;
+}
+
+.sample-parameter-input input[aria-invalid="true"] {
+  border-color: #ffcf8f;
+}
+
+.sample-parameter-hint {
+  margin: 0;
+  font-size: .875rem;
+}
+
+.sample-parameter-editor .confirmation-actions button {
+  min-width: 44px;
+  min-height: 44px;
+}

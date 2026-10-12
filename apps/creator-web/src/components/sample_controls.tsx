@@ -1,8 +1,9 @@
-import {useEffect, useRef, useState, type ReactNode} from "react";
+import {useCallback, useEffect, useRef, useState, type ReactNode} from "react";
 
 import {EqEditor} from "./eq_editor";
 import {ModalDialog} from "./modal_dialog";
-import {ParameterSlider} from "./parameter_slider";
+import {ParameterSlider, type SampleParameterSpec} from "./parameter_slider";
+import {SampleParameterEditor} from "./sample_parameter_editor";
 import type {
   PadPlayback,
   SampleLoopMode,
@@ -15,6 +16,11 @@ interface SampleControlsProps {
   page: SampleControlPage;
   padLabel: string;
   playback: Readonly<PadPlayback>;
+  savedPlayback?: Readonly<PadPlayback>;
+  numericEditingContext?: unknown;
+  numericEditingDisabled?: boolean;
+  onBeginNumericEdit?: () => void;
+  onNumericEditorReady?: (cancel: (() => void) | null) => void;
   audioSuspended: boolean;
   disabled?: boolean;
   onPreview: (playback: Readonly<PadPlayback>) => void;
@@ -24,6 +30,16 @@ interface SampleControlsProps {
 }
 
 const NOOP = () => {};
+
+interface NumericEdit {
+  parameter: SampleParameterSpec;
+  playback: Readonly<PadPlayback>;
+  context: unknown;
+  page: SampleControlPage;
+  padLabel: string;
+  audioSuspended: boolean;
+  returnFocus: HTMLElement | null;
+}
 
 interface ConfirmationDialogProps {
   labelledBy: string;
@@ -101,6 +117,11 @@ export function SampleControls({
   page,
   padLabel,
   playback,
+  savedPlayback = playback,
+  numericEditingContext,
+  numericEditingDisabled = false,
+  onBeginNumericEdit = NOOP,
+  onNumericEditorReady,
   audioSuspended,
   disabled = false,
   onPreview,
@@ -109,6 +130,41 @@ export function SampleControls({
   onReset,
 }: SampleControlsProps) {
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [numericEdit, setNumericEdit] = useState<NumericEdit | null>(null);
+  const numericEditRef = useRef(numericEdit);
+  numericEditRef.current = numericEdit;
+  const numericPreviewing = useRef(false);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  const numericContext = useRef({context: numericEditingContext, page, padLabel,
+    audioSuspended, disabled: disabled || numericEditingDisabled});
+  numericContext.current = {context: numericEditingContext, page, padLabel,
+    audioSuspended, disabled: disabled || numericEditingDisabled};
+  const discardNumeric = useCallback(() => {
+    if (!numericPreviewing.current) return;
+    numericPreviewing.current = false;
+    onCancelRef.current();
+  }, []);
+  const closeNumeric = useCallback(() => {
+    discardNumeric();
+    numericEditRef.current = null;
+    setNumericEdit(null);
+  }, [discardNumeric]);
+  const currentNumeric = (edit: NumericEdit): boolean =>
+    numericEditRef.current === edit &&
+    numericContext.current.context === edit.context &&
+    numericContext.current.page === edit.page &&
+    numericContext.current.padLabel === edit.padLabel &&
+    numericContext.current.audioSuspended === edit.audioSuspended &&
+    !numericContext.current.disabled;
+  const openNumeric = (parameter: SampleParameterSpec) => {
+    if (disabled || numericEditingDisabled) return;
+    onBeginNumericEdit();
+    setNumericEdit({parameter, playback: savedPlayback,
+      context: numericEditingContext, page, padLabel, audioSuspended,
+      returnFocus: document.activeElement instanceof HTMLElement
+        ? document.activeElement : null});
+  };
   const resetTrigger = useRef<HTMLButtonElement | null>(null);
   const loop = loopEnabled(playback.triggerMode);
   const primary = primaryEnabled(playback.triggerMode);
@@ -117,6 +173,13 @@ export function SampleControls({
     if (!audioSuspended) return;
     setConfirmingReset(false);
   }, [audioSuspended]);
+
+  useEffect(closeNumeric, [closeNumeric, numericEditingContext, page, padLabel,
+    disabled, numericEditingDisabled, audioSuspended]);
+  useEffect(() => {
+    onNumericEditorReady?.(numericEdit === null ? null : closeNumeric);
+    return () => onNumericEditorReady?.(null);
+  }, [closeNumeric, onNumericEditorReady, numericEdit]);
 
   return (
     <section className="sample-controls" aria-label={`${padLabel} Sample controls`}>
@@ -201,6 +264,8 @@ export function SampleControls({
         max={6}
         step={0.1}
         scale={1_000}
+        onEditValue={openNumeric}
+        editValueDisabled={numericEditingDisabled}
         format={(gain) => `${(gain / 1_000).toFixed(1)} dB`}
         playback={playback}
         disabled={disabled}
@@ -218,6 +283,8 @@ export function SampleControls({
         max={24}
         step={0.1}
         scale={100}
+        onEditValue={openNumeric}
+        editValueDisabled={numericEditingDisabled}
         format={formatPitch}
         playback={playback}
         disabled={disabled}
@@ -235,6 +302,8 @@ export function SampleControls({
         max={100}
         step={1}
         scale={1}
+        onEditValue={openNumeric}
+        editValueDisabled={numericEditingDisabled}
         format={formatPan}
         playback={playback}
         disabled={disabled}
@@ -252,6 +321,8 @@ export function SampleControls({
         max={2_000}
         step={1}
         scale={1}
+        onEditValue={openNumeric}
+        editValueDisabled={numericEditingDisabled}
         format={formatRamp}
         playback={playback}
         disabled={disabled}
@@ -270,6 +341,8 @@ export function SampleControls({
         max={4_000}
         step={1}
         scale={1}
+        onEditValue={openNumeric}
+        editValueDisabled={numericEditingDisabled}
         format={formatRamp}
         playback={playback}
         disabled={disabled || playback.triggerMode === "one_shot"}
@@ -289,6 +362,8 @@ export function SampleControls({
         max={100}
         step={1}
         scale={1}
+        onEditValue={openNumeric}
+        editValueDisabled={numericEditingDisabled}
         format={formatTone}
         playback={playback}
         disabled={disabled}
@@ -339,6 +414,27 @@ export function SampleControls({
             </button>
           </div>
         </ConfirmationDialog>
+      ) : null}
+      {numericEdit !== null ? (
+        <SampleParameterEditor
+          parameter={numericEdit.parameter}
+          value={numericEdit.playback[numericEdit.parameter.field] / numericEdit.parameter.scale}
+          returnFocus={numericEdit.returnFocus}
+          onPreview={(display) => {
+            if (!currentNumeric(numericEdit)) return;
+            numericPreviewing.current = true;
+            onPreview({...numericEdit.playback,
+              [numericEdit.parameter.field]: Math.round(display * numericEdit.parameter.scale)});
+          }}
+          onCommit={(display) => {
+            if (!currentNumeric(numericEdit)) return;
+            numericPreviewing.current = false;
+            onCommit({...numericEdit.playback,
+              [numericEdit.parameter.field]: Math.round(display * numericEdit.parameter.scale)});
+          }}
+          onDiscard={discardNumeric}
+          onClose={closeNumeric}
+        />
       ) : null}
     </section>
   );

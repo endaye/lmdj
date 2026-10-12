@@ -165,6 +165,8 @@ Pad，直到下一次击打或 ↑/↓。Record Sample 武装期间仍保持固�
 
 Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放与音色参数的缺省值。
 
+点击 Volume、Pitch、Pan、Attack、Release 或 Tone 的数值可打开精确输入。编辑从已保存的 playback 开始，不采用尚未提交的旋钮草稿；合法且符合步长的输入立即通过已有 Sample preview 路径试听。Apply 或 Enter 只提交一次完整 playback，形成一次作者操作／Undo；回到原值不保存，输入停顿（包括超过 400 ms）和失焦也不保存。空值、非有限数、越界或不符合步长的值不能试听或提交；非法替换会清除前一个合法试听，仍可继续修正。音频未启动时可以编辑画面，但没有试听声音。Escape／Cancel、切 Pad／Project／Asset／revision／Runtime session、离开页面／子页／System 或卸载取消尚未发出的草稿，并清除它拥有的试听；已发出的保存保留真实提交、publication failure、冲突或未知结果，不自动重发。弹窗背景不可点击；输入保留原生文本 Undo，既有 App Project history 路由如被调用，会先取消未提交草稿再恢复历史，不增加弹窗内的 Project Undo 快捷键。数值按钮、输入与操作使用至少 44 px 命中区，沿用已有单位与边界；one-shot 的 Release 仍不可用，Start／End 保留 frame 精度输入，原 range release／键盘完成／blur 与旋钮 400 ms／SHIFT 规则不变。
+
 Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页的 Tone（−100…+100）同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
 
 - 拖动极点时，极点按指针的位移移动，与按在命中圆的哪个位置无关；没有位移的按压不改变任何值。频率限于该段范围，增益 0.1 dB 步进，±0.5 dB 内吸附到 0。把低段或高段架式拖到底线以下的 Cut 区就变成 cut，cut 保留手势开始时该段的增益（已旁通的段保留底线），与拖动途中的采样无关。
@@ -262,6 +264,12 @@ Cloudflare 自动化部署验证通过，Safari、真实听感及稳定观察仍
 Vitest 覆盖播放头的 normal/loop 时间推进、44.1/48 kHz source-frame 换算、最新 Voice 所有权、终止与生命周期清理，以及长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence recovery/trim-overlay 状态、Pattern transport reducer 的 stale 响应拒绝、失败命令身份保留与 absent/null revision 保留、统一输入、Capture 互操作与 privacy-safe acceptance report；Capture 单测另固定 full-buffer 初态、两端点独立操作、midpoint 命中区、grab offset、middle inert、越界/交叉限制、键盘/辅助技术秒值、Escape/cancel 回滚和精确 commit frame range。A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程：Sample Editor journey 在 reduced-motion 设置下断言播放头逐帧推进、对辅助技术隐藏、并在 Voice completion 后移除；并在完整 Capture 波形上移动 Start/End 后核对提交 artifact 的精确 byte length；transport journey 覆盖 Play→Record→live Pad→Record-off→导航→Stop→reopen 的精确 events/revision/单一 session、Record-off ticket 丢失后的同身份 reconcile、停止态切换后 overdub 进新 Pattern，以及 owner loss 后 owner_lost 候选经 Apply 恢复听到的 take、经重开询问 Keep 恢复同一 take 并在 reload 后持久；armed-Pad journey 先证明 journal 打开时 Sample 提交的 busy 守卫拒绝（take 保留），再在同一路程里 Discard、Record-off 结算、重录并提交（播放不中断）、录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。回放对齐由 Vitest 固定 Pitch/Pan 的预览、提交与取消、Reverse 与 Loop mode 提交、Ping-pong 清除 crossfade、循环点与 crossfade 读数卡以及 reverse/ping-pong/pitch 下的播放头；packaged Playwright 的 parity journey 在真实 Runtime 上依次证明 normal（每个控件一次 revision 且 `sample.inspect` 回读精确 playback）、cancelled（Escape 后试听清除、无提交）、refused（越界值 `HOST_PROTOCOL_MISMATCH` 与旧 revision `REVISION_CONFLICT`）、failed（manufactured 提交失败显示 alert 且控件保持已提交值）与 reopened（reload 后 Truth 与控件一致），Perform journey 另证明 pan −100 时录下的 master 输出右声道逐样本为 0。Sequence 直接调节 journey 另证明：拖动仅预览、松手恰好提交一次且 revision +1、步进与 TAP 立即提交、Escape 取消不动 Truth、注入 HOST_TIMEOUT 后界面报错且 Truth/读数不变、播放中提交的 activation_frame 是旧 tempo 的下一小节边界、录音中 UI 禁用加 control layer 拒绝的双层拒绝，以及 reload 后 Truth 与界面一致。节拍器 journey 另证明：click 事件的 contextTime 间隔等于 60/bpm（±10%）且每 4 拍一个重音、录音中节拍器照常发声而 Pattern 事件不受影响、节拍器开着录 Perform 得到逐样本数字静音（同 session 的 witness 腿证明采集链有信号）、播放中关开关即停且未发声 click 被取消、reload 后开关状态从 IndexedDB 恢复（全新浏览器档案为默认关）。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据、#605 要求的 macOS Safari 播放头可见运动与听感对齐实体确认，或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 自动化结论本身不是物理验收；M3 的 Chrome Pointer 与 M8 的 Safari Pointer/听感 `PASS` 均来自上述实体记录。Safari capture M7 已在 `1.0.41.0` 实体测试中失败并由 #625 阻塞；其他通过项不替代其完整重跑、Stage 9 Safari Sequence、Chrome MIDI 或 iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
+
+N13 自动化证据包含完整组件／类型／Portal 检查，以及实际 Chromium 原生数值编辑旅程：即时预览、无效输入清理、Apply 单次保存、取消、Undo／Redo 和持久化重开。各次结果的实际源码基线、完整日志、首次全套 proof 的两个失败及后续修复见 [N13 实施 addendum](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-sample-numeric-editor.md)；单项通过不代替整合后完整八组 Creator proof。物理与听感、正式发布及部署仍需各自证据。以下保留的 Source-only 历史记录中，UNRUN／HOLD 只指各段形成时的阶段。
+
+**N13 Source 阶段历史说明（保留原文）**
+
+N13 精确输入的源码与测试定位见 `sample_parameter_editor.tsx`、`sample_numeric_editor.test.tsx`、`workspace_shell.test.tsx` 和 `creator_web_sample_numeric_editor.spec.mjs`，以及 [N13 实施 addendum](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-sample-numeric-editor.md)。首版 13 文件候选经独立 Source review 发现已提交更新在 Runtime Session 变化时丢失晚到结果的问题；Root 批准增加 `app.tsx`，修订为 14 文件 Source 候选。更新 consumer、结果读回或投影仍在途时，App 保留同一个隐藏 SampleSurface；只有同 Project、不同 Runtime Session 的自动重开可以越过对应 update pending，普通 Project 切换继续受保护。Surface 保留原 pending 身份与真实结果，只恢复读回／投影，不重发 authoring，不将旧 Pad／Project 的结果投到新编辑目标。consumer ownership 信号不证明实际 wire-send。一次锁定依赖安装已完成，npm 默认策略未运行可选 fsevents 安装脚本；TypeScript、完整六个 owning 文件、Portal 与原完整 Creator proof 全部 UNRUN，修订 Source 仍待独立 review。保留的历史 focused 结果不验证当前候选。浏览器旅程源码保留实际命令 identity、preview／invalid／一次 Apply／Escape／Undo／Redo／persisted reopen，每一步检查完整 Truth、playback 和 history。源码准备不表示 Assign、BPM、D04、A1/A2、V1、部署或 release 已完成。
 
 ## 非能力
 
@@ -805,3 +813,20 @@ Sample/Project playback summaries distinguish saved changes from prepared
 audio; exact revisions are in their playback details. Perform recording,
 WAV binding, replay revision and gesture counts are available in details,
 with live assistive status retained.
+
+以下继续保留 private automatic reopen 的 Source-only 历史记录；其中的 UNRUN／HOLD 是该记录形成时的状态，当前轻量状态见上文。
+
+### N13 private automatic reopen Source boundary
+
+The revised14 Source review identified a second P2: ordinary default-seed and
+capture writes also use open with requireSelector=false, so those arguments
+alone cannot admit retained Sample recovery. The next Source cut adds a private
+explicit admission only at the retained automatic reopen branch. Original
+Project/Session/pending Update checks and ordinary writer fences remain.
+The appended mounted workspace regression holds the old known outcome and
+successor projection, resolves ordinary seed acquisition, and requires no
+install before both settle, then exactly one install/refresh/publication.
+The prior five recovery cases and evidence remain unchanged. This is test
+source, UNRUN; native seed/capture interleaving and all type/component/Portal/
+browser/native/shipping acceptance remain HOLD. The earlier one-time install
+exit0 and withheld optional lifecycle warning are unchanged readiness facts.

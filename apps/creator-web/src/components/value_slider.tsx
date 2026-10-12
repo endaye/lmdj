@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useId, useRef, useState} from "react";
 
 // One numeric value edited by a range input. A gesture previews every move,
 // commits once on release (pointer up, a window pointerup, the release of any
@@ -24,6 +24,9 @@ interface ValueSliderProps {
   onPreview: (value: number) => void;
   onCommit: (value: number) => void;
   onCancel: () => void;
+  // Optional precise editor; ordinary range gestures retain their lifecycle.
+  onEditValue?: () => void;
+  editValueDisabled?: boolean;
 }
 
 interface Gesture {
@@ -45,7 +48,10 @@ export function ValueSlider({
   onPreview,
   onCommit,
   onCancel,
+  onEditValue,
+  editValueDisabled = false,
 }: ValueSliderProps) {
+  const rangeId = useId();
   const [draft, setDraft] = useState<number | null>(null);
   const gesture = useRef<Gesture | null>(null);
   const pointerId = useRef<number | null>(null);
@@ -137,10 +143,12 @@ export function ValueSlider({
     }
   };
 
+  const Wrapper = onEditValue === undefined ? "label" : "div";
   return (
-    <label className={className}>
-      <span>{label}</span>
+    <Wrapper className={className}>
+      {onEditValue === undefined ? <span>{label}</span> : <label htmlFor={rangeId}>{label}</label>}
       <input
+        id={rangeId}
         type="range"
         min={String(min)}
         max={String(max)}
@@ -163,7 +171,17 @@ export function ValueSlider({
         }}
         onBlur={commit}
       />
-      <output>{format(shown)}</output>
-    </label>
+      <output>{onEditValue === undefined ? format(shown) : (
+        <button
+          type="button"
+          className="sample-parameter-value"
+          aria-label={`Edit ${ariaLabel}`}
+          disabled={disabled || editValueDisabled}
+          onClick={onEditValue}
+        >
+          {format(shown)}
+        </button>
+      )}</output>
+    </Wrapper>
   );
 }
