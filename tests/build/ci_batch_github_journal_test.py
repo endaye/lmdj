@@ -358,6 +358,25 @@ class GitHubJournalTest(unittest.TestCase):
                           "why: failed complete read published a partial prefix; "
                           "remedy: commit reuse only after all pages verify")
 
+    def test_anchor_verified_prefix_skips_writer_http_authentication(self):
+        """Defect #2025: a fresh process re-authenticated every historical writer
+        (~2 REST calls per distinct run; 347 runs over 1,004 journal comments on
+        2026-10-11), exhausting the shared hourly quota on retry. An
+        anchor-carried verified prefix skips writer HTTP proofs inside it while
+        metadata and digest-chain checks still apply to every comment."""
+        self.linked_writer_history()
+        checkpoint = github.decode(self.api.issue["body"])["payload"]
+        self.api.issue["body"] = wrapped("checkpoint",
+            {**checkpoint, "verified": {"head": checkpoint["head"], "count": 4}})
+        events = self.journal.load()
+        self.assertEqual([event["id"] for event in events], [str(index) for index in range(6)])
+        attempt_reads = sum(method == "GET" and path.endswith("/attempts/1")
+                            for method, path, _ in self.api.calls)
+        self.assertEqual(attempt_reads, 3,
+                         "why: writer HTTP authentication did not stop at the verified prefix; "
+                         "remedy: only comments past the prefix pay writer proofs "
+                         "(2 delta writers + 1 checkpoint writer; the same fixture without a prefix pays 7)")
+
     def test_page_authentication_overlaps_four_readers_and_keeps_record_order(self):
         request = self.multiple_writers([17, 18, 19, 20, 21, 22, 23, 24])
         barrier = threading.Barrier(4, timeout=5)

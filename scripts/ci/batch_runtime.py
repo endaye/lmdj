@@ -492,6 +492,10 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
                 require(existing['data'] == {key: resume[key] for key in ('suites', 'reason')},
                         "resume identity reused with different command")
         answer = controller.reconcile(explicit=request, resume=resume, allow_execution=execute)
+        # A reconcile that read the complete journal lets every later process
+        # resume writer authentication from the anchor instead of paying it per
+        # tick; anchor writes during the reconcile already carry the prefix.
+        self.journal().persist_verified()
         return self.answer(answer["action"], answer["reason"], answer["request"], answer["state"])
 
 

@@ -6,7 +6,10 @@ recurrences:
   - date: 2026-09-17
     occurrence: https://github.com/endaye/lmdj/issues/1048
     observed_by: Claude Fable 5.1
-exit: gate:tests/build/ci_batch_controller_test.py
+  - date: 2026-10-12
+    occurrence: https://github.com/endaye/lmdj/issues/2025
+    observed_by: Kimi Code CLI (agent)
+exit: gate:tests/build/ci_batch_controller_test.py; gate:tests/build/ci_incremental_batch_journal_test.py; gate:tests/build/ci_batch_github_journal_test.py
 ---
 
 # A journal record that explains itself per changed path grows with the unprocessed backlog until it exceeds the bounded record size, and the local refusal then blocks every admit with no observable cause.
@@ -54,6 +57,16 @@ locally and size the resulting record against the limit. The gate
 selection stays full, and asserts the pending-admit checkpoint fits the journal
 object limit; `tests/build/ci_batch_github_journal_test.py` checks an oversized
 record is refused with the closed kind before any anchor or comment mutation.
+
+The same growth law applies to per-tick cost, not only record size: writer
+liveness authentication is per distinct writer run, so a complete replay costs
+~2 REST calls per historical comment writer and crosses the shared hourly quota
+once the journal is long enough (347 runs / 1,004 comments on 2026-10-11, #2025).
+The anchor carries a `verified: {head, count}` prefix so later processes skip
+writer HTTP re-proofs inside it while metadata and digest-chain checks still
+cover every comment; the gates are the prefix reuse and boundary tests in
+`tests/build/ci_incremental_batch_journal_test.py` and the transport-level skip
+in `tests/build/ci_batch_github_journal_test.py`.
 
 Separate construction from validation whenever you add such a normalization:
 bound when building a new record, and reproduce a stored one byte for byte,

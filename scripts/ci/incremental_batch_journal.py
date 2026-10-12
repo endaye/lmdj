@@ -20,9 +20,30 @@ class JournalBlocked(BatchError):
     pass
 
 
+def validate_verified_prefix(checkpoint):
+    """The optional anchor-carried prefix: a locked writer authenticated the first
+    `count` comments (writer liveness included) and got chain head `head`.
+
+    Later processes still check every comment's metadata and the digest chain;
+    only writer liveness re-proofs inside the prefix are skipped (#2025)."""
+    verified = checkpoint.get("verified")
+    require(verified is None
+            or (isinstance(verified, dict) and set(verified) == {"head", "count"}
+                and type(verified["count"]) is int and verified["count"] >= 0
+                and (verified["head"] is None or type(verified["head"]) is str)
+                and verified["head"] == checkpoint["head"]),
+            "checkpoint verified prefix is malformed or disagrees with its head")
+    return verified
+
+
 class Transport(Protocol):
-    def page(self, issue_id: int, cursor: str | None) -> dict:
-        """Return {comments: [...], next: cursor|None}; fetch ALL pages."""
+    def page(self, issue_id: int, cursor: str | None, authenticated_prefix: int = 0) -> dict:
+        """Return {comments: [...], next: cursor|None}; fetch ALL pages.
+
+        `authenticated_prefix` is honored only at transaction start (cursor
+        None): the first N comments carry an anchor-recorded writer
+        authentication, so their writer liveness re-proofs are skipped.
+        Comment metadata and record checks still apply to every comment."""
 
     def last(self, issue_id: int) -> dict | None:
         """Newest comment row, or None on an empty journal.
@@ -70,8 +91,10 @@ an empty checkpoint automatically. Controlled initialization is separate.
                 "checkpoint object is absent or malformed")
         require(self.authenticate(body, self.issue_id) is True, "checkpoint last editor or workflow is untrusted")
         checkpoint = body["checkpoint"]
-        require(isinstance(checkpoint, dict) and set(checkpoint) == {"head", "pending"},
+        require(isinstance(checkpoint, dict)
+                and set(checkpoint) in ({"head", "pending"}, {"head", "pending", "verified"}),
                 "checkpoint schema is invalid")
+        validate_verified_prefix(checkpoint)
         return deepcopy(checkpoint)
 
     def replace(self, previous, replacement):
@@ -97,16 +120,17 @@ class Journal:
         require(self.anchor is not None, "durable journal checkpoint is unavailable",
                 "configure an authenticated checkpoint object; do not infer progress from comments alone")
 
-    def _verify(self, comments, previous, ids):
+    def _verify(self, comments, previous, ids, skip_authenticate=0):
         envelopes = []
-        for comment in comments:
+        for index, comment in enumerate(comments):
             require(isinstance(comment, dict) and set(comment) == {"id", "edited", "envelope", "provenance"},
                     "invalid journal comment metadata")
             require(type(comment["id"]) is int and comment["id"] not in ids, "duplicate or invalid journal comment ID")
             ids.add(comment["id"])
             require(comment["edited"] is False, "journal comment was edited",
                     "stop admission and reconcile the original authenticated record")
-            require(self.authenticate(comment, self.issue_id) is True, "untrusted journal writer or workflow")
+            if index >= skip_authenticate:
+                require(self.authenticate(comment, self.issue_id) is True, "untrusted journal writer or workflow")
             envelope = comment["envelope"]
             require(isinstance(envelope, dict) and set(envelope) == {"previous", "event", "digest"},
                     "invalid journal envelope")
@@ -117,17 +141,21 @@ class Journal:
             envelopes.append(envelope)
         return envelopes, previous
 
-    def _read_complete(self):
+    def _read_complete(self, authenticated_prefix=0):
         cursor, seen, envelopes, end = None, set(), [], None
         ids, head = set(), None
+        remaining_prefix = authenticated_prefix
         while True:
-            page = self.transport.page(self.issue_id, cursor)
+            page = self.transport.page(self.issue_id, cursor,
+                                       authenticated_prefix=authenticated_prefix if cursor is None else 0)
             require(isinstance(page, dict) and set(page) == {"comments", "next", "cursor"}
                     and isinstance(page["comments"], list), "invalid or incomplete journal page")
             # Consume this page while its transport writer proofs are current.
             # The next page refreshes mutable observations; collecting all rows
             # first would re-authenticate every earlier page over HTTP.
-            verified, head = self._verify(page["comments"], head, ids)
+            verified, head = self._verify(page["comments"], head, ids,
+                                          skip_authenticate=remaining_prefix)
+            remaining_prefix = max(0, remaining_prefix - len(page["comments"]))
             envelopes.extend(verified)
             if page["cursor"] is not None:
                 require(isinstance(page["cursor"], str) and bool(page["cursor"]), "invalid journal page cursor")
@@ -177,15 +205,29 @@ class Journal:
                           "envelopes": [*cache["envelopes"], *envelopes], "ids": ids}
         return list(self._verified["envelopes"]), head
 
-    def _read(self, expected_head):
-        """Complete authenticated history, reusing a verified prefix in-process.
+    def _read(self, anchor):
+        """Complete authenticated history, reusing a verified prefix when one binds this head.
 
-        The prefix is reused only while the anchor still names exactly the head
-        this process verified; any other head forces a complete replay."""
+        The in-process prefix is reused only while the anchor still names
+        exactly the head this process verified; any other head forces a
+        complete replay. The anchor-persisted prefix ("verified") extends the
+        same rule across processes: those comments still face metadata and
+        digest-chain checks, only their writer liveness re-proofs are skipped."""
+        expected_head = anchor["head"]
         cache = self._verified
         if cache is not None and cache["cursor"] is not None and cache["head"] == expected_head:
             return self._read_delta(cache)
+        prefix = anchor.get("verified")
+        if prefix is not None and prefix["head"] == expected_head:
+            return self._read_complete(authenticated_prefix=prefix["count"])
         return self._read_complete()
+
+    def _verified_payload(self, head):
+        """The persistable prefix when this process's read covers `head`, else None."""
+        cache = self._verified
+        if cache is None or cache["head"] != head:
+            return None
+        return {"head": head, "count": cache["count"]}
 
     def _peek_pending(self, anchor):
         """Fail fast on a proven-absent stranded pending before any full replay.
@@ -208,16 +250,20 @@ class Journal:
         try:
             self._guard()
             anchor = self.anchor.read()
-            require(isinstance(anchor, dict) and set(anchor) == {"head", "pending"}, "anchor is missing or malformed")
+            require(isinstance(anchor, dict) and set(anchor) in ({"head", "pending"}, {"head", "pending", "verified"}),
+                    "anchor is missing or malformed")
             if anchor["pending"] is not None:
                 self._peek_pending(anchor)
-            envelopes, head = self._read(anchor["head"])
+            envelopes, head = self._read(anchor)
             if anchor["pending"] is not None:
                 pending = anchor["pending"]
                 require(envelopes and envelopes[-1] == pending and pending["previous"] == anchor["head"],
                         "pending append is not yet visible or its outcome is uncertain",
                         "reconcile the exact pending event; do not issue a second POST")
                 replacement = {"head": head, "pending": None}
+                verified = self._verified_payload(head)
+                if verified is not None:
+                    replacement["verified"] = verified
                 self.anchor.replace(anchor, replacement)
                 anchor = replacement
             require(head == anchor["head"], "journal suffix is missing or unanchored",
@@ -227,6 +273,31 @@ class Journal:
             if isinstance(error, JournalBlocked):
                 raise
             raise JournalBlocked(f"why: journal state unavailable: {error}; remedy: reconcile storage; do not advance cursor") from error
+
+    def persist_verified(self):
+        """Record this process's authenticated prefix on the anchor for later processes.
+
+        No-op unless this process has authenticated the current anchor head and
+        the anchor does not already carry that exact prefix. One locked PATCH
+        amortized against a complete writer re-authentication per later tick."""
+        try:
+            self._guard()
+            anchor = self.anchor.read()
+            require(isinstance(anchor, dict) and set(anchor) in ({"head", "pending"}, {"head", "pending", "verified"}),
+                    "anchor is missing or malformed")
+            desired = self._verified_payload(anchor["head"])
+            require(desired is not None,
+                    "this process has not authenticated the current head; remedy: load the journal before persisting a verified prefix")
+            if anchor.get("verified") == desired:
+                return False
+            replacement = dict(anchor)
+            replacement["verified"] = desired
+            self.anchor.replace(anchor, replacement)
+            return True
+        except Exception as error:
+            if isinstance(error, JournalBlocked):
+                raise
+            raise JournalBlocked(f"why: verified prefix persist unavailable: {error}; remedy: reconcile storage; do not advance cursor") from error
 
     def read_committed(self):
         """Read-only: the complete authenticated history up to the anchored head.
@@ -239,7 +310,7 @@ class Journal:
             require(self.anchor is not None, "durable journal checkpoint is unavailable",
                     "configure an authenticated checkpoint object; do not infer progress from comments alone")
             anchor = self.anchor.peek()
-            envelopes, head = self._read_complete()
+            envelopes, head = self._read(anchor)
             if head != anchor["head"]:
                 pending = anchor["pending"]
                 require(isinstance(pending, dict) and envelopes and envelopes[-1] == pending
@@ -266,7 +337,8 @@ class Journal:
             require(isinstance(expected_digest, str) and bool(expected_digest),
                     "pending reconcile needs the audited digest of the exact stranded intent")
             anchor = self.anchor.read()
-            require(isinstance(anchor, dict) and set(anchor) == {"head", "pending"}, "anchor is missing or malformed")
+            require(isinstance(anchor, dict) and set(anchor) in ({"head", "pending"}, {"head", "pending", "verified"}),
+                    "anchor is missing or malformed")
             pending = anchor["pending"]
             require(isinstance(pending, dict),
                     "no stranded pending append to reconcile; remedy: ordinary load recovery, never a manual clear")
@@ -274,12 +346,16 @@ class Journal:
                     "operator audit names a different intent; remedy: re-audit the exact stranded pending before clearing")
             require(pending.get("previous") == anchor["head"],
                     "stranded intent is not the chain successor; remedy: reconcile forked history first, never clear by hand")
-            envelopes, head = self._read(anchor["head"])
+            envelopes, head = self._read(anchor)
             require(all(envelope != pending for envelope in envelopes),
                     "pending append persisted; remedy: ordinary load recovery adopts it, never clear a committed event")
             require(head == anchor["head"], "journal suffix is missing or unanchored",
                     "stop admission; restore the independent anchor and journal or audit old runs before bootstrap")
-            self.anchor.replace(anchor, {"head": anchor["head"], "pending": None})
+            replacement = {"head": anchor["head"], "pending": None}
+            verified = self._verified_payload(head)
+            if verified is not None:
+                replacement["verified"] = verified
+            self.anchor.replace(anchor, replacement)
             return [deepcopy(envelope["event"]) for envelope in envelopes]
         except Exception as error:
             if isinstance(error, JournalBlocked):
@@ -305,6 +381,9 @@ returns. A pending-but-absent append blocks instead of unsafe blind retry.
             envelope = {"previous": anchor["head"], "event": deepcopy(event)}
             envelope["digest"] = digest(envelope)
             prepared = {"head": anchor["head"], "pending": envelope}
+            verified = self._verified_payload(anchor["head"])
+            if verified is not None:
+                prepared["verified"] = verified
             self.anchor.replace(anchor, prepared)
             self.transport.append(self.issue_id, envelope)
             return self.load()
