@@ -239,3 +239,71 @@ Documentation impact: required — `/core/modules/application-facade/`；
 候选 pitfall：audio-before-journal 旧路径不能当作新 profile 的证明（新路径
 reserve→durable→publish）；fence  readiness 必须按队列位置的逐字段对照，
 最新值比较在 begin-pending 交错下失真。shipping 前按 issue-done 评估登记。
+
+## 2026-10-12 R-PF — resumed direct replay profile preflight
+
+Refreshed integration base: `c2de40b6471a40b830980d6ce88fdb600988437c`.
+Original local repair `b87e9c922bae71e8b2f3f489103785d1e033528e` and PR #2029
+head `649846076354c85b1250dcc33e30fc9d8b803373` are retained. The older blanket
+header/kind-7/kind-8 refusal is superseded by #2044, merged as
+`d21ea97c71da281f89ac78238f6fcceb8b03e638`; do not reimplement it.
+
+Still outstanding at the refreshed base: Reference replay `begin` only checks
+UUID, count and ascending offsets before taking an identity and applying a
+header. A direct legacy projection can carry input_sequence or typed Filter/Pad
+gates; a headered projection can omit/duplicate its sequence or reverse
+within-tick Core order. Domain's durable grammar already rejects these profile
+shapes, but the public direct projection boundary does not. The real Engine
+adapter delegates to Reference and shares this gap. Application obtains a
+validated Cooker projection, and its supported new-profile flow stays intact.
+
+User authorized resuming remaining worktrees. This separate bounded Task owns
+only pre-effect profile-shape validation on the new supported profile. Initial
+state replacement and header acknowledgement epoch/state boundaries remain
+separate outstanding repairs; no full replay/Goal acceptance is claimed.
+The retired draft's complete-lane evidence remains historical and unverified.
+
+Declared five files: this plan;
+`packages/application-facade/src/performance_replay.cpp`;
+`tests/core/facade/performance_replay_test.cpp`;
+`tests/core/facade/performance_engine_adapter_test.cpp`;
+`apps/docs-site/docs/core/modules/application-facade.mdx`.
+No signature/layout, persisted grammar, Product Build or identity changes.
+Version impact: internal bugfix; manifest/API settlement remains in parent V1.
+Documentation impact: required
+Affected portal pages: /core/modules/application-facade/
+The existing producer/consumer diagram has unchanged nodes and flow; document
+the added validation at its current replay boundary on the owning page.
+
+Acceptance: before any header, Pad, FX, Filter, mask, reset, clock/transport
+effect or retained identity, reject a legacy sequence (including zero), legacy
+typed actions and header sequence absence/duplication/within-tick reversal.
+Each rejection must leave no sink calls, no native queue/voice changes and no
+replay identity; the same ID then admits a valid legacy projection. Headered
+profiles retain typed actions and legal zero/gapped sequence values. Preserve
+all original replay, Engine adapter and Operation Contract journey bodies.
+Run their three complete native registrations, a rebuilt missing-preflight RED
+and restored GREEN, and the unchanged complete Portal check. No stress code or
+concurrency ownership is changed; historical Master FX and full-lane debt stay
+explicit and are not cleared by these owning checks.
+Evidence: `/home/en/orca/evidence/worktree-resume-20261012/`.
+
+### R-PF verification
+
+Fresh configure and native build exit 0. New rejection oracle on unchanged
+current-main source fails at `!rejected.has_value()` (CTest exit 8). Corrected
+complete Replay/Engine Adapter/Operation Contract registrations pass 3/3,
+including all 21 original Reference and 30 original Engine bodies plus the new
+profile checks. A fresh successful rebuild with preflight bypassed then fails
+both Reference and real Engine rejection assertions (CTest exit 8); restored
+bytes have newer mtime, recompile and pass all three complete registrations.
+
+Unchanged complete Portal check with Node 26.7.0 exits 0: 176 tests, 52 pages,
+10 sources/20 outputs, typecheck/build and 50 routes/links. No version allocation,
+release, owner waiver, full-lane receipt or complete replay acceptance. Product
+preflight behavior is expressed by these regression tests; no pitfall ledger
+recurrence is added. Historical native/full-lane failures remain retained.
+
+Precommit main refresh: `171f0f1be1d022b512d38a90a96c789e1aa821c6`;
+intervening source/governance dispositions are recorded with the shipping
+evidence. No duplicate replay-profile successor was identified.
