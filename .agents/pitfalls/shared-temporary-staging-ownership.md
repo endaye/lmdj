@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-10-11
     occurrence: https://github.com/endaye/lmdj/issues/1996
     observed_by: Codex
+  - date: 2026-10-12
+    occurrence: https://github.com/endaye/lmdj/pull/2070
+    observed_by: Codex /root
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -51,3 +54,11 @@ skill now owns this causal diagnosis and complete unchanged rerun procedure.
 Do not apply it to macOS ASan fork failures: a different temporary path can
 change their allocation layout; use the separate
 `asan-macos-fork-child-stack-depot-boundary` guidance.
+
+The #2070 shipping investigation also found `gh run view --log-failed` unable
+to create its cache under `/tmp/gh-cli-cache`, owned by UID 1002 with mode 0755
+while the caller was UID 1000. Preserve that command failure, use a private
+caller-owned child `TMPDIR` for the complete read command, and leave the shared
+cache unchanged. Direct per-job API logs and the failure artifact remain the
+authority for diagnosing the independent review failure; cache access is a
+separate local observation, never evidence of a review or product defect.
