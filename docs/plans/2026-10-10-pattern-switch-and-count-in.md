@@ -1213,3 +1213,39 @@ Documentation impact: required on `/core/modules/application-facade/` and
 `/core/modules/web-runtime-platform/`, with this design and plan in the same
 Task. Source text describes the required behavior; runtime proof is recorded
 only after actual execution.
+
+
+## S6 followup — wait for outstanding fatal cleanup with no retained Pattern debt
+
+The original packaged recovery journey reached its replacement factory while
+the old Native transport was sealed but its real full-owner receipt remained
+false, with an AudioContext and BroadcastChannel still alive. The SDK's repeated
+close branch skipped its outstanding terminal cleanup Promise solely because
+Native was sealed. Sealing is not completion of actual owner/backend cleanup.
+This Task removes that extra bypass when no retained Pattern owner exists,
+waiting for the same actual cleanup Promise without relabeling the original
+fatal close as successful. Existing unknown retained Pattern debt continues to
+report false promptly; it is not discarded or converted into physical release.
+
+**Declared files:** `packages/web-runtime-platform/web/runtime_session.mjs`,
+`packages/web-runtime-platform/test/runtime_session.test.mjs`, this plan,
+`docs/design/2026-10-11-scheduled-pattern-record-count-in.md`, and
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`.
+
+**Lowest-tier verification:** same strict SDK regression against original and
+repaired source, with separate actual Native full-owner and AudioContext-close
+barriers, two original close callers, intermediate non-settlement and unchanged
+fatal result. Preserve rejected cleanup and all existing retained-debt cases.
+Run complete owning SDK/Creator controller tests, types and full Portal before
+commit. The original packaged recovery and complete final Creator remain
+independent runtime obligations; no assertion, journey, worker or deadline is
+removed. If the real recovery still has retained debt at this boundary, this
+narrow repair is insufficient and must be reported before expanding its API.
+
+### Version Management
+
+Version impact: private correctness within the already declared unshipped Web
+Runtime Platform S6 PATCH; no new public API, wire, persisted Contract or Product
+identity is allocated. Documentation impact: required on
+`/core/modules/web-runtime-platform/`, with this design and plan. Source-only
+text and component verification do not establish final integrated acceptance.

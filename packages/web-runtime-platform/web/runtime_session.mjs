@@ -6249,10 +6249,11 @@ function createRuntimeSessionController(options = {}) {
 
   async function close() {
     if (terminalCleanupStarted) {
-      // Preserve the original legacy cleanup wait when no live owner debt
-      // can block it. A sealed/retained fatal owner still reports false
-      // promptly and keeps its independent continuation and resources.
-      if (transport.terminated !== true && !hasRetainedPatternOwners()) {
+      // A seal is not completed owner/backend cleanup. With no retained
+      // Pattern debt, every caller waits the same original cleanup Promise.
+      // Live retained debt still reports false promptly, preserving its
+      // independent continuation and resources without manufacturing release.
+      if (!hasRetainedPatternOwners()) {
         try { await terminalCleanupPromise; } catch { /* Original fatal state remains observable. */ }
       }
       return false;

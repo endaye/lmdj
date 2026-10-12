@@ -9201,6 +9201,147 @@ function deliberateTerminationSeal() {
   });
 }
 
+test("repeated fatal close without Pattern debt waits the original Native and backend cleanup", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  const actualClose = f.context.close.bind(f.context);
+  let backendStarted = 0;
+  f.context.close = async () => {
+    backendStarted += 1;
+    await backendPending;
+    return actualClose();
+  };
+  await activateInputProfile(f);
+  assert.equal(f.context.state, "running");
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.state.countAccepted, false);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.transport.terminated, true);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  let first = null;
+  const replacementBoundaries = [];
+  const firstClose = f.session.close().then((value) => {
+    first = {value};
+    // Model the unchanged Creator then(factory) boundary using actual
+    // fixture owner/backend evidence, not the close boolean as an ACK.
+    replacementBoundaries.push({owner: f.transport.terminalOwnerReleased,
+      backend: f.context.state});
+  }, (error) => { first = {error}; });
+  await f.tick();
+  assert.equal(first, null, "sealed Native still owes its real full owner receipt");
+  assert.equal(replacementBoundaries.length, 0);
+  assert.equal(backendStarted, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => backendStarted === 1);
+  assert.equal(f.transport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running", "full Native retirement is not backend closure");
+  assert.equal(first, null);
+  assert.equal(replacementBoundaries.length, 0);
+  let second = null;
+  const secondClose = f.session.close().then(
+    (value) => { second = {value}; }, (error) => { second = {error}; });
+  await f.tick();
+  assert.equal(second, null, "a late repeated caller waits the same outstanding backend close");
+  assert.equal(f.state.terminalStarts, 1);
+  assert.equal(backendStarted, 1);
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+
+  releaseBackend();
+  await tickRetainedUntil(f, () => first !== null && second !== null);
+  await Promise.all([firstClose, secondClose]);
+  assert.deepEqual(first, {value: false}, "fatal closure must not be relabeled clean close");
+  assert.deepEqual(second, {value: false});
+  assert.deepEqual(replacementBoundaries, [{owner: true, backend: "closed"}]);
+  assert.equal(f.state.backendCloses, 1);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 1));
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(await f.session.close(), false);
+  assert.equal(f.state.terminalStarts, 1, "a completed repeated call does not restart cleanup");
+});
+
+test("repeated fatal close waits actual termination rejection and retains original failure and resources", async (t) => {
+  let releaseTermination;
+  const terminationPending = new Promise((resolve) => { releaseTermination = resolve; });
+  const backendFailure = Object.assign(new Error("actual terminal backend rejected"), {
+    code: "IO_ERROR", details: {resource: "audio_backend", pending: true},
+  });
+  const f = retainedConsumerFixture({terminate: async () => {
+    await terminationPending;
+    throw backendFailure;
+  }});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(f.physicalOwners.size, 0);
+  let outcome = null;
+  const closing = f.session.close().then(
+    (value) => { outcome = {value}; }, (error) => { outcome = {error}; });
+  await f.tick();
+  assert.equal(outcome, null, "the actual terminator has not settled its original Promise");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  releaseTermination();
+  await tickRetainedUntil(f, () => outcome !== null);
+  await closing;
+  assert.deepEqual(outcome, {value: false});
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT", "later cleanup rejection cannot replace the first fatal error");
+  assert.deepEqual(f.session.diagnostics().error_details, {
+    resource: "pattern_input", terminal_state: "sealed",
+  });
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(await f.session.close(), false);
+  assert.equal(f.state.terminalStarts, 1);
+});
+
+test("repeated fatal close cannot turn resolved termination into Native retirement or backend closure", async (t) => {
+  const f = retainedConsumerFixture({terminate: async () => {}});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(f.physicalOwners.size, 0);
+  let outcome = null;
+  const closing = f.session.close().then(
+    (value) => { outcome = {value}; }, (error) => { outcome = {error}; });
+  await f.tick();
+  assert.equal(outcome, null, "a resolved custom terminator is not the Native full owner receipt");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => outcome !== null);
+  await closing;
+  assert.deepEqual(outcome, {value: false}, "a still-open backend is not successful fatal cleanup");
+  assert.equal(f.transport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running");
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(await f.session.close(), false);
+  assert.equal(f.state.terminalStarts, 1);
+});
+
 test("normal close reports actual termination rejection without closing or detaching SDK ownership", async () => {
   const backendFailure = Object.assign(new Error("formal backend termination failed"), {
     code: "IO_ERROR", details: {resource: "audio_backend", pending: true},

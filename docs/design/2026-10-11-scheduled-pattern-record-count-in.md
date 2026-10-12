@@ -997,3 +997,16 @@ layout, wire or persisted Contract; identities remain in the existing unshipped
 S6 settlement. Native real-storage tests and Host callback/Bridge witnesses
 require rebuilt old/fixed discrimination; browser OPFS, complete current
 Creator and physical acceptance still need their own actual execution.
+
+
+## Repeated close preserves real outstanding cleanup
+
+A sealed Native transport can still have real owner/backend cleanup pending.
+When there is no retained Pattern debt, repeated fatal close waits for the same
+terminal cleanup Promise, including original Native full-owner retirement and
+actual AudioContext closure. It preserves the original false/fatal result;
+sealing alone cannot skip that wait. Unknown retained Pattern debt retains its
+existing prompt false response and independent continuation. This private fix
+adds no public API and cannot by itself certify replacement for that retained
+case. Strict intermediate and final owning assertions, rejected closure and the
+original packaged recovery remain required evidence.

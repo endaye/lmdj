@@ -529,3 +529,12 @@ Host 继续要求实际 callback-last-use、Native stopped、executor owner 释�
 原 Bridge response/consumer release。独立 writer acquisition、完整 Truth/Artifact
 reopen 和浏览器 OPFS 回执不能从逻辑 idle、计时器或单个 stopped 值推断。
 该私有结算不新增 wire/DTO/vtable 或 Product 身份；源码与当前运行验收分开记录。
+
+
+### S6 重复 close 的真实清理等待（修复源码）
+
+Native transport 已 sealed 仍可能等待真实 owner 与 AudioContext backend 关闭。
+没有 retained Pattern 债务时，重复 fatal close 等待同一个真实 terminal cleanup
+Promise，保留原 false/失败结果。存在未知 retained Pattern 债务时仍保留原 prompt
+false 和独立结算；不能把 sealed 或单个 Promise 返回当作完整物理释放。私有修复
+不新增公开 API；原 packaged replacement 和完整 Creator 需各自实际运行验收。
