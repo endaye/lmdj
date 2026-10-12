@@ -7347,8 +7347,10 @@ std::uint64_t prepare_transport_replay(
 }
 
 // Dispatch stays on one control thread. The test's render thread advances
-// exactly one quantum at each far-side receipt boundary: neutral reset first,
-// selected Pattern publication second. No wall-clock musical progress.
+// explicit quanta until the full neutral receipt allows Pattern publication,
+// then its publication callback. The ninth legacy FX enqueue is only a prefix:
+// reset also clears Pad gates and can release an independent Filter.
+// No wall-clock musical progress.
 Json dispatch_transport_after_replay(ControlRuntime& runtime, const Json& payload) {
   auto& engine = runtime.engine();
   const auto fx = engine.master_fx_telemetry().enqueued_gestures;
@@ -7365,11 +7367,28 @@ Json dispatch_transport_after_replay(ControlRuntime& runtime, const Json& payloa
       engine.master_fx_telemetry().enqueued_gestures >= fx + 9; });
   LMDJ_CHECK(!done.load(std::memory_order_acquire));
   LMDJ_CHECK(engine.pattern_telemetry().accepted_publications == patterns);
-  static_cast<void>(render_grid_frames(engine, 128));
-  wait_until([&] { return done.load(std::memory_order_acquire) ||
-      engine.pattern_telemetry().accepted_publications > patterns; });
+  wait_until([&] {
+    if (done.load(std::memory_order_acquire) ||
+        engine.pattern_telemetry().accepted_publications > patterns) {
+      return true;
+    }
+    static_cast<void>(render_grid_frames(engine, 128));
+    return false;
+  });
   if (done.load(std::memory_order_acquire)) check_success(response);
-  LMDJ_CHECK(!done.load(std::memory_order_acquire));
+  LMDJ_CHECK(engine.pattern_telemetry().accepted_publications > patterns);
+  // The control thread has finished reset and published the next Pattern.
+  // That publication can reach audio in the last reset quantum, so dispatch
+  // may already have completed. The accepted gate shadow is stable in either
+  // case, and every reset channel must already have audio evidence.
+  LMDJ_CHECK(engine.master_fx_telemetry().dequeued_gestures >= fx + 9);
+  LMDJ_CHECK(engine.master_fx_telemetry().queued_gestures == 0);
+  const auto filter = engine.filter_control_status().applied;
+  LMDJ_CHECK(!filter.state.engaged && !filter.state.frozen && !filter.state.hold);
+  const auto gates = engine.pad_gates_status();
+  LMDJ_CHECK(gates.applied.sequence == gates.accepted_sequence);
+  LMDJ_CHECK(gates.applied.state.muted_mask == 0);
+  LMDJ_CHECK(gates.applied.state.solo_mask == 0);
   static_cast<void>(render_grid_frames(engine, 128));
   control.join();
   check_success(response);
