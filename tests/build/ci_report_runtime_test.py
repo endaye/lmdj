@@ -970,6 +970,29 @@ class RuntimeJourneyTests(unittest.TestCase):
             setattr(self.api, name, getattr(source, name))
         return source
 
+    def test_idle_drain_persists_only_the_outbox_prefix_once_across_restart(self):
+        self.initialize()
+        self.make().execute("review", run_id=51, attempt=1)
+        body = json.loads(self.outbox_http.issue["body"])
+        body["payload"].pop("verified")
+        self.outbox_http.issue["body"] = json.dumps(body)
+        scheduler = deepcopy(self.scheduler_http.issue)
+        comments = deepcopy(self.outbox_http.comments)
+        issues, report_comments = deepcopy(self.api.issues), deepcopy(self.api.comments)
+        self.actual_calls.clear()
+        self.assertEqual(self.make().execute("drain"), {"status": "idle"})
+        self.assertEqual([p for m, p, _ in self.actual_calls if m == "PATCH"],
+                         ["/repos/endaye/lmdj/issues/783"],
+                         "why: idle drain did not upgrade only the outbox anchor; remedy: persist its verified prefix")
+        checkpoint = json.loads(self.outbox_http.issue["body"])["payload"]
+        self.assertEqual(checkpoint["verified"], {"head": checkpoint["head"], "count": len(comments)})
+        self.actual_calls.clear()
+        self.assertEqual(self.make().execute("drain"), {"status": "idle"})
+        self.assertFalse([p for m, p, _ in self.actual_calls if m == "PATCH"])
+        self.assertEqual(self.outbox_http.comments, comments)
+        self.assertEqual(self.scheduler_http.issue, scheduler)
+        self.assertEqual((self.api.issues, self.api.comments), (issues, report_comments))
+
     def test_legacy_full_reaches_authenticated_http_journal_and_exact_receipt(self):
         self.initialize()
         source = self.install_legacy()

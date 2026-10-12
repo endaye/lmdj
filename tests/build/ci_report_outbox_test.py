@@ -32,6 +32,86 @@ class OutboxTests(unittest.TestCase):
     def posts(self):
         return [c for c in self.api.calls if c[0] in {"create_issue", "create_comment"}]
 
+    def test_idle_load_persists_legacy_prefix_for_the_next_process(self):
+        self.fresh().deliver(self.api, self.report)
+        self.memory.checkpoint.pop("verified")
+        comments = deepcopy(self.memory.comments)
+        driver = self.fresh()
+        with mock.patch.object(driver.journal, "authenticate", wraps=driver.journal.authenticate) as authenticate, \
+                mock.patch.object(self.memory, "replace", wraps=self.memory.replace) as replace:
+            expected = driver.load()
+            self.assertEqual(authenticate.call_count, len(comments))
+            self.assertEqual(replace.call_count, 1,
+                             "why: an idle outbox replay did not persist its prefix; remedy: persist after successful reduction")
+        # Both readers share the reducer and could agree on a dropped delivery.
+        # Pin the durable projection to the independently observed business Issue.
+        self.assertEqual(expected["generation"], 4)
+        row = next(iter(expected["deliveries"].values()))
+        self.assertEqual(row["status"], "delivered")
+        self.assertEqual(row["receipt"], {"issue_number": self.api.issues[0]["number"], "comment_id": None})
+        self.assertEqual(self.memory.checkpoint["verified"],
+                         {"head": self.memory.checkpoint["head"], "count": len(comments)})
+        fresh = self.fresh()
+        with mock.patch.object(fresh.journal, "authenticate", wraps=fresh.journal.authenticate) as authenticate, \
+                mock.patch.object(self.memory, "replace", wraps=self.memory.replace) as replace:
+            self.assertEqual(fresh.load(), expected)
+            authenticate.assert_not_called()
+            replace.assert_not_called()
+        self.assertEqual(self.memory.comments, comments)
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_rejected_outbox_replay_does_not_persist_a_prefix(self):
+        self.memory.journal().append(dict(id="invalid", epoch="report-epoch", generation=0,
+                                         type="observe", data={}))
+        self.memory.checkpoint.pop("verified")
+        driver = self.fresh()
+        with mock.patch.object(driver.journal, "persist_verified") as persist:
+            with self.assertRaises(outbox.OutboxBlocked):
+                driver.load()
+            persist.assert_not_called()
+        self.assertNotIn("verified", self.memory.checkpoint)
+        self.assertIsNone(driver.state)
+
+    def test_failed_prefix_persist_prevents_business_post(self):
+        driver = self.fresh()
+        with mock.patch.object(self.memory, "replace", side_effect=OSError("lost anchor write")):
+            with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                driver.deliver(self.api, self.report)
+        self.assertIsNone(driver.state)
+        self.assertFalse(self.posts())
+        self.assertFalse(self.memory.comments)
+
+    def test_lost_prefix_write_response_recovers_without_repeating_a_business_post(self):
+        driver = self.fresh()
+        replace = self.memory.replace
+        def lose_response(previous, replacement):
+            replace(previous, replacement)
+            raise OSError("prefix persisted but response lost")
+        with mock.patch.object(self.memory, "replace", side_effect=lose_response):
+            with self.assertRaises(outbox.OutboxBlocked):
+                driver.deliver(self.api, self.report)
+        self.assertEqual(self.memory.checkpoint["verified"], {"head": None, "count": 0})
+        self.assertIsNone(driver.state)
+        self.assertFalse(self.posts())
+        self.assertFalse(self.memory.comments)
+        self.assertEqual(self.fresh().deliver(self.api, self.report)["status"], "delivered")
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_lock_loss_after_replay_prevents_prefix_persist(self):
+        driver = self.fresh()
+        replay = driver._replay
+        def lose_lock(events):
+            state = replay(events)
+            self.memory.lock = False
+            return state
+        with mock.patch.object(driver, "_replay", side_effect=lose_lock), \
+                mock.patch.object(self.memory, "replace", wraps=self.memory.replace) as replace:
+            with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                driver.load()
+            replace.assert_not_called()
+        self.assertIsNone(driver.state)
+        self.assertFalse(self.posts())
+
     def test_create_ack_visible_receipt_then_duplicate_delivery(self):
         first = self.fresh().deliver(self.api, self.report)
         second = self.fresh().deliver(self.api, self.report)
