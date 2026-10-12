@@ -45,7 +45,7 @@ class MemoryTransport:
         self.comments.append({"id": len(self.comments) + 1, "edited": False,
                               "envelope": deepcopy(envelope), "provenance": "trusted-run"})
 
-    def page(self, issue_id, cursor):
+    def page(self, issue_id, cursor, authenticated_prefix=0):
         start = int(cursor or 0)
         end = start + 1
         rows = deepcopy(self.comments[start:end])

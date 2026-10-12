@@ -25,6 +25,7 @@ class MemoryTransport:
         self.reject_post = False
         self.hide_comments = False
         self.lose_commit_response = False
+        self.prefix_seen = []
 
     def read_body(self, issue_id):
         if self.fail_read:
@@ -46,8 +47,9 @@ class MemoryTransport:
         if self.lose_post_response:
             raise OSError("POST persisted but response lost")
 
-    def page(self, issue_id, cursor):
+    def page(self, issue_id, cursor, authenticated_prefix=0):
         self.page_reads += 1
+        self.prefix_seen.append((cursor, authenticated_prefix))
         if self.fail_read:
             raise OSError("state API unavailable")
         if self.hide_comments:
@@ -122,6 +124,12 @@ class JournalTest(unittest.TestCase):
 
     def test_unlocked_reader_still_refuses_untrusted_or_unanchored_history(self):
         self.append(0)
+        # Without a persisted prefix (the legacy anchor), writer identity is
+        # re-proven on every read and the tamper is caught. A persisted verified
+        # prefix deliberately skips that re-proof (#2025): prefix comments still
+        # face metadata and digest-chain checks, covered by
+        # test_verified_prefix_still_checks_metadata_and_chain.
+        self.transport.body["checkpoint"].pop("verified")
         self.transport.comments[0]["provenance"] = "someone-else"
         with self.assertRaises(JournalBlocked):
             self.reader().read_committed()
@@ -398,6 +406,102 @@ class JournalTest(unittest.TestCase):
         fresh = Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock)
         self.assertEqual(reused, fresh.load(),
                          "why: in-process reuse produced a different history; remedy: keep verification equivalent")
+
+    def counting(self):
+        calls = []
+
+        def authenticate(record, issue):
+            if "envelope" in record:
+                calls.append(record["id"])
+            return self.authenticate(record, issue)
+
+        return authenticate, calls
+
+    def test_persisted_verified_prefix_skips_writer_reauthentication(self):
+        """Defect #2025: every tick is a fresh process and re-authenticated every
+        historical writer (347 distinct runs over 1,004 comments on 2026-10-11,
+        ~2 REST calls each), exhausting the shared hourly quota on retry. The
+        anchor persists the verified prefix; later processes still check every
+        comment's metadata and the digest chain but re-authenticate writers only
+        past the prefix."""
+        for number in range(3):
+            self.append(number)
+        # Baseline defect: without a persisted prefix (the legacy v1 anchor),
+        # a fresh process pays writer authentication for the complete history.
+        self.transport.body["checkpoint"].pop("verified")
+        authenticate, baseline = self.counting()
+        fresh = Journal(7, self.transport, IssueBodyAnchor(7, self.transport, authenticate, lambda: self.lock),
+                        authenticate, lambda: self.lock)
+        fresh.load()
+        self.assertEqual(len(baseline), 3)
+        fresh.persist_verified()
+        anchor = self.anchor.read()
+        self.assertEqual(anchor["verified"], {"head": anchor["head"], "count": 3})
+        writes = self.transport.body_writes
+        authenticate, calls = self.counting()
+        fresh = Journal(7, self.transport, IssueBodyAnchor(7, self.transport, authenticate, lambda: self.lock),
+                        authenticate, lambda: self.lock)
+        self.assertEqual([event["id"] for event in fresh.load()], ["0", "1", "2"])
+        self.assertEqual(calls, [],
+                         "why: a verified prefix comment was re-authenticated; remedy: only the delta pays writer proofs")
+        starts = [prefix for cursor, prefix in self.transport.prefix_seen if cursor is None]
+        self.assertTrue(starts and starts[-1] == 3,
+                        "why: the read did not name its authenticated prefix; remedy: pass the anchor-verified count")
+        self.assertEqual(self.transport.body_writes, writes, "why: a plain read wrote the checkpoint; remedy: persist only via persist_verified")
+        # New content past the prefix still pays full writer authentication.
+        fresh.append({"id": "3", "epoch": "one", "generation": 3, "type": "observe", "data": {"target": "b" * 40}})
+        self.assertEqual(len(calls), 1,
+                         "why: a delta comment skipped writer authentication; remedy: authenticate everything past the prefix")
+
+    def test_verified_prefix_still_checks_metadata_and_chain(self):
+        for number in range(3):
+            self.append(number)
+        self.journal.persist_verified()
+        self.transport.comments[1]["edited"] = True
+        with self.assertRaisesRegex(JournalBlocked, "edited"):
+            Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock).load()
+        self.transport.comments[1]["edited"] = False
+        self.transport.comments[1]["envelope"] = deepcopy(self.transport.comments[0]["envelope"])
+        with self.assertRaisesRegex(JournalBlocked, "digest|missing|forked"):
+            Journal(7, self.transport, self.anchor, self.authenticate, lambda: self.lock).load()
+
+    def test_verified_prefix_bound_to_another_head_is_malformed(self):
+        self.append(0)
+        self.journal.persist_verified()
+        checkpoint = self.transport.body["checkpoint"]
+        checkpoint["verified"] = {"head": "0" * 64, "count": checkpoint["verified"]["count"]}
+        with self.assertRaisesRegex(JournalBlocked, "verified"):
+            self.journal.load()
+
+    def test_v1_anchor_reads_and_upgrades_once(self):
+        self.append(0)
+        self.append(1)
+        # The legacy anchor shape written before the prefix mechanism existed.
+        self.transport.body["checkpoint"].pop("verified")
+        self.assertNotIn("verified", self.anchor.read())
+        authenticate, calls = self.counting()
+        fresh = Journal(7, self.transport, IssueBodyAnchor(7, self.transport, authenticate, lambda: self.lock),
+                        authenticate, lambda: self.lock)
+        self.assertEqual(len(fresh.load()), 2)
+        self.assertEqual(len(calls), 2, "why: a v1 anchor skipped writer authentication; remedy: persist a verified prefix first")
+        fresh.persist_verified()
+        self.assertIn("verified", self.anchor.read())
+        writes = self.transport.body_writes
+        self.assertFalse(fresh.persist_verified(), "why: an unchanged prefix was rewritten; remedy: no-op when the anchor already carries it")
+        self.assertEqual(self.transport.body_writes, writes)
+
+    def test_read_committed_uses_the_persisted_prefix_without_writes(self):
+        self.append(0)
+        self.append(1)
+        self.journal.persist_verified()
+        authenticate, calls = self.counting()
+        anchor = IssueBodyAnchor(7, self.transport, authenticate, lambda: False)
+        reader = Journal(7, self.transport, anchor, authenticate, lambda: False)
+        writes = self.transport.body_writes
+        self.assertEqual([event["id"] for event in reader.read_committed()], ["0", "1"])
+        self.assertEqual(calls, [],
+                         "why: a read-only reader re-authenticated a verified prefix; remedy: reuse the anchor prefix")
+        self.assertEqual(self.transport.body_writes, writes)
 
 
 if __name__ == "__main__":

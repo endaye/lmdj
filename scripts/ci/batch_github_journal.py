@@ -362,11 +362,12 @@ class GitHubJournalTransport:
         payload, writer = self._unpack(self._query(BODY_QUERY), "checkpoint")
         return {"checkpoint": payload, "provenance": writer}
 
-    def page(self, issue_id, cursor):
+    def page(self, issue_id, cursor, authenticated_prefix=0):
         self._fixed(issue_id)
         if cursor is None:
             self._begin_read_transaction()
             self._page_session = {"count": 0, "total": None, "next": None, "seen": set(),
+                                  "authenticated_prefix": authenticated_prefix,
                                   "control_proofs": _PageControlProofs(),
                                   "workflow_proofs": _PageControlProofs()}
         session = self._page_session
@@ -405,7 +406,15 @@ class GitHubJournalTransport:
         require(count <= session["total"], "comment inventory exceeds total")
         require(info["hasNextPage"] or count == session["total"], "comment inventory is truncated")
         require(not info["hasNextPage"] or comments and count < session["total"], "comment continuation contradicts total")
-        writers = {json.dumps(row["provenance"], sort_keys=True): row["provenance"] for row in comments}
+        writers = {}
+        for offset, row in enumerate(comments):
+            if session["count"] + offset < session["authenticated_prefix"]:
+                # Anchor-persisted verified prefix: writer liveness was
+                # authenticated by a locked writer when the prefix was recorded.
+                # Metadata and record checks above still applied; only the
+                # writer HTTP re-proofs are skipped.
+                continue
+            writers[json.dumps(row["provenance"], sort_keys=True)] = row["provenance"]
         unchecked = {key: value for key, value in writers.items() if key not in self._checked_writers}
         if unchecked:
             # The production HTTP client creates a separate Request/opener/response

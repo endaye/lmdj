@@ -40,7 +40,7 @@ class Memory:
             raise RuntimeError("why: anchor raced; remedy: reconcile")
         self.checkpoint = deepcopy(replacement)
 
-    def page(self, issue, cursor):
+    def page(self, issue, cursor, authenticated_prefix=0):
         return {"comments": deepcopy(self.comments), "next": None,
                 "cursor": str(len(self.comments)) if self.comments else None}
 
