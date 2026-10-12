@@ -39,8 +39,10 @@ PERFORMANCE_OPERATIONS = {
     "performance.replay.stop": "command",
     "performance.replay.status": "query",
     "performance.resample.commit": "command",
+    "performance.live.control": "command",
+    "performance.live.status": "query",
 }
-assert len(PERFORMANCE_OPERATIONS) == 24
+assert len(PERFORMANCE_OPERATIONS) == 26
 
 # Stage 11's Sound Set surface is a second Facade inventory the Native Host
 # forwards, kept apart from the Performance one above so P10-D20 stays exactly

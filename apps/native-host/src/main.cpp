@@ -97,7 +97,7 @@ enum class FacadeSurface {
   query,
 };
 
-constexpr std::array<std::pair<std::string_view, FacadeSurface>, 24>
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 26>
     kPerformanceOperations{{
         {"pattern.slot.assign", FacadeSurface::command},
         {"pattern.slot.clear", FacadeSurface::command},
@@ -123,6 +123,8 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 24>
         {"performance.replay.stop", FacadeSurface::command},
         {"performance.replay.status", FacadeSurface::query},
         {"performance.resample.commit", FacadeSurface::command},
+        {"performance.live.control", FacadeSurface::command},
+        {"performance.live.status", FacadeSurface::query},
     }};
 
 // Stage 11's Sound Set operations are a second Facade surface this Host
