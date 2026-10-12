@@ -57,9 +57,11 @@ if [[ ! -x "$repo_root/scripts/web-runtime-host.sh" ]]; then
   exit 1
 fi
 for command_name in configure build test proof serve clean; do
-  if ! grep -Eq "^[[:space:]]*${command_name}\\)" \
+  # Required commands may share a case arm; match complete literal alternatives.
+  if ! grep -Eq "^[[:space:]]*([[:alnum:]_-]+[[:space:]]*\\|[[:space:]]*)*${command_name}([[:space:]]*\\|[[:space:]]*[[:alnum:]_-]+)*[[:space:]]*\\)" \
     "$repo_root/scripts/web-runtime-host.sh"; then
-    echo "stable Web Runtime Host command is missing: $command_name" >&2
+    echo "why: stable Web Runtime Host command is missing: $command_name" >&2
+    echo "remedy: restore its case alternative in scripts/web-runtime-host.sh" >&2
     exit 1
   fi
 done
