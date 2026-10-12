@@ -205,6 +205,8 @@ class RequestJournalTest(unittest.TestCase):
             for bad in (self.settled_intent(state="open", operation_id=begun["operation_id"]),
                         self.settled_intent(merged=True, merge_commit_sha=None, operation_id=begun["operation_id"]),
                         self.settled_intent(merged=False, merge_commit_sha="b" * 40, operation_id=begun["operation_id"]),
+                        self.settled_intent(merged=True, merge_commit_sha="short", operation_id=begun["operation_id"]),
+                        self.settled_intent(merged=True, merge_commit_sha=42, operation_id=begun["operation_id"]),
                         self.settled_intent(step="verification", operation_id=begun["operation_id"]),
                         self.settled_intent(head_sha="not-a-sha", operation_id=begun["operation_id"]),
                         self.settled_intent(pull_request=0, operation_id=begun["operation_id"])):

@@ -120,7 +120,8 @@ def _validate_settled_intent(settled):
             or type(settled["pull_request"]) is not int or settled["pull_request"] <= 0
             or not _match(_SHA, settled["head_sha"]) or settled["state"] != "closed"
             or type(settled["merged"]) is not bool
-            or (settled["merge_commit_sha"] is None) == settled["merged"]):
+            or (settled["merge_commit_sha"] is None) == settled["merged"]
+            or (settled["merged"] and not _match(_SHA, settled["merge_commit_sha"]))):
         _fail("settled intent is not a terminal candidate cut Pull Request")
 
 

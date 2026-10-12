@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 import sys
 from typing import Callable
@@ -463,10 +464,12 @@ def _settled_candidate_intent(context, directory, state, reserved):
                            detail=f"#{number}")
     expected_title = f"chore(release): allocate {reserved} candidate"
     if (row["state"] != "closed" or row["head_sha"] != spec["head_sha"]
-            or row["title"] != expected_title):
+            or row["title"] != expected_title
+            or (row["merged"] and not re.fullmatch(
+                r"[0-9a-f]{40}\Z", row["merge_commit_sha"] or ""))):
         raise CommandError(
             "the outstanding candidate intent's cut Pull Request is not terminal",
-            detail=f"#{number}: state={row['state']} "
+            detail=f"#{number}: state={row['state']} merged={row['merged']} "
                    f"head={row['head_sha']} title={row['title']!r}")
     return {"step": "candidate", "operation_id": records[-1]["operation_id"],
             "pull_request": number, "head_sha": spec["head_sha"],
