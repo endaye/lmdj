@@ -147,8 +147,9 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   const before = await report(page);
   // Hosts before #1855 address the Pad as A1; current Hosts use A01. The
   // journey runs against both, so the locator accepts each exact shape.
+  // Immutable lmdj-v1.0.66.0 uses Key Q for Pad01; current Hosts use Key Z.
   const pad = page.getByRole("button", {
-    name: /^Pad A0?1 — assigned — Key Z$/,
+    name: /^Pad A0?1 — assigned — Key [QZ]$/,
   });
   await pad.click();
   await expect.poll(async () => {
@@ -162,7 +163,7 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   await page.getByRole("button", {name: "Sample"}).click();
   await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
   // The Sample workspace selects Pads on the hardware rail (ad343a6b).
-  await page.getByRole("button", {name: /^Pad A0?1 — assigned — Key Z$/}).click();
+  await page.getByRole("button", {name: /^Pad A0?1 — assigned — Key [QZ]$/}).click();
   // Hosts after #1930 organize the Sample editor into contextual pages and
   // move replacement under the Pad page; older Hosts expose it directly.
   // Settle on one of the two surfaces first, so a still-rendering page cannot
