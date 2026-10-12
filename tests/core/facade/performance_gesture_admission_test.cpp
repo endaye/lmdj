@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -14,7 +15,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/performance_engine_adapter.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 
@@ -2592,6 +2595,101 @@ void test_live_control_sessionless_window_and_recording_route_exclusion() {
   LMDJ_CHECK(fixture.live->publish_calls() == 1);
 }
 
+void test_live_control_exact_retry_observes_real_render_application() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "live-retry.lmdj";
+  lmdj::audio::RealtimeEngine engine;
+  LMDJ_CHECK(engine.prepare_master_fx(120).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto config = lmdj::facade::ApplicationConfig{
+      temp.path(), nullptr, {}, {}, std::nullopt, nullptr,
+      adapter.clock, adapter.input_sequencer, adapter.launch_acknowledger,
+      adapter.replay_controller, adapter.gesture_sink};
+  config.performance_live_control = adapter.live_control;
+  lmdj::facade::Application application(std::move(config));
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", std::string{kProject}},
+                                {"bpm", 120}}));
+  const auto status = application.query(
+      {{"operation", "performance.live.status"},
+       {"project_path", bundle.generic_string()}});
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("available") == true);
+  LMDJ_CHECK(status.at("result").at("accepted_control_sequence") == "0");
+  LMDJ_CHECK(status.at("result").at("applied_control_sequence") == "0");
+  const auto epoch = status.at("result").at("control_epoch").get<std::string>();
+  const nlohmann::json request = {
+      {"operation", "performance.live.control"},
+      {"project_path", bundle.generic_string()}, {"control_epoch", epoch},
+      {"command_id", "10000000-0000-4000-8000-000000000910"},
+      {"expected_control_sequence", "0"},
+      {"intent", {{"kind", "pad_mute"}, {"slot", 7}, {"enabled", true}}}};
+  const auto first = application.command(request);
+  check_ok(first);
+  const auto &receipt = first.at("result");
+  LMDJ_CHECK(receipt.size() == 7U);
+  LMDJ_CHECK(receipt.at("command_id") == request.at("command_id"));
+  LMDJ_CHECK(receipt.at("control_epoch") == epoch);
+  LMDJ_CHECK(receipt.at("control_sequence") == "1");
+  LMDJ_CHECK(receipt.at("gesture_generation").is_null());
+  LMDJ_CHECK(receipt.at("accepted") == true);
+  LMDJ_CHECK(receipt.at("applied") == false);
+  LMDJ_CHECK(receipt.at("replayed") == false);
+  LMDJ_CHECK(first.at("project_revision").is_null());
+  const auto accepted = adapter.live_control->live_control_snapshot();
+  LMDJ_CHECK(accepted.accepted_control_sequence == 1);
+  LMDJ_CHECK(accepted.applied_control_sequence == 0);
+  LMDJ_CHECK(accepted.accepted.state.muted_mask == (std::uint64_t{1} << 7));
+  LMDJ_CHECK(accepted.applied.state.muted_mask == 0);
+  LMDJ_CHECK(engine.pad_gates_status().accepted_sequence == 1);
+  const auto start_epoch = engine.telemetry().start_epoch;
+
+  const auto check_retry = [&](const nlohmann::json &response, bool applied) {
+    check_ok(response);
+    const auto &retry = response.at("result");
+    LMDJ_CHECK(retry.contains("applied"));
+    LMDJ_CHECK(retry.size() == 7U);
+    LMDJ_CHECK(retry.at("accepted") == true);
+    LMDJ_CHECK(retry.at("applied").is_boolean());
+    LMDJ_CHECK(retry.at("applied") == applied);
+    LMDJ_CHECK(retry.at("replayed") == true);
+    LMDJ_CHECK(response.at("project_revision").is_null());
+    auto retained_identity = receipt;
+    auto retry_identity = retry;
+    retained_identity.erase("applied");
+    retained_identity.erase("replayed");
+    retry_identity.erase("applied");
+    retry_identity.erase("replayed");
+    LMDJ_CHECK(retry_identity == retained_identity);
+    const auto snapshot = adapter.live_control->live_control_snapshot();
+    LMDJ_CHECK(snapshot.accepted_control_sequence == 1);
+    LMDJ_CHECK(snapshot.accepted.state.muted_mask == (std::uint64_t{1} << 7));
+    LMDJ_CHECK(engine.pad_gates_status().accepted_sequence == 1);
+    LMDJ_CHECK(engine.telemetry().start_epoch == start_epoch);
+  };
+  check_retry(application.command(request), false);
+  LMDJ_CHECK(
+      adapter.live_control->live_control_snapshot().applied_control_sequence == 0);
+  LMDJ_CHECK(engine.pad_gates_status().applied.sequence == 0);
+
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  engine.render(left.data(), right.data(), 128);
+  const auto actually_applied = adapter.live_control->live_control_snapshot();
+  LMDJ_CHECK(actually_applied.applied_control_sequence == 1);
+  LMDJ_CHECK(actually_applied.applied.state.muted_mask ==
+             (std::uint64_t{1} << 7));
+  LMDJ_CHECK(engine.pad_gates_status().applied.sequence == 1);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask ==
+             (std::uint64_t{1} << 7));
+  check_retry(application.command(request), true);
+  check_retry(application.command(request), true);
+  engine.stop();
+}
+
 } // namespace
 
 int main() {
@@ -2617,6 +2715,7 @@ int main() {
     test_headless_new_profile_begin_fails_explicitly();
     test_headered_launch_freezes_sequence_at_reservation_and_ack_reuses();
     test_live_control_sessionless_window_and_recording_route_exclusion();
+    test_live_control_exact_retry_observes_real_render_application();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;
