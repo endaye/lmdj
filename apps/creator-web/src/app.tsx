@@ -2893,7 +2893,8 @@ function Workspace({
       emptyPadCapture={padCaptureState !== null}
       {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
-      {...(activeMode === "sequence" ? {currentSlot: sequenceCurrentPad} : {})}
+      {...(activeMode === "sequence" || activeMode === "perform"
+        ? {currentSlot: sequenceCurrentPad} : {})}
       {...(activeMode === "sample" ? {
         onSelectSample: (slot: number) => {
           cancelPendingEncoders();
@@ -3028,6 +3029,16 @@ function Workspace({
                   backAvailable: padNavigationAvailable && sequenceCurrentPad > 0,
                   forwardAvailable: padNavigationAvailable && sequenceCurrentPad < 63,
                   onBack: () => stepSequencePad(-1), onForward: () => stepSequencePad(1),
+                },
+              } : {})}
+              {...(activeMode === "perform" && !systemOpen && !railShift && sequenceProject !== null ? {
+                padStep: {
+                  backLabel: "Previous Pad — ↑",
+                  forwardLabel: "Next Pad — ↓",
+                  backAvailable: padNavigationAvailable && sequenceCurrentPad > 0,
+                  forwardAvailable: padNavigationAvailable && sequenceCurrentPad < 63,
+                  onBack: () => stepSequencePad(-1),
+                  onForward: () => stepSequencePad(1),
                 },
               } : {})}
               {...(activeMode === "sequence" && !systemOpen && sequenceProject !== null ? {
