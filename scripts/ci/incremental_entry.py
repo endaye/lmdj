@@ -85,6 +85,7 @@ def diagnostic(operation, stage, error):
     """Closed diagnostic only. Never inspect exception text or dynamic names."""
     kinds = {JournalBlocked: "journal-blocked", JournalRecordOversized: "journal-record-oversized",
              batch.BatchError: "batch-error", OutboxBlocked: "outbox-blocked",
+             report_runtime.ReportConflictError: "report-conflict",
              ScopeError: "scope-error", json.JSONDecodeError: "json-error", OSError: "os-error",
              GitHubApiError: "github-api-error", HTTPError: "http-error"}
     answer = {"schema": "lmdj.ci-entry-diagnostic.v1",

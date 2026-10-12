@@ -460,14 +460,100 @@ class ProjectionTests(unittest.TestCase):
         self.adapter.deliver((report,), 1)
         self.assertEqual(module.report_scheduler_state(self.runtime), before)
 
-    def test_changed_frozen_body_rejected_without_new_post(self):
-        result(self.scheduler, failed=(POLICY.inventory.suites[0].jobs[0],))
-        report = self.planned()[0]
-        self.adapter.deliver((report,), 1)
-        from dataclasses import replace
-        with self.assertRaisesRegex(ValueError, "body changed"):
-            self.adapter.deliver((replace(report, summary="Different"),), 1)
+    @staticmethod
+    def _pre_template_payload(report):
+        """Freeze as a pre-template-change record: no workload line, no post-T8b fields."""
+        payload = report_outbox.freeze(report, "endaye")
+        payload["fields"].pop("management")
+        payload["fields"].pop("causal_order")
+        for holder in (payload["fields"], payload):
+            for name in ("summary", "detail", "issue_body", "comment_body"):
+                if name in holder:
+                    holder[name] = holder[name].replace("\n- Verification workload: `full`", "")
+        return payload
+
+    def test_template_drift_tolerated_queued_and_delivered_bytes_unchanged(self):
+        # The presentation template gained a line after this record was frozen.
+        # Replanning must tolerate it in both queued and delivered states while
+        # the journaled bytes stay authoritative for the actual POST (#2034).
+        result(self.scheduler, kind="candidate", base=B, target=C,
+               failed=(POLICY.inventory.suites[0].jobs[0],))
+        current = next(report for report in self.planned() if report.management is None)
+        old_payload = self._pre_template_payload(current)
+        self.assertNotIn("Verification workload", old_payload["fields"]["summary"])
+        box = self.adapter.outbox()
+        box.load()
+        delivery = batch.digest({"key": current.key, "observation": current.observation})
+        box._persist("queue", {"delivery": delivery, "payload": old_payload})
+        answer = self.adapter.deliver((current,), 32)
+        self.assertEqual(answer["outcomes"], [])
         self.assertEqual(len(self.posts()), 1)
+        self.assertNotIn("Verification workload", self.api.issues[0]["body"])
+        before = list(self.posts())
+        again = self.adapter.deliver((current,), 32)
+        self.assertEqual(again["outcomes"], [])
+        self.assertEqual(self.posts(), before)
+        stored = self.adapter.outbox().load()
+        self.assertEqual(stored["deliveries"][delivery]["payload"], old_payload)
+        self.assertEqual(stored["deliveries"][delivery]["status"], "delivered")
+
+    def test_template_drift_does_not_starve_new_observations(self):
+        result(self.scheduler, kind="candidate", base=B, target=C,
+               failed=(POLICY.inventory.suites[0].jobs[0],), advance=True)
+        drifted = next(report for report in self.planned() if report.management is None)
+        old_payload = self._pre_template_payload(drifted)
+        box = self.adapter.outbox()
+        box.load()
+        box._persist("queue", {"delivery": batch.digest({"key": drifted.key, "observation": drifted.observation}),
+                               "payload": old_payload})
+        result(self.scheduler, kind="candidate", base=C, target="5" * 40,
+               failed=(POLICY.inventory.suites[0].jobs[0],))
+        reports = [report for report in self.planned() if report.management is None]
+        self.assertEqual(len(reports), 2)
+        answer = self.adapter.deliver(tuple(reports), 32)
+        self.assertEqual(len(answer["outcomes"]), 1)
+        self.assertEqual(answer["outcomes"][0]["status"], "delivered")
+        # Same suite/class bucket: one Issue, two exact POSTs (new observation
+        # creates it, the drifted queued record comments with its old bytes).
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertEqual(len(self.posts()), 2)
+
+    def test_common_event_template_drift_tolerated_without_new_post(self):
+        common_result(self.scheduler)
+        report = self.planned()[0]
+        self.adapter.deliver((report,), 32)
+        self.assertEqual(len(self.posts()), 1)
+        from dataclasses import replace
+        drifted = replace(report, summary=report.summary + "\n- Verification workload: `quick`")
+        answer = self.adapter.deliver((drifted,), 32)
+        self.assertEqual(answer["outcomes"], [])
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_protected_identity_conflict_fails_closed_before_any_write(self):
+        result(self.scheduler, kind="bootstrap", failed=(POLICY.inventory.suites[0].jobs[0],))
+        report = self.planned()[0]
+        self.assertIsNotNone(report.management)
+        self.adapter.deliver((report,), 1)
+        self.assertEqual(len(self.posts()), 1)
+        from dataclasses import replace
+        variants = {
+            "severity": replace(report, severity="high"),
+            "title": replace(report, title="self-test: renamed bucket"),
+            "labels": replace(report, labels=report.labels[1:]),
+            "management": replace(report, management={**report.management, "policy": "0" * 64}),
+            "causal_order": replace(report, causal_order=report.causal_order + 1),
+        }
+        for name, drifted in variants.items():
+            with self.subTest(field=name):
+                with self.assertRaisesRegex(module.ReportConflictError, "protected " + name):
+                    self.adapter.deliver((drifted,), 1)
+                self.assertEqual(len(self.posts()), 1)
+        stored = self.adapter.outbox().load()
+        delivery = batch.digest({"key": report.key, "observation": report.observation})
+        other_assignee = deepcopy(stored["deliveries"][delivery]["payload"])
+        other_assignee["assignee"] = "someone-else"
+        with self.assertRaisesRegex(module.ReportConflictError, "protected assignee"):
+            module._require_replan_compatible(other_assignee, report_outbox.freeze(report, "endaye"))
 
     def test_new_managed_bucket_recovers_only_after_actual_same_suite_success(self):
         request, _ = result(self.scheduler, kind="bootstrap", failed=(POLICY.inventory.suites[0].jobs[0],), advance=True)

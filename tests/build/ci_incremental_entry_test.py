@@ -110,6 +110,7 @@ class EntryTests(unittest.TestCase):
                             (entry.JournalRecordOversized('SECRET'), 'journal-record-oversized'),
                             (entry.batch.BatchError('SECRET'), 'batch-error'),
                             (entry.OutboxBlocked('SECRET'), 'outbox-blocked'),
+                            (entry.report_runtime.ReportConflictError('SECRET'), 'report-conflict'),
                             (entry.ScopeError('SECRET'), 'scope-error'),
                             (json.JSONDecodeError('SECRET', 'SECRET', 0), 'json-error'),
                             (entry.GitHubApiError(403, 'SECRET'), 'github-api-error'),
