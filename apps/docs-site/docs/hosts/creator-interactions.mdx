@@ -170,7 +170,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - Undo/Redo 执行期间，整个控制台暂时不接受操作。
 - SHIFT＋ENC1–3 使用细调；导航和整数 BPM 保留最小步长。ENC4 没有第二功能，也没有粗调层。
 
-桌面键盘的 `Cmd/Ctrl+Z` 与 `Cmd/Ctrl+Shift+Z` 也分别对应 Undo／Redo，但当前有一项限制：焦点在按钮等非编辑控件上、Pad 输入可用时，组合键还可能同时触发当前 Bank 的 Pad 01。需要避免额外 Pad 输入时，使用左栏 SHIFT＋←／→；在输入框中仍保留原生文字撤销。修饰键与 Pad 输入的隔离方式仍待[任务 #2060](https://github.com/endaye/lmdj/issues/2060) 决定并实现，四排键位交付不代表此问题已修复。
+桌面键盘的 `Cmd/Ctrl+Z` 与 `Cmd/Ctrl+Shift+Z` 也分别对应 Undo／Redo；Creator 忽略带 Ctrl／Cmd 的 Pad 按下，保留应用／浏览器快捷键，组合键不会额外激活音频、选择或击打 Pad，也不会发起采样／导入或停止 Capture。只带 Alt／Shift 的按键保留现有 Pad 行为；先前普通按下的 Pad 在松手时仍释放，即使此时已按住 Ctrl／Cmd。输入框中仍保留原生文字撤销。
 
 ### 1.7 旋钮与方向键 \{#encoders\}
 

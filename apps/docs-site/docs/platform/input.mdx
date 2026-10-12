@@ -10,6 +10,7 @@ source_paths:
   - docs/plans/2026-08-03-lmdj-foundation-input-hardening.md
   - packages/web-runtime-platform/web/input_adapters.mjs
   - packages/web-runtime-platform/web/runtime_session.mjs
+  - apps/creator-web/src/runtime/input_controller.ts
   - apps/web-runtime-host/src/main.mjs
   - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
   - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
@@ -31,6 +32,8 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。在全局 Pattern transport 已 engaged 且录音中的 session，同一 trigger 路径在 enqueue 接受后把 press/release 注入 transport coordinator 的 admission 候选：watermark 单调分配、release 携带其归属 press 的 correlation；这一注入不改变返回给输入侧的 successful/failed/unknown 结果，unknown 输入绝不自动重 trigger。
 
 Creator 当前默认键盘 mapping 使用 `KeyboardEvent.code`，按[已批准的四排空间映射](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md)接线：`1 2 3 4` 对应当前 Bank 的 Pad 13–16，`Q W E R` 对应 Pad 9–12，`A S D F` 对应 Pad 5–8，`Z X C V` 对应 Pad 1–4。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
+
+Creator Input Controller 在 Pad 准入前忽略带 `ctrlKey` 或 `metaKey` 的 `keydown`，保留应用／浏览器组合键，不激活音频、不选择或触发 Pad，也不停止 Capture 或发起空 Pad 采样／导入。仅带 Alt／Shift 的按键沿用现有 Pad 行为；`keyup` 仍释放先前无修饰键开始的按住演奏，即使松手时已按住 Ctrl／Cmd。该策略只属于 Creator，不改变共享 Keyboard adapter 或 Diagnostic Host。
 
 Creator 左栏按 2026-10-09 决策绑定旋钮，上屏持续显示当前功能和值。
 

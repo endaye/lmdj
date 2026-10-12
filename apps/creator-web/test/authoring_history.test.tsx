@@ -5,6 +5,7 @@ import {useState} from "react";
 import {expect, test, vi} from "vitest";
 import {useAuthoringHistory} from "../src/components/authoring_history";
 import {PhysicalControls} from "../src/components/physical_controls";
+import {createCreatorInputController} from "../src/runtime/input_controller";
 import type {AuthoringHistoryRuntimeSession, AuthoringHistoryStatus} from "@lmdj/web-runtime-platform/runtime_types";
 import type {CreatorRuntimeSession} from "../src/runtime/runtime_types";
 
@@ -136,6 +137,83 @@ test("Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z drive the same history without the rail", 
   fireEvent.keyDown(window, {code: "KeyZ", key: "z", metaKey: true, shiftKey: true});
   await waitFor(() => expect(history.redoAuthoring).toHaveBeenCalledTimes(1));
 });
+
+function padInputFixture(source: CreatorRuntimeSession) {
+  const trigger = vi.fn<CreatorRuntimeSession["trigger"]>(async (slot, velocity, source) =>
+    ({sequence: 1, slot, velocity, source}));
+  const activate = vi.fn(() => null);
+  const dispatch = vi.fn();
+  const controller = createCreatorInputController({
+    session: {...source, trigger, subscribeRuntimeOutcome: () => () => {}},
+    getActiveBank: () => 0,
+    isAssigned: () => true,
+    activateAudioForGesture: activate,
+    dispatch,
+  });
+  return {controller, trigger, activate, dispatch};
+}
+
+test.each(["ctrlKey", "metaKey"] as const)(
+  "%s Undo/Redo coexist with the earlier Creator window listener without Pad input", async modifier => {
+    const {props, history} = fixture();
+    // Register the real input listener first: a defaultPrevented-only guard
+    // would trigger a Pad before the real history hook gets the chord.
+    const pads = padInputFixture(props.session);
+    try {
+      render(<Harness {...props} />);
+      await waitFor(() => expect(lit(undoKey())).toBe(true));
+      expect(document.activeElement).toBe(document.body);
+      const undoEvent = new KeyboardEvent("keydown", {code: "KeyZ", key: "z",
+        [modifier]: true, bubbles: true, cancelable: true});
+      fireEvent(document.body, undoEvent);
+      expect(undoEvent.defaultPrevented).toBe(true);
+      await waitFor(() => expect(history.undoAuthoring).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(lit(redoKey())).toBe(true));
+      fireEvent.keyUp(document.body, {code: "KeyZ", [modifier]: true});
+      expect(pads.trigger).not.toHaveBeenCalled();
+      expect(pads.activate).not.toHaveBeenCalled();
+      expect(pads.dispatch).not.toHaveBeenCalled();
+
+      const redoEvent = new KeyboardEvent("keydown", {code: "KeyZ", key: "z",
+        [modifier]: true, shiftKey: true, bubbles: true, cancelable: true});
+      fireEvent(document.body, redoEvent);
+      expect(redoEvent.defaultPrevented).toBe(true);
+      await waitFor(() => expect(history.redoAuthoring).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(lit(undoKey())).toBe(true));
+      fireEvent.keyUp(document.body, {code: "KeyZ", [modifier]: true, shiftKey: true});
+      expect(pads.trigger).not.toHaveBeenCalled();
+      expect(pads.activate).not.toHaveBeenCalled();
+      expect(pads.dispatch).not.toHaveBeenCalled();
+
+      // The same listener still admits a subsequent ordinary Pad press.
+      fireEvent.keyDown(document.body, {code: "KeyZ", key: "z"});
+      await waitFor(() => expect(pads.trigger).toHaveBeenCalledWith(0, 100, "keyboard"));
+      expect(pads.activate).toHaveBeenCalledTimes(1);
+      fireEvent.keyUp(document.body, {code: "KeyZ"});
+      expect(pads.dispatch).toHaveBeenCalledWith({type: "pad-released", slot: 0});
+    } finally { pads.controller.dispose(); }
+  },
+);
+
+test.each(["ctrlKey", "metaKey"] as const)(
+  "%s remains free of Pad input when history leaves the shortcut unhandled", async modifier => {
+    const {props, history} = fixture({...status, undoCount: 0, undoLabel: "", canUndo: false});
+    const pads = padInputFixture(props.session);
+    try {
+      render(<Harness {...props} />);
+      await screen.findByText("No changes in this session");
+      const event = new KeyboardEvent("keydown", {code: "KeyZ", key: "z",
+        [modifier]: true, bubbles: true, cancelable: true});
+      fireEvent(document.body, event);
+      expect(event.defaultPrevented).toBe(false);
+      fireEvent.keyUp(document.body, {code: "KeyZ", [modifier]: true});
+      expect(history.undoAuthoring).not.toHaveBeenCalled();
+      expect(pads.trigger).not.toHaveBeenCalled();
+      expect(pads.activate).not.toHaveBeenCalled();
+      expect(pads.dispatch).not.toHaveBeenCalled();
+    } finally { pads.controller.dispose(); }
+  },
+);
 
 test("the keyboard shortcut leaves the key alone when no history action can run", async () => {
   const {props, history} = fixture({...status, undoCount: 0, undoLabel: "", canUndo: false});

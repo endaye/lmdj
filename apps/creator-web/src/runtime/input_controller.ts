@@ -47,6 +47,10 @@ interface KeyboardInput {
   code?: string;
   type?: string;
   repeat?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
   target?: EventTarget | null;
 }
 
@@ -876,9 +880,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     ? () => {}
     : sampleOptions.session.subscribeVoiceState(observeVoiceState);
   const onBlur = () => clearAdversePressed();
-  const onKeyDown = (event: KeyboardEvent) => {
-    withInputEvent(event, () => keyboard.keyDown(event));
-  };
+  function keyDown(event: KeyboardInput) {
+    // Creator reserves Ctrl/Cmd chords for app/browser shortcuts. Filter
+    // before adapter admission, activation, selection or capture side effects;
+    // keyUp still releases gestures begun before a modifier was held.
+    if (event.ctrlKey === true || event.metaKey === true) return false;
+    return withInputEvent(event, () => keyboard.keyDown(event));
+  }
+  const onKeyDown = (event: KeyboardEvent) => { keyDown(event); };
   const onKeyUp = (event: KeyboardEvent) => { keyboard.keyUp(event); };
   const onPointerUp = (event: PointerEvent) => {
     withInputEvent(event, () => pointer.releasePointer(event));
@@ -988,9 +997,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       const released = pointer.pointerCancel(event);
       return slot === undefined ? released : released || pointer.pointerUp(event, slot);
     },
-    keyDown(event: KeyboardInput) {
-      return withInputEvent(event, () => keyboard.keyDown(event));
-    },
+    keyDown,
     keyUp(event: KeyboardInput) {
       return keyboard.keyUp(event);
     },

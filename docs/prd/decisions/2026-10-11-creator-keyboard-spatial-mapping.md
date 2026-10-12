@@ -5,7 +5,8 @@
   MIDI note 36–51 与 Pad 身份保持。
 - 结论：默认四排键盘映射已由 [PR #2058](https://github.com/endaye/lmdj/pull/2058)
   交付，#1960 已关闭；真实设备／键盘输入及听感验收未执行。
-  修饰键冲突 [#2060](https://github.com/endaye/lmdj/issues/2060) 仍开放待 owner 决定。
+  [#2060](https://github.com/endaye/lmdj/issues/2060) 的 Ctrl／Cmd 隔离策略已于
+  2026-10-12 由 owner 确认，并由 Creator Input Controller 实施。
 - 原因：键盘从上到下的四排对应屏幕从上到下的四行 Pad，避免一排键拆成
   两行 Pad，以及上下空间关系倒置。
 
@@ -48,18 +49,31 @@ Inspected revision: `a98ae01c4f033c78221fc961f6207c7fe5cabfd7`。
 该交付已在其 ancestry 中。源码与自动化交付不构成真实设备／键盘输入或
 听感验收；这些验收未执行，仍须保留按下、释放、Bank 目标与可见键帽的边界。
 
-修饰键与 Pad 输入的冲突见 [#2060](https://github.com/endaye/lmdj/issues/2060)：
-Issue 仍开放，过滤哪些修饰键及由 shared adapter 还是 Creator 层处理仍待
-owner 决定。四排键位批准与交付不批准该策略，也不表示冲突已修复。
+## 修饰键策略（2026-10-12 已确认）
+
+owner 明确确认 [#2060](https://github.com/endaye/lmdj/issues/2060) 的限定策略：
+Creator 在 Pad 准入前忽略带 `ctrlKey` 或 `metaKey` 的映射按键 `keydown`，
+包括同时按住 Alt／Shift 的组合，以保留应用及浏览器快捷键。抑制的按下不激活
+音频、不选择或触发 Pad、不停止 armed Capture，也不发起空 Pad 采样／导入。
+只带 Alt／Shift 而没有 Ctrl／Cmd 的按键保留现有行为；`keyup` 不受此过滤，
+先前无修饰键开始的 Gate 演奏在按住 Ctrl／Cmd 后松手仍正常释放。
+
+策略由 Creator Input Controller 的公开 `keyDown` 与 window 监听共用，
+不改 shared adapter、四排 mapping、Undo／Redo、MIDI、Pointer 或 Project Truth。
+源码／组件回归不构成实体键盘、浏览器原生快捷键或听感验收；这些验收未执行。
+合并与交付状态以 #2060 关联 PR 的实际记录为准。
+四排映射的历史批准本身不包含这项后续策略。
 本决定不为 #1822 的其他页方向键或新 SHIFT 组合键分配行为。
 
 ## Version Management
 
-Version impact: none — 仅同步既有决定的交付状态，不修改 source、Contract、
-manifest 或 Product Build，不分配或判定版本身份。
+Version impact: Creator Host bugfix — Ctrl／Cmd 准入修复产生 Host patch 版本债，
+由后续独立 identity-only allocation cut 结算；本 Task 不修改 manifest、Contract、
+Product Build 或 Assembly，不分配新构建、快照、tag、Release 或 Channel。
 
 ## Documentation Impact
 
-Documentation impact: none — 当前 Architecture Portal 已描述交付后的四排映射
-及 #2060 修饰键限制；本次只同步决定／问题状态，不改变 Portal 页面、
-图、工具、投影身份或已记录的 source facts。
+Documentation impact: required
+Affected portal pages: /platform/input/ /hosts/creator-interactions/ /hosts/creator-web/
+Reason: Creator 修饰键准入及 Undo／Redo 共存的 source facts 随本 Task 同步；
+不改变架构边界或图，也不分配永久版本快照。

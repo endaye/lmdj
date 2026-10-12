@@ -1,4 +1,4 @@
-import {describe, expect, test} from "vitest";
+import {describe, expect, test, vi} from "vitest";
 import {createElement, type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent} from "react";
 import {fireEvent, render} from "@testing-library/react";
@@ -223,6 +223,8 @@ interface SampleFixtureOptions {
   inspectSample?: (slot: number) => Promise<SampleInspect>;
   getAuditionPlayback?: (slot: number) => PadPlayback | null;
   getArmedCaptureSlot?: () => number | null;
+  onArmedCaptureStop?: (slot: number, source: import("../src/runtime/runtime_types").RuntimeTriggerSource) => void;
+  onPerformancePadEvent?: (event: PerformancePadInputEvent) => void;
 }
 
 function sampleFixture(options: SampleFixtureOptions = {}) {
@@ -295,6 +297,8 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
     ...(options.getArmedCaptureSlot === undefined
       ? {}
       : {getArmedCaptureSlot: options.getArmedCaptureSlot}),
+    ...(options.onArmedCaptureStop === undefined ? {} : {onArmedCaptureStop: options.onArmedCaptureStop}),
+    ...(options.onPerformancePadEvent === undefined ? {} : {onPerformancePadEvent: options.onPerformancePadEvent}),
     onFilePickIntent(slot, source) {
       filePickIntents.push({slot, source});
     },
@@ -319,6 +323,124 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
 async function settle() {
   for (let count = 0; count < 8; count += 1) await Promise.resolve();
 }
+
+type KeyboardRoute = "controller" | "window";
+
+function sendKey(controller: ReturnType<typeof createCreatorInputController>,
+  route: KeyboardRoute, type: "keydown" | "keyup", init: KeyboardEventInit) {
+  if (route === "controller") {
+    const input = {...init, type, target: document.body, isTrusted: true};
+    return type === "keydown" ? controller.keyDown(input) : controller.keyUp(input);
+  }
+  // Synthetic DOM propagation reaches the installed window listeners; it does
+  // not reproduce trusted browser activation or the browser's own shortcuts.
+  const event = new KeyboardEvent(type, {...init, bubbles: true, cancelable: true});
+  fireEvent(document.body, event);
+  return event;
+}
+
+const shortcutModifiers = [
+  {ctrlKey: true}, {metaKey: true}, {ctrlKey: true, metaKey: true},
+].flatMap(modifier => [
+  modifier, {...modifier, shiftKey: true}, {...modifier, altKey: true},
+  {...modifier, shiftKey: true, altKey: true},
+]);
+
+describe.each(["controller", "window"] as const)("Creator %s shortcut admission", route => {
+  test.each(["assigned", "empty capture", "empty import", "armed capture"])(
+    "Ctrl/Meta chords leave %s Pads and activation untouched", async mode => {
+      const activate = vi.fn(() => null);
+      const emptyPress = vi.fn(() => mode === "empty capture");
+      const emptyRelease = vi.fn();
+      const armedStop = vi.fn();
+      const performanceEvent = vi.fn();
+      const value = sampleFixture({
+        isAssigned: () => mode === "assigned",
+        activateAudioForGesture: activate,
+        onEmptyPadPress: emptyPress,
+        onEmptyPadRelease: emptyRelease,
+        getArmedCaptureSlot: () => mode === "armed capture" ? 0 : null,
+        onArmedCaptureStop: armedStop,
+        onPerformancePadEvent: performanceEvent,
+      });
+      const before = value.state();
+      try {
+        expect(document.activeElement).toBe(document.body);
+        // Independent approved-key inventory: deriving this from the adapter
+        // could hide a shared omission in the mapping and suppression test.
+        for (const code of ["Digit1", "Digit2", "Digit3", "Digit4",
+          "KeyQ", "KeyW", "KeyE", "KeyR", "KeyA", "KeyS", "KeyD", "KeyF",
+          "KeyZ", "KeyX", "KeyC", "KeyV"]) {
+          for (const modifier of shortcutModifiers) {
+            const context = `${code} ${JSON.stringify(modifier)}`;
+            const down = sendKey(value.controller, route, "keydown", {code, ...modifier});
+            if (route === "controller") expect(down, context).toBe(false);
+            else expect((down as KeyboardEvent).defaultPrevented, context).toBe(false);
+            await settle();
+            expect(activate, context).not.toHaveBeenCalled();
+            expect(value.actions, context).toEqual([]);
+            expect(value.state(), context).toBe(before);
+            expect(value.triggers, context).toEqual([]);
+            expect(value.inspectCalls, context).toEqual([]);
+            expect(performanceEvent, context).not.toHaveBeenCalled();
+            expect(emptyPress, context).not.toHaveBeenCalled();
+            expect(armedStop, context).not.toHaveBeenCalled();
+            expect(value.filePickIntents, context).toEqual([]);
+            const up = sendKey(value.controller, route, "keyup", {code, ...modifier});
+            if (route === "controller") expect(up, context).toBe(false);
+            expect(emptyRelease, context).not.toHaveBeenCalled();
+            expect(value.releases, context).toEqual([]);
+            expect(value.actions, context).toEqual([]);
+          }
+        }
+      } finally { value.controller.dispose(); }
+    },
+  );
+
+  test.each([{altKey: true}, {shiftKey: true}, {altKey: true, shiftKey: true}])(
+    "Alt/Shift without Ctrl/Meta retain Pad input: %j", async modifier => {
+      const activate = vi.fn(() => null);
+      const value = sampleFixture({activateAudioForGesture: activate});
+      try {
+        const down = sendKey(value.controller, route, "keydown", {code: "KeyX", ...modifier});
+        if (route === "controller") expect(down).toBe(true);
+        await settle();
+        expect(activate).toHaveBeenCalledTimes(1);
+        expect(value.state().sample.selectedSlot).toBe(1);
+        expect(value.triggers).toEqual([{slot: 1, velocity: 100, source: "keyboard"}]);
+        expect(value.state().pressed.get(1)).toBe("admitted");
+        sendKey(value.controller, route, "keyup", {code: "KeyX", ...modifier});
+        expect(value.state().pressed.has(1)).toBe(false);
+      } finally { value.controller.dispose(); }
+    },
+  );
+
+  test.each(shortcutModifiers)("modifier keyUp releases Gate and permits re-press: %j", async modifier => {
+    const value = sampleFixture({inspectSample: async slot => sampleInspect(slot, "gate")});
+    try {
+      sendKey(value.controller, route, "keydown", {code: "KeyZ"});
+      await settle();
+      expect(value.triggers).toEqual([{slot: 0, velocity: 100, source: "keyboard"}]);
+      expect(value.state().pressed.get(0)).toBe("admitted");
+      const up = sendKey(value.controller, route, "keyup", {code: "KeyZ", ...modifier});
+      if (route === "controller") expect(up).toBe(true);
+      await settle();
+      expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
+      expect(value.state().pressed.has(0)).toBe(false);
+      sendKey(value.controller, route, "keydown", {code: "KeyZ"});
+      await settle();
+      expect(value.triggers).toEqual([
+        {slot: 0, velocity: 100, source: "keyboard"},
+        {slot: 0, velocity: 100, source: "keyboard"},
+      ]);
+      expect(value.state().pressed.get(0)).toBe("admitted");
+      sendKey(value.controller, route, "keyup", {code: "KeyZ"});
+      await settle();
+      expect(value.releases).toHaveLength(2);
+      expect(value.state().pressed.has(0)).toBe(false);
+    } finally { value.controller.dispose(); }
+  });
+});
 
 describe("Creator input controller", () => {
   test.each(["mouse", "touch", "pen"])("empty %s Pad offers capture immediately while playback keeps its activation boundary", pointerType => {
