@@ -101,6 +101,24 @@ Wasm/OPFS 范围。Creator 入口与六态完整旅程以所属 Task 的实际�
 MIDI/触控/声学听感另行验收，旧绿色不能升级为下述 S6 生产路径的执行结果。
 
 自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收；Perform 录制与 master tap 的自动化绿色只证明消息形状、状态机与分发身份，物理验收仍为 deferred。分发门禁通过也不代表已经产生不可变快照、标签、Release、部署或 Channel 提升，这些是各自独立的后续授权边界。
+### S6 Web 物理 writer 与 terminal receipt（修复源码）
+
+Control 与真实 durable I/O child 使用同一 storage platform 的已取得 writer；本地授权
+与物理持有分别记账。child 销毁 lease 只移除本 realm 的 exact token 并退还实际 pin，
+不代理到正在等待 child join 的 Control。物理 owner 的 pending drain 保留 handle 和
+独立的共享内存引用；总 pin 未实际退还、cleanup debt 未清或另一 realm 仍持有物理
+writer 时，不能声明全部释放。
+
+authenticated terminal channel 的 native authorization 是一次性的。Worker 记住实际
+授权，`releaseAllWriters()` 的 false、异常或非严格 true 都保留 Worker／channel 并等待
+真实 drain；临时 pending 不调用负 completion。严格 true 后仍需 native completion 的
+实际正回执，才发布 terminal release receipt 并关闭。重复同 token 不启动第二个循环。
+这不把 caller timeout、空 Control map 或 retained C++ lease 改写成物理释放。
+
+原完整 Web 失败证据保留；这份修复源码和 Node VM 检查不证明 Wasm／OPFS、完整
+Creator、真实 PCM 或物理／听感验收已通过。普通 storage close 的既有异常传播边界
+也保留为真实失败，不在析构中吞错后声称 Host 已关闭。
+
 ### S6 strict companion 协议与同一 SDK owner（source draft）
 
 旧 `pattern.transport.request`/`.inspect` 的 exact key sets、ordinary command/receipt/

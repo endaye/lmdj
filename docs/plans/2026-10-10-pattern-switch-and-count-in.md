@@ -818,3 +818,88 @@ None expected. Each Task searches open entries labelled with its `area:*` before
 
 S4 records the new `shared-temporary-staging-ownership` process finding in
 `area:ci-release`; its first occurrence remains open without a new mechanism.
+
+
+### S6 real Web failure repair: shared writer across pthread realms
+
+**Premises refreshed before editing.** The frozen local candidate
+`caf8d59c27c827597e716eae728f7d495559b9f5` / tree
+`dc21a9316e48ab30eb85b2353a7cca010f943c4c` ran the original official
+`web_toolchain` proof and exited 1: the Chromium audio group selected 30,
+passed 25 and failed 5. Three actual traces expose `PROJECT_BUSY` after the
+real audio start: Control retains the Project writer, while the dedicated
+Journal worker sees only its own realm-local lease map and attempts another
+exclusive physical lock. The ordinary first journey also has a distinct stale
+immediate `awaiting_audio` assertion; the accepted ticket actually precedes
+continuation and reports `preparing`. The fifth aggregate timeout does not
+itself expose an internal busy payload. Preserve all original logs and traces;
+Native 42 PASS does not establish Web lease ownership.
+
+Current main refreshed to `a33f64278ef1dab4a3d0b7325ff8dcb8185388b8`.
+Intervening cost documentation, Portal candidate-cut classification and the
+separate Build 2.0.92.0 allocation/snapshot do not repair these runtime/test
+premises. Preserve that independent identity and snapshot on final integration;
+this repair allocates no Build. The closed product-decision Issue #1959 defines
+Off/1/2 device preferences; it does not establish S6 implementation acceptance.
+
+**Declared repair files.**
+`packages/project-io/src/web/storage_platform.cpp`,
+`src/web/library_opfs_storage.js`,
+`include/lmdj/project_io/storage_platform.hpp`;
+`packages/web-runtime-platform/src/web-runtime-pre.js`,
+`test/runtime_loader.test.mjs`;
+`tests/platform/web/project_io/project_io_web_test.cpp`,
+`project_io_web_conformance.spec.mjs`, `opfs_writer_error_test.mjs`;
+`tests/platform/web/audio/realtime_audio_worklet.spec.mjs`;
+this plan, `docs/design/2026-10-11-scheduled-pattern-record-count-in.md`,
+`apps/docs-site/docs/core/modules/project-io.mdx`,
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`, and
+`.agents/pitfalls/storage-precondition-only-one-platform-enforces.md`.
+
+**Behaviour.** Share a genuinely acquired private writer state for the same
+platform instance and canonical root. Each pthread owns its local lease wrapper
+and delegated authorization; the original realm alone owns the physical handle.
+Pin admission and final total-reference sealing form one atomic decision.
+Parent-reference zero does not seal while a child reference remains: exact
+same-platform reacquisition must retain Native semantics. A remote release
+removes its exact local authorization before dropping its pin and never waits
+for Control. A separately allocated fixed-width pin block stays alive through
+both C++ state and owner-JS physical custody; actual close releases the latter.
+Owner-local drain closes only the exact retired acquisition and keeps pending
+or failed physical debt. Off-realm wrapper destruction must not release a
+same-numbered token in another realm; retain honest cleanup debt. Preserve the
+original C++ lexical-normalization then JS residual-path-check ordering.
+
+The authenticated terminal handshake authorizes once. A pending/failed local
+drain keeps the channel and Worker alive; only an actual strict positive close
+result permits its existing complete/released-and-closed receipt. No writer
+lock is released and reacquired to hand work over, no recovery is repeated by a
+borrower, and no storage effect moves onto Control.
+
+**Lowest-tier witnesses and future verification.** Actual production-JS writer
+and terminal-loop tests cover authorization, pending/failure and close custody.
+The real OPFS/pthread witness covers root reset while child-held, same-platform
+reacquisition, independent physical exclusion, child last-use and natural join,
+actual owner close and complete-byte independent readback. Correct only T1's
+immediate phase, retaining its full Record/Press/Release/Record-off/Truth/Stop
+journey. Rebuild and rerun the original complete official Web toolchain proof,
+then all remaining S6 owning production OPFS, Web Host, Creator and platform
+proofs on the final candidate. Native component/stress history and all original
+30/300-second budgets, 64 rounds, browser workers and far-side assertions stay.
+New regression source is UNRUN until actual execution; this repair is incomplete
+until its owning checks and current-head review pass.
+
+**Gate defect caught.** A live Project writer that falsely excludes its own
+Journal worker, or a reported terminal release before the real physical writer
+is closed. No new universal gate or timeout is introduced.
+
+**Version Management.** Internal Project I/O/Web Runtime Platform PATCH debt;
+retain all existing S6 capability MINOR/ABI MAJOR debt. Existing storage vtables,
+DTOs and persisted Contracts stay unchanged. No version number, Product Build,
+Assembly, tag or Release is allocated.
+
+**Documentation impact: required.** Affected portal pages:
+`/core/modules/project-io/`, `/core/modules/web-runtime-platform/`.
+The same repair updates current topology and remaining verification limits;
+immutable historical snapshots stay unchanged. Run the original official
+`scripts/docs-site.sh check` before the repair commit.

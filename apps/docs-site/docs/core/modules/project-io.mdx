@@ -39,6 +39,27 @@ scheduled 录音／count-in 的 Facade/runtime/Creator 完整验收仍待完成�
 ## 10. 版本身份
 版本和依赖由 `module.json`/Assembly Lock 派生。
 
+## Web writer ownership across worker realms
+
+当前修复源码让同一 `ProjectStoragePlatform` 对同一 canonical Project 的真实 leases
+共享已取得的物理 writer。Control 和 durable I/O child 各自拥有本 realm 的授权 token；
+child 不再尝试第二次获取独占 OPFS lock。路径仍按原 C++ lexical normalization 与
+JS component 规则处理，原 `bundle/../bundle` 等价路径保持不变。
+
+父 realm 最后一个本地 token 释放后，若 child 的真实 pin 仍存在，物理锁保留；父 realm
+不再有 mutation authority，但同平台可重新取得引用。不同平台或独立 Module 仍需真实
+物理排他。child 先移除自己的 exact token 再退还共享 pin，释放不等待 Control event loop
+或代理；物理 owner 在总 pin 实际归零后关闭。JS 独立持有共享记账内存，直到真实关闭
+发布 receipt，避免最后 C++ 引用在 child 销毁后 owner 的 pending drain 读取悬空内存。
+错误 realm、token 或 generation 保留 cleanup debt，不冒充释放。
+
+`createSyncAccessHandle` 成功即登记物理 custody，即使初始化／recovery 后失败且关闭
+也失败，handle、共享内存和 module-wide physical count 仍保留。恢复完成前不授予新的
+mutation authority；关闭异常仍是真实失败。该修复未改变 storage vtable 或持久化格式。
+新增真实 pthread／OPFS 跨页面旅程覆盖 parent reset、child-only 写入、物理 busy、
+无 Control service 的 release、natural join、完整字节／长度／SHA 和独立重开；源码和
+JS 单元证据不代表该旅程已通过，完整 Web／Creator 验收仍待完成。
+
 ## Durable Pattern recording admission
 
 Sequence Journal 在同一 writer lease 和 checksummed record 流中保存 preparation、

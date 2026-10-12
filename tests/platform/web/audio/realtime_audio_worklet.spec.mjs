@@ -312,11 +312,11 @@ test("global Pattern transport records live input through real OPFS and settles 
   expect(journey.importCommitted).toMatchObject({ok: true});
   expect(journey.snapshot).toMatchObject({ok: true});
   expect(journey.activated).toMatchObject({ok: true});
-  // Completion ordering: the ticket's status snapshot precedes any
-  // continuation step, so it always reports the pending phase.
+  // The accepted ticket precedes the durable-opening continuation. Audio
+  // receipt polling starts only after that preparation has actually finished.
   expect(journey.ticket).toMatchObject({
     ok: true,
-    result: {submit: "accepted", status: {phase: "awaiting_audio"}},
+    result: {submit: "accepted", status: {phase: "preparing"}},
   });
 
   await expect.poll(async () => {

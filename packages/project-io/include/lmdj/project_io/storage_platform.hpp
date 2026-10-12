@@ -36,6 +36,12 @@ class ProjectStoragePlatform {
  public:
   virtual ~ProjectStoragePlatform() = default;
 
+  // Leases on the same canonical path through one platform share its acquired
+  // physical writer. Each Web realm owns its own authorization token; destroy
+  // a Web lease in the realm that acquired it. Releasing one realm's last token
+  // removes its mutation authority without closing a physical writer still
+  // borrowed by another realm. The physical owner closes only after all genuine
+  // leases retire (or an authenticated terminal drain proves remote retirement).
   virtual foundation::Result<std::unique_ptr<ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& project_path) = 0;
   virtual foundation::Result<void> ensure_directory(

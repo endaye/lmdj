@@ -1725,6 +1725,7 @@ if (typeof globalThis.window !== "undefined") {
 if (ENVIRONMENT_IS_PTHREAD && typeof BroadcastChannel === "function") {
   const terminalChannel = new BroadcastChannel(
     "lmdj.web-runtime-host.terminal.v1");
+  let terminalReleaseToken = null;
   terminalChannel.addEventListener("message", (event) => {
     const token = event.data?.token;
     if (
@@ -1733,38 +1734,72 @@ if (ENVIRONMENT_IS_PTHREAD && typeof BroadcastChannel === "function") {
     ) {
       return;
     }
+    if (terminalReleaseToken !== null) {
+      if (token !== terminalReleaseToken) {
+        // Other tokens still require the original native authorization.
+        Module.ccall(
+          "lmdj_web_host_authorize_terminal_release",
+          "number",
+          ["string", "number"],
+          [token, token.length],
+        );
+      }
+      return;
+    }
+    terminalReleaseToken = token;
+    let authorized = false;
+    let writersReleased = false;
     const releaseWhenReady = () => {
-      const authorization = Module.ccall(
-        "lmdj_web_host_authorize_terminal_release",
-        "number",
-        ["string", "number"],
-        [token, token.length],
-      );
-      if (authorization === 2) {
+      if (!authorized) {
+        const authorization = Module.ccall(
+          "lmdj_web_host_authorize_terminal_release",
+          "number",
+          ["string", "number"],
+          [token, token.length],
+        );
+        if (authorization === 2) {
+          setTimeout(releaseWhenReady, 2);
+          return;
+        }
+        if (authorization !== 1) {
+          terminalReleaseToken = null;
+          return;
+        }
+        // Native authorization is a one-shot ready -> authorized transition.
+        authorized = true;
+      }
+      if (!writersReleased) {
+        try {
+          writersReleased = LmdjOpfs.releaseAllWriters() === true;
+        } catch (_) {
+          // An unknown drain outcome retains its owners and authorization.
+        }
+      }
+      if (!writersReleased) {
         setTimeout(releaseWhenReady, 2);
         return;
       }
-      if (authorization !== 1) return;
-      let released = false;
+      let completed;
       try {
-        LmdjOpfs.releaseAllWriters();
-        released = true;
-      } finally {
-        const completed = Module.ccall(
+        completed = Module.ccall(
           "lmdj_web_host_complete_terminal_release",
           "number",
           ["string", "number", "number"],
-          [token, token.length, released ? 1 : 0],
+          [token, token.length, 1],
         );
-        if (completed === 1) {
-          terminalChannel.postMessage({
-            type: "released-and-closed",
-            token,
-          });
-        }
-        terminalChannel.close();
-        globalThis.close();
+      } catch (_) {
+        // Physical release alone cannot stand in for a native completion ACK.
       }
+      if (completed !== 1) {
+        setTimeout(releaseWhenReady, 2);
+        return;
+      }
+      terminalChannel.postMessage({
+        type: "released-and-closed",
+        token,
+      });
+      terminalChannel.close();
+      globalThis.close();
     };
     releaseWhenReady();
   });

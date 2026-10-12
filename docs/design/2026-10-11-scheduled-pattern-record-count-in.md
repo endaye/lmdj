@@ -743,6 +743,56 @@ journeys remain. Separate injected-Clock admission tests retain the literal
 labels it a fabricated 4999 ms. These are authored tests pending actual build
 and execution, not completed verification evidence.
 
+### Web writer custody across the durable I/O worker
+
+The count-in controller's I/O worker shares the exact production storage
+platform with Control. Reacquiring the same canonical Project on that platform
+must pin the acquired physical writer instead of opening a second exclusive
+OPFS lock. Canonicalization retains the existing C++ lexical-normalization then
+JS separator/component order, including the existing `bundle/../bundle` parity
+case; it introduces no new path policy.
+
+The Web implementation uses a platform-local weak registry and a private,
+fixed-width shared-Wasm control block. A real C++ lease holds total custody;
+a remote admission reserves remote custody before the total-pin CAS. The last
+ordinary pin seals total-zero in that same CAS. Releasing the parent's last
+local reference while a child remains neither seals admission nor closes the
+physical writer: the same platform may reacquire, while another platform or
+independent Module remains physically excluded.
+
+Each lease's integer authorization belongs to its acquisition realm. The child
+removes its exact local token before retiring its shared pin; it never proxies
+the release to Control or requires a Control callback during join. A retained
+physical handle with zero local references grants no local mutation authority.
+Off-realm destruction or an unknown token/generation retains cleanup debt.
+The physical owner drains only actual retired custody. Its JS memory reference
+keeps the control words alive if the last C++ state dies on the child thread;
+physical close drops the last JS reference only after publishing the receipt.
+
+Physical custody is registered as soon as `createSyncAccessHandle` succeeds,
+before lock initialization or recovery. Local references remain zero and C++
+acquisition remains unpublished until recovery succeeds. Initialization followed
+by failed close must retain the exact owner, shared memory and module-wide
+physical count; an empty Control map cannot stand in for another realm's release.
+Close exceptions remain real failures on the existing ordinary destructor path;
+this repair does not claim a new no-throw storage-retirement API.
+
+The terminal worker remembers its one-shot native authorization. False, thrown
+or malformed physical-drain results keep that Worker and channel alive, and do
+not consume native completion with a negative temporary result. Only literal
+physical success followed by actual positive native completion permits its
+release receipt and close. Duplicate same-token messages share one loop.
+Terminal sealing never fabricates retirement of retained C++ leases.
+
+Verification for this repair includes the real production platform with one
+child in the unchanged two-worker pool: immutable write/append/read, parent
+reset and same-platform renewal, independent-page physical busy, child-local
+release while Control provides no service, natural join, physical-owner drain,
+and independent full bytes/length/SHA readback and reacquisition. JS memory
+models and source reviews do not establish that browser journey. Preserve the
+original complete Web red and complete compatibility/Creator journeys; the
+repair's full runtime acceptance is still pending.
+
 ## 7. Verification and far-side assertions
 
 Each reduced test fixes one fact. Use independent literal frame/PCM oracles

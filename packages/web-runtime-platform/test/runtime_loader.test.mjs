@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import test from "node:test";
+import {runInNewContext} from "node:vm";
 
 import {
   createPackagedRuntimeLocator,
@@ -201,4 +203,226 @@ test("resolved close must confirm the backend actually reached closed", async ()
     (error) => error.code === "HOST_STATE_INVALID" && error.details.pending === true);
   assert.deepEqual(fixture.order, ["worklet", "port", "audio"]);
   assert.equal(fixture.audioContext.state, "running");
+});
+
+function terminalWorkerFixture({
+  drain = () => true,
+  pendingAuthorizations = 0,
+  complete = () => 1,
+} = {}) {
+  const token = "00000000-0000-0000-0000-000000000001";
+  const timers = [];
+  const authorizations = [];
+  const completions = [];
+  const messages = [];
+  const order = [];
+  let nativeState = "ready";
+  let releaseCalls = 0;
+  let workerCloses = 0;
+  let channelCloses = 0;
+  let channelListener;
+  let channels = 0;
+  class BroadcastChannel {
+    constructor(name) {
+      assert.equal(name, "lmdj.web-runtime-host.terminal.v1");
+      channels += 1;
+    }
+    addEventListener(type, listener) {
+      assert.equal(type, "message");
+      channelListener = listener;
+    }
+    postMessage(message) {
+      messages.push({...message});
+      order.push("receipt");
+    }
+    close() {
+      channelCloses += 1;
+      order.push("channel-close");
+    }
+  }
+  const Module = {
+    ccall(name, returnType, argumentTypes, args) {
+      assert.equal(returnType, "number");
+      if (name === "lmdj_web_host_authorize_terminal_release") {
+        assert.deepEqual(Array.from(argumentTypes), ["string", "number"]);
+        authorizations.push(Array.from(args));
+        if (args[0] !== token || args[1] !== token.length ||
+            nativeState !== "ready") return 0;
+        if (pendingAuthorizations > 0) {
+          pendingAuthorizations -= 1;
+          return 2;
+        }
+        nativeState = "authorized";
+        return 1;
+      }
+      assert.equal(name, "lmdj_web_host_complete_terminal_release");
+      assert.deepEqual(Array.from(argumentTypes), ["string", "number", "number"]);
+      assert.deepEqual(Array.from(args), [token, token.length, 1]);
+      assert.equal(nativeState, "authorized");
+      completions.push(Array.from(args));
+      order.push("completion");
+      const result = complete(completions.length);
+      if (result === 1) nativeState = "completed";
+      return result;
+    },
+  };
+  const workerSource = readFileSync(
+    new URL("../src/web-runtime-pre.js", import.meta.url), "utf8");
+  runInNewContext(workerSource, {
+    ENVIRONMENT_IS_PTHREAD: true,
+    BroadcastChannel,
+    Module,
+    LmdjOpfs: {
+      releaseAllWriters() {
+        assert.equal(nativeState, "authorized");
+        releaseCalls += 1;
+        order.push("drain");
+        return drain(releaseCalls);
+      },
+    },
+    setTimeout(callback, delay) {
+      assert.equal(delay, 2);
+      timers.push(callback);
+    },
+    close() {
+      workerCloses += 1;
+      order.push("worker-close");
+    },
+  }, {filename: "web-runtime-pre.js"});
+  assert.equal(channels, 1);
+  return {
+    token, timers, authorizations, completions, messages, order,
+    get releaseCalls() { return releaseCalls; },
+    get workerCloses() { return workerCloses; },
+    get channelCloses() { return channelCloses; },
+    get nativeState() { return nativeState; },
+    send(value = token, type = "release-and-close") {
+      channelListener({data: {type, token: value}});
+    },
+    step() {
+      assert.equal(timers.length, 1, "exactly one terminal retry is pending");
+      timers.shift()();
+    },
+  };
+}
+
+function assertTerminalWorkerRetained(fixture) {
+  assert.equal(fixture.completions.length, 0);
+  assert.deepEqual(fixture.messages, []);
+  assert.equal(fixture.channelCloses, 0);
+  assert.equal(fixture.workerCloses, 0);
+}
+
+test("terminal worker retains one authorization through pending physical drains", () => {
+  const fixture = terminalWorkerFixture({drain: (call) => call === 3});
+  fixture.send();
+  assert.equal(fixture.releaseCalls, 1);
+  assert.equal(fixture.authorizations.length, 1);
+  assert.equal(fixture.nativeState, "authorized");
+  assertTerminalWorkerRetained(fixture);
+  fixture.step();
+  assert.equal(fixture.releaseCalls, 2);
+  assert.equal(fixture.authorizations.length, 1);
+  assertTerminalWorkerRetained(fixture);
+  fixture.step();
+  assert.equal(fixture.releaseCalls, 3);
+  assert.equal(fixture.authorizations.length, 1);
+  assert.deepEqual(fixture.completions, [[fixture.token, fixture.token.length, 1]]);
+  assert.deepEqual(fixture.messages, [{type: "released-and-closed", token: fixture.token}]);
+  assert.equal(fixture.channelCloses, 1);
+  assert.equal(fixture.workerCloses, 1);
+  assert.equal(fixture.timers.length, 0);
+  assert.deepEqual(fixture.order, ["drain", "drain", "drain", "completion",
+    "receipt", "channel-close", "worker-close"]);
+});
+
+test("terminal worker retries a thrown drain without completing or closing", () => {
+  const fixture = terminalWorkerFixture({drain() { throw new Error("pending owner"); }});
+  fixture.send();
+  fixture.step();
+  assert.equal(fixture.releaseCalls, 2);
+  assert.equal(fixture.authorizations.length, 1);
+  assert.equal(fixture.nativeState, "authorized");
+  assert.equal(fixture.timers.length, 1);
+  assertTerminalWorkerRetained(fixture);
+});
+
+test("terminal worker requires literal true from the physical drain", () => {
+  for (const result of [undefined, null, 1, {}]) {
+    const fixture = terminalWorkerFixture({drain: () => result});
+    fixture.send();
+    fixture.step();
+    assert.equal(fixture.releaseCalls, 2);
+    assert.equal(fixture.authorizations.length, 1);
+    assert.equal(fixture.nativeState, "authorized");
+    assert.equal(fixture.timers.length, 1);
+    assertTerminalWorkerRetained(fixture);
+  }
+});
+
+test("terminal worker denies foreign tokens without touching physical owners", () => {
+  const fixture = terminalWorkerFixture({drain: () => false});
+  fixture.send("00000000-0000-0000-0000-000000000002");
+  assert.equal(fixture.authorizations.length, 1);
+  assert.equal(fixture.releaseCalls, 0);
+  assert.equal(fixture.timers.length, 0);
+  assert.equal(fixture.nativeState, "ready");
+  assertTerminalWorkerRetained(fixture);
+  fixture.send();
+  fixture.send("00000000-0000-0000-0000-000000000002");
+  assert.equal(fixture.authorizations.length, 3);
+  assert.equal(fixture.releaseCalls, 1);
+  assert.equal(fixture.nativeState, "authorized");
+  assert.equal(fixture.timers.length, 1);
+  assertTerminalWorkerRetained(fixture);
+});
+
+test("duplicate terminal messages share one pending authorization and drain loop", () => {
+  const fixture = terminalWorkerFixture({
+    pendingAuthorizations: 1,
+    drain: (call) => call === 2,
+  });
+  fixture.send();
+  fixture.send();
+  assert.equal(fixture.authorizations.length, 1);
+  assert.equal(fixture.releaseCalls, 0);
+  assert.equal(fixture.timers.length, 1);
+  assertTerminalWorkerRetained(fixture);
+  fixture.step();
+  fixture.send();
+  assert.equal(fixture.authorizations.length, 2);
+  assert.equal(fixture.releaseCalls, 1);
+  assert.equal(fixture.timers.length, 1);
+  assertTerminalWorkerRetained(fixture);
+  fixture.step();
+  fixture.send();
+  fixture.send();
+  assert.equal(fixture.authorizations.length, 2);
+  assert.equal(fixture.releaseCalls, 2);
+  assert.equal(fixture.completions.length, 1);
+  assert.equal(fixture.messages.length, 1);
+  assert.equal(fixture.channelCloses, 1);
+  assert.equal(fixture.workerCloses, 1);
+  assert.equal(fixture.timers.length, 0);
+});
+
+test("terminal worker waits for native completion after a positive physical drain", () => {
+  const fixture = terminalWorkerFixture({complete: (call) => call === 2 ? 1 : 0});
+  fixture.send();
+  assert.equal(fixture.releaseCalls, 1);
+  assert.equal(fixture.completions.length, 1);
+  assert.deepEqual(fixture.messages, []);
+  assert.equal(fixture.channelCloses, 0);
+  assert.equal(fixture.workerCloses, 0);
+  assert.equal(fixture.nativeState, "authorized");
+  assert.equal(fixture.timers.length, 1);
+  fixture.step();
+  assert.equal(fixture.authorizations.length, 1);
+  assert.equal(fixture.releaseCalls, 1);
+  assert.equal(fixture.completions.length, 2);
+  assert.equal(fixture.nativeState, "completed");
+  assert.equal(fixture.messages.length, 1);
+  assert.equal(fixture.channelCloses, 1);
+  assert.equal(fixture.workerCloses, 1);
+  assert.equal(fixture.timers.length, 0);
 });
