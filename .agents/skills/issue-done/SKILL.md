@@ -317,6 +317,15 @@ Read these before shipping; each is a real recurrence, not a hypothetical:
 
 Commit the changes following repository governance rules:
 
+Read each required Task verification and staged inspection's actual terminal
+exit before the dependent commit. A nonzero exit, signal termination or missing
+terminal result stops that operation. A tool returning a receipt, or a later
+command exiting zero, does not establish that an earlier prerequisite passed.
+Run dependent steps sequentially and inspect the result before launching the
+next step, or use explicit failure branches that stop the sequence. Preserve the
+failed result, fix its cause and rerun the affected check before proceeding.
+Advisory checks remain advisory unless the Task explicitly requires them.
+
 1. **Stage only declared task files**:
    ```bash
    git add <file1> <file2> ...
@@ -483,6 +492,13 @@ Issues. Retain the postmerge live Issue-state audit below.
    not a portal pass; run portal checks locally when the Task affects them.
    Validate a changed body again, without closing/reopening the PR merely to
    manufacture an old CI event.
+
+   Read both validators' actual terminal exits before creating or updating the
+   PR body; each must be zero for that exact body. If the Task includes these
+   checks in its final precommit inspection, their failure also stops the
+   commit. A successful publication command cannot clear an earlier failed or
+   unobserved required result. Retain the original failure after correcting and
+   rerunning the check.
 
    **Record Task verification and affected risks (#1996).** The PR's
    `## Verification` names the commands actually run, their outcomes and the
