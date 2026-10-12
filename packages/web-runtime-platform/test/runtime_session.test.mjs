@@ -8694,6 +8694,47 @@ for (const operation of ["host.close", "audio.suspend"]) {
 }
 
 for (const operation of ["host.close", "audio.suspend"]) {
+  test(`retained ${operation} releases every same-slot/source physical hold by its exact sequence`, async (t) => {
+    const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
+    t.after(() => f.cancelTimers());
+    await activateInputProfile(f);
+    f.state.completeInput = (payload) => payload.kind === "press" || f.state.inputComplete;
+    for (const sequence of [1, 2]) {
+      assert.deepEqual(await f.session.trigger(0, 100, "keyboard"),
+        {sequence, slot: 0, velocity: 100, source: "keyboard"});
+    }
+    assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+    assert.deepEqual([...f.physicalOwners.keys()], ["1", "2"],
+      "consuming both press results leaves both real physical owners held");
+    let lifecycleResult = null;
+    const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+      .then((value) => { lifecycleResult = value; return value; });
+    await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+    assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.request")
+      .map((e) => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+      [["press", "1", null], ["press", "2", null], ["release", "3", "1"], ["release", "4", "2"]]);
+    assert.deepEqual(f.state.lifecyclePending[0].tickets, ["3", "4"]);
+    assert.equal(lifecycleResult, null, "real release admission does not consume either caller ticket");
+    assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+    assert.deepEqual([...f.physicalOwners.keys()], ["1", "2"]);
+    assert.equal(f.state.backendCloses, 0);
+    f.state.inputComplete = true;
+    await tickRetainedUntil(f, () => f.inputConsumed.has("3") && f.inputConsumed.has("4"));
+    assert.equal(await settleRetainedCall(f, lifecycle), true);
+    assert.equal(f.physicalOwners.size, 0);
+    assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+      .map((e) => e.payload.ticket), ["1", "2", "3", "4"]);
+    assert.equal(f.retained.length, 0);
+    if (operation === "audio.suspend") {
+      assert.equal(f.session.diagnostics().state, "audio-suspended");
+      assert.equal(f.context.state, "suspended");
+      assert.equal(await settleRetainedCall(f, f.session.close()), true);
+    }
+    assert.equal(f.state.backendCloses, 1);
+  });
+}
+
+for (const operation of ["host.close", "audio.suspend"]) {
   test(`known count-in consumption stays independent of retained ${operation}`, async (t) => {
     const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
     t.after(() => f.cancelTimers());

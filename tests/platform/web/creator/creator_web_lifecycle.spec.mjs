@@ -290,7 +290,7 @@ async function recoverFromLifecycleEdge(page) {
 
 async function installLifecycleNativeProof(page) {
   await page.addInitScript(() => {
-    window.__lifecycleNativeProof = {suspends: [], voices: [], outcomes: [], consumed: []};
+    window.__lifecycleNativeProof = {suspends: [], voices: [], outcomes: [], consumed: [], inputRpc: []};
     let exposed;
     Object.defineProperty(window, "lmdjWebRuntimeHost", {
       configurable: true,
@@ -354,7 +354,23 @@ async function installLifecycleNativeProof(page) {
         });
         nativeHost.transport = Object.freeze({
           async send(...args) {
-            const response = await nativeTransport.send(...args);
+            const request = args[0];
+            const inputRpc = ["pattern.transport.input.request", "pattern.transport.input.inspect"]
+              .includes(request?.operation)
+              ? {request: structuredClone(request), began: performance.now(),
+                response: null, error: null, ended: null} : null;
+            if (inputRpc) window.__lifecycleNativeProof.inputRpc.push(inputRpc);
+            let response;
+            try {
+              response = await nativeTransport.send(...args);
+              if (inputRpc) inputRpc.response = structuredClone(response);
+            } catch (error) {
+              if (inputRpc) inputRpc.error = {code: error.code ?? null,
+                message: String(error.message), details: structuredClone(error.details ?? {})};
+              throw error;
+            } finally {
+              if (inputRpc) inputRpc.ended = performance.now();
+            }
             const consumed = observeInput(args[0], response);
             if (consumed) window.__lifecycleNativeProof.consumed.push(consumed);
             if (args[0]?.operation === "audio.suspend") {

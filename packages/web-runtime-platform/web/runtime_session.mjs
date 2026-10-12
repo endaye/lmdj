@@ -1887,7 +1887,7 @@ function createRuntimeSessionController(options = {}) {
         for (const hold of patternInputHolds.values()) {
           if (!hold.releaseSubmitted) {
             try {
-              await admitProfileRelease(hold.slot, hold.source, monotonicNow());
+              await admitProfileHoldRelease(hold, monotonicNow());
             } catch {
               // A refused admission leaves the real input/physical owner
               // retained. It must not prevent the other safety attempts.
@@ -4459,6 +4459,11 @@ function createRuntimeSessionController(options = {}) {
     const hold = [...patternInputHolds.values()].reverse().find((h) =>
       h.slot === slot && h.source === source && !h.releaseSubmitted);
     if (!hold) return false;
+    return admitProfileHoldRelease(hold, startedAt);
+  }
+  function admitProfileHoldRelease(hold, startedAt) {
+    const {slot, source} = hold;
+    if (hold.releaseSubmitted) return false;
     if (hold.sequence === null) {
       // Resolve the original admission outside both tails before a correlated
       // release is possible. Never invent a zero/fallback release sequence.
