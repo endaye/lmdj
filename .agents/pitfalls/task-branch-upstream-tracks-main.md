@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-10-10
     occurrence: https://github.com/endaye/lmdj/issues/1995
     observed_by: Codex (agent /root/sample_numeric_editor)
+  - date: 2026-10-12
+    occurrence: https://github.com/endaye/lmdj/issues/1996
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -61,3 +64,9 @@ If `@{upstream}` resolves to `origin/main` on an existing branch, run
 `git branch --unset-upstream` before doing anything else in that worktree. The
 pre-push step in `.agents/skills/issue-done/SKILL.md` §4 carries this check;
 `docs/governance/git-workflow.md` §3 names `--no-track` at task start.
+
+The CI Performance-inventory repair repeated the task-start setup without
+`--no-track`; Git printed the inherited `origin/main` upstream. The agent
+removed that branch's upstream before implementation or any push. Keep the
+existing mechanism: create without tracking and inspect the exact upstream
+before explicitly pushing the same-named task branch.

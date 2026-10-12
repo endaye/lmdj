@@ -825,3 +825,64 @@ merge remain required. No new gate, test selection or timeout is introduced.
 Version impact: none — operational evidence and process ledger only.
 Documentation impact: none — no published portal facts or product identities
 change; this plan records the recovery boundary and measurement limitations.
+
+### T7 — Keep Facade live operations separate from the Native inventory
+
+Integration/task base: `db6776df18445a6c6d64315e840e88face3c062b`.
+Relates to #1996. Declared files: `tests/host/performance_cli_test.py`,
+`.agents/pitfalls/task-branch-upstream-tracks-main.md`, and this plan.
+
+Premises before editing:
+
+- Outstanding: completed old-target batch 38238760719 fails both Coverage
+  (job 114826110368) and Linux ASan (114829490025) at the same
+  `registered_facade_performance_operations() == PERFORMANCE_OPERATIONS`
+  assertion. Current main still contains the failure: a direct call of the
+  unmodified owning function fails before reaching any executable. Facade now
+  registers `performance.live.control` (command) and
+  `performance.live.status` (query); Native still exposes its distinct 24-item
+  inventory. Sharing one exact expected set prevents the CLI behavior checks
+  from running and leaves the two Facade operations untested.
+- Already delivered: #2070 advances audio through the complete Web neutral
+  reset; the old Coverage/ASan Web failure is at that repaired journey.
+  Do not repeat its source/test changes. Open #2066 owns a separate replay
+  rendezvous fix and changes neither this test nor its operation inventory.
+- Uncertain: macOS ASan reports `provider.stem_split` failing `file.good()`
+  (primary job 114777996060). Its cause is not established by these logs.
+  This Task does not claim to repair it or grant full-candidate acceptance.
+
+Retain the explicit 24-operation Native oracle. Add a distinct explicit
+26-operation Facade oracle, like the existing Sound Set split, and execute
+CLI correct/wrong-method assertions for every Facade operation. Keep all
+Native registration/authoring legs and error-envelope assertions, with the
+same deadlines. No gate, timeout or test-selection changes.
+
+Task-start recurrence: Git initially assigned this new branch `origin/main`
+as its upstream. It was immediately unset before editing or pushing. Record
+the occurrence in the existing absorbed entry; its existing `--no-track` and
+pre-push skill remedy remains sufficient. No shared configuration changes.
+
+Lowest-tier verification: configure Dev, build `lmdj_core_cli` and
+`lmdj_native_host`, then run the complete `host.performance_cli` CTest.
+Prove the new oracle rejects a missing or wrong-kind live registration using
+the rebuilt executables; retain the original red result. Run syntax and staged
+scope/whitespace and existing pitfall-ledger checks. The operation-boundary
+defect itself is expressed directly by this owning regression.
+
+#### Version Management
+
+Version impact: none — test inventory and coverage repair only.
+Documentation impact: none — public operation behavior and portal facts are
+unchanged; this plan records the test repair and remaining acceptance gaps.
+
+T7 verification: Dev configure and both declared executable targets exit 0.
+Complete owning CTest `host.performance_cli` passes 1/1 in 0.63 s (0.65 s
+total), including 26 Facade correct/wrong-method pairs and the unchanged
+Native authoring/registration legs. Two scoped registry-reader mutations in a
+fresh no-bytecode Python process fail at the owning assertion: missing both
+live registrations (even while the 24-item Native parity agrees) and a
+wrong-kind live control. The rebuilt executables remain unchanged by those
+reader mocks; the complete CTest runs them without mocks. Syntax check and
+15 existing pitfall-ledger contracts pass. Original local and remote red
+results are retained; no timeout, selection or assertion was weakened.
+Precommit refresh still resolves to `db6776df18445a6c6d64315e840e88face3c062b`.
