@@ -655,8 +655,13 @@ share the header row. EDIT is the default, and a mode change returns to it.
 
 **SETUP** holds the settings that are set once and rarely touched:
 
-- **Tempo and Swing cards.** Each has a fader and −/+ steps. Tempo also uses
-  ENC3; Swing remains on the touch surface because ENC4 controls monitoring.
+- **Tempo and Swing.** The two controls stack at full width. Tempo groups
+  −1 BPM, TAP and +1 BPM under its slider and retains the ENC3 hint; Swing
+  keeps its slider and −/+ steps. BARS and SEQ SNAP each label a full-width
+  segment, while Double Up, Copy and New share one row. Quantize and Metronome
+  display On/Off from their current states. All settings use the outer touch
+  workspace's vertical scroll. Swing remains on the touch surface because
+  ENC4 controls monitoring.
 - **`BARS`.** A 1, 2, 4 or 8 segment on the selected Pattern's length
   (Desktop Final T8, the 2026-10-08 Pattern length and copy decision).
   Choosing a longer length adds empty bars. Choosing a shorter one deletes the
@@ -682,7 +687,7 @@ share the header row. EDIT is the default, and a mode change returns to it.
   in IndexedDB Host settings and restored on boot, without changing Project
   Truth or adding an Undo entry. OFF and recording switches remain later Tasks.
 - **`+ NEW`.** Opens the new Pattern's length (1, 2, 4 or 8 bars) with CREATE
-  and CANCEL.
+  and CANCEL. TAP stays hidden while this form is open; either exit restores it.
 - **`TAP` and Refresh authority.**
 
 The physical column drives the same page (Desktop Final plan T6):

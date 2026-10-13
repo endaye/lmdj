@@ -1603,3 +1603,298 @@ test("SEQ SNAP restores the stored choice at boot, carries it on playing switche
     .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
   expect(await inspectTruth(page)).toEqual(truthAtRest);
 });
+
+// U06b SETUP presentation: append-only acceptance alongside the complete
+// transport/Recovery/PCM-owning journeys above. These checks use native keys
+// and real Core/Host readbacks; geometry never stands in for a saved result.
+async function recordSetupLayout(page, settings, testInfo, phase) {
+  expect(["initial", "new-form", "readbacks"]).toContain(phase);
+  const choosingLength = phase === "new-form";
+  const expectedNames = [
+    "BPM", "Decrease BPM", ...(choosingLength ? [] : ["Tap Tempo"]), "Increase BPM",
+    "Swing", "Decrease Swing", "Increase Swing",
+    "Length 1 bars", "Length 2 bars", "Length 4 bars", "Length 8 bars",
+    "Double Up Pattern", "Copy Pattern", ...(choosingLength ? [] : ["New Pattern"]),
+    ...(choosingLength ? ["1 bars", "2 bars", "4 bars", "8 bars", "CANCEL", "Create Pattern"] : []),
+    "1 BEAT", "1 BAR", "SEQ END", "Quantize", "Metronome",
+  ];
+  // The official fixture starts at Swing's lower bound and this journey never
+  // changes it. Its disabled decrement remains part of layout, not the hit
+  // inventory. No other control is locked in these stopped, settled phases.
+  expect((await inspectTruth(page)).sequence_settings.swing_percent).toBe(50);
+  await expect(settings.getByRole("slider", {name: "Swing", exact: true})).toHaveValue("50");
+  const expectedInventory = expectedNames.map(name => ({name, disabled: name === "Decrease Swing"}));
+  const controls = settings.locator('button:visible, input[type="range"]:visible');
+  // Retain raw DOM diagnostics before inventory assertions. A client rect alone
+  // does not establish visibility, for example inside a closed details element.
+  const visibility = await settings.evaluate(node => {
+    const describe = element => {
+      const style = getComputedStyle(element);
+      return {
+        tag: element.tagName, className: element.className,
+        hidden: element.hidden, inert: element.inert,
+        open: element.tagName === "DETAILS" ? element.open : null,
+        rect: element.getBoundingClientRect().toJSON(),
+        clientRects: [...element.getClientRects()].map(rect => rect.toJSON()),
+        checkVisibility: typeof element.checkVisibility === "function" ? element.checkVisibility() : null,
+        style: {display: style.display, visibility: style.visibility, opacity: style.opacity,
+          contentVisibility: style.contentVisibility, overflowX: style.overflowX,
+          overflowY: style.overflowY, clip: style.clip, clipPath: style.clipPath},
+      };
+    };
+    return {
+      viewport: {width: window.innerWidth, height: window.innerHeight},
+      candidates: [...node.querySelectorAll('button, input[type="range"]')].map(control => {
+        const ancestors = [];
+        for (let parent = control.parentElement; parent; parent = parent.parentElement) {
+          ancestors.push(describe(parent));
+        }
+        return {
+          name: control.getAttribute("aria-label") ?? control.textContent.trim(),
+          disabled: control.matches(":disabled"), ...describe(control), ancestors,
+          closedDetailsAncestors: ancestors.filter(ancestor => ancestor.tag === "DETAILS" && !ancestor.open),
+        };
+      }),
+    };
+  });
+  const visibilityPath = testInfo.outputPath(`setup-${phase}-visibility.json`);
+  await writeFile(visibilityPath, JSON.stringify({phase, ...visibility}, null, 2));
+  await testInfo.attach(`setup-${phase}-visibility`, {path: visibilityPath, contentType: "application/json"});
+  await expect(controls).toHaveCount(choosingLength ? 23 : 19);
+  for (const {name, disabled} of expectedInventory) {
+    const control = settings.getByRole(name === "BPM" || name === "Swing" ? "slider" : "button",
+      {name, exact: true});
+    if (disabled) await expect(control).toBeDisabled();
+    else await expect(control).toBeEnabled();
+  }
+  const enabledControls = settings.locator('button:not(:disabled):visible, input[type="range"]:not(:disabled):visible');
+  await expect(enabledControls).toHaveCount(choosingLength ? 22 : 18);
+  expect(await enabledControls.evaluateAll(nodes => nodes.map(node =>
+    node.getAttribute("aria-label") ?? node.textContent.trim())))
+    .toEqual(expectedNames.filter(name => name !== "Decrease Swing"));
+  const geometry = await settings.evaluate(node => {
+    const scroller = node.closest('[data-testid="touch-workspace"]');
+    const rect = selector => node.querySelector(selector).getBoundingClientRect().toJSON();
+    return {
+      groups: {
+        tempo: rect(".sequence-param-tempo"), swing: rect(".sequence-param-swing"),
+        bars: rect(".sequence-setup-bars"), structure: rect(".sequence-structure-actions"),
+        snap: rect(".sequence-setup-seq-snap"), toggles: rect(".sequence-setup-toggles"),
+      },
+      scroll: {width: scroller.scrollWidth, clientWidth: scroller.clientWidth},
+    };
+  });
+  // Measure the same visible locator whose complete inventory is checked above.
+  geometry.controls = await controls.evaluateAll(nodes => nodes.map(control => ({
+    name: control.getAttribute("aria-label") ?? control.textContent.trim(),
+    disabled: control.matches(":disabled"), rect: control.getBoundingClientRect().toJSON(),
+  })));
+  expect(geometry.controls.map(({name, disabled}) => ({name, disabled}))).toEqual(expectedInventory);
+  const {tempo, swing, bars, structure, snap, toggles} = geometry.groups;
+  expect(tempo.bottom).toBeLessThanOrEqual(swing.top);
+  expect(tempo.left).toBeCloseTo(swing.left, 1);
+  expect(tempo.width).toBeCloseTo(swing.width, 1);
+  expect(swing.bottom).toBeLessThanOrEqual(bars.top);
+  expect(bars.bottom).toBeLessThanOrEqual(structure.top);
+  expect(structure.bottom).toBeLessThanOrEqual(snap.top);
+  expect(snap.bottom).toBeLessThanOrEqual(toggles.top);
+  expect(geometry.scroll.width).toBeLessThanOrEqual(geometry.scroll.clientWidth);
+  for (let index = 0; index < geometry.controls.length; index++) {
+    const a = geometry.controls[index];
+    for (const b of geometry.controls.slice(index + 1)) {
+      const overlap = Math.max(0, Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left)) *
+        Math.max(0, Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top));
+      expect(overlap, `${phase}: ${a.name} / ${b.name}`).toBe(0);
+    }
+  }
+  geometry.visibleControls = [];
+  for (let index = 0; index < await controls.count(); index++) {
+    const control = controls.nth(index);
+    await control.scrollIntoViewIfNeeded();
+    const measured = await control.evaluate(node => {
+      const rect = node.getBoundingClientRect();
+      const scroller = node.closest('[data-testid="touch-workspace"]');
+      const points = [[rect.width / 2, rect.height / 2], [rect.width / 2, 1],
+        [rect.width / 2, rect.height - 1], [1, rect.height / 2], [rect.width - 1, rect.height / 2]];
+      const text = [];
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      for (let child = walker.nextNode(); child; child = walker.nextNode()) {
+        if (!child.textContent.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(child);
+        text.push(...[...range.getClientRects()].map(item => item.toJSON()));
+      }
+      return {name: node.getAttribute("aria-label") ?? node.textContent.trim(),
+        disabled: node.matches(":disabled"),
+        rect: rect.toJSON(), viewport: scroller.getBoundingClientRect().toJSON(), text,
+        scrollTop: scroller.scrollTop,
+        hits: node.matches(":disabled") ? null : points.map(([x, y]) => document.elementFromPoint(rect.x + x, rect.y + y)
+          ?.closest("button,input") === node)};
+    });
+    geometry.visibleControls.push(measured);
+    expect(measured.rect.width, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.rect.height, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.rect.left, measured.name).toBeGreaterThanOrEqual(measured.viewport.left);
+    expect(measured.rect.right, measured.name).toBeLessThanOrEqual(measured.viewport.right);
+    expect(measured.rect.top, measured.name).toBeGreaterThanOrEqual(measured.viewport.top);
+    expect(measured.rect.bottom, measured.name).toBeLessThanOrEqual(measured.viewport.bottom);
+    if (measured.disabled) {
+      expect(measured.name).toBe("Decrease Swing");
+      expect(measured.hits).toBeNull();
+    } else {
+      expect(measured.hits, measured.name).toEqual([true, true, true, true, true]);
+    }
+    for (const text of measured.text) {
+      expect(text.left, measured.name).toBeGreaterThanOrEqual(measured.rect.left);
+      expect(text.right, measured.name).toBeLessThanOrEqual(measured.rect.right);
+      expect(text.top, measured.name).toBeGreaterThanOrEqual(measured.rect.top);
+      expect(text.bottom, measured.name).toBeLessThanOrEqual(measured.rect.bottom);
+    }
+  }
+  await settings.getByRole("slider", {name: "BPM", exact: true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath(`setup-${phase}-top.png`)});
+  await settings.getByRole("button", {name: "Metronome", exact: true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath(`setup-${phase}-bottom.png`)});
+  const path = testInfo.outputPath(`setup-${phase}-geometry.json`);
+  await writeFile(path, JSON.stringify(geometry, null, 2));
+  await testInfo.attach(`setup-${phase}-geometry`, {path, contentType: "application/json"});
+}
+
+async function readSetupMetronomePreference(page) {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const request = indexedDB.open("lmdj.creator.host", 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      try {
+        const read = database.transaction("settings", "readonly")
+          .objectStore("settings").get("metronome.v1");
+        read.onsuccess = () => { database.close(); resolve(read.result ?? null); };
+        read.onerror = () => { database.close(); reject(read.error); };
+      } catch (error) { database.close(); reject(error); }
+    };
+  }));
+}
+
+for (const viewport of [
+  {width: 1440, height: 900}, {width: 1024, height: 768}, {width: 768, height: 600},
+]) {
+  test(`SETUP flow and native keyboard reach real state at ${viewport.width}x${viewport.height}`,
+    async ({page, browserName}, testInfo) => {
+      test.skip(browserName !== "chromium");
+      test.setTimeout(240_000);
+      await installTransportProofRecorder(page);
+      // Same controlled TAP clock as the owning Tempo journey. Fixed 400/500ms
+      // examples have independently known 150/120 BPM outcomes; Core is real.
+      await page.addInitScript(() => {
+        window.__setupTapNow = null;
+        const realNow = performance.now.bind(performance);
+        performance.now = () => window.__setupTapNow ?? realNow();
+      });
+      await page.setViewportSize(viewport);
+      await page.goto("/index.html");
+      await importProject(page);
+      await page.getByRole("button", {name: "Sequence", exact: true}).click();
+      await showSequenceLayer(page, "SETUP");
+      const settings = page.getByRole("region", {name: "Sequence settings"});
+      await expect(settings.getByRole("slider", {name: "BPM", exact: true})).toBeEnabled();
+      const baseline = await inspectTruth(page);
+      const settingsUpdates = () => page.evaluate(() => window.__sequenceSettingsUpdateProof ?? []);
+      const tempoActions = settings.getByRole("group", {name: "Tempo actions"});
+      await expect(tempoActions.getByRole("button")).toHaveCount(3);
+      await recordSetupLayout(page, settings, testInfo, "initial");
+      expect(await inspectTruth(page)).toEqual(baseline);
+
+      // Native Tab order follows the visible three-button Tempo row.
+      await tempoActions.getByRole("button", {name: "Decrease BPM"}).focus();
+      await page.keyboard.press("Tab");
+      const tap = tempoActions.getByRole("button", {name: "Tap Tempo"});
+      await expect(tap).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(tempoActions.getByRole("button", {name: "Increase BPM"})).toBeFocused();
+      await tap.focus();
+      await page.evaluate(() => { window.__setupTapNow = 1_000; });
+      await page.keyboard.press("Enter");
+      expect(await inspectTruth(page)).toEqual(baseline);
+      expect(await settingsUpdates()).toHaveLength(0);
+      const targetBpm = baseline.bpm === 150 ? 120 : 150;
+      await page.evaluate(value => { window.__setupTapNow = value; }, targetBpm === 150 ? 1_400 : 1_500);
+      await page.keyboard.press("Enter");
+      await page.evaluate(() => { window.__setupTapNow = null; });
+      await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(targetBpm);
+      const tapped = await inspectTruth(page);
+      expect(tapped.revision).toBe(baseline.revision + 1);
+      expect(await settingsUpdates()).toHaveLength(1);
+      expect((await settingsUpdates())[0]).toMatchObject({ok: true, payload: {bpm: targetBpm}});
+      await expect(settings.getByRole("slider", {name: "BPM", exact: true})).toHaveValue(String(targetBpm));
+
+      // Opening and choosing a length are view state. Cancel keeps Truth;
+      // the second opening retains the draft and Create reaches Core once.
+      const newPattern = settings.getByRole("button", {name: "New Pattern"});
+      await newPattern.focus();
+      await page.keyboard.press("Space");
+      const form = settings.locator(".sequence-bars-form");
+      await expect(form).toBeVisible();
+      await expect(tap).toHaveCount(0);
+      await form.getByRole("button", {name: "4 bars", exact: true}).focus();
+      await page.keyboard.press("Enter");
+      await expect(form.getByRole("button", {name: "4 bars", exact: true})).toHaveAttribute("aria-pressed", "true");
+      expect(await inspectTruth(page)).toEqual(tapped);
+      await recordSetupLayout(page, settings, testInfo, "new-form");
+      await form.getByRole("button", {name: "CANCEL", exact: true}).focus();
+      await page.keyboard.press("Enter");
+      await expect(form).toHaveCount(0);
+      await expect(tap).toHaveCount(1);
+      expect(await inspectTruth(page)).toEqual(tapped);
+      await newPattern.focus();
+      await page.keyboard.press("Enter");
+      await expect(form.getByRole("button", {name: "4 bars", exact: true})).toHaveAttribute("aria-pressed", "true");
+      await form.getByRole("button", {name: "Create Pattern"}).focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(async () => Object.keys((await inspectTruth(page)).patterns).length)
+        .toBe(Object.keys(tapped.patterns).length + 1);
+      const created = await inspectTruth(page);
+      const newIds = Object.keys(created.patterns).filter(id => !Object.hasOwn(tapped.patterns, id));
+      expect(newIds).toHaveLength(1);
+      expect(created.patterns[newIds[0]]).toMatchObject({bars: 4, events: []});
+      expect(created.revision).toBe(tapped.revision + 1);
+      await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", newIds[0]);
+      await expect(form).toHaveCount(0);
+      await expect(tap).toHaveCount(1);
+
+      const quantize = settings.getByRole("button", {name: "Quantize", exact: true});
+      const nextQuantize = !created.sequence_settings.quantize_enabled;
+      await quantize.focus();
+      await page.keyboard.press("Space");
+      await expect.poll(async () => (await inspectTruth(page)).sequence_settings.quantize_enabled)
+        .toBe(nextQuantize);
+      await expect(quantize).toHaveAttribute("aria-pressed", String(nextQuantize));
+      await expect(quantize).toHaveText(`QUANTIZE ${nextQuantize ? "On" : "Off"}`);
+      const finalTruth = await inspectTruth(page);
+      expect(finalTruth.revision).toBe(created.revision + 1);
+      expect(await settingsUpdates()).toHaveLength(2);
+      expect((await settingsUpdates())[1]).toMatchObject({ok: true,
+        payload: {quantize_enabled: nextQuantize}});
+      const metronome = settings.getByRole("button", {name: "Metronome", exact: true});
+      await expect(metronome).toHaveAttribute("aria-pressed", "false");
+      await metronome.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => readSetupMetronomePreference(page)).toBe(true);
+      await expect(metronome).toHaveAttribute("aria-pressed", "true");
+      await expect(metronome).toHaveText("METRONOME On");
+      expect(await inspectTruth(page)).toEqual(finalTruth);
+      await recordSetupLayout(page, settings, testInfo, "readbacks");
+      expect(await inspectTruth(page)).toEqual(finalTruth);
+
+      await reopenProject(page);
+      expect(await inspectTruth(page)).toEqual(finalTruth);
+      await showPatternSetup(page, newIds[0]);
+      await expect(settings.getByRole("slider", {name: "BPM", exact: true})).toHaveValue(String(targetBpm));
+      await expect(settings.getByRole("group", {name: "Pattern length"})
+        .getByRole("button", {name: "Length 4 bars", exact: true})).toHaveAttribute("aria-pressed", "true");
+      await expect(quantize).toHaveText(`QUANTIZE ${nextQuantize ? "On" : "Off"}`);
+      await expect(metronome).toHaveText("METRONOME On");
+      expect(await readSetupMetronomePreference(page)).toBe(true);
+      expect(await inspectTruth(page)).toEqual(finalTruth);
+    });
+}

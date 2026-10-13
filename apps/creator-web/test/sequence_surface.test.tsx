@@ -67,6 +67,58 @@ function renderSurface(recovery = false, options: {
   };
 }
 
+test("Tempo groups TAP between the two one-BPM step actions", () => {
+  renderSurface();
+  openSetup();
+  const actions = screen.getByRole("group", {name: "Tempo actions"});
+  expect(within(actions).getAllByRole("button").map(button =>
+    button.getAttribute("aria-label"))).toEqual([
+    "Decrease BPM", "Tap Tempo", "Increase BPM",
+  ]);
+});
+
+test("New Pattern keeps TAP hidden until its length form is cancelled or created", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  fireEvent.click(screen.getByRole("button", {name: "New Pattern"}));
+  expect(screen.queryByRole("button", {name: "Tap Tempo"})).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "4 bars"}));
+  fireEvent.click(screen.getByRole("button", {name: "CANCEL"}));
+  expect(callbacks.onCreatePattern).not.toHaveBeenCalled();
+  expect(callbacks.onSettingsChange).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", {name: "Tap Tempo"})).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", {name: "New Pattern"}));
+  expect(screen.queryByRole("button", {name: "Tap Tempo"})).toBeNull();
+  expect(screen.getByRole("button", {name: "4 bars"}).getAttribute("aria-pressed"))
+    .toBe("true");
+  fireEvent.click(screen.getByRole("button", {name: "Create Pattern"}));
+  expect(callbacks.onCreatePattern).toHaveBeenCalledExactlyOnceWith(4);
+  expect(screen.getByRole("button", {name: "Tap Tempo"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Create Pattern"})).toBeNull();
+});
+
+test("SETUP toggle readbacks follow their controlled values after a request", () => {
+  const callbacks = renderSurface();
+  openSetup();
+  const quantize = screen.getByRole("button", {name: "Quantize"});
+  const metronome = screen.getByRole("button", {name: "Metronome"});
+  expect(quantize.textContent).toBe("QUANTIZE On");
+  expect(metronome.textContent).toBe("METRONOME Off");
+  fireEvent.click(quantize);
+  fireEvent.click(metronome);
+  expect(callbacks.onSettingsChange).toHaveBeenCalledExactlyOnceWith({quantizeEnabled: false});
+  expect(callbacks.onToggleMetronome).toHaveBeenCalledTimes(1);
+  expect(quantize.textContent).toBe("QUANTIZE On");
+  expect(metronome.textContent).toBe("METRONOME Off");
+  callbacks.update({project: {...project,
+    sequenceSettings: {...project.sequenceSettings, quantizeEnabled: false}},
+  metronomeOn: true});
+  expect(quantize.textContent).toBe("QUANTIZE Off");
+  expect(quantize.getAttribute("aria-pressed")).toBe("false");
+  expect(metronome.textContent).toBe("METRONOME On");
+  expect(metronome.getAttribute("aria-pressed")).toBe("true");
+});
+
 test.each([{name: "BPM", field: "bpm", value: "132"},
   {name: "Swing", field: "swingPercent", value: "61"}])(
   "$name shares a draft, cancels it, and clears it before committing once", ({name, field, value}) => {
