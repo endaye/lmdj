@@ -18,6 +18,9 @@ recurrences:
   - date: 2026-10-10
     occurrence: https://github.com/endaye/lmdj/issues/1983
     observed_by: Codex (GPT-6)
+  - date: 2026-10-13
+    occurrence: https://github.com/endaye/lmdj/issues/1959
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -129,3 +132,20 @@ The repeated proof waited over one second before writing restoration, checked
 the actual source compile line plus new artifact hash/mtime, and then passed
 the original test. The absorbed skill exit already prescribes this procedure;
 no gate, timeout, stress budget or test selection changed.
+
+## Sixth occurrence, 2026-10-13: a budget mutant ran without compilation
+
+During the S6 count-in implementation governed by the decision in #1959, the
+first live-control budget mutant build exited zero without a CXX or link step.
+The subsequent owning suite passed, so that attempt was retained as
+NOT_PROVEN. Neither the passing test nor the successful build was treated as
+evidence that the mutation had been compiled. Its exact timing cause was not
+established by those receipts.
+
+The corrected attempt waited for a strictly later filesystem timestamp,
+confirmed the actual CXX/link steps and changed object/binary hashes, then
+observed the intended timeout assertion fail. Restoration stamped fresh source,
+rebuilt it, and the complete two Native owning suites passed. The private
+`s6-main25-integration/root-native-budget-owning-validation/` receipts preserve
+both attempts and the original outcomes. The existing absorbed skill procedure
+remains the exit; no test deadline, worker count or journey was changed.

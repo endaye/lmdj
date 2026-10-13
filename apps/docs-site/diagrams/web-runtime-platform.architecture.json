@@ -48,11 +48,11 @@
     {
       "id": "session",
       "label": "Runtime Session",
-      "detail": "same frozen owner · tickets",
+      "detail": "frozen owner · tickets · live window",
       "kind": "core",
       "x": 650,
       "y": 170,
-      "width": 260,
+      "width": 290,
       "height": 92
     },
     {
@@ -180,7 +180,7 @@
     {
       "from": "tap",
       "to": "capture",
-      "label": "real PCM batches"
+      "label": "started · PCM · stopped"
     },
     {
       "from": "audio",
@@ -196,6 +196,11 @@
       "from": "monitor",
       "to": "output",
       "label": "same monitor gain"
+    },
+    {
+      "from": "session",
+      "to": "capture",
+      "label": "capture status"
     }
   ],
   "cards": [
@@ -208,8 +213,8 @@
       "body": "frozen runtime.session；live Pad 前协商。uint64/60 whole decimal；短 tickets 释放两条 tails。"
     },
     {
-      "title": "双输出消费",
-      "body": "product→Master tap/capture/resample；cue→monitor。PCM 后 batch ACK；paused zero，无 Engine clock。"
+      "title": "双输出与严格 tap ACK",
+      "body": "product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。"
     },
     {
       "title": "验收仍待执行",

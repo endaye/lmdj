@@ -1,5 +1,30 @@
 const MAX_BATCH_FRAMES = 4_800;
 const STOP_ACK_TIMEOUT_MS = 30_000;
+// D0/W1: the start ACK failure timer reuses the 30s stop budget as an
+// independent budget; it never extends the stop timer.
+const START_ACK_TIMEOUT_MS = 30_000;
+
+// D0/W1: the begin binding binds a capture start to one Core epoch, session
+// and begin command; null only for a legacy non-D04 caller.
+function validTapBinding(binding) {
+  if (binding === null) return true;
+  if (binding === undefined || typeof binding !== "object" ||
+      Array.isArray(binding)) return false;
+  const keys = Object.keys(binding).sort();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  return keys.length === 3 &&
+    keys[0] === "begin_command_id" && keys[1] === "control_epoch" &&
+    keys[2] === "session_id" &&
+    uuid.test(binding.begin_command_id) &&
+    uuid.test(binding.control_epoch) && uuid.test(binding.session_id);
+}
+
+function tapBindingEqual(left, right) {
+  if (left === null || right === null) return left === right;
+  return left.control_epoch === right.control_epoch &&
+    left.session_id === right.session_id &&
+    left.begin_command_id === right.begin_command_id;
+}
 
 function requireSink(sink) {
   if (
@@ -33,6 +58,12 @@ function validMasterTapEvent(message) {
     !Number.isSafeInteger(message.generation) ||
     message.generation < 0
   ) return false;
+  if (message.type === "started") {
+    return (
+      exactKeys(message, ["binding", "generation", "type"]) &&
+      validTapBinding(message.binding)
+    );
+  }
   if (message.type === "batch") {
     return (
       exactKeys(message, ["channels", "generation", "sequence", "type"]) &&
@@ -76,9 +107,14 @@ function createPerformanceMasterCaptureController({
   destination,
   timers,
   stopAckTimeoutMs,
+  startAckTimeoutMs,
 }) {
   let generation = 0;
   let active = null;
+  // D0/W1: the controller owns the single pending start before the message
+  // is posted, so a second start can never slip through the active=null
+  // window, and a late ACK is never inherited by a later begin.
+  let pendingStart = null;
   let closed = false;
   let processorFailed = false;
 
@@ -131,6 +167,25 @@ function createPerformanceMasterCaptureController({
   }
 
   node.port.onmessage = ({data}) => {
+    if (pendingStart !== null) {
+      const pending = pendingStart;
+      if (!validMasterTapEvent(data)) {
+        rejectPendingStart(pending, "tap-protocol-failure");
+        return;
+      }
+      // An ACK from an old generation or node is ignored, never inherited.
+      if (data.generation !== pending.record.generation) return;
+      // Only the exact started ACK for this binding arms the capture; a
+      // batch before it, a duplicate, or a binding mismatch all fail the
+      // pending start as protocol failures.
+      if (data.type !== "started" ||
+          !tapBindingEqual(data.binding, pending.record.binding)) {
+        rejectPendingStart(pending, "tap-protocol-failure");
+        return;
+      }
+      completePendingStart(pending);
+      return;
+    }
     const record = active;
     if (record === null) return;
     if (!validMasterTapEvent(data)) {
@@ -139,6 +194,12 @@ function createPerformanceMasterCaptureController({
     }
     if (data.generation !== record.generation) return;
     if (record.terminalFailure !== null) return;
+    if (data.type === "started") {
+      // A started ACK with no pending start is a protocol failure: a closed
+      // target must not be able to reuse it.
+      failActiveTraffic(record);
+      return;
+    }
     if (
       data.type === "batch" &&
       data.sequence === record.sequence + 1
@@ -165,16 +226,57 @@ function createPerformanceMasterCaptureController({
   function failProcessor() {
     if (processorFailed) return false;
     processorFailed = true;
+    if (pendingStart !== null) {
+      rejectPendingStart(pendingStart, "tap-processor-failed");
+    }
     if (active !== null) settle(active, {droppedFrames: 0});
     return true;
   }
 
-  async function start(sink) {
+  // A rejected pending start releases the ownership slot and reports the
+  // failure through the promise, never through sink callbacks (nothing was
+  // ever armed). The record settles through the ordinary failure path so the
+  // bounded stop cleanup still runs if the processor state is unknown.
+  function rejectPendingStart(pending, reason) {
+    if (pendingStart !== pending) return;
+    pendingStart = null;
+    if (pending.timer !== null) {
+      timers.clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+    if (pending.posted) {
+      // The processor may have received the start; run the bounded stop
+      // cleanup before declaring the record settled.
+      requestProcessorStop(pending.record);
+    }
+    settle(pending.record, {droppedFrames: 0});
+    pending.reject(
+      Object.assign(
+        new Error("Performance master capture start was not acknowledged"),
+        {code: reason},
+      ));
+  }
+
+  function completePendingStart(pending) {
+    if (pendingStart !== pending) return;
+    pendingStart = null;
+    if (pending.timer !== null) {
+      timers.clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+    active = pending.record;
+    pending.resolve(pending.handle);
+  }
+
+  async function start(sink, binding = null) {
     requireSink(sink);
+    if (!validTapBinding(binding)) {
+      throw new TypeError("Performance master capture binding is invalid");
+    }
     if (closed || processorFailed) {
       throw new Error("Performance master capture is unavailable");
     }
-    if (active !== null) {
+    if (active !== null || pendingStart !== null) {
       throw new Error("Performance master capture is already active");
     }
     generation = nextGeneration(generation);
@@ -183,6 +285,7 @@ function createPerformanceMasterCaptureController({
     const record = {
       generation,
       sequence: 0,
+      binding,
       sink,
       stopRequested: false,
       stopTimer: null,
@@ -191,14 +294,27 @@ function createPerformanceMasterCaptureController({
       resolve: resolveStop,
       stopPromise,
     };
-    active = record;
-    try {
-      node.port.postMessage({type: "start", generation});
-    } catch {
-      settle(record, {droppedFrames: 0});
-      throw new Error("Performance master capture could not start");
-    }
-    return Object.freeze({
+    let resolveStart;
+    let rejectStart;
+    const startPromise = new Promise((resolve, reject) => {
+      resolveStart = resolve;
+      rejectStart = reject;
+    });
+    const pending = {
+      record,
+      posted: false,
+      timer: null,
+      resolve: resolveStart,
+      reject: rejectStart,
+      handle: null,
+    };
+    // The pending owner is registered before the message is posted.
+    pendingStart = pending;
+    let stopping = null;
+    pending.handle = Object.freeze({
+      // The immutable started receipt: proof this tap armed this binding.
+      generation: record.generation,
+      binding,
       stop() {
         if (record.settled || record.stopRequested) return record.stopPromise;
         if (!requestProcessorStop(record)) {
@@ -212,11 +328,27 @@ function createPerformanceMasterCaptureController({
         return record.stopPromise;
       },
     });
+    // The start failure timer exists before the post: a synchronous ACK or a
+    // synchronous post failure both settle it exactly once.
+    pending.timer = timers.setTimeout(() => {
+      rejectPendingStart(pending, "tap-start-timeout");
+    }, startAckTimeoutMs);
+    try {
+      node.port.postMessage({type: "start", generation, binding});
+      pending.posted = true;
+    } catch {
+      rejectPendingStart(pending, "tap-post-failed");
+      throw new Error("Performance master capture could not start");
+    }
+    return startPromise;
   }
 
   async function close() {
     if (closed) return;
     closed = true;
+    if (pendingStart !== null) {
+      rejectPendingStart(pendingStart, "tap-closed");
+    }
     if (active !== null) settle(active, {droppedFrames: 0});
     node.port.onmessage = null;
     try {
@@ -259,5 +391,7 @@ export async function createPerformanceMasterTap(
     timers: internal.timers ?? globalThis,
     stopAckTimeoutMs:
       internal.stopAckTimeoutMs ?? STOP_ACK_TIMEOUT_MS,
+    startAckTimeoutMs:
+      internal.startAckTimeoutMs ?? START_ACK_TIMEOUT_MS,
   });
 }

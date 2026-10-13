@@ -612,6 +612,12 @@ void test_bridge_admits_every_stage10_performance_operation() {
       {"performance.replay.stop",
        {{"replay_id", kReplayId}, {"request_id", request}}},
       {"performance.replay.status", {{"replay_id", kReplayId}}},
+      {"performance.live.status", Json::object()},
+      {"performance.live.control",
+       {{"control_epoch", uuid(202)},
+        {"command_id", command},
+        {"expected_control_sequence", "0"},
+        {"intent", {{"kind", "hold_on"}}}}},
       {"performance.resample.commit",
        {{"command_id", command},
         {"expected_revision", 0},
@@ -620,7 +626,7 @@ void test_bridge_admits_every_stage10_performance_operation() {
         {"source_end_frame", 1},
         {"target_slot", {{"bank", 0}, {"pad", 1}}}}},
   };
-  LMDJ_CHECK(valid_requests.size() == 23U);
+  LMDJ_CHECK(valid_requests.size() == 25U);
   std::uint32_t suffix = 210;
   for (const auto& [operation, payload] : valid_requests) {
     const auto response = bridge_request(bridge, operation, payload, suffix++);
@@ -628,6 +634,121 @@ void test_bridge_admits_every_stage10_performance_operation() {
         response.value("ok", false) ||
         response.at("error").at("code") != "HOST_PROTOCOL_MISMATCH");
   }
+}
+
+// W1 oracle: the typed live-control wire crosses the real bridge into the
+// Facade's admission kernel and the engine; a stale epoch after engine
+// restart is refused, and a Bank/Pattern change preserves the live state.
+void test_bridge_routes_typed_live_control_to_the_real_engine() {
+  TempDirectory temporary;
+  auto created = ControlRuntime::create(
+      temporary.path(), config(temporary.path()), kLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  require_success(runtime->dispatch(
+      "project.create",
+      {
+          {"project_id", kProjectId},
+          {"bpm", 120},
+          {"initial_pattern",
+           {{"pattern_id", kPatternId}, {"bars", 1}, {"events", Json::array()}}},
+      },
+      {}));
+  require_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(runtime->engine().start().has_value());
+  ControlBridge bridge(
+      *runtime,
+      BridgeHooks{
+          nullptr,
+          &ImmediateControl::schedule,
+          &ImmediateControl::on_control,
+          nullptr,
+          nullptr,
+          nullptr});
+
+  // The status binds the retained Project and issues the Core epoch.
+  const auto status = require_success(
+      bridge_request(bridge, "performance.live.status", Json::object(), 300),
+      "performance.live.status");
+  LMDJ_CHECK(status.at("available") == true);
+  const auto epoch = status.at("control_epoch").get<std::string>();
+  LMDJ_CHECK(status.at("accepted").at("muted_slots").empty());
+
+  // A pad gate admission crosses into the engine's accepted shadow and, after
+  // a real render, its applied proof.
+  const auto controlled = require_success(
+      bridge_request(
+          bridge,
+          "performance.live.control",
+          {{"control_epoch", epoch},
+           {"command_id", uuid(301)},
+           {"expected_control_sequence", "0"},
+           {"intent",
+            {{"kind", "pad_mute"}, {"slot", 7}, {"enabled", true}}}},
+          302),
+      "performance.live.control");
+  LMDJ_CHECK(controlled.at("accepted") == true);
+  LMDJ_CHECK(controlled.at("control_sequence") == "1");
+  LMDJ_CHECK(runtime->engine().pad_gates_status().accepted.muted_mask ==
+             (std::uint64_t{1} << 7));
+  {
+    std::array<float, 128> left{};
+    std::array<float, 128> right{};
+    runtime->engine().render(left.data(), right.data(), 128);
+  }
+  LMDJ_CHECK(runtime->engine().pad_gates_status().applied.state.muted_mask ==
+             (std::uint64_t{1} << 7));
+
+  // The exact retry answers the receipt without a second admission.
+  const auto replayed = require_success(
+      bridge_request(
+          bridge,
+          "performance.live.control",
+          {{"control_epoch", epoch},
+           {"command_id", uuid(301)},
+           {"expected_control_sequence", "0"},
+           {"intent",
+            {{"kind", "pad_mute"}, {"slot", 7}, {"enabled", true}}}},
+          303),
+      "performance.live.control retry");
+  LMDJ_CHECK(replayed.at("replayed") == true);
+  LMDJ_CHECK(runtime->engine().pad_gates_status().accepted_sequence == 1);
+
+  // Bank/Pattern/Truth changes preserve the epoch and the live state.
+  require_success(runtime->dispatch(
+      "pattern.slot.assign",
+      {{"command_id", uuid(306)},
+       {"expected_revision", 0},
+       {"pattern_slot", 2},
+       {"pattern_id", kPatternId}},
+      {}));
+  const auto preserved = require_success(
+      bridge_request(bridge, "performance.live.status", Json::object(), 307),
+      "performance.live.status after a Truth change");
+  LMDJ_CHECK(preserved.at("control_epoch").get<std::string>() == epoch);
+  LMDJ_CHECK(preserved.at("accepted").at("muted_slots").size() == 1);
+  LMDJ_CHECK(runtime->engine().pad_gates_status().accepted.muted_mask ==
+             (std::uint64_t{1} << 7));
+
+  // Engine restart invalidates the epoch; the old target cannot publish.
+  runtime->engine().stop();
+  LMDJ_CHECK(runtime->engine().start().has_value());
+  const auto stale = bridge_request(
+      bridge,
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(304)},
+       {"expected_control_sequence", "1"},
+       {"intent", {{"kind", "pad_mute"}, {"slot", 8}, {"enabled", true}}}},
+      305);
+  // The stale epoch is refused before any publish; the engine's accepted
+  // mask proves zero enqueue (the bridge normalizes the error detail).
+  LMDJ_CHECK(!stale.value("ok", false));
+  LMDJ_CHECK(stale.at("error").at("code") == "INVALID_ARGUMENT");
+  LMDJ_CHECK(
+      runtime->engine().pad_gates_status().accepted.muted_mask == 0);
+  runtime->engine().stop();
 }
 
 void test_rejects_invalid_values_at_the_cpp_host_boundary() {
@@ -728,6 +849,13 @@ void test_rejects_invalid_values_at_the_cpp_host_boundary() {
       {"performance.replay.stop",
        {{"replay_id", kReplayId}, {"request_id", "not-a-uuid"}}},
       {"performance.replay.status", {{"replay_id", "not-a-uuid"}}},
+      // W1: the typed live-control boundary — lossy sequences, out-of-range
+      // slots, extra keys, and headered shape drift all fail the protocol.
+      {"performance.live.status", {{"unexpected", true}}},
+      {"performance.live.control",
+       {{"control_epoch", uuid(103)},
+        {"command_id", command},
+        {"expected_control_sequence", "01"}}},
       {"performance.resample.commit",
        {{"command_id", command},
         {"expected_revision", 0},
@@ -736,10 +864,62 @@ void test_rejects_invalid_values_at_the_cpp_host_boundary() {
         {"source_end_frame", 20},
         {"target_slot", {{"bank", 0}, {"pad", 1}, {"unexpected", true}}}}},
   };
-  LMDJ_CHECK(invalid_requests.size() == 23U);
+  LMDJ_CHECK(invalid_requests.size() == 25U);
   std::set<std::string> operations;
   for (const auto& [operation, payload] : invalid_requests) {
     LMDJ_CHECK(operations.insert(operation).second);
+    const auto response = runtime->dispatch(operation, payload, {});
+    LMDJ_CHECK(!response.value("ok", true));
+    LMDJ_CHECK(
+        response.at("error").at("code") == "HOST_PROTOCOL_MISMATCH");
+  }
+
+  // The headered variants share operation names with the legacy shape: each
+  // drift case still fails the protocol at the bridge.
+  const auto headered_invalid = std::vector<Json>{
+      {"command_id", command},
+      {"expected_revision", 0},
+  };
+  static_cast<void>(headered_invalid);
+  for (const auto& [operation, payload] : std::vector<std::pair<std::string, Json>>{
+      {"performance.live.control",
+       {{"control_epoch", uuid(103)},
+        {"command_id", command},
+        {"expected_control_sequence", "18446744073709551616"}}},
+      {"performance.live.control",
+       {{"control_epoch", uuid(103)},
+        {"command_id", command},
+        {"expected_control_sequence", "0"},
+        {"intent",
+         {{"kind", "pad_mute"}, {"slot", 64}, {"enabled", true}}}}},
+      {"performance.live.control",
+       {{"control_epoch", uuid(103)},
+        {"command_id", command},
+        {"expected_control_sequence", "0"},
+        {"intent", {{"kind", "hold_on"}, {"tick", 0}}}}},
+      {"performance.record.begin",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"session_id", kSessionId},
+        {"performance_id", kPerformanceId},
+        {"control_epoch", "not-a-uuid"}}},
+      {"performance.record.event",
+       {{"session_id", kSessionId},
+        {"event_id", request},
+        {"control_epoch", uuid(103)},
+        {"expected_recording_sequence", "0"},
+        {"event",
+         {{"kind", "fx_engage"},
+          {"fx", "delay"},
+          {"value", 500},
+          {"gesture_id", uuid(104)}}}}},
+      {"performance.record.launch-request",
+       {{"session_id", kSessionId},
+        {"request_id", request},
+        {"pattern_slot", 1},
+        {"control_epoch", uuid(103)},
+        {"expected_recording_sequence", "1.0"}}},
+  }) {
     const auto response = runtime->dispatch(operation, payload, {});
     LMDJ_CHECK(!response.value("ok", true));
     LMDJ_CHECK(
@@ -1063,6 +1243,7 @@ int main() {
     test_constructs_application_with_engine_authorities_and_services_launches();
     test_launch_during_recording_lands_on_the_transport_bar_line();
     test_bridge_admits_every_stage10_performance_operation();
+    test_bridge_routes_typed_live_control_to_the_real_engine();
     test_rejects_invalid_values_at_the_cpp_host_boundary();
     test_owner_loss_never_materializes_an_unacknowledged_launch();
     test_bridge_service_cadence_settles_pattern_transport();

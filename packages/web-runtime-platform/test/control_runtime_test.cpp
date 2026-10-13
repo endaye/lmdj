@@ -7350,10 +7350,47 @@ Json dispatch_retained_for_test(ControlRuntime& runtime, std::string_view operat
       return std::chrono::steady_clock::now();
     }) {
   const auto budget = operation == "host.close" ? std::chrono::seconds(10)
-      : operation == "audio.suspend" || operation == "trigger" ? std::chrono::seconds(1)
+      : operation == "audio.activate" || operation == "audio.suspend" ||
+        operation == "trigger" ? std::chrono::seconds(1)
       : std::chrono::seconds(30);
   return dispatch_retained_for_test(runtime, operation, payload, sidecar,
       ControlRuntime::AbsoluteRequestDeadline{now() + budget});
+}
+
+void test_retained_audio_activation_keeps_default_one_second_budget() {
+  for (const auto elapsed_ms : {900, 1'100}) {
+    FakeCoordinator coordinator;
+    FakeRuntimeClock clock;
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(8);
+    import_and_assign(*runtime, wav, kAssetId, 885, 886, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    LMDJ_CHECK(ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
+    coordinator.after_begin = [&] {
+      clock.current += std::chrono::milliseconds(elapsed_ms);
+    };
+    LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+
+    // Exercise the default retained helper, not a caller-supplied cutoff.
+    // Direct Control's deadline test cannot catch this helper widening 1s to 30s.
+    const auto response = dispatch_retained_for_test(
+        *runtime, "audio.activate", Json::object(), {}, [&] { return clock.current; });
+    LMDJ_CHECK(coordinator.begin_calls == 1);
+    if (elapsed_ms < 1'000) {
+      LMDJ_CHECK(response.at("ok") == true);
+    } else {
+      LMDJ_CHECK(response.at("ok") == false);
+      LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+      LMDJ_CHECK(coordinator.acknowledgement_calls == 0);
+      LMDJ_CHECK(!coordinator.called);
+      check_error(runtime->dispatch("audio.activate", Json::object(), {}, clock.current),
+          "HOST_STATE_INVALID");
+      LMDJ_CHECK(coordinator.begin_calls == 1);
+    }
+  }
 }
 
 Json pattern_transport_inspect(
@@ -7619,6 +7656,144 @@ void switch_grid_project(ControlRuntime& runtime) {
   check_success(dispatch_retained_for_test(runtime, "snapshot.reload", {{"pattern_id", kNextPatternId}}, {}));
   check_success(dispatch_retained_for_test(runtime, "audio.activate", Json::object(), {}));
   static_cast<void>(render_grid_frames(runtime.engine(), 128));
+}
+
+// W1 oracle on the real ControlRuntime → Facade → engine path: the live
+// command binds the retained Project and engine epoch; the headered begin
+// fence gates the first Pad; the replacement Project refuses the old epoch.
+void test_headered_live_control_flows_through_control_runtime() {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  auto runtime = grid_edit_runtime(temp, coordinator);
+  auto& engine = runtime->engine();
+
+  const auto status =
+      runtime->dispatch("performance.live.status", Json::object(), {});
+  check_success(status);
+  LMDJ_CHECK(status.at("result").at("available") == true);
+  const auto epoch =
+      status.at("result").at("control_epoch").get<std::string>();
+
+  // A live control accepted but not yet drained makes the fence genuinely
+  // pending; the first Pad is refused until the drain proves it.
+  check_success(runtime->dispatch(
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(9809)},
+       {"expected_control_sequence", "0"},
+       {"intent", {{"kind", "pad_mute"}, {"slot", 0}, {"enabled", true}}}},
+      {}));
+  const auto revision = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("revision").get<std::uint64_t>();
+  const auto session = uuid(9801);
+  const auto performance = uuid(9802);
+  const auto begun = runtime->dispatch(
+      "performance.record.begin",
+      {{"command_id", uuid(9800)},
+       {"expected_revision", revision},
+       {"session_id", session},
+       {"performance_id", performance},
+       {"control_epoch", epoch}},
+      {});
+  check_success(begun);
+  LMDJ_CHECK(begun.at("result").at("profile") == "header_input_sequence");
+  LMDJ_CHECK(begun.at("result").at("core_control_ready") == false);
+  LMDJ_CHECK(begun.at("result").at("next_recording_sequence") == "0");
+
+
+  // The first Pad is refused before the fence's applied proof.
+  const auto early = runtime->dispatch(
+      "performance.record.event",
+      {{"session_id", session},
+       {"event_id", uuid(9803)},
+       {"control_epoch", epoch},
+       {"expected_recording_sequence", "0"},
+       {"event",
+        {{"kind", "pad_press"},
+         {"gesture_id", uuid(9804)},
+         {"slot", 0},
+         {"velocity", 127}}}},
+      {});
+  LMDJ_CHECK(!early.value("ok", false));
+
+  // One real drain proves the fence: the gate opens for the same epoch.
+  static_cast<void>(render_grid_frames(engine, 128));
+  static_cast<void>(runtime->service_performance());
+  const auto ready =
+      runtime->dispatch("performance.record.status", Json::object(), {});
+  check_success(ready);
+  LMDJ_CHECK(ready.at("result").at("core_control_ready") == true);
+
+  check_success(runtime->dispatch(
+      "performance.record.event",
+      {{"session_id", session},
+       {"event_id", uuid(9803)},
+       {"control_epoch", epoch},
+       {"expected_recording_sequence", "0"},
+       {"event",
+        {{"kind", "pad_press"},
+         {"gesture_id", uuid(9804)},
+         {"slot", 0},
+         {"velocity", 127}}}},
+      {}));
+  static_cast<void>(render_grid_frames(engine, 128));
+  check_success(runtime->dispatch(
+      "performance.record.event",
+      {{"session_id", session},
+       {"event_id", uuid(9805)},
+       {"control_epoch", epoch},
+       {"expected_recording_sequence", "1"},
+       {"event",
+        {{"kind", "pad_release"},
+         {"gesture_id", uuid(9804)},
+         {"slot", 0}}}},
+      {}));
+
+  // The sessionless route is refused while the headered recording owns the
+  // epoch's control.
+  const auto bypass = runtime->dispatch(
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(9806)},
+       {"expected_control_sequence", "0"},
+       {"intent", {{"kind", "hold_on"}}}},
+      {});
+  LMDJ_CHECK(!bypass.value("ok", false));
+
+  check_success(runtime->dispatch(
+      "performance.record.stop",
+      {{"session_id", session}, {"request_id", uuid(9807)}}, {}));
+
+  // The PadHit carries its press's durable sequence on the headered wire.
+  const auto saved_at = runtime->dispatch("project.inspect", Json::object(), {})
+      .at("result").at("project").at("revision").get<std::uint64_t>();
+  check_success(runtime->dispatch(
+      "performance.save",
+      {{"command_id", uuid(9810)},
+       {"expected_revision", saved_at},
+       {"performance_id", performance},
+       {"name", "Headered take"},
+       {"recording_artifact", nullptr}},
+      {}));
+  const auto inspected = runtime->dispatch(
+      "performance.inspect", {{"performance_id", performance}}, {});
+  check_success(inspected);
+  const auto& events =
+      inspected.at("result").at("performance").at("events");
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.at(0).at("kind") == "pad_hit");
+  LMDJ_CHECK(events.at(0).at("input_sequence") == "1");
+
+  // Replacement Project: the old epoch cannot publish into it.
+  switch_grid_project(*runtime);
+  const auto stale = runtime->dispatch(
+      "performance.live.control",
+      {{"control_epoch", epoch},
+       {"command_id", uuid(9808)},
+       {"expected_control_sequence", "0"},
+       {"intent", {{"kind", "hold_on"}}}},
+      {});
+  LMDJ_CHECK(!stale.value("ok", false));
 }
 
 // #1789: a replay holds the Runtime only for its own Project, so a Project
@@ -12106,6 +12281,37 @@ void test_normal_count_in_close_consumption_precedes_retirement() {
   LMDJ_CHECK(backend.cue_consumers_acknowledged.load());
 }
 
+void test_bridge_live_operations_keep_original_one_second_queue_budget() {
+  for (const auto operation : {"performance.live.status", "performance.live.control"}) {
+    FakeCoordinator coordinator;
+    TempDirectory temp;
+    auto runtime = grid_edit_runtime(temp, coordinator);
+    const auto status = runtime->dispatch("performance.live.status", Json::object(), {});
+    LMDJ_CHECK(status.at("ok") == true);
+    const auto epoch = status.at("result").at("control_epoch");
+    LMDJ_CHECK(runtime->engine().pad_gates_status().accepted_sequence == 0);
+    const Json payload = std::string_view{operation} == "performance.live.status"
+        ? Json::object()
+        : Json{{"control_epoch", epoch}, {"command_id", uuid(10030)},
+               {"expected_control_sequence", "0"},
+               {"intent", {{"kind", "hold_on"}}}};
+    FakeProxy proxy;
+    auto bridge = make_bridge(*runtime, proxy);
+    const auto request_id = uuid(10031);
+    LMDJ_CHECK(bridge->submit(encode(request(request_id, operation, payload)), {}) ==
+        BridgeSubmitStatus::accepted);
+    // A queued request already spends its operation budget before Control starts.
+    // No JS timeout or tighter caller deadline masks Bridge's default policy.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1'050));
+    proxy.pump_one();
+    const auto response = poll_message(*bridge);
+    LMDJ_CHECK(response.at("request_id") == request_id);
+    LMDJ_CHECK(response.at("ok") == false);
+    LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+    LMDJ_CHECK(runtime->engine().pad_gates_status().accepted_sequence == 0);
+  }
+}
+
 void bridge_timeout_keeps_the_real_count_in_caller_receipt(bool before_dispatch) {
   TempDirectory temp;
   FakeCoordinator coordinator;
@@ -12834,6 +13040,7 @@ int main() {
     test_pad_delete_stops_voice_preserves_rhythm_and_roundtrips_history();
     test_pattern_transport_status_reports_the_rendered_frame();
     test_pattern_events_edit_during_a_replay_returns_at_its_end();
+    test_headered_live_control_flows_through_control_runtime();
     test_a_pad_delete_during_a_replay_stops_only_the_live_voice();
     test_an_undo_during_a_replay_publishes_nothing_over_it();
     test_a_bpm_change_during_a_replay_publishes_nothing_over_it();
@@ -12894,7 +13101,9 @@ int main() {
     test_audio_activation_rolls_back_begin_and_ack_failures();
     test_audio_suspend_requires_and_honors_quiescence_coordinator();
     test_audio_activation_rechecks_deadline_after_generation_ack();
+    test_retained_audio_activation_keeps_default_one_second_budget();
     test_audio_activation_ack_wait_uses_original_request_budget();
+    test_bridge_live_operations_keep_original_one_second_queue_budget();
     test_audio_activation_rollback_rechecks_the_original_deadline();
     test_suspend_and_close_pass_only_the_original_remaining_budget();
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();

@@ -80,7 +80,7 @@ async function installTransportObservability(page) {
     };
     window.__lmdjTask11 = observations;
     const existing = window.__LMDJ_WEB_HOST_SEAMS__ ?? {};
-    const observedTransport = {
+    const observedTransport = new Proxy({
       async send(request, options) {
         observations.requests.push(request.operation);
         const response = await window.lmdjWebRuntimeHost.transport.send(
@@ -116,7 +116,19 @@ async function installTransportObservability(page) {
       subscribeFailure(listener) {
         return window.lmdjWebRuntimeHost.transport.subscribeFailure(listener);
       },
-    };
+    }, {
+      get(target, property, receiver) {
+        if (Object.hasOwn(target, property)) {
+          return Reflect.get(target, property, receiver);
+        }
+        // Keep real terminal state and optional capabilities visible to the
+        // Session while the original methods retain their observations.
+        const actual = window.lmdjWebRuntimeHost?.transport;
+        if (actual == null) return undefined;
+        const value = Reflect.get(actual, property, actual);
+        return typeof value === "function" ? value.bind(actual) : value;
+      },
+    });
     window.__LMDJ_WEB_HOST_SEAMS__ = {
       ...existing,
       transport: observedTransport,

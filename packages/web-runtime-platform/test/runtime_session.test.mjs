@@ -23,6 +23,7 @@ const API = [
   "inspectAttempt",
   "activateAudio",
   "applyFxGesture",
+  "applyPerformanceLiveControl",
   "applyPerformanceRecovery",
   "applySequenceRecovery",
   "assignPatternSlot",
@@ -73,6 +74,7 @@ const API = [
   "movePatternSlot",
   "previewSoundSetMap",
   "stopSoundSetAudition",
+  "queryPerformanceLiveStatus",
   "queryPerformanceRecordingStatus",
   "queryPerformanceReplayStatus",
   "querySampleQuota",
@@ -10867,4 +10869,1103 @@ test("default packaged load rejects a foreign Module callback and never adopts a
   assert.equal(actualTerminatorRuntime, null);
   assert.equal(p.browserWindow.lmdjWebRuntimeHost, foreign);
   assert.equal(foreign.session, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// D0/W1 typed live-control producer oracles.
+// ---------------------------------------------------------------------------
+
+const LIVE_EPOCH = "40000000-0000-4000-8000-000000000001";
+const LIVE_STATE_WIRE = {
+  hold: false,
+  filter: {mode: "legacy", engaged: false, frozen: false, value: 0},
+  other_fx: Object.fromEntries(
+    ["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"]
+      .map((name) => [name, {engaged: false, frozen: false, value: 0}])),
+  muted_slots: [],
+  solo_slots: [],
+};
+
+test("typed live control serializes exactly and tracks the CAS window", async () => {
+  const operations = [];
+  let liveSequence = 0;
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope);
+      switch (envelope.operation) {
+        case "performance.live.status":
+          return success(envelope, {
+            available: true,
+            control_epoch: LIVE_EPOCH,
+            accepted: LIVE_STATE_WIRE,
+            applied: LIVE_STATE_WIRE,
+            runtime_generations: Object.fromEntries(
+              ["crush", "cutter", "delay", "filter", "gate", "reverse",
+                "reverb", "stutter"].map((name) => [name, null])),
+            accepted_control_sequence: String(liveSequence),
+            applied_control_sequence: String(liveSequence),
+            reset_pending: false,
+            begin_pending: false,
+            project_revision: null,
+          });
+        case "performance.live.control": {
+          // A replayed receipt does not advance the SDK's window.
+          const replayed = envelope.payload.intent.kind === "hold_off";
+          liveSequence += replayed ? 0 : 1;
+          return success(envelope, {
+            command_id: envelope.payload.command_id,
+            control_epoch: envelope.payload.control_epoch,
+            control_sequence: String(liveSequence),
+            gesture_generation: null,
+            accepted: true,
+            applied: false,
+            replayed,
+            project_revision: null,
+          });
+        }
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  const status = await session.queryPerformanceLiveStatus();
+  assert.equal(status.available, true);
+  assert.equal(status.controlEpoch, LIVE_EPOCH);
+  assert.equal(status.accepted.hold, false);
+  assert.equal(status.appliedControlSequence, "0");
+
+  const first = await session.applyPerformanceLiveControl({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "pad_mute", slot: 7, enabled: true},
+  });
+  assert.equal(first.accepted, true);
+  assert.equal(first.replayed, false);
+  const wired = operations.find(
+    ({operation}) => operation === "performance.live.control").payload;
+  assert.deepEqual(wired, {
+    control_epoch: LIVE_EPOCH,
+    command_id: wired.command_id,
+    expected_control_sequence: "0",
+    intent: {kind: "pad_mute", slot: 7, enabled: true},
+  });
+
+  // The same-identity replay does not advance the window.
+  const replayed = await session.applyPerformanceLiveControl({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "hold_off"},
+  });
+  assert.equal(replayed.replayed, true);
+  const third = await session.applyPerformanceLiveControl({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "hold_on"},
+  });
+  assert.equal(third.replayed, false);
+  const envelopes = operations.filter(
+    ({operation}) => operation === "performance.live.control");
+  assert.equal(envelopes[1].payload.expected_control_sequence, "1");
+  assert.equal(envelopes[2].payload.expected_control_sequence, "1");
+
+  // A closed session rejects new inputs without sending anything.
+  await session.close();
+  const before = operations.length;
+  await assert.rejects(
+    session.applyPerformanceLiveControl({
+      controlEpoch: LIVE_EPOCH,
+      intent: {kind: "hold_on"},
+    }),
+    (error) => error.code === "HOST_STATE_INVALID",
+  );
+  assert.equal(operations.length, before);
+});
+
+test("bounded live-input window rejects overflow, never drops releases, and cleanup rejects the waiting input", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000010";
+  const performanceId = "40000000-0000-4000-8000-000000000011";
+  const order = [];
+  let gateResolve = null;
+  let gate = null;
+  const {session} = fixture({
+    send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            project_revision: 1,
+          });
+        case "performance.record.event":
+          order.push(envelope.payload.event.kind);
+          if (gate !== null) await gate;
+          return success(envelope, {
+            event_id: envelope.payload.event_id,
+            accepted_tick: 0,
+            input_sequence: 1,
+            coalesced: false,
+            replayed: false,
+            project_revision: null,
+          });
+        case "performance.record.stop":
+          order.push("stop");
+          return success(envelope, {
+            request_id: envelope.payload.request_id,
+            session_id: sessionId,
+            performance_id: performanceId,
+            state: "stopped",
+            pending_event_count: 0,
+            replayed: false,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.beginPerformanceRecording({
+    sessionId, performanceId, expectedRevision: 0,
+  });
+
+  // The first event inflight holds the gate; one ordinary waits; the next
+  // ordinary input is explicitly refused.
+  gate = new Promise((resolve) => { gateResolve = resolve; });
+  const press = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000020",
+    event: {kind: "pad_press", gestureId: "40000000-0000-4000-8000-000000000021", slot: 1, velocity: 100},
+  });
+  const waiting = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000022",
+    event: {kind: "hold_on"},
+  });
+  await assert.rejects(
+    session.recordPerformanceEvent({
+      sessionId,
+      eventId: "40000000-0000-4000-8000-000000000023",
+      event: {kind: "hold_off"},
+    }),
+    /window is full/,
+  );
+  // The matching release always fits its reserved slot.
+  const release = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000024",
+    event: {kind: "pad_release", gestureId: "40000000-0000-4000-8000-000000000021", slot: 1},
+  });
+  gateResolve();
+  gate = null;
+  await press;
+  await waiting;
+  await release;
+  assert.deepEqual(order, ["pad_press", "hold_on", "pad_release"]);
+  // Let the lane's completion bookkeeping settle before the next window.
+  await drainTasks();
+
+  // The cleanup token rejects a never-admitted waiting input explicitly and
+  // still completes after the admitted work.
+  gate = new Promise((resolve) => { gateResolve = resolve; });
+  const admitted = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000025",
+    event: {kind: "hold_on"},
+  });
+  const cancelled = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000026",
+    event: {kind: "hold_off"},
+  });
+  const stopping = session.stopPerformanceRecording({
+    sessionId,
+    requestId: "40000000-0000-4000-8000-000000000027",
+  });
+  await assert.rejects(cancelled, /cancelled before Core admission/);
+  gateResolve();
+  gate = null;
+  await admitted;
+  await stopping;
+  assert.deepEqual(order.slice(-2), ["hold_on", "stop"]);
+  await session.close();
+});
+
+test("the 65th open Pad gesture is refused without an admission report", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000030";
+  const performanceId = "40000000-0000-4000-8000-000000000031";
+  const {session} = fixture({
+    send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            project_revision: 1,
+          });
+        case "performance.record.event":
+          return success(envelope, {
+            event_id: envelope.payload.event_id,
+            accepted_tick: 0,
+            input_sequence: 1,
+            coalesced: false,
+            replayed: false,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.beginPerformanceRecording({
+    sessionId, performanceId, expectedRevision: 0,
+  });
+  for (let pad = 0; pad < 64; pad += 1) {
+    await session.recordPerformanceEvent({
+      sessionId,
+      eventId: `40000000-0000-4000-8000-${String(pad + 256).padStart(12, "0")}`,
+      event: {
+        kind: "pad_press",
+        gestureId: `40000000-0000-4000-9000-${String(pad + 1).padStart(12, "0")}`,
+        slot: pad,
+        velocity: 100,
+      },
+    });
+  }
+  await assert.rejects(
+    session.recordPerformanceEvent({
+      sessionId,
+      eventId: "40000000-0000-4000-8000-000000000321",
+      event: {
+        kind: "pad_press",
+        gestureId: "40000000-0000-4000-9000-000000000065",
+        slot: 0,
+        velocity: 100,
+      },
+    }),
+    /Too many open Pad gestures/,
+  );
+  await session.close();
+});
+
+test("the dual-ready gate parks recorded inputs until Core-ready and the started ACK both land", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000040";
+  const performanceId = "40000000-0000-4000-8000-000000000041";
+  let coreReady = false;
+  let tapStarted = null;
+  let tapBinding = null;
+  const sentOperations = [];
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    start(sink, binding) {
+      tapBinding = binding;
+      return new Promise((resolve) => {
+        tapStarted = () => resolve({
+          generation: 1,
+          binding,
+          stop: async () => {},
+        });
+      });
+    },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    send: async (envelope) => {
+      sentOperations.push(envelope.operation);
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            profile: "header_input_sequence",
+            control_epoch: LIVE_EPOCH,
+            core_control_ready: false,
+            next_recording_sequence: "0",
+            fx_bindings: [],
+            project_revision: 1,
+          });
+        case "performance.record.status":
+          return success(envelope, {
+            state: "active",
+            session_id: sessionId,
+            performance_id: performanceId,
+            journal_revision: 1,
+            next_flush_seq: 1,
+            pending_event_count: 0,
+            open_pad_gestures: 0,
+            open_fx_gestures: 0,
+            hold: false,
+            pending_launch: null,
+            last_launch_ack: null,
+            profile: "header_input_sequence",
+            control_epoch: LIVE_EPOCH,
+            core_control_ready: coreReady,
+            next_recording_sequence: "0",
+            pending_admission: null,
+            project_revision: null,
+          });
+        case "performance.record.event":
+          return success(envelope, {
+            event_id: envelope.payload.event_id,
+            accepted_tick: 4,
+            input_sequence: "1",
+            next_recording_sequence: "1",
+            result: "no_audio",
+            coalesced: false,
+            gesture_generation: null,
+            recording_gesture_id: null,
+            replayed: false,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+
+  let beginSettled = false;
+  const begin = session.beginPerformanceRecording({
+    sessionId,
+    performanceId,
+    expectedRevision: 0,
+    controlEpoch: LIVE_EPOCH,
+    captureSink: {onBatch() {}, onStopped() {}, onFailure() {}},
+  }).then((value) => {
+    beginSettled = true;
+    return value;
+  });
+  await drainTasks();
+  assert.equal(beginSettled, false);
+
+  // A recorded Pad parks in the window: zero delivery to the Host bridge.
+  const parked = session.recordPerformanceEvent({
+    sessionId,
+    eventId: "40000000-0000-4000-8000-000000000042",
+    event: {kind: "pad_press", gestureId: "40000000-0000-4000-8000-000000000043", slot: 2, velocity: 100},
+  });
+  await drainTasks();
+  assert.equal(sentOperations.includes("performance.record.event"), false);
+
+  // Core fence ready first: the capture ACK still holds the gate.
+  coreReady = true;
+  for (let attempt = 0; attempt < 20 && tapBinding === null; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  assert.notEqual(tapBinding, null);
+  assert.equal(tapBinding.control_epoch, LIVE_EPOCH);
+  assert.equal(tapBinding.session_id, sessionId);
+  await drainTasks();
+  assert.equal(beginSettled, false);
+  assert.equal(sentOperations.includes("performance.record.event"), false);
+
+  // The matching started ACK releases both.
+  tapStarted();
+  const begun = await begin;
+  assert.equal(begun.coreControlReady, true);
+  await parked;
+  assert.equal(sentOperations.includes("performance.record.event"), true);
+  const eventEnvelope = sentOperations
+    .map((operation, index) => ({operation, index}))
+    .filter(({operation}) => operation === "performance.record.event");
+  assert.equal(eventEnvelope.length, 1);
+  await session.close();
+});
+
+
+// Integration regression: Native capacity only applies once admission runs;
+// queued calls need their own reservation before either SDK promise tail.
+// This injected short-admission gate proves SDK bounds and exact wire/caller
+// retirement, not physical device hearing or native callback performance.
+test("profile queued Press capacity is bounded before admission and real Release retires each original owner", async () => {
+  let releaseShort;
+  let shortStarted;
+  const shortReady = new Promise(resolve => { shortStarted = resolve; });
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation !== "pattern.transport.request") return null;
+    shortStarted();
+    return new Promise(resolve => { releaseShort = () => resolve(success(e, {
+      session_id: e.payload.session_id, command_id: e.payload.command_id, submit: "accepted",
+      status: transportStatus({phase: "idle"}),
+    })); });
+  }});
+  await activateInputProfile(f);
+  const stop = f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  await shortReady;
+  const keys = Array.from({length: 64}, () => ({}));
+  const presses = keys.map((key, slot) => f.session.trigger(slot, 100, "pointer", key));
+  assert.equal(await f.session.trigger(0, 100, "pointer", {}), false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0,
+    "the 65th queued Press never acquired a Native ticket");
+  releaseShort();
+  assert.equal((await stop).submit, "accepted");
+  const accepted = await Promise.all(presses);
+  assert.deepEqual(accepted.map(x => x.sequence), Array.from({length: 64}, (_, i) => i + 1));
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 64);
+  for (let slot = 0; slot < 64; slot += 1) {
+    assert.equal(await f.session.release(slot, "pointer", keys[slot]), true);
+  }
+  const requests = f.sent.filter(e => e.operation === "pattern.transport.input.request");
+  assert.equal(requests.length, 128);
+  assert.deepEqual(requests.slice(64).map(e => e.payload.held_press_sequence),
+    Array.from({length: 64}, (_, i) => String(i + 1)));
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 128);
+  // Capacity returns only after these real matching release consumes.
+  assert.equal((await f.session.trigger(0, 100, "pointer", keys[0])).sequence, 129);
+  assert.equal(await f.session.release(0, "pointer", keys[0]), true);
+  await f.session.close();
+});
+
+test("Performance queued Pad admission counts toward 64 before the first receipt", async () => {
+  let releaseFirst;
+  let firstStarted;
+  const ready = new Promise(resolve => { firstStarted = resolve; });
+  const events = [];
+  const {session} = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      events.push(e.payload.event);
+      if (events.length === 1) {
+        firstStarted();
+        await new Promise(resolve => { releaseFirst = resolve; });
+      }
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: 1,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await session.start();
+  const sessionId = "40000000-0000-4000-8000-000000000050";
+  const id = (prefix, i) => `40000000-0000-4000-${prefix}-${String(i + 1).padStart(12, "0")}`;
+  const presses = Array.from({length: 64}, (_, slot) => session.recordPerformanceEvent({
+    sessionId, eventId: id("8100", slot),
+    event: {kind: "pad_press", gestureId: id("8200", slot), slot, velocity: 100},
+  }));
+  await ready;
+  await assert.rejects(session.recordPerformanceEvent({sessionId, eventId: id("8100", 64),
+    event: {kind: "pad_press", gestureId: id("8200", 64), slot: 0, velocity: 100},
+  }), /Too many open Pad gestures/);
+  assert.equal(events.length, 1, "the pending 64 reservations bound the unsent queue");
+  releaseFirst();
+  await Promise.all(presses);
+  assert.equal(events.length, 64);
+  for (let slot = 0; slot < 64; slot += 1) {
+    await session.recordPerformanceEvent({sessionId, eventId: id("8300", slot),
+      event: {kind: "pad_release", gestureId: id("8200", slot), slot},
+    });
+  }
+  assert.deepEqual(events.slice(64).map(e => e.gesture_id),
+    Array.from({length: 64}, (_, slot) => id("8200", slot)));
+  await session.recordPerformanceEvent({sessionId, eventId: id("8400", 0),
+    event: {kind: "pad_press", gestureId: id("8500", 0), slot: 0, velocity: 100},
+  });
+  await session.recordPerformanceEvent({sessionId, eventId: id("8600", 0),
+    event: {kind: "pad_release", gestureId: id("8500", 0), slot: 0},
+  });
+  assert.equal(events.length, 130, "matching accepted release returned admission capacity");
+  await session.close();
+});
+
+
+test("direct companion requests reserve actual known capacity before the Host tail", async () => {
+  let releaseQuery;
+  let queryStarted;
+  const ready = new Promise(resolve => { queryStarted = resolve; });
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation === "pattern.transport.count-in.capabilities")
+      return success(e, {...defaultResult(e.operation), input_capacity: 2});
+    if (e.operation === "project.inspect") {
+      queryStarted();
+      return new Promise(resolve => { releaseQuery = () => resolve(success(e, defaultResult(e.operation))); });
+    }
+    return null;
+  }});
+  await activateInputProfile(f);
+  const query = f.session.inspectProject();
+  await ready;
+  const request = i => ({commandId: `40000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    runtimeGeneration: "1", frameEpoch: "1", inputSerial: String(i), slot: i - 1, velocity: 100,
+    kind: "press", held: false, heldPressSequence: null});
+  const first = f.session.requestPatternInput(request(1));
+  const second = f.session.requestPatternInput(request(2));
+  await assert.rejects(f.session.requestPatternInput(request(3)),
+    error => error.code === "HOST_STATE_INVALID" && error.details.pending === false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0);
+  releaseQuery();
+  await query;
+  for (const admitted of await Promise.all([first, second])) {
+    const consumed = await f.session.inspectPatternInput(admitted.ticket, true);
+    assert.equal(consumed.complete, true);
+    assert.equal(consumed.nativeResult.disposition, "muted_no_voice");
+  }
+  const third = await f.session.requestPatternInput(request(3));
+  assert.equal((await f.session.inspectPatternInput(third.ticket, true)).complete, true);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 3);
+  await f.session.close();
+});
+
+test("queued profile keyup observers share one original matching Release", async () => {
+  let releaseStop;
+  let stopStarted;
+  const ready = new Promise(resolve => { stopStarted = resolve; });
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation !== "pattern.transport.request") return null;
+    stopStarted();
+    return new Promise(resolve => { releaseStop = () => resolve(success(e, {
+      session_id: e.payload.session_id, command_id: e.payload.command_id, submit: "accepted",
+      status: transportStatus({phase: "idle"}),
+    })); });
+  }});
+  await activateInputProfile(f);
+  const stop = f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  await ready;
+  const key = {};
+  const press = f.session.trigger(0, 100, "pointer", key);
+  const released = f.session.release(0, "pointer", key);
+  const joined = f.session.release(0, "pointer", key);
+  releaseStop();
+  await stop;
+  assert.equal((await press).sequence, 1);
+  assert.equal(await released, true);
+  assert.equal(await joined, true);
+  const requests = f.sent.filter(e => e.operation === "pattern.transport.input.request");
+  assert.deepEqual(requests.map(e => [e.payload.kind, e.payload.held_press_sequence]),
+    [["press", null], ["release", "1"]]);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 2);
+  await f.session.close();
+});
+
+test("a capture started ACK arriving during close cannot arm before the physical cleanup fence", async () => {
+  let acknowledge;
+  let releaseBackend;
+  let backendStarted;
+  const backendReady = new Promise(resolve => { backendStarted = resolve; });
+  let tapClosed = 0;
+  let captureStops = 0;
+  let backendClosed = false;
+  const tap = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    start(sink) {
+      return new Promise(resolve => { acknowledge = () => resolve({stop: async () => {
+        captureStops += 1;
+        sink.onStopped();
+      }}); });
+    },
+    failProcessor() {},
+    async close() {
+      assert.equal(backendClosed, true, "SDK tap detach follows the actual backend closure");
+      tapClosed += 1;
+    },
+  };
+  const f = fixture({browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {resourceLimits: {perform_recording_frames: 86_400_000,
+      perform_recording_queue_batches: 32}, performanceMasterTapUrl: "./assets/perform-master-tap.js"},
+    createPerformanceMasterTap: async () => tap,
+    runtimeTerminator: async () => {
+      backendStarted();
+      await new Promise(resolve => { releaseBackend = resolve; });
+      f.context.state = "closed";
+      backendClosed = true;
+    },
+  });
+  await f.session.start();
+  assert.equal(await f.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const starting = f.session.startPerformanceMasterCapture({onBatch() {}, onStopped() {}, onFailure() {}});
+  const rejected = assert.rejects(starting, {code: "HOST_STATE_INVALID"});
+  const closing = f.session.close();
+  await backendReady;
+  assert.equal(tapClosed, 0);
+  acknowledge();
+  await rejected;
+  assert.equal(captureStops, 1);
+  assert.equal(tapClosed, 0, "a cancelled ACK cannot detach the original tap early");
+  releaseBackend();
+  assert.equal(await closing, true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
+  assert.equal(tapClosed, 1);
+  await assert.rejects(f.session.startPerformanceMasterCapture({onBatch() {}, onStopped() {}, onFailure() {}}),
+    {code: "HOST_STATE_INVALID"});
+});
+
+
+// Injected legacy owner fixture: a real invocation-bound owner receipt and
+// backend close are separate producers. Neither terminator entry/completion
+// nor public close is a full-owner or backend receipt.
+function legacyOwnerClosureFixture({send, beforeSeal = async () => {}}) {
+  let sealed = false;
+  let fullReceipt = false;
+  let actualRuntime = null;
+  let actualAudioContext = null;
+  let nativeStops = 0;
+  let backendCloses = 0;
+  let ownerConfirmation;
+  const ownerPending = new Promise(resolve => {ownerConfirmation = resolve;});
+  let beginTermination;
+  const terminationStarted = new Promise(resolve => {beginTermination = resolve;});
+  let beginBackend;
+  const backendStarted = new Promise(resolve => {beginBackend = resolve;});
+  let closeBackend;
+  const backendPending = new Promise(resolve => {closeBackend = resolve;});
+  const ownerTransport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return fullReceipt; },
+    async send(envelope) {
+      assert.equal(sealed, false, "a sealed owner accepts no new ordinary request");
+      return send(envelope);
+    },
+    subscribe() { return () => {}; },
+    subscribeFailure() { return () => {}; },
+  };
+  const f = fixture({browserWindow: {}, publishRuntime: true,
+    sessionTransport: ownerTransport, runtimeTransport: ownerTransport,
+    runtimeTerminator: async ({runtime, audioContext}) => {
+      assert.equal(runtime.transport, ownerTransport, "terminate this invocation's actual loaded owner");
+      assert.equal(audioContext, f.context, "backend belongs to the same original Session");
+      actualRuntime = runtime;
+      actualAudioContext = audioContext;
+      nativeStops += 1;
+      beginTermination();
+      // A genuine queued legacy Release is allowed to finish before sealing;
+      // this is an explicit input-owner gate, not a fabricated Release ACK.
+      await beforeSeal();
+      sealed = true;
+      await ownerPending;
+      await audioContext.close();
+    }});
+  f.context.close = async () => {
+    assert.equal(actualAudioContext, f.context);
+    backendCloses += 1;
+    beginBackend();
+    await backendPending;
+    f.context.state = "closed";
+  };
+  return Object.assign(f, {
+    ownerTransport, terminationStarted, backendStarted,
+    deliverOwnerReceipt() {
+      assert.equal(actualRuntime?.transport, ownerTransport);
+      assert.equal(nativeStops, 1, "only the original owner produces its closure receipt");
+      assert.equal(sealed, true, "the original owner was actually sealed before its receipt");
+      assert.equal(fullReceipt, false);
+      fullReceipt = true;
+      ownerConfirmation();
+    },
+    releaseBackend() { closeBackend(); },
+    nativeStops: () => nativeStops,
+    backendCloses: () => backendCloses,
+  });
+}
+
+// F1/F2/F3 repair witnesses use public APIs and original wire/receipt IDs.
+// Source delivery only: these component models do not prove physical hearing.
+test("legacy known-unsubmitted refusals never acquire a matching Release capacity slot", async () => {
+  const wire = [];
+  let sequence = 0;
+  const f = fixture({send: async e => {
+    if (e.operation === "trigger") {
+      wire.push(e.payload);
+      return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  for (let i = 0; i < 64; i += 1)
+    assert.equal(await f.session.trigger(0, 100, "pointer", {}), false);
+  assert.equal(wire.length, 0, "non-running refusals have no Native handoff");
+  assert.equal(await f.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  for (let i = 0; i < 64; i += 1)
+    assert.equal(await f.session.trigger(0, 0, "pointer", {}), false);
+  assert.equal(wire.length, 0, "invalid velocity also has no Native handoff");
+  const key = {};
+  assert.equal((await f.session.trigger(0, 100, "pointer", key)).sequence, 1);
+  assert.equal(await f.session.release(0, "pointer", key), true);
+  assert.deepEqual(wire, [{slot: 0, velocity: 100}, {slot: 0, kind: "release"}]);
+  const next = {};
+  assert.equal((await f.session.trigger(1, 100, "pointer", next)).sequence, 2);
+  assert.equal(await f.session.release(1, "pointer", next), true);
+  assert.equal(await f.session.close(), true);
+});
+
+test("a swallowed submitted-unknown legacy false retains its original capacity until real matching Release", async () => {
+  let sequence = 0;
+  const wire = [];
+  let releaseUnknown;
+  let unknownStarted;
+  const ready = new Promise(resolve => {unknownStarted = resolve;});
+  let releaseObserved;
+  const genuineRelease = new Promise(resolve => {releaseObserved = resolve;});
+  const f = legacyOwnerClosureFixture({beforeSeal: () => genuineRelease, send: async e => {
+    if (e.operation === "trigger") {
+      wire.push(e.payload);
+      if (e.payload.kind === "release") {
+        releaseObserved();
+        return success(e, {accepted: true});
+      }
+      sequence += 1;
+      if (sequence === 64) {
+        unknownStarted();
+        await new Promise(resolve => {releaseUnknown = resolve;});
+        throw Object.assign(new Error("original admission response lost"),
+          {code: "HOST_TIMEOUT", details: {pending: true}});
+      }
+      return success(e, {sequence});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "no cleanup initiated");
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "activation is not cleanup initiation");
+  const keys = Array.from({length: 64}, () => ({}));
+  for (let slot = 0; slot < 63; slot += 1)
+    assert.equal((await f.session.trigger(slot, 100, "pointer", keys[slot])).sequence, slot + 1);
+  const unknown = f.session.trigger(63, 100, "pointer", keys[63]);
+  await ready;
+  const matchingRelease = f.session.release(63, "pointer", keys[63]);
+  await assert.rejects(f.session.trigger(0, 100, "pointer", {}), /Too many open Pad gestures/);
+  releaseUnknown();
+  assert.equal(await unknown, false);
+  assert.equal(wire.filter(x => x.kind !== "release").length, 64,
+    "unknown false is not evidence that the original handoff never happened");
+  assert.equal(await matchingRelease, true);
+  // Fatal failure seals new admission. Do not turn that seal into a false
+  // capacity-reuse claim: retirement must follow real cleanup in this model.
+  await assert.rejects(f.session.trigger(0, 100, "pointer", {}), /Runtime session is closed/);
+  assert.deepEqual(wire.at(-1), {slot: 63, kind: "release"});
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  await f.terminationStarted;
+  const originalWait = f.session.waitForTerminalCleanup();
+  assert.equal(f.session.waitForTerminalCleanup(), originalWait);
+  let eligible = null;
+  void originalWait.then(value => {eligible = value;});
+  await drainTasks();
+  assert.equal(f.ownerTransport.terminalOwnerReleased, false);
+  assert.equal(eligible, null, "fatal cleanup cannot borrow legacy normal-close eligibility");
+  assert.equal(f.backendCloses(), 0);
+  f.deliverOwnerReceipt();
+  await f.backendStarted;
+  assert.equal(f.ownerTransport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running");
+  assert.equal(eligible, null, "full owner receipt is not backend closure");
+  f.releaseBackend();
+  assert.equal(await originalWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.backendCloses(), 1);
+  assert.equal(f.nativeStops(), 1);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.deepEqual(wire.at(-1), {slot: 63, kind: "release"});
+});
+
+test("legacy Release stays after its parked Press across the original dual-ready capture gate", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000090";
+  const performanceId = "40000000-0000-4000-8000-000000000091";
+  let acknowledge;
+  let tapStarting;
+  const tapReady = new Promise(resolve => {tapStarting = resolve;});
+  const wire = [];
+  let sequence = 0;
+  const tap = {destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    start(sink, binding) {
+      tapStarting();
+      return new Promise(resolve => {acknowledge = () => resolve({binding, generation: 1,
+        stop: async () => {sink.onStopped();}});});
+    }, failProcessor() {}, async close() {}};
+  const f = fixture({browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS, performanceMasterTapUrl: "./assets/perform-master-tap.js"},
+    createPerformanceMasterTap: async () => tap,
+    send: async e => {
+      if (e.operation === "performance.record.begin") return success(e, {
+        performance_id: performanceId, committed_revision: 1, replayed: false,
+        profile: "header_input_sequence", control_epoch: LIVE_EPOCH, core_control_ready: true,
+        next_recording_sequence: "0", fx_bindings: [], project_revision: 1});
+      if (e.operation === "trigger") {
+        wire.push(e.payload);
+        return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+      }
+      return success(e, defaultResult(e.operation));
+    }});
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const begin = f.session.beginPerformanceRecording({sessionId, performanceId, expectedRevision: 0,
+    controlEpoch: LIVE_EPOCH, captureSink: {onBatch() {}, onStopped() {}, onFailure() {}}});
+  await tapReady;
+  const key = {};
+  const press = f.session.trigger(2, 100, "pointer", key);
+  const release = f.session.release(2, "pointer", key);
+  await drainTasks();
+  assert.deepEqual(wire, [], "neither the parked Press nor its Release overtakes readiness");
+  acknowledge();
+  assert.equal((await begin).coreControlReady, true);
+  assert.equal((await press).sequence, 1);
+  assert.equal(await release, true);
+  assert.deepEqual(wire, [{slot: 2, velocity: 100}, {slot: 2, kind: "release"}]);
+  const fresh = {};
+  assert.equal((await f.session.trigger(3, 100, "pointer", fresh)).sequence, 2);
+  assert.equal(await f.session.release(3, "pointer", fresh), true);
+  assert.equal(await f.session.close(), true);
+});
+
+test("legacy Release waits for its original first admission including a submitted-unknown response", async () => {
+  for (const unknown of [false, true]) {
+    let releaseAdmission;
+    let admissionStarted;
+    const ready = new Promise(resolve => {admissionStarted = resolve;});
+    const wire = [];
+    const f = fixture({send: async e => {
+      if (e.operation !== "trigger") return success(e, defaultResult(e.operation));
+      wire.push(e.payload);
+      if (e.payload.kind === "release") return success(e, {accepted: true});
+      admissionStarted();
+      await new Promise(resolve => {releaseAdmission = resolve;});
+      if (unknown) throw Object.assign(new Error("original response lost"),
+        {code: "HOST_TIMEOUT", details: {pending: true}});
+      return success(e, {sequence: 1});
+    }});
+    await f.session.start();
+    await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+    const key = {};
+    const press = f.session.trigger(4, 100, "keyboard", key);
+    await ready;
+    const release = f.session.release(4, "keyboard", key);
+    await drainTasks();
+    assert.deepEqual(wire, [{slot: 4, velocity: 100}]);
+    releaseAdmission();
+    const admitted = await press;
+    assert.equal(unknown ? admitted : admitted.sequence, unknown ? false : 1);
+    assert.equal(await release, true);
+    assert.deepEqual(wire, [{slot: 4, velocity: 100}, {slot: 4, kind: "release"}]);
+    if (unknown) {
+      assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+      await f.session.waitForTerminalCleanup();
+    } else assert.equal(await f.session.close(), true);
+  }
+});
+
+test("Performance matching Release reservations are bounded while foreign and duplicate events cannot borrow them", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000092";
+  const id = (prefix, i) => `40000000-0000-4000-${prefix}-${String(i + 1).padStart(12, "0")}`;
+  let releaseFirst;
+  let firstStarted;
+  const ready = new Promise(resolve => {firstStarted = resolve;});
+  const wire = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      wire.push(e.payload);
+      if (wire.length === 1) {firstStarted(); await new Promise(resolve => {releaseFirst = resolve;});}
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: wire.length,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const presses = Array.from({length: 64}, (_, slot) => f.session.recordPerformanceEvent({sessionId,
+    eventId: id("9100", slot), event: {kind: "pad_press", gestureId: id("9200", slot), slot, velocity: 100}}));
+  await ready;
+  const releases = Array.from({length: 64}, (_, slot) => f.session.recordPerformanceEvent({sessionId,
+    eventId: id("9300", slot), event: {kind: "pad_release", gestureId: id("9200", slot), slot}}));
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9400", 64),
+    event: {kind: "pad_press", gestureId: id("9200", 0), slot: 0, velocity: 100}}), /already owns a Press position/);
+  for (let i = 0; i < 64; i += 1) {
+    await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9400", i),
+      event: {kind: "pad_release", gestureId: id("9200", 0), slot: 0}}), /Release is already reserved/);
+  }
+  // Preserve the original foreign/replay API within the ordinary 1+1 window.
+  const foreign = f.session.recordPerformanceEvent({sessionId, eventId: id("9500", 0),
+    event: {kind: "pad_release", gestureId: id("9600", 0), slot: 0}});
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9500", 65),
+    event: {kind: "pad_release", gestureId: id("9200", 0), slot: 1}}), /Live input window is full/,
+    "a wrong-slot UUID Release has no original owner reservation to borrow");
+  for (let i = 1; i <= 64; i += 1) {
+    await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9500", i),
+      event: {kind: "pad_release", gestureId: id("9600", i), slot: 0}}), /Live input window is full/);
+  }
+  assert.equal(wire.length, 1, "no matching or foreign Release bypasses the original receipt");
+  releaseFirst();
+  await Promise.all(presses);
+  await Promise.all(releases);
+  await foreign;
+  assert.deepEqual(wire.slice(64, 128).map(x => [x.event.gesture_id, x.event.slot]),
+    Array.from({length: 64}, (_, slot) => [id("9200", slot), slot]));
+  const fresh = {sessionId, eventId: id("9700", 0),
+    event: {kind: "pad_press", gestureId: id("9800", 0), slot: 0, velocity: 100}};
+  await f.session.recordPerformanceEvent(fresh);
+  await f.session.recordPerformanceEvent({sessionId, eventId: id("9900", 0),
+    event: {kind: "pad_release", gestureId: fresh.event.gestureId, slot: 0}});
+  assert.equal(wire.length, 131, "all 64 original Releases complete and return their owner capacity");
+  assert.equal(await f.session.close(), true);
+});
+
+test("Performance cleanup owns one token while a received gesture still completes before stop", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000093";
+  const performanceId = "40000000-0000-4000-8000-000000000094";
+  const id = i => `40000000-0000-4000-8000-${String(i + 100).padStart(12, "0")}`;
+  let releaseFirst;
+  let firstStarted;
+  const ready = new Promise(resolve => {firstStarted = resolve;});
+  const wire = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      wire.push([e.operation, e.payload.event.kind]);
+      if (wire.length === 1) {firstStarted(); await new Promise(resolve => {releaseFirst = resolve;});}
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: wire.length,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    if (e.operation === "performance.record.stop") {
+      wire.push([e.operation, e.payload.request_id]);
+      return success(e, {request_id: e.payload.request_id, session_id: sessionId, performance_id: performanceId,
+        state: "stopped", pending_event_count: 0, replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const press = f.session.recordPerformanceEvent({sessionId, eventId: id(1),
+    event: {kind: "pad_press", gestureId: id(2), slot: 0, velocity: 100}});
+  await ready;
+  const release = f.session.recordPerformanceEvent({sessionId, eventId: id(3),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}});
+  const ordinary = f.session.recordPerformanceEvent({sessionId, eventId: id(4), event: {kind: "hold_on"}});
+  const cancelled = assert.rejects(ordinary, /cancelled before Core admission/);
+  const stop = f.session.stopPerformanceRecording({sessionId, requestId: id(5)});
+  for (let i = 6; i < 70; i += 1)
+    await assert.rejects(f.session.stopPerformanceRecording({sessionId, requestId: id(i)}), /cleanup token is already reserved/);
+  assert.deepEqual(wire, [["performance.record.event", "pad_press"]]);
+  await cancelled;
+  releaseFirst();
+  await press;
+  await release;
+  assert.equal((await stop).requestId, id(5));
+  assert.deepEqual(wire, [["performance.record.event", "pad_press"],
+    ["performance.record.event", "pad_release"], ["performance.record.stop", id(5)]]);
+  const next = await f.session.stopPerformanceRecording({sessionId, requestId: id(70)});
+  assert.equal(next.requestId, id(70), "the token is reusable after its original successful receipt");
+  assert.equal(await f.session.close(), true);
+});
+
+
+test("close truthfully cancels a never-admitted legacy Press and its queued real Release", async () => {
+  let releaseAdmission;
+  let admissionStarted;
+  const ready = new Promise(resolve => {admissionStarted = resolve;});
+  const wire = [];
+  const f = legacyOwnerClosureFixture({send: async e => {
+    if (e.operation !== "trigger") return success(e, defaultResult(e.operation));
+    wire.push(e.payload);
+    admissionStarted();
+    await new Promise(resolve => {releaseAdmission = resolve;});
+    return success(e, {sequence: 1});
+  }});
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "no cleanup initiated");
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "activation is not cleanup initiation");
+  const admitted = f.session.trigger(0, 100, "pointer", {});
+  await ready;
+  const key = {};
+  const queued = f.session.trigger(1, 100, "pointer", key);
+  const release = f.session.release(1, "pointer", key);
+  const pressRejected = assert.rejects(queued, /cancelled before Core admission/);
+  const releaseRejected = assert.rejects(release, /cancelled before Core admission/);
+  const closing = f.session.close();
+  await pressRejected;
+  await releaseRejected;
+  assert.deepEqual(wire, [{slot: 0, velocity: 100}], "no fabricated Release or cancelled Press reached Native");
+  releaseAdmission();
+  assert.equal(await admitted, false);
+  await f.terminationStarted;
+  const originalWait = f.session.waitForTerminalCleanup();
+  assert.equal(f.session.waitForTerminalCleanup(), originalWait);
+  let eligible = null;
+  let closed = null;
+  void originalWait.then(value => {eligible = value;});
+  void closing.then(value => {closed = value;});
+  await drainTasks();
+  assert.equal(f.ownerTransport.terminalOwnerReleased, false);
+  assert.equal(eligible, null);
+  assert.equal(closed, null, "public close waits the original owner resources");
+  assert.equal(f.backendCloses(), 0);
+  f.deliverOwnerReceipt();
+  await f.backendStarted;
+  assert.equal(f.ownerTransport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running");
+  assert.equal(eligible, null, "normal close still needs independent backend closure");
+  assert.equal(closed, null);
+  f.releaseBackend();
+  assert.equal(await closing, true);
+  assert.equal(await originalWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.backendCloses(), 1);
+  assert.equal(f.nativeStops(), 1);
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.deepEqual(wire, [{slot: 0, velocity: 100}]);
+});
+
+test("unknown Performance Release retains the original reserved position until actual cleanup", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000095";
+  const performanceId = "40000000-0000-4000-8000-000000000096";
+  const id = i => `40000000-0000-4000-8000-${String(i + 200).padStart(12, "0")}`;
+  let loseRelease = true;
+  const wire = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      wire.push(e.payload);
+      if (e.payload.event.kind === "pad_release" && loseRelease)
+        throw Object.assign(new Error("matching Release receipt lost"), {code: "HOST_TIMEOUT", details: {pending: true}});
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: wire.length,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    if (e.operation === "performance.record.stop") return success(e, {
+      request_id: e.payload.request_id, session_id: sessionId, performance_id: performanceId,
+      state: "stopped", pending_event_count: 0, replayed: false, project_revision: null});
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  await f.session.recordPerformanceEvent({sessionId, eventId: id(1),
+    event: {kind: "pad_press", gestureId: id(2), slot: 0, velocity: 100}});
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id(3),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}}), {code: "HOST_TIMEOUT"});
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id(4),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}}), /Release is already reserved/);
+  assert.equal(wire.length, 2, "caller rejection did not retire or redispatch the unknown Release");
+  assert.equal((await f.session.stopPerformanceRecording({sessionId, requestId: id(5)})).state, "stopped");
+  loseRelease = false;
+  await f.session.recordPerformanceEvent({sessionId, eventId: id(6),
+    event: {kind: "pad_press", gestureId: id(2), slot: 0, velocity: 100}});
+  await f.session.recordPerformanceEvent({sessionId, eventId: id(7),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}});
+  assert.deepEqual(wire.slice(2).map(x => x.event.kind), ["pad_press", "pad_release"]);
+  assert.equal(await f.session.close(), true);
+});
+
+test("unknown Performance cleanup keeps the singleton token after its caller rejects", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000097";
+  const requestId = "40000000-0000-4000-8000-000000000098";
+  const stops = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.stop") {
+      stops.push(e.payload);
+      throw Object.assign(new Error("original cleanup receipt lost"), {code: "HOST_TIMEOUT", details: {pending: true}});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  await assert.rejects(f.session.stopPerformanceRecording({sessionId, requestId}), {code: "HOST_TIMEOUT"});
+  await assert.rejects(f.session.stopPerformanceRecording({sessionId,
+    requestId: "40000000-0000-4000-8000-000000000099"}), /cleanup token is already reserved/);
+  assert.deepEqual(stops, [{session_id: sessionId, request_id: requestId}]);
+  assert.equal(await f.session.close(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
 });

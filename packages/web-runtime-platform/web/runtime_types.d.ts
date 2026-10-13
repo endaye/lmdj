@@ -491,6 +491,11 @@ export interface WebPerformanceCaptureSession {
   ): () => void;
   startPerformanceMasterCapture(
     sink: PerformanceMasterCaptureSink,
+    binding?: Readonly<{
+      controlEpoch: string;
+      sessionId: string;
+      beginCommandId: string;
+    }> | null,
   ): Promise<PerformanceMasterCapture>;
 }
 
@@ -623,6 +628,181 @@ export interface PerformanceReplayStatus {
   readonly projectRevision: null;
 }
 
+// ---------------------------------------------------------------------------
+// D0/W1 headered live-control types (lmdj.project.v5 5.4.1). Opaque Core
+// sequences are canonical decimal strings; Pad slots are 0..63 safe integers.
+// ---------------------------------------------------------------------------
+
+export type PerformanceFilterTypeName = "lp" | "hp" | "bp";
+
+export type PerformanceLiveControlIntent =
+  | Readonly<{
+      kind: "filter_parameter";
+      phase: "engage" | "move";
+      parameter: "type";
+      value: PerformanceFilterTypeName;
+      gestureGeneration?: string;
+    }>
+  | Readonly<{
+      kind: "filter_parameter";
+      phase: "engage" | "move";
+      parameter: "cutoff_hz";
+      value: number;
+      gestureGeneration?: string;
+    }>
+  | Readonly<{
+      kind: "filter_parameter";
+      phase: "engage" | "move";
+      parameter: "resonance_milli";
+      value: number;
+      gestureGeneration?: string;
+    }>
+  | Readonly<{kind: "filter_release"; gestureGeneration: string}>
+  | Readonly<{
+      kind: "fx_parameter";
+      phase: "engage" | "move";
+      fx: PerformanceFx;
+      value: number;
+      gestureGeneration?: string;
+    }>
+  | Readonly<{
+      kind: "fx_release";
+      fx: PerformanceFx;
+      gestureGeneration: string;
+    }>
+  | Readonly<{kind: "pad_mute" | "pad_solo"; slot: number; enabled: boolean}>
+  | Readonly<{kind: "clear_pad_gates"}>
+  | Readonly<{kind: "hold_on" | "hold_off"}>;
+
+export type PerformanceLiveFilterState =
+  | Readonly<{mode: "legacy"; engaged: boolean; frozen: boolean; value: number}>
+  | Readonly<{
+      mode: "independent";
+      engaged: boolean;
+      frozen: boolean;
+      type: PerformanceFilterTypeName;
+      cutoffHz: number;
+      resonanceMilli: number;
+    }>;
+
+export interface PerformanceLiveFxGateState {
+  readonly engaged: boolean;
+  readonly frozen: boolean;
+  readonly value: number;
+}
+
+export interface PerformanceLiveState {
+  readonly hold: boolean;
+  readonly filter: PerformanceLiveFilterState;
+  readonly otherFx: Readonly<
+    Record<Exclude<PerformanceFx, "filter">, PerformanceLiveFxGateState>
+  >;
+  readonly mutedSlots: readonly number[];
+  readonly soloSlots: readonly number[];
+}
+
+export type PerformanceLiveStatus =
+  | Readonly<{
+      available: true;
+      controlEpoch: string;
+      accepted: PerformanceLiveState;
+      applied: PerformanceLiveState;
+      runtimeGenerations: Readonly<Record<PerformanceFx, string | null>>;
+      acceptedControlSequence: string;
+      appliedControlSequence: string;
+      resetPending: boolean;
+      beginPending: boolean;
+      projectRevision: null;
+    }>
+  | Readonly<{
+      available: false;
+      controlEpoch: null;
+      accepted: null;
+      applied: null;
+      acceptedControlSequence: null;
+      appliedControlSequence: null;
+      resetPending: false;
+      beginPending: false;
+      projectRevision: null;
+    }>;
+
+export interface PerformanceLiveControlResult {
+  readonly commandId: string;
+  readonly controlEpoch: string;
+  readonly controlSequence: string;
+  readonly gestureGeneration: string | null;
+  readonly accepted: true;
+  readonly applied: boolean;
+  readonly replayed: boolean;
+  readonly projectRevision: null;
+}
+
+export interface PerformanceFxBinding {
+  readonly fx: PerformanceFx;
+  readonly gestureGeneration: string;
+  readonly recordingGestureId: string;
+}
+
+export interface PerformanceHeaderedBeginResult extends PerformanceLifecycleResult {
+  readonly profile: "header_input_sequence";
+  readonly controlEpoch: string;
+  readonly coreControlReady: boolean;
+  readonly nextRecordingSequence: string;
+  readonly fxBindings: readonly PerformanceFxBinding[];
+}
+
+export type PerformanceHeaderedEvent =
+  | PerformanceRawEvent
+  | Readonly<{
+      kind: "fx_move" | "fx_release";
+      fx: PerformanceFx;
+      gestureId: string;
+      gestureGeneration: string;
+      value?: number;
+    }>
+  | Readonly<{
+      kind: "filter_parameter";
+      phase: "engage" | "move";
+      parameter: "type" | "cutoff_hz" | "resonance_milli";
+      value: number | PerformanceFilterTypeName;
+      gestureId?: string;
+      gestureGeneration?: string;
+    }>
+  | Readonly<{
+      kind: "filter_release";
+      gestureId: string;
+      gestureGeneration: string;
+    }>
+  | Readonly<{kind: "pad_mute" | "pad_solo"; slot: number; enabled: boolean}>
+  | Readonly<{kind: "clear_pad_gates"}>;
+
+export type PerformanceEventResult =
+  | Readonly<{
+      eventId: string;
+      acceptedTick: number;
+      inputSequence: number;
+      coalesced: boolean;
+      replayed: boolean;
+      projectRevision: null;
+    }>
+  | Readonly<{
+      eventId: string;
+      acceptedTick: number;
+      inputSequence: string;
+      nextRecordingSequence: string;
+      result: "published" | "no_audio";
+      coalesced: false;
+      gestureGeneration: string | null;
+      recordingGestureId: string | null;
+      replayed: false;
+      projectRevision: null;
+    }>
+  | Readonly<{
+      admission: Readonly<Record<string, unknown>>;
+      replayed: true;
+      projectRevision: null;
+    }>;
+
 export interface PerformanceRuntimeSession {
   assignPatternSlot(request: Readonly<{
     expectedRevision: number;
@@ -677,21 +857,32 @@ export interface PerformanceRuntimeSession {
     performanceId: string;
     expectedRevision: number;
   }>): Promise<PerformanceLifecycleResult>;
+  // D0/W1 headered profile: the begin promise resolves only after the Core
+  // fence proves the applied header and (when a captureSink is supplied) the
+  // real worklet start ACK matches this begin's binding.
+  beginPerformanceRecording(request: Readonly<{
+    sessionId: string;
+    performanceId: string;
+    expectedRevision: number;
+    controlEpoch: string;
+    captureSink?: PerformanceMasterCaptureSink;
+  }>): Promise<PerformanceHeaderedBeginResult>;
   recordPerformanceEvent(request: Readonly<{
     sessionId: string;
     eventId: string;
-    event: PerformanceRawEvent;
-  }>): Promise<Readonly<{
-    eventId: string;
-    acceptedTick: number;
-    inputSequence: number;
-    coalesced: boolean;
-    replayed: boolean;
-    projectRevision: null;
-  }>>;
+    event: PerformanceRawEvent | PerformanceHeaderedEvent;
+  }>): Promise<PerformanceEventResult>;
   applyFxGesture(event: PerformanceFxGesture): Promise<Readonly<{
     applied: true;
   }>>;
+  // D0/W1 typed live control: the sessionless producer echoes the Core epoch
+  // from queryPerformanceLiveStatus and the CAS window advances per admitted
+  // control.
+  applyPerformanceLiveControl(request: Readonly<{
+    controlEpoch: string;
+    intent: PerformanceLiveControlIntent;
+  }>): Promise<PerformanceLiveControlResult>;
+  queryPerformanceLiveStatus(): Promise<PerformanceLiveStatus>;
   requestPerformancePatternLaunch(request: Readonly<{
     sessionId: string;
     requestId: string;

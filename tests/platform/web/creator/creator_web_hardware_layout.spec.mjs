@@ -130,11 +130,17 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   // Undo/Redo is the SHIFT + ← / → chord on the direction row; the lamp, not
   // a greyed button pair, reports availability, and nothing sits outside the
   // console frame.
+  await expect(keys.getByRole("button", {name: "Previous Sample page — ←", exact: true}))
+    .toBeDisabled();
+  await expect(keys.getByRole("button", {name: "Next Sample page — →", exact: true}))
+    .toBeEnabled();
+  await keys.getByRole("button", {name: /^SHIFT/}).click();
   const undoKey = keys.getByRole("button", {name: "Undo — SHIFT + ←", exact: true});
   await expect(undoKey).toBeDisabled();
   await expect(undoKey).not.toHaveClass(/\bis-lit\b/);
   await expect(keys.getByRole("button", {name: "Redo — SHIFT + →", exact: true}))
     .toBeDisabled();
+  await keys.getByRole("button", {name: /^SHIFT/}).click();
   await expect(page.getByTestId("authoring-history")).toHaveCount(0);
   await expect(keys.getByRole("button", {name: "Project", exact: true})).toBeVisible();
   await expect(keys.getByRole("button", {name: "Sample", exact: true})).toBeVisible();
@@ -275,6 +281,82 @@ async function inspectTruth(page) {
     window.lmdjWebRuntimeHost.inspection.inspectProject());
   return inspected.project;
 }
+
+test("Project arrows follow the rendered three-column list and only OPEN changes Project", async ({page}) => {
+  await page.goto("/");
+  await waitForBootProject(page);
+  const keys = page.getByTestId("physical-controls");
+  const touch = page.getByTestId("touch-workspace");
+  // Four real local Projects expose a complete row and a shorter final row.
+  // Create them through the existing UI, not a cloned DOM or fake inventory.
+  for (let index = 0; index < 3; index += 1) {
+    const before = await inspectTruth(page);
+    await keys.getByRole("button", {name: "Project", exact: true}).click();
+    await page.getByRole("button", {name: "New Project", exact: true}).click();
+    await expect.poll(async () => (await inspectTruth(page)).project_id,
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS}).not.toBe(before.project_id);
+    await waitForBootProject(page);
+  }
+  await keys.getByRole("button", {name: "Project", exact: true}).click();
+  const cards = touch.locator(".project-card");
+  await expect(cards).toHaveCount(4);
+  const labels = await cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-label")));
+  const expectSelection = async (index) => {
+    await expect.poll(() => cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-pressed"))))
+      .toEqual([0, 1, 2, 3].map(cardIndex => String(cardIndex === index)));
+  };
+  const before = await inspectTruth(page);
+  for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
+    await page.setViewportSize(viewport);
+    await touch.evaluate(element => {element.scrollTop = 0;});
+    await expectConsoleFitsStage(page);
+    const geometry = await touch.evaluate(element => ({
+      width: element.clientWidth, scrollWidth: element.scrollWidth,
+      cards: [...element.querySelectorAll(".project-card")].map(card => ({
+        rect: card.getBoundingClientRect().toJSON(), width: card.clientWidth, scrollWidth: card.scrollWidth,
+      })),
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+    for (const card of geometry.cards) expect(card.scrollWidth).toBeLessThanOrEqual(card.width);
+    const [first, second, third, fourth] = geometry.cards.map(card => card.rect);
+    expect(second.left).toBeGreaterThan(first.right);
+    expect(third.left).toBeGreaterThan(second.right);
+    expect(second.top).toBeCloseTo(first.top, 0);
+    expect(third.top).toBeCloseTo(first.top, 0);
+    expect(fourth.left).toBeCloseTo(first.left, 0);
+    expect(fourth.top).toBeGreaterThan(first.bottom);
+    await cards.nth(1).scrollIntoViewIfNeeded();
+    const target = await cards.nth(1).boundingBox();
+    const hit = await page.evaluate(({x, y}) =>
+      document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
+    {x: target.x + target.width / 2, y: target.y + target.height / 2});
+    expect(hit).toBe(labels[1]);
+    await cards.nth(0).click();
+    await expectSelection(0);
+    await expect(keys.getByRole("button", {name: "Previous Project row — ↑", exact: true})).toBeDisabled();
+    await keys.getByRole("button", {name: "Next Project — →", exact: true}).click();
+    await expectSelection(1);
+    expect(await inspectTruth(page)).toEqual(before);
+    await keys.getByRole("button", {name: "Next Project row — ↓", exact: true}).click();
+    await expectSelection(3);
+    await expect(keys.getByRole("button", {name: "Next Project row — ↓", exact: true})).toBeDisabled();
+    expect(await inspectTruth(page)).toEqual(before);
+    await keys.getByRole("button", {name: "Previous Project row — ↑", exact: true}).click();
+    await expectSelection(0);
+    expect(await inspectTruth(page)).toEqual(before);
+  }
+  const currentIndex = await cards.evaluateAll(elements => elements.findIndex(element =>
+    element.parentElement.getAttribute("aria-current") === "true"));
+  expect(currentIndex).toBeGreaterThanOrEqual(0);
+  const targetIndex = currentIndex === 3 ? 0 : 3;
+  await cards.nth(targetIndex).click();
+  expect(await inspectTruth(page)).toEqual(before);
+  const selectedId = labels[targetIndex].slice("Select Project ".length);
+  await page.getByRole("button", {name: `Open Project ${selectedId}`, exact: true}).click();
+  await expect(page.getByRole("heading", {name: `Project ${selectedId}`, exact: true}))
+    .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  expect((await inspectTruth(page)).project_id.slice(0, 8)).toBe(selectedId);
+});
 
 test("commits Tempo only on release and keeps Project Truth across a reload", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
@@ -549,4 +631,147 @@ test("mode-specific overview identity, read-only feedback and details survive na
   await reopenLocalProject(page);
   await expect(page.locator(".overview-context")).toHaveText("PROJECT / 00000000");
   expect((await inspectTruth(page)).project_id).toBe(truth.project_id);
+});
+
+// Observe real Facade requests while retaining its original transport and
+// responses. These journeys click the rendered App, never injected handlers.
+async function observePerformPadRequests(page) {
+  await page.addInitScript(() => {
+    window.__performPadRequests = [];
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {configurable: true,
+      get: () => exposed,
+      set(host) {
+        const native = host.transport;
+        host.transport = new Proxy({}, {get(_target, key) {
+          const value = Reflect.get(native, key, native);
+          if ((key === "send" || key === "sendRetained") && typeof value === "function") {
+            return (...args) => {
+              const observed = {operation: args[0]?.operation, ok: null};
+              window.__performPadRequests.push(observed);
+              const result = Reflect.apply(value, native, args);
+              if (key === "send") {
+                Promise.resolve(result).then(response => {observed.ok = response?.ok;}, () => {});
+              }
+              return result;
+            };
+          }
+          return typeof value === "function" ? value.bind(native) : value;
+        }});
+        exposed = host;
+      },
+    });
+  });
+}
+
+test("Perform Pad arrows share all 64 silent selections and retain SHIFT/System boundaries", async ({page}) => {
+  await observePerformPadRequests(page);
+  await page.goto("/");
+  await waitForBootProject(page);
+  await importAndOpenProject(page);
+  const truth = await inspectTruth(page);
+  await page.getByRole("button", {name: "Perform", exact: true}).click();
+  await page.evaluate(() => {window.__performPadRequests.length = 0;});
+  const matrix = page.getByTestId("pad-matrix");
+  const current = matrix.locator('[aria-current="true"]');
+  const up = page.getByRole("button", {name: "Previous Pad — ↑", exact: true});
+  const down = page.getByRole("button", {name: "Next Pad — ↓", exact: true});
+  const address = slot => `${"ABCD"[Math.floor(slot / 16)]}${String(slot % 16 + 1).padStart(2, "0")}`;
+  const assertCurrent = async slot => {
+    await expect(current).toHaveCount(1);
+    await expect(current).toHaveAttribute("aria-label", new RegExp(`^Pad ${address(slot)} —`));
+    await expect(current).toHaveClass(/is-selected/);
+    await expect(page.getByRole("button", {name: `Bank ${"ABCD"[Math.floor(slot / 16)]}`, exact: true}))
+      .toHaveAttribute("aria-current", "page");
+  };
+  await assertCurrent(0);
+  await expect(up).toBeDisabled();
+  for (let slot = 1; slot < 64; slot += 1) {
+    await down.click();
+    await assertCurrent(slot);
+  }
+  await expect(down).toBeDisabled();
+  await assertCurrent(63);
+  for (let slot = 62; slot >= 0; slot -= 1) {
+    await up.click();
+    await assertCurrent(slot);
+  }
+  await expect(up).toBeDisabled();
+  await assertCurrent(0);
+  await down.click();
+  await assertCurrent(1);
+  const shift = page.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer", exact: true});
+  await shift.click();
+  await expect(page.getByRole("button", {name: "Up — unassigned until direction mapping is approved", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Down — unassigned until direction mapping is approved", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Undo — SHIFT + ←", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Redo — SHIFT + →", exact: true})).toBeVisible();
+  await assertCurrent(1);
+  await shift.click();
+  await expect(down).toBeEnabled();
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Up — unassigned until direction mapping is approved", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Down — unassigned until direction mapping is approved", exact: true})).toBeDisabled();
+  await assertCurrent(1);
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await expect(down).toBeEnabled();
+  await assertCurrent(1);
+  await down.click();
+  await assertCurrent(2);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.locator(".overview-context")).toHaveText("SAMPLE / PAD A03");
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByTestId("sequence-overview")).toContainText("A03");
+  await assertCurrent(2);
+  await page.getByRole("button", {name: "Perform", exact: true}).click();
+  await assertCurrent(2);
+  expect(await inspectTruth(page)).toEqual(truth);
+  const requests = await page.evaluate(() => window.__performPadRequests);
+  expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
+    "pattern.transport.input.request", "performance.fx.gesture"].includes(request.operation))).toEqual([]);
+});
+
+test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value", async ({page}) => {
+  await observePerformPadRequests(page);
+  await page.goto("/");
+  await waitForBootProject(page);
+  await importAndOpenProject(page);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await wakeAudioWithPad(page, {padAddress: "A01"});
+  await page.getByRole("button", {name: "Perform", exact: true}).click();
+  const filter = page.getByRole("slider", {name: "Filter", exact: true});
+  await expect(filter).toHaveValue("500");
+  const acceptedFxBefore = await page.evaluate(() => window.__performPadRequests
+    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length);
+  await page.getByRole("button", {name: "Encoder 1 — Filter", exact: true}).press("ArrowUp");
+  await expect(filter).toHaveValue("510");
+  const hold = page.getByRole("button", {name: "HOLD", exact: true});
+  await hold.click();
+  await expect(hold).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => page.evaluate(() => window.__performPadRequests
+    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length))
+    .toBe(acceptedFxBefore + 2);
+  const master = page.getByRole("slider", {name: "MASTER", exact: true});
+  const monitorBefore = Number(await master.inputValue());
+  expect(Number.isFinite(monitorBefore)).toBe(true);
+  expect(monitorBefore).toBeGreaterThan(0);
+  await page.getByRole("button", {name: "Encoder 4 — Output Volume", exact: true}).press("ArrowDown");
+  await expect(master).toHaveValue(String(monitorBefore - 1));
+  const truth = await inspectTruth(page);
+  await page.evaluate(() => {window.__performPadRequests.length = 0;});
+  const down = page.getByRole("button", {name: "Next Pad — ↓", exact: true});
+  for (let slot = 1; slot <= 16; slot += 1) {
+    await down.click();
+    await expect(page.getByTestId("pad-matrix").locator('[aria-current="true"]'))
+      .toHaveAttribute("aria-label", new RegExp(`^Pad ${slot === 16 ? "B01" : `A${String(slot + 1).padStart(2, "0")}`} —`));
+    await expect(filter).toHaveValue("510");
+    await expect(hold).toHaveAttribute("aria-pressed", "true");
+    await expect(master).toHaveValue(String(monitorBefore - 1));
+  }
+  await expect(page.getByRole("button", {name: "Bank B", exact: true})).toHaveAttribute("aria-current", "page");
+  expect(await inspectTruth(page)).toEqual(truth);
+  const requests = await page.evaluate(() => window.__performPadRequests);
+  expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
+    "pattern.transport.input.request", "performance.fx.gesture", "performance.record.begin", "performance.record.stop",
+    "pattern.transport.request"].includes(request.operation))).toEqual([]);
 });

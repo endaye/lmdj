@@ -2165,3 +2165,114 @@ Version impact: no manifest or identity allocation; approved compatible
 Creator feature debt remains for V1. Documentation impact: required —
 /hosts/creator-web/ and /hosts/creator-interactions/. Physical/hearing, A1/A2,
 full-candidate, V1/snapshot, release and deployment remain separate.
+
+## 2026-10-13 — K2a Project / Sample direction Source preparation
+
+Bounded successor Task:
+[K2a plan](2026-10-13-creator-project-sample-navigation.md). The actual refreshed
+main/base is `9f44298c98b190c20443c79cd62d19045ee06e41`. Its live #1822 body and
+two historical comments, approved October 11 decision, relevant merged
+successors and owning handlers/tests were read before editing. #2006 approved
+K2; #2001/#2090/#2058/#2082 already delivered history, numeric editing and
+keyboard behaviors. The actual mounted direction registry still bound only
+Sequence, Project's hardware list was single-column, and Sample's existing
+page owner was not connected to rail directions. These two remaining consumers
+are the bounded implementation scope; they do not repeat delivered work.
+
+Source now reuses the existing Project selection for left/right neighbors and
+up/down rows of three, renders that same hardware list as three columns, and
+keeps explicit OPEN. Sample up/down uses the existing silent A01–D16 current
+Pad selector; left/right uses its existing four-page state. Context changes
+cancel unsubmitted rotary/numeric previews. Already sent updates retain their
+original owner/results, including an old Pad result after selection changes.
+Project/Sample SHIFT+up/down is unassigned and SHIFT+left/right keeps history.
+Existing Sequence/Perform, ENC4, MIDI, spatial keyboard and Ctrl/Cmd guard
+code remains outside the changed consumers; no global Arrow listener is added.
+
+The one-Task plan declares thirteen paths, including only the necessary
+history-layer locator adaptations in the original browser journeys. All old
+history counts, revision, failure, sound identity and reopen assertions remain.
+New mounted App cases and the actual browser three-column geometry journey
+are Source, not execution results. The browser case checks the fixed touch
+panel at the existing scaled viewports and rejects horizontal overflow;
+jsdom alone cannot prove layout. Source preparation is owned by child Codex
+thread `01a1301f-d080-7b01-a427-39aedff8554c` in its own isolated
+`feat/creator-project-sample-navigation` worktree.
+
+Component, TypeScript, Portal and packaged/browser verification are UNRUN while
+Root owns the shared execution queue. No install/build/test/stage/commit/push/
+PR/merge was performed in this Source phase. The complete Task, Perform/FILTER
+consumer, K2/#1822, physical/hearing, full-candidate and Goal remain open.
+
+Version impact: compatible Creator MINOR debt for the next approved identity
+settlement; no active manifest/Assembly/Contract/Build/Channel change here.
+Documentation impact: required — /platform/input/ and
+/hosts/creator-interactions/; current behavior and remaining Perform debt are
+updated together. Run the owning Task checks and whole Portal before commit.
+
+### 2026-10-13 — 独立 Perform Pad 轴源码准备
+
+Root 已批准从 fresh main `cbd7f898604f4e0953cb912279976bf12badaecc`
+建立独立 `feat/creator-perform-pad-navigation` worktree，交付
+[Perform 静默当前 Pad 轴](2026-10-13-creator-perform-pad-navigation.md)。
+普通 ↑／↓ 复用 Sequence 的同一 current Pad、A01–D16 边界、Bank／可见行
+同步和矩阵高亮；不触发 Pad、不写 Truth/history，不改变 FX/HOLD、录音、
+transport 或 ENC4。新增方向在 Perform SHIFT/System 中不可用；既有
+SHIFT＋←／→ history owner 保持。ENC4／MASTER 已交付，不重复实现。
+
+本 Task 严格声明 App、workspace_shell test、原 hardware browser、两条
+Portal input/interactions、本计划事实 append 和新实施计划共七路径。
+本段及源码准备不是实测完成：Vitest、TypeScript、Portal、真实 browser
+和所有 heavy checks 当前均 UNRUN；初始执行窗口由 D03 F1 拥有，K2a
+合并后仍先完成 Source 检查，再进入调度的执行阶段。
+
+§0 查询时 [#2108](https://github.com/endaye/lmdj/pull/2108) OPEN、head
+`fab52a5acfc4ce039d997e86f404882dad5ab345`；它真正合并后，本 Task 须
+正常集成 committed main 再运行 owning checks，不复制 draft 或修改其
+worktree。完整 Perform PRIMARY／FILTER／MORE 左右组轴仍依赖 W1/C1
+真实 producer/consumer，当前 C1 owner UNKNOWN 不等于无人负责。本项
+不结算 K2、[#1822](https://github.com/endaye/lmdj/issues/1822)、D04 或 Goal；
+保留其余原计划、N13 证据及其他作者段落。Creator MINOR/Build/snapshot
+债留 V1，A1/A2、真实设备／听感、完整候选、release/deploy 均保持独立。
+
+Documentation impact: required — `/platform/input/`、
+`/hosts/creator-interactions/`；两页同步本次实际 Pad 轴接线与剩余组轴边界。
+
+随后 live 查询确认 #2108 于 2026-10-12 23:02:39 UTC 真正 MERGED，squash
+`9534841424c04399bd0e94341ba96d38dd3dcbe4` 的 parent 为上述 cbd。本 Task
+分支已正常 fast-forward 到该 committed main，完整保留 Project／Sample
+导航、其测试和文档历史，再应用本次七路径改动。前段 OPEN 是初始 §0
+事实；当前实际基线为 953，owning checks 仍 UNRUN，待调度释放执行窗口。
+
+Root 随后完成全部七文件 Source 预检并分配执行窗口。首次完整 five-file
+Vitest 自然 1，403 PASS／2 FAIL，仅本次新增测试的 grid role 与未配置
+master-capture fixture 前置错误；原失败全文、Source 与自然退出保留。
+修正实际 Sequence grid 入口及既有 configured FX 前置，原 App 接线、预算、
+完整 journey 与严格断言不变。后续 TypeScript、Portal、build/browser 和
+shipping 未启动；须完整重跑 five-file owning gate，不能把四文件 PASS
+或 fixture 修正当作本项、K2、#1822、A1/A2、V1 或 Goal 完成。
+
+### 2026-10-13 Perform Pad 轴：light owning checkpoint
+
+独立七路径 Task 的最小 fixture/selector 修正后，原五文件 Vitest 完整自然
+0（405P／0F），full tsc 自然 0，whole Portal 自然 0（177 tests／52 pages／
+10 diagrams+20 outputs／50 routes）。原 403P／2F 负结果和所有历史保留；
+App 产品字节未因 fixture 修正改变。fresh main 仍是 K2a merged953；#1822
+仍 OPEN。完整 hardware Chromium 尚 UNRUN，须由干净 Task 候选的新鲜
+Creator/Runtime、CLI fixture、owned server 完成；不据 light PASS 结算完整
+K2、FILTER/group、设备/听感、A1/A2、V1 或 Goal。详细 receipts 与后续结果
+由 `2026-10-13-creator-perform-pad-navigation.md` 的 dated checkpoints 记录。
+
+### 2026-10-13 Perform Pad 轴：完整 owning Chromium checkpoint
+
+独立 clean Task 候选正常 Creator/Runtime build/package、真实 CLI 64 Pad
+fixture 与 double-pack reproducibility 均自然 0。nonce/PID owned server
+上原 whole hardware Chromium（workers 1）自然 0：10P／0F／0skip，70.16 s，
+保留原八个 case 和两个新增完整旅程；真实 64 Pad 往返/共享选择/边界以及
+持有 FX/HOLD/ENC4 的跨 Bank 选择通过，完整 Truth 和触发/authoring/额外
+FX/transport/record 请求严格零变更。Source7 command 前后不变，原预算
+及 light 首次负结果保留。此 checkpoint 的自动 Task owning acceptance
+已通过，最终 head 的独立 PR review/保护合并仍待普通 shipping 流程；
+完整 FILTER/group、K2/#1822、设备/听感、A1/A2、V1 和 Goal 不据此结算。
+详细自然 receipts、artifact/source identity 与实际 URL/fixture 记录在本项
+`2026-10-13-creator-perform-pad-navigation.md` 及 Root 外部 execution 目录。

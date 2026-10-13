@@ -1464,3 +1464,200 @@ All existing unshipped S6 version debts remain. Documentation impact: required
 on `/core/modules/application-facade/`, with source diagram and official
 HTML/SVG outputs updated in this Task. S6 runtime and physical acceptance
 remain incomplete until their actual current-candidate evidence exists.
+
+## S6 followup — integrate actual main live controls without losing retained input ownership
+
+**Premises refreshed before editing.** This isolated integration starts at
+`d3d75dce2f5d827cf77fb5c712d8dce8be3e8d8e` (tree
+`1fe85f0d91c4e7a3703ec70810171f2e68dca38c`) and combines actual main
+`25b8875478396df39ff0882c223c4c11bdf98806` (tree
+`2909de8f4f429e99190375f68a4622215799f40f`). Main adds Project/Sample
+navigation, typed Performance live producers, and silent Perform Pad navigation.
+Its 35 changed files overlap 16 S6 paths; the actual no-commit merge returned
+seven conflicted files. Keep both source histories, original worktrees and
+all raw failure evidence. A merge conflict is not a product-test failure.
+
+Before the final freeze, main advanced to
+`368045df5df8eac1af44e31a9a4e6f1f1133666e` through PR #2110. That Task
+updates the complete keyboard focus-order witness for the already integrated
+Next Project button; it changes no product code. Preserve its exact two blobs
+and the original far-side Pad assertion. The declared integration scope now
+includes those two paths and the existing skipped-rebuild pitfall recurrence.
+
+Independent source review found two concrete original-budget defects:
+Bridge defaulted `performance.live.control` and `performance.live.status` to
+30 seconds instead of their original one second; the retained Native test
+helper also defaulted `audio.activate` to 30 seconds instead of one. Restore
+both original policies, keeping all tighter caller cutoffs, other operation
+budgets, explicit test overrides, and all original test registrations.
+The 111-name operation registry is the exact union of both sources.
+
+The previous D3 full Mac Core run actually passed 228 Core tests and 224 ASan
+native tests. Its separate normal Release stress passed all 17 tests and the
+full 64-repeat count-in journey in 145.54 seconds under the original 300-second
+Facade limit. These receipts remain exact-source historical results. The
+activation helper defect limits what that previous PASS establishes; it is
+not proof of all original operation deadlines, the new integration, Dev-mode
+obligations, other lanes, physical retirement, or hearing.
+
+**Declared files.** The Task preserves all 35 actual incoming paths and owns
+only the necessary conflict/budget/observer/documentation changes, plus the
+previously drafted Web Host observer and this plan:
+
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/components/physical_controls.tsx`
+- `apps/creator-web/src/components/project_surface.tsx`
+- `apps/creator-web/src/components/sample_surface.tsx`
+- `apps/creator-web/src/styles.css`
+- `apps/creator-web/test/workspace_shell.test.tsx`
+- `apps/docs-site/diagrams/web-runtime-platform.architecture.json`
+- `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`
+- `apps/docs-site/docs/hosts/creator-interactions.mdx`
+- `apps/docs-site/docs/platform/input.mdx`
+- `apps/docs-site/docs/platform/web-runtime.mdx`
+- `apps/docs-site/static/diagrams/web-runtime-platform.html`
+- `apps/docs-site/static/diagrams/web-runtime-platform.svg`
+- `docs/plans/2026-10-09-creator-desktop-final-followup.md`
+- `docs/plans/2026-10-11-performance-live-control-producers.md`
+- `docs/plans/2026-10-12-web-live-performance-controls.md`
+- `docs/plans/2026-10-13-creator-perform-pad-navigation.md`
+- `docs/plans/2026-10-13-creator-project-sample-navigation.md`
+- `docs/plans/2026-10-13-creator-a11y-rail-focus-fix.md`
+- `packages/web-runtime-platform/src/bridge.cpp`
+- `packages/web-runtime-platform/src/control_runtime.cpp`
+- `packages/web-runtime-platform/test/control_runtime_test.cpp`
+- `packages/web-runtime-platform/test/performance_bridge_test.cpp`
+- `packages/web-runtime-platform/test/performance_master_capture.test.mjs`
+- `packages/web-runtime-platform/test/performance_master_tap_worklet.test.mjs`
+- `packages/web-runtime-platform/test/performance_protocol.test.mjs`
+- `packages/web-runtime-platform/test/protocol.test.mjs`
+- `packages/web-runtime-platform/test/runtime_session.test.mjs`
+- `packages/web-runtime-platform/web/performance_master_capture.mjs`
+- `packages/web-runtime-platform/web/performance_master_tap_worklet.js`
+- `packages/web-runtime-platform/web/protocol.mjs`
+- `packages/web-runtime-platform/web/runtime_session.mjs`
+- `packages/web-runtime-platform/web/runtime_types.d.ts`
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`
+- `tests/platform/web/creator/creator_web_sample_editor.spec.mjs`
+- `tests/platform/web/creator/creator_web_sequence_grid.spec.mjs`
+- `tests/platform/web/creator/creator_web_accessibility.spec.mjs`
+- `tests/platform/web/host/web_runtime_host_browser.spec.mjs`
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md`
+- `.agents/pitfalls/revert-proof-rebuild-skipped.md`
+
+**SDK source boundaries.** Retain the public four-argument trigger and real
+opaque physical gesture key, typed live FIFO, original call-time deadline,
+short admission tail, and separately awaited durable completion. Reserve
+queued press capacity before enqueue. Count queued, admitted, response-unknown
+and still physically held owners; an observer rejection alone cannot retire
+them. Matching Release has its own reserved path and cannot wait for durable
+completion or consume a new unrelated serial. Keep the same cleanup authority,
+real Runtime terminator and all Native/callback/backend shutdown fences before
+listener or tap detachment. Never replace actual termination with an ACK or
+successful operation result.
+
+The capability DTO and original fixtures still permit Native input capacity
+up to 1024. A known-profile SDK ingress may conservatively use
+`min(64, negotiated input_capacity)` without changing that Contract. The
+existing direct unprobed input API does not gain an activation/probe prerequisite;
+its local conservative limit cannot prove an unknown Native capacity. The
+cross-domain relationship between Performance UUIDs and Pattern opaque gesture
+keys is an explicit pending product decision. Do not invent identity conversion
+or claim that separately bounded queues establish a shared global limit.
+
+**Independent SDK review repairs.** The frozen two-file source review found
+three additional defects within these existing boundaries. A definitely
+unsubmitted legacy Press that returns `false` must release its local capacity
+reservation; a submitted or response-unknown Press must keep its real owner
+debt. The public boolean alone does not distinguish those cases. A real legacy
+Release must follow its original queued Press even while header/capture
+readiness is pending, without delaying the existing reserved profile Release
+behind durable completion. Performance's release exception belongs to one
+matching locally received gesture, and cleanup has one reserved token;
+foreign or duplicate Releases and repeated cleanup requests must not create
+an unbounded exception queue. Preserve original request/receipt identities
+and truthful refusal results. These repairs do not decide the pending
+cross-domain capacity or gesture-identity contract.
+
+**Observer and portal integration.** Observe both actual `send` and optional
+`sendRetained` in the two original Perform navigation journeys. Preserve real
+receiver, getter, arguments, return value, rejection and absent capabilities;
+only add `pattern.transport.input.request` to the existing forbidden mutation
+lists. Preserve all 64 Pad selections, Bank and shared selection checks,
+SHIFT/System, held FX/HOLD, ENC4 MASTER and unchanged Truth assertions. Keep
+the Web Host observer's real terminal getter and optional transport capabilities
+visible; its original audio conformance failure remains a failure. Combine
+product-output-0/cue-output-1 routing with main's strict start binding/started
+ACK and capture-ready facts. Generate HTML/SVG from the official renderer;
+never hand-resolve generated outputs or route cue audio through capture.
+
+**Lowest-tier verification / defects caught.** Run complete
+`host.web_control_runtime` and `host.web_performance_bridge` suites. The new
+default-helper clock witness checks actual activation at 900/1100 ms with no
+explicit caller cutoff; each real Bridge live operation spends 1050 ms in its
+original queue before pumping. Independently revert each of the three budget
+entries, rebuild, read the actual failed owning assertion, then restore with
+fresh mtime and rebuild. Existing coordinator seams are unit/component setup,
+not physical audio ACK evidence. A Pad-gate sequence does not prove no FX
+admission; the strict actual `HOST_TIMEOUT` response owns the budget assertion.
+
+Run the complete original SDK tests, preserving appended tests from both sides.
+Add bounded queued-press/readiness-hold and matching Release/unknown-owner
+regressions using actual Session methods. Run both full Perform navigation
+journeys and demonstrate the new negative oracle against a rebuilt real input
+producer mutation. Run the original complete Portal check. Final S6 still
+requires the original complete eight-group Creator proof, separate held-I/O
+count-in journeys, full Web Host audio/native/Chromium/WebKit selection, normal
+Dev component/stress obligations and every selected exact-head batch-only lane.
+No old-head PASS transfers to a new source, and no provider failure is review.
+Original input 1s, opening 5s, component 30s, stress 300s, 64 rounds, workers,
+Release/Stop/Truth/reopen legs and coverage floors remain unchanged. All new
+runtime and rebuilt mutation proofs are tracked by their original private
+receipts and input freezes; a passing earlier freeze cannot clear a later
+source finding.
+
+For the three SDK findings, use public Session methods to prove: 64 definitely
+unsubmitted legacy refusals issue no Native trigger requests and leave room
+for a genuine later Press and Release; a queued legacy Press and physical
+keyup retain Press-before-Release order across a real readiness/receipt hold
+and leave no orphan owner; and foreign/duplicate Performance Releases and
+repeated cleanup requests cannot exceed their declared reserved positions.
+Retain a separately submitted-unknown owner until actual release or closure,
+every original matching Release, normal stop/finalization and far-side fresh
+capacity reuse. Add only defect-specific cases to the two already-declared
+SDK files and rerun their complete owning suite after the fresh repair freeze.
+Component transport fixtures prove those modeled boundaries, not physical
+audio callback retirement, browser durability or hearing.
+
+The fresh SDK repair's original whole command first returned 313 PASS and
+4 FAIL. Independent review found two malformed new Stop response fixtures and
+two cleanup witnesses missing actual original-owner/backend closure producers.
+Correct only those fixtures, keep strict protocol and production cleanup
+authority unchanged, and assert pending independently before owner receipt
+and backend closure. The corrected complete component command returned
+317 PASS / 0 FAIL; original failed evidence remains retained.
+
+The original complete Creator entry requires a clean committed source tree.
+Its first launch on this uncommitted merge draft returned exit 2 at that
+precondition before building or running any group. Preserve that result;
+do not override the clean-tree check. Complete the declared lower-tier
+verification and atomic Task source commit, then run the original eight-group
+proof on that clean head. A source commit is a verification input freeze,
+not full S6 acceptance or permission to transfer an older lane's pass key.
+
+### Version Management
+
+Version impact: none for this integration repair. Preserve already allocated
+Build95 and all unshipped S6/W1/Creator version debts; allocate no new identity,
+Product Build or immutable snapshot here. Shipping must still settle applicable
+existing version obligations.
+
+### Documentation Impact
+
+Documentation impact: required
+Affected portal pages: `/core/modules/web-runtime-platform/`,
+`/platform/web-runtime/`; preserve the incoming current navigation/input pages.
+Reason: current combined registry, budgets, real input ownership and
+product/cue capture boundaries must match the integrated sources and diagrams.
+Task source review, runtime verification, merge, release and physical/hearing
+acceptance remain separate facts. No release or worktree cleanup is requested.

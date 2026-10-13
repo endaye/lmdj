@@ -263,6 +263,8 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
   if (operation.starts_with("pattern.transport.count-in.") ||
       operation.starts_with("pattern.transport.input.") ||
       operation == "host.status" || operation == "audio.activate" ||
+      operation == "performance.live.control" ||
+      operation == "performance.live.status" ||
       operation == "audio.suspend" || operation == "trigger" ||
       operation == "sample.preview.set" ||
       operation == "sample.preview.clear" || operation == "sample.stop") {
@@ -272,7 +274,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 109> operations{
+  static constexpr std::array<std::string_view, 111> operations{
       "host.status",
       "project.create",
       "project.duplicate",
@@ -341,6 +343,8 @@ bool supported_operation(std::string_view operation) {
       "performance.record.begin",
       "performance.record.event",
       "performance.fx.gesture",
+      "performance.live.control",
+      "performance.live.status",
       "performance.record.launch-request",
       "performance.record.flush",
       "performance.record.stop",

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="91e747f4da5e9113728bc6a9c226f7a36231d1650af8a2c7384457e7b365fe93">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="ebe20a24bfecfdf34cb6615c835c62ba5a522d1df780bf4e4ea398ecd5a02620">
   <title id="title">Web Runtime Platform Module</title><desc id="description">S6 源码草稿：同一 frozen Session、strict companion 与 product/cue 双输出；执行 UNVERIFIED</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -16,14 +16,15 @@
 <g class="connection"><path class="edge-mask" d="M 250 426 H 295 V 216 H 340"/><path class="edge" d="M 250 426 H 295 V 216 H 340" marker-end="url(#arrow)"/><text x="295" y="312">Diagnostic identity</text></g>
 <g class="connection"><path class="edge-mask" d="M 250 191 H 284 V 364 H 6 V 310 H 40"/><path class="edge" d="M 250 191 H 284 V 364 H 6 V 310 H 40" marker-end="url(#arrow)"/><text x="145" y="242">verified shell cache</text></g>
 <g class="connection"><path class="edge-mask" d="M 560 216 H 605 V 216 H 650"/><path class="edge" d="M 560 216 H 605 V 216 H 650" marker-end="url(#arrow)"/><text x="605" y="207">admit</text></g>
-<g class="connection"><path class="edge-mask" d="M 910 216 H 960 V 216 H 1010"/><path class="edge" d="M 910 216 H 960 V 216 H 1010" marker-end="url(#arrow)"/><text x="960" y="207">strict companion + ordinary</text></g>
+<g class="connection"><path class="edge-mask" d="M 940 216 H 975 V 216 H 1010"/><path class="edge" d="M 940 216 H 975 V 216 H 1010" marker-end="url(#arrow)"/><text x="975" y="207">strict companion + ordinary</text></g>
 <g class="connection"><path class="edge-mask" d="M 1260 216 H 1285 V 216 H 1310"/><path class="edge" d="M 1260 216 H 1285 V 216 H 1310" marker-end="url(#arrow)"/><text x="1285" y="207">transfer-only bytes</text></g>
-<g class="connection"><path class="edge-mask" d="M 910 216 H 944 V 480 H 306 V 426 H 340"/><path class="edge" d="M 910 216 H 944 V 480 H 306 V 426 H 340" marker-end="url(#arrow)"/><text x="625" y="312">full startup identity</text></g>
+<g class="connection"><path class="edge-mask" d="M 940 216 H 974 V 480 H 306 V 426 H 340"/><path class="edge" d="M 940 216 H 974 V 480 H 306 V 426 H 340" marker-end="url(#arrow)"/><text x="640" y="312">full startup identity</text></g>
 <g class="connection"><path class="edge-mask" d="M 560 426 H 605 V 538 H 650"/><path class="edge" d="M 560 426 H 605 V 538 H 650" marker-end="url(#arrow)"/><text x="605" y="473">output 0: product</text></g>
-<g class="connection"><path class="edge-mask" d="M 910 538 H 960 V 538 H 1010"/><path class="edge" d="M 910 538 H 960 V 538 H 1010" marker-end="url(#arrow)"/><text x="960" y="529">real PCM batches</text></g>
+<g class="connection"><path class="edge-mask" d="M 910 538 H 960 V 538 H 1010"/><path class="edge" d="M 910 538 H 960 V 538 H 1010" marker-end="url(#arrow)"/><text x="960" y="529">started · PCM · stopped</text></g>
 <g class="connection"><path class="edge-mask" d="M 560 426 H 785 V 426 H 1010"/><path class="edge" d="M 560 426 H 785 V 426 H 1010" marker-end="url(#arrow)"/><text x="785" y="417">output 1: cue only</text></g>
 <g class="connection"><path class="edge-mask" d="M 910 538 H 960 V 426 H 1010"/><path class="edge" d="M 910 538 H 960 V 426 H 1010" marker-end="url(#arrow)"/><text x="960" y="473">product monitor</text></g>
 <g class="connection"><path class="edge-mask" d="M 1260 426 H 1285 V 426 H 1310"/><path class="edge" d="M 1260 426 H 1285 V 426 H 1310" marker-end="url(#arrow)"/><text x="1285" y="417">same monitor gain</text></g>
+<g class="connection"><path class="edge-mask" d="M 940 216 H 975 V 538 H 1010"/><path class="edge" d="M 940 216 H 975 V 538 H 1010" marker-end="url(#arrow)"/><text x="975" y="368">capture status</text></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="141" width="218" height="100" rx="18"/>
@@ -44,10 +45,10 @@
       <text class="node-detail" x="356" y="228">exact Host allowlist</text>
     </g>
     <g class="component kind-core">
-      <rect class="node-mask" x="646" y="166" width="268" height="100" rx="18"/>
-      <rect class="node" x="650" y="170" width="260" height="92" rx="14"/>
+      <rect class="node-mask" x="646" y="166" width="298" height="100" rx="18"/>
+      <rect class="node" x="650" y="170" width="290" height="92" rx="14"/>
       <text class="node-title" x="666" y="202">Runtime Session</text>
-      <text class="node-detail" x="666" y="228">same frozen owner · tickets</text>
+      <text class="node-detail" x="666" y="228">frozen owner · tickets · live window</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="336" y="376" width="228" height="100" rx="18"/>
@@ -99,6 +100,6 @@
     </g>
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">身份与兼容</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">清单投影身份；envelope1/ordinary/单输出保留。完整 startup tuple，恢复不加路由；未分配 Build。</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">同一 Session owner</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">frozen runtime.session；live Pad 前协商。uint64/60 whole decimal；短 tickets 释放两条 tails。</div></foreignObject></g>
-<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">双输出消费</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">product→Master tap/capture/resample；cue→monitor。PCM 后 batch ACK；paused zero，无 Engine clock。</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">双输出与严格 tap ACK</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">验收仍待执行</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">1s Pad/5s opening/16 RPC。held I/O、真 release/Truth/reopen、raw PCM 未验收；S7/听感另行交付。</div></foreignObject></g>
 </svg>
