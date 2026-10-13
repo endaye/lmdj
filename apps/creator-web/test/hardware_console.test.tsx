@@ -35,7 +35,7 @@ test("names the four hardware regions for the console shell", () => {
   expect(screen.getByRole("region", {name: "Touch workspace"})).toBeTruthy();
 });
 
-test("names D01–D04 physical keys by accessible name and exported icons", () => {
+test("compact rail text preserves the full accessible key names", () => {
   render(<PhysicalControls
     activeMode="project"
     activeBank={0}
@@ -46,22 +46,16 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
     onRecord={() => {}}
     recordEnabled
   />);
-  for (const name of [
-    "Project", "Sample", "Sequence", "Perform",
-    "Bank A", "Bank B", "Bank C", "Bank D",
-  ]) {
+  for (const [name, label] of [
+    ["Project", "PRJ"], ["Sample", "SMP"], ["Sequence", "SEQ"], ["Perform", "PRF"],
+    ["Bank A", "A"], ["Bank B", "B"], ["Bank C", "C"], ["Bank D", "D"],
+    ["Record", "REC"], ["Play/Stop — needs a playable Project and running audio", "PLAY"],
+  ] as const) {
     const key = screen.getByRole("button", {name});
-    if (name.startsWith("Bank ")) {
-      expect(key.textContent).toBe(name.slice(-1));
-    } else {
-      expect(key.querySelector("svg")).toBeTruthy();
-      expect(key.textContent).toBe("");
-    }
+    expect(key.textContent).toBe(label);
+    expect(key.querySelector("svg")).toBeNull();
   }
-  expect(screen.getByRole("button", {name: "Record"}).querySelector("svg")).toBeTruthy();
-  expect(screen.getByRole("button", {
-    name: "Play/Stop — needs a playable Project and running audio",
-  }).querySelector("svg")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current")).toBe("page");
   // The −/+ placeholder row is gone; SHIFT holds its row as one full-width key.
   expect(screen.queryByRole("button", {name: /^Decrease/})).toBeNull();
   expect(screen.queryByRole("button", {name: /^Increase/})).toBeNull();
@@ -71,6 +65,36 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,
   })).toHaveLength(4);
+});
+
+test("native Tab order places SHIFT after Banks and before both direction rows", async () => {
+  const user = userEvent.setup();
+  const onToggleShift = vi.fn();
+  render(<>
+    <PhysicalControls activeMode="project" activeBank={0} sequenceEnabled performEnabled
+      onSelectMode={() => {}} onSelectBank={() => {}}
+      onRecord={() => {}} recordEnabled onPlayStop={() => {}} playEnabled
+      history={{shifted: false, onToggleShift, undoAvailable: true, redoAvailable: true,
+        onUndo: () => {}, onRedo: () => {}, undoTitle: "Undo", redoTitle: "Redo"}}
+      padStep={{backLabel: "Previous object — ↑", forwardLabel: "Next object — ↓",
+        backAvailable: true, forwardAvailable: true, onBack: () => {}, onForward: () => {}}}
+      directionStep={{backLabel: "Previous page — ←", forwardLabel: "Next page — →",
+        backAvailable: true, forwardAvailable: true, onBack: () => {}, onForward: () => {}}}
+    />
+    <button type="button">After rail</button>
+  </>);
+  const order = ["Project", "Sample", "Sequence", "Perform",
+    "Bank A", "Bank B", "Bank C", "Bank D", "SHIFT — engage the Undo/Redo layer",
+    "Previous object — ↑", "Next object — ↓", "Previous page — ←", "Next page — →",
+    "Record", "Play/Stop", "After rail"];
+  for (const name of order) {
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", {name}));
+    if (name.startsWith("SHIFT")) {
+      await user.keyboard("{Enter}");
+      expect(onToggleShift).toHaveBeenCalledTimes(1);
+    }
+  }
 });
 
 test("the disabled Perform key names only its real gate: a playable Project", () => {
@@ -137,7 +161,7 @@ test("the rail SHIFT chord gates Undo/Redo behind the modifier with lamp availab
   expect(onRedo).not.toHaveBeenCalled();
 });
 
-test("physical icons are inline SVG so the img-src 'self' CSP cannot blank them", () => {
+test("retained Logo and encoder graphics remain inline under the local-only CSP", () => {
   // The packaged Host ships under `img-src 'self'`; an `<img>` fed a Vite
   // `data:` URL renders as a broken image there, which is how the D01–D04
   // icons vanished on device without a journey noticing.
@@ -156,8 +180,8 @@ test("physical icons are inline SVG so the img-src 'self' CSP cannot blank them"
   expect(container.querySelectorAll("img")).toHaveLength(0);
   expect(container.querySelectorAll("[src]")).toHaveLength(0);
   const svgs = container.querySelectorAll("svg");
-  // Brand mark, four encoders, four mode keys, Record, Play/Stop.
-  expect(svgs).toHaveLength(11);
+  // Only the brand mark and four encoders are graphical. Key labels are text.
+  expect(svgs).toHaveLength(5);
   for (const svg of svgs) {
     expect(svg.getAttribute("aria-hidden")).toBe("true");
     expect(svg.querySelector("path")).toBeTruthy();

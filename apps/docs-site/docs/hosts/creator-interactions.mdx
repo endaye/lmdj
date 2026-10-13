@@ -32,8 +32,8 @@ source_paths:
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 export const ConsoleDiagram = () => {
-  const keys = [['PRJ', 'SMP'], ['SEQ', 'PRF'], ['A', 'B'], ['C', 'D'], ['↑', '↓'], ['←', '→'], ['SHIFT'], ['●', '▶']];
-  const names = ['Project · Sample', 'Sequence · Perform', 'Bank A · B', 'Bank C · D', '↑ · ↓', '← · →', 'SHIFT', 'Record · Play/Stop'];
+  const keys = [['PRJ', 'SMP'], ['SEQ', 'PRF'], ['A', 'B'], ['C', 'D'], ['SHIFT'], ['↑', '↓'], ['←', '→'], ['REC', 'PLAY']];
+  const names = ['Project · Sample', 'Sequence · Perform', 'Bank A · B', 'Bank C · D', 'SHIFT', '↑ · ↓', '← · →', 'Record · Play/Stop'];
   const line = {fill: 'none', stroke: 'currentColor', strokeWidth: 1.5};
   return (
     <figure style={{margin: '1rem 0', maxWidth: '760px'}}>
@@ -84,7 +84,7 @@ export const ConsoleDiagram = () => {
 
 <ConsoleDiagram />
 
-- **左栏**：Logo（即 System 入口）、2×2 的 ENC1–ENC4，以及八行按键：Project｜Sample、Sequence｜Perform、A｜B、C｜D、↑｜↓、←｜→、SHIFT（占一整行）、Record ●｜Play/Stop ▶。[布局参考](https://github.com/endaye/lmdj/blob/main/docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md)第 4 节的 −／+ 行目前不存在，方向键上移，SHIFT 占第 7 行。
+- **左栏**：Logo（即 System 入口）、2×2 的 ENC1–ENC4，以及八行按键：PRJ｜SMP、SEQ｜PRF、A｜B、C｜D、SHIFT（占一整行）、↑｜↓、←｜→、REC｜PLAY。模式与录放键保留 Project／Sample／Sequence／Perform／Record／Play/Stop 的完整可访问名称；[布局参考](https://github.com/endaye/lmdj/blob/main/docs/design/2026-09-11-lmdj-hardware-ui-layout-reference.md)第 4 节的 −／+ 行目前不存在；Interaction UI 将 SHIFT 移到 Bank 后的第 5 行，方向键为第 6、7 行。原生 Tab 遵循这个顺序，禁用键被跳过。
 - **上屏**：只读反馈区。它没有可点击的音乐按钮、旋钮、波形拖拽点或网格编辑点。编辑都来自左栏、Pad 和触摸区。
 - **16 个 Pad**：当前 Bank 的 16 个声音槽，地址见 [1.8](#pads)。
 - **触摸区**：内容随当前页面变化，各页分别说明。
@@ -132,7 +132,7 @@ export const ConsoleDiagram = () => {
 
 | 入口 | 录什么 | 怎样保存 |
 | --- | --- | --- |
-| 左栏 Record ● | Pad 事件，录进当前 Pattern | 再按 Record 或按 Play/Stop 时保存。 |
+| 左栏 REC（Record） | Pad 事件，录进当前 Pattern | 再按 Record 或按 Play/Stop 时保存。 |
 | 按住空 Pad（任意页） | 一段音频，录进这个 Pad；来源在 System 选麦克风或内部播放 | 正常松手后自动尝试保存，见 [1.9](#pad-capture)。 |
 | Sample 的 Record Sample | 麦克风音频，录进所选 Pad | Stop 后必须按 Commit，见 [4.7](#capture)。 |
 | Perform 的 Record Performance | 演出操作和主输出 WAV | Stop 后在 Takes 按 Save，见[第 6 章](#perform)。 |

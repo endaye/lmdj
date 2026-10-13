@@ -189,21 +189,21 @@ for (const viewport of [
     // shape that made #977 read as a Creator defect.
     await expect(page.getByRole("button", {name: "Sound Sets"})).toBeEnabled();
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
-    // The physical column is the rail now. Its keys are icons, so the walk
-    // reads each stop's accessible name. Audio is not running in this case,
+    // The physical column's compact text retains full accessible names; this
+    // walk reads those names. Audio is not running in this case,
     // The first transport/Pad gesture wakes audio. Unassigned encoders
     // and directions are skipped; history directions stay inert until SHIFT
-    // is held. SHIFT remains reachable, followed by Record, Play/Stop and
-    // the first Pad, proving the complete physical rail.
+    // is held. SHIFT comes after Banks and before the available directions,
+    // then Record, Play/Stop and the first Pad complete the physical rail.
     await page.getByTestId("physical-controls")
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
+      "SHIFT — engage the Undo/Redo layer",
       // #2108 wired the Project rail directions into the physical column; on
       // the first Project "Previous Project — ←" is disabled and skipped,
-      // while "Next Project — →" is an enabled tab stop before SHIFT.
+      // while "Next Project — →" is an enabled tab stop after SHIFT.
       "Next Project — →",
-      "SHIFT — engage the Undo/Redo layer",
       "Record", "Play/Stop", "Pad A13 — assigned — Key 1",
     ];
     const focusOrder = [];
