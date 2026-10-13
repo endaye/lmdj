@@ -478,6 +478,60 @@ void pattern_event_equality_includes_the_voice_dsp_block() {
   LMDJ_CHECK(!(first == second));
 }
 
+void alternate_tempo_retains_source_events_and_shared_material() {
+  auto snapshot = valid_snapshot();
+  snapshot.events = {{{0, 0}, 960, 960, 127, snapshot.pads[0].sample}};
+  const auto owner = snapshot.pads[0].sample;
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(source.has_value());
+  auto faster = source.value().with_tempo(240);
+  LMDJ_CHECK(faster.has_value());
+  LMDJ_CHECK(faster.value().project_id() == source.value().project_id());
+  LMDJ_CHECK(faster.value().pattern_id() == source.value().pattern_id());
+  LMDJ_CHECK(faster.value().project_revision() == source.value().project_revision());
+  LMDJ_CHECK(faster.value().bpm() == 240 && faster.value().ppq() == 960);
+  LMDJ_CHECK(faster.value().loop_length_ticks() == 3840);
+  LMDJ_CHECK(faster.value().loop_frames() == 48'000);
+  LMDJ_CHECK(faster.value().bar_frames() == 48'000);
+  LMDJ_CHECK(faster.value().events()[0].start_frame == 12'000);
+  LMDJ_CHECK(faster.value().events()[0].release_frame == 24'000);
+  auto same_event = faster.value().events()[0];
+  same_event.start_frame = source.value().events()[0].start_frame;
+  same_event.release_frame = source.value().events()[0].release_frame;
+  LMDJ_CHECK(same_event == source.value().events()[0]);
+  LMDJ_CHECK(faster.value().events()[0].material.interleaved == owner->interleaved.data());
+  LMDJ_CHECK(source.value().bpm() == 120 && snapshot.bpm == 120);
+  LMDJ_CHECK(source.value().events()[0].start_frame == 24'000);
+  LMDJ_CHECK(source.value().events()[0].release_frame == 48'000);
+  for (const auto bpm : {std::uint16_t{0}, std::uint16_t{39}, std::uint16_t{241}})
+    LMDJ_CHECK(!source.value().with_tempo(bpm).has_value());
+  LMDJ_CHECK(source.value().events()[0].start_frame == 24'000);
+
+  const std::array overlay{PatternEvent{{0, 0}, 960, 240, 63}};
+  auto merged = PreparedPatternView::from_snapshot_with_overlay(snapshot, overlay);
+  auto derived = merged.value().with_tempo(60);
+  LMDJ_CHECK(derived.has_value() && derived.value().has_overlay());
+  LMDJ_CHECK(derived.value().events()[0].velocity == 63);
+  LMDJ_CHECK(derived.value().events()[0].duration_tick == 240);
+  LMDJ_CHECK(derived.value().events()[0].start_frame == 48'000);
+  LMDJ_CHECK(derived.value().events()[0].release_frame == 60'000);
+}
+
+void fractional_anchor_has_absolute_independent_boundary_oracles() {
+  using lmdj::audio::anchored_tick_boundary_frame;
+  // Absolute expectations discriminate a shared floor/rounding error; neither
+  // the helper under test nor engine/consumer agreement derives these values.
+  LMDJ_CHECK(anchored_tick_boundary_frame({12'001, 1'382'515'200, 240}, 960) == 18'001);
+  LMDJ_CHECK(anchored_tick_boundary_frame({12'001, 2'765'030'400, 120}, 1920) == 35'999);
+  LMDJ_CHECK(anchored_tick_boundary_frame({17, 2'007'360, 97}, 1) == 27);
+  LMDJ_CHECK(anchored_tick_boundary_frame({17, 2'007'360, 97}, 0) == 17);
+  LMDJ_CHECK(!anchored_tick_boundary_frame({0, 0, 0}, 1));
+  LMDJ_CHECK(!anchored_tick_boundary_frame(
+      {0, 0, 120}, std::numeric_limits<std::uint64_t>::max()));
+  LMDJ_CHECK(!anchored_tick_boundary_frame(
+      {std::numeric_limits<std::uint64_t>::max(), 0, 120}, 1));
+}
+
 void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   auto prior = PreparedSampleBank::empty(ProjectId{kProjectId}, 6);
   const std::array<float, 2> prior_pcm{0.25F, 0.25F};
@@ -648,4 +702,6 @@ int main() {
   admits_decided_boundaries_and_rejects_one_mono_frame_over();
   prepares_immutable_pattern_overlay_and_integer_timing();
   pattern_event_equality_includes_the_voice_dsp_block();
+  alternate_tempo_retains_source_events_and_shared_material();
+  fractional_anchor_has_absolute_independent_boundary_oracles();
 }

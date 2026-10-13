@@ -48,7 +48,14 @@ export function SampleOverview({state}: SampleOverviewProps) {
       <p className="sample-overview-pad">
         {content}{status === null ? "" : ` · ${status}`}
       </p>
-      <dl className="sample-overview-facts">
+      {metadata === null ? <div className="sample-overview-empty">
+        <strong>{content === "EMPTY" ? "EMPTY PAD" : status ?? content}</strong>
+        <span>{content === "EMPTY" ? "No audio assigned"
+          : state.project.current === null ? "No Project open"
+            : slot === null ? "Select a Pad"
+              : status === "LOADING" ? "Loading Sample details…" : "Sample details unavailable"}</span>
+      </div> : null}
+      <dl className={`sample-overview-facts${metadata === null ? " visually-hidden" : ""}`}>
         <div>
           <dt>Format</dt>
           <dd>

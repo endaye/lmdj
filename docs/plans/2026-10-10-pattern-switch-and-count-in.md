@@ -2141,3 +2141,86 @@ Documentation impact: required. Preserve incoming current pages on
 This addendum records integration boundaries; complete Portal verification
 is required before commit. Incoming immutable snapshots and witnesses remain
 unchanged.
+
+## S6 followup — integrate delivered main3f audio and SDK source
+
+This integration starts from verified owner commit
+`0dd07a662cd9d454f6ba43ab845dfc7324ca1cc5`, tree
+`3b6fffd48abd4d4becf9e28cfc0cc67f493443fb`, and adopts actual public main
+`3f05b962902c9bf2d9c8c5f558ab3b4d033f5492`. Merge base is
+`35455f7576fc96ad253f2d5a523ba457e1df9321`. The pre-edit private inventory
+names 149 output paths: 148 incoming/combined paths plus this plan. Seven
+prospective conflict paths are recorded before any tracked edit.
+
+Already delivered upstream: Build96 and its immutable snapshot/witness,
+Creator Pad/Capture/Trim/overview/Slice/Sequence layout, B1 headered FX type
+closure (#2147), render CPU/FX accounting (#2152), native fractional tempo
+position retention (#2155), and immediate live Pad input cutoff (#2156).
+Import their actual committed identities, source and tests; do not repeat
+these implementations or claim their remaining full/physical acceptance.
+
+Explicit resolution files are Audio Runtime `src/realtime_engine.cpp`,
+`tests/core/audio/realtime_engine_test.cpp`, Platform
+`test/runtime_session.test.mjs`, current Audio Runtime Portal MDX and its
+`.architecture.json` source. Generate the declared Audio Runtime HTML/SVG
+with the existing official renderer; never hand-edit generated diagrams.
+Preserve both complete Native registration lists and the exact B1 178-line
+SDK addition alongside every S6 input, shared64 and shutdown test. Keep
+all automatic incoming paths; immutable versioned snapshots and witnesses
+must match the incoming committed blobs exactly.
+
+The Native publication guard must retain both S6 scheduled ownership and
+upstream tempo/preserve-phase refusal rules. At the actual scheduled start S,
+initialize the upstream musical clock consistently with a fresh ordinary
+start. Independent source inspection confirms a reachable tempo -> Stop ->
+scheduled restart leaves the prior continuous clock at S without five
+resets. The correction resets event-loop cursor, tick-zero tempo anchor,
+position availability, applied frame and continuous-timing mode only after
+the actual S start CAS succeeds. A focused existing-engine regression uses
+literal C13001/S61001, genuine four cue spans, S+1 PCM, the new public anchor,
+next-beat73001 and next-loop109001; no authored clock/state seam. The
+composition correction and regression stay in the declared engine/test pair. Keep the actual start CAS,
+cue ownership, material lifetime, input-completion and shutdown authorities.
+Dynamic proof of this composition is UNRUN until the owning rebuilt test
+runs; a conflict-free parse alone does not establish behavior.
+
+H1 remains the sole upstream `task_9b85e3173d86` after B2a/B3 and positive
+writer releases. Do not implement a parallel repair or infer that this
+integration explains the original three Creator failures. No new Orca Run,
+Task, Dispatch, inbox, takeover or rebind is part of this integration.
+
+Lowest-tier checks before commit: the complete 13-file SDK Node26 suite;
+Creator TypeScript and original full unit selection; fresh Dev configure
+and owning RealtimeEngine/prepared-bank plus all four previous Facade
+performance/count-in targets and full-name CTest entries; identity/version
+and 77-case new-file ownership checks; and the original complete Portal
+check. Reserve Native, full Creator units and Portal work through the shared
+heavy coordinator before invocation. A nonzero result remains a failure,
+with unreached commands UNRUN; do not automatically retry, install, loosen
+budgets or shorten journeys.
+
+All S6 final-candidate obligations remain: selected exact-head lanes and
+batch-only evidence, original Native 30-second component and
+300-second/64-round stress checks, rebuilt budget/navigation negative proofs,
+separate held-I/O proof, complete original eight-group Creator, complete
+current-head independent review, version-debt disposition and protected
+shipping. Original Creator127PASS/3FAIL/11SKIP and all historical Native,
+metadata and provider failures remain unchanged. No full acceptance follows
+from this integration subset.
+
+### Version Management
+
+Version impact: none for the integration itself. Import existing allocated
+main identities exactly, including Build96 and its immutable snapshot.
+Preserve unshipped S6/C1 debts and upstream #2155 Audio Runtime MAJOR ABI debt
+for the separately owned identity settlement. Allocate no identity, Product
+Build, snapshot, tag, Release or Channel.
+
+### Documentation Impact
+
+Documentation impact: required. Combine current `/core/modules/audio-runtime/`
+and its source diagram; preserve incoming facts on
+`/core/modules/web-runtime-platform/`, `/hosts/creator-web/`,
+`/hosts/creator-interactions/` and other automatic imports. Document actual
+combined scheduling/tempo/input behavior after source disposition. The whole
+Portal check is required before commit; versioned snapshots remain immutable.

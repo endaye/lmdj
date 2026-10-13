@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <iostream>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/detail/voice_dsp.hpp>
@@ -300,6 +301,474 @@ struct PatternTransportFixture {
     return *receipt;
   }
 };
+
+RuntimeSnapshot tempo_quarter_snapshot(std::uint16_t bpm = 120) {
+  auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, bpm, 12'000);
+  snapshot.pads[0].playback.trigger_mode = TriggerMode::one_shot;
+  snapshot.events.clear();
+  for (std::uint32_t tick = 0; tick < 3840; tick += 960)
+    snapshot.events.push_back({{0, 0}, tick, 1, 127, snapshot.pads[0].sample});
+  return snapshot;
+}
+
+void render_until(RealtimeEngine& engine, std::uint64_t frame) {
+  const auto current = engine.telemetry().rendered_frames;
+  LMDJ_CHECK(current <= frame);
+  render_frames(engine, frame - current);
+}
+
+void check_tempo_onset(RealtimeEngine& engine, std::uint64_t frame,
+                       std::uint64_t prior_starts) {
+  render_until(engine, frame);
+  LMDJ_CHECK(engine.telemetry().started_voices == prior_starts);
+  float left{}, right{};
+  engine.render(&left, &right, 1);
+  LMDJ_CHECK(engine.telemetry().started_voices == prior_starts + 1);
+  LMDJ_CHECK(left == 0 && right == 0); // Actual onset's first attack frame.
+  engine.render(&left, &right, 1);
+  LMDJ_CHECK(left > 0 && right == left);
+  LMDJ_CHECK(engine.telemetry().started_voices == prior_starts + 1);
+}
+
+void continuous_tempo_selected_switch_uses_musical_position() {
+  using namespace lmdj::audio;
+  for (const auto& [snap, expected] : std::array{
+      std::pair{PatternSwitchSnap::beat, std::uint64_t{18'001}},
+      std::pair{PatternSwitchSnap::bar, std::uint64_t{54'001}},
+      std::pair{PatternSwitchSnap::pattern_end, std::uint64_t{102'001}}}) {
+    auto snapshot = tempo_quarter_snapshot();
+    snapshot.bars = 2;
+    snapshot.loop_length_ticks = 7680;
+    auto source = PreparedPatternView::from_snapshot(snapshot);
+    PatternTransportFixture f(snapshot);
+    f.apply(1, PatternTransportAction::start);
+    render_until(f.engine, 12'001);
+    const auto tempo = f.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(240).value()), f.generation);
+    LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+    render_until(f.engine, 13'001);
+    auto target = pattern_snapshot(kPatternB, {0, 0}, 127, 120, -12'000);
+    target.pads[0].playback.trigger_mode = TriggerMode::one_shot;
+    auto next = PreparedPatternView::from_snapshot(target);
+    const auto publication = f.engine.publish_pattern_switch_view(std::move(next.value()), snap);
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    // Independent absolute arithmetic, not agreement with the scheduling helper:
+    // 120 BPM through 12001, then 240 BPM reaches ticks 960/3840/7680 here.
+    std::cerr << "continuous selected snap=" << static_cast<int>(snap)
+              << " expected=" << expected << " actual=" << publication.activation_frame << '\n';
+    LMDJ_CHECK(publication.activation_frame == expected);
+    render_until(f.engine, expected);
+    LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == tempo.generation);
+    float left{}, right{};
+    f.engine.render(&left, &right, 1);
+    LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == publication.generation);
+    LMDJ_CHECK(f.engine.current_pattern_origin_frame() == expected);
+    LMDJ_CHECK(f.engine.pattern_tempo_observation(publication.generation)->anchor ==
+        (TransportAnchor{expected, 0, 120}));
+    f.engine.render(&left, &right, 1);
+    LMDJ_CHECK(left < 0 && left == right);
+  }
+}
+
+void tempo_transition_and_cancel_keep_fractional_position_and_next_loop() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture baseline(snapshot), preview(snapshot);
+  baseline.apply(1, PatternTransportAction::start);
+  preview.apply(1, PatternTransportAction::start);
+  check_tempo_onset(baseline.engine, 24'000, 1); // Positive 120 BPM PCM control.
+  render_until(preview.engine, 12'001);
+  const auto fast = preview.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), preview.generation);
+  LMDJ_CHECK(fast.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(!preview.engine.pattern_tempo_observation(fast.generation));
+  // Independent closed-form frames, not a helper/consumer parity check. A
+  // mutation resetting N at apply must fail this real onset assertion even
+  // if both engine observation and a future click consumer agree on zero.
+  check_tempo_onset(preview.engine, 18'001, 1);
+  const auto applied = preview.engine.pattern_tempo_observation(fast.generation);
+  LMDJ_CHECK(applied && applied->start_epoch == 1 && applied->playing);
+  LMDJ_CHECK(applied->applied_frame == 12'001);
+  LMDJ_CHECK(applied->anchor == (TransportAnchor{12'001, 1'382'515'200, 240}));
+  LMDJ_CHECK(!preview.engine.pattern_tempo_observation(preview.generation));
+  LMDJ_CHECK(preview.engine.current_pattern_origin_frame() == 0);
+  render_until(preview.engine, 20'000);
+  const auto cancel = preview.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(120).value()), fast.generation);
+  LMDJ_CHECK(cancel.result == PatternPublishResult::accepted);
+  check_tempo_onset(preview.engine, 40'001, 2);
+  const auto restored = preview.engine.pattern_tempo_observation(cancel.generation);
+  LMDJ_CHECK(restored && restored->anchor == (TransportAnchor{20'000, 3'225'484'800, 120}));
+  check_tempo_onset(preview.engine, 64'001, 3);
+  check_tempo_onset(preview.engine, 88'001, 4); // Next loop, not a fresh origin.
+  LMDJ_CHECK(snapshot.bpm == 120 && source.value().bpm() == 120);
+}
+
+void tempo_deceleration_needs_no_unsigned_logical_origin() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot(240);
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  check_tempo_onset(f.engine, 12'000, 1);
+  // check_tempo_onset rendered through 12001; transition at 12002. Keep the
+  // independent negative-origin case at 12001 by using a separate fixture.
+  PatternTransportFixture slowed(snapshot);
+  slowed.apply(1, PatternTransportAction::start);
+  render_until(slowed.engine, 12'001);
+  const auto next = slowed.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(120).value()), slowed.generation);
+  LMDJ_CHECK(next.result == PatternPublishResult::accepted);
+  check_tempo_onset(slowed.engine, 35'999, 2);
+  const auto timing = slowed.engine.pattern_tempo_observation(next.generation);
+  LMDJ_CHECK(timing && timing->anchor == (TransportAnchor{12'001, 2'765'030'400, 120}));
+  LMDJ_CHECK(slowed.engine.current_pattern_origin_frame() == 0);
+}
+
+void tempo_transition_schedules_an_effective_boundary_exactly_once() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, 24'000);
+  const auto next = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(next.result == PatternPublishResult::accepted);
+  check_tempo_onset(f.engine, 24'000, 1);
+  LMDJ_CHECK(f.engine.pattern_tempo_observation(next.generation)->applied_frame == 24'000);
+  render_frames(f.engine, 500);
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 2);
+  check_tempo_onset(f.engine, 36'000, 2);
+}
+
+void tempo_transition_keeps_held_pcm_cursor_and_retimes_musical_release() {
+  using namespace lmdj::audio;
+  auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, 120, 12'000);
+  std::vector<std::int16_t> waveform(509);
+  for (std::size_t i = 0; i < waveform.size(); ++i)
+    waveform[i] = static_cast<std::int16_t>(1000 + i * 31);
+  snapshot.pads[0].sample = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::move(waveform)});
+  snapshot.pads[0].playback.end_frame = 509;
+  snapshot.events[0].sample = snapshot.pads[0].sample;
+  snapshot.events[0].duration_tick = 1920;
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture reference(snapshot), changed(snapshot);
+  reference.apply(1, PatternTransportAction::start);
+  changed.apply(1, PatternTransportAction::start);
+  render_until(reference.engine, 12'001);
+  render_until(changed.engine, 12'001);
+  const auto next = changed.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), changed.generation);
+  LMDJ_CHECK(next.result == PatternPublishResult::accepted);
+  for (unsigned i = 0; i < 1024; ++i) {
+    float left{}, right{}, expected_left{}, expected_right{};
+    g_allocations.store(0); g_deallocations.store(0);
+    g_track_allocations.store(true);
+    changed.engine.render(&left, &right, 1);
+    reference.engine.render(&expected_left, &expected_right, 1);
+    g_track_allocations.store(false);
+    LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+    LMDJ_CHECK(left == expected_left && right == expected_right && left > 0);
+    LMDJ_CHECK(changed.engine.reclaim_retired_patterns() == 0);
+  }
+  render_until(changed.engine, 30'001);
+  LMDJ_CHECK(changed.engine.telemetry().active_voices == 1);
+  render_frames(changed.engine, kRampFrames);
+  LMDJ_CHECK(changed.engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(changed.engine.reclaim_retired_patterns() == 1);
+  render_until(reference.engine, 30'001 + kRampFrames);
+  LMDJ_CHECK(reference.engine.telemetry().active_voices == 1);
+}
+
+void tempo_transition_rejects_stale_or_changed_source_before_application() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  for (unsigned change = 0; change < 10; ++change) {
+    auto altered = snapshot;
+    if (change == 0) ++altered.project_revision;
+    if (change == 1) altered.pattern_id = PatternId{kPatternB};
+    if (change == 2) altered.events[1].velocity = 63;
+    if (change == 3) altered.events[1].onset_tick += 1;
+    if (change == 4) altered.pads[0].playback.linear_gain = 0.5F;
+    if (change == 7) {
+      altered.pads[0].sample = std::make_shared<const lmdj::cooker::PcmSample>(
+          *snapshot.pads[0].sample);
+      for (auto& event : altered.events) event.sample = altered.pads[0].sample;
+    }
+    if (change == 8) altered.project_id = ProjectId{kPatternB};
+    if (change == 9) {
+      altered.bars = 2;
+      altered.loop_length_ticks = lmdj::domain::kBarTicks4x4 * 2;
+    }
+    auto source = PreparedPatternView::from_snapshot(altered);
+    const auto expected = change == 5 ? 0 : change == 6 ? f.generation + 1 : f.generation;
+    LMDJ_CHECK(f.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(240).value()), expected).result ==
+        PatternPublishResult::phase_mismatch);
+    LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == f.generation);
+    LMDJ_CHECK(f.engine.pattern_tempo_observation(f.generation)->anchor.bpm == 120);
+  }
+}
+
+void tempo_transition_refuses_queued_claimed_and_reserved_cutoff() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  auto other = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 0}, 127));
+  const auto pending = f.engine.publish_pattern_switch_view(std::move(other.value()));
+  LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+  for (bool claimed : {false, true}) {
+    if (claimed) render_frames(f.engine, 1);
+    LMDJ_CHECK(f.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(240).value()), f.generation).result ==
+        PatternPublishResult::publication_pending);
+    LMDJ_CHECK(f.engine.pattern_tempo_observation(f.generation)->anchor.bpm == 120);
+  }
+  LMDJ_CHECK(f.engine.submit_pattern_transport({7, 2, f.generation,
+      PatternTransportAction::fence,
+      PatternReplacementAuthority{pending.generation, PatternId{kPatternB}, pending.activation_frame}})
+      == PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(receipt && receipt->switch_decision == PatternCutoffDecision::canceled_at_cutoff);
+  LMDJ_CHECK(f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation).result ==
+      PatternPublishResult::publication_pending);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+}
+
+void tempo_cutoff_retains_exact_applied_anchor_after_late_inspection() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, 12'001);
+  const auto next = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {7, 2, next.generation, PatternTransportAction::fence, {}}) == PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  const auto receipt = f.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(receipt && receipt->effective_frame == 12'002 && receipt->origin_frame == 0);
+  LMDJ_CHECK(receipt->tempo_anchor == (TransportAnchor{12'002, 1'382'745'600, 240}));
+  render_frames(f.engine, 500);
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(7, 2)->tempo_anchor == receipt->tempo_anchor);
+  LMDJ_CHECK(f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(120).value()), next.generation).result ==
+      PatternPublishResult::publication_pending);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+}
+
+void tempo_cutoff_cancels_an_unapplied_transition_before_its_effective_frame() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, 12'001);
+  const auto next = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(next.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({7, 2, f.generation,
+      PatternTransportAction::stop,
+      PatternReplacementAuthority{next.generation, PatternId{kPatternA}, next.activation_frame}})
+      == PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  const auto stopped = f.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(stopped && !stopped->playing && stopped->pattern_generation == f.generation);
+  LMDJ_CHECK(stopped->switch_decision == PatternCutoffDecision::canceled_at_cutoff);
+  LMDJ_CHECK(stopped->tempo_anchor == (TransportAnchor{12'001, 1'382'515'200, 120}));
+  LMDJ_CHECK(!f.engine.pattern_tempo_observation(next.generation));
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+  render_frames(f.engine, 50'000);
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), next.generation).result ==
+      PatternPublishResult::phase_mismatch);
+}
+
+void tempo_transition_stopped_transport_stays_silent_until_new_start() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture stopped(snapshot);
+  const auto next = stopped.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), stopped.generation);
+  LMDJ_CHECK(next.result == PatternPublishResult::accepted);
+  render_frames(stopped.engine, 1024);
+  const auto silent = stopped.engine.pattern_tempo_observation(next.generation);
+  LMDJ_CHECK(silent && !silent->playing && silent->anchor.bpm == 240);
+  LMDJ_CHECK(stopped.engine.telemetry().started_voices == 0);
+  stopped.generation = next.generation;
+  const auto start = stopped.apply(1, PatternTransportAction::start);
+  LMDJ_CHECK(start.tempo_anchor == (TransportAnchor{1024, 0, 240}));
+  check_tempo_onset(stopped.engine, 13'024, 1);
+}
+
+void tempo_transition_full_pool_refuses_without_changing_current_tempo() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture full(snapshot);
+  full.apply(1, PatternTransportAction::start);
+  for (std::size_t i = 1; i < kRealtimePatternCapacity; ++i) {
+    const auto publication = full.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(i % 2 ? 240 : 120).value()), full.generation);
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    render_frames(full.engine, 1);
+    full.generation = publication.generation;
+  }
+  LMDJ_CHECK(full.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(60).value()), full.generation).result ==
+      PatternPublishResult::pattern_slots_full);
+  LMDJ_CHECK(full.engine.pattern_tempo_observation(full.generation)->anchor.bpm == 240);
+  render_frames(full.engine, 256); // The retained initial one-shot really drains.
+  LMDJ_CHECK(full.engine.reclaim_retired_patterns() == kRealtimePatternCapacity - 1);
+}
+
+void tempo_phase_commit_adopts_revision_without_restoring_an_integer_origin() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, 12'001);
+  const auto preview = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(preview.result == PatternPublishResult::accepted);
+  render_until(f.engine, 13'001);
+  auto committed = snapshot;
+  committed.project_revision = 2;
+  committed.bpm = 240;
+  auto adopted = PreparedPatternView::from_snapshot(committed);
+  const auto publication = f.engine.publish_pattern_view_preserving_phase(
+      std::move(adopted.value()), preview.generation);
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  check_tempo_onset(f.engine, 18'001, 1);
+  const auto timing = f.engine.pattern_tempo_observation(publication.generation);
+  LMDJ_CHECK(timing && timing->applied_frame == 13'001);
+  LMDJ_CHECK(timing->anchor == (TransportAnchor{12'001, 1'382'515'200, 240}));
+  check_tempo_onset(f.engine, 30'001, 2);
+  check_tempo_onset(f.engine, 42'001, 3);
+  check_tempo_onset(f.engine, 54'001, 4);
+}
+
+void tempo_release_overflow_rejects_the_due_voice_without_infinite_hold() {
+  using namespace lmdj::audio;
+  auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, 120, 12'000);
+  snapshot.events[0].onset_tick = 960;
+  snapshot.events[0].duration_tick = 960;
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  const auto maximum = std::numeric_limits<std::uint64_t>::max();
+  // Existing seam: writer handoff is quiescent; no new production hook. The
+  // onset fits in uint64 but its musical release does not.
+  f.engine.set_rendered_frames_quiescent_for_testing(maximum - 24'000);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, maximum - 12'000);
+  const auto publication = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  render_until(f.engine, maximum - 6'000);
+  float left{}, right{};
+  g_allocations.store(0); g_deallocations.store(0);
+  g_track_allocations.store(true);
+  f.engine.render(&left, &right, 1);
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  LMDJ_CHECK(left == 0 && right == 0);
+  LMDJ_CHECK(f.engine.telemetry().started_voices == 0);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(f.engine.telemetry().invalid_events == 1);
+}
+
+void tempo_position_overflow_spends_claimed_owner_without_applied_evidence() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  snapshot.events.clear();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  const auto overflowing_frame = std::numeric_limits<std::uint64_t>::max() / (120U * 960U) + 1;
+  f.engine.set_rendered_frames_quiescent_for_testing(overflowing_frame);
+  const auto refused_at_apply = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(refused_at_apply.result == PatternPublishResult::accepted);
+  float left{}, right{};
+  g_allocations.store(0); g_deallocations.store(0);
+  g_track_allocations.store(true);
+  f.engine.render(&left, &right, 1);
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  const auto accounting = f.engine.pattern_telemetry();
+  LMDJ_CHECK(accounting.current_generation == f.generation);
+  LMDJ_CHECK(accounting.pending_publications == 0 && accounting.canceled_publications == 1);
+  LMDJ_CHECK(accounting.accepted_publications == 2 && accounting.applied_publications == 1);
+  LMDJ_CHECK(!f.engine.pattern_tempo_observation(refused_at_apply.generation));
+  const auto owner = f.engine.pattern_transport_observation();
+  LMDJ_CHECK(owner && !owner->pending_switches[0] && !owner->pending_switches[1]);
+  LMDJ_CHECK(!owner->outstanding_cancellation);
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {7, 2, f.generation, PatternTransportAction::fence, {}}) ==
+      PatternTransportSubmit::accepted);
+  render_frames(f.engine, 1);
+  const auto cutoff = f.engine.inspect_pattern_transport_receipt(7, 2);
+  LMDJ_CHECK(cutoff && cutoff->playing && cutoff->pattern_generation == f.generation);
+  LMDJ_CHECK(!cutoff->tempo_anchor);
+  render_frames(f.engine, 10);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(7, 2)->tempo_anchor);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(7, 2));
+  // Separate synthetic writer handoff checks that failed apply did not leave
+  // A/Q admission stuck. It does not assert production clock rollback support.
+  f.engine.set_rendered_frames_quiescent_for_testing(1000);
+  const auto fresh = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(60).value()), f.generation);
+  LMDJ_CHECK(fresh.result == PatternPublishResult::accepted);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.pattern_tempo_observation(fresh.generation)->anchor ==
+      (TransportAnchor{1000, 115'200'000, 60}));
+}
+
+void tempo_stop_overflow_stays_unavailable_until_an_explicit_new_start() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  snapshot.events.clear();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  const auto overflowing_frame = std::numeric_limits<std::uint64_t>::max() / (120U * 960U) + 1;
+  f.engine.set_rendered_frames_quiescent_for_testing(overflowing_frame);
+  const auto stopped = f.apply(2, PatternTransportAction::stop);
+  LMDJ_CHECK(!stopped.playing && !stopped.tempo_anchor);
+  LMDJ_CHECK(!f.engine.pattern_tempo_observation(f.generation));
+  render_frames(f.engine, 10);
+  LMDJ_CHECK(f.engine.submit_pattern_transport(
+      {7, 3, f.generation, PatternTransportAction::fence, {}}) ==
+      PatternTransportSubmit::not_running);
+  const auto stopped_again = f.apply(3, PatternTransportAction::stop);
+  LMDJ_CHECK(!stopped_again.playing && !stopped_again.tempo_anchor);
+  const auto attempted = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(attempted.result == PatternPublishResult::accepted);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == f.generation);
+  LMDJ_CHECK(!f.engine.pattern_tempo_observation(attempted.generation));
+  const auto restarted = f.apply(4, PatternTransportAction::start);
+  LMDJ_CHECK(restarted.playing && restarted.tempo_anchor ==
+      (TransportAnchor{restarted.effective_frame, 0, 120}));
+  LMDJ_CHECK(f.engine.pattern_tempo_observation(f.generation)->anchor ==
+      *restarted.tempo_anchor);
+}
 
 void phase_overlay_retains_sustained_samples() {
   using namespace lmdj::audio;
@@ -5693,6 +6162,241 @@ RuntimeSnapshot two_bar_switch_snapshot(const char* pattern, std::uint16_t bpm) 
   return snapshot;
 }
 
+void continuous_selected_switch_retains_claimed_same_bpm_phase_clock() {
+  using namespace lmdj::audio;
+  for (const auto& [snap, expected] : std::array{
+      std::pair{PatternSwitchSnap::beat, std::uint64_t{18'001}},
+      std::pair{PatternSwitchSnap::bar, std::uint64_t{54'001}},
+      std::pair{PatternSwitchSnap::pattern_end, std::uint64_t{54'001}}}) {
+    auto snapshot = tempo_quarter_snapshot();
+    auto source = PreparedPatternView::from_snapshot(snapshot);
+    PatternTransportFixture f(snapshot);
+    f.apply(1, PatternTransportAction::start);
+    render_until(f.engine, 12'001);
+    const auto tempo = f.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(240).value()), f.generation);
+    render_until(f.engine, 13'001);
+    snapshot.bpm = 240;
+    ++snapshot.project_revision;
+    auto adopted = PreparedPatternView::from_snapshot(snapshot);
+    const auto phase = f.engine.publish_pattern_view_preserving_phase(
+        std::move(adopted.value()), tempo.generation);
+    LMDJ_CHECK(phase.result == PatternPublishResult::accepted);
+    f.engine.render(nullptr, nullptr, 0);
+    auto b = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 90, 120, -12'000));
+    const auto selected = f.engine.publish_pattern_switch_view(std::move(b.value()), snap,
+        PatternReplacementAuthority{phase.generation, PatternId{kPatternA}, phase.activation_frame});
+    LMDJ_CHECK(selected.result == PatternPublishResult::accepted);
+    LMDJ_CHECK(selected.activation_frame == expected);
+    render_frames(f.engine, 1);
+    LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == phase.generation);
+    LMDJ_CHECK(f.engine.pattern_tempo_observation(phase.generation)->anchor ==
+        (TransportAnchor{12'001, 1'382'515'200, 240}));
+    render_until(f.engine, expected);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+    render_frames(f.engine, 1);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternB});
+    LMDJ_CHECK(f.engine.current_pattern_origin_frame() == expected);
+    float left{}, right{};
+    f.engine.render(&left, &right, 1);
+    LMDJ_CHECK(left < 0 && left == right);
+    LMDJ_CHECK(f.engine.pattern_telemetry().accepted_publications == 4);
+    LMDJ_CHECK(f.engine.pattern_telemetry().applied_publications == 4);
+  }
+}
+
+void selected_switch_waits_for_claimed_tempo_apply_without_consuming_generation() {
+  using namespace lmdj::audio;
+  for (const int claim_mode : {0, 1, 2}) {
+    for (const bool has_queued_successor : {false, true}) {
+      auto snapshot = tempo_quarter_snapshot();
+      auto source = PreparedPatternView::from_snapshot(snapshot);
+      PatternTransportFixture f(snapshot);
+      f.apply(1, PatternTransportAction::start);
+      render_until(f.engine, 12'001);
+      const auto tempo = f.engine.publish_pattern_tempo_transition(
+          std::move(source.value().with_tempo(240).value()), f.generation);
+      LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+      PausedRealtimeHook gate;
+      std::thread callback;
+      if (claim_mode == 0) {
+        f.engine.render(nullptr, nullptr, 0); // Claim alone supplies no apply evidence.
+      } else {
+        if (claim_mode == 1) testing::set_pattern_claim_hook(&gate.hook);
+        else testing::set_pattern_apply_hook(&gate.hook);
+        callback = std::thread([&] { render_frames(f.engine, 1); });
+        gate.wait();
+      }
+      PatternReplacementAuthority authority{
+          tempo.generation, PatternId{kPatternA}, tempo.activation_frame};
+      std::uint64_t latest_generation = tempo.generation;
+      if (has_queued_successor) {
+        auto queued_view = source.value().with_tempo(240);
+        const auto queued = f.engine.publish_pattern_view(std::move(queued_view.value()),
+            60'000, authority);
+        LMDJ_CHECK(queued.result == PatternPublishResult::accepted);
+        authority = {queued.generation, PatternId{kPatternA}, queued.activation_frame};
+        latest_generation = queued.generation;
+      }
+      LMDJ_CHECK(!f.engine.pattern_tempo_observation(tempo.generation));
+      auto target = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 90, 120, -12'000));
+      // The refusal must leave the caller's material intact for this exact retry.
+      const auto refused = f.engine.publish_pattern_switch_view(std::move(target.value()),
+          PatternSwitchSnap::beat, authority);
+      LMDJ_CHECK(refused.result == PatternPublishResult::publication_pending);
+      LMDJ_CHECK(refused.generation == 0 && refused.activation_frame == 0);
+      LMDJ_CHECK(target.value().pattern_id() == PatternId{kPatternB});
+      const auto pending = f.engine.pattern_telemetry();
+      LMDJ_CHECK(pending.current_generation == f.generation);
+      LMDJ_CHECK(pending.pending_generation == latest_generation);
+      LMDJ_CHECK(pending.accepted_publications == (has_queued_successor ? 3 : 2));
+      // A paused callback has not published latest-only audio telemetry yet.
+      // Inspect the owning Q/A authority for the exact retained publications.
+      const auto owners = f.engine.pattern_transport_observation();
+      LMDJ_CHECK(owners && owners->current_generation == f.generation);
+      LMDJ_CHECK(owners->pending_switches[0] &&
+          owners->pending_switches[0]->generation == tempo.generation &&
+          owners->pending_switches[0]->pattern_id == PatternId{kPatternA} &&
+          owners->pending_switches[0]->activation_frame == tempo.activation_frame);
+      LMDJ_CHECK(owners->pending_switches[1].has_value() == has_queued_successor);
+      if (has_queued_successor) {
+        LMDJ_CHECK(owners->pending_switches[1]->generation == authority.generation &&
+            owners->pending_switches[1]->pattern_id == authority.pattern_id &&
+            owners->pending_switches[1]->activation_frame == authority.activation_frame);
+      }
+      LMDJ_CHECK(pending.canceled_publications == 0 && pending.superseded_publications == 0);
+      if (claim_mode != 0) {
+        gate.release();
+        callback.join();
+      } else {
+        render_frames(f.engine, 1);
+      }
+      const auto anchor = f.engine.pattern_tempo_observation(tempo.generation);
+      LMDJ_CHECK(anchor && anchor->anchor == (TransportAnchor{12'001, 1'382'515'200, 240}));
+      const auto retry = f.engine.publish_pattern_switch_view(std::move(target.value()),
+          PatternSwitchSnap::beat, authority);
+      LMDJ_CHECK(retry.result == PatternPublishResult::accepted);
+      LMDJ_CHECK(retry.generation == latest_generation + 1 && retry.activation_frame == 18'001);
+      render_until(f.engine, 18'001);
+      LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == tempo.generation);
+      render_frames(f.engine, 1);
+      const auto applied = f.engine.pattern_telemetry();
+      LMDJ_CHECK(applied.current_generation == retry.generation);
+      LMDJ_CHECK(applied.accepted_publications == (has_queued_successor ? 4 : 3) &&
+          applied.applied_publications == 3);
+      LMDJ_CHECK(applied.pending_publications == 0 && applied.canceled_publications == 0);
+      LMDJ_CHECK(applied.superseded_publications == (has_queued_successor ? 1 : 0));
+      float left{}, right{};
+      f.engine.render(&left, &right, 1);
+      LMDJ_CHECK(left < 0 && left == right);
+    }
+  }
+}
+
+void continuous_selected_switch_keeps_actual_claimed_predecessor_clock() {
+  using namespace lmdj::audio;
+  for (const auto& [snap, expected] : std::array{
+      std::pair{PatternSwitchSnap::beat, std::uint64_t{41'416}},
+      std::pair{PatternSwitchSnap::bar, std::uint64_t{111'660}},
+      std::pair{PatternSwitchSnap::pattern_end, std::uint64_t{205'319}}}) {
+    auto snapshot = tempo_quarter_snapshot();
+    auto source = PreparedPatternView::from_snapshot(snapshot);
+    PatternTransportFixture f(snapshot);
+    f.apply(1, PatternTransportAction::start);
+    render_until(f.engine, 12'001);
+    const auto tempo = f.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(240).value()), f.generation);
+    LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+    render_until(f.engine, 13'001);
+    auto b = PreparedPatternView::from_snapshot(two_bar_switch_snapshot(kPatternB, 123));
+    const auto pb = f.engine.publish_pattern_switch_view(std::move(b.value()), PatternSwitchSnap::beat);
+    LMDJ_CHECK(pb.result == PatternPublishResult::accepted && pb.activation_frame == 18'001);
+    render_frames(f.engine, 1); // Audio owns ordinary B, which will restart at 18001.
+    auto c = PreparedPatternView::from_snapshot(pattern_snapshot(kCutoffPatternC, {0, 2}, 30, 60));
+    const auto pc = f.engine.publish_pattern_switch_view(std::move(c.value()), snap,
+        PatternReplacementAuthority{pb.generation, PatternId{kPatternB}, pb.activation_frame});
+    LMDJ_CHECK(pc.result == PatternPublishResult::accepted);
+    // B origin 18001 + independently rounded 123 BPM beat/bar/two-bar length;
+    // using continuous A's anchor or C's 60 BPM would produce different frames.
+    LMDJ_CHECK(pc.activation_frame == expected);
+    render_until(f.engine, 18'001);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+    render_frames(f.engine, 1);
+    LMDJ_CHECK(f.engine.current_pattern_origin_frame() == 18'001);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternB});
+    render_until(f.engine, expected);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternB});
+    render_frames(f.engine, 1);
+    LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kCutoffPatternC});
+    LMDJ_CHECK(f.engine.current_pattern_origin_frame() == expected);
+    const auto stats = f.engine.pattern_telemetry();
+    LMDJ_CHECK(stats.accepted_publications == 4 && stats.applied_publications == 4);
+    LMDJ_CHECK(stats.pending_publications == 0 && stats.canceled_publications == 0);
+  }
+}
+
+void continuous_selected_switch_retries_after_reserved_frontier_advances() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, 12'001);
+  const auto tempo = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(240).value()), f.generation);
+  LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+  render_until(f.engine, 13'001);
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::control_pattern_before_publication,
+      &gate.hook);
+  PatternPublication next{};
+  std::thread control([&] {
+    auto b = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 90));
+    next = f.engine.publish_pattern_switch_view(std::move(b.value()), PatternSwitchSnap::beat);
+  });
+  gate.wait(); // First attempt computed 18001 before audio invalidates admission.
+  render_until(f.engine, 20'001);
+  gate.release();
+  control.join();
+  testing::set_realtime_hook(testing::RealtimeHookPoint::control_pattern_before_publication, nullptr);
+  LMDJ_CHECK(next.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(next.activation_frame == 30'001);
+  render_until(f.engine, 30'001);
+  LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == tempo.generation);
+  render_frames(f.engine, 1);
+  LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(f.engine.current_pattern_origin_frame() == 30'001);
+  const auto stats = f.engine.pattern_telemetry();
+  LMDJ_CHECK(stats.accepted_publications == 3 && stats.applied_publications == 3);
+  LMDJ_CHECK(stats.pending_publications == 0 && stats.canceled_publications == 0);
+}
+
+void continuous_selected_switch_refuses_overflow_without_losing_admission() {
+  using namespace lmdj::audio;
+  for (const auto snap : {PatternSwitchSnap::beat, PatternSwitchSnap::bar,
+       PatternSwitchSnap::pattern_end}) {
+    auto snapshot = tempo_quarter_snapshot();
+    auto source = PreparedPatternView::from_snapshot(snapshot);
+    PatternTransportFixture f(snapshot);
+    f.apply(1, PatternTransportAction::start);
+    render_until(f.engine, 12'001);
+    const auto tempo = f.engine.publish_pattern_tempo_transition(
+        std::move(source.value().with_tempo(240).value()), f.generation);
+    render_frames(f.engine, 1);
+    f.engine.set_rendered_frames_quiescent_for_testing(std::numeric_limits<std::uint64_t>::max());
+    auto b = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 90));
+    const auto refused = f.engine.publish_pattern_switch_view(std::move(b.value()), snap);
+    LMDJ_CHECK(refused.result == PatternPublishResult::publish_queue_full);
+    LMDJ_CHECK(f.engine.pattern_telemetry().current_generation == tempo.generation);
+    LMDJ_CHECK(f.engine.pattern_telemetry().pending_publications == 0);
+    // Synthetic quiescent handoff only, proving rejection releases reservation.
+    f.engine.set_rendered_frames_quiescent_for_testing(13'001);
+    auto retry = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternB, {0, 1}, 90));
+    const auto accepted = f.engine.publish_pattern_switch_view(std::move(retry.value()), snap);
+    LMDJ_CHECK(accepted.result == PatternPublishResult::accepted);
+  }
+}
+
 void selected_switch_snap_applies_at_its_exact_frame() {
   using namespace lmdj::audio;
   struct Case { PatternSwitchSnap snap; std::uint64_t frame; };
@@ -6177,8 +6881,8 @@ void pad_gates_address_slots_0_and_63_and_preserve_across_replacement() {
   auto out = render_take(engine, 128);
   LMDJ_CHECK(out.back() == 0.25F);
 
-  // Mute A01: its voice ramps to silence over exactly 96 frames; D16 is
-  // untouched. (The ramp/tail PCM proof is the next test.)
+  // Mute A01: its input closes immediately; D16 is untouched.
+  // The first-frame/tail PCM proof is the next test.
   LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
   out = render_take(engine, kRampFrames + 32);
   LMDJ_CHECK(out.back() == -0.25F);
@@ -6265,14 +6969,17 @@ void pad_gates_pcm_oracle_mute_tail_and_restore() {
     if (!with_delay) {
       LMDJ_CHECK(out.back() == 0.0F);
     }
-    // Mute A01: its gate ramps 1 -> 0 over exactly the 96-frame window.
+    // Mute A01: no grace window after the new mask applies. Retain the
+    // original 96-frame observation and all later tail/restore legs.
     LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
     out = render_take(engine, kRampFrames);
     if (!with_delay) {
-      // Constant content makes the gate shape directly readable: the mix
-      // decreases strictly to exactly the B01 level at the 96th frame.
-      for (std::size_t i = 1; i < out.size(); ++i) {
-        LMDJ_CHECK(out[i] <= out[i - 1]);
+      for (std::size_t frame = 0; frame < out.size(); ++frame) {
+        if (out[frame] != -0.5F) {
+          std::fprintf(stderr, "live gate close frame=%zu actual=%.9g expected=-0.5\n",
+                       frame, out[frame]);
+        }
+        LMDJ_CHECK(out[frame] == -0.5F);
       }
       LMDJ_CHECK(out.back() == -0.5F);
       out = render_take(engine, 64);
@@ -6280,6 +6987,9 @@ void pad_gates_pcm_oracle_mute_tail_and_restore() {
         LMDJ_CHECK(value == -0.5F);
       }
     } else {
+      for (const auto value : out) {
+        LMDJ_CHECK(value == 0.0F);
+      }
       // The shared Delay tail is still audible after the gate closes and
       // decays on its own; it is not a leak through the closed gate. The
       // value-500 Delay swaps its ping-pong buffer every 12,000 frames
@@ -6318,6 +7028,244 @@ void pad_gates_pcm_oracle_mute_tail_and_restore() {
   }
 }
 
+// Diagnostics identify the first divergent applied-frame sample, not merely
+// a later peak or the gain field used by the implementation.
+void check_pad_gate_sample(float left, float right, float expected_left,
+                           float expected_right, std::size_t frame) {
+  if (left != expected_left || right != expected_right) {
+    std::fprintf(stderr,
+        "live gate PCM frame=%zu actual=(%.9g,%.9g) expected=(%.9g,%.9g)\n",
+        frame, left, right, expected_left, expected_right);
+  }
+  LMDJ_CHECK(left == expected_left && right == expected_right);
+}
+
+void pad_gates_cut_current_input_at_the_first_applied_frame() {
+  for (const std::uint8_t slot : {std::uint8_t{0}, std::uint8_t{63}}) {
+    for (const bool solo : {false, true}) {
+      for (const bool other_pad : {false, true}) {
+        const auto other = static_cast<std::uint8_t>(63 - slot);
+        const std::vector<float> affected(4'800, 0.5F);
+        const std::vector<float> unaffected(4'800, -0.25F);
+        auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+        const ResolvedPlayback playback{0, 4'800, TriggerMode::loop_gate, 1.0F, false};
+        LMDJ_CHECK(bank.set_sample(slot, affected, playback).has_value());
+        LMDJ_CHECK(bank.set_sample(other, unaffected, playback).has_value());
+        RealtimeEngine engine;
+        LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+        LMDJ_CHECK(engine.start().has_value());
+        LMDJ_CHECK(engine.enqueue_control(control(1, slot, PadControlKind::press, 127)) ==
+                   EnqueueResult::accepted);
+        if (other_pad) {
+          LMDJ_CHECK(engine.enqueue_control(control(2, other, PadControlKind::press, 127)) ==
+                     EnqueueResult::accepted);
+        }
+        const auto warm = render_channels(engine, 128);
+        const float survivor = other_pad ? -0.25F : 0.0F;
+        check_pad_gate_sample(warm.left.back(), warm.right.back(),
+                              0.5F + survivor, 0.5F + survivor, 127);
+        const auto muted = solo ? std::uint64_t{0} : std::uint64_t{1} << slot;
+        const auto soloed = solo ? std::uint64_t{1} << other : std::uint64_t{0};
+        LMDJ_CHECK(engine.enqueue_pad_gates(muted, soloed) == FxEnqueueResult::accepted);
+        const auto accepted = engine.pad_gates_status();
+        LMDJ_CHECK(accepted.accepted_sequence == 1 && accepted.applied.sequence == 0);
+        LMDJ_CHECK(accepted.accepted.muted_mask == muted &&
+                   accepted.accepted.solo_mask == soloed);
+        const auto out = render_channels(engine, 128);
+        const auto applied = engine.pad_gates_status();
+        LMDJ_CHECK(applied.applied.sequence == accepted.accepted_sequence);
+        LMDJ_CHECK(applied.applied.epoch == engine.telemetry().start_epoch);
+        LMDJ_CHECK(applied.applied.state.muted_mask == muted &&
+                   applied.applied.state.solo_mask == soloed);
+        for (std::size_t frame = 0; frame < out.left.size(); ++frame) {
+          check_pad_gate_sample(out.left[frame], out.right[frame], survivor, survivor, frame);
+        }
+        LMDJ_CHECK(engine.telemetry().active_voices == (other_pad ? 2U : 1U));
+        engine.stop();
+      }
+    }
+  }
+}
+
+void pad_gates_block_primed_tone_and_eq_memory() {
+  for (const bool eq : {false, true}) {
+    RealtimeEngine engine;
+    const std::vector<float> affected(8'000, 0.5F);
+    const std::vector<float> unaffected(8'000, 0.125F);
+    auto dsp = low_passed();
+    if (eq) {
+      dsp.tone = 0;
+      dsp.eq_flags = lmdj::cooker::ResolvedVoiceDsp::kEqLow;
+      dsp.eq_low_freq_hz = 120;
+      dsp.eq_low_gain_millidb = -6'000;
+    }
+    auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+    LMDJ_CHECK(bank.set_sample(0, affected,
+        dsp_playback(0, 8'000, TriggerMode::loop_gate, dsp)).has_value());
+    LMDJ_CHECK(bank.set_sample(63, unaffected,
+        {0, 8'000, TriggerMode::loop_gate, 1.0F, false}).has_value());
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    LMDJ_CHECK(engine.enqueue_control(control(1, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    LMDJ_CHECK(engine.enqueue_control(control(2, 63, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    const auto warm = render_channels(engine, 4'096);
+    LMDJ_CHECK(warm.left.back() > 0.125F && warm.right.back() > 0.125F);
+    LMDJ_CHECK(engine.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+    const auto out = render_channels(engine, 256);
+    const auto applied = engine.pad_gates_status().applied;
+    LMDJ_CHECK(applied.sequence == 1 && applied.epoch == 1);
+    for (std::size_t frame = 0; frame < out.left.size(); ++frame) {
+      check_pad_gate_sample(out.left[frame], out.right[frame], 0.125F, 0.125F, frame);
+    }
+    LMDJ_CHECK(engine.telemetry().active_voices == 2);
+    engine.stop();
+  }
+}
+
+void pad_gates_block_current_and_future_pattern_input() {
+  for (const bool future : {false, true}) {
+    auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, 120, -16'384);
+    snapshot.events[0].onset_tick = future ? 12 : 0;  // frame 300 or 0
+    snapshot.events[0].duration_tick = 80;           // 2,000 frames
+    RealtimeEngine gated, audible;
+    for (auto* engine : {&gated, &audible}) {
+      LMDJ_CHECK(engine->publish_sample_bank(
+          PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) == PublishResult::accepted);
+      auto pattern = PreparedPatternView::from_snapshot(snapshot);
+      LMDJ_CHECK(pattern.has_value());
+      LMDJ_CHECK(engine->publish_pattern_view(std::move(pattern.value())).result ==
+                 PatternPublishResult::accepted);
+      LMDJ_CHECK(engine->start().has_value());
+    }
+    const auto prefix = render_channels(gated, 256);
+    const auto reference_prefix = render_channels(audible, 256);
+    LMDJ_CHECK(prefix.left == reference_prefix.left && prefix.right == reference_prefix.right);
+    LMDJ_CHECK(gated.telemetry().started_voices == (future ? 0U : 1U));
+    LMDJ_CHECK(gated.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+    const auto out = render_channels(gated, 512);
+    const auto control_out = render_channels(audible, 512);
+    const auto applied = gated.pad_gates_status().applied;
+    LMDJ_CHECK(applied.sequence == 1 && applied.epoch == 1);
+    for (std::size_t frame = 0; frame < out.left.size(); ++frame) {
+      check_pad_gate_sample(out.left[frame], out.right[frame], 0.0F, 0.0F, frame);
+    }
+    LMDJ_CHECK(peak_of(control_out.left, 0, control_out.left.size()) > 0.0F);
+    LMDJ_CHECK(peak_of(control_out.right, 0, control_out.right.size()) > 0.0F);
+    // The common gate does not change Pattern scheduling or kill its voice.
+    LMDJ_CHECK(gated.telemetry().started_voices == 1 && gated.telemetry().active_voices == 1);
+    LMDJ_CHECK(gated.enqueue_pad_gates(0, 0) == FxEnqueueResult::accepted);
+    const auto reopened = render_channels(gated, 128);
+    check_pad_gate_sample(reopened.left.back(), reopened.right.back(), -0.5F, -0.5F, 127);
+    LMDJ_CHECK(gated.telemetry().started_voices == 1);
+    gated.stop();
+    audible.stop();
+  }
+}
+
+void pad_gates_preserve_shared_fx_from_an_independent_input_stream() {
+  for (const auto fx : {PerformanceFx::delay, PerformanceFx::reverb}) {
+    for (const bool other_pad : {false, true}) {
+      // No envelope formula is copied into the oracle: both source signals
+      // are zero for the first 256 frames, past their ordinary attack, then
+      // exact binary fractions. The input oracle never reads live_gate.
+      constexpr std::uint32_t prefix_frames = 1'280;
+      constexpr std::uint32_t tail_frames = 48'000;
+      constexpr std::uint32_t source_frames = prefix_frames + tail_frames;
+      std::vector<float> affected(source_frames, 0.25F);
+      std::vector<float> unaffected(source_frames, 0.125F);
+      std::fill_n(affected.begin(), 256, 0.0F);
+      std::fill_n(unaffected.begin(), 256, 0.0F);
+      RealtimeEngine engine;
+      auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+      const ResolvedPlayback playback{0, source_frames, TriggerMode::loop_gate, 1.0F, false};
+      LMDJ_CHECK(bank.set_sample(0, affected, playback).has_value());
+      LMDJ_CHECK(bank.set_sample(63, unaffected, playback).has_value());
+      LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+      LMDJ_CHECK(engine.prepare_master_fx(120).has_value());
+      LMDJ_CHECK(engine.start().has_value());
+      LMDJ_CHECK(engine.enqueue_fx_gesture({FxGestureKind::engage, fx, 500}) ==
+                 FxEnqueueResult::accepted);
+      lmdj::audio::MasterFxChain reference;
+      LMDJ_CHECK(reference.prepare({48'000, 120}).has_value());
+      LMDJ_CHECK(reference.apply_gesture({FxGestureKind::engage, fx, 500}));
+      LMDJ_CHECK(engine.enqueue_control(control(1, 0, PadControlKind::press, 127)) ==
+                 EnqueueResult::accepted);
+      if (other_pad) {
+        LMDJ_CHECK(engine.enqueue_control(control(2, 63, PadControlKind::press, 127)) ==
+                   EnqueueResult::accepted);
+      }
+      const float survivor = other_pad ? 0.125F : 0.0F;
+      RenderedChannels input{std::vector<float>(prefix_frames, 0.25F + survivor),
+                             std::vector<float>(prefix_frames, 0.25F + survivor)};
+      std::fill_n(input.left.begin(), 256, 0.0F);
+      std::fill_n(input.right.begin(), 256, 0.0F);
+      reference.process(input.left.data(), input.right.data(), prefix_frames);
+      const auto prefix = render_channels(engine, prefix_frames);
+      LMDJ_CHECK(prefix.left == input.left && prefix.right == input.right);
+      LMDJ_CHECK(prefix.left.back() > 0.0F && prefix.right.back() > 0.0F);
+      LMDJ_CHECK(engine.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+      RenderedChannels expected{std::vector<float>(tail_frames, survivor),
+                                std::vector<float>(tail_frames, survivor)};
+      reference.process(expected.left.data(), expected.right.data(), tail_frames);
+      const auto actual = render_channels(engine, tail_frames);
+      const auto applied = engine.pad_gates_status().applied;
+      LMDJ_CHECK(applied.sequence == 1 && applied.epoch == 1);
+      // Exact input and same FX API permit exact equality: no tolerance can
+      // hide an extra affected-Pad sample or an erased shared tail.
+      for (std::size_t frame = 0; frame < actual.left.size(); ++frame) {
+        check_pad_gate_sample(actual.left[frame], actual.right[frame],
+                              expected.left[frame], expected.right[frame], frame);
+      }
+      if (!other_pad) {
+        // Independent positive legs: each channel retains an actual tail,
+        // and later windows decay; silence alone cannot pass the oracle.
+        for (const auto* channel : {&actual.left, &actual.right}) {
+          const auto early = peak_of(*channel, 0, 12'000);
+          const auto later = peak_of(*channel, 24'000, tail_frames);
+          LMDJ_CHECK(early > 0.0F && later > 0.0F && later < early);
+        }
+      } else {
+        LMDJ_CHECK(actual.left.back() > 0.0F && actual.right.back() > 0.0F);
+      }
+      LMDJ_CHECK(engine.telemetry().active_voices == (other_pad ? 2U : 1U));
+      engine.stop();
+    }
+  }
+}
+
+void pad_gates_do_not_shorten_an_existing_release() {
+  for (const auto kind : {PadControlKind::release, PadControlKind::stop_slot}) {
+    RealtimeEngine engine;
+    const std::vector<float> sample(8'000, 0.5F);
+    start_with_playback(engine, sample,
+        dsp_playback(0, 8'000, TriggerMode::loop_gate, envelope_dsp(0, 240)));
+    LMDJ_CHECK(engine.enqueue_control(control(1, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    render_channels(engine, 200);
+    LMDJ_CHECK(engine.enqueue_control(control(2, 0, kind)) == EnqueueResult::accepted);
+    const auto release = render_channels(engine, 16);
+    LMDJ_CHECK(release.left.back() > 0.0F && release.right.back() > 0.0F);
+    const auto edges = drain_voice_states(engine, 2);
+    LMDJ_CHECK(edges[0].state == RuntimeVoiceState::started);
+    LMDJ_CHECK(edges[1].state == RuntimeVoiceState::stopped);
+    LMDJ_CHECK(engine.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+    const auto remaining = (kind == PadControlKind::release ? 240U : 96U) - 16U;
+    const auto gated = render_channels(engine, remaining - 1);
+    for (std::size_t frame = 0; frame < gated.left.size(); ++frame) {
+      check_pad_gate_sample(gated.left[frame], gated.right[frame], 0.0F, 0.0F, frame);
+    }
+    LMDJ_CHECK(engine.telemetry().active_voices == 1);
+    const auto ended = render_channels(engine, 1);
+    check_pad_gate_sample(ended.left[0], ended.right[0], 0.0F, 0.0F, remaining - 1);
+    LMDJ_CHECK(engine.telemetry().active_voices == 0);
+    std::array<RuntimeVoiceStateEvent, 1> extra{};
+    LMDJ_CHECK(engine.drain_voice_states(extra) == 0);
+    engine.stop();
+  }
+}
+
 void pad_gates_cursor_continues_while_gated() {
   // A01 sweeps 0..1 over a 4096-frame loop, so its cursor position is
   // readable in the mix. The voice is muted across the loop wrap; the
@@ -6342,7 +7290,7 @@ void pad_gates_cursor_continues_while_gated() {
       control(2, 1, PadControlKind::press, 127)) == EnqueueResult::accepted);
   auto out = render_take(engine, 200);       // cursor 200 at the mute point
   LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
-  out = render_take(engine, kRampFrames);    // cursor 296 when fully gated
+  out = render_take(engine, kRampFrames);    // cursor 296, advancing while gated
   LMDJ_CHECK(out.back() == -0.5F);
   out = render_take(engine, 3'900);          // cursor 4196, past the wrap
   LMDJ_CHECK(out.back() == -0.5F);
@@ -6376,7 +7324,7 @@ void pad_gates_do_not_reach_the_audition_sentinel() {
              EnqueueResult::accepted);
   auto out = render_take(engine, 128);
   LMDJ_CHECK(out.back() == 0.25F);
-  // Mute slot 0: the project voice ramps out; the audition continues alone.
+  // Mute slot 0: the project input closes; the audition continues alone.
   LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
   out = render_take(engine, kRampFrames + 32);
   LMDJ_CHECK(out.back() == -0.25F);
@@ -6467,6 +7415,96 @@ struct ScheduledRecordFixture {
     }
   }
 };
+
+void scheduled_restart_after_tempo_stop_has_a_fresh_musical_origin() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.enable_pattern_transport(71).has_value());
+  LMDJ_CHECK(engine.enable_scheduled_pattern_record(71).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(
+      PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) == PublishResult::accepted);
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(source.has_value());
+  auto faster = source.value().with_tempo(240);
+  LMDJ_CHECK(faster.has_value());
+  const auto first = engine.publish_pattern_view(std::move(source.value()));
+  LMDJ_CHECK(first.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.submit_pattern_transport({71, 1, first.generation,
+      PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+  render_frames(engine, 1);
+  const auto started = engine.inspect_pattern_transport_receipt(71, 1);
+  LMDJ_CHECK(started && started->playing && started->effective_frame == 0);
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(71, 1));
+
+  render_until(engine, 12'001);
+  const auto tempo = engine.publish_pattern_tempo_transition(
+      std::move(faster.value()), first.generation);
+  LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+  render_until(engine, 13'000);
+  const auto changed = engine.pattern_tempo_observation(tempo.generation);
+  LMDJ_CHECK(changed && changed->playing && changed->applied_frame == 12'001);
+  LMDJ_CHECK(changed->anchor == (TransportAnchor{12'001, 1'382'515'200, 240}));
+  LMDJ_CHECK(engine.submit_pattern_transport({71, 2, tempo.generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  render_frames(engine, 1);
+  const auto stopped = engine.inspect_pattern_transport_receipt(71, 2);
+  LMDJ_CHECK(stopped && !stopped->playing && stopped->effective_frame == 13'000);
+  LMDJ_CHECK(stopped->tempo_anchor == (TransportAnchor{13'000, 1'612'684'800, 240}));
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(71, 2));
+  LMDJ_CHECK(engine.telemetry().started_voices == 1 && engine.telemetry().active_voices == 0);
+
+  const ScheduledPatternRecordRequest request{
+      71, 1, 3, 1, tempo.generation, PatternId{kPatternA}, 1};
+  LMDJ_CHECK(engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::accepted);
+  const auto pending = engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(pending && !pending->count_in_frame && !pending->start_frame && !pending->start_receipt);
+  // Literal 240-BPM geometry: C=13001, four 12000-frame beats, S=61001.
+  // One real callback crosses every cue and S; no clock/state testing seam.
+  constexpr std::uint64_t count_in = 13'001;
+  constexpr std::uint64_t start = 61'001;
+  std::vector<float> left(start - count_in + 2), right(left.size());
+  g_allocations.store(0); g_deallocations.store(0); g_track_allocations.store(true);
+  engine.render(left.data(), right.data(), static_cast<std::uint32_t>(left.size()));
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  LMDJ_CHECK(std::all_of(left.begin(), left.end() - 1, [](float value) { return value == 0; }));
+  LMDJ_CHECK(std::all_of(right.begin(), right.end() - 1, [](float value) { return value == 0; }));
+  LMDJ_CHECK(left.back() > 0 && right.back() == left.back()); // The new tick-zero note at S+1.
+  LMDJ_CHECK(engine.telemetry().started_voices == 2);
+  const auto applied = engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(applied && applied->phase == ScheduledPatternPhase::applied);
+  LMDJ_CHECK(applied->bpm == 240 && applied->bar_frames == 48'000);
+  LMDJ_CHECK(applied->count_in_frame == count_in && applied->start_frame == start);
+  LMDJ_CHECK(applied->start_receipt && applied->start_receipt->result == ScheduledPatternResult::applied);
+  LMDJ_CHECK(applied->start_receipt->epoch == 3 && applied->start_receipt->serial == 1 &&
+      applied->start_receipt->pattern_generation == tempo.generation);
+  LMDJ_CHECK(applied->start_receipt->effective_frame == start &&
+      applied->start_receipt->origin_frame == start && applied->start_receipt->playing);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == start);
+  const auto restarted = engine.pattern_tempo_observation(tempo.generation);
+  LMDJ_CHECK(restarted && restarted->start_epoch == 1 && restarted->playing);
+  LMDJ_CHECK(restarted->applied_frame == start && restarted->anchor == (TransportAnchor{start, 0, 240}));
+  CountInCueBatch cues{};
+  LMDJ_CHECK(engine.take_count_in_cue_batch_audio(cues));
+  LMDJ_CHECK(cues.runtime_generation == 71 && cues.frame_epoch == 1 && cues.serial == 1);
+  LMDJ_CHECK(cues.begin_frame == count_in && cues.end_frame == start + 2 && !cues.cancellation_frame);
+  constexpr std::array<std::uint64_t, 4> markers{13'001, 25'001, 37'001, 49'001};
+  LMDJ_CHECK(cues.span_count == markers.size());
+  for (std::size_t i = 0; i < markers.size(); ++i) {
+    LMDJ_CHECK(cues.spans[i].marker_frame == markers[i] && cues.spans[i].begin_frame == markers[i]);
+    LMDJ_CHECK(cues.spans[i].end_frame == markers[i] + 1'920);
+    LMDJ_CHECK(cues.spans[i].forced && cues.spans[i].marker && cues.spans[i].accent == (i == 0));
+  }
+  LMDJ_CHECK(engine.acknowledge_count_in_cue_batch_audio(cues.batch_id));
+  LMDJ_CHECK(engine.acknowledge_scheduled_pattern_record(71, 1, 3));
+  // Independent subsequent PCM onsets prove the old fractional position is
+  // not merely hidden in the new observation or inherited by the next loop.
+  check_tempo_onset(engine, 73'001, 2);
+  check_tempo_onset(engine, 109'001, 5);
+  engine.stop();
+  LMDJ_CHECK(engine.scheduled_pattern_record_quiescent());
+}
 
 void quiescent_stop_before_S_requires_a_real_cancellation_intent() {
   for (const bool armed : {false, true}) {
@@ -7325,6 +8363,7 @@ void cue_consumer_fence_and_optional_downbeat_survive_applied_ack() {
 }  // namespace
 
 int main() {
+  scheduled_restart_after_tempo_stop_has_a_fresh_musical_origin();
   stopped_then_exact_cancel_retains_refused_e2_and_independent_input_owners();
   quiescent_stop_before_S_requires_a_real_cancellation_intent();
   scheduled_record_has_independent_literal_frames_in_one_long_callback();
@@ -7347,6 +8386,26 @@ int main() {
   profile_storage_bounds_are_fixed_and_scheduled_epoch_exhaustion_preserves_legacy();
   unsent_e2_shutdown_refuses_truthfully_and_requires_evidence_and_hold_reconciliation();
   stopped_owner_preserves_already_submitted_real_e2_receipt();
+  continuous_selected_switch_retains_claimed_same_bpm_phase_clock();
+  selected_switch_waits_for_claimed_tempo_apply_without_consuming_generation();
+  continuous_selected_switch_keeps_actual_claimed_predecessor_clock();
+  continuous_selected_switch_retries_after_reserved_frontier_advances();
+  continuous_selected_switch_refuses_overflow_without_losing_admission();
+  continuous_tempo_selected_switch_uses_musical_position();
+  tempo_transition_and_cancel_keep_fractional_position_and_next_loop();
+  tempo_deceleration_needs_no_unsigned_logical_origin();
+  tempo_transition_schedules_an_effective_boundary_exactly_once();
+  tempo_transition_keeps_held_pcm_cursor_and_retimes_musical_release();
+  tempo_transition_rejects_stale_or_changed_source_before_application();
+  tempo_transition_refuses_queued_claimed_and_reserved_cutoff();
+  tempo_cutoff_retains_exact_applied_anchor_after_late_inspection();
+  tempo_cutoff_cancels_an_unapplied_transition_before_its_effective_frame();
+  tempo_transition_stopped_transport_stays_silent_until_new_start();
+  tempo_transition_full_pool_refuses_without_changing_current_tempo();
+  tempo_phase_commit_adopts_revision_without_restoring_an_integer_origin();
+  tempo_release_overflow_rejects_the_due_voice_without_infinite_hold();
+  tempo_position_overflow_spends_claimed_owner_without_applied_evidence();
+  tempo_stop_overflow_stays_unavailable_until_an_explicit_new_start();
   selected_switch_snap_applies_at_its_exact_frame();
   beat_snap_follows_event_ticks_inside_each_rounded_loop();
   pattern_end_snap_uses_actual_loop_frames_instead_of_repeated_bars();
@@ -7509,6 +8568,11 @@ int main() {
   pattern_generation_preserves_its_non_reused_exhaustion_boundary();
   pad_gates_address_slots_0_and_63_and_preserve_across_replacement();
   pad_gates_pcm_oracle_mute_tail_and_restore();
+  pad_gates_cut_current_input_at_the_first_applied_frame();
+  pad_gates_block_primed_tone_and_eq_memory();
+  pad_gates_block_current_and_future_pattern_input();
+  pad_gates_preserve_shared_fx_from_an_independent_input_stream();
+  pad_gates_do_not_shorten_an_existing_release();
   pad_gates_cursor_continues_while_gated();
   pad_gates_do_not_reach_the_audition_sentinel();
   pad_gates_queue_full_and_stale_epoch_fail_closed();

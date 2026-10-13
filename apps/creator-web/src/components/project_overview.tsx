@@ -6,44 +6,37 @@ import {projectStorageStatus} from "../state/overview_context";
 interface ProjectOverviewProps {
   state: CreatorState;
   midi?: MidiStatus | null;
+  outputValue?: string | undefined;
 }
 
-// D01's read-only upper screen: a summary line, then the PROJECT, CONTENT and
-// WORKSPACE columns. It always shows the open Project, never the touch
-// area's selected card.
-export function ProjectOverview({state, midi = null}: ProjectOverviewProps) {
+// The open Project, Audio and MIDI stay visible in both Project and System.
+// Storage is a qualified local fact, not an aggregate "everything saved" claim.
+export function ProjectOverview({state, midi = null, outputValue}: ProjectOverviewProps) {
   const project = state.project.current;
   const patterns = project?.patterns.length ?? 0;
   return (
     <div className="project-overview" data-testid="project-overview">
-      <p className="project-overview-summary">
-        {project === null
-          ? "NO PROJECT OPEN"
-          : `${project.bpm} BPM · 4 BANKS · ${project.assignedPadCount} ASSIGNED PADS · ${
-            String(patterns).padStart(2, "0")} PATTERNS`}
-      </p>
-      <div className="project-overview-columns">
+      <div className="project-overview-columns overview-summary-columns">
         <dl aria-label="Project">
-          <dt>PROJECT</dt>
-          <dd>{project ? shortProjectId(project.projectId) : "none"}</dd>
-          <dd>{project ? "Local workspace" : "—"}</dd>
-          <dd>{projectStorageStatus(state)}</dd>
+          <dt>{projectStorageStatus(state)}</dt>
+          <dd className="overview-value">{project ? shortProjectId(project.projectId) : "none"}</dd>
+          <dd>{project ? `${project.assignedPadCount} Pads · ${patterns} Patterns` : "No content open"}</dd>
+          <dd>{project ? `${project.bpm} BPM · 4 Banks` : "—"}</dd>
         </dl>
-        <dl aria-label="Content">
-          <dt>CONTENT</dt>
-          <dd>{String(patterns).padStart(2, "0")} patterns</dd>
-          <dd>{project?.assignedPadCount ?? 0} / 64 Pads used</dd>
-          <dd>{project ? "4 Banks" : "—"}</dd>
-        </dl>
-        <dl aria-label="Workspace">
-          <dt>WORKSPACE</dt>
-          <dd>{`Audio engine ${state.audio.phase}`}</dd>
-          <dd>MIDI {midiLabel(midi)}</dd>
+        <dl aria-label="Audio">
+          <dt>AUDIO</dt>
+          <dd className="overview-value">{state.audio.phase}</dd>
+          <dd>Device output {outputValue ?? "—"}</dd>
           {/* Full error and recovery action stay in the touch workspace; the
               short status replaces, rather than appends to, the ready row. */}
           <dd data-error-code={state.runtime.errorCode ?? undefined}>
             {state.runtime.errorCode !== null ? "Needs attention" : `Project ${state.project.phase}`}
           </dd>
+        </dl>
+        <dl aria-label="MIDI">
+          <dt>MIDI</dt>
+          <dd className="overview-value">{midiLabel(midi)}</dd>
+          <dd>{midi?.permission === "granted" ? "Configure in System" : "Enable in System"}</dd>
         </dl>
       </div>
     </div>

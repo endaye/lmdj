@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="22c194757550c2607982862decd5daf90c17f74e9680ed8f0d85a6d91ac6002b">
-  <title id="title">Audio Runtime Module</title><desc id="description">S6 源码草稿：ordinary Phase/SNAP、serial60 scheduled cell、独立 input escrow 与 product/cue 输出</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="abd949d08f72280c63fa849deb369df3c9c3123def3edaa640a7c4853e680eb9">
+  <title id="title">Audio Runtime Module</title><desc id="description">Runtime source：连续 tempo / SNAP、S6 scheduled cell、独立 input escrow 与 product/cue 输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -9,7 +9,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">S6 源码草稿：ordinary Phase/SNAP、serial60 scheduled cell、独立 input escrow 与 product/cue 输出</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">Runtime source：连续 tempo / SNAP、S6 scheduled cell、独立 input escrow 与 product/cue 输出</text>
 
   <g class="connection"><path class="edge-mask" d="M 250 218 H 290 V 218 H 330"/><path class="edge" d="M 250 218 H 290 V 218 H 330" marker-end="url(#arrow)"/></g>
 <g class="connection"><path class="edge-mask" d="M 570 218 H 605 V 218 H 640"/><path class="edge" d="M 570 218 H 605 V 218 H 640" marker-end="url(#arrow)"/><text x="605" y="209">slot token + 64-bit identity</text></g>
@@ -36,7 +36,7 @@
       <rect class="node-mask" x="326" y="166" width="248" height="104" rx="18"/>
       <rect class="node" x="330" y="170" width="240" height="96" rx="14"/>
       <text class="node-title" x="346" y="202">Pattern / Voice Owners</text>
-      <text class="node-detail" x="346" y="228">origin · retained PCM generations</text>
+      <text class="node-detail" x="346" y="228">fractional clock · retained PCM</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="636" y="166" width="238" height="104" rx="18"/>
@@ -98,8 +98,8 @@
       <text class="node-title" x="1296" y="522">Cue PCM Output</text>
       <text class="node-detail" x="1296" y="548">pointer-free batch · output 1</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">普通与 scheduled transport</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Phase/SNAP 保留；Preparing 独占复制/借用后 Armed。e1=S、真 e2=F；无回填。</div></foreignObject></g>
-<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">输入与退役</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">2N FIFO/completion，N ordinary/N held release。press ACK 不结束 hold；pre-S 无录音 lineage。</div></foreignObject></g>
-<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">产品与 cue</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">单 typed/legacy Filter。output0 经 Master tap；output1 只接 monitor。两路 PCM 后 batch ACK。</div></foreignObject></g>
-<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Live Pad Mute/Solo</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">FX 前逐 Voice gain gate；64-bit Mute/Solo masks 原子成对应用，muted 优先；audition 不受影响。共享 Delay/Reverb 已有尾音自然衰减。</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Clock / scheduled start</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">连续 tempo 保持位置/Voice；switch 从零开始。S6 先复制/借用再 Armed；e1=实际 S，e2=真 F。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Input / lifetime</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">2N FIFO/completion；N ordinary + N held release。ACK 不退役物理 hold；借用/回调各自结算。</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Gate / product / cue</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Gate 首帧断输入，96 帧恢复；FX 尾音保留。product 经 tap；cue 只到 monitor。</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Realtime boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio 不分配/析构/加锁/写 Truth 或 Journal。值快照不锁 audio；audition 退役不退款 Project。</div></foreignObject></g>
 </svg>

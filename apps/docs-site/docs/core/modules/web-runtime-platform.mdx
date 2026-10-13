@@ -40,6 +40,27 @@ Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。
 Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Runtime Session 的 `createProject` 在串行 Project action 上发出 `project.create`，先校验调用方给出的 Project/Pattern 身份、BPM 与 Bar 数，再只接受指名同一身份、revision 0 的结果；`duplicateProject({sourceProjectId, projectId})` 在同一串行 lane 上发出 `project.duplicate`，发送前拒绝非法或相同的身份，只接受指名新身份、revision 0 的 Local Project summary；Host 只复制、不替换当前打开的 Project、writer lease 或 Runtime，调用方另行 `openProject` 打开副本。Host 在 running、有 active Sequence 或未完成 Sample import 时以 `HOST_STATE_INVALID` 拒绝，另一标签页持有源 Project 时返回 `PROJECT_BUSY`，目标身份已被使用时返回 `DUPLICATE_ID`；源 Project 有未完成录制（含崩溃 owner 留下的 active Journal）时返回 `HOST_STATE_INVALID` 与 “source Project has an unfinished recording”，而不是被通用 sanitizer 还原成请求无效。发布前 deadline 已过则不发布任何副本，由 bridge 报告 `HOST_TIMEOUT`。Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。全局 Pattern transport 的 live overlay 发布由 Facade 协调器在控制节拍上驱动：Platform 实现 `publish_overlay` 能力（prepare 走 Runtime Snapshot），service tick 持续服务开着的录音，同 Pattern 的排队发布在落地前 coalesce，Record-off 可撤回尚未被 audio claim 的 overlay 后提交；已 claim 的 publication 保留原 busy/边界结算——无 beat restart。
 ## 5. API 与 Contract 边界
 
+`PerformanceHeaderedEvent` 的普通 FX 输入对应现有 serializer 的三个独立形状：
+
+| kind | 必填 SDK 字段（除 kind 外） | 禁止字段 |
+| --- | --- | --- |
+| `fx_engage` | `fx`, `value` | `gestureId`, `gestureGeneration` |
+| `fx_move` | `fx`, `value`, `gestureId`, `gestureGeneration` | — |
+| `fx_release` | `fx`, `gestureId`, `gestureGeneration` | `value` |
+
+engage 不接收调用方生成的 legacy gesture identity；Core 的 begin binding 或
+engage receipt 返回 `recordingGestureId` 与 `gestureGeneration`，后续 move/release
+原样回传为 `gestureId` 与 `gestureGeneration`。move 的值必填，release 不携值。
+类型对 engage identity 和 release value 使用显式禁止字段，因此已存入变量的
+这些非法形状也不能赋给 HeaderedEvent；其他任意额外键仍由运行时 closed-schema
+校验，TypeScript 结构型类型不替代该校验或数值/identity 值域校验。
+
+`PerformanceRawEvent` 保留 legacy ID-bound FX 形状。
+`recordPerformanceEvent` 继续接受 `PerformanceRawEvent | PerformanceHeaderedEvent`，
+begin overload 顺序不变，也没有新增 headered 专属方法。共享方法的静态参数类型
+不能从运行时 session profile 中选择一种协议：legacy 输入在该联合方法上合法，
+headered session 仍会在发送前拒绝它。Pad/HOLD 和既有 Filter vocabulary 保持原样。
+
 headered `beginPerformanceRecording({controlEpoch, captureSink, ...})` 在 Core
 control-ready 与本次 binding 的 tap `started` ACK 都到达后，返回可选只读
 `capture`：它就是本次 start 已创建并冻结的 SDK `PerformanceMasterCapture`
@@ -74,6 +95,16 @@ Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe
 Creator Web 与诊断 Web Runtime Host 共用此 Platform；实际身份由 Build Identity 派生。历史 Platform `4.0.0` 把 `MAX_ASSET_BYTES` 保持为 1 MiB sidecar/chunk 边界，并以 `MAX_SAMPLE_IMPORT_BYTES` 接受 manifest 锁定的完整选区 WAV 总量；协议创建失败不再被误当成 quota/snapshot truth。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。master tap 采集到的 PCM 批次同样只是瞬态 Host 资源：Runtime Session 的 capture 配置由 manifest 锁定的 `perform_recording_frames` 与 `perform_recording_queue_batches` 派生，两者缺失或不是正整数时状态停留在 `unconfigured`；这些批次在被 Facade 提交为 Artifact 之前都不是创作真相。
 ## 8. 测试与证据
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。Stage 10 的新增覆盖：`performance_master_tap_worklet.test.mjs` 覆盖 tap 的分批、控制消息精确形状与停止确认；`performance_master_capture.test.mjs` 覆盖消费侧的精确键校验、generation 隔离、sequence 连续性与停止超时结算；`performance_protocol.test.mjs` 覆盖 Pattern Slot 与 Performance 操作在 Host 协议上的注册与信封校验；`performance_bridge_test.cpp` 覆盖 Control 侧的 Performance 桥接；W1 起它另以真实 Facade+engine 验证 typed live-control 经桥到达 engine accepted/applied shadow、exact retry 零二次 admission、engine restart 后旧 epoch 拒绝、Truth 变更不换 epoch，以及新增键/越界 slot/有损序号的协议拒绝；`control_runtime_test.cpp` 覆盖 headered 录制端到端（fence pending 拒首 Pad、drain 后放行、PadHit 携 press 序号、录制期 sessionless 路由拒绝、替换 Project 后旧 epoch 拒投）；Node 侧 `performance_protocol.test.mjs` 锁定 26 个 Performance 操作与新旧线形校验，`runtime_session.test.mjs` 覆盖有界窗口上限/65 次 press 拒绝/cleanup 显式 reject/双 ready 前零投递；`performance_master_capture.test.mjs` 与 `performance_master_tap_worklet.test.mjs` 覆盖 started ACK 的 pending、错绑定/重复/提前批次/超时/关闭各自拒绝与旧 ACK 不复用；`manifest_gate_test.cpp` 覆盖九项 resource limit 与 `perform_master_tap_worklet` 角色计数门禁。
+`apps/creator-web/test/runtime_sdk_headered_fx.types.ts` 是原 Creator 完整 TypeScript
+配置包含的 compiler-only fixture，不是 Vitest suite。它直接对 SDK 导出的
+HeaderedEvent 做正反赋值断言，并通过 Creator 继承的真实方法保留 legacy/headered
+合法调用；负断言不借共享方法联合类型假称可以静态选择 profile。
+`runtime_session.test.mjs` 的 FX shape cases 从 public begin/event 入口检查完整
+wire、Core receipt 映射、七个非 Filter FX 的 engage→move→release、拒绝后零发送及
+下一合法事件的 cursor，另保留 legacy wire。它们与完整 capture-controller/worklet
+suites、锁定编译器的原完整配置和完整 Portal check 分别验证各自边界；新增 fixture
+的存在不代表已执行通过，SDK mock receipt 也不代表真实 Core DSP/browser/PCM 验收。
+
 ## 9. 限制与下一门禁
 
 Native manifest 回归直接采用当前生成的 `expected_assets`，不增删其角色，完成

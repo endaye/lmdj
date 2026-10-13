@@ -1,0 +1,103 @@
+/* Figma 401:4219. Only the assigned Sample Trim body uses this presentation;
+   Capture and long-source import share waveform classes but keep their UI. */
+.sample-surface section.waveform-editor {
+  min-width: 0;
+  gap: var(--creator-group-gap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.sample-surface .waveform-editor .waveform-canvas {
+  min-height: 80px;
+  border-radius: 4px;
+  background: var(--creator-base);
+}
+
+.sample-surface .waveform-editor .waveform-canvas svg {
+  height: 80px;
+}
+
+.sample-surface .waveform-editor .waveform-unavailable {
+  min-height: 80px;
+  padding: 8px;
+  font: 400 10px/14px var(--creator-font-mono);
+}
+
+.sample-surface .waveform-editor path[data-waveform] {
+  fill: var(--creator-sky, #95d4df);
+  stroke: var(--creator-sky, #95d4df);
+}
+
+.sample-surface .waveform-editor line[data-zero-line] {
+  stroke: var(--creator-line);
+}
+
+.sample-surface .waveform-editor rect[data-selection-mask] {
+  fill: var(--creator-base);
+  fill-opacity: .65;
+}
+
+.sample-surface .waveform-editor line[data-handle] {
+  stroke: var(--creator-lime);
+}
+
+.sample-surface .waveform-editor .waveform-grip-bar {
+  background: var(--creator-lime);
+}
+
+.sample-surface .waveform-editor .waveform-grip-bar::before,
+.sample-surface .waveform-editor .waveform-grip-bar::after {
+  background: var(--creator-ink);
+}
+
+.sample-surface .waveform-editor .waveform-values {
+  gap: var(--creator-group-gap);
+  align-items: stretch;
+}
+
+.sample-surface .waveform-editor .waveform-value-card {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+  font-family: var(--creator-font-mono);
+}
+
+.sample-surface .waveform-editor .waveform-value-card span {
+  grid-column: 1 / -1;
+  font-size: 9px;
+  line-height: 13px;
+  letter-spacing: 0;
+}
+
+.sample-surface .waveform-editor .sample-value-input {
+  min-width: 0;
+  color: var(--creator-text);
+  font: 400 16px/22px var(--creator-font-mono);
+}
+
+.sample-surface .waveform-editor .waveform-value-card small {
+  align-self: center;
+  font-size: 11px;
+}
+
+.sample-surface .waveform-editor .waveform-viewport-actions {
+  display: grid;
+  gap: var(--creator-group-gap);
+  min-width: 0;
+}
+
+.sample-surface .waveform-editor .waveform-zoom-actions,
+.sample-surface .waveform-editor .waveform-pan-actions {
+  display: grid;
+  gap: var(--creator-group-gap);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sample-surface .waveform-editor .waveform-pan-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}

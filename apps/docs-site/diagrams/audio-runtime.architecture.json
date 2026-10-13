@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Audio Runtime Module",
-    "summary": "S6 源码草稿：ordinary Phase/SNAP、serial60 scheduled cell、独立 input escrow 与 product/cue 输出"
+    "summary": "Runtime source：连续 tempo / SNAP、S6 scheduled cell、独立 input escrow 与 product/cue 输出"
   },
   "boundaries": [],
   "components": [
@@ -19,7 +19,7 @@
     {
       "id": "bank",
       "label": "Pattern / Voice Owners",
-      "detail": "origin · retained PCM generations",
+      "detail": "fractional clock · retained PCM",
       "kind": "core",
       "x": 330,
       "y": 170,
@@ -199,20 +199,20 @@
   ],
   "cards": [
     {
-      "title": "普通与 scheduled transport",
-      "body": "Phase/SNAP 保留；Preparing 独占复制/借用后 Armed。e1=S、真 e2=F；无回填。"
+      "title": "Clock / scheduled start",
+      "body": "连续 tempo 保持位置/Voice；switch 从零开始。S6 先复制/借用再 Armed；e1=实际 S，e2=真 F。"
     },
     {
-      "title": "输入与退役",
-      "body": "2N FIFO/completion，N ordinary/N held release。press ACK 不结束 hold；pre-S 无录音 lineage。"
+      "title": "Input / lifetime",
+      "body": "2N FIFO/completion；N ordinary + N held release。ACK 不退役物理 hold；借用/回调各自结算。"
     },
     {
-      "title": "产品与 cue",
-      "body": "单 typed/legacy Filter。output0 经 Master tap；output1 只接 monitor。两路 PCM 后 batch ACK。"
+      "title": "Gate / product / cue",
+      "body": "Gate 首帧断输入，96 帧恢复；FX 尾音保留。product 经 tap；cue 只到 monitor。"
     },
     {
-      "title": "Live Pad Mute/Solo",
-      "body": "FX 前逐 Voice gain gate；64-bit Mute/Solo masks 原子成对应用，muted 优先；audition 不受影响。共享 Delay/Reverb 已有尾音自然衰减。"
+      "title": "Realtime boundary",
+      "body": "Audio 不分配/析构/加锁/写 Truth 或 Journal。值快照不锁 audio；audition 退役不退款 Project。"
     }
   ]
 }

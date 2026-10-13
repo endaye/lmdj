@@ -20,7 +20,7 @@ test("a Runtime error replaces its status row without adding raw error text to t
       errorDetails: {message: "Unbounded provider text ".repeat(100)}},
   }} />);
   const overview = screen.getByTestId("project-overview");
-  const workspace = overview.querySelector('dl[aria-label="Workspace"]')!;
+  const workspace = overview.querySelector('dl[aria-label="Audio"]')!;
   expect(workspace.querySelectorAll("dd")).toHaveLength(3);
   expect(workspace.querySelector("[data-error-code]")?.textContent).toBe("Needs attention");
   expect(overview.textContent).not.toContain("Unbounded provider text");
@@ -41,5 +41,15 @@ test("no open Project displays an explicit empty identity and state", () => {
   render(<ProjectOverview state={initialCreatorState} />);
   const overview = screen.getByTestId("project-overview");
   expect(overview.querySelector('dl[aria-label="Project"]')?.textContent)
-    .toBe("PROJECTnone—NO PROJECT OPEN");
+    .toBe("NO PROJECT OPENnoneNo content open—");
+});
+
+test("Project and System facts retain real audio, MIDI and device output readbacks", () => {
+  render(<ProjectOverview state={{...state, audio: {phase: "suspended"}}}
+    midi={{permission: "denied", connectedInputCount: 0}} outputValue="61%" />);
+  const overview = screen.getByTestId("project-overview");
+  expect(overview.querySelector('dl[aria-label="Audio"]')?.textContent)
+    .toBe("AUDIOsuspendedDevice output 61%Project ready");
+  expect(overview.querySelector('dl[aria-label="MIDI"]')?.textContent)
+    .toContain("MIDIdenied");
 });

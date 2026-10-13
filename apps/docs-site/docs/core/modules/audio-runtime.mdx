@@ -18,13 +18,57 @@ S6 当前为**源码草稿，执行验收 UNVERIFIED**。下述 scheduled Record
 与双输出适配描述当前源码；组件、并发、Wasm/OPFS、完整 Portal、物理设备与听感
 仍待完整 Task 验证。上方身份由清单生成，不能把旧版本测试当作这份草稿的验收。
 
+## 连续 tempo transition
+
+`PreparedPatternView::with_tempo(bpm)` 从不可变 prepared source 派生 40..240 BPM
+view，保留 Project/Pattern/revision、canonical events、overlay 与共享 PCM owner，
+只重算 frame bounds。`publish_pattern_tempo_transition(view, expected_generation)`
+是独立于同 BPM phase edit 的 Runtime primitive：要求精确 current generation 与相同
+source/event/material identity，拒绝 pending Q/A publication 和保留中的 transport
+command/receipt，复用原子 publication admission 与 cutoff。
+
+音频 owner 在实际应用帧 F 保留分数 tick numerator，使用 48 kHz、PPQ 960、固定
+denominator 2,880,000 的 `TransportAnchor` 调度后续 onset 和 loop。当前音乐位置
+不重启，持音保留 PCM cursor、envelope 与 owner；gated note-off 跟随同一音乐
+anchor，one-shot 和已经开始释放的 tail 保留音频生命周期。callback 不分配、回收
+owner 或加锁，无法表示的 note-off 拒绝该 Voice，而非制造无限 hold。
+
+串行 control lane 的 `pattern_tempo_observation(expected_generation)` 返回实际
+audio-applied generation、start epoch、applied frame、exact anchor 与 playing；
+它不把请求时预测的 activation frame 当作已应用证明。`PatternTransportReceipt`
+保留 cutoff 时的 optional `tempo_anchor`，无法表示音乐位置时为 unavailable，
+不制造零位置；后续 recording 消费者必须拒绝缺失的精确锚点。旧 `origin_frame` 是物理 start/restart frame，
+连续变速后不能替代分数音乐锚点。`anchored_tick_boundary_frame` 以 checked integer
+ceiling 投影 tick，overflow/invalid 为 unavailable。同 BPM phase edit 的 changed-BPM
+拒绝契约仍保留；对已连续变速的 view 做同 BPM authoring adoption 不恢复整数 origin。
+
+选定的 Beat/Bar/End switch 在连续 clock 上取下一个严格晚于保留 frontier 的
+音乐 tick 边界，并向上取整到实际 frame。已由 audio claim 的普通前驱 Pattern
+仍使用自己的 activation 与 geometry，不能拼接旧 Pattern 的 anchor；普通替换
+从 tick zero 开始。未进入连续模式的 rounded-loop 行为保持不变。
+相同 Project/Pattern/BPM/PPQ/loop 的已 claim phase edit 保留同一连续音乐
+clock；普通 replacement 的 clock 不能借用它。新 tempo transition 前驱若仅
+被 claim、尚未真正 apply（包括 `render(0)`），selected switch 返回既有
+`publication_pending`，不消耗 generation、不覆盖已接受 Q/A。实际 apply 后
+原调用者可基于 coherent anchor 重试。
+
+当前 Web adapter 把所有非 accepted publication 映射为 unavailable error，
+没有自动 pending retry。I2b 必须先 clear/cancel preview 并确认实际应用 barrier，
+再发 Pattern switch，且显式处理仍可达的 native pending；此 consumer proof
+仍为 UNRUN，本 Task 不修改 Facade、Contract 或 adapter。
+
+这是 Runtime 能力。Facade/Web preview 生命周期、Creator 400 ms 保存与取消、
+metronome 同锚点消费仍需后续接线；该 primitive 本身不写 Project Truth，也不代表
+Creator 可听 preview 已验收。新增公开对象布局属于 C++ ABI MAJOR debt，身份由
+active manifests 的 Build Identity 投影，后续版本结算不手写推测版本号。
+
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态
 Audio Runtime（当前身份见上方 Build Identity）已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。当前 source 以 32 位 atomic slot-token mailbox 线性化 immutable Pattern publication：control 只取代尚未被 callback claim 的同 Project/Pattern/next-Bar view；不同 Pattern 默认拒绝，只有同时匹配 pending generation、源 Pattern 与 activation frame 的 Sequence switch/Stop authority 才可替换或取消。已 claim 的 view 保留原 boundary，较新的 view 从 claimed activation/BPM Bar length 重算到下一 Bar；slot token 的 bit 31 表示 claimed，完整 64 位 generation 保存在不可变槽内；保留原有 2^63 耗尽边界并 fail closed，不循环复用外部身份。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。本版新增固定八段 master FX 链：`kFxChainOrder` 的顺序恒为 filter → delay → reverb → stutter → gate → reverse → crush → cutter，每段状态是 `{value, engaged, frozen}`，链级另有一个 HOLD 位冻结全链当前形态。所有 FX 取值共享 0..1000 的整数值域（`kMasterFxValueMaximum = 1000`）。`MasterFxChain` 暴露 `prepare / reset / set_bpm(bpm) / apply_gesture(FxGesture) / process(left, right, frames)`；stutter、cutter 与 delay 的周期全部由 `master_fx_bar_frames(sample_rate, bpm)` 与各自的 divisor 表从 Bar 推导，因此 FX 时值跟随整数 BPM transport anchor，而不是墙钟时间。`RealtimeEngine` 相应新增 `prepare_master_fx(bpm)`（控制线程、quiescent，一次性分配全部 FX 渲染存储）、`enqueue_fx_gesture`/`enqueue_master_fx_tempo(bpm)`、有界的 `MasterFxControlKind {gesture, tempo}` 控制通道、`FxEnqueueResult`（`accepted`、`invalid_fx`、`invalid_value`、`invalid_bpm`、`not_prepared`、`not_running`、`queue_full`）与 `master_fx_telemetry()`、`master_fx_processed_frames_`。既有实时不变量完全不变：实时回调仍不分配、不加锁、不修改 Project、不做量化、不做 journal I/O；FX 缓冲在准备阶段一次分配完毕，手势与 tempo 只经由有界控制通道到达。
 
 同一 Filter stage 另有一条 typed independent 分支（D04/F1）：Core DSP 类型为 `FilterType`（LP/HP/BP）与整数 `FilterParameters`（Cutoff 20–20 000 Hz、Resonance 0–1000 即 0–100%），Domain 持久化类型在边界显式翻译。DSP 为每声道一个二阶 TPT SVF，三种类型共用同一状态推导；Q 按 `(1/√2)·(10·√2)^(r/1000)` 映射（0% 为 Butterworth，100% 为 Q=10），BP 在中心频率为单位增益；系数只按固定 48 kHz 计算，20 kHz 边界不下调。系数与 wet gate 过渡沿用共享的 96 帧（2 ms）斜坡，OFF 是逐位旁通。单一 stage ownership：independent engage 原子接管并清除 legacy 分支的 engaged/frozen；legacy engage（或 independent 活跃时的 legacy move）接管回 legacy；legacy release 只释放 legacy gesture，不能消灭已接管的 independent gesture；move 要求已 engage 的 independent gesture，release 在 HOLD 下冻结并保留参数组供读回。新控制走同一条有界 1024 控制队列（`MasterFxControlKind::filter`），与手势/tempo 共享容量与 `queue_full` 预算；控制侧 accepted shadow 只在队列接受后更新并各消耗一个 accepted sequence，音频线程在 drain 后经固定三槽值通道发布 coherent applied `FilterLiveState`＋sequence＋engine start epoch（`filter_control_status()`），accepted 与 applied 严格分离；不新增 render mutex、实时分配、无界重试或额外 master 输出增益。`FxEnqueueResult` 不新增枚举（application-facade 对其穷举 switch），非法 tuple 复用 `invalid_value`；release 不校验其被忽略的 tuple。
-同一引擎另有 64-Pad live Mute/Solo 声音门控（D04/M1）：`enqueue_pad_gates(muted_mask, solo_mask)` 把两组 uint64 mask 作为一个原子对经同一条有界 1024 控制队列送达（`MasterFxControlKind::pad_gates`），mask/status/reset 同属一个 producer；accepted shadow 只在队列接受后更新，queue 满 fail-closed 且不污染 shadow，音频线程在 drain 时成对应用并经固定三槽值通道发布带 sequence 与 engine start epoch 的 applied 快照（`pad_gates_status()`）。门控是每个非 audition voice 上的 `live_gate` 增益：目标在 gated/ungated 间切换时以共享的 96 帧斜坡过渡，中性（值为 1）路径逐位不变；门控只乘增益，voice cursor 继续前进，解除时恢复当时位置的声音，不 retrigger、不冻结。Mute 优先于 Solo，Solo mask 非空时未被 Solo 的 Pad 视为 gated，多 Solo 合法；持久 `playback.muted` 仍是独立的额外禁止。gated Pad 的 press 在 trigger 处被拒、解除后不复活；mask 寻址 project Pad slot 0–63，audition sentinel 不在值域内，metronome 不经过本引擎。gate 位于共享 FX 输入之前：已进入共享 Delay/Reverb 总线的尾音自然衰减、不清空总线，其他 Pad 的效果继续。`start()`/`stop()` 清空两组 mask 并按新 epoch 发布中性 applied；Bank/Pattern replacement 保留两组 mask（门控寻址 Pad slot，不寻址 Asset）。
+同一引擎另有 64-Pad live Mute/Solo 声音门控（D04/M1）：`enqueue_pad_gates(muted_mask, solo_mask)` 把两组 uint64 mask 作为一个原子对经同一条有界 1024 控制队列送达（`MasterFxControlKind::pad_gates`），mask/status/reset 同属一个 producer；accepted shadow 只在队列接受后更新，queue 满 fail-closed 且不污染 shadow，音频线程在 drain 时成对应用并经固定三槽值通道发布带 sequence 与 engine start epoch 的 applied 快照（`pad_gates_status()`）。门控在新 mask 对实际应用的首个渲染帧立即阻断每个非 audition voice 的输入：`live_gate` 立即归零，Tone/EQ 记忆产生的最终贡献也在共享 FX 总线之前置零，不提供 96 帧输入宽限。逐 voice DSP、包络、cursor 和 release/lifetime 继续推进；解除门控保留既有 96 帧恢复斜坡，恢复当时位置的声音，不 retrigger、不冻结；中性（值为 1）路径逐位不变。普通 release/stop/end 的包络和 post-EQ declick 保持原规则，不能用提前终止 voice 实现 live gate。Mute 优先于 Solo，Solo mask 非空时未被 Solo 的 Pad 视为 gated，多 Solo 合法；持久 `playback.muted` 仍是独立的额外禁止。gated Pad 的 press 在 trigger 处被拒、解除后不复活；mask 寻址 project Pad slot 0–63，audition sentinel 不在值域内。普通 JS metronome 不经过 product bus；S6 count-in cue 由 Engine 的独立值批次交给 adapter，从 output 1 送往 monitor，不进入逐 Voice Pad gate 或 Master FX/capture。gate 位于共享 FX 输入之前：已进入共享 Delay/Reverb 总线的尾音自然衰减、不清空总线，其他 Pad 的效果继续。`start()`/`stop()` 清空两组 mask 并按新 epoch 发布中性 applied；Bank/Pattern replacement 保留两组 mask（门控寻址 Pad slot，不寻址 Asset）。
 
 共享的逐 voice DSP 内核（`include/lmdj/audio/detail/voice_dsp.hpp`、`src/voice_dsp.cpp`）渲染携带非中性 voice DSP 块的 voice：Q32.32 读头的步进为 2^(cents/1200)（整八度是精确的 2 的幂，pitch 0 读整数帧）；reverse 是镜像取样，循环点、ping-pong 与 crossfade 都在逻辑坐标中计算；只有小数位置才做 4 点 Hermite 插值；ping-pong 在末帧与循环点反射且不重复边界帧；crossfade 是循环与自身的等功率重叠；pan 为等功率、居中单位增益、硬偏时远端精确静音；非循环 voice 的 2 ms 结尾淡出按输出帧计。实时引擎的 Bank 按下、Sample 预览、Pattern voice 与 Performance Replay，以及离线渲染器，都在 voice 启动时准备内核，不合的块计为无效事件（离线为无效请求）。中性 voice 不进入内核、保持原渲染路径，所以默认输出与 golden 渲染不变。Voice-state 发布内核的物理源帧，reverse voice 的 playhead 因此反向移动。内核不分配、不加锁；逐帧计算不使用 double，只有每次触发时准备内核才用 double 一次算出 pitch 步进；四分之一正弦表在静态初始化时建立。reverse 镜像整个 trim 区间，循环点也随之镜像：循环点缺省时 reverse 循环仍覆盖整个区间。离线渲染逐 voice 量化后按 snapshot 顺序饱和混合；实时路径对立体声源仍下混为 mono，这一既有差异不变。
 
@@ -152,14 +196,17 @@ Project、Pattern、BPM、PPQ 与 loop length；不匹配返回
 非 canonical PPQ。Project revision 和事件内容可以变化，支持 journal overlay
 与提交后的 canonical replacement。既有 publication 方法与默认启动语义保留。
 
-替换在音频实际取得 publication 后的首个有效渲染帧 F 应用，保留原 origin。
-新事件 cursor 从该 origin 推导当前 loop phase，并定位到 F 尚未调度的首个事件：
+替换在音频实际取得 publication 后的首个有效渲染帧 F 应用。普通 rounded-loop
+模式保留原 origin；已进入连续 tempo 模式时保留同一分数音乐 anchor，不从整数
+origin 重建相位。新事件 cursor 从对应 clock 推导当前 loop phase，并定位到 F 尚未调度的首个事件：
 恰在 F 的事件执行一次，已经过去的事件等下一 loop。返回的 activation frame 是
 控制侧观察到的最早请求帧，并非回填的实际应用帧。显式 Pattern-stopped 状态下只更新
 current view，不启用调度；后续显式 start 仍从新的 origin 开始。
 
 旧 generation 的持续 Voice 保留其 slot、sample reference、播放 cursor、envelope
-和绝对 scheduled release。旧 Pattern slot 进入 retiring，所有 Voice 结束且
+与 release 所有权。普通 clock 保留绝对 scheduled release；连续 tempo clock
+下的 gated Pattern note-off 使用同一音乐 anchor，one-shot 与已开始的 release tail
+保持自身音频生命周期。旧 Pattern slot 进入 retiring，所有 Voice 结束且
 publication/audio owner 已释放后才可由控制线程 reclaim；音频线程不析构 PCM。
 固定四槽耗尽返回 `pattern_slots_full`，不抢占 Voice、不强制回收、不增长存储，
 释放后调用者可重试。pending publication（含 switch）或 reserved transport
@@ -363,7 +410,7 @@ ESP32 可用堆、整机适配或实时 deadline 通过。该 additive API 与 B
 现已在本次 integration 分配匹配的 Module/Assembly 身份。
 
 ## 8. 测试与证据
-Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。master FX 由 `audio.master_fx`、`audio.master_fx_determinism` 与 `audio.master_fx_allocation_guard` 覆盖链顺序、值域、HOLD、Bar 相对周期、相同输入相同输出与实时路径的无分配保证；F1 起 `audio.master_fx` 另以解析 warped-bilinear 原型作为独立 oracle 校验 LP/HP/BP 频响、20 Hz/20 kHz 与 0/100% 边界的有限稳定、单参数 move 互不影响、legacy 接管与 release 归属，`audio.master_fx_determinism` 用同一整数控制流锁定引擎与共享 DSP 的一致性及 golden 样本，`audio.master_fx_allocation_guard` 覆盖全部新参数变更与 HOLD/release/neutral 的零分配及 accepted/applied 收敛。`audio.master_fx_stress` 属于 stress tier，覆盖控制通道在并发渲染下的有界行为，并新增 typed 参数 churn、确定性 queue-full 拒绝与 epoch 重启用例（原场景与预算不变）。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。`audio.value_channel` 验证 64 位进位、读者半途暂停时连续发布与重置、最终值及多读者串行；Realtime component 的确定性交错覆盖 Q/P/C 占用、Pad 0/63 handoff、同槽高位 generation 复用、无下一 callback 的取消结果及 admission 重算边界。M1 起 `audio.realtime_engine` 另覆盖 live Mute/Solo 门控：mask 寻址 slot 0/63、多 Solo 与 Mute 优先、accepted/applied 与 epoch 一致、Bank replacement 保留 mask、gated press 不起 voice 且解除不复活；原生 PCM oracle 用两条持续信号固定 96 帧 ramp 形状（常值内容单调降到精确目标值、之后逐帧相等、解除单调升回、无 retrigger）与共享 Delay 尾音规则（gate 关闭后先一整个 Delay period 精确静音、随后 echo 代际峰值按 0.35 反馈严格衰减）；sweep 内容跨 loop wrap 证明 cursor 继续前进而非冻结；audition sentinel 不被门控；queue 满 fail-closed、not-running 拒绝、stop/restart 清空并换新 epoch。`audio.realtime_engine_stress` 新增并发 producer/consumer 用例：render 线程逐帧渲染，producer 高频翻转两组 mask 五万次，断言按 FIFO 收敛到最终 accepted 对。`audio.master_fx_allocation_guard` 把 `enqueue_pad_gates`/applied drain 纳入零分配与无锁覆盖，并固定无 prepared Master FX 时门控仍然 admit（voice 级而非 FX stage）。Snapshot stress 同时运行四个观察者并覆盖 start/stop 写者交接。物理延迟与 Safari 内存验收单列。
+Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。master FX 由 `audio.master_fx`、`audio.master_fx_determinism` 与 `audio.master_fx_allocation_guard` 覆盖链顺序、值域、HOLD、Bar 相对周期、相同输入相同输出与实时路径的无分配保证；F1 起 `audio.master_fx` 另以解析 warped-bilinear 原型作为独立 oracle 校验 LP/HP/BP 频响、20 Hz/20 kHz 与 0/100% 边界的有限稳定、单参数 move 互不影响、legacy 接管与 release 归属，`audio.master_fx_determinism` 用同一整数控制流锁定引擎与共享 DSP 的一致性及 golden 样本，`audio.master_fx_allocation_guard` 覆盖全部新参数变更与 HOLD/release/neutral 的零分配及 accepted/applied 收敛。`audio.master_fx_stress` 属于 stress tier，覆盖控制通道在并发渲染下的有界行为，并新增 typed 参数 churn、确定性 queue-full 拒绝与 epoch 重启用例（原场景与预算不变）。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。`audio.value_channel` 验证 64 位进位、读者半途暂停时连续发布与重置、最终值及多读者串行；Realtime component 的确定性交错覆盖 Q/P/C 占用、Pad 0/63 handoff、同槽高位 generation 复用、无下一 callback 的取消结果及 admission 重算边界。M1 起 `audio.realtime_engine` 另覆盖 live Mute/Solo 门控：mask 寻址 slot 0/63、多 Solo 与 Mute 优先、accepted/applied 与 epoch 一致、Bank replacement 保留 mask、gated press 不起 voice 且解除不复活；原生 PCM oracle 从 applied 首帧检查 Mute/新增 Solo 对当前声音的精确关断和另一 Pad 的逐帧保留，覆盖 slot 0/63、两声道、primed Tone/EQ 记忆、当前和后续 Pattern 音符，以及原 release/stop 的剩余生命周期；解除仍逐渐升回、无 retrigger。共享 Delay/Reverb 分别与独立已知总线输入（相同有限前缀、之后被门控 Pad 零输入、可选另一 Pad 持续输入）经过同一公开 FX 链的完整波形逐帧比较，包含首帧和后续 echo/tail；保留正值尾音及后窗衰减，以及原 Delay 首周期静音、后续代际衰减断言；sweep 内容跨 loop wrap 证明 cursor 继续前进而非冻结；audition sentinel 不被门控；queue 满 fail-closed、not-running 拒绝、stop/restart 清空并换新 epoch。`audio.realtime_spsc_stress` 包含并发 producer/consumer 用例：render 线程逐帧渲染，producer 高频翻转两组 mask 五万次，断言按 FIFO 收敛到最终 accepted 对。`audio.master_fx_allocation_guard` 把 `enqueue_pad_gates`/applied drain 纳入零分配与无锁覆盖，并固定无 prepared Master FX 时门控仍然 admit（voice 级而非 FX stage）。Snapshot stress 同时运行四个观察者并覆盖 start/stop 写者交接。物理延迟与 Safari 内存验收单列。
 `audio.realtime_queue` 另行锁定紧凑 Voice-state 存储、完整字段边界、精确容量、
 FIFO、wraparound、失败 pop 不修改输出与静止 clear/reuse；既有
 `audio.realtime_spsc_stress` 增加一百万次紧凑事件并发传输而不减少原有工作量。

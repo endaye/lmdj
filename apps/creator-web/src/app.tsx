@@ -3153,14 +3153,10 @@ function Workspace({
                 />
               )}
 
-              {!systemOpen && ["sample", "slice"].includes(activeMode) &&
+              {!systemOpen && activeMode === "sample" &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
-                {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
-                  onClick={() => selectMode("slice")}>Slice</button>}
-                {activeMode === "slice" &&
-                  <button type="button" onClick={() => selectMode("sample")}>
-                    Back to Sample
-                  </button>}
+                <button type="button" disabled={!sliceEnabled}
+                  onClick={() => selectMode("slice")}>Slice</button>
               </nav>}
               <SystemSurface active={systemOpen} onBack={() => {
                 setSystemOpen(false);
@@ -3368,6 +3364,7 @@ function Workspace({
                 <CandidateSurface key={state.project.current.projectId}
                   session={session} projectId={state.project.current.projectId}
                   projectRevision={state.project.current.revision}
+                  onBack={() => selectMode("sample")}
                   onRefreshProject={(revision) => refreshCandidateProject(
                     state.project.current!.projectId, revision,
                   )} />
@@ -3386,9 +3383,13 @@ function Workspace({
                   }}
                 />
               ) : (
+                <>
                 <p className="touch-fallback-note">
                   Open a Project with candidate or Sound Set support.
                 </p>
+                {activeMode === "slice" && <button type="button"
+                  onClick={() => selectMode("sample")}>Back to Sample</button>}
+                </>
               )}
               {/* One Sample surface: shown in Sample mode, carried hidden while an
                   armed capture, an open trim overlay or a Sequence-side

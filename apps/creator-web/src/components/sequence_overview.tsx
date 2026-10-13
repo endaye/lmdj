@@ -28,6 +28,7 @@ import {padContent} from "../state/overview_context";
 
 interface SequenceOverviewProps {
   hideContext?: boolean;
+  hidePosition?: boolean;
   project: ProjectView | null;
   state: SequenceState;
   transport?: PatternTransportState;
@@ -44,6 +45,7 @@ interface SequenceOverviewProps {
 export function SequenceOverview({
   project,
   hideContext = false,
+  hidePosition = false,
   state,
   transport,
   bank,
@@ -53,7 +55,8 @@ export function SequenceOverview({
   currentPad,
   rowOffset = bank * SEQUENCE_BANK_PADS,
 }: SequenceOverviewProps) {
-  const selectedPatternId = state.selectedPatternId ?? project?.patternId ?? null;
+  const playingPatternId = transport?.status?.playing === true ? transport.status.currentPatternId : null;
+  const selectedPatternId = playingPatternId ?? state.selectedPatternId ?? project?.patternId ?? null;
   const pattern = selectedPatternId === null
     ? undefined
     : project?.patterns.find((item) => item.patternId === selectedPatternId);
@@ -104,7 +107,7 @@ export function SequenceOverview({
   const bars = pattern?.bars ?? null;
   return (
     <div className="sequence-overview" data-testid="sequence-overview">
-      <p className="sequence-overview-position" data-testid="sequence-position">
+      <p className={`sequence-overview-position${hidePosition ? " visually-hidden" : ""}`} data-testid="sequence-position">
         {transportLabel.toUpperCase()} / {sequenceBarBeat(playheadTick)}
       </p>
       {/* One context line: a status, when there is one, takes its place. */}
@@ -167,6 +170,9 @@ export function SequenceOverview({
         ) : null}
       </dl>
       )}
+      {hideContext && queuedSwitchPatternId !== null ? (
+        <output className="sequence-overview-queued">QUEUED {queuedSwitchPatternId.slice(0, 8)}</output>
+      ) : null}
       {overview !== null ? (
         <div className="sequence-overview-rows">
           <ol className="sequence-overview-names" aria-hidden="true">

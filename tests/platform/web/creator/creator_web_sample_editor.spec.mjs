@@ -1765,3 +1765,196 @@ for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
     await noErrors();
   });
 }
+
+// Trim owns the ordinary action/value targets below. Its existing dragging
+// zones are intentionally not claimed as universal 44px targets: the 20px
+// per-side zones still clip at the source edge and shared midpoint.
+async function recordTrimGeometry(page, editor, state, testInfo) {
+  const canvas = editor.locator(".waveform-canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  const waveform = await canvas.evaluate((element) => ({
+    height: element.clientHeight,
+    waveformFill: getComputedStyle(element.querySelector("[data-waveform]")).fill,
+    grips: [...element.querySelectorAll("[data-grip-zone]")].map((grip) => {
+      const rect = grip.getBoundingClientRect();
+      return {kind: grip.dataset.gripZone, width: rect.width, height: rect.height};
+    }),
+  }));
+  expect(waveform.height).toBe(80);
+  const waveformShot = testInfo.outputPath(`trim-${state}-waveform.png`);
+  await page.screenshot({path: waveformShot});
+  await testInfo.attach(`trim-${state}-waveform`, {path: waveformShot, contentType: "image/png"});
+
+  const groups = [];
+  for (const selector of [".waveform-values", ".waveform-viewport-actions"]) {
+    const group = editor.locator(selector);
+    await group.scrollIntoViewIfNeeded();
+    const geometry = await group.evaluate((element) => {
+      const controls = [...element.querySelectorAll("button, input.sample-value-input")];
+      const boxes = controls.map((control) => {
+        const rect = control.getBoundingClientRect();
+        const points = [[rect.width / 2, 1], [rect.width / 2, rect.height - 1],
+          [1, rect.height / 2], [rect.width - 1, rect.height / 2],
+          [rect.width / 2, rect.height / 2]];
+        return {
+          label: control.getAttribute("aria-label") ?? control.textContent.trim(),
+          x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom,
+          width: rect.width, height: rect.height,
+          localX: control.offsetLeft, localY: control.offsetTop,
+          localRight: control.offsetLeft + control.offsetWidth,
+          localBottom: control.offsetTop + control.offsetHeight,
+          insideViewport: rect.x >= 0 && rect.y >= 0 &&
+            rect.right <= innerWidth && rect.bottom <= innerHeight,
+          hits: points.map(([x, y]) => {
+            const hit = document.elementFromPoint(rect.x + x, rect.y + y);
+            return hit === control || control.contains(hit);
+          }),
+        };
+      });
+      return {boxes, horizontalOverflow: element.scrollWidth - element.clientWidth};
+    });
+    expect(geometry.horizontalOverflow).toBe(0);
+    for (const control of geometry.boxes) {
+      expect(control.width, `${state}: ${control.label}`).toBeGreaterThanOrEqual(44);
+      expect(control.height, `${state}: ${control.label}`).toBeGreaterThanOrEqual(44);
+      expect(control.insideViewport, `${state}: ${control.label}`).toBe(true);
+      expect(control.hits, `${state}: ${control.label}`).toEqual([true, true, true, true, true]);
+    }
+    groups.push({selector, ...geometry});
+  }
+  expect(groups[0].boxes).toHaveLength(state === "looping" ? 4 : 2);
+  const actions = groups[1].boxes;
+  expect(actions.map(({label}) => label)).toEqual([
+    "Zoom Out", "Zoom In", "Fit waveform", "Pan Left", "Pan Right",
+  ]);
+  // Logical layout coordinates retain their meaning when the whole console
+  // rotates; the actual CSS-pixel rectangles/hits above stay screen-relative.
+  const [out, inside, fit, left, right] = actions;
+  expect(out.localY).toBe(inside.localY);
+  expect(inside.localY).toBe(fit.localY);
+  expect(inside.localX).toBeGreaterThan(out.localRight);
+  expect(fit.localX).toBeGreaterThan(inside.localRight);
+  expect(left.localY).toBeGreaterThan(out.localBottom);
+  expect(left.localY).toBe(right.localY);
+  expect(right.localX).toBeGreaterThan(left.localRight);
+  const overall = await editor.evaluate((element) => {
+    const boxes = [...element.querySelectorAll("button, input.sample-value-input")]
+      .map((control) => control.getBoundingClientRect());
+    return {
+      overlapCount: boxes.flatMap((a, index) => boxes.slice(index + 1).filter((b) =>
+        a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top)).length,
+      horizontalOverflow: element.scrollWidth - element.clientWidth,
+    };
+  });
+  expect(overall.overlapCount).toBe(0);
+  expect(overall.horizontalOverflow).toBe(0);
+  const jsonPath = testInfo.outputPath(`trim-${state}-geometry.json`);
+  const actionsShot = testInfo.outputPath(`trim-${state}-actions.png`);
+  await writeFile(jsonPath, JSON.stringify({waveform, groups, overall}, null, 2));
+  await page.screenshot({path: actionsShot});
+  await testInfo.attach(`trim-${state}-geometry`, {path: jsonPath, contentType: "application/json"});
+  await testInfo.attach(`trim-${state}-actions`, {path: actionsShot, contentType: "image/png"});
+}
+
+for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 720},
+  {width: 1280, height: 600}, {width: 1024, height: 768},
+  {width: 768, height: 600}, {width: 768, height: 1024}]) {
+  test(`Trim groups preserve real local viewport and editing at ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium");
+    test.setTimeout(180_000);
+    const noErrors = recordPageErrors(page);
+    await installHostProofRecorder(page);
+    await page.setViewportSize(viewport);
+    await page.goto("/index.html");
+    await waitForBootProject(page);
+    await activateAudio(page);
+    await chooseSampleFile(page, "Add Sample to Pad A01", "trim-layout.wav", pcm16Wav({}));
+    await commitLongSourceSelection(page);
+    await expectProjectRevision(page, 1);
+    await showSamplePage(page, "Trim");
+    const editor = page.getByRole("region", {name: "Pad A01 waveform editor", exact: true});
+    await expect(editor.getByRole("img", {name: "Pad A01 mirrored waveform"})).toBeVisible();
+    const inspectTruth = async () => {
+      const response = await rawRequest(page, "project.inspect", {});
+      expect(response.ok).toBe(true);
+      return response.result;
+    };
+    const initialTruth = await inspectTruth();
+    expect(initialTruth.project.revision).toBe(1);
+    await recordTrimGeometry(page, editor, "ordinary", testInfo);
+    const button = (name) => editor.getByRole("button", {name, exact: true});
+    await button("Zoom Out").focus();
+    for (const name of ["Zoom In", "Fit waveform", "Pan Left", "Pan Right"]) {
+      await page.keyboard.press("Tab");
+      await expect(button(name)).toBeFocused();
+    }
+
+    const view = async (name, start, end, keyboard = false) => {
+      const offset = await page.evaluate(() => window.__sampleProofResponses.length);
+      if (keyboard) {
+        await button(name).focus();
+        await page.keyboard.press("Enter");
+      } else {
+        await button(name).click();
+      }
+      await expect(editor).toHaveAttribute("data-viewport-start", String(start));
+      await expect(editor).toHaveAttribute("data-viewport-end", String(end));
+      // Wait for the real viewport query to settle before the negative Truth
+      // read, so an in-flight request cannot masquerade as local-only success.
+      await expect.poll(() => page.evaluate((from) =>
+        window.__sampleProofResponses.slice(from).filter((r) =>
+          r.operation === "sample.waveform" && r.ok).length, offset),
+      {timeout: REPORT_REVISION_TIMEOUT_MS}).toBe(1);
+      expect(await inspectTruth()).toEqual(initialTruth);
+    };
+    const localFrom = await page.evaluate(() => window.__sampleProofOperations.length);
+    await view("Zoom In", 24_000, 72_000);
+    await recordTrimGeometry(page, editor, "zoomed", testInfo);
+    await view("Pan Right", 36_000, 84_000, true);
+    await view("Pan Left", 24_000, 72_000);
+    await view("Zoom Out", 0, 96_000, true);
+    await view("Zoom In", 24_000, 72_000);
+    await view("Fit waveform", 0, 96_000, true);
+    expect(await page.evaluate((from) => window.__sampleProofOperations.slice(from)
+      .filter((operation) => ["sample.update_pad", "sample.preview.set", "trigger"]
+        .includes(operation)), localFrom)).toEqual([]);
+
+    await showSamplePage(page, "Playback");
+    await page.getByRole("button", {name: "Loop", exact: true}).click();
+    await expect.poll(async () => {
+      const response = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+      expect(response.ok).toBe(true);
+      return {revision: response.result.project_revision, mode: response.result.playback.trigger_mode};
+    }, {timeout: REPORT_REVISION_TIMEOUT_MS}).toEqual({revision: 2, mode: "loop_toggle"});
+    await showSamplePage(page, "Trim");
+    await expect(editor.getByRole("spinbutton", {name: "Pad A01 Loop start time (seconds)"})).toBeEnabled();
+    await recordTrimGeometry(page, editor, "looping", testInfo);
+    const loopedPlayback = await inspectedPlayback(page);
+    const start = editor.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"});
+    // Real pointer focus plus keyboard editing works in the rotated portrait
+    // viewport too; no synthetic grip event or coordinate rewrite is used.
+    await start.click();
+    await start.fill("0.25");
+    await page.keyboard.press("Tab");
+    await expect.poll(async () => {
+      const response = await rawRequest(page, "sample.inspect", {slot: SLOT_A1});
+      expect(response.ok).toBe(true);
+      return {revision: response.result.project_revision, playback: response.result.playback};
+    }, {timeout: REPORT_REVISION_TIMEOUT_MS}).toEqual({
+      revision: 3, playback: {...loopedPlayback, trim_start_frame: 12_000},
+    });
+    await expect(start).toBeEnabled();
+    await expect(start).toHaveValue("0.25");
+    const saved = await inspectTruth();
+    expect(saved.project.revision).toBe(3);
+    expect(await page.evaluate((from) => window.__sampleProofOperations.slice(from)
+      .filter((operation) => operation === "trigger"), localFrom)).toEqual([]);
+    await page.reload();
+    await waitForProjectReopen(page, saved.project.project_id.slice(0, 8));
+    expect(await inspectTruth()).toEqual(saved);
+    await page.getByRole("button", {name: "Sample", exact: true}).click();
+    await showSamplePage(page, "Trim");
+    await expect(page.getByRole("spinbutton", {name: "Pad A01 Start time (seconds)"})).toHaveValue("0.25");
+    await noErrors();
+  });
+}

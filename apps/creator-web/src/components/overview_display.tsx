@@ -14,8 +14,11 @@ import {PerformOverview} from "./perform_overview";
 import {SampleOverview} from "./sample_overview";
 import {SequenceOverview} from "./sequence_overview";
 import {transportStatusLabel} from "./transport_status";
-import {projectIdentity, sampleIdentity} from "../state/overview_context";
+import {projectIdentity, projectStorageStatus, sampleIdentity} from "../state/overview_context";
 import type {PerformController} from "../state/perform_state";
+import {SEQUENCE_TICKS_PER_BAR, sequenceBarBeat} from "../state/sequence_grid_model";
+import {usePatternPlayheadTick} from "./use_pattern_playhead";
+import "./overview_display.css";
 
 interface OverviewDisplayProps {
   encoders?: Partial<Record<EncoderPosition, EncoderBinding>>;
@@ -59,6 +62,39 @@ function modeLabel(mode: CreatorMode): string {
   }
 }
 
+// Keep animation local to the readout instead of rerendering every mode body.
+function TransportReadout({transport, bpm, bars, tempoPreview, swing}: {
+  transport: PatternTransportState | undefined;
+  bpm: number | null;
+  bars: number | null;
+  tempoPreview: number | null;
+  swing: number | null;
+}) {
+  const tick = usePatternPlayheadTick(transport, bpm,
+    bars === null ? null : bars * SEQUENCE_TICKS_PER_BAR);
+  return <div className="overview-transport" aria-label="Pattern transport">
+    <span>{transport === undefined ? "STOPPED" : transportStatusLabel(transport).toUpperCase()}</span>
+    {tempoPreview === null ? null : <output className="overview-bpm">{tempoPreview} BPM</output>}
+    {swing === null ? null : <output className="overview-swing">SWING {swing}%</output>}
+    <output aria-label="Transport position" aria-live="off">{bars === null ? "—" : sequenceBarBeat(tick)}</output>
+  </div>;
+}
+
+function AuxiliaryOverview({state, mode}: {state: CreatorState; mode: "slice" | "soundset"}) {
+  // Source/job/catalog state belongs to the touch controllers. Until they
+  // project it here, show workflow guidance rather than a made-up receipt.
+  return <div className="overview-summary-columns" data-testid={`${mode}-overview`}>
+    <dl><dt>PROJECT</dt><dd className="overview-value">{projectIdentity(state.project.current)}</dd>
+      <dd>{projectStorageStatus(state)}</dd></dl>
+    <dl><dt>{mode === "slice" ? "SOURCE" : "CATALOG"}</dt>
+      <dd className="overview-value">{mode === "slice" ? "Select a source" : "Sound Sets"}</dd>
+      <dd>{mode === "slice" ? "Source selection in touch workspace" : "Browse and audition on the touch screen"}</dd></dl>
+    <dl><dt>{mode === "slice" ? "RESULT" : "INSTALL"}</dt>
+      <dd className="overview-value">{mode === "slice" ? "Preview slices" : "Choose target"}</dd>
+      <dd>{mode === "slice" ? "Adopt to save them to Pads" : "Choose a target Bank before installing"}</dd></dl>
+  </div>;
+}
+
 export function OverviewDisplay({
   state,
   encoders,
@@ -90,40 +126,34 @@ export function OverviewDisplay({
   const patternIndex = pattern === undefined || project === null
     ? null
     : project.patterns.findIndex((item) => item.patternId === pattern.patternId) + 1;
-  // Sequence shows only its own status and track rows (2026-10-04 Sequence
-  // hardware UI decision), Project its summary and three columns (D01) and
-  // Sample its Pad, format, selection and whole waveform (D03), and Perform
-  // its transport, bar and beat (D04).
-  // Keep lifecycle announcements available to assistive technology; technical
-  // identities and counts live in System > Project and build details.
-  const sequenceMode = activeMode === "sequence";
-  const showsProject = activeMode === "project" || activeMode === "perform" || activeMode === "soundset";
+  const sequenceMode = !systemOpen && activeMode === "sequence";
+  const performMode = !systemOpen && activeMode === "perform";
+  const showsProject = !systemOpen && activeMode === "project";
   const projectLabel = <span data-testid="opened-project" aria-label="Open Project">
     {projectIdentity(project)}
   </span>;
+  const playingSlot = playingPatternId === null ? -1 : project?.patternSlots.indexOf(playingPatternId) ?? -1;
+  const objectLabel = activeMode === "sequence"
+    ? patternIndex === null ? "NO PATTERN" : String(patternIndex).padStart(2, "0")
+    : activeMode === "perform"
+      ? playingSlot >= 0 ? `SLOT ${String(playingSlot + 1).padStart(2, "0")}`
+        : patternIndex === null ? "NO PATTERN" : `PATTERN ${String(patternIndex).padStart(2, "0")}`
+      : activeMode === "sample" ? sampleIdentity(state.sample.selectedSlot) : null;
   return (
-    <div className={`overview-display${sequenceMode ? " is-sequence" : ""}${
-      activeMode === "project" ? " is-project" : ""}${activeMode === "sample" ? " is-sample" : ""}${
-      activeMode === "perform" ? " is-perform" : ""}`}>
+    <div className="overview-display interaction-overview" data-mode={systemOpen ? "system" : activeMode}>
       <div className="overview-primary">
         <output className="overview-context">
           {systemOpen ? "SYSTEM" : modeLabel(activeMode)}
-          {systemOpen ? "" : activeMode === "sequence"
-            ? patternIndex === null ? " / NO PATTERN" : ` / ${String(patternIndex).padStart(2, "0")}`
-            : activeMode === "sample" ? ` / ${sampleIdentity(state.sample.selectedSlot)}`
-            : showsProject ? <> / {projectLabel}</> : ` / ${sampleIdentity(state.sample.selectedSlot)}`}
+          {systemOpen ? null : showsProject ? <> / {projectLabel}</>
+            : objectLabel === null ? null : ` / ${objectLabel}`}
         </output>
-        {/* Object-focused modes still name their enclosing Project to a screen
-            reader, without drawing unrelated technical facts above the editor. */}
-        {systemOpen || !showsProject ? <span className="visually-hidden">Project {projectLabel}</span> : null}
-        <output className={`overview-bpm${activeMode === "sequence" || activeMode === "perform" ? "" : " visually-hidden"}`}>
-          {project ? `${tempoPreview ?? project.bpm} BPM` : "NO PROJECT"}
-        </output>
-        {sequenceMode && project ? (
-          <output className="overview-swing">
-            SWING {swingPreview ?? project.sequenceSettings.swingPercent}%
-          </output>
-        ) : null}
+        {!showsProject ? <span className="visually-hidden">Project {projectLabel}</span> : null}
+        {!sequenceMode && !performMode ? <output className="overview-bpm visually-hidden">
+          {project ? `${project.bpm} BPM` : "NO PROJECT"}
+        </output> : null}
+        <TransportReadout transport={transport} bpm={project?.bpm ?? null} bars={pattern?.bars ?? null}
+          tempoPreview={sequenceMode || performMode ? tempoPreview ?? project?.bpm ?? null : null}
+          swing={sequenceMode && project ? swingPreview ?? project.sequenceSettings.swingPercent : null} />
         <output className="overview-phase visually-hidden">
           <span data-testid="creator-phase">{selectCreatorPhase(state)}</span>
           {" / "}
@@ -137,19 +167,13 @@ export function OverviewDisplay({
               : ""}
         </output>
       </div>
-      {encoders === undefined ? null : (
-        <dl className="encoder-readbacks" aria-label="Encoder functions and values">
-          {([1, 2, 3, 4] as const).map((position) => (
-            <div key={position} data-encoder={position}>
-              <dt title={encoders[position]?.label}>ENC{position} {encoderLabel(encoders[position]?.label)}</dt>
-              <dd>{encoders[position]?.value ?? "—"}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      {activeMode === "sequence" ? (
+      <div className="overview-body">
+      {systemOpen ? (
+        <ProjectOverview state={state} midi={midi} outputValue={encoders?.[4]?.value} />
+      ) : activeMode === "sequence" ? (
         <SequenceOverview
           hideContext={encoders !== undefined}
+          hidePosition
           project={project}
           state={sequence}
           bank={state.activeBank}
@@ -161,18 +185,15 @@ export function OverviewDisplay({
           {...(transport === undefined ? {} : {transport})}
         />
       ) : activeMode === "project" ? (
-        <ProjectOverview state={state} midi={midi} />
+        <ProjectOverview state={state} midi={midi} outputValue={encoders?.[4]?.value} />
       ) : activeMode === "sample" ? (
         <SampleOverview state={state} />
       ) : activeMode === "slice" || activeMode === "soundset" ? (
-        <p className="overview-grid-caption">
-          {activeMode === "slice"
-            ? "Preview slices on the touch screen. Adopt to save them to Pads."
-            : "Browse and audition on the touch screen. Choose a target Bank before installing."}
-        </p>
+        <AuxiliaryOverview state={state} mode={activeMode} />
       ) : activeMode === "perform" ? (
         <PerformOverview
           state={state}
+          hideState
           selectedPatternId={selectedPatternId}
           {...(performController === undefined ? {} : {controller: performController})}
           {...(transport === undefined ? {} : {transport})}
@@ -181,6 +202,17 @@ export function OverviewDisplay({
         <p className="overview-grid-caption">
           Event grid is a live projection target; this overview does not edit it.
         </p>
+      )}
+      </div>
+      {encoders === undefined ? null : (
+        <dl className="encoder-readbacks" aria-label="Encoder functions and values">
+          {([1, 2, 3, 4] as const).map((position) => (
+            <div key={position} data-encoder={position}>
+              <dt title={encoders[position]?.label}>ENC{position} {encoderLabel(encoders[position]?.label)}</dt>
+              <dd>{encoders[position]?.value ?? "—"}</dd>
+            </div>
+          ))}
+        </dl>
       )}
     </div>
   );

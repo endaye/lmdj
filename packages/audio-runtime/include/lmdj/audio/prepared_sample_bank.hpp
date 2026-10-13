@@ -70,6 +70,11 @@ foundation::Result<std::uint64_t> tick_boundary_frame(
     std::uint64_t tick,
     std::uint16_t bpm,
     std::uint32_t ppq = kTransportPpq) noexcept;
+// Allocation-free exact boundary relative to a fractional musical anchor.
+// An already reached tick is due at the anchor frame. Invalid/overflowing
+// timing returns unavailable, never an invented frame.
+std::optional<std::uint64_t> anchored_tick_boundary_frame(
+    const TransportAnchor& anchor, std::uint64_t tick) noexcept;
 
 struct PreparedSampleMaterialView {
   const std::int16_t* interleaved{};
@@ -138,6 +143,9 @@ class PreparedPatternView final {
   static foundation::Result<PreparedPatternView> from_snapshot_with_overlay(
       const cooker::RuntimeSnapshot& snapshot,
       std::span<const domain::PatternEvent> journal_overlay);
+  // Control-local immutable derivation. Shares PCM owners, retains source
+  // identity/authoring events, and changes only BPM and derived frame bounds.
+  foundation::Result<PreparedPatternView> with_tempo(std::uint16_t bpm) const;
 
   const foundation::ProjectId& project_id() const noexcept;
   const foundation::PatternId& pattern_id() const noexcept;

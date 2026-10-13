@@ -12,7 +12,7 @@ function job(empty = false): CandidateJobView {return {job_id: jobId, active_set
   sets: [{set_id: "set", status: "active", attempt_id: "attempt",
     source: {project_id: projectId, asset_id: assetId, project_revision: 3},
     recipes: empty ? [] : [{candidate_id: "recipe", kind: "slice_interval_v1", start_frame: 0, end_frame: 48000, frame_rate: 48000}]}]};}
-function setup(options: {missing?: boolean; empty?: boolean} = {}) {
+function setup(options: {missing?: boolean; empty?: boolean; onBack?: () => void} = {}) {
   const truth = {project_revision: 3, project: {project_id: projectId, revision: 3,
     assets: Object.fromEntries([assetId, otherId].map(id => [id, {artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 96044}}])),
     patterns: {pattern: {events: [{slot: {bank: 0, pad: 0}, tick: 0}]}}, banks: []}};
@@ -35,7 +35,8 @@ function setup(options: {missing?: boolean; empty?: boolean} = {}) {
   };
   const refresh = vi.fn(async () => {});
   const view = render(<CandidateSurface session={session as unknown as CreatorCandidateRuntimeSession}
-    projectId={projectId} projectRevision={3} onRefreshProject={refresh} />);
+    projectId={projectId} projectRevision={3} onRefreshProject={refresh}
+    {...(options.onBack ? {onBack: options.onBack} : {})} />);
   return {session, refresh, truth, ...view};
 }
 async function source() {
@@ -201,4 +202,54 @@ test("an unexpected refusal shows catalogue copy and records the raw failure (#1
   const alert = await screen.findByText(/This copy of Creator is out of date\. Reload the page to load the current version\./);
   expect(alert.textContent).not.toMatch(/candidate bridge payload rejected|HOST_PROTOCOL_MISMATCH/);
   expect(reportFailure).toHaveBeenCalledWith("Slices", raw);
+});
+
+
+test("Slice heading counts only the selected source's actual active recipes", async () => {
+  const {session} = setup();
+  const result = job();
+  result.sets[0]!.recipes = [0, 1, 2].map(index => ({candidate_id: `recipe-${index}`,
+    kind: "slice_interval_v1", start_frame: index * 12000, end_frame: (index + 1) * 12000, frame_rate: 48000}));
+  session.inspectCandidateJob.mockResolvedValueOnce(result);
+  expect(screen.queryByText(/CANDIDATES?/)).toBeNull();
+  await source();
+  expect(await screen.findByText("3 CANDIDATES")).toBeTruthy();
+  expect(screen.getByRole("heading", {name: "Slice / 22222222"})).toBeTruthy();
+  session.inspectCandidateJob.mockResolvedValueOnce(job(true));
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Slice source"}), otherId);
+  expect(await screen.findByText("0 CANDIDATES")).toBeTruthy();
+  expect(screen.queryByText("3 CANDIDATES")).toBeNull();
+  expect(screen.queryByText(/A03.*Bass|4 CANDIDATES/)).toBeNull();
+  expect(session.runCandidateJob).not.toHaveBeenCalled();
+  expect(session.adoptCandidates).not.toHaveBeenCalled();
+});
+
+test("Slice puts source before permission and adoption before refresh and discard", async () => {
+  setup(); await source();
+  const sourceControl = screen.getByRole("combobox", {name: "Slice source"});
+  const grant = screen.getByRole("button", {name: "Grant analysis permission"});
+  expect(sourceControl.compareDocumentPosition(grant) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const adopt = screen.getByRole("button", {name: "Adopt selected slices"});
+  const refresh = screen.getByRole("button", {name: "Refresh slices and Project"});
+  const discard = screen.getByRole("button", {name: "Discard slices"});
+  expect(adopt.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(refresh.compareDocumentPosition(discard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("Slice Back delegates navigation without analyzing or adopting", async () => {
+  const back = vi.fn();
+  const {session} = setup({onBack: back}); await source();
+  const button = screen.getByRole("button", {name: "Back to Sample"});
+  expect(button.parentElement).toBe(screen.getByRole("button", {name: "Refresh slices and Project"}).parentElement);
+  await userEvent.click(button);
+  expect(back).toHaveBeenCalledTimes(1);
+  expect(session.runCandidateJob).not.toHaveBeenCalled();
+  expect(session.adoptCandidates).not.toHaveBeenCalled();
+});
+
+test("Slice preview exposes its visible action phrase in its unique accessible name", async () => {
+  setup(); await source();
+  const preview = screen.getByRole("button", {name: "Preview slice 1"});
+  expect(preview.textContent).toBe("Preview slice");
+  expect(preview.getAttribute("aria-label")).toContain(preview.textContent);
 });

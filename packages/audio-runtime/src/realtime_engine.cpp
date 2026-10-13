@@ -147,6 +147,24 @@ std::optional<std::uint64_t> next_pattern_switch_frame(
       boundary.value() > maximum - origin - loop_offset) return std::nullopt;
   return origin + loop_offset + boundary.value();
 }
+// Continuous clocks select the next musical multiple from the exact retained
+// numerator. The physical origin is intentionally absent from this calculation.
+std::optional<std::uint64_t> next_continuous_pattern_switch_frame(
+    const PreparedPatternView& pattern, const TransportAnchor& anchor,
+    std::uint64_t observed, PatternSwitchSnap snap) noexcept {
+  if (observed < anchor.runtime_frame) return std::nullopt;
+  const auto numerator = integrate_tick_numerator(anchor.tick_numerator,
+      observed - anchor.runtime_frame, anchor.bpm, pattern.ppq());
+  if (!numerator) return std::nullopt;
+  const auto period = snap == PatternSwitchSnap::beat ? pattern.ppq()
+      : snap == PatternSwitchSnap::bar ? domain::kBarTicks4x4
+      : snap == PatternSwitchSnap::pattern_end ? pattern.loop_length_ticks() : 0;
+  if (period == 0) return std::nullopt;
+  const auto count = whole_tick(*numerator) / period;
+  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+  if (count == maximum || count + 1 > maximum / period) return std::nullopt;
+  return anchored_tick_boundary_frame(anchor, (count + 1) * period);
+}
 static_assert(std::atomic<std::uint16_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(
@@ -345,7 +363,12 @@ void RealtimeEngine::publish_control_observation() noexcept {
 
 void RealtimeEngine::publish_transport_decision() noexcept {
   transport_decision_.publish({rendered_frames_, pattern_origin_frame_,
-      observed_current_pattern_generation_});
+      observed_current_pattern_generation_,
+      {start_epoch_, observed_current_pattern_generation_,
+       pattern_tempo_applied_frame_, pattern_tempo_anchor_,
+       state_.load(std::memory_order_relaxed) == RealtimeState::running &&
+           (!pattern_transport_enabled_ || pattern_playing_)},
+      pattern_continuous_timing_, pattern_position_available_});
 }
 
 std::uint64_t RealtimeEngine::pattern_token_generation(
@@ -559,6 +582,25 @@ void RealtimeEngine::apply_published_pattern(
   const auto current =
       current_pattern_slot_.load(std::memory_order_relaxed);
   const auto preserve_phase = pattern_slots_[publication.slot].preserve_phase;
+  const auto tempo_transition = pattern_slots_[publication.slot].tempo_transition;
+  const auto playing = state_.load(std::memory_order_relaxed) == RealtimeState::running &&
+      (!pattern_transport_enabled_ || pattern_playing_);
+  const auto position = preserve_phase
+      ? pattern_position_numerator(runtime_frame) : std::optional<std::uint64_t>{0};
+  const auto previous_position = preserve_phase && playing && runtime_frame != 0
+      ? pattern_position_numerator(runtime_frame - 1) : std::nullopt;
+  if (tempo_transition && !position) {
+    // No allocation/error construction on audio, and no invented applied
+    // anchor. The admitted material is retired without changing the old grid.
+    pattern_slots_[publication.slot].state.store(
+        PatternState::reclaimable, std::memory_order_release);
+    audio_pending_pattern_generation_.store(0, std::memory_order_release);
+    observed_audio_pending_ = {};
+    ++transport_canceled_publications_;
+    ++audio_invalid_events_;
+    publish_transport_decision();
+    return;
+  }
   if (current != kNoPatternSlot) {
     for (auto& voice : voices_) {
       if (!preserve_phase && voice.active && voice.pattern_voice) {
@@ -577,12 +619,35 @@ void RealtimeEngine::apply_published_pattern(
   pattern_applied_frames_[publication.slot] = runtime_frame;
   next.state.store(PatternState::current, std::memory_order_release);
   current_pattern_slot_.store(publication.slot, std::memory_order_release);
-  if (!preserve_phase) pattern_origin_frame_ = runtime_frame;
+  if (!preserve_phase) {
+    pattern_origin_frame_ = runtime_frame;
+    pattern_continuous_timing_ = false;
+    pattern_tempo_anchor_ = {runtime_frame, 0, next.pattern->bpm()};
+    pattern_position_available_ = true;
+    pattern_event_loop_ = 0;
+  } else if (tempo_transition) {
+    pattern_tempo_anchor_ = {runtime_frame, *position, next.pattern->bpm()};
+    pattern_position_available_ = true;
+    pattern_continuous_timing_ = true;
+    for (auto& voice : voices_) {
+      if (voice.active && voice.pattern_voice && !voice.releasing &&
+          voice.scheduled_release_frame != 0) {
+        const auto release = anchored_tick_boundary_frame(
+            pattern_tempo_anchor_, voice.pattern_release_tick);
+        if (release) voice.scheduled_release_frame = *release;
+        else stop_voice(voice, runtime_frame, VoiceStop::declick);
+      }
+    }
+  }
+  pattern_tempo_applied_frame_ = runtime_frame;
   observed_current_pattern_generation_ = publication.generation;
   observed_audio_pending_ = {};
   publish_transport_decision();
   pattern_event_index_ = 0;
-  if (preserve_phase && runtime_frame >= pattern_origin_frame_) {
+  if (preserve_phase && pattern_continuous_timing_) {
+    seek_continuous_pattern_events(previous_position
+        ? whole_tick(*previous_position) + 1 : 0);
+  } else if (preserve_phase && runtime_frame >= pattern_origin_frame_) {
     const auto local_frame =
         (runtime_frame - pattern_origin_frame_) % next.pattern->loop_frames();
     const auto& events = next.pattern->events();
@@ -598,9 +663,33 @@ void RealtimeEngine::apply_published_pattern(
 
 void RealtimeEngine::start_pattern_voice(
     const PreparedPatternEvent& event,
-    std::uint64_t loop_origin_frame) noexcept {
+    std::uint64_t loop_origin_frame, std::uint64_t loop_tick) noexcept {
   const auto slot = global_slot(event.slot);
   const auto playback = event.playback;
+  const auto event_end_tick =
+      static_cast<std::uint64_t>(event.onset_tick) + event.duration_tick;
+  if (loop_tick > std::numeric_limits<std::uint64_t>::max() - event_end_tick) {
+    ++audio_invalid_events_;
+    return;
+  }
+  const auto release_tick = loop_tick + event_end_tick;
+  std::uint64_t release_frame = 0;
+  if (playback.trigger_mode != domain::TriggerMode::one_shot) {
+    if (pattern_continuous_timing_) {
+      const auto release = anchored_tick_boundary_frame(pattern_tempo_anchor_, release_tick);
+      if (!release) {
+        ++audio_invalid_events_;
+        return;
+      }
+      release_frame = *release;
+    } else {
+      if (loop_origin_frame > std::numeric_limits<std::uint64_t>::max() - event.release_frame) {
+        ++audio_invalid_events_;
+        return;
+      }
+      release_frame = loop_origin_frame + event.release_frame;
+    }
+  }
   if (!valid_material(event.material) ||
       !valid_playback_range(playback, event.material.frame_count)) {
     audio_invalid_events_ += 1;
@@ -637,10 +726,8 @@ void RealtimeEngine::start_pattern_voice(
                 playback.linear_gain;
   voice->trigger_mode = playback.trigger_mode;
   set_voice_envelope(*voice, playback);
-  voice->scheduled_release_frame =
-      playback.trigger_mode == domain::TriggerMode::one_shot
-          ? 0
-          : loop_origin_frame + event.release_frame;
+  voice->pattern_release_tick = release_tick;
+  voice->scheduled_release_frame = release_frame;
   voice->pattern_voice = true;
   voice->origin = PadControlOrigin::performance_replay;
   voice->pattern_slot = current_pattern_slot_.load(std::memory_order_relaxed);
@@ -654,6 +741,46 @@ void RealtimeEngine::start_pattern_voice(
   peak_voices_ = std::max(peak_voices_, active_voices_);
 }
 
+std::optional<std::uint64_t> RealtimeEngine::pattern_position_numerator(
+    std::uint64_t frame) const noexcept {
+  const auto slot = current_pattern_slot_.load(std::memory_order_relaxed);
+  if (slot == kNoPatternSlot || !pattern_position_available_) return std::nullopt;
+  if (pattern_transport_enabled_ && !pattern_playing_)
+    return pattern_tempo_anchor_.tick_numerator;
+  const auto& pattern = *pattern_slots_[slot].pattern;
+  if (pattern_continuous_timing_) {
+    if (frame < pattern_tempo_anchor_.runtime_frame) return std::nullopt;
+    return integrate_tick_numerator(pattern_tempo_anchor_.tick_numerator,
+        frame - pattern_tempo_anchor_.runtime_frame, pattern_tempo_anchor_.bpm);
+  }
+  if (frame < pattern_origin_frame_) return std::nullopt;
+  const auto elapsed = frame - pattern_origin_frame_;
+  const auto loops = elapsed / pattern.loop_frames();
+  const auto loop_numerator =
+      static_cast<std::uint64_t>(pattern.loop_length_ticks()) * kTickDenominator;
+  if (loops > std::numeric_limits<std::uint64_t>::max() / loop_numerator)
+    return std::nullopt;
+  return integrate_tick_numerator(loops * loop_numerator,
+      elapsed % pattern.loop_frames(), pattern.bpm(), pattern.ppq());
+}
+
+void RealtimeEngine::seek_continuous_pattern_events(std::uint64_t first_tick) noexcept {
+  const auto slot = current_pattern_slot_.load(std::memory_order_relaxed);
+  const auto& pattern = *pattern_slots_[slot].pattern;
+  pattern_event_loop_ = first_tick / pattern.loop_length_ticks();
+  const auto local_tick = first_tick % pattern.loop_length_ticks();
+  const auto& events = pattern.events();
+  pattern_event_index_ = static_cast<std::size_t>(std::lower_bound(
+      events.begin(), events.end(), local_tick,
+      [](const PreparedPatternEvent& event, std::uint64_t tick) {
+        return event.onset_tick < tick;
+      }) - events.begin());
+  if (!events.empty() && pattern_event_index_ == events.size()) {
+    pattern_event_index_ = 0;
+    ++pattern_event_loop_;
+  }
+}
+
 void RealtimeEngine::schedule_pattern_events(
     std::uint64_t runtime_frame) noexcept {
   const auto slot =
@@ -662,6 +789,27 @@ void RealtimeEngine::schedule_pattern_events(
     return;
   }
   const auto& pattern = *pattern_slots_[slot].pattern;
+  if (pattern_continuous_timing_) {
+    const auto numerator = pattern_position_numerator(runtime_frame);
+    const auto& events = pattern.events();
+    if (!numerator || events.empty()) return;
+    const auto length = pattern.loop_length_ticks();
+    while (pattern_event_index_ < events.size()) {
+      const auto& event = events[pattern_event_index_];
+      if (pattern_event_loop_ >
+          (std::numeric_limits<std::uint64_t>::max() - event.onset_tick) / length)
+        return;
+      const auto loop_tick = pattern_event_loop_ * length;
+      const auto tick = loop_tick + event.onset_tick;
+      if (tick > *numerator / kTickDenominator) return;
+      start_pattern_voice(event, runtime_frame, loop_tick);
+      if (++pattern_event_index_ == events.size()) {
+        pattern_event_index_ = 0;
+        ++pattern_event_loop_;
+      }
+    }
+    return;
+  }
   const auto origin =
       pattern_origin_frame_;
   if (runtime_frame < origin) {
@@ -677,7 +825,8 @@ void RealtimeEngine::schedule_pattern_events(
   while (pattern_event_index_ < events.size() &&
          events[pattern_event_index_].start_frame == local_frame) {
     start_pattern_voice(
-        events[pattern_event_index_], loop_origin_frame);
+        events[pattern_event_index_], loop_origin_frame,
+        (elapsed / pattern.loop_frames()) * pattern.loop_length_ticks());
     ++pattern_event_index_;
   }
 }
@@ -1136,6 +1285,7 @@ RealtimeEngine::inspect_pattern_transport_receipt(
         decision == PatternCutoffDecision::applied_before_cutoff
             ? std::optional<std::uint64_t>{frame} : std::nullopt};
   };
+  receipt.tempo_anchor = cell.tempo_anchor;
   receipt.switch_outcomes[0] = outcome(
       retained_transport_switch_, cell.decision, cell.switch_applied_frame);
   receipt.switch_outcomes[1] = outcome(retained_transport_predecessor_,
@@ -1214,11 +1364,21 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
   receipt.legacy_is_predecessor =
       receipt.predecessor_decision == PatternCutoffDecision::applied_before_cutoff &&
       receipt.decision != PatternCutoffDecision::applied_before_cutoff;
+  const auto cutoff_position = pattern_position_numerator(frame);
+  const auto current_slot = current_pattern_slot_.load(std::memory_order_relaxed);
+  const auto bpm = pattern_slots_[current_slot].pattern->bpm();
   if (command.action == PatternTransportAction::start) {
     pattern_playing_ = true;
     pattern_origin_frame_ = frame;
     pattern_event_index_ = 0;
+    pattern_event_loop_ = 0;
+    pattern_tempo_anchor_ = {frame, 0, bpm};
+    pattern_position_available_ = true;
+    pattern_tempo_applied_frame_ = frame;
+    pattern_continuous_timing_ = false;
   } else if (command.action == PatternTransportAction::stop) {
+    pattern_position_available_ = cutoff_position.has_value();
+    if (cutoff_position) pattern_tempo_anchor_ = {frame, *cutoff_position, bpm};
     pattern_playing_ = false;
     for (auto& voice : voices_) {
       if (voice.active && voice.pattern_voice &&
@@ -1235,6 +1395,10 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
       scheduled_cutoff_serial_.store(tag >> 4U, std::memory_order_seq_cst);
   }
   receipt.origin_frame = pattern_origin_frame_;
+  if (command.action == PatternTransportAction::start)
+    receipt.tempo_anchor = TransportAnchor{frame, 0, bpm};
+  else if (cutoff_position)
+    receipt.tempo_anchor = TransportAnchor{frame, *cutoff_position, bpm};
   receipt.playing = pattern_playing_;
   receipt.pattern_slot = current_pattern_slot_.load(std::memory_order_relaxed);
   receipt.pattern_generation = pattern_slots_[receipt.pattern_slot].generation;
@@ -1720,6 +1884,13 @@ void RealtimeEngine::advance_scheduled_record_audio(
   pattern_playing_ = true;
   pattern_origin_frame_ = s.start_frame;
   pattern_event_index_ = 0;
+  // Scheduled S is the same tick-zero restart as an ordinary Start. A prior
+  // tempo transition/Stop must not carry its continuous clock into this run.
+  pattern_event_loop_ = 0;
+  pattern_tempo_anchor_ = {s.start_frame, 0, s.bpm};
+  pattern_position_available_ = true;
+  pattern_tempo_applied_frame_ = s.start_frame;
+  pattern_continuous_timing_ = false;
   local.started = true;
   publish_transport_decision();
   scheduled_tag_.store(schedule_tag(s.serial, ScheduledPatternPhase::applied),
@@ -1799,6 +1970,12 @@ PatternPublication RealtimeEngine::publish_pattern_view_preserving_phase(
       PatternPublicationTiming::preserve_phase, expected_generation);
 }
 
+PatternPublication RealtimeEngine::publish_pattern_tempo_transition(
+    PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept {
+  return publish_pattern_view_impl(std::move(pattern), std::nullopt, std::nullopt,
+      PatternPublicationTiming::tempo_transition, expected_generation);
+}
+
 PatternPublication RealtimeEngine::publish_pattern_view_impl(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
@@ -1806,6 +1983,9 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     PatternPublicationTiming timing, std::uint64_t expected_generation,
     PatternSwitchSnap snap) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
+  const bool tempo_transition = timing == PatternPublicationTiming::tempo_transition;
+  const bool preserves_position = tempo_transition ||
+      timing == PatternPublicationTiming::preserve_phase;
   // Once S has applied, overlay publication no longer competes with the
   // scheduled start. Its original material stays independently pinned until
   // the recording owner consumes e1/e2 and every audio borrow has ended.
@@ -1850,10 +2030,22 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     const auto observed_pending_generation = observed_queued_token != 0
         ? observed_queued_generation
         : observed_audio_generation;
-    if (timing == PatternPublicationTiming::preserve_phase &&
-        observed_pending_generation != 0) {
+    if (preserves_position && observed_pending_generation != 0) {
       ++pattern_publication_rejections_;
       return {PatternPublishResult::publication_pending, 0, 0};
+    }
+    if (timing == PatternPublicationTiming::switch_bar && observed_audio_generation != 0) {
+      const auto& predecessor =
+          pattern_slots_[pattern_slot_token(observed_audio_mailbox) - 1];
+      const auto decision = transport_decision_.read();
+      if (predecessor.tempo_transition &&
+          (decision.current_pattern_generation != observed_audio_generation ||
+           !decision.tempo_available)) {
+        // A claim (including render(0)) is not an applied tempo anchor. Keep
+        // every accepted owner untouched; the caller can retry after apply.
+        ++pattern_publication_rejections_;
+        return {PatternPublishResult::publication_pending, 0, 0};
+      }
     }
     std::optional<std::uint64_t> observed_pending_activation;
     std::optional<std::uint64_t> claimed_next_activation;
@@ -1921,7 +2113,11 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
 #endif
     const auto current =
         current_pattern_slot_.load(std::memory_order_acquire);
-    if (timing == PatternPublicationTiming::preserve_phase) {
+    const auto decision = transport_decision_.read();
+    if (current != kNoPatternSlot &&
+        decision.current_pattern_generation != pattern_slots_[current].generation)
+      continue; // Audio is publishing the coherent current/anchor pair.
+    if (preserves_position) {
       if (current == kNoPatternSlot || expected_generation == 0 ||
           pattern_slots_[current].generation != expected_generation) {
         ++pattern_publication_rejections_;
@@ -1930,8 +2126,18 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       const auto& previous = *pattern_slots_[current].pattern;
       if (previous.project_id() != pattern.project_id() ||
           previous.pattern_id() != pattern.pattern_id() ||
-          previous.bpm() != pattern.bpm() || previous.ppq() != pattern.ppq() ||
-          previous.loop_length_ticks() != pattern.loop_length_ticks()) {
+          (!tempo_transition && previous.bpm() != pattern.bpm()) ||
+          previous.ppq() != pattern.ppq() ||
+          previous.loop_length_ticks() != pattern.loop_length_ticks() ||
+          (tempo_transition && (previous.project_revision() != pattern.project_revision() ||
+              previous.has_overlay() != pattern.has_overlay() ||
+              previous.events().size() != pattern.events().size() ||
+              !std::equal(previous.events().begin(), previous.events().end(), pattern.events().begin(),
+                  [](PreparedPatternEvent source, const PreparedPatternEvent& target) {
+                    source.start_frame = target.start_frame;
+                    source.release_frame = target.release_frame;
+                    return source == target;
+                  })))) {
         ++pattern_publication_rejections_;
         return {PatternPublishResult::phase_mismatch, 0, 0};
       }
@@ -1966,27 +2172,45 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     slot->pattern.emplace(std::move(pattern));
     slot->active_voices = 0;
     slot->generation = *generation;
-    slot->preserve_phase = timing == PatternPublicationTiming::preserve_phase;
+    slot->preserve_phase = preserves_position;
+    slot->tempo_transition = tempo_transition;
     slot->switch_bar = timing == PatternPublicationTiming::switch_bar;
 
     const auto running =
         state_.load(std::memory_order_acquire) == RealtimeState::running;
     std::uint64_t activation_frame = 0;
     if (running) {
-      const auto observed_frame =
-          transport_decision_.read().rendered_frames;
+      const auto observed_frame = decision.rendered_frames;
       activation_frame = observed_frame;
       if (timing == PatternPublicationTiming::switch_bar && current != kNoPatternSlot) {
         const auto* geometry = &*pattern_slots_[current].pattern;
-        auto origin = transport_decision_.read().pattern_origin_frame;
-        if (observed_audio_generation != 0) {
+        auto origin = decision.pattern_origin_frame;
+        const bool claimed_predecessor = observed_audio_generation != 0 &&
+            observed_audio_generation != decision.current_pattern_generation;
+        bool use_continuous_clock = !claimed_predecessor && decision.continuous_timing;
+        if (claimed_predecessor) {
           // Includes replacing unclaimed C while B already belongs to audio:
           // C still follows B's geometry, never the old current A's clock.
           const auto& predecessor = pattern_slots_[pattern_slot_token(observed_audio_mailbox) - 1];
-          geometry = &*predecessor.pattern;
+          const auto& before = *geometry;
+          const auto& after = *predecessor.pattern;
+          // A same-BPM edit keeps the actually retained clock. Prove its
+          // geometry equivalent before using the current owner's anchor;
+          // an ordinary claimed Pattern still starts at its own tick zero.
+          use_continuous_clock = decision.continuous_timing &&
+              predecessor.preserve_phase && !predecessor.tempo_transition &&
+              before.project_id() == after.project_id() &&
+              before.pattern_id() == after.pattern_id() &&
+              before.bpm() == after.bpm() && before.ppq() == after.ppq() &&
+              before.loop_length_ticks() == after.loop_length_ticks();
+          geometry = &after;
           origin = predecessor.activation_frame;
         }
-        const auto selected = next_pattern_switch_frame(*geometry, origin, observed_frame, snap);
+        const auto selected = use_continuous_clock
+            ? (decision.tempo_available
+                ? next_continuous_pattern_switch_frame(
+                    *geometry, decision.tempo.anchor, observed_frame, snap) : std::nullopt)
+            : next_pattern_switch_frame(*geometry, origin, observed_frame, snap);
         if (!selected) {
           slot->pattern.reset();
           slot->generation = 0;
@@ -1994,8 +2218,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
           return {PatternPublishResult::publish_queue_full, 0, 0};
         }
         activation_frame = *selected;
-      } else if (timing == PatternPublicationTiming::immediate ||
-          timing == PatternPublicationTiming::preserve_phase) {
+      } else if (timing == PatternPublicationTiming::immediate || preserves_position) {
         activation_frame = observed_frame;
       } else if (authorized_replacement &&
                  requested_activation_frame.has_value()) {
@@ -2021,11 +2244,22 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
         }
         activation_frame = *requested_activation_frame;
       } else if (current != kNoPatternSlot) {
-        const auto origin =
-            transport_decision_.read().pattern_origin_frame;
+        const auto origin = decision.pattern_origin_frame;
         const auto bar_frames =
             pattern_slots_[current].pattern->bar_frames();
-        if (observed_frame >= origin) {
+        if (decision.continuous_timing) {
+          const auto boundary = decision.tempo_available
+              ? next_continuous_pattern_switch_frame(*pattern_slots_[current].pattern,
+                  decision.tempo.anchor, observed_frame, PatternSwitchSnap::bar)
+              : std::nullopt;
+          if (!boundary) {
+            slot->pattern.reset();
+            slot->generation = 0;
+            ++pattern_publication_rejections_;
+            return {PatternPublishResult::publish_queue_full, 0, 0};
+          }
+          activation_frame = *boundary;
+        } else if (observed_frame >= origin) {
           const auto elapsed = observed_frame - origin;
           const auto bars = elapsed / bar_frames;
           if (bars == std::numeric_limits<std::uint64_t>::max() ||
@@ -2195,6 +2429,11 @@ foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
   }
   pattern_origin_frame_ = 0;
   observed_current_pattern_generation_ = 0;
+  pattern_tempo_anchor_ = {};
+  pattern_position_available_ = true;
+  pattern_tempo_applied_frame_ = 0;
+  pattern_continuous_timing_ = false;
+  pattern_event_loop_ = 0;
   publish_transport_decision();
   pattern_event_index_ = 0;
   return foundation::Result<void>::success();
@@ -2296,6 +2535,16 @@ RealtimeEngine::pattern_transport_observation() const {
       return observation;
   }
   return std::nullopt;
+}
+
+std::optional<PatternTempoObservation> RealtimeEngine::pattern_tempo_observation(
+    std::uint64_t expected_generation) const noexcept {
+  const auto decision = transport_decision_.read();
+  if (expected_generation == 0 ||
+      decision.current_pattern_generation != expected_generation ||
+      !decision.tempo_available || decision.tempo.anchor.bpm == 0)
+    return std::nullopt;
+  return decision.tempo;
 }
 
 std::optional<foundation::PatternId>
@@ -2507,6 +2756,13 @@ foundation::Result<void> RealtimeEngine::start() {
   audio_pending_pattern_generation_.store(0, std::memory_order_relaxed);
   pattern_origin_frame_ = 0;
   pattern_event_index_ = 0;
+  pattern_event_loop_ = 0;
+  pattern_continuous_timing_ = false;
+  pattern_tempo_applied_frame_ = 0;
+  pattern_position_available_ = true;
+  const auto tempo_slot = current_pattern_slot_.load(std::memory_order_relaxed);
+  pattern_tempo_anchor_ = {0, 0, tempo_slot == kNoPatternSlot
+      ? std::uint16_t{0} : pattern_slots_[tempo_slot].pattern->bpm()};
   std::fill(voices_.begin(), voices_.end(), Voice{});
   voice_scan_extent_ = 0;
   preview_mask_ = 0;
@@ -2706,6 +2962,8 @@ void RealtimeEngine::stop() noexcept {
   applied_pad_gates_sequence_ = 0;
   pad_gates_applied_channel_.publish(
       PadGatesAppliedState{{}, 0, start_epoch_});
+  publish_transport_decision();
+
 }
 
 EnqueueResult RealtimeEngine::enqueue(TriggerEvent event) noexcept {
@@ -3733,24 +3991,19 @@ void RealtimeEngine::render(
             voice.release_scale;
       }
       // The live Pad gate (D04 Mute/Solo): a project Pad voice whose Pad is
-      // muted, or unsoloed while any Solo is active, ramps to zero over 96
-      // frames while its cursor keeps advancing; re-allowing ramps it back to
-      // the current sound without retriggering. Audition voices bypass the
-      // gate, and bytes already inside the shared Delay/Reverb decay on their
-      // own because the gate sits before the shared-FX input.
-      if (!is_audition_bank_slot(voice.bank_slot)) {
-        if (pad_live_gated(voice.slot)) {
-          if (voice.live_gate > 0.0F) {
-            voice.live_gate -= kRealtimeRampScale;
-            if (voice.live_gate < 0.0F) {
-              voice.live_gate = 0.0F;
-            }
-          }
-        } else if (voice.live_gate < 1.0F) {
-          voice.live_gate += kRealtimeRampScale;
-          if (voice.live_gate > 1.0F) {
-            voice.live_gate = 1.0F;
-          }
+      // muted, or unsoloed while any Solo is active, contributes no input
+      // from the first frame under the applied mask. DSP and cursor/lifetime
+      // still advance; re-allowing ramps back to the current sound without
+      // retriggering. Audition bypasses the gate, and already accepted shared
+      // Delay/Reverb tails remain in the shared bus.
+      const bool live_gated = !is_audition_bank_slot(voice.bank_slot) &&
+                              pad_live_gated(voice.slot);
+      if (live_gated) {
+        voice.live_gate = 0.0F;
+      } else if (voice.live_gate < 1.0F) {
+        voice.live_gate += kRealtimeRampScale;
+        if (voice.live_gate > 1.0F) {
+          voice.live_gate = 1.0F;
         }
       }
       const auto live_gate = voice.live_gate;
@@ -3781,6 +4034,11 @@ void RealtimeEngine::render(
           value *= detail::voice_dsp_end_fade(voice.dsp) *
                    detail::voice_dsp_release_declick(
                        voice.releasing, voice.release_frames_remaining);
+        }
+        // Zero filter input still leaves Tone/EQ memory. Keep evaluating it,
+        // but block its contribution before it enters the shared FX bus.
+        if (live_gated) {
+          value = 0.0F;
         }
         left[frame] += value * voice.dsp.pan_left;
         right[frame] += value * voice.dsp.pan_right;

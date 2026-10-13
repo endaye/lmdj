@@ -13203,6 +13203,184 @@ test("direct exact replay cannot submit a still-prepared Press outside its token
   for (const other of others) other.cancelUnsubmittedPattern();
   await f.session.close();
 });
+function headeredFxShapeFixture() {
+  const sessionId = "40000000-0000-4000-8000-000000000201";
+  const performanceId = "40000000-0000-4000-8000-000000000202";
+  const coreBinding = {
+    gesture_generation: "40000000-0000-4000-8000-000000000203",
+    recording_gesture_id: "40000000-0000-4000-8000-000000000204",
+  };
+  // A Core cursor beyond Number's exact range must remain an opaque string.
+  const initialSequence = "9007199254740993";
+  let nextSequence = BigInt(initialSequence);
+  const sent = [];
+  const receipts = [];
+  const {session} = fixture({send: async (envelope) => {
+    switch (envelope.operation) {
+      case "performance.record.begin":
+        return success(envelope, {performance_id: performanceId, committed_revision: 1,
+          replayed: false, profile: "header_input_sequence", control_epoch: LIVE_EPOCH,
+          core_control_ready: true, next_recording_sequence: initialSequence,
+          fx_bindings: [], project_revision: 1});
+      case "performance.record.event": {
+        sent.push(envelope.payload);
+        const receipt = {
+          event_id: envelope.payload.event_id, accepted_tick: 17,
+          input_sequence: String(nextSequence), next_recording_sequence: String(++nextSequence),
+          result: "published", coalesced: false,
+          ...(envelope.payload.event.kind === "fx_engage" ? coreBinding : {
+            gesture_generation: null, recording_gesture_id: null,
+          }),
+          replayed: false, project_revision: null,
+        };
+        receipts.push(receipt);
+        return success(envelope, receipt);
+      }
+      default: return success(envelope, defaultResult(envelope.operation));
+    }
+  }});
+  return {session, sessionId, performanceId, initialSequence, sent, receipts};
+}
+
+for (const fx of ["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"]) {
+  test(`headered ${fx} FX wires engage, move and release with returned Core identities`, async (t) => {
+    const {session, sessionId, performanceId, initialSequence, sent, receipts} = headeredFxShapeFixture();
+    t.after(() => session.close());
+    await session.start();
+    const begun = await session.beginPerformanceRecording({sessionId, performanceId,
+      expectedRevision: 0, controlEpoch: LIVE_EPOCH});
+    assert.equal(begun.nextRecordingSequence, initialSequence);
+    const engageId = webcrypto.randomUUID();
+    const engaged = await session.recordPerformanceEvent({sessionId, eventId: engageId,
+      event: {kind: "fx_engage", fx, value: 500}});
+    assert.deepEqual(sent[0], {
+      session_id: sessionId, event_id: engageId,
+      control_epoch: LIVE_EPOCH, expected_recording_sequence: initialSequence,
+      event: {kind: "fx_engage", fx, value: 500},
+    });
+    assert.deepEqual(engaged, {
+      eventId: engageId, acceptedTick: 17,
+      inputSequence: receipts[0].input_sequence,
+      nextRecordingSequence: receipts[0].next_recording_sequence,
+      result: "published", coalesced: false,
+      gestureGeneration: receipts[0].gesture_generation,
+      recordingGestureId: receipts[0].recording_gesture_id,
+      replayed: false, projectRevision: null,
+    });
+    // The caller echoes the public receipt; it does not invent a legacy ID.
+    const binding = {gestureId: engaged.recordingGestureId,
+      gestureGeneration: engaged.gestureGeneration};
+    assert.equal(typeof binding.gestureId, "string");
+    assert.equal(typeof binding.gestureGeneration, "string");
+    for (const [kind, values] of [["fx_move", {value: 600}], ["fx_release", {}]]) {
+      const eventId = webcrypto.randomUUID();
+      const expectedSequence = receipts.at(-1).next_recording_sequence;
+      const result = await session.recordPerformanceEvent({sessionId, eventId,
+        event: {kind, fx, ...values, ...binding}});
+      assert.deepEqual(sent.at(-1), {
+        session_id: sessionId, event_id: eventId,
+        control_epoch: LIVE_EPOCH, expected_recording_sequence: expectedSequence,
+        event: {kind, fx, ...values, gesture_id: binding.gestureId,
+          gesture_generation: binding.gestureGeneration},
+      });
+      assert.deepEqual(result, {
+        eventId, acceptedTick: 17, inputSequence: receipts.at(-1).input_sequence,
+        nextRecordingSequence: receipts.at(-1).next_recording_sequence,
+        result: "published", coalesced: false,
+        gestureGeneration: null, recordingGestureId: null,
+        replayed: false, projectRevision: null,
+      });
+    }
+    assert.equal(sent.length, 3);
+  });
+}
+
+const HEADERED_FX_SHAPE_BINDING = {
+  gestureId: "40000000-0000-4000-8000-000000000205",
+  gestureGeneration: "40000000-0000-4000-8000-000000000206",
+};
+for (const [name, event] of [
+  ["engage with legacy ID", {kind: "fx_engage", fx: "delay", value: 500,
+    gestureId: HEADERED_FX_SHAPE_BINDING.gestureId}],
+  ["engage with generation", {kind: "fx_engage", fx: "delay", value: 500,
+    gestureGeneration: HEADERED_FX_SHAPE_BINDING.gestureGeneration}],
+  ["engage with both identities", {kind: "fx_engage", fx: "delay", value: 500,
+    ...HEADERED_FX_SHAPE_BINDING}],
+  ["engage without value", {kind: "fx_engage", fx: "delay"}],
+  ["move without value", {kind: "fx_move", fx: "delay", ...HEADERED_FX_SHAPE_BINDING}],
+  ["move without generation", {kind: "fx_move", fx: "delay", value: 600,
+    gestureId: HEADERED_FX_SHAPE_BINDING.gestureId}],
+  ["move without ID", {kind: "fx_move", fx: "delay", value: 600,
+    gestureGeneration: HEADERED_FX_SHAPE_BINDING.gestureGeneration}],
+  ["release without generation", {kind: "fx_release", fx: "delay",
+    gestureId: HEADERED_FX_SHAPE_BINDING.gestureId}],
+  ["release without ID", {kind: "fx_release", fx: "delay",
+    gestureGeneration: HEADERED_FX_SHAPE_BINDING.gestureGeneration}],
+  ["release with value", {kind: "fx_release", fx: "delay", value: 600,
+    ...HEADERED_FX_SHAPE_BINDING}],
+]) {
+  test(`headered FX rejects ${name} before transport and retains the cursor`, async (t) => {
+    const {session, sessionId, performanceId, initialSequence, sent} = headeredFxShapeFixture();
+    t.after(() => session.close());
+    await session.start();
+    await session.beginPerformanceRecording({sessionId, performanceId,
+      expectedRevision: 0, controlEpoch: LIVE_EPOCH});
+    await assert.rejects(session.recordPerformanceEvent({sessionId,
+      eventId: webcrypto.randomUUID(), event}), TypeError);
+    assert.deepEqual(sent, []);
+    const eventId = webcrypto.randomUUID();
+    await session.recordPerformanceEvent({sessionId, eventId,
+      event: {kind: "fx_engage", fx: "delay", value: 500}});
+    assert.deepEqual(sent, [{
+      session_id: sessionId, event_id: eventId, control_epoch: LIVE_EPOCH,
+      expected_recording_sequence: initialSequence,
+      event: {kind: "fx_engage", fx: "delay", value: 500},
+    }]);
+  });
+}
+
+test("legacy FX keeps its ID-bound engage, move and no-value release wire", async (t) => {
+  const sessionId = "40000000-0000-4000-8000-000000000207";
+  const performanceId = "40000000-0000-4000-8000-000000000208";
+  const {gestureId, gestureGeneration} = HEADERED_FX_SHAPE_BINDING;
+  const sent = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "performance.record.begin") {
+      return success(envelope, {performance_id: performanceId,
+        committed_revision: 1, replayed: false, project_revision: 1});
+    }
+    if (envelope.operation === "performance.record.event") {
+      sent.push(envelope.payload);
+      return success(envelope, {event_id: envelope.payload.event_id,
+        accepted_tick: 17, input_sequence: sent.length, coalesced: false,
+        replayed: false, project_revision: null});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  t.after(() => session.close());
+  await session.start();
+  await session.beginPerformanceRecording({sessionId, performanceId, expectedRevision: 0});
+  for (const [kind, values] of [
+    ["fx_engage", {value: 500}], ["fx_move", {value: 600}], ["fx_release", {}],
+  ]) {
+    const before = sent.length;
+    await assert.rejects(session.recordPerformanceEvent({sessionId,
+      eventId: webcrypto.randomUUID(), event: {kind, fx: "delay", ...values}}), TypeError);
+    await assert.rejects(session.recordPerformanceEvent({sessionId,
+      eventId: webcrypto.randomUUID(), event: {kind, fx: "delay", ...values,
+        gestureId, gestureGeneration}}), TypeError);
+    assert.equal(sent.length, before);
+    const eventId = webcrypto.randomUUID();
+    const result = await session.recordPerformanceEvent({sessionId, eventId,
+      event: {kind, fx: "delay", ...values, gestureId}});
+    assert.deepEqual(sent.at(-1), {session_id: sessionId, event_id: eventId,
+      event: {kind, fx: "delay", ...values, gesture_id: gestureId}});
+    assert.deepEqual(result, {eventId, acceptedTick: 17, inputSequence: sent.length,
+      coalesced: false, replayed: false, projectRevision: null});
+  }
+  assert.equal(sent.length, 3);
+});
+
 for (const variant of ["ack", "delayed-status", "other-session", "other-epoch"]) {
   test(`headered recording cursor follows matching observed status: ${variant}`, async () => {
     const sessionId = "40000000-0000-4000-8000-000000000060";

@@ -23,6 +23,7 @@ import {padColourOf} from "../state/pad_colour";
 import type {SeqSnap} from "../state/seq_snap_preference";
 import {SequenceGrid} from "./sequence_grid";
 import {PatternSelector, TouchSegment, type TouchSegmentOption} from "./touch_kit";
+import "./sequence_setup_layout.css";
 
 const BAR_COUNTS = [1, 2, 4, 8] as const;
 const BAR_OPTIONS: readonly TouchSegmentOption<1 | 2 | 4 | 8>[] = BAR_COUNTS.map((count) =>
@@ -214,7 +215,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
           padColour={(slot) => padColourOf(project, slot)}
         />
       )) : (
-      <section aria-label="Sequence settings" className="sequence-settings">
+      <section aria-label="Sequence settings" className="sequence-settings sequence-setup-layout">
         <div className="sequence-param-row" key={`${project.projectId}:${selectedPatternId}`}>
           <div className="sequence-param-card sequence-param-tempo">
             <ValueSlider
@@ -234,12 +235,15 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             <div className="sequence-param-actions" role="group" aria-label="Tempo actions">
               <button type="button" aria-label="Decrease BPM"
                 disabled={disabled || (requestedBpmRef.current ?? bpm) <= 40}
-                onClick={() => requestBpm((requestedBpmRef.current ?? bpm) - 1)}>−</button>
-              <span className="sequence-param-encoder">ENC 3</span>
+                onClick={() => requestBpm((requestedBpmRef.current ?? bpm) - 1)}>− 1 BPM</button>
+              {!choosingLength ? <button type="button" className="touch-control" aria-label="Tap Tempo"
+                disabled={disabled}
+                onClick={tapTempo}>TAP</button> : null}
               <button type="button" aria-label="Increase BPM"
                 disabled={disabled || (requestedBpmRef.current ?? bpm) >= 240}
-                onClick={() => requestBpm((requestedBpmRef.current ?? bpm) + 1)}>+</button>
+                onClick={() => requestBpm((requestedBpmRef.current ?? bpm) + 1)}>+ 1 BPM</button>
             </div>
+            <p className="sequence-param-encoder">ENC 3 · TEMPO</p>
           </div>
           <div className="sequence-param-card sequence-param-swing">
             <ValueSlider
@@ -282,7 +286,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             disabled={structureDisabled || props.onResizePattern === undefined}
             onChange={resizePattern} />
         </div>
-        <div className="sequence-setup-row sequence-setup-actions">
+        <div className="sequence-setup-row sequence-setup-actions sequence-structure-actions">
           <button type="button" className="touch-control" aria-label="Double Up Pattern"
             disabled={structureDisabled || props.onDoubleUpPattern === undefined ||
               selectedPattern.bars === 8}
@@ -294,34 +298,11 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
             onClick={() => props.onCopyPattern?.()}>
             COPY
           </button>
-        </div>
-        <div className="sequence-setup-row sequence-setup-toggles">
-          <button type="button" className="touch-control" aria-label="Quantize"
-            aria-pressed={project.sequenceSettings.quantizeEnabled}
-            disabled={disabled} onClick={() => props.onSettingsChange({
-              quantizeEnabled: !project.sequenceSettings.quantizeEnabled,
-            })}>
-            QUANTIZE
-          </button>
-          {/* The metronome is a monitoring switch, not a Transport setting:
-              it must stay toggleable while recording. */}
-          <button type="button" className="touch-control sequence-metronome"
-            aria-label="Metronome"
-            aria-pressed={props.metronomeOn}
-            onClick={props.onToggleMetronome}>
-            METRONOME
-          </button>
-        </div>
-        {/* #1958 S4: SEQ SNAP picks the boundary a playing-state Pattern
-            switch queues at. Like the metronome it is a per-device
-            preference, so it stays reachable while recording and is
-            choosable from the first paint; the app's touched guard keeps a
-            late boot read from overwriting an explicit choice. */}
-        <div className="sequence-setup-row sequence-setup-seq-snap">
-          <span>SEQ SNAP</span>
-          <TouchSegment<SeqSnap> label="Sequence snap" options={SEQ_SNAP_OPTIONS}
-            value={props.seqSnap}
-            onChange={props.onSeqSnapChange} />
+          {!choosingLength ? <button type="button" className="touch-control" aria-label="New Pattern"
+            aria-expanded={false} disabled={disabled || playing}
+            onClick={() => setChoosingLength(true)}>
+            + NEW
+          </button> : null}
         </div>
         {choosingLength ? (
           <form className="sequence-bars-form" onSubmit={(event) => {
@@ -340,18 +321,35 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
               </button>
             </div>
           </form>
-        ) : (
-          <div className="sequence-setup-row sequence-setup-actions">
-            <button type="button" className="touch-control" aria-label="New Pattern"
-              aria-expanded={false} disabled={disabled || playing}
-              onClick={() => setChoosingLength(true)}>
-              + NEW
-            </button>
-            <button type="button" className="touch-control" aria-label="Tap Tempo"
-              disabled={disabled}
-              onClick={tapTempo}>TAP</button>
-          </div>
-        )}
+        ) : null}
+        {/* #1958 S4: SEQ SNAP picks the boundary a playing-state Pattern
+            switch queues at. Like the metronome it is a per-device
+            preference, so it stays reachable while recording and is
+            choosable from the first paint; the app's touched guard keeps a
+            late boot read from overwriting an explicit choice. */}
+        <div className="sequence-setup-row sequence-setup-seq-snap">
+          <span>PATTERN SWITCH · SEQ SNAP</span>
+          <TouchSegment<SeqSnap> label="Sequence snap" options={SEQ_SNAP_OPTIONS}
+            value={props.seqSnap}
+            onChange={props.onSeqSnapChange} />
+        </div>
+        <div className="sequence-setup-row sequence-setup-toggles">
+          <button type="button" className="touch-control" aria-label="Quantize"
+            aria-pressed={project.sequenceSettings.quantizeEnabled}
+            disabled={disabled} onClick={() => props.onSettingsChange({
+              quantizeEnabled: !project.sequenceSettings.quantizeEnabled,
+            })}>
+            QUANTIZE <span aria-hidden="true">{project.sequenceSettings.quantizeEnabled ? "On" : "Off"}</span>
+          </button>
+          {/* The metronome is a monitoring switch, not a Transport setting:
+              it must stay toggleable while recording. */}
+          <button type="button" className="touch-control sequence-metronome"
+            aria-label="Metronome"
+            aria-pressed={props.metronomeOn}
+            onClick={props.onToggleMetronome}>
+            METRONOME <span aria-hidden="true">{props.metronomeOn ? "On" : "Off"}</span>
+          </button>
+        </div>
         {props.showRefresh === false ? null : (
           <details className="sequence-details">
             <summary>Playback details</summary>

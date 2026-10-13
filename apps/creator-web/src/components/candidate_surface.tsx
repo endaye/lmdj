@@ -1,6 +1,6 @@
 import {userMessage} from "../state/error_messages";
 import {useReportFailure} from "../runtime/diagnostics_context";
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState, type ReactNode} from "react";
 import {changeProviderPermission, subscribeProviderPermissions} from "../state/provider_permissions";
 import type {
   CandidateJobView, CandidateProviderList, CandidateRecipe,
@@ -10,6 +10,8 @@ import {
   activeCandidateSet, candidateJobId, candidatePlan, candidateSources,
   type CandidateSource, type CandidateTargetDraft,
 } from "../state/candidate_state";
+
+import "./candidate_surface.css";
 
 const capability = "sample.slice.v1";
 const permission = "sample.slice.execute";
@@ -37,18 +39,22 @@ function errorCopy(error: unknown): string {
   const {message, nextStep} = userMessage(code);
   return `${message} ${nextStep}`;
 }
-function recipeLabel(recipe: CandidateRecipe, index: number): string {
-  return `Slice ${index + 1} · ${(recipe.start_frame / recipe.frame_rate).toFixed(3)}–${
+function intervalLabel(recipe: CandidateRecipe): string {
+  return `${(recipe.start_frame / recipe.frame_rate).toFixed(3)}–${
     (recipe.end_frame / recipe.frame_rate).toFixed(3)} s`;
+}
+function recipeLabel(recipe: CandidateRecipe, index: number): string {
+  return `Slice ${index + 1} · ${intervalLabel(recipe)}`;
 }
 interface CandidateSurfaceProps {
   session: CreatorCandidateRuntimeSession;
   projectId: string;
   projectRevision: number;
   onRefreshProject: (committedRevision?: number) => Promise<unknown>;
+  onBack?: () => void;
 }
 
-export function CandidateSurface({session, projectId, projectRevision, onRefreshProject}: CandidateSurfaceProps) {
+export function CandidateSurface({session, projectId, projectRevision, onRefreshProject, onBack}: CandidateSurfaceProps) {
   const reportFailure = useReportFailure();
   const shownFailure = (error: unknown) => {
     reportFailure("Slices", error);
@@ -56,6 +62,12 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
   };
   const [sources, setSources] = useState<readonly CandidateSource[]>([]);
   const [source, setSource] = useState("");
+  // A read-only header projection of CandidateJob's active result. Associate it
+  // with its source so switching source cannot display the previous count.
+  const [resultCount, setResultCount] = useState<{source: string; count: number | null} | null>(null);
+  const receiveResultCount = useCallback((source: string, count: number | null) => {
+    setResultCount({source, count});
+  }, []);
   const [providers, setProviders] = useState<CandidateProviderList | null>(null);
   const [provider, setProvider] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,10 +106,18 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
     setSources(projection.sources);
     setUncertain(false);
   };
+  const permissionControl = <button type="button" disabled={busy || !providers || providers.granted_permissions?.includes(permission)}
+    onClick={() => void settingsAction(async () => {
+      await changeProviderPermission(session, permission, true);
+    })}>{providers?.granted_permissions?.includes(permission) ? "Analysis permission granted" : "Grant analysis permission"}</button>;
+  const count = source && resultCount?.source === source ? resultCount.count : null;
   return <section className="candidate-surface" aria-label="Slice">
-    <header><h2>Slice</h2><p>Analyze a source, listen to slices, then choose their Pads.</p></header>
+    <header className="candidate-header">
+      <h2>Slice{source ? ` / ${source.slice(0, 8)}` : ""}</h2>
+      {count !== null ? <span className="candidate-result-count">{count} {count === 1 ? "CANDIDATE" : "CANDIDATES"}</span> : null}
+    </header>
     <fieldset disabled={busy} className="candidate-settings">
-      <legend>Analysis setup</legend>
+      <legend className="visually-hidden">Analysis setup</legend>
       <label>Provider<select aria-label="Slice Provider" value={provider} onChange={event => {
         const chosen = event.target.value;
         if (!chosen) {setProvider(""); return;}
@@ -108,11 +128,6 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
       }}><option value="">Choose a Provider</option>{providers?.providers.filter(item =>
         item.capabilities.some(item => item.capability_id === capability)).map(item =>
         <option key={item.id} value={item.id}>{item.id === "local.sample.slice" ? "Local reference detector" : item.id}</option>)}</select></label>
-      <p>The local reference detector runs on its registered test platform, on this device.</p>
-      <button type="button" disabled={!providers || providers.granted_permissions?.includes(permission)}
-        onClick={() => void settingsAction(async () => {
-          await changeProviderPermission(session, permission, true);
-        })}>{providers?.granted_permissions?.includes(permission) ? "Analysis permission granted" : "Grant analysis permission"}</button>
     </fieldset>
     <label className="candidate-source">Source<select aria-label="Slice source" value={source}
       onChange={event => {setSource(event.target.value); setError(null);}}>
@@ -125,7 +140,13 @@ export function CandidateSurface({session, projectId, projectRevision, onRefresh
         Boolean(providers?.granted_permissions?.includes(permission))}
       uncertain={uncertain} adoptionPending={adoptionPending}
       onAdoptionPendingChange={setAdoptionPending}
-      onUncertain={() => setUncertain(true)} onRefreshProject={refreshProject} /> : null}
+      permissionControl={permissionControl} onResultCount={receiveResultCount}
+      {...(onBack ? {onBack} : {})}
+      onUncertain={() => setUncertain(true)} onRefreshProject={refreshProject} /> : <>
+      {permissionControl}
+      <p className="candidate-policy-help">The local reference detector runs on its registered test platform, on this device. Analysis accepts public audio only.</p>
+      {onBack ? <div className="candidate-footer"><button type="button" onClick={onBack}>Back to Sample</button></div> : null}
+    </>}
   </section>;
 }
 interface CandidateJobProps {
@@ -133,9 +154,13 @@ interface CandidateJobProps {
   analysisReady: boolean; uncertain: boolean; adoptionPending: boolean;
   onAdoptionPendingChange: (pending: boolean) => void; onUncertain: () => void;
   onRefreshProject: (committedRevision?: number) => Promise<void>;
+  permissionControl: ReactNode;
+  onResultCount: (source: string, count: number | null) => void;
+  onBack?: () => void;
 }
 function CandidateJob({session, projectId, assetId, revision, analysisReady, uncertain,
-  onUncertain, onRefreshProject, adoptionPending, onAdoptionPendingChange}: CandidateJobProps) {
+  onUncertain, onRefreshProject, adoptionPending, onAdoptionPendingChange,
+  permissionControl, onResultCount, onBack}: CandidateJobProps) {
   const reportFailure = useReportFailure();
   const shownFailure = (error: unknown) => {
     reportFailure("Slices", error);
@@ -152,6 +177,9 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
   const locked = useRef(true);
   const active = activeCandidateSet(job);
   const plan = candidatePlan(rows, active);
+  useEffect(() => {
+    onResultCount(assetId, active?.recipes.length ?? null);
+  }, [assetId, active?.recipes.length, onResultCount]);
   useEffect(() => {
     mounted.current = true;
     let live = true;
@@ -226,19 +254,22 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
   };
   const pending = job?.history.findLast(item => item.status === "pending" || item.status === "interrupted");
   return <div className="candidate-job" aria-busy={busy}>
-    <label className="candidate-classification">
-      <input type="checkbox" checked={publicSource} disabled={busy}
-        onChange={event => setPublicSource(event.target.checked)} />
-      Use this source as public audio for local analysis
-    </label>
-    <p>The current analysis policy accepts public audio. Processing runs locally.</p>
+    <div className="candidate-permissions">
+      {permissionControl}
+      <label className="candidate-classification">
+        <input type="checkbox" checked={publicSource} disabled={busy}
+          aria-label="Use this source as public audio for local analysis"
+          onChange={event => setPublicSource(event.target.checked)} />
+        <span>Public audio</span>
+      </label>
+    </div>
+    <p className="candidate-policy-help">The local reference detector runs on its registered test platform, on this device. Analysis accepts public audio only.</p>
     <div className="candidate-actions">
-      <button type="button" disabled={busy || !analysisReady || !publicSource || uncertain} onClick={() => void analyze()}>{job ? "Retry analysis" : "Analyze"}</button>
-      <button type="button" disabled={busy || adoptionPending} onClick={() => void refresh()}>Refresh slices and Project</button>
+      <button type="button" className="candidate-analyze" disabled={busy || !analysisReady || !publicSource || uncertain} onClick={() => void analyze()}>{job ? "Retry analysis" : "Analyze"}</button>
       {pending ? <button type="button" disabled={busy} onClick={() => void operation(async () => {
         acceptJob(await session.cancelCandidateJob(jobId, pending.intent.attempt_id));
       })}>Cancel analysis</button> : null}
-      <button type="button" onClick={() => {
+      <button type="button" className="candidate-stop" onClick={() => {
         void session.stopCandidateAudition().then(() => {if (mounted.current) setMessage("Preview stopped.");},
           error => {if (mounted.current) setError(shownFailure(error));});
       }}>Stop preview</button>
@@ -251,17 +282,13 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
     {job?.history.at(-1)?.status === "interrupted" ? <p role="status">Analysis was interrupted. Retry explicitly to analyze again.</p> : null}
     {job && !active ? <p role="status">No active slices. Retry analysis to create a new result.</p> : null}
     {active ? <>
-      <header className="candidate-result-header"><h3>Detected slices</h3>
-        <button type="button" disabled={busy} onClick={() => void operation(async () => {
-          await session.stopCandidateAudition();
-          if (mounted.current) acceptJob(await session.discardCandidateSet(jobId, active.set_id));
-        })}>Discard slices</button></header>
+      <header className="candidate-result-header"><h3>Detected slices</h3></header>
       {active.recipes.length === 0 ? <p role="status">Analysis complete. No slices detected.</p> : null}
       <ol className="candidate-recipes" aria-label="Detected slices">
         {active.recipes.map((recipe, index) => <li key={recipe.candidate_id}>
-          <span>{recipeLabel(recipe, index)}</span>
+          <div className="candidate-card-heading"><span>Slice {String(index + 1).padStart(2, "0")}</span><span>{intervalLabel(recipe)}</span></div>
           <span className="candidate-interval">Frames [{recipe.start_frame}, {recipe.end_frame}) · {recipe.frame_rate} Hz</span>
-          <button type="button" disabled={busy} onClick={() => void audition(recipe.candidate_id)} aria-label={`Preview slice ${index + 1}`}>Preview</button>
+          <button type="button" disabled={busy} onClick={() => void audition(recipe.candidate_id)} aria-label={`Preview slice ${index + 1}`}>Preview slice</button>
         </li>)}
       </ol>
       {active.recipes.length ? <fieldset disabled={busy || uncertain} className="candidate-plan"><legend>Choose target Pads</legend>
@@ -280,8 +307,16 @@ function CandidateJob({session, projectId, assetId, revision, analysisReady, unc
         </div>)}
         <button type="button" onClick={() => setRows(current => [...current, {key: crypto.randomUUID(), candidateId: "", bank: "", pad: ""}])}>Add target</button>
         {plan.error ? <p role="status">{plan.error}</p> : null}
-        <button type="button" disabled={plan.error !== null} onClick={() => void adopt()}>Adopt selected slices</button>
+        <button type="button" className="is-primary" disabled={plan.error !== null} onClick={() => void adopt()}>Adopt selected slices</button>
       </fieldset> : null}
     </> : null}
+    <div className="candidate-footer">
+      <button type="button" disabled={busy || adoptionPending} onClick={() => void refresh()}>Refresh slices and Project</button>
+      {onBack ? <button type="button" onClick={onBack}>Back to Sample</button> : null}
+    </div>
+    {active ? <button type="button" className="candidate-discard is-danger" disabled={busy} onClick={() => void operation(async () => {
+      await session.stopCandidateAudition();
+      if (mounted.current) acceptJob(await session.discardCandidateSet(jobId, active.set_id));
+    })}>Discard slices</button> : null}
   </div>;
 }

@@ -1096,7 +1096,8 @@ function mutableSampleRuntimeFixture() {
 }
 
 async function candidatePlaybackFixture(runningAudio = false,
-  configure?: (fixture: ReturnType<typeof mutableSampleRuntimeFixture>) => void) {
+  configure?: (fixture: ReturnType<typeof mutableSampleRuntimeFixture>) => void,
+  replacementSession?: CreatorRuntimeSession) {
   const fixture = mutableSampleRuntimeFixture();
   const sourceId = "33333333-3333-4333-8333-333333333333";
   const adoptedId = "44444444-4444-4444-8444-444444444444";
@@ -1147,7 +1148,9 @@ async function candidatePlaybackFixture(runningAudio = false,
   });
   if (runningAudio) setRunningAudioFixture(session);
   configure?.(fixture);
-  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const factory = vi.fn<() => CreatorRuntimeSession>()
+    .mockReturnValueOnce(session).mockReturnValue(replacementSession ?? session);
+  render(<App initialState={ready} runtimeFactory={factory} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Slice"}));
@@ -1159,7 +1162,8 @@ async function candidatePlaybackFixture(runningAudio = false,
   await userEvent.selectOptions(screen.getByRole("combobox", {name: "Target 1 Bank"}), "0");
   await userEvent.selectOptions(screen.getByRole("combobox", {name: "Target 1 Pad"}),
     screen.getByRole("combobox", {name: "Target 1 Pad"}).querySelector('option[value="1"]')!);
-  return {...fixture, prepare, trigger, adopt, publication, get revision() {return fixture.revision;}};
+  return {...fixture, prepare, trigger, adopt, publication, factory,
+    get revision() {return fixture.revision;}};
 }
 
 test("Candidate adoption waits for a new Runtime Bank before reporting playback ready", async () => {
@@ -1175,6 +1179,117 @@ test("Candidate adoption waits for a new Runtime Bank before reporting playback 
   await act(async () => pending.resolve(fixture.publication()));
   expect(await screen.findByText("Adopted 1 slices.")).toBeTruthy();
   expect(screen.queryByRole("region", {name: "Project audio status"})).toBeNull();
+});
+
+test("Slice returns from its footer to Sample and stops preview without adopting the draft", async () => {
+  const stop = vi.fn(async () => ({}));
+  const run = vi.fn();
+  const fixture = await candidatePlaybackFixture(false, fixture => {
+    Object.assign(fixture.session, {stopCandidateAudition: stop, runCandidateJob: run});
+  });
+  const before = structuredClone(fixture.inspectProject());
+  const callsBefore = [...fixture.calls];
+  const back = screen.getByRole("button", {name: "Back to Sample"});
+  expect(back.closest(".candidate-footer"))
+    .toBe(screen.getByRole("button", {name: "Refresh slices and Project"}).parentElement);
+  await userEvent.click(screen.getByRole("button", {name: "Preview slice 1"}));
+  expect(await screen.findByText("Preview was not played. Tap a Pad to wake audio and try again.")).toBeTruthy();
+  const stopsBefore = stop.mock.calls.length;
+  await userEvent.click(back);
+  expect(screen.getByRole("button", {name: "Sample"}).getAttribute("aria-current")).toBe("page");
+  expect(screen.queryByRole("region", {name: "Slice"})).toBeNull();
+  expect(screen.getByRole("button", {name: "Slice"})).toBeTruthy();
+  await waitFor(() => expect(stop.mock.calls.length).toBeGreaterThan(stopsBefore));
+  expect(fixture.inspectProject()).toEqual(before);
+  expect(fixture.calls).toEqual(callsBefore);
+  expect(fixture.adopt).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
+test("Slice fallback returns to Sample after its Project refresh fails without adopting the draft", async () => {
+  const stop = vi.fn(async () => ({}));
+  const run = vi.fn();
+  const fixture = await candidatePlaybackFixture(false, fixture => {
+    Object.assign(fixture.session, {stopCandidateAudition: stop, runCandidateJob: run});
+  });
+  const before = structuredClone(fixture.inspectProject());
+  const callsBefore = [...fixture.calls];
+  const stopsBefore = stop.mock.calls.length;
+  const inspect = vi.spyOn(fixture.session, "inspectProject").mockRejectedValueOnce(
+    Object.assign(new Error("Project inspection failed"), {code: "IO_ERROR"}));
+
+  await userEvent.click(screen.getByRole("button", {name: "Refresh slices and Project"}));
+  await screen.findByText("Open a Project with candidate or Sound Set support.");
+  expect(inspect).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("region", {name: "Slice"})).toBeNull();
+  expect(screen.getByTestId("creator-phase").textContent).toBe("failed");
+  expect(screen.getByRole("button", {name: "Project"})).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", {name: "Sample"})).toHaveProperty("disabled", false);
+  await waitFor(() => expect(stop.mock.calls.length).toBeGreaterThan(stopsBefore));
+
+  await userEvent.click(screen.getByRole("button", {name: "Back to Sample"}));
+  expect(screen.getByRole("button", {name: "Sample"}).getAttribute("aria-current")).toBe("page");
+  expect(document.querySelector(".sample-surface")).not.toBeNull();
+  expect(screen.queryByText("Open a Project with candidate or Sound Set support.")).toBeNull();
+  expect(screen.getByRole("button", {name: "Slice"})).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("button", {name: "Back to Sample"})).toBeNull();
+  expect(inspect).toHaveBeenCalledTimes(1);
+  expect(fixture.inspectProject()).toEqual(before);
+  expect(fixture.revision).toBe(3);
+  expect(fixture.calls).toEqual(callsBefore);
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(fixture.trigger).not.toHaveBeenCalled();
+  expect(fixture.adopt).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
+test("Slice fallback returns to Sample after Runtime replacement loses Candidate capability", async () => {
+  const replacement = mutableSampleRuntimeFixture();
+  const replacementTruth = structuredClone(replacement.inspectProject());
+  const open = vi.spyOn(replacement.session, "openProject");
+  const replacementTrigger = vi.spyOn(replacement.session, "trigger");
+  const stop = vi.fn(async () => ({}));
+  const run = vi.fn();
+  let restart!: (state: RuntimeHostState) => void;
+  const fixture = await candidatePlaybackFixture(false, fixture => {
+    Object.assign(fixture.session, {stopCandidateAudition: stop, runCandidateJob: run});
+    fixture.session.subscribeHostState = listener => {restart = listener; return () => {};};
+  }, replacement.session);
+  const before = structuredClone(fixture.inspectProject());
+  const stopsBefore = stop.mock.calls.length;
+
+  // Exercise the existing replacement lifecycle. Production sessions always
+  // include Candidate methods; this fixture covers the optional Host boundary.
+  await act(async () => restart({state: "restart-required",
+    errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+  await waitFor(() => expect(fixture.factory).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(replacement.calls).toContain("reloadSnapshot"));
+  expect(open).toHaveBeenCalledExactlyOnceWith(listedSummary.projectId, listedSummary.patternId);
+  expect(fixture.calls.filter(call => call === "close")).toHaveLength(1);
+  expect(screen.getByText("Open a Project with candidate or Sound Set support.")).toBeTruthy();
+  expect(screen.queryByRole("region", {name: "Slice"})).toBeNull();
+  expect(screen.getByRole("button", {name: "Project"})).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", {name: "Sample"})).toHaveProperty("disabled", false);
+  await waitFor(() => expect(stop.mock.calls.length).toBeGreaterThan(stopsBefore));
+  const replacementCalls = [...replacement.calls];
+
+  await userEvent.click(screen.getByRole("button", {name: "Back to Sample"}));
+  expect(screen.getByRole("button", {name: "Sample"}).getAttribute("aria-current")).toBe("page");
+  expect(document.querySelector(".sample-surface")).not.toBeNull();
+  expect(screen.queryByText("Open a Project with candidate or Sound Set support.")).toBeNull();
+  expect(screen.getByRole("button", {name: "Slice"})).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("button", {name: "Back to Sample"})).toBeNull();
+  expect(replacement.calls).toEqual(replacementCalls);
+  expect(replacement.inspectProject()).toEqual(replacementTruth);
+  expect(fixture.inspectProject()).toEqual(before);
+  expect(replacement.revision).toBe(3);
+  expect(fixture.revision).toBe(3);
+  expect(fixture.factory).toHaveBeenCalledTimes(2);
+  expect(fixture.prepare).not.toHaveBeenCalled();
+  expect(fixture.trigger).not.toHaveBeenCalled();
+  expect(replacementTrigger).not.toHaveBeenCalled();
+  expect(fixture.adopt).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
 });
 
 test("Candidate publication failure retains one commit and retries only preparation", async () => {
@@ -2796,8 +2911,9 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   // frames, as on Sequence), real Bank/Quantize facts, never the pictured
   // output meters or a control of any kind.
   expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 01 · BEAT 01 / 04");
-  expect(screen.getByTestId("perform-overview").textContent ?? "")
-    .toMatch(/Bank.*A.*Quantize/s);
+  const performOverview = within(screen.getByTestId("perform-overview"));
+  expect(performOverview.getByLabelText("Bank").textContent).toBe("A");
+  expect(performOverview.getByLabelText("Quantize").textContent).toBe("ON");
   expect(screen.getByTestId("perform-overview").textContent ?? "")
     .not.toMatch(/PEAK|NO CLIP/);
   expect(within(screen.getByRole("region", {name: "Overview display"}))

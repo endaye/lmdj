@@ -763,13 +763,28 @@ export interface PerformanceHeaderedBeginResult extends PerformanceLifecycleResu
 }
 
 export type PerformanceHeaderedEvent =
-  | PerformanceRawEvent
+  | Exclude<PerformanceRawEvent, {kind: "fx_engage" | "fx_move" | "fx_release"}>
   | Readonly<{
-      kind: "fx_move" | "fx_release";
+      kind: "fx_engage";
+      fx: PerformanceFx;
+      value: number;
+      // Core issues these identities; callers cannot supply legacy bindings.
+      gestureId?: never;
+      gestureGeneration?: never;
+    }>
+  | Readonly<{
+      kind: "fx_move";
       fx: PerformanceFx;
       gestureId: string;
       gestureGeneration: string;
-      value?: number;
+      value: number;
+    }>
+  | Readonly<{
+      kind: "fx_release";
+      fx: PerformanceFx;
+      gestureId: string;
+      gestureGeneration: string;
+      value?: never;
     }>
   | Readonly<{
       kind: "filter_parameter";

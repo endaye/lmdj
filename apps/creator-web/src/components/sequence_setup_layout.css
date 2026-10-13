@@ -1,0 +1,89 @@
+/* SETUP alone adopts the Interaction UI grouping. The shared header and
+   EDIT's sixteen lanes retain their existing geometry and input ownership. */
+.sequence-settings.sequence-setup-layout {
+  gap: var(--creator-group-gap);
+  min-width: 0;
+}
+
+.sequence-setup-layout .sequence-param-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+}
+
+.sequence-setup-layout .sequence-param-card {
+  min-width: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.sequence-setup-layout .sequence-param-slider {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label value" "slider slider";
+  align-items: center;
+  column-gap: var(--creator-group-gap);
+  row-gap: 0;
+  min-width: 0;
+}
+
+.sequence-setup-layout .sequence-param-slider > span {
+  grid-area: label;
+  font-size: 11px;
+  line-height: 15px;
+  letter-spacing: 0;
+}
+
+.sequence-setup-layout .sequence-param-slider > input {
+  grid-area: slider;
+  min-width: 0;
+  min-height: var(--creator-control-hit);
+  margin: 0;
+}
+
+.sequence-settings.sequence-setup-layout .sequence-param-card output {
+  grid-area: value;
+  color: var(--creator-text);
+  font-family: var(--creator-font-mono);
+  font-size: 12px;
+  line-height: 17px;
+  text-align: right;
+}
+
+.sequence-setup-layout .sequence-param-actions,
+.sequence-setup-layout .sequence-structure-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* New's length form retains the original TAP visibility rule. Keep the two
+   step actions at the row's edges while TAP is absent. */
+.sequence-setup-layout .sequence-param-tempo .sequence-param-actions > button:last-child {
+  grid-column: 3;
+}
+
+.sequence-setup-layout .sequence-param-encoder {
+  justify-self: start;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0;
+}
+
+.sequence-setup-layout .sequence-setup-bars,
+.sequence-setup-layout .sequence-setup-seq-snap {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.sequence-setup-layout .sequence-setup-row > span {
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0;
+}
+
+.sequence-setup-layout .sequence-bars-form {
+  display: grid;
+  gap: var(--creator-group-gap);
+}
+
+.sequence-setup-layout .sequence-setup-toggles > button {
+  gap: 4px;
+}

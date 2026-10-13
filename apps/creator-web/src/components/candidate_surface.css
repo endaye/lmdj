@@ -1,0 +1,152 @@
+/* #2112 U10: Slice layout. Shared controls retain ownership of face/hit sizing. */
+.hardware-workspace .candidate-surface {
+  display: grid;
+  align-content: start;
+  gap: var(--creator-group-gap);
+  min-width: 0;
+}
+.hardware-workspace .candidate-surface .candidate-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--creator-group-gap);
+}
+.hardware-workspace .candidate-surface .candidate-header h2 {
+  margin: 0;
+  font: 500 var(--creator-heading-size)/20px var(--creator-font-action);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.candidate-surface .candidate-result-count {
+  padding-top: 3px;
+  color: var(--creator-muted);
+  font: 10px/14px var(--creator-font-mono);
+}
+.hardware-workspace .candidate-surface .candidate-settings,
+.hardware-workspace .candidate-surface .candidate-plan {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: var(--creator-group-gap);
+}
+.hardware-workspace .candidate-surface .candidate-settings > label,
+.hardware-workspace .candidate-surface .candidate-source {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--creator-group-gap);
+  margin: 0;
+  max-width: none;
+  color: var(--creator-muted);
+  font: 11px/15px var(--creator-font-mono);
+}
+.hardware-workspace .candidate-surface select {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--creator-control-hit);
+  padding: 4px 6px;
+  font: 12px/17px var(--creator-font-mono);
+  color: var(--creator-text);
+}
+.hardware-workspace .candidate-surface .candidate-job {
+  display: grid;
+  min-width: 0;
+  gap: var(--creator-group-gap);
+}
+.candidate-surface .candidate-permissions,
+.candidate-surface .candidate-footer,
+.hardware-workspace .candidate-surface .candidate-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--creator-group-gap);
+}
+.candidate-surface .candidate-permissions > *,
+.candidate-surface .candidate-footer > * { min-width: 0; }
+.candidate-surface .candidate-footer > :only-child,
+.candidate-surface .candidate-analyze,
+.candidate-surface .candidate-stop:nth-child(2) { grid-column: 1 / -1; }
+.hardware-workspace .candidate-surface .candidate-classification {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: var(--creator-control-hit);
+  padding: 4px 6px;
+  border: 1px solid var(--creator-line);
+  border-radius: var(--creator-control-radius, 6px);
+  background: var(--creator-raised);
+  font: 9px/13px var(--creator-font-mono);
+}
+.candidate-surface .candidate-classification:has(:checked) {
+  border-color: var(--creator-lime);
+  color: var(--creator-lime);
+}
+.candidate-surface .candidate-classification:has(:focus-visible) {
+  outline: 2px solid var(--creator-text);
+  outline-offset: 2px;
+}
+.candidate-surface .candidate-classification:has(:disabled) { opacity: .45; }
+.hardware-workspace .candidate-surface .candidate-policy-help,
+.hardware-workspace .candidate-surface .candidate-interval,
+.hardware-workspace .candidate-surface .candidate-plan > p {
+  margin: 0;
+  color: var(--creator-muted);
+  font: 10px/14px var(--creator-font-mono);
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .candidate-surface .candidate-result-header h3,
+.hardware-workspace .candidate-surface .candidate-plan legend {
+  margin: 0;
+  color: var(--creator-muted);
+  font: 11px/15px var(--creator-font-mono);
+}
+.hardware-workspace .candidate-surface .candidate-plan legend { margin-bottom: 8px; }
+.hardware-workspace .candidate-surface .candidate-recipes {
+  min-width: 0;
+  max-height: none;
+  margin: 0;
+  gap: var(--creator-group-gap);
+  overflow: visible;
+}
+.hardware-workspace .candidate-surface .candidate-recipes > li {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 12px;
+  background: var(--creator-base);
+  border-radius: 7px;
+}
+.candidate-surface .candidate-card-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--creator-text);
+  font: 12px/17px var(--creator-font-mono);
+}
+.candidate-surface .candidate-card-heading > :first-child {
+  color: var(--creator-muted);
+  font: 11px/15px var(--creator-font-mono);
+  text-transform: uppercase;
+}
+.hardware-workspace .candidate-surface .candidate-target {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--creator-group-gap);
+  margin: 0;
+  padding: 12px;
+  background: var(--creator-base);
+  border-radius: 7px;
+}
+.candidate-surface .candidate-target > label:first-child,
+.candidate-surface .candidate-target > button { grid-column: 1 / -1; }
+.hardware-workspace .candidate-surface .candidate-target > label {
+  min-width: 0;
+  color: var(--creator-muted);
+  font: 11px/15px var(--creator-font-mono);
+}
+.hardware-workspace .candidate-surface .candidate-plan > button { margin: 0; }
+.hardware-workspace .candidate-surface .candidate-discard { color: var(--creator-rose, #e5adc4); }
