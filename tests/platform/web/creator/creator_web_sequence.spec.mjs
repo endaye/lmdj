@@ -101,6 +101,7 @@ async function installTransportProofRecorder(page) {
               window.__patternSwitchProof.push({
                 payload: structuredClone(request.payload),
                 ok: response?.ok ?? null,
+                result: structuredClone(response?.result ?? null),
               });
             }
             if (operation === "trigger") {
@@ -1329,6 +1330,90 @@ test("SETUP changes, doubles and copies a Pattern, undoes exactly, and reopens w
   expect(reopened.pattern_slots).toEqual(final.pattern_slots);
   await showPatternSetup(page, patternId);
   await expect(lengthButton(page, 4)).toHaveAttribute("aria-pressed", "true");
+});
+
+// #2112 B01: the current GROOVE item must reach the same Host cancellation
+// path as the physical direction keys. No projection or audio clock is faked.
+test("GROOVE current selection cancels a queued switch and preserves Truth through Stop and reopen", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await installTransportProofRecorder(page);
+  await page.goto("/index.html");
+  await importProject(page);
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  const firstPattern = await selectedSequencePatternId(page);
+  await createSequencePattern(page, 1);
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-count", "2");
+  const secondPattern = Object.keys((await inspectTruth(page)).patterns)
+    .find((id) => id !== firstPattern);
+  expect(secondPattern).toBeDefined();
+  await selectSequencePattern(page, firstPattern);
+  // A deliberately slow musical tempo leaves time for the real UI's queue
+  // and cancellation gestures before the boundary; no deadline is widened.
+  await showSequenceLayer(page, "SETUP");
+  await page.getByRole("slider", {name: "BPM", exact: true}).press("Home");
+  await expect.poll(async () => (await inspectTruth(page)).bpm).toBe(40);
+  await showSequenceLayer(page, "EDIT");
+  const truthAtRest = await inspectTruth(page);
+  const trigger = page.getByRole("button", {name: "Choose Pattern", exact: true});
+  const choose = async (patternId) => {
+    await trigger.click();
+    await page.getByRole("dialog", {name: "Choose Pattern", exact: true})
+      .locator(`[data-pattern-choice="${patternId}"]`).click();
+  };
+
+  // Leg 1 — selecting the stopped current item closes without publication.
+  await page.evaluate(() => { window.__snapshotReloadProof = []; });
+  await choose(firstPattern);
+  await expect(trigger).toBeFocused();
+  expect(await switchRequests(page)).toEqual([]);
+  expect(await page.evaluate(() => window.__snapshotReloadProof)).toEqual([]);
+
+  await wakeAudioWithPad(page);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await playStopKey(page).click();
+  await transportStatus(page, "playing");
+  const sessionId = (await transportRequests(page)).at(-1).payload.session_id;
+  await choose(firstPattern);
+  expect(await switchRequests(page)).toEqual([]);
+
+  // Leg 2 — a real queue names B while A remains the current Pattern.
+  await awaitEarlyBar(page, sessionId, 40);
+  await choose(secondPattern);
+  await expect(trigger).toContainText("GROOVE / 01 → 02");
+  const queued = await inspectTransport(page, sessionId);
+  expect(queued.current_pattern_id).toBe(firstPattern);
+  expect(queued.pending_switch.pattern_id).toBe(secondPattern);
+  const boundary = queued.pending_switch.activation_frame;
+
+  // Leg 3 — current-A is an intent to the native owner. Its response and
+  // subsequent status establish cancellation, then the UI follows them.
+  await choose(firstPattern);
+  await expect.poll(async () => (await switchRequests(page)).length).toBe(2);
+  expect((await switchRequests(page)).at(-1)).toMatchObject({
+    payload: {pattern_id: firstPattern, snap: "bar"}, ok: true,
+    result: {pattern_id: firstPattern, activation_frame: null},
+  });
+  await expect.poll(async () => {
+    const status = await inspectTransport(page, sessionId);
+    return status.playing && status.current_pattern_id === firstPattern &&
+      status.pending_switch == null && status.runtime_frame > boundary;
+  }, {timeout: 30_000, intervals: [50]}).toBe(true);
+  await expect(trigger).toContainText("GROOVE / 01");
+  await expect(trigger).not.toContainText("→");
+  await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", firstPattern);
+  expect(await page.evaluate(() => window.__snapshotReloadProof)).toEqual([]);
+  expect(await inspectTruth(page)).toEqual(truthAtRest);
+
+  // Leg 4 — Stop and reopening retain exactly the original authored Truth.
+  await playStopKey(page).click();
+  await transportStatus(page, "stopped");
+  const stopped = await inspectTransport(page, sessionId);
+  expect(stopped.current_pattern_id).toBe(firstPattern);
+  expect(stopped.pending_switch).toBe(null);
+  expect(await inspectTruth(page)).toEqual(truthAtRest);
+  await reopenProject(page);
+  expect(await inspectTruth(page)).toEqual(truthAtRest);
 });
 
 // #1958 S4: SEQ SNAP names the boundary a playing-state switch queues at.

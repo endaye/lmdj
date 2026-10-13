@@ -34,7 +34,8 @@ import type {
 
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
-const creatorStyles = readFileSync("src/styles.css", "utf8");
+const creatorStyles = readFileSync("src/styles.css", "utf8") +
+  readFileSync("src/components/project_surface.css", "utf8");
 let styleElement: HTMLStyleElement;
 let originalOfflineAudioContext: typeof globalThis.OfflineAudioContext | undefined;
 beforeAll(() => {
@@ -192,7 +193,7 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
 
   await user.click(projectMode);
   expect(projectMode.getAttribute("aria-current")).toBe("page");
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "New Project"}).hasAttribute("disabled"))
     .toBe(true);
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
 });
@@ -2356,20 +2357,20 @@ test("gates Project actions while the Runtime is booting", async () => {
   const fixture = runtimeFixture({start: () => start});
   render(<App runtimeFactory={() => fixture.session} />);
 
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "New Project"}).hasAttribute("disabled"))
     .toBe(true);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(true);
 
   finishStart?.(true);
   await screen.findByRole("button", {name: "Open Project 11111111"});
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(false);
 });
 
-test("Open local switches Projects through one serialized visible selection", async () => {
+test("selected Open switches Projects through one serialized visible selection", async () => {
   const secondSummary: LocalProjectSummary = {
     ...listedSummary,
     projectId: "22222222-2222-4222-8222-222222222222",
@@ -2423,7 +2424,6 @@ test("Open local switches Projects through one serialized visible selection", as
     name: "Open Project 11111111",
   }));
   await screen.findByRole("heading", {name: "Project 11111111"});
-  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   // D01: a card tap selects; OPEN PROJECT opens the selection.
   await userEvent.click(await screen.findByRole("button", {name: "Select Project 22222222"}));
   const openSecond = await screen.findByRole("button", {
@@ -2451,10 +2451,13 @@ test("disables Project actions while an import owns the action slot", async () =
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   await userEvent.upload(input!, new File(["bundle"], "pending.lmdj"));
   await waitFor(() => expect(screen.getByTestId("creator-phase").textContent).toBe("importing"));
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "New Project"}).hasAttribute("disabled"))
     .toBe(true);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(true);
+
+  expect(screen.getByRole("button", {name: "Open Project 11111111"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", {name: "Select Project 11111111"})).toHaveProperty("disabled", true);
 
   finishImport?.(listedSummary);
   await screen.findByRole("heading", {name: "Project 11111111"});
@@ -2469,10 +2472,11 @@ test("lists, opens, and imports through the injected Runtime Session", async () 
   const open = await screen.findByRole("button", {
     name: "Open Project 11111111",
   });
-  expect(screen.getByText("Revision 3")).toBeTruthy();
-  expect(screen.getByText("120 BPM")).toBeTruthy();
-  expect(screen.getByText("1 assigned Pad")).toBeTruthy();
-  expect(screen.getByText("1 Asset")).toBeTruthy();
+  const card = screen.getByRole("button", {name: "Select Project 11111111"});
+  expect(card.textContent).toContain("Revision 3");
+  expect(card.textContent).toContain("120 BPM");
+  expect(card.textContent).toContain("1 Pad");
+  expect(card.textContent).toContain("1 Asset");
   await user.click(screen.getByRole("button", {name: "Sample"}));
   expect(fixture.calls).toEqual(["start", "listLocalProjects"]);
   await user.click(screen.getByRole("button", {name: "Project"}));
@@ -2691,7 +2695,8 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
     .toContain("LOCAL AUTOSAVE");
 
   const touch = screen.getByRole("region", {name: "Touch workspace"});
-  expect(within(touch).getByRole("button", {name: "Open local"})).toBeTruthy();
+  expect(within(touch).getByRole("button", {name: "New Project"})).toBeTruthy();
+  expect(within(touch).getByText("No other local Project is stored on this device.")).toBeTruthy();
   expect(within(touch).getByRole("button", {name: "Import .lmdj"})).toBeTruthy();
   expect(within(touch).queryByRole("button", {name: "Activate audio"})).toBeNull();
   expect(within(touch).queryByRole("button", {name: "Enable MIDI"})).toBeNull();
@@ -3152,7 +3157,6 @@ test("re-engages the Pattern transport with a fresh identity when an open replac
   await waitFor(() => expect(inspectedSessionIds).toHaveLength(1));
 
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   await userEvent.click(await screen.findByRole("button", {
     name: "Open Project 11111111",
   }));
@@ -5648,7 +5652,6 @@ test.each(["another Project", "returning to the same Project", "replacement Runt
       await waitFor(() => expect(screen.getByRole("button", {name: "Duplicate Project"})).toHaveProperty("disabled", false));
     };
     const open = async (summary: LocalProjectSummary) => {
-      await userEvent.click(screen.getByRole("button", {name: "Open local"}));
       await userEvent.click(await screen.findByRole("button", {name: `Select Project ${summary.projectId.slice(0, 8)}`}));
       await userEvent.click(await screen.findByRole("button", {name: `Open Project ${summary.projectId.slice(0, 8)}`}));
       await screen.findByRole("heading", {name: `Project ${summary.projectId.slice(0, 8)}`});
@@ -5756,7 +5759,6 @@ test("a new Project Pad capture failure re-arms its own history navigation", asy
   try {
     showHistoryLayer();
     await waitFor(() => expect(undo().classList.contains("is-lit")).toBe(true));
-    await userEvent.click(screen.getByRole("button", {name: "Open local"}));
     await userEvent.click(await screen.findByRole("button", {name: "Select Project 44444444"}));
     await userEvent.click(await screen.findByRole("button", {name: "Open Project 44444444"}));
     await screen.findByRole("heading", {name: "Project 44444444"});
@@ -6242,9 +6244,9 @@ test.each([
     await waitFor(() => expect(revisionCell()?.textContent).toBe(outcome === "unknown" ? "3" : "4"));
     expect(replacementInspect).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", {name: "Open local"})).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Open Project 11111111"})).toHaveProperty("disabled", true);
     await userEvent.click(screen.getByRole("button", {name: "New Project"}));
-    await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+    await userEvent.click(screen.getByRole("button", {name: "Open Project 11111111"}));
     expect(second.calls).not.toContain("createProject");
     expect(replacementOpen).toHaveBeenCalledTimes(1);
     expect(replacementUpdate).not.toHaveBeenCalled();
@@ -6466,7 +6468,24 @@ test("ordinary default seed waits for the retained Sample update and successor p
   }
 });
 
-test("Project directions select adjacent cards and three-column rows; only OPEN opens", async () => {
+test.each([0, 1])("Project list with %i item has no adjacent navigation", (count) => {
+  const state = {...ready, project: {...ready.project,
+    projects: count === 0 ? [] : [listedSummary]}};
+  render(<App initialState={state} />);
+  for (const name of ["Previous Project — ↑", "Next Project — ↓"]) {
+    const key = screen.getByRole("button", {name});
+    expect(key).toHaveProperty("disabled", true);
+    fireEvent.click(key);
+  }
+  expect(screen.getAllByRole("heading", {name: "Project 11111111"})).toHaveLength(1);
+  expect(screen.queryAllByRole("button", {name: /^Select Project/})).toHaveLength(count);
+  if (count === 1) {
+    expect(screen.getByRole("button", {name: "Select Project 11111111"})
+      .getAttribute("aria-pressed")).toBe("true");
+  }
+});
+
+test("Project directions select the single list without opening or writing; only OPEN opens", async () => {
   const summaries = [listedSummary, ...Array.from({length: 7}, (_, index) => {
     const digit = (index + 4).toString(16);
     return {...listedSummary,
@@ -6486,7 +6505,7 @@ test("Project directions select adjacent cards and three-column rows; only OPEN 
   };
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
-  await waitFor(() => expect(screen.getByRole("button", {name: "Next Project — →"})).toHaveProperty("disabled", false));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Next Project — ↓"})).toHaveProperty("disabled", false));
   const opened = open.mock.calls.length;
   const reads = [...fixture.calls];
   const selected = () => Array.from(document.querySelectorAll(".project-card"),
@@ -6498,27 +6517,41 @@ test("Project directions select adjacent cards and three-column rows; only OPEN 
     expect(fixture.calls).toEqual(reads);
   };
   expect(getComputedStyle(document.querySelector(".local-projects")!).gridTemplateColumns)
-    .toBe("repeat(3, minmax(0, 1fr))"); // jsdom style seam; browser owns painted geometry.
+    .toBe("minmax(0, 1fr)"); // jsdom style seam; browser owns painted geometry.
   expectSelection(0);
-  expect(screen.getByRole("button", {name: "Previous Project — ←"})).toHaveProperty("disabled", true);
-  expect(screen.getByRole("button", {name: "Previous Project row — ↑"})).toHaveProperty("disabled", true);
-  for (const [name, index] of [
-    ["Next Project — →", 1], ["Next Project row — ↓", 4], ["Next Project row — ↓", 7],
-    ["Previous Project row — ↑", 4], ["Previous Project — ←", 3], ["Previous Project row — ↑", 0],
-    ["Next Project — →", 1], ["Next Project — →", 2], ["Next Project row — ↓", 5],
-    ["Next Project row — ↓", 7],
-  ] as const) {
-    fireEvent.click(screen.getByRole("button", {name}));
-    expectSelection(index);
-    expect(screen.getByRole("button", {name: "Previous Project row — ↑"}))
-      .toHaveProperty("disabled", index < 3);
-  }
-  for (const name of ["Next Project — →", "Next Project row — ↓"]) {
+  for (const name of ["Undo — SHIFT + ←", "Redo — SHIFT + →"]) {
     const key = screen.getByRole("button", {name});
     expect(key).toHaveProperty("disabled", true);
     fireEvent.click(key);
-    expectSelection(7);
+    expectSelection(0);
   }
+  expect(screen.getByRole("button", {name: "Previous Project — ↑"})).toHaveProperty("disabled", true);
+  for (let index = 1; index < summaries.length; index += 1) {
+    fireEvent.click(screen.getByRole("button", {name: "Next Project — ↓"}));
+    expectSelection(index);
+    expect(screen.getByRole("button", {name: "Previous Project — ↑"}))
+      .toHaveProperty("disabled", false);
+  }
+  const down = screen.getByRole("button", {name: "Next Project — ↓"});
+  expect(down).toHaveProperty("disabled", true);
+  fireEvent.click(down);
+  expectSelection(7);
+  for (let index = summaries.length - 2; index >= 0; index -= 1) {
+    fireEvent.click(screen.getByRole("button", {name: "Previous Project — ↑"}));
+    expectSelection(index);
+  }
+  const up = screen.getByRole("button", {name: "Previous Project — ↑"});
+  expect(up).toHaveProperty("disabled", true);
+  fireEvent.click(up);
+  expectSelection(0);
+  // The history layer keeps its own mapping and does not navigate Projects.
+  fireEvent.click(screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"}));
+  expect(screen.queryByRole("button", {name: "Next Project — ↓"})).toBeNull();
+  expect(screen.getByRole("button", {name: "Undo — SHIFT + ←"})).toBeTruthy();
+  expectSelection(0);
+  fireEvent.click(screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"}));
+  fireEvent.click(screen.getByRole("button", {name: "Select Project aaaaaaaa"}));
+  expectSelection(7);
   await userEvent.click(screen.getByRole("button", {name: "Open Project aaaaaaaa"}));
   await waitFor(() => expect(open).toHaveBeenCalledTimes(opened + 1));
   expect(open.mock.lastCall?.[0]).toBe(summaries[7]!.projectId);

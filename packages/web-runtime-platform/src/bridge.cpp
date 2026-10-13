@@ -336,7 +336,7 @@ bool supported_operation(std::string_view operation) {
 }
 
 bool snapshot_notification_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 9> operations{
+  static constexpr std::array<std::string_view, 10> operations{
       "project.open",
       "snapshot.reload",
       "snapshot.retry",
@@ -345,6 +345,7 @@ bool snapshot_notification_operation(std::string_view operation) {
       "sample.import.commit",
       "sample.update_pad",
       "sample.reset_pad",
+      "pad.assign",
       "pad.delete",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
@@ -1307,6 +1308,7 @@ struct ControlBridge::Impl {
               operation == "sample.import.commit" ||
               operation == "sample.update_pad" ||
               operation == "sample.reset_pad" ||
+              operation == "pad.assign" ||
               operation == "pad.delete" ||
               operation == "history.undo" || operation == "history.redo";
           const auto& result = has_result ? response.at("result") : Json{};

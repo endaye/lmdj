@@ -66,7 +66,6 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   // imported one again, each with Enter, each landing on its own heading.
   await pressProjectAction(page, page.getByTestId("physical-controls")
     .getByRole("button", {name: "Project", exact: true}));
-  await pressProjectAction(page, page.getByRole("button", {name: "Open local", exact: true}));
   // D01: a card selects the Project and OPEN PROJECT opens the selection.
   const other = page.getByRole("button", {name: /^Select Project (?!00000000$)[0-9a-f]{8}$/});
   await expect(other).toHaveCount(1);
@@ -75,7 +74,6 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   await pressProjectAction(page, page.getByRole("button", {name: `Open Project ${otherId}`, exact: true}));
   await expect(page.getByRole("heading", {name: `Project ${otherId}`}))
     .toBeVisible({timeout: OPEN_TRANSITION_TIMEOUT_MS});
-  await pressProjectAction(page, page.getByRole("button", {name: "Open local", exact: true}));
   await pressProjectAction(page, page.getByRole("button", {name: "Select Project 00000000", exact: true}));
   await pressProjectAction(page, page.getByRole("button", {name: "Open Project 00000000", exact: true}));
   const heading = page.getByRole("heading", {name: "Project 00000000"});
@@ -189,21 +187,21 @@ for (const viewport of [
     // shape that made #977 read as a Creator defect.
     await expect(page.getByRole("button", {name: "Sound Sets"})).toBeEnabled();
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
-    // The physical column is the rail now. Its keys are icons, so the walk
-    // reads each stop's accessible name. Audio is not running in this case,
+    // The physical column's compact text retains full accessible names; this
+    // walk reads those names. Audio is not running in this case,
     // The first transport/Pad gesture wakes audio. Unassigned encoders
     // and directions are skipped; history directions stay inert until SHIFT
-    // is held. SHIFT remains reachable, followed by Record, Play/Stop and
-    // the first Pad, proving the complete physical rail.
+    // is held. SHIFT comes after Banks and before the available directions,
+    // then Record, Play/Stop and the first Pad complete the physical rail.
     await page.getByTestId("physical-controls")
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
-      // #2108 wired the Project rail directions into the physical column; on
-      // the first Project "Previous Project — ←" is disabled and skipped,
-      // while "Next Project — →" is an enabled tab stop before SHIFT.
-      "Next Project — →",
       "SHIFT — engage the Undo/Redo layer",
+      // #2108 wired the Project rail directions into the physical column; on
+      // the first Project "Previous Project — ↑" is disabled and skipped,
+      // while "Next Project — ↓" is an enabled tab stop after SHIFT.
+      "Next Project — ↓",
       "Record", "Play/Stop", "Pad A13 — assigned — Key 1",
     ];
     const focusOrder = [];

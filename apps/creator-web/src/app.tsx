@@ -3130,10 +3130,8 @@ function Workspace({
         </section>
       )}
 
-              {!systemOpen && ["project", "sample", "soundset", "slice"].includes(activeMode) &&
+              {!systemOpen && ["sample", "soundset", "slice"].includes(activeMode) &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
-                {activeMode === "project" && <button type="button" disabled={!soundSetEnabled}
-                  onClick={() => selectMode("soundset")}>Sound Sets</button>}
                 {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
                   onClick={() => selectMode("slice")}>Slice</button>}
                 {(activeMode === "soundset" || activeMode === "slice") &&
@@ -3226,6 +3224,8 @@ function Workspace({
                   canImport={canImportProject}
                   canCreate={canCreateProject}
                   canDuplicate={canDuplicateProject}
+                  canSoundSets={soundSetEnabled}
+                  onSoundSets={() => selectMode("soundset")}
                   duplicateRefusal={duplicateRefusal}
                   showLocalProjects={showLocalProjects}
                   onShowLocal={() => setShowLocalProjects(true)}

@@ -261,3 +261,59 @@ exited 0 (`/tmp/lmdj-u03a-review-repair-tsc.log`). No Portal page changed.
 The subsequent clean-source repair commit is the normal product packager's
 input; its browser result will be recorded in PR Verification after the
 authorized heavy window, without amending an already pushed head.
+
+## Current-main integration after review repair
+
+Repair commit `26d68df71e23850c69c728d924c4449b2f90cb95` passed fresh normal
+build/package and both complete Chromium browser files: 15 passed, one
+existing WebKit-only skip, terminal exit 0, 1.2 minutes. The component suite
+passed 254 tests, typecheck passed and final scope suite passed 77 tests.
+Those receipts are retained under `/tmp/lmdj-u03a-review-repair-*.log`.
+The commit was pushed and PR #2119 read back the exact head. No new review
+workflow ran because the PR had actual merge conflicts (`mergeable=false`);
+this was not successful or eligible current-head review.
+
+Root admitted merging current main `50ecc7107a3347878e1d5aa7f72b031d7d58eb98`
+without rewriting the pushed history. `git merge --no-commit --no-ff` returned
+exit 1 with two Portal content conflicts, retained in
+`/tmp/lmdj-u03a-main-merge.log`. They were adjacent facts in
+`creator-interactions.mdx` and the shared historical paragraph in
+`creator-web.mdx`. Resolution retains main's U02a text rail, SHIFT-after-Bank
+and native Tab order, together with U03's current upper-display layout and
+explicit historical T9/T10/T11 attribution. No new behavior was added.
+
+The automatic merges were inspected against main: `workspace_shell.test.tsx`
+keeps all U04 single-column navigation cases and adds only U03's independent
+Bank/Quantize fact assertions; the complete hardware-layout browser file
+keeps U02a rail and U04 Project journeys plus the six repair loading/inspect
+far-side assertions. Imported main product/producer changes are unchanged
+from their merged source. The staged diff against main remains the declared
+U03 files plus the previously admitted browser repair path.
+
+The combined input must rerun all eight whole component files, Creator
+typecheck, Portal, scope ownership, fresh normal build/package and both full
+browser files. Previous receipts remain evidence only for their original
+inputs. At this integration declaration, typecheck passed; component tests
+are running and Portal/build/package/browser remain UNRUN, awaiting Root's
+heavy window. A clean merge checkpoint for the normal packager may be created
+only after source/Portal checks and staged inspection pass. Do not push before
+the combined artifact browser checks pass; real review finding 3 remains for
+the automated final-head repair review.
+
+Integrated source results: the same eight whole component files passed
+256/256 tests, exit 0, 69.82 seconds
+(`/tmp/lmdj-u03a-main-merge-components.log`); whole Creator typecheck exited 0
+(`/tmp/lmdj-u03a-main-merge-tsc.log`); scope ownership passed 77 tests, exit 0,
+8.674 seconds (`/tmp/lmdj-u03a-main-merge-scope.log`). The staged diff against
+main has exactly the 15 admitted U03/repair paths, no unmerged entries and no
+unstaged files. Staged whitespace check passed. Portal and artifact/browser
+verification remain UNRUN for this merged input until their actual terminals
+finish in Root's heavy window.
+
+The integrated whole Portal check subsequently exited 0
+(`/tmp/lmdj-u03a-main-merge-portal.log`): 177 tests, 52 pages, 10 diagram
+sources/20 outputs and 50 routes with internal links. Root admitted the
+clean-source merge checkpoint after this result, solely as the input to the
+normal packager. Fresh build/package and the two complete browser files will
+bind to that merge head; their final receipts will be handed to Root for PR
+Verification without another source or plan amend.

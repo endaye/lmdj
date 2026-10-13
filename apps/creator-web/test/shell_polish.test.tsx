@@ -112,8 +112,10 @@ test("D01 Project cards keep Open, offer New Project and omit Save", () => {
     },
   };
   render(<ProjectSurface state={withList} canOpen hideSummary onOpen={onOpen} />);
-  expect(screen.getByText("01 LOCAL")).toBeTruthy();
-  expect(screen.getByText("01", {selector: ".project-card-index"})).toBeTruthy();
+  expect(screen.getByText("LOCAL", {exact: true})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Open local"})).toBeNull();
+  expect(screen.getByRole("button", {name: "Open Project 01234567"}).closest("li"))
+    .toBe(screen.getByRole("button", {name: "Select Project 01234567"}).closest("li"));
   fireEvent.click(screen.getByRole("button", {name: "Open Project 01234567"}));
   expect(onOpen).toHaveBeenCalledWith(withList.project.projects[0]);
   expect(screen.queryByRole("button", {name: /^SAVE$/i})).toBeNull();
@@ -248,4 +250,32 @@ test("D01: a card tap only selects; OPEN PROJECT opens the selection", () => {
   expect(screen.queryByRole("button", {name: "Open Project 01234567"})).toBeNull();
   fireEvent.click(screen.getByRole("button", {name: "Open Project 89abcdef"}));
   expect(onOpen).toHaveBeenCalledWith(withTwo.project.projects[1]);
+});
+
+
+test("Project touch list keeps New and Import first and secondary actions after the cards", () => {
+  const actions = {onCreate: vi.fn(), onImport: vi.fn(), onDuplicate: vi.fn(), onSoundSets: vi.fn()};
+  const withList = {...ready, project: {...ready.project, projects: [listed(project.projectId, 7)]}};
+  render(<ProjectSurface state={withList} hideSummary canOpen canCreate canImport canDuplicate
+    canSoundSets {...actions} />);
+  const surface = document.querySelector(".project-surface")!;
+  const names = Array.from(surface.querySelectorAll("button"), button =>
+    button.getAttribute("aria-label") ?? button.textContent?.trim());
+  expect(names).toEqual(["New Project", "Import .lmdj", "Select Project 01234567",
+    "Open Project 01234567", "Duplicate Project", "Sound Sets"]);
+  fireEvent.click(screen.getByRole("button", {name: "Sound Sets"}));
+  expect(actions.onSoundSets).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", {name: "Duplicate Project"}));
+  expect(actions.onDuplicate).toHaveBeenCalledTimes(1);
+});
+
+test("Project touch empty state retains creation, import, Sound Sets and disabled Duplicate", () => {
+  render(<ProjectSurface state={initialCreatorState} hideSummary canCreate canImport
+    canSoundSets onSoundSets={vi.fn()} />);
+  expect(screen.getByText("No local Project is open.")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", {name: "Import .lmdj"})).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", {name: "Sound Sets"})).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", {name: "Duplicate Project"})).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("button", {name: /^Open Project/})).toBeNull();
 });

@@ -7,6 +7,7 @@ import type {
   LocalProjectSummary,
 } from "../state/creator_state";
 import {shortProjectId} from "../state/view_model";
+import "./project_surface.css";
 
 interface ProjectSurfaceProps {
   state: CreatorState;
@@ -14,6 +15,8 @@ interface ProjectSurfaceProps {
   canImport?: boolean;
   canCreate?: boolean;
   canDuplicate?: boolean;
+  canSoundSets?: boolean;
+  onSoundSets?: () => void;
   // The code of a Duplicate refused before any copy existed; the open
   // Project is untouched.
   duplicateRefusal?: string | null;
@@ -62,6 +65,8 @@ export function ProjectSurface({
   canImport = false,
   canCreate = false,
   canDuplicate = false,
+  canSoundSets = false,
+  onSoundSets,
   duplicateRefusal = null,
   showLocalProjects = false,
   hideSummary = false,
@@ -116,7 +121,7 @@ export function ProjectSurface({
         if (!encodersActive) return;
         const viewport = surface.current?.closest<HTMLElement>('[aria-label="Touch workspace"]');
         if (viewport === null || viewport === undefined) return;
-        const first = surface.current?.querySelector<HTMLElement>(".project-card");
+        const first = surface.current?.querySelector<HTMLElement>(".local-projects > li");
         const row = (first?.offsetHeight ?? 0) + 8;
         viewport.scrollTop = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight,
           viewport.scrollTop + detents * row));
@@ -128,18 +133,11 @@ export function ProjectSurface({
     return () => onEncodersReady?.(null);
   }, [onEncodersReady, encodersActive, encoders]);
   const navigation = useMemo<ContextualNavigation>(() => ({
-    directionStep: {
-      backLabel: "Previous Project — ←", forwardLabel: "Next Project — →",
+    padStep: {
+      backLabel: "Previous Project — ↑", forwardLabel: "Next Project — ↓",
       backAvailable: !importing && selectedIndex > 0,
       forwardAvailable: !importing && selectedIndex >= 0 && selectedIndex < projects.length - 1,
       onBack: () => selectProjectBy(-1), onForward: () => selectProjectBy(1),
-    },
-    padStep: {
-      backLabel: "Previous Project row — ↑", forwardLabel: "Next Project row — ↓",
-      backAvailable: !importing && selectedIndex >= 3,
-      forwardAvailable: !importing && selectedIndex >= 0 &&
-        Math.floor(selectedIndex / 3) < Math.floor((projects.length - 1) / 3),
-      onBack: () => selectProjectBy(-3), onForward: () => selectProjectBy(3),
     },
   }), [importing, selectedIndex, projects.length, selectProjectBy]);
   useEffect(() => {
@@ -154,35 +152,57 @@ export function ProjectSurface({
     viewport.addEventListener("scroll", read);
     return () => viewport.removeEventListener("scroll", read);
   }, []);
+  useEffect(() => {
+    const card = surface.current?.querySelector<HTMLElement>(".local-projects .is-selected");
+    const viewport = surface.current?.closest<HTMLElement>('[aria-label="Touch workspace"]');
+    if (!card || !viewport) return;
+    // Layout coordinates remain valid when the whole console scales or rotates.
+    // Scroll only the touch panel, never its stage or the document.
+    const layoutTop = (element: HTMLElement) => {
+      let top = 0;
+      for (let current: HTMLElement | null = element; current !== null;
+        current = current.offsetParent as HTMLElement | null) top += current.offsetTop;
+      return top;
+    };
+    const top = layoutTop(card) - layoutTop(viewport) - viewport.clientTop;
+    const bottom = top + card.offsetHeight;
+    if (top < viewport.scrollTop) viewport.scrollTop = top;
+    else if (bottom > viewport.scrollTop + viewport.clientHeight) {
+      viewport.scrollTop = bottom - viewport.clientHeight;
+    }
+    setListPosition(viewport.scrollTop);
+  }, [selected?.projectId]);
   const onImportFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.item(0);
     event.currentTarget.value = "";
     if (file) onImport?.(file);
   };
   return (
-    <main ref={surface} className="project-surface">
+    <main ref={surface} className={`project-surface${hideSummary ? " project-touch-list" : ""}`}>
       <div className="surface-heading">
         <div className="project-chooser-header">
           <p className="eyebrow">Project surface</p>
-          {/* D01 reads YOUR PROJECTS; the heading still names the open
-              Project for assistive technology. */}
-          {hideSummary ? <span className="project-your" aria-hidden="true">YOUR PROJECTS</span> : null}
+          {/* The accessible heading keeps naming the open Project. */}
+          {hideSummary ? <span className="project-your" aria-hidden="true">PROJECT</span> : null}
           <h1 className={hideSummary ? "visually-hidden" : undefined}>
             {showChooser ? "Local Projects" : `Project ${shortProjectId(project.projectId)}`}
           </h1>
           {hideSummary ? (
             <p className="project-local-count">
-              {String(state.project.projects.length).padStart(2, "0")} LOCAL
+              LOCAL
             </p>
           ) : null}
         </div>
-        <div className="project-actions">
-          {project !== null && showLocalProjects && onHideLocal ? (
+        <div className={hideSummary ? "project-actions project-create-row" : "project-actions"}>
+          {!hideSummary && project !== null && showLocalProjects && onHideLocal ? (
             <button type="button" onClick={onHideLocal}>
               Back to Project
             </button>
           ) : null}
-          {hideSummary ? null : (
+          {hideSummary ? (
+            <button type="button" className="is-primary" aria-label="New Project"
+              disabled={!canCreate} onClick={onCreate}>+ New Project</button>
+          ) : (
             <>
               <button type="button" disabled={!canCreate} onClick={onCreate}>
                 New Project
@@ -192,15 +212,18 @@ export function ProjectSurface({
               </button>
             </>
           )}
-          <button
+          {hideSummary ? null : <button
             type="button"
             aria-controls="local-projects"
             disabled={!canOpen}
             onClick={onShowLocal}
           >
             Open local
-          </button>
-          {hideSummary ? null : (
+          </button>}
+          {hideSummary ? (
+            <button type="button" aria-label="Import .lmdj" disabled={!canImport}
+              onClick={() => fileInput.current?.click()}>Import</button>
+          ) : (
             <button type="button" disabled={!canImport}
               onClick={() => fileInput.current?.click()}>
               Import .lmdj
@@ -276,6 +299,8 @@ export function ProjectSurface({
                   className="project-card"
                   aria-label={`Select Project ${id}`}
                   aria-pressed={selected?.projectId === summary.projectId}
+                  title={summary.projectId}
+                  disabled={importing}
                   onClick={() => setSelectedId(summary.projectId)}
                 >
                   <span className="project-card-index" aria-hidden="true">
@@ -283,21 +308,33 @@ export function ProjectSurface({
                   </span>
                   <span className="project-card-text">
                     <strong>Project {id}</strong>
-                    {isCurrent ? <span>Open now</span> : null}
-                    <span>Revision {summary.revision}</span>
-                    <span>{summary.bpm} BPM</span>
-                    <span>
-                      {summary.assignedPadCount} assigned {summary.assignedPadCount === 1 ? "Pad" : "Pads"}
-                    </span>
-                    <span>{summary.assetCount} {summary.assetCount === 1 ? "Asset" : "Assets"}</span>
+                    {hideSummary ? <>
+                      <span className="project-card-facts">
+                        {isCurrent ? <span className="project-card-current">CURRENT PROJECT · </span> : null}
+                        {summary.assignedPadCount} {summary.assignedPadCount === 1 ? "Pad" : "Pads"}
+                        {" · "}{summary.assetCount} {summary.assetCount === 1 ? "Asset" : "Assets"}
+                      </span>
+                      <span>{summary.bpm} BPM · Revision {summary.revision}</span>
+                    </> : <>
+                      {isCurrent ? <span>Open now</span> : null}
+                      <span>Revision {summary.revision}</span>
+                      <span>{summary.bpm} BPM</span>
+                      <span>{summary.assignedPadCount} assigned {summary.assignedPadCount === 1 ? "Pad" : "Pads"}</span>
+                      <span>{summary.assetCount} {summary.assetCount === 1 ? "Asset" : "Assets"}</span>
+                    </>}
                   </span>
                 </button>
+                {hideSummary && selected?.projectId === summary.projectId ? (
+                  <button type="button" className="project-open"
+                    aria-label={`Open Project ${id}`} disabled={!canOpen}
+                    onClick={() => onOpen?.(summary)}>Open Project</button>
+                ) : null}
               </li>
             );
           })}
         </ul>
       )}
-      {showSummary || projects.length === 0 ? null : (
+      {hideSummary || showSummary || projects.length === 0 ? null : (
         <div className="project-open-row">
           <button
             type="button"
@@ -308,25 +345,17 @@ export function ProjectSurface({
           >
             OPEN PROJECT
           </button>
-          {hideSummary ? (
-            <button type="button" aria-label="Duplicate Project" disabled={!canDuplicate}
-              onClick={onDuplicate}>
-              DUPLICATE
-            </button>
-          ) : null}
+
         </div>
       )}
-      {hideSummary ? (
-        <div className="project-create-row">
-          <button type="button" aria-label="New Project" disabled={!canCreate} onClick={onCreate}>
-            + NEW PROJECT
-          </button>
-          <button type="button" aria-label="Import .lmdj" disabled={!canImport}
-            onClick={() => fileInput.current?.click()}>
-            IMPORT
-          </button>
+      {hideSummary ? <>
+        <div className="project-open-row">
+          <button type="button" aria-label="Duplicate Project" title="Duplicate the open Project"
+            disabled={!canDuplicate} onClick={onDuplicate}>Duplicate</button>
+          <button type="button" disabled={!canSoundSets} onClick={onSoundSets}>Sound Sets</button>
         </div>
-      ) : null}
+        <p className="project-browse-hint">Select a card to browse. Open to change sounds.</p>
+      </> : null}
     </main>
   );
 }
