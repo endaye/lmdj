@@ -22,6 +22,11 @@ Cardputer profile 同步到当前 Build 与 Assembly 摘要。
 
 它不是公共 Release、部署或 Channel 晋级。
 
+`2.0.95.0` 的 cut 曾遗漏 Cardputer 字面量同步，`tests/build/version_test.py` 因此在主干转红
+（profile 仍为 `2.0.94.0`）。后续修正把 profile 与 `PROJECT_VER` 重新同步到该 Build、Host 版本与
+Assembly 摘要，并让候选 cut 的身份级联自始再生成这两份字面量，`version_test` 同时进入候选 Task
+的必需命令。
+
 ## 历史分配记录
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。

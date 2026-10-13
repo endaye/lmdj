@@ -40,7 +40,7 @@ def pr_document(spec):
             f"Private snapshot source: `{spec['source_sha']}`\n\nCut binding: `{spec['cut_binding_sha256']}`\n\n"
             f"Frozen snapshot: `{spec['snapshot_sha256']}`\n\nTask verification evidence: `{spec['task_evidence_sha256']}`\n\n"
             "Required Task commands (the authority gate must confirm recorded exit 0):\n\n"
-            "- `scripts/docs-site.sh check`\n- `python3 tests/build/ci_change_scope_test.py`\n- `git diff --cached --check`\n\n"
+            "- `scripts/docs-site.sh check`\n- `python3 tests/build/ci_change_scope_test.py`\n- `python3 tests/build/version_test.py`\n- `git diff --cached --check`\n\n"
             "Allocates only the frozen candidate and its canary documentation snapshot. "
             "The actual protected-main squash SHA must be verified before selecting a candidate target. "
             "Retain the private source for the subsequent official witness Task. "

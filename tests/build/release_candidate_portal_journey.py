@@ -504,7 +504,7 @@ def main():
         cut_checks_raw = (cut_journal / CandidateTaskChecks.STATE).read_bytes()
         cut_checks_state = json.loads(cut_checks_raw)
         assert canonical_json(cut_checks_state) == cut_checks_raw
-        assert [row["phase"] for row in cut_checks_state["commands"]] == ["staged"] * 3 + ["committed"] * 3
+        assert [row["phase"] for row in cut_checks_state["commands"]] == ["staged"] * 4 + ["committed"] * 4
         assert all(row["status"] == "verified" and row["result"][0] == 0 for row in cut_checks_state["commands"])
         assert checked_cut["checks"]["sha256"] == sha256(cut_checks_raw).hexdigest()
         for row in cut_checks_state["commands"]:
@@ -587,7 +587,7 @@ def main():
         checks_raw = (task_journal / WitnessTaskChecks.STATE).read_bytes()
         checks_state = json.loads(checks_raw)
         assert canonical_json(checks_state) == checks_raw
-        assert [row["phase"] for row in checks_state["commands"]] == ["staged"] * 3 + ["committed"] * 3
+        assert [row["phase"] for row in checks_state["commands"]] == ["staged"] * 4 + ["committed"] * 4
         assert all(row["status"] == "verified" and row["result"][0] == 0 for row in checks_state["commands"])
         assert checked["checks"]["sha256"] == sha256(checks_raw).hexdigest()
         record({"stage":"witness-task-checks", "receipt":checked["checks"], "state":checks_state})
