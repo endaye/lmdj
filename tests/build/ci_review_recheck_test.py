@@ -1,12 +1,15 @@
 """Far-side recheck journey with authentic review artifacts and strict API shapes."""
 from copy import deepcopy
+import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +18,8 @@ import ci_review_wait_test as history
 import pr_agent_review as engine
 import review_failure_report as failure_report
 import review_recheck as recheck
+import review_pipeline as pipeline
+import pr_agent_input as producer
 
 
 def request_fixture():
@@ -99,13 +104,101 @@ class Platform:
             return request_fixture()["fix_diff"].encode()
         raise AssertionError(args)
 
+    def read_source(self, identity, original, path):
+        return (self.git("show", original + ":" + path).decode("utf-8"),
+                self.git("diff", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames",
+                         "--unified=3", original, identity["head_sha"], "--", path).decode("utf-8"))
+
     def collect(self):
-        request = recheck.collect(self, self.document, 70, git=self.git, fetch=lambda ref: None)
+        request = recheck.collect(self, self.document, 70, git=self.git, fetch=lambda ref: None, read_source=self.read_source)
         recheck.attach(self.document, request)
         return request
 
     def publish(self, native=None):
-        return recheck.publish(self, self.document, native or native_fixture(), git=self.git, fetch=lambda ref: None)
+        return recheck.publish(self, self.document, native or native_fixture(), git=self.git, fetch=lambda ref: None, read_source=self.read_source)
+
+
+class PartialRecheckTests(unittest.TestCase):
+    def test_cold_historical_finding_and_independent_publication_prepare_only_its_path(self):
+        with tempfile.TemporaryDirectory(prefix="lmdj-recheck-partial-") as temporary, contextlib.ExitStack() as stack:
+            root = Path(temporary)
+            full, remote = root / "full", root / "remote.git"
+            full.mkdir()
+            environment = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
+            def git(cwd, *args):
+                return subprocess.run(["git", *map(str, args)], cwd=cwd, env=environment,
+                                      capture_output=True, check=True).stdout
+            git(full, "init", "-q")
+            revisions = []
+            (full / "src").mkdir()
+            for value in (0, 1, 2):
+                (full / "src/example.py").write_text(f"def value():\n    return {value}\n")
+                (full / "unrelated.txt").write_text("historical unrelated\n" if value == 1 else "stable\n")
+                (full / ".gitattributes").write_text("# original\n*.py diff\n" if value == 1 else "# base\n")
+                (full / "src/.gitattributes").write_text("# original nested\n*.py diff\n" if value == 1 else "*.py diff\n")
+                git(full, "add", ".")
+                git(full, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", str(value))
+                revisions.append(git(full, "rev-parse", "HEAD").decode().strip())
+            base, original, head = revisions
+            old_oid = git(full, "rev-parse", original + ":src/example.py").decode().strip()
+            other_oid = git(full, "rev-parse", original + ":unrelated.txt").decode().strip()
+            attributes = [git(full, "rev-parse", original + ":" + path).decode().strip()
+                          for path in (".gitattributes", "src/.gitattributes")]
+            git(full, "clone", "--bare", full, remote)
+            git(remote, "config", "uploadpack.allowFilter", "true")
+            identity = dict(repository=history.REPO, pull_request=7, base_sha=base, head_sha=head,
+                            control_sha=base, run_id="99", run_attempt=1)
+            for module in (history, history.fixtures):
+                stack.enter_context(mock.patch.object(module, "A", original))
+                stack.enter_context(mock.patch.object(module, "B", base))
+            api = Platform()
+            api.history.pull["head"]["sha"] = head
+            policy = pipeline.test_scope.load_policy(ROOT)
+            stack.enter_context(mock.patch.object(pipeline.test_scope, "load_policy", return_value=policy))
+            stack.enter_context(mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-only", "GIT_NO_LAZY_FETCH": "1"}))
+            request = None
+            for name in ("collector", "publisher"):
+                partial = root / name
+                git(full, "clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), partial)
+                git(partial, "update-ref", "HEAD", base)
+                (partial / ".git/info/attributes").write_text("*.py -diff\n")
+                (partial / ".gitattributes").write_text("*.py -diff\n")
+                def metadata():
+                    return {str(path.relative_to(partial)): path.read_bytes()
+                            for path in partial.rglob("*") if path.is_file()
+                            and not path.is_relative_to(partial / ".git/objects")}
+                with mock.patch.object(pipeline, "ROOT", partial):
+                    pipeline.prepare_fixed_input(identity)
+                    self.assertEqual(set(producer.missing_input_objects(
+                        partial, [old_oid, other_oid, *attributes], base=original)),
+                        {old_oid, other_oid, *attributes})
+                    api.document = producer.build_input(partial, identity)
+                    before = metadata()
+                    source_git = lambda *args: git(partial, *args)
+                    if name == "collector":
+                        request = recheck.collect(api, api.document, 70, git=source_git, fetch=lambda ref: None, read_source=pipeline.read_repair_source)
+                        self.assertEqual(request["original_content"], "def value():\n    return 1\n")
+                        self.assertIn("-    return 1\n+    return 2\n", request["fix_diff"])
+                    else:
+                        recheck.attach(api.document, request)
+                        bounded = producer._bounded_process
+                        def failed_transport(command, **kwargs):
+                            if "fetch" in command:
+                                raise producer.InputCollectionError("fixture explicit transport failure")
+                            return bounded(command, **kwargs)
+                        with mock.patch.object(producer, "_bounded_process", side_effect=failed_transport), \
+                                self.assertRaisesRegex(recheck.ReviewScopeError, "explicit transport failure"):
+                            recheck.publish(api, api.document, native_fixture(), git=source_git,
+                                            fetch=lambda ref: None, read_source=pipeline.read_repair_source)
+                        self.assertFalse(api.resolved)
+                        self.assertEqual(api.writes, [])
+                        self.assertEqual(metadata(), before)
+                        receipt = recheck.publish(api, api.document, native_fixture(), git=source_git, fetch=lambda ref: None, read_source=pipeline.read_repair_source)
+                        self.assertTrue(receipt["resolved"])
+                        self.assertEqual(api.writes, ["reply", "resolveReviewThread"])
+                    self.assertEqual(producer.missing_input_objects(partial, [old_oid, *attributes], base=original), ())
+                    self.assertEqual(producer.missing_input_objects(partial, [other_oid], base=original), (other_oid,))
+                    self.assertEqual(metadata(), before)
 
 
 class BatchPlatform(Platform):
@@ -159,7 +252,7 @@ class BatchPlatform(Platform):
         return super()._request(method, path, body=body, raw=raw)
 
     def collect_batch(self):
-        requests, report = recheck.collect_batch(self, self.document, git=self.git, fetch=lambda ref: None)
+        requests, report = recheck.collect_batch(self, self.document, git=self.git, fetch=lambda ref: None, read_source=self.read_source)
         recheck.attach_batch(self.document, requests)
         return requests, report
 
@@ -172,7 +265,7 @@ class BatchPlatform(Platform):
 
     def publish_batch(self, native=None, record=None):
         return recheck.publish_batch(self, self.document, native or self.native(),
-                                    git=self.git, fetch=lambda ref: None, record=record)
+                                    git=self.git, fetch=lambda ref: None, read_source=self.read_source, record=record)
 
 
 class BatchRecheckTests(unittest.TestCase):
@@ -431,7 +524,9 @@ class RecheckTests(unittest.TestCase):
                         mapped = [revisions[0] if a == history.A else revisions[1] if a == "c" * 40 else a for a in args]
                         return command("-c", "core.abbrev=" + abbreviation, *mapped)
                     return original_git(*args)
-                return recheck.collect(self.api, self.api.document, 70, git=git, fetch=lambda ref: None)
+                with mock.patch.object(self.api, "git", side_effect=git):
+                    return recheck.collect(self.api, self.api.document, 70, git=git, fetch=lambda ref: None,
+                                           read_source=self.api.read_source)
             short, long = collect_with("8"), collect_with("12")
             self.assertEqual(short, long)
             self.assertRegex(short["fix_diff"], r"index [0-9a-f]{40}\.\.[0-9a-f]{40} 100644")
@@ -450,14 +545,17 @@ class RecheckTests(unittest.TestCase):
 
     def test_human_root_is_refused_before_model(self):
         self.api.history.inline_details[70]["user"] = {"id": 10, "login": "endaye"}
-        with self.assertRaisesRegex(recheck.Refused, "original bot"):
+        with mock.patch.object(self.api, "read_source") as read_source, \
+                self.assertRaisesRegex(recheck.Refused, "original bot"):
             self.api.collect()
+        read_source.assert_not_called()
         self.assertEqual(self.api.writes, [])
 
     def test_forged_bot_body_cannot_pass_retained_artifact_authentication(self):
         self.api.history.inline_details[70]["body"] = "forged finding"
-        with self.assertRaises(ValueError):
+        with mock.patch.object(self.api, "read_source") as read_source, self.assertRaises(ValueError):
             self.api.collect()
+        read_source.assert_not_called()
         self.assertEqual(self.api.writes, [])
 
     def test_truncated_inventory_never_resolves(self):
