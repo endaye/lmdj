@@ -13,7 +13,7 @@ import {CREATOR_SOUND_SET_CATALOG_PATH} from
   "../../../products/lmdj/creator-defaults.mjs";
 
 import {App} from "./app";
-import {fitConsoleToStage} from "./components/hardware_console";
+import {consoleLayoutForViewport, fitConsoleToStage} from "./components/hardware_console";
 import {createRetainedAudioContext} from "./runtime/audio_clock";
 import {registerOfflineShell} from "./runtime/offline_shell";
 import {
@@ -141,12 +141,10 @@ if (identitySlot !== null) {
     `v${buildIdentity.productBuild} · creator-web ${buildIdentity.hostVersion}`;
 }
 
-// Stage fit (Desktop Final T2). The console scales proportionally to fill
-// the stage (#root, the flex item between header and footer) and centres
-// itself; under (max-width: 959px) and (orientation: portrait) it is also
-// turned 90° so the device reads as landscape. styles.css pins the workspace
-// to the stage's top-left corner; CSS cannot divide two lengths, so the
-// scale is computed here and applied about that corner.
+// Retain the full Figma layout whenever its controls fit without shrinking.
+// A compact layout changes the chrome and internal spacing first; its actual
+// natural size is then fitted by the same transform. A fitting full portrait
+// layout keeps the original counter-clockwise rotation.
 const stagePortrait = window.matchMedia(
   "(max-width: 959px) and (orientation: portrait)",
 );
@@ -155,6 +153,8 @@ function fitStage(): void {
   const workspace = document.querySelector<HTMLElement>(".hardware-workspace");
   if (workspace === null) return;
   fittedWorkspace = workspace;
+  const layout = consoleLayoutForViewport({width: window.innerWidth, height: window.innerHeight});
+  document.documentElement.dataset.creatorLayout = layout;
   workspace.style.width = "";
   workspace.style.height = "";
   workspace.style.transform = "";
@@ -166,7 +166,8 @@ function fitStage(): void {
   const fit = fitConsoleToStage(
     {width: stage.clientWidth, height: stage.clientHeight},
     {width: naturalWidth, height: naturalHeight},
-    stagePortrait.matches,
+    layout === "full" && stagePortrait.matches,
+    layout === "compact" ? 1 : Infinity,
   );
   if (fit === null) return;
   workspace.style.width = `${naturalWidth}px`;

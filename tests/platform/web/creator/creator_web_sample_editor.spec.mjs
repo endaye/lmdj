@@ -1615,10 +1615,16 @@ for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
           width: box.width, height: box.height};
       };
       const rect = bounds(element);
-      const buttons = [...element.querySelectorAll("button")].map((item) => ({
-        label: item.textContent, ...bounds(item),
-        horizontalOverflow: item.scrollWidth - item.clientWidth,
-      }));
+      const buttons = [...element.querySelectorAll("button")].map((item) => {
+        const box = bounds(item);
+        const points = [[box.width / 2, 1], [box.width / 2, box.height - 1],
+          [1, box.height / 2], [box.width - 1, box.height / 2],
+          [box.width / 2, box.height / 2]];
+        return {label: item.textContent, ...box,
+          horizontalOverflow: item.scrollWidth - item.clientWidth,
+          hits: points.map(([x, y]) => document.elementFromPoint(box.x + x, box.y + y)
+            ?.closest("button") === item)};
+      });
       const overlaps = buttons.flatMap((left, index) => buttons.slice(index + 1)
         .filter((right) => left.x < right.right && left.right > right.x &&
           left.y < right.bottom && left.bottom > right.y));
@@ -1641,9 +1647,13 @@ for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
     for (const item of geometry.buttons) {
       expect(item.width).toBeCloseTo(loop.width, 1);
       expect(item.horizontalOverflow, item.label).toBe(0);
+      expect(item.width, item.label).toBeGreaterThanOrEqual(44);
+      expect(item.height, item.label).toBeGreaterThanOrEqual(44);
+      expect(item.hits, item.label).toEqual([true, true, true, true, true]);
     }
-    // U01 owns shared 32-face/44-actual sizing. Record scaled rectangles here;
-    // grouping must never add overlap or rely on invisible hit extensions.
+    // U01 supplies shared 32-face/44-actual sizing. Check its real Playback
+    // consumers, including unpainted target edges after scrolling into view;
+    // rectangles alone cannot rule out clipping or another hit owner.
     const geometryPath = testInfo.outputPath("playback-toggles-geometry.json");
     const screenshotPath = testInfo.outputPath("playback-toggles.png");
     await writeFile(geometryPath, JSON.stringify(geometry, null, 2));

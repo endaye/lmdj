@@ -123,8 +123,46 @@ links, actual exit 0 (`/tmp/lmdj-u05a-portal.log`). At the clean source checkpoi
 normal build/package and browser checks remain UNRUN; the shipping PR records
 their final exact-head results and artifact receipts. Source checks do not
 establish packaged-browser, device, listening or full-candidate acceptance.
-The admitted heavy window covers the pending normal package and both complete
-browser specs. U01's eventual actual 44 CSS px acceptance remains separate.
+The first admitted heavy window covered the normal package and both complete
+browser specs. Its result is retained below, separately from final integration.
+
+### U01 integration and retained first-run evidence
+
+At `3ba7301b6df3d16aad78d731e9ee14b5ae854a97`, normal Creator build and package
+passed. The original Sample fixture generator ran unchanged with this
+worktree's built native CLI; two packs were byte-identical and bundle
+verification passed. The complete Sample 14-case spec plus the original Numeric
+spec passed with 14 PASS / 1 existing WebKit-only skip, exit 0, in 6.7 minutes
+(`/tmp/lmdj-u05a-browser.log`). Its owned server terminated with -15 and was
+confirmed absent. The original packaged distribution remains at
+`build/verification/u05a/pre-u01-dist`; fixture/artifact identities, browser
+receipt and all three screenshots/geometry JSON files are retained.
+
+Those old-layout buttons measured 55.275, 46.2 and 34.65 CSS px high at
+1440×900, 1024×768 and 768×600 respectively, with no mutual overlap or
+horizontal overflow. The 768×600 result is explicitly **not** a 44px pass.
+Main then delivered U01 as `73fc1c7bf0cd2f0a7f52cef481d0746ff032dd22`, changing
+the actual shared button/font/stage inputs that Playback consumes. Root
+authorized a source-only merge retaining the 3ba7301b ancestry and all original
+receipts. The merge keeps U01's shared rules and Portal text alongside this
+Task's independent two-column CSS and Playback paragraphs; no shared source
+rule or handler is rewritten.
+
+The existing three new viewport cases now also require each real target to be
+at least 44 CSS px in both dimensions and hit its own button at all four edge
+midpoints and centre. The old 768×600 measurement would fail that requirement.
+All original eleven Sample cases, budgets and the new keyboard/save legs stay
+intact. The final integrated candidate still needs a fresh normal build/package
+and the same complete 15-case browser invocation. These checks are **UNRUN**
+until the original S6 run releases its heavy window and Root admits this run;
+the first-run evidence cannot clear the changed shared-input acceptance debt.
+The integrated source passes all 93 owning component tests, TypeScript and
+77 staged scope tests, each with actual exit 0
+(`/tmp/lmdj-u05a-u01-{components,tsc,scope}.log`). JSDOM reports stylesheet
+parsing warnings; these component results establish state/interaction
+semantics, not rendered CSS acceptance. Browser syntax, full original Sample
+prefix and whitespace checks pass. Integrated Portal/build/package/browser
+checks remain UNRUN while S6 owns the heavy window.
 
 ## Version Management
 
