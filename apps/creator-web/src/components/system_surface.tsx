@@ -1,6 +1,37 @@
 import {useEffect, useRef, useState, type ReactNode} from "react";
 import type {CreatorCandidateRuntimeSession, CandidateProviderList} from "../runtime/runtime_types";
 import {changeProviderPermission, subscribeProviderPermissions} from "../state/provider_permissions";
+import type {CreatorState} from "../state/creator_state";
+import type {PadCaptureSource} from "../capture/pad_capture";
+import {midiLabel, type MidiStatus} from "./midi_status";
+import {TouchSegment} from "./touch_kit";
+import "./system_surface.css";
+
+export function SystemStatus({audio, midi}: {
+  audio: CreatorState["audio"]["phase"];
+  midi: MidiStatus | null;
+}) {
+  return <dl className="system-status" aria-label="Device status">
+    <div><dt>Audio</dt><dd><output aria-label="System audio status">{audio}</output></dd></div>
+    <div><dt>MIDI</dt><dd><output aria-label="System MIDI status">{midiLabel(midi)}</output></dd></div>
+  </dl>;
+}
+
+export function PadRecordingSource({source, disabled, onChange}: {
+  source: PadCaptureSource;
+  disabled: boolean;
+  onChange(source: PadCaptureSource): void;
+}) {
+  return <section className="system-recording-source" aria-label="Pad recording settings">
+    <h3>Empty Pad recording source</h3>
+    <TouchSegment label="Pad recording source" value={source} disabled={disabled}
+      options={[{value: "microphone", label: "Microphone"},
+        {value: "master", label: "Internal playback"}]}
+      onChange={value => {if (value !== source) onChange(value);}} />
+    <p>{disabled ? "Finish the current Pad recording before changing its source."
+      : "Hold an empty Pad to record. Release to save."}</p>
+  </section>;
+}
 
 export function ProviderSettings({session}: {session: CreatorCandidateRuntimeSession}) {
   const [listing, setListing] = useState<CandidateProviderList | null>(null);
@@ -37,12 +68,17 @@ export function ProviderSettings({session}: {session: CreatorCandidateRuntimeSes
   </section>;
 }
 
-export function SystemSurface({children, onBack}: {children: ReactNode; onBack(): void}) {
+export function SystemSurface({children, onBack, active = true}: {
+  children: ReactNode;
+  onBack(): void;
+  active?: boolean;
+}) {
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {heading.current?.focus();}, []);
-  return <section className="system-surface" aria-label="System">
+  useEffect(() => {if (active) heading.current?.focus();}, [active]);
+  return <section className="system-surface" aria-label="System" hidden={!active}>
     <header><h2 tabIndex={-1} ref={heading}>System</h2>
-      <button type="button" onClick={onBack}>Back to music</button></header>
+      <span>Device settings</span></header>
+    <button type="button" className="system-back is-primary" onClick={onBack}>Back to music</button>
     {children}
   </section>;
 }

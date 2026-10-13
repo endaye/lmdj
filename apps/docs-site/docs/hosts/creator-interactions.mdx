@@ -642,7 +642,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 | Play/Stop、Record | 照常控制全局 Pattern；打开 System 不停止播放。 |
 | 16 个 Pad | 照常演奏；打开 System 时清除未松开的按压，正在进行的空 Pad 采样转为待确认。 |
 | 上屏 | 标题 SYSTEM；原音乐页事实继续更新，旋钮区显示未分配与监听音量。返回后恢复音乐页标题和绑定。 |
-| 触摸区 | 原页面隐藏，显示 System。临时录音和错误提示可以继续显示。 |
+| 触摸区 | 原页面隐藏，显示 System：Back to music、Audio/MIDI 状态卡、设备操作、空 Pad 录音来源、详情与报告。Provider settings 和 Developer diagnostics 可展开；临时录音和错误提示继续显示。 |
 
 打开 System 先取消未提交的 Sample／BPM 旋钮草稿，并按 HOLD 释放 Perform 旋钮拥有的效果手势。已经提交的作者内容保留。
 
@@ -653,8 +653,8 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 | 未授权 MIDI | Enable MIDI | 唤醒音频并请求 Web MIDI。获准后 MIDI note 36–51 演奏当前 Bank。浏览器不支持或拒绝时不显示为可用。 |
 | Runtime 就绪 | Export report | 下载本地诊断报告。不保存作者编辑，不发送给他人。 |
 | 任意 | Project and build details 折叠项 | 只读：Project ID、修订号、Pad 与 Asset 数、Key、MIDI、Pattern 长度，以及构建身份说明。关闭 System 后保持展开状态。这里的构建身份不证明线上部署的版本。 |
-| 空 Pad 采样空闲 | Pad recording source：Microphone／Internal playback | 设置按住空 Pad 采样的来源，保存在本设备。不影响 Record Sample。 |
-| 有分析服务权限 | Revoke permission | 撤销权限，Slice 同步更新。不删除 Project；再次分析需要重新授权。 |
+| 空 Pad 采样空闲 | Pad recording source 分段按钮：Microphone／Internal playback | 所选按钮显示当前来源，设置保存在本设备，不改 Project，不影响 Record Sample。采样尚未回到空闲时两项都禁用，并提示先处理当前录音。 |
+| 有分析服务权限 | Provider settings → Revoke permission | 撤销权限，Slice 同步更新。不删除 Project；再次分析需要重新授权。 |
 | 有诊断记录 | Developer diagnostics 折叠项 | 只读：最近 100 条本次会话的错误（时间、操作、错误代码、细节）。只在内存中。 |
 
 ## 9. 跨页的录音、恢复与错误 \{#cross-page\}

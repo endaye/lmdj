@@ -875,8 +875,9 @@ test.each([
     // area until a take starts, and System shows the remembered source.
     expect(screen.queryByRole("region", {name: "Pad recording"})).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "System"}));
-    expect((screen.getByRole("combobox", {name: "Pad recording source"}) as HTMLSelectElement)
-      .value).toBe(source);
+    expect(within(screen.getByRole("group", {name: "Pad recording source"})).getByRole("button", {
+      name: source === "master" ? "Internal playback" : "Microphone",
+    }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
     fireEvent.mouseDown(pad, {button: 0});
     const recording = screen.getByRole("region", {name: "Pad recording"});
@@ -2705,7 +2706,7 @@ test("hardware Project keeps list/import/open, offers New Project in touch and o
   // Pad recording source is a System setting rather than a touch-area row.
   expect(within(touch).queryByRole("button", {name: "System"})).toBeNull();
   expect(within(touch).queryByRole("region", {name: "Pad recording"})).toBeNull();
-  expect(within(touch).queryByRole("combobox", {name: "Pad recording source"})).toBeNull();
+  expect(within(touch).queryByRole("group", {name: "Pad recording source"})).toBeNull();
   await userEvent.click(within(screen.getByRole("complementary", {name: "Physical controls"}))
     .getByRole("button", {name: "System"}));
   expect(within(touch).getByRole("button", {name: "Enable MIDI"})).toBeTruthy();
