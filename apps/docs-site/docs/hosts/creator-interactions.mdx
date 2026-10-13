@@ -178,8 +178,8 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - 单击旋钮没有额外动作。
 - ENC1–3 随页面和参数组变化，见 Project、Sample、Sequence 和 Perform 的控件速查卡。System／Sound Sets／Slice 的 ENC1–3 未分配。上屏持续显示四个当前功能和数值。
 - ENC4 在所有页面固定为 Output Volume：每格 1%，范围 0–100%，默认 100%，可恢复已记住的 0%。监听会话和偏好恢复就绪后才可转动。它立即改变本设备监听，包括节拍器；音量存 IndexedDB，不写 Project／Undo，也不改变录音、重采样或导出电平。
-- ↑↓ 在 Sample／Sequence／Perform 选择同一个当前 Pad，在 Project 的三列列表选择上一／下一行。Perform 按 A01–D16 首尾停止，跨界同步 Bank，并在矩阵中高亮；SHIFT 或 System 中不提供 Perform Pad 方向。Project／Sample 的 SHIFT＋↑↓ 未分配；完整 Perform 三组导航仍待滤波接线，见[第 2 章](#planned)。
-- ← → 不按 SHIFT 时在 Project 选择相邻项、Sample 切现有子页、Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。左栏方向按钮不接管文本输入或聚焦旋钮的键盘方向键。
+- ↑↓ 在 Sample／Sequence／Perform 选择同一个当前 Pad，在 Project 的单列列表选择相邻工程并滚入可见范围。Perform 按 A01–D16 首尾停止，跨界同步 Bank，并在矩阵中高亮；SHIFT 或 System 中不提供 Perform Pad 方向。Project／Sample 的 SHIFT＋↑↓ 未分配；完整 Perform 三组导航仍待滤波接线，见[第 2 章](#planned)。
+- ← → 不按 SHIFT 时在 Project 未分配、Sample 切现有子页、Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。左栏方向按钮不接管文本输入或聚焦旋钮的键盘方向键。
 - Sample 工程参数转动时立即预览，同一 Pad 的多参数停转 400 ms 后合并为一次保存／Undo。转回起点不保存。Sequence ENC3 的 BPM 当前只有即时读数预览，播放和节拍器仍等提交后发布；可听即时预览尚未实现。
 - Sample 作者锁定、Sequence 录音或传输结算时，相关工程参数旋钮不可用，未提交的预览作废；ENC4 保持监听职责。
 - 未提交的 Sample／BPM 旋钮草稿在离页、切 Pad／Project／Pattern、打开 System、Escape 或 Undo／Redo 前取消。下一轮从已保存的值开始；已经发出的请求保留真实结算结果。
@@ -281,7 +281,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | Record count-in | ● 始终控制 Pattern 事件录音，当前停止时按下立即开始。 | 停止时按 ● 可选 Off／1／2 小节预备拍，默认 Off；录音过程中不重新 count-in。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
 | Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
-| 三页普通方向导航 | Project ←/→ 选相邻项、↑/↓ 在三列列表移一行，OPEN 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
+| 三页普通方向导航 | Project 单列 ↑/↓ 选相邻项、普通 ←/→ 未分配，卡片内 Open 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | Perform 独立滤波 | 底层音频能力已加入；Creator 仍是旧单值 Filter。 | 主组为 Cutoff／Delay／Reverb；FILTER 组为 LP／HP／BP、Cutoff、Resonance。初始 OFF，LP／20 kHz／0%；参数完整录制和回放。需要剩余接线与验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | 底层 64-Pad 门控已加入；Creator 尚无实时按钮及完整录放流程。 | 多 Solo、Mute 优先；切 Bank／Pattern 保持，离开 Perform／换工程清空；录制起点状态和后续变化。立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
@@ -295,14 +295,14 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 控件 | 在 Project 页的作用 |
 | --- | --- |
 | ENC1／ENC2 | ENC1 每格选一个 Project；ENC2 每格按一张卡片加间距的高度滚动触摸区列表，不改选择。只选中不会打开。ENC3 未分配。 |
-| 其余左栏 | ENC4 监听音量；←/→ 选相邻工程，↑/↓ 按三列移一行，只选择；首尾停止，最后一行不足三项时钳位到现有项。SHIFT＋↑/↓ 未分配。SHIFT + ← →、Play/Stop、Record、Bank 见[第 1 章](#global)。 |
+| 其余左栏 | ENC4 监听音量；普通 ↑/↓ 选单列列表的相邻工程并滚入可见范围，首尾停止；普通 ←/→ 未分配，只选择不会打开。SHIFT＋↑/↓ 未分配。SHIFT + ← →、Play/Stop、Record、Bank 见[第 1 章](#global)。 |
 | 16 个 Pad | 演奏；Sample 的所选 Pad 跟着变。空 Pad 可按住采样。 |
 | 上屏 | 已打开 Project 的短身份、保存方式、待处理状态、Pattern 与 Pad 数量、音频和 MIDI 状态。 |
 | 触摸区 | Project 卡片、新建、打开、导入、复制和 Sound Sets 入口。 |
 
 上屏补充：
 
-- 点三列卡片、转 ENC1 或按普通方向只改变同一个选择；上屏项目身份仍是已打开的 Project，选择旋钮的读数随选择变化。OPEN PROJECT 才打开。
+- 点单列卡片、转 ENC1 或按普通 ↑/↓ 只改变同一个选择；上屏项目身份仍是已打开的 Project，选择旋钮的读数随选择变化。卡片内 Open 才打开。
 - 名称只显示公开字段；没有名称时显示短 Project ID 或 Pad 地址和类别。
 - `LOCAL AUTOSAVE` 只表示保存方式，不表示所有草稿都已保存，也不显示虚构的时间。
 - 上屏的 Project 短身份可供读屏软件读取。
@@ -310,15 +310,16 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 **触摸区**
 
+PROJECT／LOCAL 标题下常驻单列列表；顶部是 New Project／Import，底部是 Duplicate／Sound Sets。卡片仅显示实际短身份、Pad／Asset 数、BPM 和修订；本地摘要没有名称和 Pattern 数时不填示例值。只有所选卡片显示 Open，已打开的工程另标 CURRENT PROJECT。该布局遵循 [2026-10-13 批准决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-13-creator-interaction-ui-baseline.md)，取代旧三列与 Open local／Back to Project 浏览入口。
+
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
 | 有本地 Project | 点 Project 卡片 | 只选中这张卡片。不打开、不换声音、不复制。 |
-| 已选中卡片 | OPEN PROJECT | 打开所选 Project，换成它的 Pad。拿到 Project 并加载成功才算完成。有中断的录音时会出现恢复提示，见[第 9 章](#cross-page)。 |
-| 已有 Project | Open local／Back to Project | 展开或收起本地 Project 列表，只改视图。 |
-| 可以新建 | + NEW PROJECT | 新建并打开一个 Project，自动进入 Sample。新 Project 保存在本地。 |
-| 已打开 Project | DUPLICATE | 复制**当前已打开**的 Project 并打开副本，副本有独立身份。不复制只是选中的卡片。被拒绝时显示原因。 |
-| 可以导入 | IMPORT | 选择 .lmdj 文件导入，显示进度。取消文件对话框不改任何内容。导入成功后才替换当前内容。身份重复时见[第 9 章](#cross-page)。 |
-| 任意 | Sound Sets | 进入 Sound Sets，不会因进入而安装。 |
+| 已选中卡片 | 卡片内 Open | 打开所选 Project，换成它的 Pad。拿到 Project 并加载成功才算完成。有中断的录音时会出现恢复提示，见[第 9 章](#cross-page)。 |
+| 可以新建 | 顶部 New Project | 新建并打开一个 Project，自动进入 Sample。新 Project 保存在本地。 |
+| 已打开 Project | 底部 Duplicate | 复制**当前已打开**的 Project 并打开副本，副本有独立身份。不复制只是选中的卡片。被拒绝时显示原因。 |
+| 可以导入 | 顶部 Import | 选择 .lmdj 文件导入，显示进度。取消文件对话框不改任何内容。导入成功后才替换当前内容。身份重复时见[第 9 章](#cross-page)。 |
+| 任意 | 底部 Sound Sets | 进入 Sound Sets，不会因进入而安装。 |
 
 ## 4. Sample \{#sample\}
 
@@ -814,6 +815,8 @@ N13 的 mounted App 测试源码补齐 page／subpage／Pad／System／blur、co
 
 revised14 review 又识别出普通 defaultSeed／capture 与自动 reopen 共用 `open + requireSelector=false` 的 P2。下一 Source cut 只给 retained automatic reopen 分支增加私有显式 admission，原 Project／不同 Session／精确 pending Update 身份检查及普通写入栅栏保留。新增 mounted App defaultSeed 源码经真实 RuntimeProvider 同 Project 重开，在旧已知结果和 successor 投影仍持有时完成 deferred acquisition，分别断言普通 install 未调用；释放两腿后，普通 install／Truth refresh／publication 必须继续且仅一次。原五个 recovery cases、数值规则及历史失败／UNRUN 记录不改写。consumer fixture 不证明 native seed／capture 动态交错；所有验证及 shipping 仍 HOLD，锁定安装实际0和默认未运行的可选脚本 warning 不变。
 
-**K2a Source 阶段**
+**K2a Source 阶段（历史记录）**
 
 Project／Sample 普通方向接线与硬件三列列表在独立 K2a Task 准备；mounted App 回归和原 hardware-layout 的真实三列、缩放命中／无横向溢出旅程已补源码，原 history／failure／reopen 各腿保留并通过实际 SHIFT 层读取。component／type／Portal／browser 执行仍 UNRUN，等待独占验证窗口；这些源码事实不表示 Task 已交付、布局已验证、Perform/FILTER 已接线、K2/#1822 已完成或物理／听感通过。[Task 与验证边界](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-13-creator-project-sample-navigation.md)。
+
+上述 K2a 三列记录保留当时的源码与验证边界。Project 单列与 ↑/↓ 相邻导航由 [U04 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-13-creator-project-single-list.md)取代；本页 Project 章节描述该迭代，未据此结算 Perform/FILTER、设备或听感验收。
