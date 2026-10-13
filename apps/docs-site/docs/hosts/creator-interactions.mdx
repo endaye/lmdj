@@ -865,6 +865,7 @@ SILENCED。Pad 矩阵上的 MUTE / SOLO 状态不替代颜色与当前 Pad 高�
 
 状态覆盖 A01–D16，切 Bank、切 Pattern 保留；沿用 Pad 演奏和 ↑/↓ 的当前
 Pad 选择，不新增键盘、SHIFT 或 MIDI 映射。离开 Perform 或换工程时清空，
-离页等待 Core 清空确认；HOLD 不保留这些门控。录制包含原有起点 mask 与后续
+离页等待 Core 清空确认；确认前若 owner epoch 更换，离页失败，不接管或声明
+新 owner 的 mask 已清空。HOLD 不保留这些门控。录制包含原有起点 mask 与后续
 变化，保存、重新打开后 Replay 恢复。实时控制不改 Sample 的持久化 muted、
 工程 Undo、localStorage、监听 MASTER 或作品电平。

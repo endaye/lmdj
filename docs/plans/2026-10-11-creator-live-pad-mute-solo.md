@@ -618,3 +618,52 @@ The entire Sample development group then exited 0: 19 PASS and its one existing
 Chromium capability skip. Revision 60 reopening and both native trim-grip
 transitions through revisions 61/62 passed. Path ownership remained 77/77 and
 normal Portal check exited 0. No product/CSS inputs changed for this correction.
+
+## Current-head independent review disposition — PR2177
+
+The complete `d79dc317bdfff8ddbe586fffcd5967f7677b3c9d` proof passed with actual
+exit 0: 77 UI files/1593 tests and all eight browser groups, 161 PASS/11 existing
+skips/0 FAIL. Raw log SHA256:
+`674f726de0449a0474673a3d29145ce8f479cbc64fb501de6d0f17a225ca3fbb`.
+Normal Portal, normal build/package and body declarations also exited 0.
+The original worktree/index stayed frozen and 22 known proof PIDs were naturally
+absent. These receipts remain exact-head historical evidence after the repair.
+
+Authenticated independent DeepSeek review, run `38442918029` attempt 1, examined
+this exact complete PR head and published three findings. The read-only eligibility
+helper exited 0 with `eligible:true`; this alone did not authorize merge or resolve
+conversations. The complete paginated review and threads were read.
+
+1. Accept the changed-epoch reset finding. A clear admission on an owned epoch
+   followed by a replacement epoch's status must not complete exit as an applied
+   reset. Fail the exit on this observation and never rebind or issue a clear to
+   the replacement. New leave/close consumer oracles observed the old code
+   resolving instead of rejecting: full Perform file, 141 PASS/2 FAIL, actual
+   exit 1. Change only the owner-change branch to throw; keep the same reset
+   budget, same-owner applied-mask fence, cursor, record/replay lifetime and
+   replacement ownership. Documentation states this narrower failure boundary.
+2. Reject the rapid-toggle finding as already guarded. The controller's
+   `state.padGates.provenance !== "core"` check precedes intent construction,
+   and synchronous pending dispatch precedes queue admission. An immediate
+   second controller call is rejected. The existing delayed-readback oracle
+   directly invokes the controller twice and checks one producer admission.
+3. Reject the arbitrary-burst scanner concern for this fixed-fixture oracle.
+   Both real source files are exactly 4800 frames at 48 kHz; every strike waits
+   180 ms held plus 200 ms after the release acknowledgement. The 4928-frame
+   scan window isolates these 100 ms sources within the bounded strike spacing;
+   exact four-burst count, amplitude ratios and replay comparison remain strict.
+   This is not a parser acceptance claim for arbitrary short/overlapping audio.
+
+Repair scope remains within the already-declared Task15: controller, complete
+Perform test, both Host pages and plan. No Core/SDK/producer/S6 or CSS changes;
+no new gate, filter, timeout or dropped journey. General UNKNOWN, same closed
+owner, restart, physical/hearing and V1 settlement debts remain. Validate the
+complete relevant files and normal Portal, ship the scoped review repair, then
+rerun the entire clean-head Creator proof and obtain fresh independent head
+review before guarded squash merge. Retain all old successful and failed logs.
+
+Review repair verification before commit: complete Perform file 143/143 PASS
+(the two new owner-epoch exits are red-before/green-after), complete Workspace
+197/197 PASS, TypeScript exit 0 and normal Portal exit 0 (179 tests/52 pages/
+10 diagram sources/20 outputs/50 routes). All tracked repair paths are the five
+already-declared C2 paths above. Final clean-head complete proof remains owed.

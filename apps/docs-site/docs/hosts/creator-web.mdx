@@ -621,7 +621,9 @@ pending until readback; unavailable controls are disabled without claiming neutr
 Bank and Pattern changes retain the masks. Pad strikes and the existing ↑/↓ keys
 choose the current Pad; these controls add no keyboard/MIDI mapping. Leaving
 Perform or replacing the Project clears the gates and waits for applied readback,
-even with HOLD on. HOLD only retains FX. The controls use the shared bounded
+even with HOLD on. If the owner epoch changes before that acknowledgement,
+the exit fails without clearing or claiming neutral state for the replacement.
+HOLD only retains FX. The controls use the shared bounded
 Performance input queue; old-epoch replies cannot mutate a replacement owner.
 
 Performance recording captures existing masks in its initial state and journals

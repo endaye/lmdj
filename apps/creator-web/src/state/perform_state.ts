@@ -942,7 +942,9 @@ export function createPerformController(options: PerformControllerOptions): Perf
       // owner's actual empty applied masks; HOLD only owns FX.
       for (let attempt = 0; attempt < maximumStatusQueries; attempt += 1) {
         const status = await session.queryPerformanceLiveStatus();
-        if (status.available && status.controlEpoch !== epoch) return;
+        if (status.available && status.controlEpoch !== epoch) {
+          throw new Error("Performance Pad gate owner changed before reset acknowledgement");
+        }
         if (status.available && !status.resetPending &&
             status.appliedControlSequence === status.acceptedControlSequence &&
             status.applied.mutedSlots.length === 0 && status.applied.soloSlots.length === 0) {

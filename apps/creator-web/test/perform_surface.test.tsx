@@ -2965,6 +2965,31 @@ test("recording freezes preexisting Pad masks and journals later changes and lea
   expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind)).toEqual(["pad_solo"]);
 });
 
+for (const exit of ["leave", "close"] as const) {
+  test(`Pad gate ${exit} rejects an owner epoch replacement during reset acknowledgement`, async () => {
+    const fixture = controllerFixture();
+    const {calls} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    fixture.controller.togglePadGate("solo", 63);
+    await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+    const replacementEpoch = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const replacement = liveState({mutedSlots: [9]});
+    calls.liveStatus.mockResolvedValue(liveStatusAvailable({
+      controlEpoch: replacementEpoch, accepted: replacement, applied: replacement,
+    }));
+    await expect(fixture.controller[exit]()).rejects.toThrow(
+      "Performance Pad gate owner changed before reset acknowledgement");
+    expect(calls.liveControl.mock.calls.filter(([request]) =>
+      request.intent.kind === "clear_pad_gates")).toHaveLength(1);
+    expect(calls.liveControl.mock.calls.every(([request]) =>
+      request.controlEpoch === LIVE_EPOCH)).toBe(true);
+    expect(fixture.controller.getState().padGates).not.toMatchObject({
+      mutedSlots: [], soloSlots: [], provenance: "core",
+    });
+  });
+}
+
 test("a refused gate reset blocks leave instead of declaring empty masks", async () => {
   const fixture = controllerFixture({maximumStatusQueries: 2, waitForStatusQuery: async () => {}});
   const {calls} = fixture.runtime;
