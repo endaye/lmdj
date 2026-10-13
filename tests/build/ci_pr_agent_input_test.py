@@ -13,6 +13,10 @@ import subprocess
 import stat
 import sys
 import tempfile
+import threading
+import time
+import signal
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import unittest
 from unittest import mock
 
@@ -180,6 +184,118 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(self.git.text("rev-parse", "HEAD"), head)
         self.assertEqual(base_tip, self.git.text("rev-parse", "main"))
 
+    def test_preparation_discovers_rename_blobs_and_ancestor_attributes_in_a_real_partial_clone(self):
+        base = self.commit_files({
+            ".gitattributes": b"*.txt diff\n", "nested/.gitattributes": b"*.txt diff\n",
+            "nested/old.txt": b"one\ntwo\nthree\nfour\nfive\n", "deleted.txt": b"gone\n",
+            "unrelated.txt": b"not a preparation input\n",
+        }, "base")
+        self.git.run("mv", "nested/old.txt", "nested/new.txt")
+        self.git.run("rm", "deleted.txt")
+        head = self.commit_files({"nested/new.txt": b"one\ntwo\nthree\nCHANGED\nfive\n",
+                                  "added.txt": b"added\n"}, "renamed head")
+        remote = Path(self.temp.name) / "remote.git"
+        partial = Path(self.temp.name) / "partial"
+        self.git.run("clone", "--bare", str(self.repo), str(remote))
+        RealGit(remote).run("config", "uploadpack.allowFilter", "true")
+        self.git.run("clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), str(partial))
+        git = RealGit(partial)
+        git.run("update-ref", "HEAD", base)
+        identity = self.identity(base, head, base)
+        expected = {self.git.text("rev-parse", revision + ":" + path)
+                    for revision, path in ((base, "nested/old.txt"), (head, "nested/new.txt"),
+                                           (base, "deleted.txt"), (head, "added.txt"),
+                                           (base, ".gitattributes"), (base, "nested/.gitattributes"))}
+        commands = []
+        execute = producer._bounded_process
+        def observe(command, **kwargs):
+            commands.append(command)
+            return execute(command, **kwargs)
+        with mock.patch.object(producer, "_bounded_process", side_effect=observe):
+            oids = producer.required_input_objects(partial, identity)
+            missing = producer.missing_input_objects(partial, oids, base=base)
+        self.assertEqual(set(oids), expected)
+        self.assertEqual(set(missing), expected)
+        self.assertTrue(any("--no-renames" in command for command in commands))
+        self.assertFalse(any("--find-renames=50%" in command or "fetch" in command for command in commands))
+        self.assertIn("?" + self.git.text("rev-parse", base + ":unrelated.txt"),
+                      git.text("rev-list", "--objects", "--all", "--missing=print"))
+        with self.assertRaises(producer.InputCollectionError):
+            producer.build_input(partial, identity)
+        self.assertEqual(set(producer.missing_input_objects(partial, oids, base=base)), expected)
+
+    def test_repair_inventory_is_literal_and_rejects_invalid_source_boundaries(self):
+        base = self.commit_files({"a[1].txt": b"base\n", "a1.txt": b"unrelated\n"}, "base")
+        original = self.commit_files({"a[1].txt": b"original\n"}, "original")
+        head = self.commit_files({"a[1].txt": b"fixed\n"}, "head")
+        identity = self.identity(base, head)
+        expected = {self.git.text("rev-parse", revision + ":a[1].txt") for revision in (original, head)}
+        self.assertEqual(set(producer.required_repair_objects(self.repo, identity, original, "a[1].txt")), expected)
+        for revision, path, reason in ((head, "a[1].txt", "distinct ancestor"),
+                                       (original, "../a[1].txt", "malformed"),
+                                       (original, "absent.txt", "single source blob"),
+                                       ("--all", "a[1].txt", "malformed")):
+            with self.subTest(revision=revision, path=path), self.assertRaisesRegex(producer.InputCollectionError, reason):
+                producer.required_repair_objects(self.repo, identity, revision, path)
+
+    def test_partial_clone_collection_never_requests_missing_objects_before_or_after_preparation(self):
+        base, head = self.base_and_head({"a.txt": b"old\n", "unused.txt": b"unused\n"},
+                                        {"a.txt": b"new\n"})
+        remote, partial = Path(self.temp.name) / "remote.git", Path(self.temp.name) / "partial"
+        self.git.run("clone", "--bare", str(self.repo), str(remote))
+        RealGit(remote).run("config", "uploadpack.allowFilter", "true")
+        self.git.run("clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), str(partial))
+        git = RealGit(partial)
+        identity = self.identity(base, head)
+        oids = producer.required_input_objects(partial, identity)
+        requests = []
+        class Reject(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_error(500)
+            def log_message(self, *_):
+                pass
+        server = HTTPServer(("127.0.0.1", 0), Reject)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            git.run("remote", "set-url", "origin", f"http://127.0.0.1:{server.server_port}/remote.git")
+            with self.assertRaises(producer.InputCollectionError):
+                producer.build_input(partial, identity)
+            self.assertEqual(requests, [])
+            self.assertEqual(set(producer.missing_input_objects(partial, oids, base=base)), set(oids))
+            # Explicit fixture preparation; it does not give the collector transport.
+            git.run("fetch", "--no-filter", "--no-tags", remote.as_uri(), *oids)
+            document = producer.build_input(partial, identity)
+            self.assertEqual(document["files"][0]["head"]["sha256"], hashlib.sha256(b"new\n").hexdigest())
+            self.assertEqual(requests, [])
+            unused = self.git.text("rev-parse", head + ":unused.txt")
+            self.assertIn("?" + unused, git.text("rev-list", "--objects", "--all", "--missing=print"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_preparation_bounds_ancestor_path_expansion_before_attribute_read(self):
+        path = "/".join(["nested"] * 16 + ["a.txt"])
+        base, head = self.base_and_head({path: b"old\n"}, {path: b"new\n"})
+        with mock.patch.object(producer, "MAX_INVENTORY_BYTES", 512):
+            with self.assertRaisesRegex(producer.InputCollectionError, "attribute paths exceed"):
+                producer.required_input_objects(self.repo, self.identity(base, head))
+
+    def test_preparation_rejects_wrong_type_identity_and_incomplete_object_metadata(self):
+        base, head = self.base_and_head({"a.txt": b"old\n"}, {"a.txt": b"new\n"})
+        with self.assertRaisesRegex(producer.InputCollectionError, "not a blob"):
+            producer.missing_input_objects(self.repo, [head], base=base)
+        with self.assertRaisesRegex(producer.InputCollectionError, "malformed"):
+            producer.missing_input_objects(self.repo, ["--all"], base=base)
+        with self.assertRaisesRegex(producer.InputCollectionError, "T2 identity is invalid"):
+            producer.required_input_objects(self.repo, {**self.identity(base, head), "head_sha": "main"})
+        oid = self.git.text("rev-parse", head + ":a.txt")
+        with mock.patch.object(producer, "_git", return_value=b""):
+            with self.assertRaisesRegex(producer.InputCollectionError, "incomplete"):
+                producer.missing_input_objects(self.repo, [oid], base=base)
+
     def test_bounded_process_streams_stdin_and_caps_stdout_and_stderr(self):
         payload = b"x" * (1024 * 1024)
         echo = [sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(str(len(data)).encode())"]
@@ -210,6 +326,44 @@ class ProducerTests(unittest.TestCase):
                     command, cwd=self.repo, input_data=b"x" * (128 * 1024),
                     max_output=64, env=producer._git_environment(),
                 )
+
+    def test_bounded_transport_failure_stops_its_real_descendant(self):
+        for failure in ("time", "output", "diagnostic"):
+            with self.subTest(failure=failure):
+                pidfile = self.repo / (failure + ".pid")
+                child = ("import os,time; from pathlib import Path; "
+                         f"Path({str(pidfile)!r}).write_text(str(os.getpid())); time.sleep(60)")
+                parent = ("import subprocess,sys,time; from pathlib import Path; "
+                          f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+                          f"p=Path({str(pidfile)!r})\n"
+                          "while not p.exists(): time.sleep(.01)\n")
+                if failure != "time":
+                    stream = "stdout" if failure == "output" else "stderr"
+                    parent += f"sys.{stream}.write('x' * 65); sys.{stream}.flush()\n"
+                parent += "time.sleep(60)\n"
+                pid = None
+                def alive():
+                    result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                            capture_output=True, text=True, check=False)
+                    return result.returncode == 0 and not result.stdout.strip().startswith("Z")
+                try:
+                    with mock.patch.object(producer, "GIT_TIMEOUT_SECONDS", 1), \
+                            mock.patch.object(producer, "MAX_STDERR_BYTES", 64):
+                        with self.assertRaisesRegex(producer.InputCollectionError, "bounded " + failure + " limit"):
+                            producer._bounded_process([sys.executable, "-c", parent],
+                                                      cwd=self.repo, max_output=64)
+                    self.assertTrue(pidfile.is_file(), "fixture child must start before the bounded failure")
+                    pid = int(pidfile.read_text())
+                    deadline = time.monotonic() + 1
+                    while alive() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertFalse(alive(), "why: transport descendant survived failure; "
+                                     "remedy: stop the owned process group before returning")
+                finally:
+                    if pid is None and pidfile.exists():
+                        pid = int(pidfile.read_text())
+                    if pid is not None and alive():
+                        os.kill(pid, signal.SIGKILL)
 
     def test_diff_attributes_are_bound_to_the_base_tree_not_worktree_index_or_ambient_env(self):
         base, head = self.base_and_head({"a.txt": b"old\n"}, {"a.txt": b"new\n"})
@@ -390,6 +544,7 @@ class ProducerTests(unittest.TestCase):
         nested_commit = nested_git.commit("nested")
         self.git.run("update-index", "--add", "--cacheinfo", f"160000,{nested_commit},vendor.git")
         head = self.git.commit("gitlink")
+        self.assertEqual(producer.required_input_objects(self.repo, self.identity(base, head)), ())
         failure = self.assert_failure(base, head, "Git blob object")
         self.assertEqual(failure["inventory"], [{"status": "A", "paths": ["vendor.git"]}])
 
