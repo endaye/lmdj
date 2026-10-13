@@ -622,6 +622,11 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 
 ### 7.2 Slice \{#slice\}
 
+触摸区先显示 Provider、Source，再显示权限和 Public audio 声明、Analyze。
+标题使用实际源 Asset 短身份，候选数只显示该源已读取的真实结果；未读取时不填数。
+候选卡显示序号、时间区间和帧信息。目标列表保持每行显式选择 Slice、Bank、Pad；
+Adopt 在列表之后，Refresh 与 Back to Sample 位于底部同一行，Discard 单独置后。
+
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
 | 支持 Slice | Provider 下拉／Grant analysis permission | 选择分析服务、授予分析权限。这是本设备设置，不写入 Project。 |
@@ -629,7 +634,7 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 可以分析 | public audio 复选框 | 声明这段音频可以做本地 public 分析。只勾选不保存。 |
 | 服务、权限、声明都就绪 | Analyze／Retry analysis | 开始一次分析，先停止候选试听。结果是候选，不是 Pad。 |
 | 分析中或中断 | Cancel analysis | 取消这次分析。之前的结果和已采用的 Pad 不受影响。 |
-| 有候选 | Preview／Stop preview | 试听或停止一个切片。不分配。音频未启动时提示先打一个 Pad。 |
+| 有候选 | Preview slice／Stop preview | 试听或停止一个切片。不分配。音频未启动时提示先打一个 Pad。 |
 | 有候选 | Add target、Slice／Bank／Pad 下拉、Remove | 编辑“一个切片 → 一个目标 Pad”的列表。不换演奏 Bank，不保存。 |
 | 方案有效，没有结果不明的采用 | Adopt selected slices | 停止试听，把切片写入目标 Pad。替换目标原有声音，保留源音频和 Pattern；成功后目标列表清空。失败或结果不明时先 Refresh。 |
 | 有分析记录 | Refresh slices and Project | 重新读取 Project 和候选，解除已核对的不明状态。不自动重试 Adopt。 |

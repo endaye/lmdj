@@ -344,11 +344,18 @@ writer lease 时不能取得输入 owner；没有隐式授权或私有 Wasm 调�
 
 ## Slice
 
+触摸区按 Provider、Source、权限与 Public audio 声明、Analyze、候选卡、目标列表
+排列。标题显示当前源 Asset 的短身份；候选数只取当前源已读取的实际结果，尚未
+读取时不填数字。候选卡展示片段序号、时间区间和帧信息，Preview slice 保留独立
+试听操作。Adopt selected slices 位于目标列表之后，Refresh 与 Back to Sample
+并列在底部，Discard slices 最后单独排列。
+
 Slice 从 Facade Project inspection 列出已保留的源 Asset（包括未分配到 Pad 的素材）。
 用户先选择参考 Provider 并显式授权，再确认此源素材可按当前 public 分类进行本地分析；成功但无 onset 时显示空结果。
 当前参考 Provider 使用既有 test 平台，选择不会自动授权，也不会启用生产 Provider。
 片段可独立试听/停止，未激活音频时如实提示未播放；退出 Slice、切换 Project 或
-关闭界面会停止试听。预览不写入 Project。
+关闭界面会停止试听。Back to Sample 只返回 Sample 并停止试听，不提交未采用的
+目标列表。预览不写入 Project。
 
 每个目标行须明确选择片段、Bank 和 Pad，不预填目标。同一片段可采用到多个不同
 Pad，重复目标被拒绝。采用以当前 revision 和新命令提交一次，刷新 Project 后
