@@ -522,6 +522,58 @@ test("the GROOVE header names the playing Pattern and the queued switch target",
     .toBe(project.patterns[0]!.patternId);
 });
 
+test.each(["cancelled", "claimed"] as const)(
+  "GROOVE sends the current Pattern to the owner and waits for the %s projection", (outcome) => {
+    const current = project.patterns[0]!.patternId;
+    const target = project.patterns[1]!.patternId;
+    const view = renderSurface(false, {
+      transport: transportStatus({playing: true, currentPatternId: current,
+        pendingSwitch: {patternId: target, activationFrame: 96_000}}),
+    });
+    const trigger = screen.getByRole("button", {name: "Choose Pattern"});
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", {name: "GROOVE / 01"}));
+    expect(view.onSwitch).toHaveBeenCalledExactlyOnceWith(current);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    // Sending a cancellation intent must not hide an unconfirmed queue.
+    expect(trigger.textContent).toContain("GROOVE / 01 → 02");
+
+    view.update({transport: transportStatus({playing: true,
+      currentPatternId: outcome === "cancelled" ? current : target,
+      pendingSwitch: outcome === "cancelled" ? null :
+        {patternId: current, activationFrame: 192_000},
+    })});
+    expect(trigger.textContent).toContain(outcome === "cancelled"
+      ? "GROOVE / 01" : "GROOVE / 02 → 01");
+    if (outcome === "cancelled") expect(trigger.textContent).not.toContain("→");
+    expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+      .toBe(outcome === "cancelled" ? current : target);
+  });
+
+test("GROOVE selecting the playing Pattern without a queue makes no request", () => {
+  const view = renderSurface(false, {transport: transportStatus({playing: true})});
+  fireEvent.click(screen.getByRole("button", {name: "Choose Pattern"}));
+  fireEvent.click(screen.getByRole("button", {name: "GROOVE / 01"}));
+  expect(view.onSwitch).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test.each(["Cancel", "Escape"])("GROOVE %s leaves the queued switch alone", (action) => {
+  const view = renderSurface(false, {transport: transportStatus({playing: true,
+    pendingSwitch: {patternId: project.patterns[1]!.patternId, activationFrame: 96_000},
+  })});
+  const trigger = screen.getByRole("button", {name: "Choose Pattern"});
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", {name: "Choose Pattern"});
+  if (action === "Cancel") fireEvent.click(within(dialog).getByRole("button", {name: "Cancel"}));
+  else fireEvent.keyDown(dialog, {key: "Escape"});
+  expect(view.onSwitch).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(trigger.textContent).toContain("GROOVE / 01 → 02");
+});
+
 // #1823: BARS, DOUBLE UP and COPY act on the selected Pattern in SETUP.
 test("BARS asks to resize the selected Pattern to the chosen length", () => {
   const callbacks = renderSurface();
