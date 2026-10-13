@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 
 import {ModalDialog} from "./modal_dialog";
+import "./sequence_grid_tools.css";
 
 import type {PadColour} from "../runtime/runtime_types";
 import type {Bank} from "../state/creator_state";
@@ -528,34 +529,27 @@ export function SequenceGrid(props: SequenceGridProps) {
         </button>
       </div>
       {panel === null ? null : <ModalDialog returnFocus={panelTrigger.current}
-        onCancel={() => setPanel(null)} dialogClassName="sequence-picker-dialog"
+        onCancel={() => setPanel(null)} dialogClassName={panel === "tools"
+          ? "sequence-picker-dialog sequence-grid-tools-dialog" : "sequence-picker-dialog"}
         label={panel === "bars" ? "Choose bar" : "Grid tools"}>
-        <h2>{panel === "bars" ? "CHOOSE BAR" : "GRID TOOLS"}</h2>
+        {panel === "bars" ? <h2>CHOOSE BAR</h2> : (
+          <header className="sequence-grid-tools-heading">
+            <h2>GRID TOOLS</h2>
+            <span>EDIT VIEW</span>
+          </header>
+        )}
         {panel === "bars" ? <div className="sequence-bar-options">
           {Array.from({length: model.bars}, (_, index) => <button key={index}
             type="button" className="touch-control" aria-label={`Bar ${index + 1}`}
             aria-pressed={firstBar === index + 1}
             onClick={() => { scrollCommand.current(index, true); setPanel(null); }}>{index + 1}</button>)}
         </div> : (
-      <div className="sequence-grid-toolbar">
-        <div className="sequence-segment" role="group" aria-label="Snap">
-          <span className="visually-hidden">SNAP</span>
-          {SEQUENCE_GRID_SNAPS.map((option) => (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={snap === option}
-              aria-label={`Snap ${option}`}
-              onClick={() => props.onSnapChange(option)}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-        <div className="sequence-segment sequence-grid-mode" role="group" aria-label="Edit mode">
-          <span className="visually-hidden">MODE</span>
+      <div className="sequence-grid-tools-controls">
+        <h3>EDIT MODE</h3>
+        <div className="sequence-grid-tools-mode" role="group" aria-label="Edit mode">
           <button
             type="button"
+            className="touch-control"
             aria-pressed={editMode === "note"}
             aria-label="Note mode"
             onClick={() => props.onEditModeChange("note")}
@@ -564,6 +558,7 @@ export function SequenceGrid(props: SequenceGridProps) {
           </button>
           <button
             type="button"
+            className="touch-control"
             aria-pressed={editMode === "vel"}
             aria-label="Velocity mode"
             onClick={() => props.onEditModeChange("vel")}
@@ -571,9 +566,29 @@ export function SequenceGrid(props: SequenceGridProps) {
             VEL
           </button>
         </div>
+        <h3>GRID SNAP</h3>
+        <div className="sequence-grid-tools-snap" role="group" aria-label="Snap">
+          {SEQUENCE_GRID_SNAPS.map((option) => (
+            <button
+              key={option}
+              type="button"
+              className="touch-control"
+              aria-pressed={snap === option}
+              aria-label={`Snap ${option}`}
+              onClick={() => props.onSnapChange(option)}
+            >
+              {option === "off" ? "Off" : option}
+            </button>
+          ))}
+        </div>
+        <p className="sequence-grid-tools-help">
+          NOTE: tap a note to delete. VEL: drag to edit velocity.
+        </p>
       </div>
         )}
-        <button type="button" className="touch-control" onClick={() => setPanel(null)}>Done</button>
+        <button type="button" className={panel === "tools"
+          ? "touch-control is-primary" : "touch-control"}
+          onClick={() => setPanel(null)}>Done</button>
       </ModalDialog>}
       {editing.enabled || editing.reason === null ? null : (
         <p className="sequence-grid-reason" role="status">{editing.reason}</p>
