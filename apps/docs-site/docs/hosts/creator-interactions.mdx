@@ -424,6 +424,13 @@ Mute 与 Reverse。每个开关显示真实的 On／Off；辅助技术继续通�
 
 文件入口接受 WAV、MP3、M4A、AAC、FLAC 等，实际能读的格式取决于浏览器。保存的是统一格式的音频。
 
+IMPORT AUDIO 面板覆盖右侧触控区；TARGET 始终来自本次导入捕获的 Pad，
+竖屏旋转控制台时面板保持正向。源波形、Selection start／length、文件信息、
+容量和错误在内部纵向滚动；Preview selection 与 Stop preview 分成两个入口，
+每次 Preview 都从当前选段重新开始，Stop 可重复操作。界面不从本地按钮状态
+推断音频仍在播放。Commit／Cancel 和底部 Delete Pad 保持可达；提交中仍保留
+既有 Delete 和 Escape 取消边界。原生模态的背景锁定、焦点约束和返回焦点不变。
+
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
 | 已解码 | Selection start／length 滑块 | 在源音频里选一段。长度受目标 Pad 和 Bank 的容量限制。只改草稿。 |

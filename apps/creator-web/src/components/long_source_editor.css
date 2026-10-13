@@ -1,0 +1,130 @@
+.long-source-dialog.long-source-import-dialog {
+  --creator-sky: #95d4df;
+  --creator-dim: #7c877b;
+  box-sizing: border-box;
+  width: min(368px, calc(100vw - 16px));
+  height: min(368px, calc(100dvh - 16px));
+  max-height: calc(100dvh - 16px);
+  padding: 16px;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--creator-text);
+  background: var(--creator-touch);
+  font: 400 11px/15px var(--creator-font-mono);
+}
+
+.long-source-import-dialog .long-source-heading {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.long-source-import-dialog .long-source-heading h2 {
+  margin: 0;
+  font: 500 14px/20px var(--creator-font-heading);
+}
+.long-source-import-dialog .long-source-heading > span {
+  color: var(--creator-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.long-source-import-dialog .long-source-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  overscroll-behavior: contain;
+}
+.long-source-import-dialog .long-source-content > * { flex: none; min-width: 0; }
+.long-source-import-dialog .long-source-waveform {
+  display: block;
+  height: 90px;
+  border: 0;
+  border-radius: 4px;
+  fill: var(--creator-sky);
+}
+.long-source-import-dialog .long-source-waveform rect[data-selected="false"] { fill: var(--creator-dim); }
+.long-source-import-dialog .long-source-waveform line {
+  stroke: var(--creator-lime);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+.long-source-import-dialog .long-source-selection { gap: 0; }
+.long-source-import-dialog .long-source-selection > span {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  color: var(--creator-muted);
+}
+.long-source-import-dialog .long-source-selection > span > :first-child { text-transform: uppercase; }
+.long-source-import-dialog .long-source-selection > span > :last-child {
+  color: var(--creator-text);
+  font-size: 12px;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.long-source-import-dialog .long-source-selection input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: var(--creator-control-hit);
+  height: var(--creator-control-hit);
+  min-height: var(--creator-control-hit);
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(to right,
+    var(--selection-colour, var(--creator-lime)) var(--selection-fill),
+    var(--creator-line) var(--selection-fill)) center / 100% 4px no-repeat;
+  cursor: pointer;
+}
+.long-source-import-dialog .long-source-selection input:focus-visible {
+  outline: 1px solid var(--creator-lime);
+  outline-offset: -1px;
+}
+.long-source-import-dialog .long-source-details { display: grid; gap: 8px; }
+.long-source-import-dialog .long-source-details p {
+  overflow-wrap: anywhere;
+  color: var(--creator-muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+.long-source-import-dialog .long-source-details .long-source-name { color: var(--creator-text); }
+.long-source-import-dialog [role="alert"] { color: var(--creator-rose); overflow-wrap: anywhere; }
+.long-source-import-dialog .long-source-actions {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+}
+.long-source-import-dialog .long-source-delete { grid-column: 1 / -1; }
+
+.long-source-import-dialog .long-source-selection input::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+}
+.long-source-import-dialog .long-source-selection input::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 14px;
+  margin-top: -5px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--creator-text);
+}
+.long-source-import-dialog .long-source-selection input::-moz-range-track { height: 4px; background: transparent; }
+.long-source-import-dialog .long-source-selection input::-moz-range-thumb {
+  width: 12px;
+  height: 14px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--creator-text);
+}
+.long-source-import-dialog .long-source-selection input:disabled { opacity: .4; cursor: not-allowed; }
