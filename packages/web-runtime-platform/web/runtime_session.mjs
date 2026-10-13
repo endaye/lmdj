@@ -1759,7 +1759,9 @@ function createRuntimeSessionController(options = {}) {
       if (activePerformanceMasterCapture === capture) {
         activePerformanceMasterCapture = null;
       }
-      pendingPerformanceMasterCaptureStart = null;
+      if (pendingPerformanceMasterCaptureStart === pendingOwner) {
+        pendingPerformanceMasterCaptureStart = null;
+      }
     }
     const platformSink = Object.freeze({
       onBatch(channels) {
@@ -4600,6 +4602,7 @@ function createRuntimeSessionController(options = {}) {
       // The window holds every recorded input until both producers prove
       // ready for this begin; nothing is delivered early or dropped.
       holdLiveInputs();
+      let capture = null;
       try {
         const deadline =
           monotonicNow() + CORE_CONTROL_READY_TIMEOUT_MS;
@@ -4621,7 +4624,7 @@ function createRuntimeSessionController(options = {}) {
           }
         }
         if (captureSink !== null) {
-          await startPerformanceMasterCapture(captureSink, {
+          capture = await startPerformanceMasterCapture(captureSink, {
             controlEpoch,
             sessionId,
             beginCommandId,
@@ -4659,6 +4662,7 @@ function createRuntimeSessionController(options = {}) {
             gestureGeneration: binding.gesture_generation,
             recordingGestureId: binding.recording_gesture_id,
           }))),
+        ...(capture === null ? {} : {capture}),
       });
     })();
   }
