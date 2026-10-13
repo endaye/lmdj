@@ -28,7 +28,7 @@ export function PadRecordingSource({source, disabled, onChange}: {
       options={[{value: "microphone", label: "Microphone"},
         {value: "master", label: "Internal playback"}]}
       onChange={value => {if (value !== source) onChange(value);}} />
-    <p>{disabled ? "Finish the current Pad recording before changing its source."
+    <p>{disabled ? "Source changes are temporarily unavailable."
       : "Hold an empty Pad to record. Release to save."}</p>
   </section>;
 }

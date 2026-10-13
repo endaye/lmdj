@@ -58,7 +58,7 @@ test("recording source segments dispatch a distinct source and stay locked durin
   expect(playback.hasAttribute("disabled")).toBe(true);
   await user.click(microphone);
   expect(onChange).toHaveBeenCalledTimes(1);
-  expect(screen.getByText(/Finish the current Pad recording/)).toBeTruthy();
+  expect(screen.getByText("Source changes are temporarily unavailable.")).toBeTruthy();
 });
 test("Provider permission revocation refreshes and preserves other grants", async () => {
   const configure = vi.fn(async permissions => ({granted_permissions:permissions}));

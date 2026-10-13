@@ -89,6 +89,25 @@ passed 177 tests / 50 routes and internal links. Receipts use the
 checkpoint only; fresh build/package and all declared browser journeys remain
 UNRUN until the resulting artifact is actually exercised.
 
+## Review correction
+
+The initial published head `97f77f39a65cc6738518b75dda4f7cea32a63174`
+passed its normal build/package, four complete System browser cases and both
+complete microphone/Perform journeys. PR #2121's trusted review identified
+one actionable wording issue: source changes are also locked during permission,
+preparation and review, not only while recording. Replace the disabled hint
+with neutral availability wording, preserving the controller and all gates.
+The owning component assertion checks the corrected copy. The other three
+findings were independently checked: the source segments have no local state
+and retain the previous conditional mount; all six audio phase words describe
+the actual state; Export report remains within the named System region.
+These dispositions will be recorded on their review threads. The copy repair
+requires its owning component file and TypeScript checks; the next normal
+artifact will rerun the complete System browser file. The two unaffected
+capture journeys remain passed on the prior artifact, with no changed handler,
+state machine, gesture, persistence or assertions. A later integrated candidate
+must still verify its complete scope.
+
 ## Version Management
 
 Version impact: none
