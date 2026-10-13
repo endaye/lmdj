@@ -1230,3 +1230,5 @@ test("Candidate Job responses validate source, recipes and lifecycle association
     assert.throws(() => validate(malformed), HostProtocolError);
   }
 });
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

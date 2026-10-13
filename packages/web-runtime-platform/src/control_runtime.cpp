@@ -6548,3 +6548,5 @@ detail::ControlRuntimeSnapshotAccess::read(
 }
 
 }  // namespace lmdj::web_runtime
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

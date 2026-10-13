@@ -1926,3 +1926,5 @@ export function createProtocolTransport({
     },
   });
 }
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

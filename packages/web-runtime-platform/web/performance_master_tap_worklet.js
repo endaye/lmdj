@@ -144,3 +144,5 @@ class PerformanceMasterTapProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor("lmdj-perform-master-tap", PerformanceMasterTapProcessor);
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

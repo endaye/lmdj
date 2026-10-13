@@ -522,3 +522,5 @@ test("transport validates a successful result against its pending operation", as
     error instanceof HostProtocolError &&
     error.code === "HOST_PROTOCOL_MISMATCH");
 });
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

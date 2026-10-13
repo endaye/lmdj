@@ -7954,3 +7954,5 @@ test("the dual-ready gate parks recorded inputs until Core-ready and the started
   assert.equal(eventEnvelope.length, 1);
   await session.close();
 });
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

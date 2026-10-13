@@ -6779,3 +6779,5 @@ export function createRuntimeSession({
     ...seams,
   });
 }
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

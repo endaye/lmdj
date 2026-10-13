@@ -1238,3 +1238,5 @@ int main() {
     return 1;
   }
 }
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

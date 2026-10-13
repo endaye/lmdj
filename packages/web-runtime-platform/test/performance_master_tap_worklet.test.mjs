@@ -210,3 +210,5 @@ test("reports a stopped acknowledgement delivery failure exactly", async () => {
     droppedFrames: 0,
   });
 });
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

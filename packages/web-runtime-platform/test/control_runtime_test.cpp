@@ -10935,3 +10935,5 @@ int main() {
   std::cout << "web control runtime tests: PASS\n";
   return 0;
 }
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

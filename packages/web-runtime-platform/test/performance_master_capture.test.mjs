@@ -680,3 +680,5 @@ test("a legacy null binding still arms, and a malformed binding is refused", asy
   node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 0}});
   await stopping;
 });
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

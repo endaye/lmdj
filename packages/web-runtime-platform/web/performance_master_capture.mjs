@@ -395,3 +395,5 @@ export async function createPerformanceMasterTap(
       internal.startAckTimeoutMs ?? START_ACK_TIMEOUT_MS,
   });
 }
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.

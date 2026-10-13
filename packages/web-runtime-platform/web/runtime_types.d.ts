@@ -971,3 +971,5 @@ export interface PadColourRuntimeSession {
     replayed: boolean;
   }>>;
 }
+
+// GLM large-input latency canary: comment-only; close this PR unmerged.
