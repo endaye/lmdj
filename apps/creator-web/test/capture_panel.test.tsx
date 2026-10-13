@@ -118,6 +118,60 @@ test("renders the idle Record button without ever building the real browser cont
   expect(screen.getByRole("button", {name: "Record into Pad A01"})).toBeTruthy();
 });
 
+test("Capture headings follow the real phase and timer follows delivered frames", async () => {
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController});
+  expect(screen.getByRole("heading", {name: "RECORD SAMPLE"})).toBeTruthy();
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(155_520).fill(0.2)], 0.2));
+  expect(screen.getByLabelText("Pad A01 recorded time").textContent).toBe("00:03.240");
+  expect(screen.getByText("Recording into Pad A01")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  expect(await screen.findByRole("heading", {name: "RECORDED SAMPLE"})).toBeTruthy();
+  expect(screen.getByText("TARGET Pad A01")).toBeTruthy();
+  expect(screen.getByText("Not saved yet. Commit writes to the original Pad.")).toBeTruthy();
+});
+
+test("Stop and Commit remain outside the scrolling detail region", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  expect(screen.getByRole("button", {name: "Stop"}).classList.contains("is-primary")).toBe(true);
+  expect(container.querySelector(".capture-panel-content")?.contains(
+    screen.getByRole("button", {name: "Stop"}))).toBe(false);
+  act(() => listener.onBatch([new Float32Array(4_800).fill(0.2)], 0.2));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  const commit = await screen.findByRole("button", {name: "Commit"});
+  expect(commit.classList.contains("is-primary")).toBe(true);
+  expect(container.querySelector(".capture-panel-content")?.contains(commit)).toBe(false);
+  expect(screen.getByRole("button", {name: "Discard"}).classList.contains("is-danger")).toBe(true);
+});
+
+test("permission and failed-save presentations retain real messages and phase actions", async () => {
+  let allow: (() => void) | undefined;
+  let failCommit: ((value: {kind: "failed"; message: string}) => void) | undefined;
+  const {makeController, instances} = createFactory({startImpl: () => new Promise<void>((resolve) => { allow = resolve; })});
+  renderPanel({makeController, onCommit: () => new Promise((resolve) => { failCommit = resolve; })});
+  fireEvent.click(screen.getByRole("button", {name: "Record into Pad A01"}));
+  expect(screen.getByRole("status").textContent).toBe("Requesting microphone access…");
+  expect(screen.getByRole("heading", {name: "RECORD SAMPLE"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Stop"})).toBeNull();
+  await act(async () => allow?.());
+  act(() => instances[0]!.listener.onBatch([new Float32Array(48_000).fill(0.2)], 0.2));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  fireEvent.click(screen.getByRole("button", {name: "Commit"}));
+  expect(screen.getByRole("status").textContent).toBe("Committing…");
+  expect(screen.getByRole("heading", {name: "RECORDED SAMPLE"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Commit"})).toBeNull();
+  await act(async () => failCommit?.({kind: "failed", message: "The take could not be saved."}));
+  expect(screen.getByRole("alert").textContent).toBe("The take could not be saved.");
+  expect(screen.getByRole("heading", {name: "RECORDED SAMPLE"})).toBeTruthy();
+  expect(screen.getByLabelText("Pad A01 Duration").textContent).toBe("1.000 s");
+  expect(screen.getByRole("button", {name: "Commit"}).classList.contains("is-primary")).toBe(true);
+  expect(screen.getByRole("button", {name: "Discard"}).classList.contains("is-danger")).toBe(true);
+});
+
 test("a Sequence Pad stop request preserves the take in the trimming overlay", async () => {
   const {makeController, instances} = createFactory();
   const phases: string[] = [];
@@ -694,7 +748,7 @@ test("recording shows elapsed time, a level meter, and a growing waveform canvas
 
   act(() => listener.onBatch([new Float32Array(4_800).fill(0.5)], 0.5));
   await waitFor(() => expect(canvas.getAttribute("data-frame-count")).toBe("4800"));
-  expect(screen.getByText("0.1 s recorded")).toBeTruthy();
+  expect(screen.getByLabelText("Pad A01 recorded time").textContent).toBe("00:00.100");
   const meter = screen.getByRole("meter", {name: "Pad A01 input level"}) as HTMLMeterElement;
   expect(meter.value).toBeCloseTo(0.5);
 
@@ -719,7 +773,7 @@ test("a stereo batch sizes the buffer from the batch itself and the frame count 
     [new Float32Array(4_800).fill(0.5), new Float32Array(4_800).fill(-0.5)], 0.5,
   ));
   await waitFor(() => expect(canvas.getAttribute("data-frame-count")).toBe("4800"));
-  expect(screen.getByText("0.1 s recorded")).toBeTruthy();
+  expect(screen.getByLabelText("Pad A01 recorded time").textContent).toBe("00:00.100");
 
   act(() => listener.onBatch(
     [new Float32Array(4_800).fill(0.25), new Float32Array(4_800).fill(-0.25)], 0.25,
@@ -734,7 +788,7 @@ test("a batch that disagrees with the buffer's channel shape stops the capture a
 
   // The first batch is mono, sizing the buffer as 1-channel.
   act(() => listener.onBatch([new Float32Array(4_800).fill(0.3)], 0.3));
-  await screen.findByText("0.1 s recorded");
+  expect(screen.getByLabelText("Pad A01 recorded time").textContent).toBe("00:00.100");
 
   // A later batch disagrees in shape (2 channels): CaptureBuffer.append
   // throws TypeError. Without a try/catch around it, this would escape into

@@ -1,0 +1,58 @@
+.capture-panel-dialog.capture-interaction-dialog {
+  box-sizing: border-box;
+  width: min(368px, calc(100vw - 16px));
+  height: min(368px, calc(100dvh - 16px));
+  max-height: calc(100dvh - 16px);
+  gap: 8px;
+  padding: 16px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--creator-text);
+  background: var(--creator-touch);
+  font: 400 11px/15px var(--creator-font-mono);
+}
+
+.capture-interaction-dialog .capture-panel-header { gap: 8px; align-items: center; }
+.capture-interaction-dialog .capture-panel-header > div { min-width: 0; }
+.capture-interaction-dialog .capture-panel-header h2 {
+  margin: 0;
+  font: 500 14px/20px var(--creator-font-heading);
+}
+.capture-interaction-dialog .capture-panel-header > button { flex: none; }
+.capture-interaction-dialog .capture-panel-target { color: var(--creator-muted); font-size: 10px; }
+.capture-interaction-dialog .capture-panel-content { gap: 8px; padding: 0; overflow-x: hidden; }
+.capture-interaction-dialog .capture-panel-content p { margin: 0; overflow-wrap: anywhere; }
+.capture-interaction-dialog .capture-panel-view {
+  height: auto;
+  min-height: 100px;
+  gap: 6px;
+  padding: 12px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--creator-base);
+}
+.capture-interaction-dialog .capture-panel-view.is-trimming,
+.capture-interaction-dialog .capture-panel-view.is-commit-error {
+  /* At either endpoint the native 44px range extends half its width past
+     the waveform. Reserve that space, including when keyboard focus reveals
+     the input, instead of clipping it inside the scrolling content. */
+  padding: 0 calc(var(--creator-control-hit) / 2);
+  background: transparent;
+}
+.capture-interaction-dialog .capture-recording-target { color: var(--creator-rose); font: 500 18px/25px var(--creator-font-heading); }
+.capture-interaction-dialog .capture-recorded-time { font: 400 28px/39px var(--creator-font-mono); font-variant-numeric: tabular-nums; }
+.capture-interaction-dialog .capture-panel-view canvas { height: 68px; }
+.capture-interaction-dialog .capture-panel-view meter { order: 1; width: 100%; height: 8px; flex: none; }
+.capture-interaction-dialog .capture-trim-waveform { height: 100px; background: var(--creator-base); }
+.capture-interaction-dialog .capture-trim-waveform canvas { height: 100%; }
+.capture-interaction-dialog .capture-trim-values { grid-template-columns: minmax(0, 1fr); gap: 8px; font-size: 10px; }
+.capture-interaction-dialog .capture-trim-values > div { display: flex; justify-content: space-between; gap: 8px; min-height: 22px; }
+.capture-interaction-dialog .capture-trim-values output { color: var(--creator-text); font-size: 11px; }
+.capture-interaction-dialog .capture-trim-values > div:last-child output { color: var(--creator-lime); }
+.capture-interaction-dialog .capture-input-name { color: var(--creator-muted); font-size: 10px; line-height: 14px; }
+.capture-interaction-dialog .capture-panel-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 8px; }
+.capture-interaction-dialog .capture-panel-actions.is-trimming,
+.capture-interaction-dialog .capture-panel-actions.is-commit-error { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.capture-interaction-dialog .capture-crop { grid-column: 1 / -1; }
+.capture-interaction-dialog .capture-save-note { flex: none; margin: 0; color: var(--creator-muted); font-size: 10px; line-height: 14px; }
+.capture-interaction-dialog [role="alert"] { color: var(--creator-rose); }
