@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/performance_replay.hpp>
@@ -1043,9 +1044,129 @@ void test_direct_headered_profile_keeps_zero_and_gapped_sequences() {
                "header", "pad_gates", "filter_change", "reset"}));
 }
 
+void test_facade_identity_and_playing_exclusion_precede_loading() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "project.lmdj";
+  const auto missing = temp.path() / "missing.lmdj";
+  lmdj::project_io::ProjectStore writer;
+  LMDJ_CHECK(writer.create(bundle, replay_facade_project()).has_value());
+  auto controller = std::make_shared<CapturingController>();
+  auto application = make_replay_application(temp.path(), controller);
+  const nlohmann::json request{
+      {"operation", "performance.replay.begin"},
+      {"project_path", bundle.generic_string()},
+      {"replay_id", kReplayId}, {"performance_id", kPerformanceId},
+  };
+  LMDJ_CHECK(application.command(request).at("ok") == true);
+  auto collision = request;
+  collision["project_path"] = missing.generic_string();
+  LMDJ_CHECK(application.command(collision).at("error").at("code") ==
+             "DUPLICATE_ID");
+  collision["replay_id"] = kSecondReplayId;
+  const auto excluded = application.command(collision);
+  LMDJ_CHECK(excluded.at("ok") == false);
+  LMDJ_CHECK((excluded.at("error").at("details") ==
+              nlohmann::json{{"active_replay_id", kReplayId}}));
+  LMDJ_CHECK(writer.delete_performance(bundle, {
+      {lmdj::foundation::CommandId{
+           "80000000-0000-4000-8000-000000000001"}, 0},
+      PerformanceId{kPerformanceId}}).has_value());
+  const auto retry = application.command(request);
+  LMDJ_CHECK(retry.at("ok") == true);
+  LMDJ_CHECK(retry.at("result").at("resolved_revision") == 0);
+  LMDJ_CHECK(controller->begin_calls == 1);
+  LMDJ_CHECK(controller->projections.front()->resolved_revision == 0);
+}
+
+void test_facade_load_failure_keeps_original_error_and_completed_cleanup() {
+  for (const bool corrupted : {false, true}) {
+    TempDirectory temp;
+    const auto bundle = temp.path() / "project.lmdj";
+    const auto missing = temp.path() / "missing.lmdj";
+    lmdj::project_io::ProjectStore writer;
+    LMDJ_CHECK(writer.create(bundle, replay_facade_project()).has_value());
+    if (corrupted) {
+      LMDJ_CHECK(writer.create(missing, replay_facade_project()).has_value());
+      std::ofstream manifest(missing / "manifest.json", std::ios::trunc);
+      manifest << "{";
+      LMDJ_CHECK(manifest.good());
+    }
+    auto controller = std::make_shared<CapturingController>();
+    auto application = make_replay_application(temp.path(), controller);
+    LMDJ_CHECK(application.command({
+        {"operation", "performance.replay.begin"},
+        {"project_path", bundle.generic_string()},
+        {"replay_id", kReplayId}, {"performance_id", kPerformanceId},
+    }).at("ok") == true);
+    controller->status_value.state = ReplayState::complete;
+    const auto loader_error = application.query({
+        {"operation", "performance.list"}, {"project_path", missing.generic_string()},
+    });
+    LMDJ_CHECK(loader_error.at("ok") == false);
+    const auto failed = application.command({
+        {"operation", "performance.replay.begin"},
+        {"project_path", missing.generic_string()},
+        {"replay_id", kSecondReplayId}, {"performance_id", kSecondPerformanceId},
+    });
+    LMDJ_CHECK(failed.at("ok") == false);
+    LMDJ_CHECK(failed.at("error") == loader_error.at("error"));
+    // Both callers use ProjectStore::load: parity alone misses a shared wrong
+    // error. This fixture independently requires the failing phase and path.
+    LMDJ_CHECK(failed.at("error").at("code") == "INVALID_PROJECT");
+    LMDJ_CHECK(failed.at("error").at("message") ==
+               (corrupted ? "project JSON file could not be parsed"
+                          : "project managed directory is missing or invalid"));
+    LMDJ_CHECK(failed.at("error").at("details").at("path") ==
+               (corrupted ? missing / "manifest.json" : missing).generic_string());
+    LMDJ_CHECK(controller->status_calls == 1);
+    LMDJ_CHECK(application.command({
+        {"operation", "performance.replay.begin"},
+        {"project_path", bundle.generic_string()},
+        {"replay_id", kSecondReplayId}, {"performance_id", kSecondPerformanceId},
+    }).at("ok") == true);
+    LMDJ_CHECK(controller->status_calls == 1);
+    LMDJ_CHECK(controller->begin_calls == 2);
+  }
+}
+
+void test_facade_missing_target_keeps_original_error_and_completed_cleanup() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "project.lmdj";
+  auto state = replay_facade_project();
+  lmdj::project_io::ProjectStore writer;
+  LMDJ_CHECK(writer.create(bundle, state).has_value());
+  auto controller = std::make_shared<CapturingController>();
+  auto application = make_replay_application(temp.path(), controller);
+  LMDJ_CHECK(application.command({
+      {"operation", "performance.replay.begin"},
+      {"project_path", bundle.generic_string()},
+      {"replay_id", kReplayId}, {"performance_id", kPerformanceId},
+  }).at("ok") == true);
+  controller->status_value.state = ReplayState::complete;
+  const auto missing = application.command({
+      {"operation", "performance.replay.begin"},
+      {"project_path", bundle.generic_string()}, {"replay_id", kSecondReplayId},
+      {"performance_id", "50000000-0000-4000-8000-000000000003"},
+  });
+  LMDJ_CHECK(missing.at("ok") == false);
+  LMDJ_CHECK(missing.at("error").at("code") == "NOT_FOUND");
+  LMDJ_CHECK(missing.at("error").at("message") == "Performance does not exist");
+  LMDJ_CHECK(controller->status_calls == 1);
+  LMDJ_CHECK(application.command({
+      {"operation", "performance.replay.begin"},
+      {"project_path", bundle.generic_string()},
+      {"replay_id", kSecondReplayId}, {"performance_id", kPerformanceId},
+  }).at("ok") == true);
+  LMDJ_CHECK(controller->status_calls == 1);
+  LMDJ_CHECK(controller->begin_calls == 2);
+}
+
 }  // namespace
 
 int main() {  try {
+    test_facade_identity_and_playing_exclusion_precede_loading();
+    test_facade_load_failure_keeps_original_error_and_completed_cleanup();
+    test_facade_missing_target_keeps_original_error_and_completed_cleanup();
     test_direct_legacy_profile_rejects_sequences_before_effects();
     test_direct_legacy_profile_rejects_typed_actions_before_effects();
     test_direct_headered_profile_rejects_missing_sequence_before_header();
