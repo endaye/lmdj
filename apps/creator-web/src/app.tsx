@@ -3130,13 +3130,13 @@ function Workspace({
         </section>
       )}
 
-              {!systemOpen && ["sample", "soundset", "slice"].includes(activeMode) &&
+              {!systemOpen && ["sample", "slice"].includes(activeMode) &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
                 {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
                   onClick={() => selectMode("slice")}>Slice</button>}
-                {(activeMode === "soundset" || activeMode === "slice") &&
-                  <button type="button" onClick={() => selectMode(activeMode === "slice" ? "sample" : "project")}>
-                    Back to {activeMode === "slice" ? "Sample" : "Project"}
+                {activeMode === "slice" &&
+                  <button type="button" onClick={() => selectMode("sample")}>
+                    Back to Sample
                   </button>}
               </nav>}
               {systemOpen && <SystemSurface onBack={() => {
@@ -3359,6 +3359,7 @@ function Workspace({
               ) : activeMode === "soundset" && isSoundSetSession(session) ? (
                 <SoundSetSurface
                   session={session}
+                  onBack={() => selectMode("project")}
                   projectRevision={state.project.current?.revision ?? null}
                   activeBank={state.activeBank}
                   onInstalled={(revision) => {

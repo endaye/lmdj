@@ -3,6 +3,7 @@ import {useReportFailure} from "../runtime/diagnostics_context";
 import {useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState} from "react";
 
 import {BankSelector} from "./bank_selector";
+import "./soundset_surface.css";
 import type {Bank} from "../state/creator_state";
 import {PAD_MATRIX_ORDER, bankName, slotAddress} from "../state/view_model";
 import {
@@ -30,6 +31,7 @@ interface SoundSetSurfaceProps {
   projectRevision: number | null;
   activeBank: Bank;
   onInstalled?: (revision: number) => void;
+  onBack?: () => void;
   initialState?: SoundSetState;
 }
 
@@ -109,6 +111,7 @@ export function SoundSetSurface({
   projectRevision,
   activeBank,
   onInstalled,
+  onBack,
   initialState = initialSoundSetState,
 }: SoundSetSurfaceProps) {
   const reportFailure = useReportFailure();
@@ -260,14 +263,13 @@ export function SoundSetSurface({
   return (
     <section ref={surfaceRef} className="soundset-surface" aria-label="Sound Sets" data-step={step}>
       <header className="soundset-header">
-        <h2>Sound Sets</h2>
-        {step === "browse" ? <button
-          type="button"
-          disabled={session === undefined || busy}
-          onClick={() => { void refresh(); }}
-        >
-          Refresh Catalog
-        </button> : <span className="soundset-step-label">{step.toUpperCase()}</span>}
+        <h2>{step === "browse" ? "Sound Sets" : selected?.name ?? "Sound Sets"}</h2>
+        <span className="soundset-step-label">{
+          step === "browse" ? "CATALOG" : step === "details"
+            ? `${selected?.occupiedSlots.length ?? 0} SOUNDS`
+            : step === "target" ? "INSTALL TARGET"
+              : `BANK ${bankName((state.preview?.bankId ?? state.receipt?.bankId ?? state.targetBank) as Bank)}`
+        }</span>
       </header>
       <nav className="soundset-steps" aria-label="Sound Set steps">
         {STEPS.map((value) => <button type="button" key={value}
@@ -302,33 +304,22 @@ export function SoundSetSurface({
         {state.sets.map((summary) => (
           <li key={summary.manifestSha256} data-selected={state.selected?.manifestSha256 === summary.manifestSha256 ? "true" : undefined}>
             <h3>{summary.name}</h3>
-            <dl>
-              <dt>Publisher</dt>
-              <dd>{summary.publisher}</dd>
-              <dt>Version</dt>
-              <dd>{summary.version}</dd>
-              <dt>Sounds</dt>
-              <dd>{summary.occupiedSlots.length} of 16</dd>
-              <dt>Download</dt>
-              <dd>{formatSetBytes(summary.totalBytes)}</dd>
-              <dt>Licence</dt>
-              <dd>{summary.license.spdxId}</dd>
-              {summary.license.attribution === "" ? null : (
-                <>
-                  <dt>Attribution</dt>
-                  <dd className="soundset-attribution">
-                    {summary.license.attribution}
-                  </dd>
-                </>
-              )}
-            </dl>
+            <p className="soundset-card-summary">
+              {summary.occupiedSlots.length} {summary.occupiedSlots.length === 1 ? "sound" : "sounds"}
+              {" · "}{summary.license.spdxId}
+            </p>
+            {summary.license.attribution === "" ? null : (
+              <p className="soundset-attribution">{summary.license.attribution}</p>
+            )}
             <button
               type="button"
               disabled={busy}
               data-inspect-set={summary.manifestSha256}
+              aria-label={`Inspect Set ${summary.name}`}
+              className="is-primary"
               onClick={() => { void inspect(summary); }}
             >
-              Inspect {summary.name}
+              Inspect Set
             </button>
           </li>
         ))}
@@ -356,73 +347,78 @@ export function SoundSetSurface({
         </ul>
       )}
 
+      <div className="soundset-browse-actions">
+        <button type="button" disabled={session === undefined || busy}
+          onClick={() => { void refresh(); }}>Refresh Catalog</button>
+        {onBack ? <button type="button" onClick={onBack}>Back to Project</button> : null}
+      </div>
       </> : null}
 
       {selected === null || step === "browse" ? null : (
         <section className="soundset-inspect" aria-label={`Sound Set ${selected.name}`}>
-          <header>
-            <h3>{selected.name}</h3>
-          </header>
-          <p>{selected.publisher} · {selected.license.spdxId}</p>
+          <p className="soundset-license">{selected.license.spdxId} · {selected.publisher}</p>
           {selected.license.attribution === "" ? null : (
             <p className="soundset-attribution">
               Attribution: {selected.license.attribution}
             </p>
           )}
           {step === "details" ? <>
-          <button type="button" disabled={busy} onClick={() => setStep("target")}>Choose install target</button>
-          {selected.demo === null ? null : (
-            <p className="soundset-demo">
-              <button
-                type="button"
-                className="soundset-audition"
-                onClick={() => void audition()}
-              >
-                Audition set demo
-              </button>{" "}
-              · {formatSetBytes(selected.demo.byteLength)}
-            </p>
-          )}
-
+          <div className="soundset-audition-actions">
+            {selected.demo === null ? null : (
+              <button type="button" className="soundset-audition"
+                aria-label="Audition demo"
+                title={`${formatSetBytes(selected.demo.byteLength)} demo`}
+                onClick={() => void audition()}>Audition demo</button>
+            )}
+            <button type="button" className="soundset-audition-stop"
+              onClick={() => void stopAudition()}>Stop audition</button>
+          </div>
           <ol className="soundset-slots" aria-label="Sound Set slots">
             {selected.slots.map((slot) => (
               <li key={slot.slot} data-empty={slotIsEmpty(slot) ? "true" : "false"}>
-                <span className="soundset-slot-index">{slot.slot + 1}</span>
                 {slotIsEmpty(slot) ? (
-                  // No control, no affordance: an empty Set slot is not an
-                  // action the user can take on the target Pad.
-                  <span className="soundset-slot-empty">Empty in this Set</span>
-                ) : (
-                  /* Empty slots deliberately have no audition control. */
-                  <span className="soundset-slot-sound">
-                    <button
-                      type="button"
-                      className="soundset-audition"
-                      aria-label={`Audition ${slot.name}`}
-                      onClick={() => void audition(slot.slot)}
-                    >
-                      {slot.name}
-                    </button>{" "}
-                    · {slot.role} · {slot.audio?.sampleRate} Hz ·{" "}
-                    {slot.audio?.channels === 1 ? "mono" : "stereo"}
+                  <span className="soundset-slot-empty">
+                    <span className="soundset-slot-index" aria-hidden="true">{
+                      String(slot.slot + 1).padStart(2, "0")}</span>
+                    <span>Empty in this Set</span>
                   </span>
+                ) : (
+                  <button type="button" className="soundset-audition"
+                    aria-label={`Audition ${slot.name}`}
+                    onClick={() => void audition(slot.slot)}>
+                    <span className="soundset-slot-index" aria-hidden="true">{
+                      String(slot.slot + 1).padStart(2, "0")}</span>
+                    <span>{slot.name}</span>
+                  </button>
                 )}
               </li>
             ))}
           </ol>
-
-          <button
-            type="button"
-            className="soundset-audition-stop"
-            onClick={() => void stopAudition()}
-          >
-            Stop audition
-          </button>
+          <button type="button" className="is-primary" disabled={busy}
+            onClick={() => setStep("target")}>Choose install target</button>
+          <details className="soundset-metadata">
+            <summary>Set and sound details</summary>
+            <dl>
+              <div><dt>Publisher</dt><dd>{selected.publisher}</dd></div>
+              <div><dt>Version</dt><dd>{selected.version}</dd></div>
+              <div><dt>Download</dt><dd>{formatSetBytes(selected.totalBytes)}</dd></div>
+              {selected.slots.filter(slot => !slotIsEmpty(slot)).map(slot => (
+                <div key={slot.slot}>
+                  <dt>{String(slot.slot + 1).padStart(2, "0")} · {slot.name}</dt>
+                  <dd>{slot.role} · {slot.audio?.sampleRate} Hz · {
+                    slot.audio?.channels === 1 ? "mono" : "stereo"}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
           </> : null}
 
           {step === "target" ? <fieldset className="soundset-target" disabled={busy} aria-labelledby="soundset-target-bank">
-            <legend id="soundset-target-bank">Installation destination</legend>
-            <p>Choose where to install. This does not change the playing Bank.</p>
+            <legend id="soundset-target-bank" className="visually-hidden">Installation destination</legend>
+            <div className="soundset-target-card">
+              <h3>Choose destination Bank</h3>
+              <p>This does not change the playing Bank.</p>
+            </div>
             <BankSelector
               purpose="install"
               activeBank={state.targetBank}
@@ -433,6 +429,7 @@ export function SoundSetSurface({
             <button
               type="button"
               disabled={busy || projectRevision === null}
+              className="is-primary"
               onClick={() => { void preview(); }}
             >
               Preview mapping into Bank {bankName(state.targetBank)}
@@ -479,13 +476,14 @@ export function SoundSetSurface({
 
               {collisions.length === 0 ? null : (
                 <fieldset className="soundset-policy" disabled={busy}>
-                  <legend>Occupied Pads</legend>
+                  <legend>All {collisions.length} occupied {collisions.length === 1 ? "Pad" : "Pads"}</legend>
                   {(["keep", "replace"] as const).map((policy) => (
                     <label key={policy}>
                       <input
                         type="radio"
                         name="soundset-occupied-pad-policy"
                         value={policy}
+                        aria-label={policy === "keep" ? "Keep occupied — keep the Pads I already have" : "Replace occupied — replace them with this Set"}
                         checked={state.policy === policy}
                         onChange={() =>
                           dispatch({
@@ -493,19 +491,15 @@ export function SoundSetSurface({
                             policy: policy as OccupiedPadPolicy,
                           })}
                       />
-                      {policy === "keep"
-                        ? "Keep the Pads I already have"
-                        : "Replace them with this Set"}
+                      <span>{policy === "keep" ? "Keep occupied" : "Replace occupied"}</span>
                     </label>
                   ))}
                 </fieldset>
               )}
 
-              <button type="button" disabled={busy} onClick={() => { void preview(); }}>
-                Refresh mapping
-              </button>
               <button
                 type="button"
+                className="is-primary"
                 disabled={!selectCanInstall(state) || projectRevision === null}
                 onClick={() => { void install(); }}
               >
@@ -513,6 +507,9 @@ export function SoundSetSurface({
                   ? `Install into Bank ${bankName(state.preview.bankId as Bank)}`
                   : `Install ${selectWriteCount(state)} of 16 into Bank ${
                     bankName(state.preview.bankId as Bank)}`}
+              </button>
+              <button type="button" disabled={busy} onClick={() => { void preview(); }}>
+                Refresh mapping
               </button>
             </div>
           )}

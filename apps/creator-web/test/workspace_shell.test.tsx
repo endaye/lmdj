@@ -2828,6 +2828,26 @@ test("hardware Slice and Sound Sets stay in the touch workspace without extra ph
   expect(screen.getByTestId("hardware-console")).toBeTruthy();
 });
 
+test("Sound Sets returns from its Browse footer without writing or reopening the Project", async () => {
+  const fixture = runtimeFixture();
+  const list = vi.fn(async () => ({catalogAvailable: true, sets: [], refused: []}));
+  Object.assign(fixture.session, {listSoundSets: list});
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  const before = [...fixture.calls];
+  await userEvent.click(screen.getByRole("button", {name: "Sound Sets"}));
+  await screen.findByText("No Sound Set is available in this Workspace.");
+  const back = screen.getByRole("button", {name: "Back to Project"});
+  expect(back.closest(".soundset-browse-actions"))
+    .toBe(screen.getByRole("button", {name: "Refresh Catalog"}).parentElement);
+  await userEvent.click(back);
+  expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
+  expect(screen.queryByRole("region", {name: "Sound Sets"})).toBeNull();
+  expect(fixture.calls).toEqual(before);
+  expect(list).toHaveBeenCalledTimes(1);
+});
+
 const engagedTransportStatus = (
   overrides: Partial<PatternTransportStatus> = {},
 ): PatternTransportStatus => ({

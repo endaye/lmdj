@@ -224,6 +224,9 @@ async function installProjectTap(page, catalogEndpoint) {
         nativeHost.transport = Object.freeze({
           async send(...parameters) {
             const [request] = parameters;
+            if (request?.operation === "project.open") {
+              window.__soundsetProjectOpenRequests = (window.__soundsetProjectOpenRequests ?? 0) + 1;
+            }
             const response = await nativeTransport.send(...parameters);
             if (request?.operation === "soundset.install") {
               window.__soundsetInstalls ??= [];
@@ -374,6 +377,7 @@ async function occupancyOf(page, bank) {
 }
 
 async function assertSoundSetStepLayout(page, testInfo, step) {
+  const renderedHits = [];
   // Absolute rendered bounds catch overflow even if a parent clips it. Do not
   // compare two CSS classes or merely assert overflow-x:hidden.
   for (const viewport of [{width:1440,height:900}, {width:1280,height:600}, {width:768,height:600}]) {
@@ -396,8 +400,58 @@ async function assertSoundSetStepLayout(page, testInfo, step) {
     expect(geometry.scrollWidth, `${step}: outer horizontal fit`).toBe(geometry.width);
     expect(geometry.outside, `${step}: descendant bounds`).toEqual([]);
     expect(geometry.nested, `${step}: only the outer vertical scroller`).toEqual([]);
+    // Retain the existing design-coordinate minimum. It is NOT a claim of
+    // 44 CSS px after the hardware transform; U01 owns that final compliance.
     expect(geometry.controls.every(height => height >= 44), `${step}: navigation touch bounds`).toBe(true);
+    if (step === "details") {
+      const slots = await touch.locator(".soundset-slots > li").evaluateAll(rows => rows.map(row => {
+        const rect = row.getBoundingClientRect();
+        return {left:rect.left, right:rect.right, top:rect.top, bottom:rect.bottom};
+      }));
+      expect(slots).toHaveLength(16);
+      // Actual placement, including empty slots: 1–8 down the left column,
+      // 9–16 down the right, with no missing, reversed or overlapping row.
+      for (let index = 0; index < 8; index += 1) {
+        expect(slots[index].right).toBeLessThan(slots[index+8].left);
+        expect(Math.abs(slots[index].top-slots[index+8].top)).toBeLessThan(1);
+        if (index > 0) {
+          expect(slots[index-1].bottom).toBeLessThanOrEqual(slots[index].top);
+          expect(slots[index+7].bottom).toBeLessThanOrEqual(slots[index+8].top);
+        }
+      }
+      const target = touch.getByRole("button", {name:"Choose install target"});
+      await expect(target).toBeEnabled();
+      const ordered = await target.evaluate(el => el.compareDocumentPosition(
+        el.parentElement.querySelector(".soundset-slots")) & Node.DOCUMENT_POSITION_PRECEDING);
+      expect(ordered, "target action follows all sixteen slots").toBeTruthy();
+    }
+    // Scroll each enabled native target into view and hit-test its centre and
+    // inner edges. This checks reachability and sibling occlusion without
+    // firing an audition, target change or install during geometry checks.
+    const controls = touch.locator(".soundset-surface button:not(:disabled), .soundset-policy:not(:disabled) label, .soundset-metadata summary");
+    for (let index = 0; index < await controls.count(); index += 1) {
+      const control = controls.nth(index);
+      await control.evaluate(el => el.scrollIntoView({block:"center",inline:"nearest"}));
+      const hit = await control.evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        const points = [[rect.left+rect.width/2,rect.top+rect.height/2],
+          [rect.left+1,rect.top+rect.height/2], [rect.right-1,rect.top+rect.height/2],
+          [rect.left+rect.width/2,rect.top+1], [rect.left+rect.width/2,rect.bottom-1]];
+        return {name:el.getAttribute("aria-label") ?? el.textContent.trim(),
+          width:rect.width, height:rect.height,
+          hits:points.map(([x,y]) => el.contains(document.elementFromPoint(x,y)))};
+      });
+      expect(hit.hits, `${step} ${viewport.width}×${viewport.height}: ${hit.name} centre/edges`).toEqual(Array(5).fill(true));
+      renderedHits.push({viewport, ...hit});
+    }
+    await touch.evaluate(el => { el.scrollTop=0; });
+    await page.screenshot({path:testInfo.outputPath(`soundset-${step}-${viewport.width}x${viewport.height}.png`)});
   }
+  const renderedHitsPath = testInfo.outputPath(`soundset-${step}-rendered-hits.json`);
+  writeFileSync(renderedHitsPath, JSON.stringify(renderedHits,null,2));
+  await testInfo.attach(`soundset-${step}-rendered-hits`, {
+    path:renderedHitsPath,contentType:"application/json",
+  });
   await page.setViewportSize({width:1440,height:900});
   await page.getByTestId("touch-workspace").evaluate(el => { el.scrollTop=0; });
   await page.screenshot({path:testInfo.outputPath(`soundset-${step}.png`)});
@@ -488,9 +542,11 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
 
   // Leg 2 -- inspect. Far side: the full 16-slot layout, with the empty slots
   // marked and carrying no control (S11-D12 starts in the surface).
-  await assertSoundSetStepLayout(page, testInfo, "browse");
-  const originControl = listing.getByRole("button", {name: `Inspect ${ATTRIBUTION}`});
+  const originControl = listing.getByRole("button", {name: `Inspect Set ${ATTRIBUTION}`});
+  // Read the completed Browse state: during catalog refresh every Inspect
+  // action is disabled and would otherwise evade enabled-target hit checks.
   await expect(originControl).toBeEnabled();
+  await assertSoundSetStepLayout(page, testInfo, "browse");
   await originControl.scrollIntoViewIfNeeded();
   // Native actionability can scroll again around the sticky navigation. Read
   // the actual click position before React handles it, not an earlier sample.
@@ -536,6 +592,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "Attribution: Fixture Attribution Kit by Bea Waveform (CC BY 4.0)");
   await expect(preview.getByRole("figure", {name:"Proposed Bank mapping"}).locator("button, input, a, [tabindex]"))
     .toHaveCount(0);
+  await expect(preview.getByRole("group", {name:"All 4 occupied Pads"}).getByRole("radio")).toHaveCount(2);
   await assertSoundSetStepLayout(page, testInfo, "review");
   await install.scrollIntoViewIfNeeded();
   await expect(install).toBeInViewport();
@@ -566,7 +623,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     page, "soundset.map.preview");
 
   await showSoundSetStep(page, "Details");
-  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await page.getByRole("button", {name: "Audition demo"}).click();
   await expect.poll(
     async () => await lastSoundsetOperation(page, "soundset.audition"),
     {timeout: REQUEST_TIMEOUT_MS},
@@ -611,7 +668,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   });
   const auditionsBefore = await soundsetOperationCount(page, "soundset.audition");
   await showSoundSetStep(page, "Details");
-  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await page.getByRole("button", {name: "Audition demo"}).click();
   await expect.poll(
     async () => await soundsetOperationCount(page, "soundset.audition"),
     {timeout: REQUEST_TIMEOUT_MS},
@@ -633,7 +690,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   // A second audition still answers, which a terminated transport cannot do.
   const secondBefore = await soundsetOperationCount(page, "soundset.audition");
   await showSoundSetStep(page, "Details");
-  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await page.getByRole("button", {name: "Audition demo"}).click();
   await expect.poll(
     async () => await soundsetOperationCount(page, "soundset.audition"),
     {timeout: REQUEST_TIMEOUT_MS},
@@ -686,7 +743,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   // where some Pads are written and the occupied ones are spared, is proved
   // natively in `tests/host/cli_test.py::soundset_acceptance_journey` and is
   // not reachable here without a second Bundle fixture.
-  await page.getByRole("radio", {name: "Keep the Pads I already have"})
+  await page.getByRole("radio", {name: "Keep occupied — keep the Pads I already have"})
     .check();
   await expect(install).toBeEnabled();
   await expect(install).toHaveText("Install 0 of 16 into Bank A");
@@ -736,7 +793,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     .click();
   await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   await expect(install).toBeDisabled();
-  await page.getByRole("radio", {name: "Replace them with this Set"}).check();
+  await page.getByRole("radio", {name: "Replace occupied — replace them with this Set"}).check();
   await expect(install).toBeEnabled();
   await install.click();
   await expect(receipt).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
@@ -793,7 +850,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   );
   await expect(listing.getByRole("listitem")).toHaveCount(3);
 
-  await listing.getByRole("button", {name: `Inspect ${FOUNDRY}`}).click();
+  await listing.getByRole("button", {name: `Inspect Set ${FOUNDRY}`}).click();
   const offlineInspect = page.getByRole("region", {
     name: `Sound Set ${FOUNDRY}`,
   });
@@ -811,7 +868,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   const beforeB = await occupancyOf(page, 1);
   expect(Object.keys(beforeB.pads)).toHaveLength(16);
-  await page.getByRole("radio", {name: "Replace them with this Set"}).check();
+  await page.getByRole("radio", {name: "Replace occupied — replace them with this Set"}).check();
   await page.getByRole("button", {name: /^Install (?:into Bank|[0-9]+ of 16 into Bank)/}).click();
   await expect(receipt).toContainText("Installed 11 Pads into Bank B", {
     timeout: REQUEST_TIMEOUT_MS,
@@ -838,6 +895,29 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   for (const pad of [10, 11, 13, 14, 15]) {
     expect(offlineTruth.pads[pad]).toBe(beforeB.pads[pad]);
   }
+
+  // Leg 7 -- the Browse footer returns to the open Project. Far side: the
+  // physical mode and touch workspace change, without another Project open
+  // request, authoring install or mutation of the fully read-back Truth.
+  await showSoundSetStep(page, "Browse");
+  const beforeBack = {
+    truth: await inspectTruth(page),
+    ...await page.evaluate(() => ({
+      opens:window.__soundsetProjectOpenRequests ?? 0,
+      installs:window.__soundsetInstalls.length,
+    })),
+  };
+  await page.locator(".soundset-browse-actions").getByRole("button", {name:"Back to Project"}).click();
+  await expect(page.getByRole("button", {name:"Project", exact:true})).toHaveAttribute("aria-current","page");
+  await expect(page.getByRole("region", {name:"Sound Sets", exact:true})).toHaveCount(0);
+  await expect(page.getByTestId("touch-workspace").getByRole("button", {name:"Import .lmdj",exact:true})).toBeVisible();
+  expect({
+    truth: await inspectTruth(page),
+    ...await page.evaluate(() => ({
+      opens:window.__soundsetProjectOpenRequests ?? 0,
+      installs:window.__soundsetInstalls.length,
+    })),
+  }).toEqual(beforeBack);
 });
 
 // This case was originally titled so that the Creator gate's webkit slot
@@ -1008,14 +1088,14 @@ async function installAttributionReplaceIntoBankA(page) {
   const listing = page.getByRole("list", {name: "Catalog Sound Sets"});
   await expect(listing.getByRole("heading", {name: ATTRIBUTION}))
     .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
-  await listing.getByRole("button", {name: `Inspect ${ATTRIBUTION}`}).click();
+  await listing.getByRole("button", {name: `Inspect Set ${ATTRIBUTION}`}).click();
   await expect(page.getByRole("region", {name: `Sound Set ${ATTRIBUTION}`}))
     .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   await showSoundSetStep(page, "Target");
   await page.getByRole("button", {name: "Preview mapping into Bank A"}).click();
   await expect(page.locator(".soundset-preview"))
     .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
-  await page.getByRole("radio", {name: "Replace them with this Set"}).check();
+  await page.getByRole("radio", {name: "Replace occupied — replace them with this Set"}).check();
   const installsBefore = await page.evaluate(() =>
     window.__soundsetInstalls?.length ?? 0);
   await page.getByRole("button", {name: /^Install (?:into Bank|[0-9]+ of 16 into Bank)/})

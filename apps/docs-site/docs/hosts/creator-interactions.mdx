@@ -585,10 +585,10 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 
 触摸区分为 **Browse / Details / Target / Review** 四步。
 
-- Browse 显示 Catalog、离线缓存和不可用的 Set。
-- Details 显示许可、16 个声音和试听。
-- Target 选择安装到哪个 Bank。
-- Review 显示只读的映射方案、冲突处理和确认。
+- Browse 顶部标记 Catalog；单列卡片显示真实名称、声音数量和许可，Refresh Catalog 与 Back to Project 在列表底部。Catalog 不可达时显示本 Workspace 的缓存提示；卡片没有独立的“已缓存／在设备上”状态。
+- Details 顶部显示所选 Set 的名称和实际声音数量；demo 与 Stop 在声音列表之前。全部 16 槽分成两列，左列 01–08、右列 09–16；空槽只有说明，不能试听。Choose install target 在列表之后；Set and sound details 可展开查看发布者、版本、下载大小及各声音的角色、采样率和声道。
+- Target 选择安装到哪个 Bank，再按 Preview mapping；目标说明明确不改变演奏 Bank。
+- Review 显示只读的 4×4 映射方案、全局冲突处理和确认；Install 在 Refresh mapping 之前。
 - 许可和署名在 Details、Target、Review 都可见。
 - 只有触摸区整体纵向滚动，步骤条始终可达。
 - 切步骤不重新读取详情、不安装、不停止试听。
@@ -599,18 +599,20 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
 | 可以查询 | Refresh Catalog | 重新列出可用和不可用的 Set。离线时显示本设备缓存。 |
-| 有 Set | Inspect Set | 读取详情：名称、许可、16 个声音和 demo。 |
+| 有 Set | Inspect Set | 读取详情：名称、许可、全部 16 槽和可用的 demo；声音数量以占用槽数为准。 |
 | 未在请求中 | Browse／Details／Target／Review 步骤键 | 切步骤。没选 Set 时只有 Browse；没有方案或安装结果时 Review 不可用。 |
 | Details | Choose install target | 进入 Target。 |
-| 有 demo 或声音 | Audition set demo／声音名称按钮 | 试听，不需要先安装。再次试听替换上一次。没有持续的“正在播放”状态，出错时提示。 |
-| 任意 | Stop audition | 停止 Set 试听。不停止全局 Pattern。 |
+| 有 demo 或声音 | Audition demo／声音名称按钮 | 试听，不需要先安装。再次试听替换上一次。没有持续的“正在播放”状态，出错时提示。 |
+| Details | Stop audition | 停止 Set 试听。不停止全局 Pattern。 |
 | Target | Install target Bank A–D | 只选安装目标，不改左栏的演奏 Bank。 |
 | 已选 Set 和目标 | Preview mapping | 显示目标 Bank 16 个槽的方案：Install／Occupied／Empty source／Unmapped。方案格不能演奏。空声音不会清掉 Pad。 |
 | Review，未在请求中 | Refresh mapping | 按当前目标和 Project 重新生成方案，冲突选择需要重新确认。不安装。 |
-| 方案有冲突 | Keep／Replace | 保留已有 Pad 或替换。不选就不能安装。 |
+| 方案有冲突 | Keep occupied／Replace occupied | 为所有冲突槽选择同一个保留或替换策略，分组标题显示受影响的 Pad 数量；不能逐槽混用。不选就不能安装。 |
 | 方案可以提交 | Install into Bank | 按确认的方案安装，显示 Installed 或冲突、失败。若目标是当前 Bank，Pad 声音和颜色随即更新。空的 Set 槽不清除原 Pad；Replace 时颜色按普通替换的规则保留。 |
 | 详情或错误 | Browse／Dismiss | 返回列表或关闭错误。不撤销已完成的安装，不停止试听。 |
-| 任意 | Back to Project | 回到 Project，不安装未确认的方案。 |
+| Browse 底部 | Back to Project | 回到已打开的 Project，不重新打开工程，不安装未确认的方案。 |
+
+[2026-10-13 Interaction UI 决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-13-creator-interaction-ui-baseline.md)保留全局 Keep／Replace 策略；图稿中的单槽示例不改变这个边界。试听没有可据以显示持续播放灯的状态，Stop 直接交给 Host 判断并执行。
 
 安装总是用预览时的目标和 Project 版本；如果 Project 之后变了，安装被拒绝，需要 Refresh mapping 后重新确认。
 

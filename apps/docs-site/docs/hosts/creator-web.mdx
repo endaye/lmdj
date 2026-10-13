@@ -91,15 +91,24 @@ Sequence 的 ↑/↓ 仍按 A01–D16 选择当前 Pad。自动化验证显示�
 ### Sound Set 分步安装
 
 从 Project 进入 Sound Sets 后，通过 **Browse → Details → Target → Review** 操作。
-Browse 显示 Catalog、缓存和不可用 Set；Details 保留全部 16 槽与 demo／单槽试听、
-Stop audition；Target 选择安装 Bank；Review 显示只读映射和确认。
+Browse 使用单列卡片显示真实名称、占用槽数和许可；Refresh Catalog 与 Back to
+Project 位于列表底部。离线缓存提示来自 Catalog 查询结果；没有单个 Set 的缓存
+字段，所以卡片不显示推测的 ON DEVICE 状态。Back 只返回当前 Project，不重新打开。
+Details 先显示 demo／Stop，再按左列 01–08、右列 09–16 排列全部 16 槽；
+空槽不提供试听。Choose install target 在声音列表之后，发布者、版本、下载大小
+及声音角色／采样率／声道保留在 Set and sound details 展开区。
+Target 显示安装目标说明与 Bank 选择；Review 显示只读映射，Install 在 Refresh
+mapping 之前。试听和 Stop 仍直接调用 Host，不根据按钮点击伪造持续播放状态。
 步骤切换只改变视图，返回 Browse 恢复选中的 Inspect 按钮焦点与列表位置。
 许可和 attribution 在详情与安装确认中保持可见，内容仅沿外层触摸区纵向滚动。
 
 映射按 MPC 地址顺序排列，明确区分 Install、Occupied、Empty source（原 Pad 不变）
 与 Unmapped；没有可演奏 Pad 的外观或点击行为。目标 Bank 与左侧演奏 Bank 独立。
 改目标会作废旧映射及 Keep／Replace 选择；预览和安装期间锁住步骤、目标与策略。
-有冲突时仍需明确选择 Keep 或 Replace，未确认不会修改 Project。
+有冲突时分组标题显示受影响 Pad 数量，Keep occupied／Replace occupied 是对所有
+冲突槽的一次全局选择，未确认不会修改 Project；不能逐槽混用。这沿用
+[2026-10-13 Interaction UI 决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-13-creator-interaction-ui-baseline.md)
+保留的策略，图稿中单槽示例不改变安装契约。
 安装发送预览时的 Bank 与 revision；过期或失败时保留错误、Refresh mapping 和重试，
 不把当前 revision 偷换成已确认的版本。成功回执与原有保存重开行为保持不变。
 
