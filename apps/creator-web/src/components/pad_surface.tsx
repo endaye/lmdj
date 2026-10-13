@@ -6,7 +6,7 @@ import {
   selectVisiblePads,
   type CreatorState,
 } from "../state/creator_state";
-import {padColourAttribute} from "../state/pad_colour";
+import {padCategoryLabel, padColourAttribute} from "../state/pad_colour";
 import {PAD_MATRIX_ORDER, padAddress} from "../state/view_model";
 import type {createCreatorInputController} from "../runtime/input_controller";
 
@@ -122,7 +122,8 @@ export function PadSurface({
             }}
           >
             <strong>{address}</strong>
-            <span>{status ?? (capturing ? "Capturing" : assigned ? "Assigned" : "Empty")}</span>
+            <span>{status ?? (capturing ? "Capturing" : assigned
+              ? padCategoryLabel(pad.category) ?? "Assigned" : "Empty")}</span>
             <kbd aria-hidden="true">{keyboardKey}</kbd>
             {highlighted ? (
               <i className="pad-selected-dot" data-testid="pad-selected-dot" aria-hidden="true" />

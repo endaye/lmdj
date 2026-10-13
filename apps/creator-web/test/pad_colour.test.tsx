@@ -54,6 +54,40 @@ const matrixColour = (address: string) =>
   screen.getByRole("button", {name: new RegExp(`^Pad ${address} `)})
     .getAttribute("data-pad-colour");
 
+test("Pad labels describe the Asset category even when a different colour is chosen", () => {
+  const categories = ["drums", "bass", "melodic", "vocal", "texture"] as const;
+  const labelledProject: ProjectView = {...project,
+    pads: project.pads.map((pad, index) => index < categories.length
+      ? {...pad, assetId: `asset-${index}`, category: categories[index]!,
+        colourOverride: 2, colour: 2} : pad),
+  };
+  render(<PadSurface state={{...creatorState(), project: {
+    phase: "ready", projects: [], current: labelledProject,
+  }}} />);
+  for (const [index, label] of ["DRUMS", "BASS", "MELODIC", "VOCAL", "TEXTURE"].entries()) {
+    const button = screen.getByRole("button", {name: new RegExp(`^Pad A0${index + 1} — assigned`)});
+    expect(button.querySelector("span")?.textContent).toBe(label);
+    expect(button.getAttribute("data-pad-colour")).toBe("2");
+  }
+});
+
+test("Pad loading and capture status remain visible before the category label", () => {
+  const view = render(<PadSurface state={creatorState()} armedCaptureSlot={0} />);
+  expect(screen.getByRole("button", {name: /^Pad A01 — capturing/})
+    .querySelector("span")?.textContent).toBe("Capturing");
+  for (const [phase, label] of [["loading", "Loading"], ["processing", "Processing"],
+    ["failed", "Failed"], ["saved-unavailable", "Failed"]] as const) {
+    view.rerender(<PadSurface state={creatorState()} armedCaptureSlot={0}
+      seedSlots={[{phase, request: null, committedRevision: null}]} />);
+    expect(screen.getByRole("button", {name: /^Pad A01 /})
+      .querySelector("span")?.textContent).toBe(label);
+  }
+  expect(screen.getByRole("button", {name: /^Pad A03 — assigned/})
+    .querySelector("span")?.textContent).toBe("Assigned");
+  expect(screen.getByRole("button", {name: /^Pad A04 — empty/})
+    .querySelector("span")?.textContent).toBe("Empty");
+});
+
 test("the Pad matrix, Sequence overview rows and touch grid notes draw the same colour for each Pad", () => {
   render(<PadSurface state={creatorState()} />);
   const overview = render(<SequenceOverview project={project} state={initialSequenceState}

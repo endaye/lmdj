@@ -918,6 +918,42 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
       installs:window.__soundsetInstalls.length,
     })),
   }).toEqual(beforeBack);
+
+  // The actual installed melody exercises a long category caption in a
+  // selected compact Pad; changing BASS's colour alone cannot prove this.
+  await page.setViewportSize({width: 768, height: 600});
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByRole("button", {name: "Bank B", exact: true}).click();
+  const melodicPad = page.getByRole("button", {name: /^Pad B09 — assigned/});
+  await melodicPad.click();
+  await expect(melodicPad).toHaveAttribute("aria-pressed", "true");
+  await expect(melodicPad.locator("span")).toHaveText("MELODIC");
+  await page.evaluate(() => document.fonts.ready);
+  const captionGeometry = await melodicPad.evaluate((element) => {
+    const rect = (item) => {
+      const {left, right, top, bottom} = item.getBoundingClientRect();
+      return {left, right, top, bottom};
+    };
+    const range = document.createRange();
+    range.selectNodeContents(element.querySelector("span"));
+    return {pad: rect(element), address: rect(element.querySelector("strong")),
+      dot: rect(element.querySelector(".pad-selected-dot")),
+      lines: [...range.getClientRects()].map(({left, right, top, bottom}) =>
+        ({left, right, top, bottom}))};
+  });
+  expect(captionGeometry.lines.length).toBeGreaterThan(0);
+  for (const line of captionGeometry.lines) {
+    expect(line.left).toBeGreaterThanOrEqual(captionGeometry.pad.left);
+    expect(line.right).toBeLessThanOrEqual(captionGeometry.pad.right);
+    expect(line.top).toBeGreaterThanOrEqual(captionGeometry.address.bottom);
+    expect(line.bottom).toBeLessThanOrEqual(captionGeometry.pad.bottom);
+    const dot = captionGeometry.dot;
+    expect(line.left < dot.right && line.right > dot.left &&
+      line.top < dot.bottom && line.bottom > dot.top).toBe(false);
+  }
+  writeFileSync(testInfo.outputPath("compact-melodic-pad.json"), JSON.stringify(captionGeometry, null, 2));
+  await page.screenshot({path: testInfo.outputPath("compact-melodic-pad.png")});
+  expect(await inspectTruth(page)).toEqual(beforeBack.truth);
 });
 
 // This case was originally titled so that the Creator gate's webkit slot
@@ -1018,6 +1054,41 @@ async function expectPadColourTruth(page, pad, expected) {
   }, {timeout: REQUEST_TIMEOUT_MS}).toEqual(expected);
 }
 
+// Independent owner-approved RGB oracle (2026-10-13). Index agreement alone
+// would let every consumer keep the same obsolete palette unnoticed.
+const INTERACTION_PAD_COLOURS = [
+  {label: "DRUMS", hex: "#f2b584", rgb: "rgb(242, 181, 132)"},
+  {label: "BASS", hex: "#ddf478", rgb: "rgb(221, 244, 120)"},
+  {label: "MELODIC", hex: "#b6a0ec", rgb: "rgb(182, 160, 236)"},
+  {label: "VOCAL", hex: "#95d4df", rgb: "rgb(149, 212, 223)"},
+  {label: "TEXTURE", hex: "#e5adc4", rgb: "rgb(229, 173, 196)"},
+];
+
+async function expectSelectedPadTreatment(page, pad) {
+  const address = `A${String(pad + 1).padStart(2, "0")}`;
+  const button = page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)});
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await expect(button).toHaveCSS("border-top-color", "rgb(255, 255, 255)");
+  await expect(button.locator("strong")).toHaveCSS("font-size", "11px");
+  await expect(button.locator("strong")).toHaveCSS("line-height", "15px");
+  await expect(button.locator("span")).toHaveText("BASS");
+  await expect(button.locator("span")).toHaveCSS("font-size", "9px");
+  await expect(button.locator("span")).toHaveCSS("line-height", "13px");
+  await expect(button.getByTestId("pad-selected-dot"))
+    .toHaveCSS("background-color", "rgb(221, 244, 120)");
+  await expect(button.getByTestId("pad-selected-dot")).toHaveCSS("width", "5px");
+  await expect(button.getByTestId("pad-selected-dot")).toHaveCSS("height", "5px");
+}
+
+async function expectColourPickerPalette(controls, selected) {
+  for (const [index, colour] of INTERACTION_PAD_COLOURS.entries()) {
+    const swatch = controls.getByRole("button", {name: `${colour.label} colour`, exact: true});
+    await expect(swatch).toHaveAttribute("data-pad-colour", String(index));
+    await expect(swatch).toHaveAttribute("aria-pressed", String(index === selected));
+    await expect(swatch).toHaveCSS(index === selected ? "background-color" : "color", colour.rgb);
+  }
+}
+
 // The far side on screen: all three surfaces draw the same palette index
 // ("neutral" for null). The overview and the touch grid live on the Sequence
 // page, so this switches there; callers switch back for the controls.
@@ -1036,6 +1107,25 @@ async function expectPadColourSurfaces(page, pad, colour) {
   const row = page.locator(`.sequence-grid-row[data-pad='${pad}']`);
   await expect(row).toHaveAttribute("data-pad-colour", attribute);
   await expect(row.getByTestId("sequence-grid-note")).toHaveCount(1);
+  const expected = colour === null ? "rgb(173, 182, 170)" : INTERACTION_PAD_COLOURS[colour].rgb;
+  await expect(overview.locator(`.sequence-overview-names li[data-row='${pad}']`))
+    .toHaveCSS("color", expected);
+  await expect(overview.locator(`.sequence-overview-note[data-row='${pad}'] .sequence-overview-onset`))
+    .toHaveCSS("fill", expected);
+  await expect(row.locator(".sequence-grid-pad")).toHaveCSS("color", expected);
+  await expect(row.getByTestId("sequence-grid-note")).toHaveCSS("background-color", expected);
+  const matrixPad = page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)});
+  if (colour !== null) {
+    await expect(matrixPad).toHaveCSS("--pad-colour", INTERACTION_PAD_COLOURS[colour].hex);
+    const selected = await matrixPad.evaluate((element) => element.classList.contains("is-selected"));
+    if (selected) {
+      await expect(matrixPad).toHaveCSS("border-top-color", "rgb(255, 255, 255)");
+      await expect(matrixPad.getByTestId("pad-selected-dot"))
+        .toHaveCSS("background-color", "rgb(221, 244, 120)");
+    } else {
+      await expect(matrixPad).toHaveCSS("box-shadow", `${expected} 0px 0px 0px 1px inset`);
+    }
+  }
 }
 
 async function awaitConsoleInteractive(page) {
@@ -1111,7 +1201,7 @@ async function installAttributionReplaceIntoBankA(page) {
   expect(committed.result.installed.map((entry) => entry.pad)).toEqual([0, 1, 2, 3]);
 }
 
-test("one Pad colour follows its category, a user override, re-install, reopen and restore", async ({page, browserName, baseURL}) => {
+test("one Pad colour follows its category, a user override, re-install, reopen and restore", async ({page, browserName, baseURL}, testInfo) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(600_000);
   const origin = new URL(baseURL).origin;
@@ -1159,6 +1249,8 @@ test("one Pad colour follows its category, a user override, re-install, reopen a
   // Leg 2 -- manual override. MELODIC is index 2; the category stays BASS.
   let controls = await padColourControls(page, PAD_A04);
   await expect(controls.getByTestId("pad-colour-source")).toHaveText("BASS default");
+  await expectColourPickerPalette(controls, 1);
+  await expectSelectedPadTreatment(page, PAD_A04);
   await controls.getByRole("button", {name: "MELODIC colour"}).click();
   const melodicOverride = {category: "bass", colour_override: 2, colour: 2};
   await expectPadColourTruth(page, PAD_A04, melodicOverride);
@@ -1167,6 +1259,28 @@ test("one Pad colour follows its category, a user override, re-install, reopen a
     .toHaveText("Undo: Set Pad colour", {timeout: REQUEST_TIMEOUT_MS});
   await expectPadColourSurfaces(page, PAD_A04, 2);
   await expectUndoRedo(page, PAD_A04, bassDefault, melodicOverride);
+
+  // Exercise the five stable override indices through real UI commits. The
+  // category stays BASS, then restore index 2 before the original retention legs.
+  const previousViewport = page.viewportSize();
+  for (const index of [0, 1, 2, 3, 4, 2]) {
+    controls = await padColourControls(page, PAD_A04);
+    await controls.getByRole("button", {name: `${INTERACTION_PAD_COLOURS[index].label} colour`, exact: true}).click();
+    await expectPadColourTruth(page, PAD_A04, {category: "bass", colour_override: index, colour: index});
+    await expectColourPickerPalette(controls, index);
+    await expectSelectedPadTreatment(page, PAD_A04);
+    if (index === 4) {
+      await page.setViewportSize({width: 768, height: 600});
+      await expectSelectedPadTreatment(page, PAD_A04);
+      await controls.scrollIntoViewIfNeeded();
+      await page.screenshot({path: testInfo.outputPath("interaction-texture-picker.png")});
+    }
+    await expectPadColourSurfaces(page, PAD_A04, index);
+    if (index === 4) {
+      await page.screenshot({path: testInfo.outputPath("interaction-texture-sequence.png")});
+    }
+  }
+  if (previousViewport) await page.setViewportSize(previousViewport);
 
   // Leg 3 -- re-install `replace`, the stand-in for re-separation. A04 gets
   // a new Asset from the same `bass` slot and keeps the user's override.
