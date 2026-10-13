@@ -5,6 +5,35 @@ Date: 2026-09-10 (Asia/Shanghai)
 Task: LMDJ #1153 / umbrella #1149 T4
 Status: production pilot implementation in progress; see the current record below.
 
+## 2026-10-13 large-input timeout mitigation
+
+PR #2083 run 38261680621 attempt 4 and PR #2109 run 38323591263 repeated
+GLM whole-response timeouts at 60241 / 60224 ms, with no response usage.
+The host adapter/config matched main. A pinned real-handler HTTP-wire probe
+confirmed the domestic endpoint and `reasoning_effort: low`; the host's
+unauthenticated endpoint probe reached HTTP 401 in 205 ms. The remaining
+failure is inference-path latency relative to the unchanged 60-second bound;
+historical evidence cannot separate queueing, prefill and generation.
+
+The source configuration selects the same-family speed tier
+`glm-5.3-flashx`, with qualified served identity `zai/glm-5.3-flashx`.
+Official [model documentation](https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash)
+retains 1M context and advertises up to 200 tokens/s. Standard
+[pricing](https://docs.bigmodel.cn/cn/guide/start/pricing.md), read 2026-10-13,
+is CNY 2 / million input and CNY 7 / million output. The existing conservative
+CNY 7 / USD conversion reserves about USD 0.304 for full context; two maximum
+DeepSeek reservations plus one FlashX admission still fit the USD 1 cap.
+The price/model revision changes only the envelope identity; historical
+reservations still count against global monthly and pilot budgets.
+
+The wire regression exercises two failed primary requests, complete-input
+FlashX dispatch, low reasoning effort, the 4096 output cap, served identity,
+actual usage settlement and retained uncertain reservations. No input,
+timeout, output, budget or review gate is relaxed. Source verification is
+separate from installation and real large-input acceptance; see
+`docs/plans/2026-10-13-glm-review-timeout.md`. This entry is not a record of
+production recovery.
+
 ## 2026-10-10 rollback drill (umbrella #1149, #1153a)
 
 A real `current` → `previous` → restore cycle was executed on the review host

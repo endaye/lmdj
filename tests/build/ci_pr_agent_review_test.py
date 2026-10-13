@@ -1209,7 +1209,7 @@ class InputAndPolicyTests(unittest.TestCase):
         self.assertTrue(witness["providers"]["deepseek"]["enabled"])
         self.assertEqual(witness["providers"]["deepseek"]["model"], "deepseek/deepseek-flash")
         self.assertTrue(witness["providers"]["glm"]["enabled"])
-        self.assertEqual(witness["providers"]["glm"]["model"], "zai/glm-5.3-flash")
+        self.assertEqual(witness["providers"]["glm"]["model"], "zai/glm-5.3-flashx")
         self.assertEqual(witness["providers"]["glm"]["endpoint"], "https://open.bigmodel.cn/api/paas/v4")
         self.assertEqual(witness["providers"]["glm"]["credential_ref"], "PR_AGENT_ZAI_API_KEY")
         self.assertEqual(witness["engine"]["name"], "pr-agent")
@@ -2403,6 +2403,47 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         # keeps its non-thinking request and never receives the GLM knob.
         self.assertEqual(calls[-1]["extra_body"], {"reasoning_effort": "low"})
         self.assertEqual(calls[0]["extra_body"], {"thinking": {"type": "disabled"}})
+
+    def test_production_flashx_wire_fallback_preserves_input_and_cost_after_primary_failures(self):
+        self.config_path.write_text((ROOT / "scripts/ci/pr-agent/runtime.toml").read_text())
+        # Only remove the production retry pause from this fixture; prices,
+        # context, output, deadline and count/cost bounds use the real config.
+        self.config_path.write_text(self.config_path.read_text().replace("backoff_seconds = 5", "backoff_seconds = 0"))
+        calls = []
+        full_input = adapter.render_prompt_input(adapter.authenticate_input(json.loads(self.input_path.read_text())))
+
+        async def response_factory(httpx, request):
+            body = json.loads((await request.aread()).decode())
+            calls.append(body)
+            self.assertIn(full_input, body["messages"][1]["content"])
+            self.assertEqual(body["max_tokens"], 4096)
+            if len(calls) <= 2:
+                self.assertEqual(body["model"], "deepseek-flash")
+                return httpx.Response(500, request=request, json={"error": {"message": "fixture transient refusal"}})
+            self.assertEqual(str(request.url), "https://open.bigmodel.cn/api/paas/v4/chat/completions")
+            self.assertEqual(body["model"], "glm-5.3-flashx")
+            self.assertEqual(body["reasoning_effort"], "low")
+            self.assertNotIn("thinking", body)
+            return httpx.Response(200, request=request, json={
+                "id": "fixture", "created": 1, "object": "chat.completion",
+                "model": "glm-5.3-flashx",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content":
+                    (FIXTURES / "clean-native-review.yaml").read_text()}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        with mock.patch.dict(os.environ, {"PR_AGENT_ZAI_API_KEY": "fixture-zai-secret"}):
+            result, _, ledger = self.run_with_wire_transport(response_factory)
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(len(calls), 3)
+        attempt = result["attempts"][-1]
+        self.assertTrue(attempt["coverage"]["complete"])
+        self.assertEqual(attempt["model"]["actual"], "zai/glm-5.3-flashx")
+        records = [json.loads(line) for line in ledger.read_text().splitlines()]
+        self.assertEqual([record["status"] for record in records],
+                         ["reserved", "uncertain", "reserved", "uncertain", "reserved", "reconciled"])
+        self.assertLess(sum(record["reserved_amount_usd"] for record in records if record["status"] == "reserved"), 1.0)
+        self.assertEqual(records[-1]["usage"], {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
 
     def test_limit_warning_survives_total_deadline_after_first_refusal(self):
         self.config_path.write_text(self.config_path.read_text().replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1"))
