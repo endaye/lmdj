@@ -105,12 +105,17 @@ test("a pending launch preserves the acknowledged slot and clears on failure or 
   const view = render(<PerformOverview state={state} controller={controller} />);
   const cue = () => screen.getByLabelText("Pattern launch cue").textContent;
   expect(cue()).toBe("ACKNOWLEDGED SLOT 01 · NOTHING QUEUED");
+  // Acknowledged is a historical receipt, not evidence of ongoing playback.
+  expect(screen.getByTestId("perform-playing").textContent).toBe("—");
   update({type: "pending-launch", pending: {requestId: "next", patternSlot: 1,
     targetTick: 3840, claimed: false}});
   expect(cue()).toBe("ACKNOWLEDGED SLOT 01 → QUEUED SLOT 02");
+  expect(screen.getByTestId("perform-queued").textContent).toBe("—");
+  expect(screen.getByTestId("perform-playing").textContent).toBe("—");
   update({type: "error", message: "Launch was refused"});
   update({type: "pending-launch", pending: null});
   expect(cue()).toBe("ACKNOWLEDGED SLOT 01 · NOTHING QUEUED");
+  expect(screen.getByTestId("perform-queued").textContent).toBe("—");
   update({type: "session-neutral"});
   expect(cue()).toBe("LAST LAUNCH — · NOTHING QUEUED");
   expect(view.container.querySelector("button,input,select,[tabindex]" )).toBeNull();
@@ -118,6 +123,56 @@ test("a pending launch preserves the acknowledged slot and clears on failure or 
   expect(listeners.size).toBe(0);
   expect(controller.connect).not.toHaveBeenCalled();
   expect(controller.leave).not.toHaveBeenCalled();
+});
+
+test("no open Project has no invented Pattern counter or playing slot", () => {
+  render(<PerformOverview state={initialCreatorState} />);
+  expect(screen.getByTestId("perform-counter").textContent).toBe("—");
+  expect(screen.getByTestId("perform-playing").textContent).toBe("—");
+  expect(screen.getByTestId("perform-queued").textContent).toBe("—");
+});
+
+test("playing and queued slots come from separate transport facts", () => {
+  const next = "33333333-3333-4333-8333-333333333333";
+  render(<PerformOverview state={{...state, project: {...state.project, current: {...project,
+    patterns: [...project.patterns, {patternId: next, bars: 1, events: []}],
+    patternSlots: [project.patternId, next, ...Array<string | null>(14).fill(null)],
+  }}}} transport={{...initialPatternTransportState, status: {
+    engaged: true, playing: true, recording: false, phase: "idle",
+    runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+    observedAtMilliseconds: performance.now(), commandId: null, publicationPending: false,
+    error: null, currentPatternId: project.patternId,
+    pendingSwitch: {patternId: next, activationFrame: 96_000},
+  }}} />);
+  expect(screen.getByTestId("perform-playing").textContent).toBe("SLOT 01");
+  expect(screen.getByTestId("perform-queued").textContent).toBe("SLOT 02");
+  expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 02 · BEAT 01 / 04");
+});
+
+test("Pattern columns keep their domain while a Performance launch is also pending", () => {
+  const next = "33333333-3333-4333-8333-333333333333";
+  const performanceState: PerformState = {
+    ...initialPerformState({state: "unconfigured", config: null, error: null}),
+    lastLaunchAck: {requestId: "previous", patternSlot: 3, effectiveTick: 1920},
+    pendingLaunch: {requestId: "performance-next", patternSlot: 2, targetTick: 3840, claimed: false},
+  };
+  render(<PerformOverview state={{...state, project: {...state.project, current: {...project,
+    patterns: [...project.patterns, {patternId: next, bars: 1, events: []}],
+    patternSlots: [project.patternId, next, ...Array<string | null>(14).fill(null)],
+  }}}} controller={{subscribe: () => () => {}, getState: () => performanceState}}
+    transport={{...initialPatternTransportState, status: {
+      engaged: true, playing: true, recording: false, phase: "idle",
+      runtimeGeneration: 1, transportEpoch: 1, originFrame: 0, runtimeFrame: 0,
+      observedAtMilliseconds: performance.now(), commandId: null, publicationPending: false,
+      error: null, currentPatternId: project.patternId,
+      pendingSwitch: {patternId: next, activationFrame: 96_000},
+    }}} />);
+  expect(screen.getByText("PATTERN PLAYING").parentElement?.textContent).toBe("PATTERN PLAYINGSLOT 01");
+  expect(screen.getByText("PATTERN QUEUED").parentElement?.textContent).toBe("PATTERN QUEUEDSLOT 02");
+  expect(screen.getByText("PATTERN POSITION").parentElement?.textContent)
+    .toBe("PATTERN POSITIONBAR 01 / 02 · BEAT 01 / 04");
+  expect(screen.getByLabelText("Pattern launch cue").textContent)
+    .toBe("ACKNOWLEDGED SLOT 04 → QUEUED SLOT 03");
 });
 
 // #1958: without a Performance launch pending, the playing transport's queued

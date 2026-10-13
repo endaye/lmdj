@@ -2796,8 +2796,9 @@ test("keeps pad identity and mounts Project Sample Sequence in the hardware touc
   // frames, as on Sequence), real Bank/Quantize facts, never the pictured
   // output meters or a control of any kind.
   expect(screen.getByTestId("perform-counter").textContent).toBe("BAR 01 / 01 · BEAT 01 / 04");
-  expect(screen.getByTestId("perform-overview").textContent ?? "")
-    .toMatch(/Bank.*A.*Quantize/s);
+  const performOverview = within(screen.getByTestId("perform-overview"));
+  expect(performOverview.getByLabelText("Bank").textContent).toBe("A");
+  expect(performOverview.getByLabelText("Quantize").textContent).toBe("ON");
   expect(screen.getByTestId("perform-overview").textContent ?? "")
     .not.toMatch(/PEAK|NO CLIP/);
   expect(within(screen.getByRole("region", {name: "Overview display"}))
