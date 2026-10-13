@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -13,6 +14,8 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+#include <string_view>
 #include <string>
 #include <thread>
 #include <vector>
@@ -77,57 +80,84 @@ struct HostAccounting {
 struct HostAccountingSample {
   int cpu = -1;
   HostAccounting per_cpu;
+  bool valid = false;
 };
 
-[[maybe_unused]] HostAccounting parse_stat_counters(
-    const std::string& line, std::size_t skip) {
-  HostAccounting counters;
-  unsigned long long user = 0;
-  unsigned long long nice = 0;
-  unsigned long long system = 0;
-  unsigned long long idle = 0;
-  unsigned long long iowait = 0;
-  unsigned long long irq = 0;
-  unsigned long long softirq = 0;
-  unsigned long long steal = 0;
-  if (std::sscanf(line.c_str() + skip, "%llu %llu %llu %llu %llu %llu %llu %llu",
-                  &user, &nice, &system, &idle, &iowait, &irq, &softirq,
-                  &steal) == 8) {
-    counters.irq_ticks = irq;
-    counters.softirq_ticks = softirq;
-    counters.steal_ticks = steal;
+bool parse_stat_counters(
+    std::string_view line, std::size_t skip, HostAccounting& counters) {
+  if (skip > line.size()) {
+    return false;
   }
-  return counters;
+  // /proc/stat has eight required fields and up to two guest fields. Parse
+  // complete unsigned tokens: scanf would accept negative or partial values.
+  std::array<std::uint64_t, 10> fields{};
+  std::size_t count = 0;
+  auto remaining = line.substr(skip);
+  while (true) {
+    const auto first = remaining.find_first_not_of(" \t");
+    if (first == std::string_view::npos) {
+      break;
+    }
+    remaining.remove_prefix(first);
+    if (count == fields.size()) {
+      return false;
+    }
+    const auto end = remaining.find_first_of(" \t");
+    const auto token = remaining.substr(0, end);
+    const auto parsed = std::from_chars(
+        token.data(), token.data() + token.size(), fields[count]);
+    if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size()) {
+      return false;
+    }
+    ++count;
+    remaining.remove_prefix(token.size());
+  }
+  if (count < 8) {
+    return false;
+  }
+  counters = {fields[7], fields[5], fields[6]};
+  return true;
 }
 
-HostAccountingSample host_accounting_sample() {
+HostAccountingSample read_host_accounting(std::istream& stat, int cpu) {
   HostAccountingSample sample;
-#if defined(__linux__)
-  sample.cpu = sched_getcpu();
-  const std::string wanted =
-      sample.cpu >= 0 ? "cpu" + std::to_string(sample.cpu) : std::string();
-  std::ifstream stat("/proc/stat");
+  sample.cpu = cpu;
+  if (cpu < 0) {
+    return sample;
+  }
+  const auto wanted = "cpu" + std::to_string(cpu) + " ";
   std::string line;
   while (std::getline(stat, line)) {
-    // The trailing space in the prefix makes "cpu1 " unable to match the
-    // "cpu10 "/"cpu1x" lines of higher-numbered CPUs.
-    if (!wanted.empty() && line.rfind(wanted + " ", 0) == 0) {
-      sample.per_cpu = parse_stat_counters(line, wanted.size() + 1);
+    // Exact prefix: cpu1 cannot borrow the counters of cpu10 or cpu1x.
+    if (line.rfind(wanted, 0) == 0) {
+      sample.valid = !stat.bad() &&
+                     parse_stat_counters(line, wanted.size(), sample.per_cpu);
       break;
     }
   }
-#endif
   return sample;
+}
+
+HostAccountingSample host_accounting_sample() {
+#if defined(__linux__)
+  const auto cpu = sched_getcpu();
+  std::ifstream stat("/proc/stat");
+  return read_host_accounting(stat, cpu);
+#else
+  return {};
+#endif
 }
 
 HostAccounting host_accounting_delta(
     const HostAccountingSample& before, const HostAccountingSample& after) {
-  // Attribution is per-vCPU or nothing: it is precise only when the render
-  // thread stayed on one vCPU across the ~36 us window. A mid-window
-  // migration (or an unreadable CPU) cannot say which vCPU took the event,
-  // so the overrun is counted, fail-closed — never excused by accounting
-  // activity on a CPU the thread may not have touched.
-  if (before.cpu < 0 || before.cpu != after.cpu) {
+  // Equal endpoint CPUs cannot prove no migration occurred in between.
+  // Preserve the existing per-vCPU predicate, but reject the entire window
+  // on missing evidence or any decreasing counter before unsigned arithmetic.
+  if (before.cpu < 0 || before.cpu != after.cpu ||
+      !before.valid || !after.valid ||
+      after.per_cpu.steal_ticks < before.per_cpu.steal_ticks ||
+      after.per_cpu.irq_ticks < before.per_cpu.irq_ticks ||
+      after.per_cpu.softirq_ticks < before.per_cpu.softirq_ticks) {
     return {};
   }
   HostAccounting delta;
@@ -136,6 +166,175 @@ HostAccounting host_accounting_delta(
   delta.softirq_ticks =
       after.per_cpu.softirq_ticks - before.per_cpu.softirq_ticks;
   return delta;
+}
+
+struct RenderMeasurement {
+  std::chrono::nanoseconds elapsed{};
+  HostAccountingSample host_before;
+  HostAccountingSample host_after;
+
+  bool exceeds(std::chrono::nanoseconds deadline) const {
+    return elapsed > deadline;
+  }
+};
+
+template <typename Render, typename Clock, typename Sample>
+RenderMeasurement measure_render(
+    bool verify_deadline, Render render, Clock clock, Sample sample) {
+  if (!verify_deadline) {
+    render();
+    return {};
+  }
+  const auto host_before = sample();
+  const auto started = clock();
+  render();
+  const auto elapsed = clock() - started;
+  const auto host_after = sample();
+  return {elapsed, host_before, host_after};
+}
+
+RenderMeasurement scripted_render(
+    std::chrono::nanoseconds render_cost,
+    std::chrono::nanoseconds after_sample_cost,
+    HostAccountingSample before = {}, HostAccountingSample after = {}) {
+  std::chrono::nanoseconds cpu{};
+  unsigned samples = 0;
+  return measure_render(
+      true, [&] { cpu += render_cost; }, [&] { return cpu; }, [&] {
+        if (samples++ == 0) {
+          cpu += std::chrono::nanoseconds{3'000'000};
+          return before;
+        }
+        cpu += after_sample_cost;
+        return after;
+      });
+}
+
+void sampler_work_is_outside_render_clock() {
+  // The oracle is a scripted CPU timeline, not agreement between two copies
+  // of the measurement code: only the render advances it by 50,000 ns.
+  const auto before_only = scripted_render(
+      std::chrono::nanoseconds{50'000}, std::chrono::nanoseconds{0});
+  if (before_only.elapsed.count() != 50'000) {
+    std::cerr << "why: before sampler entered render clock; expected 50000 ns, "
+              << "observed " << before_only.elapsed.count()
+              << " ns; remedy: sample host before CPU start.\n";
+  }
+  LMDJ_CHECK(before_only.elapsed.count() == 50'000);
+  const auto both_samplers = scripted_render(
+      std::chrono::nanoseconds{50'000}, std::chrono::nanoseconds{7'000'000});
+  if (both_samplers.elapsed.count() != 50'000) {
+    std::cerr << "why: after sampler entered render clock; expected 50000 ns, "
+              << "observed " << both_samplers.elapsed.count()
+              << " ns; remedy: end CPU clock before sampling host.\n";
+  }
+  LMDJ_CHECK(both_samplers.elapsed.count() == 50'000);
+}
+
+HostAccountingSample scripted_stat(std::string_view text, int cpu = 1) {
+  std::istringstream stat{std::string(text)};
+  return read_host_accounting(stat, cpu);
+}
+
+void render_deadline_and_accounting_are_strict() {
+  constexpr auto deadline = std::chrono::nanoseconds{2'666'666};
+  const auto zero = scripted_stat("cpu1 0 0 0 0 0 0 0 0\n");
+  LMDJ_CHECK(zero.valid);
+  LMDJ_CHECK(zero.per_cpu.total() == 0);
+  const auto nonzero = scripted_stat("cpu1 1 2 3 4 5 6 7 8 9 10\n");
+  LMDJ_CHECK(nonzero.valid);
+  LMDJ_CHECK(nonzero.per_cpu.irq_ticks == 6);
+  LMDJ_CHECK(nonzero.per_cpu.softirq_ticks == 7);
+  LMDJ_CHECK(nonzero.per_cpu.steal_ticks == 8);
+
+  // Slow sampling cannot excuse real render work. Both boundaries and the
+  // production loops use the same measurement and strict greater-than test.
+  const auto overrun = scripted_render(
+      deadline + std::chrono::nanoseconds{1},
+      std::chrono::nanoseconds{7'000'000}, zero, zero);
+  LMDJ_CHECK(overrun.elapsed.count() == 2'666'667);
+  const auto unattributed = overrun.exceeds(deadline) &&
+      host_accounting_delta(overrun.host_before, overrun.host_after).total() == 0;
+  LMDJ_CHECK(static_cast<unsigned>(unattributed) == 1);
+  const auto boundary = scripted_render(
+      deadline, std::chrono::nanoseconds{7'000'000}, zero, zero);
+  LMDJ_CHECK(boundary.elapsed.count() == 2'666'666);
+  LMDJ_CHECK(!boundary.exceeds(deadline));
+
+  const auto check_unattributed = [&](HostAccountingSample before,
+                                     HostAccountingSample after,
+                                     std::string_view fact) {
+    const auto measured = scripted_render(
+        deadline + std::chrono::nanoseconds{1},
+        std::chrono::nanoseconds{7'000'000}, before, after);
+    LMDJ_CHECK(measured.exceeds(deadline));
+    const auto delta = host_accounting_delta(
+        measured.host_before, measured.host_after);
+    lmdj::test::check(delta.steal_ticks == 0 && delta.irq_ticks == 0 &&
+                          delta.softirq_ticks == 0,
+                      std::string("why: ") + std::string(fact) +
+                          " attributed an invalid window; remedy: validate "
+                          "both samples and every counter before subtraction");
+  };
+
+  // An unopened file exercises actual failed stream reading with a known CPU,
+  // not an injected validity flag. A zero after-value must not wrap unsigned.
+  std::ifstream unreadable;
+  const auto failed_read = read_host_accounting(unreadable, 1);
+  LMDJ_CHECK(failed_read.cpu == 1);
+  LMDJ_CHECK(!failed_read.valid);
+  check_unattributed(nonzero, failed_read, "invalid-after false-wrap");
+  check_unattributed(failed_read, nonzero, "invalid-before positive counters");
+
+  const std::array<std::string_view, 7> malformed{
+      "cpu1 0 0 0 0 0 0 0\n", "cpu1 0 0 0 0 0 0 0 x\n",
+      "cpu1 0 0 0 0 0 -1 0 0\n", "cpu1 0 0 0 0 0 0 0 1x\n",
+      "cpu1 0 0 0 0 0 0 0 18446744073709551616\n",
+      "cpu1 0 0 0 0 0 0 0 0 invalid\n",
+      "cpu1 0 0 0 0 0 0 0 0 0 0 0\n"};
+  for (const auto text : malformed) {
+    const auto invalid = scripted_stat(text);
+    LMDJ_CHECK(!invalid.valid);
+    check_unattributed(nonzero, invalid, text);
+    check_unattributed(invalid, nonzero, text);
+  }
+  const auto missing = scripted_stat("cpu10 0 0 0 0 0 6 7 8\n");
+  LMDJ_CHECK(!missing.valid);
+  check_unattributed(nonzero, missing, "missing exact CPU line");
+  const auto exact = scripted_stat(
+      "cpu10 0 0 0 0 0 6 7 8\ncpu1 0 0 0 0 0 0 0 0\n");
+  LMDJ_CHECK(exact.valid);
+  LMDJ_CHECK(exact.per_cpu.total() == 0);
+  check_unattributed(zero, exact, "cpu1/cpu10 distinction");
+  const auto unknown = scripted_stat("cpu1 0 0 0 0 0 6 7 8\n", -1);
+  LMDJ_CHECK(!unknown.valid);
+  check_unattributed(unknown, nonzero, "unknown before CPU");
+  check_unattributed(nonzero, unknown, "unknown after CPU");
+  const auto other_cpu = scripted_stat("cpu2 0 0 0 0 0 9 10 11\n", 2);
+  LMDJ_CHECK(other_cpu.valid);
+  check_unattributed(nonzero, other_cpu, "mismatched CPU");
+
+  // Each accounted field decreases separately while the other fields rise:
+  // rejection must cover the whole window, not just clamp one subtraction.
+  for (const auto text : {"cpu1 0 0 0 0 0 5 9 10\n",
+                          "cpu1 0 0 0 0 0 8 6 10\n",
+                          "cpu1 0 0 0 0 0 8 9 7\n"}) {
+    const auto decreased = scripted_stat(text);
+    LMDJ_CHECK(decreased.valid);
+    check_unattributed(nonzero, decreased, text);
+  }
+  for (const auto text : {"cpu1 0 0 0 0 0 1 0 0\n",
+                          "cpu1 0 0 0 0 0 0 1 0\n",
+                          "cpu1 0 0 0 0 0 0 0 1\n"}) {
+    const auto positive = scripted_stat(text);
+    LMDJ_CHECK(positive.valid);
+    const auto measured = scripted_render(
+        deadline + std::chrono::nanoseconds{1},
+        std::chrono::nanoseconds{7'000'000}, zero, positive);
+    LMDJ_CHECK(measured.exceeds(deadline));
+    LMDJ_CHECK(host_accounting_delta(
+                   measured.host_before, measured.host_after).total() == 1);
+  }
 }
 
 void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
@@ -206,22 +405,16 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
       // instead of counting them. Sanitizer builds retain this concurrent
       // stress path for safety checks but cannot represent production
       // callback timing because every memory access is instrumented.
-      const auto started = kVerifyRealtimeDeadline
-                               ? current_thread_cpu_time()
-                               : std::chrono::nanoseconds::zero();
-      const auto host_before =
-          kVerifyRealtimeDeadline ? host_accounting_sample()
-                                  : HostAccountingSample{};
-      engine.render(left.data(), right.data(), left.size());
-      const auto elapsed = kVerifyRealtimeDeadline
-                               ? current_thread_cpu_time() - started
-                               : std::chrono::nanoseconds::zero();
+      const auto measurement = measure_render(
+          kVerifyRealtimeDeadline,
+          [&] { engine.render(left.data(), right.data(), left.size()); },
+          current_thread_cpu_time, host_accounting_sample);
+      const auto elapsed = measurement.elapsed;
       if (kVerifyRealtimeDeadline) {
-        const auto host_after = host_accounting_sample();
         const auto observed_ns = static_cast<std::uint64_t>(elapsed.count());
-        if (elapsed > kCallbackDeadline) {
+        if (measurement.exceeds(kCallbackDeadline)) {
           const auto attribution =
-              host_accounting_delta(host_before, host_after);
+              host_accounting_delta(measurement.host_before, measurement.host_after);
           if (attribution.total() > 0) {
             callback_overruns_attributed.fetch_add(
                 1, std::memory_order_relaxed);
@@ -453,19 +646,17 @@ void run_full_kernel_voice_pool(bool tone_stages, bool verify_deadline) {
   std::array<float, kFramesPerQuantum> left{};
   std::array<float, kFramesPerQuantum> right{};
   for (std::uint32_t quantum = 0; quantum < kQuanta; ++quantum) {
-    const auto started = verify_deadline ? current_thread_cpu_time()
-                                         : std::chrono::nanoseconds::zero();
-    const auto host_before =
-        verify_deadline ? host_accounting_sample() : HostAccountingSample{};
-    engine.render(left.data(), right.data(), left.size());
+    const auto measurement = measure_render(
+        verify_deadline,
+        [&] { engine.render(left.data(), right.data(), left.size()); },
+        current_thread_cpu_time, host_accounting_sample);
     if (verify_deadline) {
-      const auto elapsed = current_thread_cpu_time() - started;
-      const auto host_after = host_accounting_sample();
+      const auto elapsed = measurement.elapsed;
       const auto observed_ns = static_cast<std::uint64_t>(elapsed.count());
       worst_ns = std::max(worst_ns, observed_ns);
       total_ns += observed_ns;
-      if (elapsed > kCallbackDeadline) {
-        if (host_accounting_delta(host_before, host_after).total() > 0) {
+      if (measurement.exceeds(kCallbackDeadline)) {
+        if (host_accounting_delta(measurement.host_before, measurement.host_after).total() > 0) {
           ++attributed;
         } else {
           ++overruns;
@@ -807,6 +998,8 @@ void filter_ack_epoch_distinguishes_engine_restarts() {
 
 int main() {
   try {
+    sampler_work_is_outside_render_clock();
+    render_deadline_and_accounting_are_strict();
     all_eight_effects_sustain_maximum_gesture_rate_without_underruns();
     full_voice_pool_with_every_kernel_stage_holds_the_deadline();
     full_voice_pool_with_every_tone_stage_holds_the_deadline();
