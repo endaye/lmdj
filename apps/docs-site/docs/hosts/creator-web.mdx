@@ -577,8 +577,11 @@ share the header row. EDIT is the default, and a mode change returns to it.
 - previous/next bar buttons and the `BAR` range button reach every bar in
   1/2/4/8-bar Patterns. The range button opens a direct bar picker. A partial
   native scroll displays both intersected bars; choosing a bar aligns its start.
-- Grid tools (showing the current snap and NOTE/VEL) opens all five snap
-  choices and both editing modes. Done or Escape returns focus to the opener.
+- Grid tools (showing the current snap and NOTE/VEL) opens EDIT MODE first,
+  with NOTE/VEL side by side, then GRID SNAP with 1/4, 1/8, 1/16 above 1/32
+  and Off. The help text distinguishes tapping a note to delete in NOTE from
+  dragging to change velocity in VEL. Done or Escape returns focus to the
+  opener and retains the choices; the modal scrolls when needed.
 - one bar fills the visible lane beside fixed Pad labels. The overview frame
   follows this unobscured lane, excluding the label column. ENC1 and native
   horizontal panning remain available; dragging a scrollbar is unnecessary.
