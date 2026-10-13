@@ -6,7 +6,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 
 import {checkSnapshotProjection, checkRevisionProjection} from '../scripts/check-snapshot-projection.mjs';
-import {projectionManifest} from '../scripts/lib/snapshot-provenance.mjs';
+import {createSquashWitness, projectionManifest} from '../scripts/lib/snapshot-provenance.mjs';
 
 const METADATA = 'apps/architecture-portal/versioned_metadata/version-1.0.31.0.json';
 
@@ -159,6 +159,59 @@ test('a bad introducing projection cannot be washed away by a later repair', asy
   const h = await history(t);
   await h.snapshot('1.0.1.0', true);
   await h.snapshot('1.0.1.0');
+  const result = await h.check();
+  assert.equal(result.checked, 1);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /projection does not match/);
+});
+
+// The #2088 shape: the freeze ran mid-branch, the branch then carried further
+// edits to projected paths, and the squash landed both as one introducing
+// commit. The recorded projection is the retained source commit's, so it can
+// never match the introducing tree; the authorized repair is the squash
+// witness that reconstructs that source from the introducing tree.
+async function witnessedHistory(t, tamperWitness) {
+  const h = await history(t);
+  const version = '1.0.92.0';
+  await h.write('source.txt', 'frozen source');
+  const source = h.commit('freeze source');
+  const raw = execFileSync('git', ['cat-file', 'commit', source], {cwd: h.root, encoding: 'buffer'});
+  const headers = raw.toString('utf8').split('\n\n')[0];
+  const metadata = {
+    product_build: version,
+    revision: source,
+    source_commit: {
+      raw_base64: raw.toString('base64'),
+      committed_at_utc: new Date(Number(/^committer .+ (\d+) [+-]\d{4}$/m.exec(headers)[1]) * 1000).toISOString(),
+      tree: /^tree ([0-9a-f]{40})$/m.exec(headers)[1],
+    },
+    source_projection: await projectionManifest(h.root, source, ['source.txt']),
+  };
+  await h.write('source.txt', 'moved after freeze');
+  await h.write(`apps/architecture-portal/versioned_metadata/version-${version}.json`, JSON.stringify(metadata));
+  const introducing = h.commit('squash: snapshot plus post-freeze edit');
+  const witness = await createSquashWitness({repoRoot: h.root, metadata, introducingRevision: introducing});
+  if (tamperWitness) tamperWitness(witness);
+  await h.write(
+    `apps/architecture-portal/versioned_provenance/version-${version}-squash-witness.json`,
+    `${JSON.stringify(witness, null, 2)}\n`,
+  );
+  h.commit('witness');
+  return h;
+}
+
+test('main interval accepts a divergence authorized by a witness naming the introducing commit', async (t) => {
+  const h = await witnessedHistory(t);
+  const result = await h.check();
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.checked, 1);
+});
+
+test('main interval fails closed when the witness cannot reconstruct the source', async (t) => {
+  const h = await witnessedHistory(t, (witness) => {
+    witness.entries.find((entry) => entry.path === 'source.txt').source_base64 =
+      Buffer.from('forged source').toString('base64');
+  });
   const result = await h.check();
   assert.equal(result.checked, 1);
   assert.equal(result.errors.length, 1);
