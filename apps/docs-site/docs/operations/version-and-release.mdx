@@ -25,7 +25,11 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 
 ## P1 协同分配材料
 
-候选准备工具保留默认的六文件分配行为。可选的 `creator-p1` 是一个固定材料
+候选准备工具保留默认的分配行为：默认材料由 Product 四份身份文件、Cardputer 两份手写身份
+字面量（`products/lmdj/src/cardputer_assembly.cpp` 与 `apps/cardputer-host/CMakeLists.txt`，
+自 `products/lmdj/version.json`、`apps/cardputer-host/module.json` 与 Assembly 摘要再生成）
+与两份 Runtime identity 组成，共八份文件；`python3 tests/build/version_test.py` 属于候选
+Task 的必需命令。可选的 `creator-p1` 是一个固定材料
 范围，需要原始请求之外的独立范围授权；不会按工作树状态或回执中的路径自动
 选择。工具先验证冻结基线的 Assembly 与 Lock，再从同一依赖图派生 P1 的组件
 版本及消费者 pin。Product、组件身份、Runtime identity、Cardputer 身份、严格
