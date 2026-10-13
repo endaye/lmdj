@@ -1,0 +1,211 @@
+/* Interaction UI upper display. Scoped above the old mode selectors so
+   importing this component does not depend on global stylesheet order. */
+.overview-display.interaction-overview[data-mode] {
+  display: grid;
+  grid-template-rows: 22px minmax(0, 1fr) 24px;
+  gap: 15px;
+  min-width: 0;
+  font-family: var(--creator-font-mono);
+}
+.overview-display.interaction-overview[data-mode="sequence"] { gap: 12px; }
+.overview-display.interaction-overview[data-mode] .overview-primary {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: baseline;
+  line-height: 20px;
+}
+.overview-display.interaction-overview[data-mode] .overview-context {
+  min-width: 0;
+  font: 500 14px/20px var(--creator-font-action);
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.overview-display.interaction-overview[data-mode] .overview-transport {
+  display: flex;
+  flex-shrink: 0;
+  align-items: baseline;
+  gap: 12px;
+  color: var(--creator-muted);
+  font: 400 11px/15px var(--creator-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.overview-display.interaction-overview[data-mode] :is(.overview-bpm, .overview-swing) {
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0;
+}
+.overview-display.interaction-overview[data-mode] .overview-body {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.overview-display.interaction-overview[data-mode] .encoder-readbacks {
+  min-width: 0;
+  height: 24px;
+  font: 400 9px/13px var(--creator-font-mono);
+}
+.overview-display.interaction-overview[data-mode] .encoder-readbacks > div {
+  background: var(--creator-base);
+  padding: 5px 6px;
+  align-items: center;
+  gap: 6px;
+}
+.overview-display.interaction-overview[data-mode] .encoder-readbacks dt {
+  text-transform: uppercase;
+  flex-shrink: 1;
+}
+.overview-display.interaction-overview[data-mode] .encoder-readbacks dd {
+  flex-shrink: 0;
+  color: var(--creator-muted);
+}
+.overview-display.interaction-overview[data-mode] .overview-summary-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  min-width: 0;
+}
+.overview-display.interaction-overview[data-mode] .overview-summary-columns dl {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  min-width: 0;
+}
+.overview-display.interaction-overview[data-mode] .overview-summary-columns dt {
+  color: var(--creator-muted);
+  font: 400 9px/13px var(--creator-font-mono);
+  letter-spacing: 0;
+}
+.overview-display.interaction-overview[data-mode] .overview-summary-columns dd {
+  margin: 0;
+  color: var(--creator-muted);
+  font: 400 10px/14px var(--creator-font-mono);
+  overflow-wrap: anywhere;
+}
+.overview-display.interaction-overview[data-mode] .overview-summary-columns .overview-value {
+  color: var(--creator-text);
+  font: 500 18px/25px var(--creator-font-action);
+  margin-bottom: 2px;
+}
+.overview-display.interaction-overview[data-mode] .sample-overview { height: 100%; }
+.overview-display.interaction-overview[data-mode] .sample-overview-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--creator-screen);
+  color: var(--creator-muted);
+  font: 400 11px/15px var(--creator-font-mono);
+}
+.overview-display.interaction-overview[data-mode] .sample-overview-empty strong {
+  font: 500 24px/34px var(--creator-font-action);
+}
+.overview-display.interaction-overview[data-mode] .sample-overview-pad {
+  top: -13px;
+  left: 0;
+  right: auto;
+  color: var(--creator-muted);
+  font: 400 9px/13px var(--creator-font-mono);
+  letter-spacing: 0;
+}
+.overview-display.interaction-overview[data-mode] .sample-overview-waveform { height: 100%; }
+.overview-display.interaction-overview[data-mode] .sample-overview-facts {
+  position: absolute;
+  z-index: 1;
+  bottom: 1px;
+  left: 6px;
+  right: 6px;
+  gap: 16px;
+  width: fit-content;
+  max-width: calc(100% - 12px);
+  background: var(--creator-base);
+  font: 400 9px/13px var(--creator-font-mono);
+  letter-spacing: 0;
+}
+.overview-display.interaction-overview[data-mode] .sample-overview-peak { fill: var(--creator-blue); }
+.overview-display.interaction-overview[data-mode] .sequence-overview { height: 100%; }
+.overview-display.interaction-overview[data-mode] .sequence-overview-rows {
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px;
+}
+.overview-display.interaction-overview[data-mode] .sequence-overview-names {
+  grid-auto-rows: 7px;
+  row-gap: 2.5px;
+  font: 400 7px/7px var(--creator-font-mono);
+  letter-spacing: 0;
+}
+.overview-display.interaction-overview[data-mode] .sequence-overview-steps { height: 74px; }
+.overview-display.interaction-overview[data-mode] .sequence-overview-status {
+  position: absolute;
+  top: -12px;
+  left: 0;
+  right: auto;
+  max-width: 100%;
+  margin: 0;
+  line-height: 12px;
+  background: var(--creator-screen);
+}
+.overview-display.interaction-overview[data-mode] .sequence-overview-queued {
+  position: absolute;
+  right: 0;
+  bottom: -12px;
+  color: var(--creator-blue);
+  font: 400 9px/12px var(--creator-font-mono);
+}
+.overview-display.interaction-overview[data-mode] .perform-overview {
+  position: relative;
+  height: 100%;
+  gap: 0;
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-columns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+  margin: 0;
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-columns dt {
+  color: var(--creator-muted);
+  font: 400 9px/13px var(--creator-font-mono);
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-columns dd {
+  margin: 4px 0 0;
+  color: var(--creator-text);
+  font: 400 18px/25px var(--creator-font-mono);
+  letter-spacing: 0;
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-columns > :first-child dd { color: var(--creator-lime); }
+.overview-display.interaction-overview[data-mode] .perform-overview-columns > :nth-child(2) dd { color: var(--creator-blue); }
+.overview-display.interaction-overview[data-mode] .perform-overview-columns .perform-overview-counter {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  line-height: 12px;
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-counter > span { white-space: nowrap; }
+.overview-display.interaction-overview[data-mode] .perform-overview-launch {
+  position: absolute;
+  left: 0;
+  bottom: 7px;
+  color: var(--creator-muted);
+  font: 400 9px/13px var(--creator-font-mono);
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-progress {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--creator-line);
+}
+.overview-display.interaction-overview[data-mode] .perform-overview-progress span { background: var(--creator-lime); }
+.overview-display.interaction-overview[data-mode] .perform-overview-facts {
+  position: absolute;
+  right: 0;
+  bottom: -14px;
+  gap: 12px;
+  font: 400 9px/13px var(--creator-font-mono);
+  letter-spacing: 0;
+}

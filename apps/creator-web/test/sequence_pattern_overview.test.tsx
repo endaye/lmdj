@@ -185,6 +185,25 @@ test("names the playing Pattern and lists the queued switch target", () => {
     within(screen.getByTestId("sequence-overview"))
       .getByText(name).nextElementSibling?.textContent;
   expect(fact("Queued")).toBe(second.patternId.slice(0, 8));
+  // The overview's notes must name the same playing object as its heading;
+  // selecting the queued, empty Pattern cannot clear the playing overview.
+  expect(overviewNotes().map(note => note.getAttribute("data-row"))).toEqual(["0"]);
+});
+
+test("encoder readbacks do not conceal a queued target or a publication failure", () => {
+  const target = "33333333-3333-4333-8333-333333333333";
+  const state: CreatorState = {...initialCreatorState,
+    project: {...initialCreatorState.project, phase: "ready", current: project}};
+  render(<OverviewDisplay state={state} activeMode="sequence" sequence={initialSequenceState}
+    snap="1/16" viewport={null} selection={[]} encoders={{}}
+    transport={{...playingTransport, errorCode: "HOST_STATE_INVALID",
+      status: {...playingTransport.status!, publicationPending: true,
+        pendingSwitch: {patternId: target, activationFrame: 96_000}}}} />);
+  expect(document.querySelector(".sequence-overview-queued")?.textContent)
+    .toBe("QUEUED 33333333");
+  expect(document.querySelector(".sequence-overview-status")?.textContent)
+    .toBe("That can't be done right now.");
+  expect(document.querySelectorAll(".sequence-overview-names li")).toHaveLength(8);
 });
 
 test("a playhead frame that outlives its effect never reschedules", () => {
