@@ -53,12 +53,12 @@
   --creator-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* Pad colour palette in the Contract's stable index order (#1207). */
-[data-pad-colour="0"] { --pad-colour: #f3b580; }
-[data-pad-colour="1"] { --pad-colour: #dff779; }
-[data-pad-colour="2"] { --pad-colour: #b49de8; }
-[data-pad-colour="3"] { --pad-colour: #94d2dc; }
-[data-pad-colour="4"] { --pad-colour: #e6ed98; }
+/* Interaction UI palette (2026-10-13), preserving the Contract's stable indices. */
+[data-pad-colour="0"] { --pad-colour: #f2b584; }
+[data-pad-colour="1"] { --pad-colour: #ddf478; }
+[data-pad-colour="2"] { --pad-colour: #b6a0ec; }
+[data-pad-colour="3"] { --pad-colour: #95d4df; }
+[data-pad-colour="4"] { --pad-colour: #e5adc4; }
 [data-pad-colour="neutral"] { --pad-colour: var(--creator-muted); }
 
 
@@ -1079,8 +1079,8 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   width: 80px;
   height: 80px;
   min-height: 80px;
-  padding: 6px 8px;
-  border-radius: 7px;
+  padding: 8px;
+  border-radius: 6px;
   background: var(--creator-base);
   border: .5px solid var(--creator-line);
   color: var(--creator-text);
@@ -1089,17 +1089,19 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 .hardware-console .pad strong {
   position: absolute;
-  top: 6px;
+  top: 8px;
   left: 8px;
-  font-size: 9px;
+  font-size: 11px;
+  line-height: 15px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 .hardware-console .pad kbd {
   position: absolute;
-  top: 6px;
+  top: 8px;
   right: 8px;
   font-size: 9px;
+  line-height: 13px;
   background: none;
   border: 0;
   color: var(--creator-muted);
@@ -1108,26 +1110,29 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .hardware-console .pad span {
   position: absolute;
   left: 8px;
-  bottom: 6px;
-  font-size: 8px;
-  letter-spacing: .04em;
+  right: 8px;
+  bottom: 8px;
+  font-size: 9px;
+  line-height: 13px;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
   text-transform: uppercase;
   color: var(--creator-muted);
 }
-.hardware-console .pad[data-assigned="true"] span { color: var(--creator-text); }
+.hardware-console .pad.is-selected span { padding-right: 9px; }
 /* One effective Pad colour (#1207) on the matrix, the Sequence overview rows
    and the touch grid notes. Core resolves the palette index; neutral is the
    D02 EMPTY grey outline. */
 .hardware-console .pad:not([data-pad-colour="neutral"]) { box-shadow: inset 0 0 0 1px var(--pad-colour); }
-/* Selection is white plus a lime dot, never a colour alone: BASS #DFF779 is
-   too close to the selection lime #DDF478 (2026-10-07 decision, item 6). */
+/* Selection remains white plus a lime dot: BASS now shares #DDF478 with
+   the global lime, so the category colour cannot identify selection. */
 .hardware-console .pad.is-selected { border-color: #fff; box-shadow: inset 0 0 0 1px #fff; }
 .hardware-console .pad-selected-dot {
   position: absolute;
   right: 8px;
-  bottom: 8px;
-  width: 7px;
-  height: 7px;
+  bottom: 16px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--creator-lime);
 }
@@ -2210,11 +2215,11 @@ html[data-creator-layout="compact"] {
 .hardware-workspace :is(.sequence-param-card output, .perform-fader-value) {
   font-size: var(--creator-value-size);
 }
-.hardware-workspace .pad-colour-swatch {
+.hardware-workspace .sample-surface .pad-colour-swatch {
   color: var(--pad-colour);
   background-color: var(--creator-base);
 }
-.hardware-workspace .pad-colour-swatch[aria-pressed="true"] {
+.hardware-workspace .sample-surface .pad-colour-swatch[aria-pressed="true"] {
   color: var(--creator-base);
   background-color: var(--pad-colour);
 }

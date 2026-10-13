@@ -5,8 +5,8 @@ import type {
   ProjectView,
 } from "../runtime/runtime_types";
 
-// The five Pad colours of the 2026-10-07 decision, in the Contract's stable
-// palette index order (lmdj.project.v5 5.3.0). The hex values live once, in
+// The five Pad categories retain the Contract's stable palette index order
+// (lmdj.project.v5 5.3.0). The 2026-10-13 display hex values live once, in
 // styles.css, keyed by `data-pad-colour`; this table names them.
 export const PAD_PALETTE: readonly Readonly<{
   index: PadColour;
