@@ -14,6 +14,50 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <DiagramFrame title="Audio Runtime Module" diagramId="audio-runtime" />
 
+## 连续 tempo transition
+
+`PreparedPatternView::with_tempo(bpm)` 从不可变 prepared source 派生 40..240 BPM
+view，保留 Project/Pattern/revision、canonical events、overlay 与共享 PCM owner，
+只重算 frame bounds。`publish_pattern_tempo_transition(view, expected_generation)`
+是独立于同 BPM phase edit 的 Runtime primitive：要求精确 current generation 与相同
+source/event/material identity，拒绝 pending Q/A publication 和保留中的 transport
+command/receipt，复用原子 publication admission 与 cutoff。
+
+音频 owner 在实际应用帧 F 保留分数 tick numerator，使用 48 kHz、PPQ 960、固定
+denominator 2,880,000 的 `TransportAnchor` 调度后续 onset 和 loop。当前音乐位置
+不重启，持音保留 PCM cursor、envelope 与 owner；gated note-off 跟随同一音乐
+anchor，one-shot 和已经开始释放的 tail 保留音频生命周期。callback 不分配、回收
+owner 或加锁，无法表示的 note-off 拒绝该 Voice，而非制造无限 hold。
+
+串行 control lane 的 `pattern_tempo_observation(expected_generation)` 返回实际
+audio-applied generation、start epoch、applied frame、exact anchor 与 playing；
+它不把请求时预测的 activation frame 当作已应用证明。`PatternTransportReceipt`
+保留 cutoff 时的 optional `tempo_anchor`，无法表示音乐位置时为 unavailable，
+不制造零位置；后续 recording 消费者必须拒绝缺失的精确锚点。旧 `origin_frame` 是物理 start/restart frame，
+连续变速后不能替代分数音乐锚点。`anchored_tick_boundary_frame` 以 checked integer
+ceiling 投影 tick，overflow/invalid 为 unavailable。同 BPM phase edit 的 changed-BPM
+拒绝契约仍保留；对已连续变速的 view 做同 BPM authoring adoption 不恢复整数 origin。
+
+选定的 Beat/Bar/End switch 在连续 clock 上取下一个严格晚于保留 frontier 的
+音乐 tick 边界，并向上取整到实际 frame。已由 audio claim 的普通前驱 Pattern
+仍使用自己的 activation 与 geometry，不能拼接旧 Pattern 的 anchor；普通替换
+从 tick zero 开始。未进入连续模式的 rounded-loop 行为保持不变。
+相同 Project/Pattern/BPM/PPQ/loop 的已 claim phase edit 保留同一连续音乐
+clock；普通 replacement 的 clock 不能借用它。新 tempo transition 前驱若仅
+被 claim、尚未真正 apply（包括 `render(0)`），selected switch 返回既有
+`publication_pending`，不消耗 generation、不覆盖已接受 Q/A。实际 apply 后
+原调用者可基于 coherent anchor 重试。
+
+当前 Web adapter 把所有非 accepted publication 映射为 unavailable error，
+没有自动 pending retry。I2b 必须先 clear/cancel preview 并确认实际应用 barrier，
+再发 Pattern switch，且显式处理仍可达的 native pending；此 consumer proof
+仍为 UNRUN，本 Task 不修改 Facade、Contract 或 adapter。
+
+这是 Runtime 能力。Facade/Web preview 生命周期、Creator 400 ms 保存与取消、
+metronome 同锚点消费仍需后续接线；该 primitive 本身不写 Project Truth，也不代表
+Creator 可听 preview 已验收。新增公开对象布局属于 C++ ABI MAJOR debt，身份由
+active manifests 的 Build Identity 投影，后续版本结算不手写推测版本号。
+
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态

@@ -311,6 +311,21 @@ foundation::Result<std::uint64_t> raw_tick_at(
       whole_tick(numerator.value()));
 }
 
+std::optional<std::uint64_t> anchored_tick_boundary_frame(
+    const TransportAnchor& anchor, std::uint64_t tick) noexcept {
+  if (!valid_bpm(anchor.bpm) ||
+      tick > std::numeric_limits<std::uint64_t>::max() / kTickDenominator)
+    return std::nullopt;
+  const auto target = tick * kTickDenominator;
+  if (target <= anchor.tick_numerator) return anchor.runtime_frame;
+  const auto remaining = target - anchor.tick_numerator;
+  const auto rate = static_cast<std::uint64_t>(anchor.bpm) * kTransportPpq;
+  const auto frames = remaining / rate + (remaining % rate != 0 ? 1U : 0U);
+  if (frames > std::numeric_limits<std::uint64_t>::max() - anchor.runtime_frame)
+    return std::nullopt;
+  return anchor.runtime_frame + frames;
+}
+
 foundation::Result<TransportAnchor> freeze_transport_bpm(
     const TransportAnchor& anchor,
     std::uint64_t runtime_frame,
@@ -380,6 +395,33 @@ PreparedPatternView::from_snapshot_with_overlay(
     const cooker::RuntimeSnapshot& snapshot,
     std::span<const domain::PatternEvent> journal_overlay) {
   return prepare(snapshot, journal_overlay);
+}
+
+foundation::Result<PreparedPatternView> PreparedPatternView::with_tempo(
+    std::uint16_t bpm) const {
+  if (!valid_bpm(bpm))
+    return foundation::Result<PreparedPatternView>::failure(
+        invalid_timing("Pattern tempo must be from 40 through 240 BPM"));
+  auto loop = tick_boundary_frame(loop_length_ticks_, bpm, ppq_);
+  auto bar = tick_boundary_frame(domain::kBarTicks4x4, bpm, ppq_);
+  if (!loop.has_value() || !bar.has_value())
+    return foundation::Result<PreparedPatternView>::failure(
+        invalid_timing("Pattern tempo frame bounds overflowed"));
+  auto events = events_;
+  for (auto& event : events) {
+    const auto start = tick_boundary_frame(event.onset_tick, bpm, ppq_);
+    const auto release = tick_boundary_frame(
+        static_cast<std::uint64_t>(event.onset_tick) + event.duration_tick,
+        bpm, ppq_);
+    if (!start.has_value() || !release.has_value())
+      return foundation::Result<PreparedPatternView>::failure(
+          invalid_timing("Pattern tempo event bounds overflowed"));
+    event.start_frame = start.value();
+    event.release_frame = release.value();
+  }
+  return foundation::Result<PreparedPatternView>::success(PreparedPatternView{
+      project_id_, pattern_id_, project_revision_, bpm, ppq_, loop_length_ticks_,
+      loop.value(), bar.value(), std::move(events), material_owners_, has_overlay_});
 }
 
 const foundation::ProjectId& PreparedPatternView::project_id() const noexcept {

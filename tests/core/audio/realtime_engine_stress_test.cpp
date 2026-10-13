@@ -145,6 +145,119 @@ void pattern_transport_receipts_race_publication_and_reclaim() {
       PatternTransportSubmit::stale_generation);
 }
 
+void tempo_transitions_race_render_reclaim_and_retained_record_fences() {
+  using namespace lmdj;
+  using namespace lmdj::audio;
+  const foundation::ProjectId project{"00000000-0000-4000-8000-000000000001"};
+  const foundation::PatternId pattern{"00000000-0000-4000-8000-000000000002"};
+  auto pcm = std::make_shared<const cooker::PcmSample>(
+      cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 12'000)});
+  cooker::RuntimeSnapshot snapshot{project, pattern, 1, 120, 1,
+      domain::kPpq, domain::kBarTicks4x4,
+      {{{0, 0}, {std::string(64, 'a'), "audio/wav", 256}, pcm,
+        {0, 128, domain::TriggerMode::one_shot, 1.0F, false}}}, {}};
+  for (std::uint32_t tick = 0; tick < 3840; tick += 960)
+    snapshot.events.push_back({{0, 0}, tick, 1, 127, pcm});
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(source.has_value());
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.enable_pattern_transport(29).has_value());
+  auto initial = source.value().with_tempo(120);
+  auto publication = engine.publish_pattern_view(std::move(initial.value()));
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  std::atomic<bool> done{};
+  std::thread callback([&] {
+    std::array<float, 64> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      callback_active = true;
+      engine.render(left.data(), right.data(), left.size());
+      callback_active = false;
+      for (std::size_t i = 0; i < left.size(); ++i)
+        LMDJ_CHECK(std::isfinite(left[i]) && std::isfinite(right[i]));
+      std::this_thread::yield();
+    }
+  });
+  std::uint64_t epoch = 1;
+  std::uint64_t current = publication.generation;
+  LMDJ_CHECK(engine.submit_pattern_transport(
+      {29, epoch, current, PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+  std::optional<PatternTransportReceipt> start;
+  while (!(start = engine.inspect_pattern_transport_receipt(29, epoch)))
+    std::this_thread::yield();
+  LMDJ_CHECK(start->tempo_anchor == (TransportAnchor{start->effective_frame, 0, 120}));
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(29, epoch));
+  auto previous = *start->tempo_anchor;
+  const auto physical_origin = start->origin_frame;
+  for (unsigned cycle = 0; cycle < 300; ++cycle) {
+    const auto bpm = std::uint16_t(cycle % 2 ? 60 : 240);
+    do {
+      engine.reclaim_retired_patterns();
+      auto derived = source.value().with_tempo(bpm);
+      LMDJ_CHECK(derived.has_value());
+      publication = engine.publish_pattern_tempo_transition(std::move(derived.value()), current);
+      if (publication.result == PatternPublishResult::pattern_slots_full)
+        std::this_thread::yield();
+    } while (publication.result == PatternPublishResult::pattern_slots_full);
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    std::optional<PatternTempoObservation> applied;
+    while (!(applied = engine.pattern_tempo_observation(publication.generation))) {
+      engine.reclaim_retired_patterns();
+      std::this_thread::yield();
+    }
+    LMDJ_CHECK(applied->start_epoch == 1 && applied->playing);
+    LMDJ_CHECK(applied->applied_frame >= publication.activation_frame);
+    // Closed-form numerator, independent of the freeze/boundary helpers. The
+    // renderer may advance any number of frames; the real receipt bounds it.
+    const auto expected_numerator = previous.tick_numerator +
+        (applied->applied_frame - previous.runtime_frame) * previous.bpm * 960U;
+    LMDJ_CHECK(applied->anchor.runtime_frame == applied->applied_frame);
+    LMDJ_CHECK(applied->anchor.tick_numerator == expected_numerator);
+    LMDJ_CHECK(applied->anchor.bpm == bpm);
+    current = publication.generation;
+    previous = applied->anchor;
+    // Applied clock visibility precedes the pending-token release inside
+    // apply. Wait for the existing completed apply observation before fencing.
+    while (engine.pattern_telemetry().current_generation != current)
+      std::this_thread::yield();
+    LMDJ_CHECK(engine.submit_pattern_transport(
+        {29, ++epoch, current, PatternTransportAction::fence, {}}) == PatternTransportSubmit::accepted);
+    auto refused = source.value().with_tempo(120);
+    LMDJ_CHECK(engine.publish_pattern_tempo_transition(std::move(refused.value()), current).result ==
+        PatternPublishResult::publication_pending);
+    std::optional<PatternTransportReceipt> receipt;
+    while (!(receipt = engine.inspect_pattern_transport_receipt(29, epoch))) {
+      engine.reclaim_retired_patterns(); // Reservation must safely defer reclaim.
+      std::this_thread::yield();
+    }
+    LMDJ_CHECK(receipt->origin_frame == physical_origin && receipt->playing);
+    LMDJ_CHECK(receipt->bpm == bpm && receipt->pattern_generation == current);
+    LMDJ_CHECK(receipt->tempo_anchor.has_value());
+    LMDJ_CHECK(receipt->tempo_anchor->runtime_frame == receipt->effective_frame);
+    LMDJ_CHECK(receipt->tempo_anchor->tick_numerator == previous.tick_numerator +
+        (receipt->effective_frame - previous.runtime_frame) * bpm * 960U);
+    const auto retained = engine.inspect_pattern_transport_receipt(29, epoch);
+    LMDJ_CHECK(retained->tempo_anchor == receipt->tempo_anchor);
+    LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(29, epoch));
+  }
+  LMDJ_CHECK(engine.submit_pattern_transport(
+      {29, ++epoch, current, PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  std::optional<PatternTransportReceipt> stopped;
+  while (!(stopped = engine.inspect_pattern_transport_receipt(29, epoch)))
+    std::this_thread::yield();
+  LMDJ_CHECK(!stopped->playing && stopped->pattern_generation == current);
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(29, epoch));
+  while (engine.telemetry().active_voices != 0) std::this_thread::yield();
+  done.store(true, std::memory_order_release);
+  callback.join();
+  engine.reclaim_retired_patterns();
+  const auto accounting = engine.pattern_telemetry();
+  LMDJ_CHECK(accounting.accepted_publications == 301);
+  LMDJ_CHECK(accounting.applied_publications == 301);
+  LMDJ_CHECK(accounting.pending_publications == 0 && accounting.canceled_publications == 0);
+  engine.stop();
+}
+
 void phase_publication_races_render_reclaim_and_stop() {
   using namespace lmdj;
   using namespace lmdj::audio;
@@ -833,6 +946,7 @@ void operator delete(void* p, std::size_t, std::align_val_t) noexcept { release_
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { release_allocation(p); }
 
 int main() {
+  tempo_transitions_race_render_reclaim_and_retained_record_fences();
   phase_publication_races_render_reclaim_and_stop();
   pattern_transport_receipts_race_publication_and_reclaim();
   pcm_audition_replacement_keeps_both_owners_until_audio_release();

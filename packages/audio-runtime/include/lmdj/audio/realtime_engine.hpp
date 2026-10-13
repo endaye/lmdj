@@ -154,6 +154,18 @@ struct PatternTransportReceipt {
   std::optional<PatternReplacementAuthority> switch_authority;
   std::optional<std::uint64_t> switch_applied_frame;
   std::array<std::optional<PatternTransportSwitchOutcome>, 2> switch_outcomes{};
+  // Exact position at effective_frame. origin_frame remains the physical
+  // start/restart frame and cannot encode fractional continuous tempo changes.
+  // Unrepresentable musical position leaves this appended field unavailable.
+  std::optional<TransportAnchor> tempo_anchor{};
+};
+
+struct PatternTempoObservation {
+  std::uint64_t start_epoch{};
+  std::uint64_t pattern_generation{};
+  std::uint64_t applied_frame{};
+  TransportAnchor anchor{};
+  bool playing{};
 };
 
 struct PatternTelemetry {
@@ -557,10 +569,12 @@ class RealtimeEngine final {
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
   // Opt-in 1-BAR launch. Retained as a forwarding overload for existing callers.
-  // An audio-owned predecessor keeps its boundary; its successor uses that
-  // Pattern's geometry and activation as the new origin. Timing is computed
-  // inside publication admission and the returned frame is authoritative.
-  // Recomputes timing after a claim race; the returned frame is authoritative.
+  // Continuous timing uses its exact musical anchor. Ordinary audio-owned
+  // predecessors supply their own tick-zero activation/geometry; same-BPM
+  // phase edits retain the clock. A claimed tempo transition without an applied
+  // anchor returns publication_pending without consuming this publication.
+  // Timing is computed inside admission and recomputed after a claim race;
+  // the accepted returned frame is authoritative.
   PatternPublication publish_pattern_switch_view(
       PreparedPatternView&& pattern,
       std::optional<PatternReplacementAuthority> replacement_authority =
@@ -587,6 +601,15 @@ class RealtimeEngine final {
   // Explicit Pattern-stopped remains stopped; legacy scheduling stays enabled.
   PatternPublication publish_pattern_view_preserving_phase(
       PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
+  // Tempo-only derivation of the exact current immutable source. Uses the
+  // same publication admission/cutoff as phase edits, keeps voices and exact
+  // musical position, and refuses pending Q/A or a reserved transport receipt.
+  PatternPublication publish_pattern_tempo_transition(
+      PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
+  // Serialized control lane. Audio-applied timing, not the admission's
+  // predicted activation frame; generation mismatch is unavailable.
+  std::optional<PatternTempoObservation> pattern_tempo_observation(
+      std::uint64_t expected_generation) const noexcept;
   // Control thread, concurrent with render. Cancels the exact pending
   // publication until the render apply point claims it. False means the
   // authority was stale or the apply point already won.
@@ -712,6 +735,7 @@ class RealtimeEngine final {
     switch_bar,
     immediate,
     preserve_phase,
+    tempo_transition,
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
   static_assert(std::atomic<PatternState>::is_always_lock_free);
@@ -753,6 +777,7 @@ class RealtimeEngine final {
     std::uint64_t activation_frame = 0;
     std::size_t active_voices = 0;
     bool preserve_phase = false;
+    bool tempo_transition = false;
     bool switch_bar = false;
   };
 
@@ -785,6 +810,7 @@ class RealtimeEngine final {
     std::uint64_t predecessor_applied_frame{};
     PatternCutoffDecision predecessor_decision{};
     bool legacy_is_predecessor{};
+    std::optional<TransportAnchor> tempo_anchor{};
   };
   static_assert(std::is_trivially_copyable_v<PatternTransportCommandCell>);
   static_assert(std::is_trivially_copyable_v<PatternTransportReceiptCell>);
@@ -863,6 +889,7 @@ class RealtimeEngine final {
     static constexpr float release_scale = attack_scale;
 #endif
     std::uint64_t scheduled_release_frame = 0;
+    std::uint64_t pattern_release_tick = 0;
     bool pattern_voice = false;
     PadControlOrigin origin = PadControlOrigin::host_input;
     std::uint8_t pattern_slot = kNoPatternSlot;
@@ -944,7 +971,11 @@ class RealtimeEngine final {
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,
-      std::uint64_t loop_origin_frame) noexcept;
+      std::uint64_t loop_origin_frame,
+      std::uint64_t loop_tick = 0) noexcept;
+  std::optional<std::uint64_t> pattern_position_numerator(
+      std::uint64_t frame) const noexcept;
+  void seek_continuous_pattern_events(std::uint64_t first_tick) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
   detail::RuntimeSpscStorage<PadControlEvent> queue_{kRealtimeQueueCapacity};
@@ -993,6 +1024,11 @@ class RealtimeEngine final {
   std::uint64_t next_pattern_generation_ = 1;
   std::uint64_t pattern_origin_frame_ = 0;
   std::size_t pattern_event_index_ = 0;
+  TransportAnchor pattern_tempo_anchor_{};
+  std::uint64_t pattern_event_loop_ = 0;
+  std::uint64_t pattern_tempo_applied_frame_ = 0;
+  bool pattern_continuous_timing_ = false;
+  bool pattern_position_available_ = true;
   std::atomic<RealtimeState> state_{RealtimeState::stopped};
   std::uint64_t start_epoch_ = 0;
   std::uint64_t enqueued_events_ = 0;
@@ -1143,6 +1179,9 @@ class RealtimeEngine final {
     std::uint64_t rendered_frames = 0;
     std::uint64_t pattern_origin_frame = 0;
     std::uint64_t current_pattern_generation = 0;
+    PatternTempoObservation tempo{};
+    bool continuous_timing = false;
+    bool tempo_available = false;
   };
   // Writer-private authority is separate from the recycled output slots.
   PatternObservation observed_audio_pending_{};
