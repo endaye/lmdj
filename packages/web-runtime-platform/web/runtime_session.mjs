@@ -1601,6 +1601,94 @@ function createRuntimeSessionController(options = {}) {
   let patternInputProfile = null;
   let patternInputCapacity = null;
   const patternInputPressReservations = new Set();
+  // One place per real physical gesture across both input contracts. Opaque
+  // keys never cross the wire; each original domain still owns its receipts.
+  const sharedGestures = new Set();
+  const physicalGestureOwners = new Map();
+  const leasedPhysicalKeys = new WeakSet();
+  const retiredLeasedPhysicalKeys = new WeakSet();
+
+  function newSharedGesture(gestureKey) {
+    if (sharedGestures.size >= 64) return null;
+    const owner = {gestureKey, slot: null, source: null, startedAt: monotonicNow(), releaseStartedAt: null,
+      physicalEnded: gestureKey === undefined, preparation: false, preparationCancelled: false,
+      handedOff: false, claims: new Set()};
+    sharedGestures.add(owner);
+    if (gestureKey !== undefined) physicalGestureOwners.set(gestureKey, owner);
+    return owner;
+  }
+  function retireSharedGesture(owner) {
+    if (owner.preparation || owner.claims.size !== 0 ||
+        (owner.handedOff && !owner.physicalEnded)) return;
+    sharedGestures.delete(owner);
+    if (owner.gestureKey !== undefined && leasedPhysicalKeys.has(owner.gestureKey))
+      retiredLeasedPhysicalKeys.add(owner.gestureKey);
+    // An old lease cannot remove a later owner using the same local object.
+    if (physicalGestureOwners.get(owner.gestureKey) === owner)
+      physicalGestureOwners.delete(owner.gestureKey);
+  }
+  function claimSharedGesture(gestureKey, domain, slot, source) {
+    if (gestureKey !== undefined && retiredLeasedPhysicalKeys.has(gestureKey)) return null;
+    const owner = gestureKey === undefined ? newSharedGesture(undefined)
+      : physicalGestureOwners.get(gestureKey) ?? newSharedGesture(gestureKey);
+    if (owner === null || (domain === "pattern" && owner.preparationCancelled) ||
+        (owner.slot !== null && slot !== undefined && owner.slot !== slot) ||
+        (domain === "pattern" && owner.source !== null && source !== undefined && owner.source !== source) ||
+        [...owner.claims].some(claim => claim.domain === domain)) return null;
+    owner.slot ??= slot ?? null;
+    owner.source ??= source ?? null;
+    const claim = {owner, domain, submitted: false};
+    owner.claims.add(claim);
+    if (domain === "pattern") owner.preparation = false;
+    return claim;
+  }
+  function submitSharedGesture(claim) {
+    if (claim === null || claim === undefined) return;
+    claim.submitted = true;
+    claim.owner.handedOff = true;
+  }
+  function settleSharedGesture(claim) {
+    if (claim === null || claim === undefined) return;
+    claim.owner.claims.delete(claim);
+    retireSharedGesture(claim.owner);
+  }
+  function endPhysicalGesture(gestureKey) {
+    const owner = physicalGestureOwners.get(gestureKey);
+    if (owner === undefined) return;
+    owner.physicalEnded = true;
+    owner.releaseStartedAt ??= monotonicNow();
+    retireSharedGesture(owner);
+  }
+  function reserveInputGesture(gestureKey, slot, source = "pointer") {
+    validateGestureKey(gestureKey);
+    if (gestureKey === undefined) throw new TypeError("A physical gesture key is required");
+    flatSlotAddress(slot);
+    if (!TRIGGER_SOURCES.has(source)) throw new TypeError("Runtime gesture source is invalid");
+    if (closing || machine.state === "closed" || physicalGestureOwners.has(gestureKey) ||
+        leasedPhysicalKeys.has(gestureKey)) return null;
+    const owner = newSharedGesture(gestureKey);
+    if (owner === null) return null;
+    owner.preparation = true;
+    owner.slot = slot;
+    owner.source = source;
+    leasedPhysicalKeys.add(gestureKey);
+    return Object.freeze({
+      cancelUnsubmittedPattern() {
+        // Only preparation is ours to cancel. Transferred or unknown domain
+        // claims have their own positive retirement boundaries.
+        if (owner.preparation) {
+          owner.preparation = false;
+          owner.preparationCancelled = true;
+          retireSharedGesture(owner);
+        }
+      },
+      releasePhysical() {
+        owner.physicalEnded = true;
+        owner.releaseStartedAt ??= monotonicNow();
+        retireSharedGesture(owner);
+      },
+    });
+  }
   const patternInputPendingTickets = new Map();
   const patternInputReleaseReservations = new Map();
   const profileReleaseObservers = new WeakMap();
@@ -2129,7 +2217,21 @@ function createRuntimeSessionController(options = {}) {
       const legacyNormalClose = normalClose !== null && normalClose.failure === null &&
         fatalReservation === null && transport.terminated !== true &&
         fullOwnerReceipt === undefined && patternInputProfile === null;
-      terminalCleanupEligible = !hasRetainedPatternOwners() &&
+      // The full Host receipt proves its Native/Pattern owners and actual
+      // backend closure above. It is not a Performance journal stop receipt.
+      // Retain that domain's unresolved claim until its genuine Release/Stop.
+      for (const owner of sharedGestures) {
+        owner.preparation = false;
+        owner.preparationCancelled = true;
+        for (const claim of owner.claims) {
+          if (!claim.submitted ||
+              ((fullOwnerReceipt === true || legacyNormalClose) && claim.domain === "pattern"))
+            owner.claims.delete(claim);
+        }
+        if (fullOwnerReceipt === true || legacyNormalClose) owner.physicalEnded = true;
+        retireSharedGesture(owner);
+      }
+      terminalCleanupEligible = sharedGestures.size === 0 && !hasRetainedPatternOwners() &&
         (audioContext === null || audioContext.state === "closed") &&
         (fullOwnerReceipt === true || neverLoaded || legacyNormalClose);
     })().then(resolveCleanup, rejectCleanup);
@@ -2228,13 +2330,14 @@ function createRuntimeSessionController(options = {}) {
     if (requestOptions.cancelQuery === true) {
       transportOptions.cancelQuery = true;
     }
-    if (operation === "pattern.transport.input.request" && requestOptions.originalStartedAt !== undefined) {
+    if (["pattern.transport.input.request", "trigger", "performance.record.event"].includes(operation) &&
+        requestOptions.originalStartedAt !== undefined) {
       // Both SDK tails spend the same Pad budget. Compute it at the actual
       // transport handoff, not before waiting behind an independent query.
-      transportOptions.deadlineMs = (requestOptions.originalBudgetMs ?? deadlineForOperation("trigger")) -
+      transportOptions.deadlineMs = (requestOptions.originalBudgetMs ?? deadlineForOperation(operation)) -
         (monotonicNow() - requestOptions.originalStartedAt);
       if (transportOptions.deadlineMs <= 0)
-        throw typedError("HOST_TIMEOUT", "Original Pattern input deadline expired", {pending: false});
+        throw typedError("HOST_TIMEOUT", "Original Pad input deadline expired", {pending: false});
     }
     const retainedOwner = typeof requestOptions.retainedOwner === "function" &&
       requestOptions.retainedOwner();
@@ -2421,6 +2524,7 @@ function createRuntimeSessionController(options = {}) {
       liveLanePendingPresses.delete(owner);
       liveLaneOpenPads.delete(owner.gestureKey);
       liveLaneReleaseReservations.delete(owner);
+      settleSharedGesture(owner.sharedClaim);
     }
   }
 
@@ -2448,6 +2552,7 @@ function createRuntimeSessionController(options = {}) {
             // local reservation from a handed-off/possibly unknown owner.
             if (!entry.identity.legacy || entry.submitted)
               liveLaneOpenPads.set(entry.gestureKey, entry);
+            else settleSharedGesture(entry.sharedClaim);
           }
           if (entry.classification === "pad_release") {
             if (value !== false) retireLiveLaneRelease(entry);
@@ -2461,6 +2566,7 @@ function createRuntimeSessionController(options = {}) {
           // admission response keeps it; an observer rejection is no receipt.
           if (!unknownSubmittedOutcome(error, entry.submitted)) {
             liveLanePendingPresses.delete(entry);
+            settleSharedGesture(entry.sharedClaim);
             for (const owner of entry.releaseOwners) liveLaneReleaseReservations.delete(owner);
             if (liveLaneCleanupReservation === entry) liveLaneCleanupReservation = null;
           }
@@ -2552,8 +2658,14 @@ function createRuntimeSessionController(options = {}) {
         }
       }
     }
+    const sharedClaim = classification === "pad_press"
+      ? claimSharedGesture(identity.physicalKey, identity.legacy ? "pattern" : "performance", identity.slot, identity.source) : null;
+    if (classification === "pad_press" && sharedClaim === null)
+      return Promise.reject(typedError("HOST_STATE_INVALID",
+        "Combined Pad gesture window is full or this domain already owns the Press", {pending: false}));
     return new Promise((resolve, reject) => {
-      const entry = {action, resolve, reject, classification, gestureKey, identity, releaseOwners,
+      const entry = {action, resolve, reject, classification, gestureKey, identity, releaseOwners, sharedClaim,
+        startedAt: sharedClaim?.owner.startedAt ?? monotonicNow(),
         started: false, submitted: false, cancelled: false};
       if (classification === "pad_press") liveLanePendingPresses.add(entry);
       if (classification === "pad_release")
@@ -2668,12 +2780,16 @@ function createRuntimeSessionController(options = {}) {
       }, {
         // The Wasm transport may resolve this response and synchronously drain
         // its following notification before this async continuation can run.
+        originalStartedAt: liveEntry?.startedAt,
         beforeDispatch(requestId) {
           if (triggerResponseReservations.size >= TRIGGER_LEDGER_LIMIT) {
             throw typedError("HOST_STATE_INVALID", "Trigger response ledger is full");
           }
           responseReservation.requestId = requestId;
-          if (liveEntry !== null) liveEntry.submitted = true;
+          if (liveEntry !== null) {
+            liveEntry.submitted = true;
+            submitSharedGesture(liveEntry.sharedClaim);
+          }
           triggerResponseReservations.set(requestId, responseReservation);
         },
       });
@@ -2747,9 +2863,17 @@ function createRuntimeSessionController(options = {}) {
     if (patternInputProfile !== null) {
       // Only the short admission owns the runtime tail. Native/durable
       // completion may remain held while Release, Stop and inspect proceed.
-      const startedAt = monotonicNow();
+      const startedAt = physicalGestureOwners.get(gestureKey)?.startedAt ?? monotonicNow();
       const reservation = reservePatternInputPress({slot: flatSlot, source, gestureKey});
-      if (reservation === null) return Promise.resolve(rejectTrigger());
+      if (reservation === null) {
+        const owner = physicalGestureOwners.get(gestureKey);
+        if (owner?.preparation) {
+          owner.preparation = false;
+          owner.preparationCancelled = true;
+          retireSharedGesture(owner);
+        }
+        return Promise.resolve(rejectTrigger());
+      }
       const admission = serializeRuntimeAction(() =>
         admitProfileTrigger(flatSlot, velocity, source, startedAt, gestureKey, reservation));
       reservation.admission = admission;
@@ -2765,7 +2889,8 @@ function createRuntimeSessionController(options = {}) {
         });
     }
     return submitLiveInput(entry => dispatchTrigger(flatSlot, velocity, source, entry),
-      "pad_press", {slot: flatSlot, source, gestureKey}, {legacy: true, slot: flatSlot});
+      "pad_press", {slot: flatSlot, source, gestureKey},
+      {legacy: true, slot: flatSlot, source, physicalKey: gestureKey});
 
   }
 
@@ -4312,6 +4437,8 @@ function createRuntimeSessionController(options = {}) {
     patternInputTickets.clear();
     patternInputOperations.clear();
     patternInputHolds.clear();
+    for (const reservation of patternInputPressReservations)
+      settleSharedGesture(reservation.sharedClaim);
     patternInputPressReservations.clear();
     patternInputPendingTickets.clear();
     patternInputReleaseReservations.clear();
@@ -4533,18 +4660,27 @@ function createRuntimeSessionController(options = {}) {
     if (patternInputPressReservations.size >= capacity ||
         (gestureKey !== undefined && [...patternInputPressReservations].some(r => r.gestureKey === gestureKey)))
       return null;
-    const reservation = {slot, source, gestureKey, owner: null, admission: null};
+    const sharedClaim = claimSharedGesture(gestureKey, "pattern", slot, source);
+    if (sharedClaim === null) return null;
+    const reservation = {slot, source, gestureKey, owner: null, admission: null, sharedClaim};
     patternInputPressReservations.add(reservation);
     return reservation;
   }
+  function cancelPatternInputReservation(reservation) {
+    patternInputPressReservations.delete(reservation);
+    settleSharedGesture(reservation?.sharedClaim);
+  }
   function releasePatternInputCapacity(entry) {
     if (entry.consumed && (!entry.request.held || entry.physicalReleased))
-      patternInputPressReservations.delete(entry.pressReservation);
+      cancelPatternInputReservation(entry.pressReservation);
   }
-  function queueProfileRelease(slot, source, startedAt, gestureKey) {
+  function matchingProfileReleaseReservation(slot, source, gestureKey) {
     const matches = [...patternInputPressReservations].reverse().filter(r =>
       r.slot === slot && r.source === source && (gestureKey === undefined || r.gestureKey === gestureKey));
-    const reservation = matches.find(r => !r.releaseObserver) ?? matches[0];
+    return matches.find(r => !r.releaseObserver) ?? matches[0];
+  }
+  function queueProfileRelease(slot, source, startedAt, gestureKey) {
+    const reservation = matchingProfileReleaseReservation(slot, source, gestureKey);
     if (!reservation) return Promise.resolve(false);
     const previous = profileReleaseObservers.get(reservation);
     if (previous) return previous;
@@ -4630,6 +4766,7 @@ function createRuntimeSessionController(options = {}) {
         retainedOwner,
         beforeDispatch: (requestId) => {
           entry.submitted = true;
+          submitSharedGesture(pressReservation?.sharedClaim);
           patternInputTickets.set(key, entry);
           requestOptions.beforeDispatch?.(requestId);
         }});
@@ -4656,7 +4793,7 @@ function createRuntimeSessionController(options = {}) {
       patternInputPendingTickets.delete(key);
       if (!unknownSubmittedOutcome(error, entry.submitted)) {
         patternInputTickets.delete(key);
-        patternInputPressReservations.delete(pressReservation);
+        cancelPatternInputReservation(pressReservation);
         if (patternInputReleaseReservations.get(releaseKey) === entry)
           patternInputReleaseReservations.delete(releaseKey);
       }
@@ -4949,7 +5086,7 @@ function createRuntimeSessionController(options = {}) {
         !TRIGGER_SOURCES.has(source) || closing || safetyReservation || interruptionReservation ||
         !(machine.state === "running" || (machine.state === "recovering" && recoveryEpoch?.probeWindow)))
       {
-        patternInputPressReservations.delete(reservation);
+        cancelPatternInputReservation(reservation);
         return rejectTrigger();
       }
     // Reconciliation preserves the original entry object, including this
@@ -4958,7 +5095,7 @@ function createRuntimeSessionController(options = {}) {
         ([...patternInputHolds.values()].some(h => h.gestureKey === gestureKey) ||
          [...patternInputOperations.values()].some(e => e.kind === "press" && e.gestureKey === gestureKey)))
       {
-        patternInputPressReservations.delete(reservation);
+        cancelPatternInputReservation(reservation);
         return rejectTrigger();
       }
     const probe = machine.state === "recovering" ? {
@@ -4970,7 +5107,7 @@ function createRuntimeSessionController(options = {}) {
       probeReservation = probe;
     }
     return admitProfileInput(slot, velocity, source, "press", null, startedAt, gestureKey, probe, reservation).then(entry => {
-      if (entry === false) patternInputPressReservations.delete(reservation);
+      if (entry === false) cancelPatternInputReservation(reservation);
       if (entry === false && currentProfileProbe(probe)) {
         // Known local refusal created no Native debt. Restore only this same
         // epoch's original opportunity; never overwrite a newer reservation.
@@ -4981,7 +5118,7 @@ function createRuntimeSessionController(options = {}) {
       return entry;
     }, error => {
       if (reservation.owner === null || !unknownSubmittedOutcome(error, reservation.owner.submitted))
-        patternInputPressReservations.delete(reservation);
+        cancelPatternInputReservation(reservation);
       failProfileProbe(probe, error);
       throw error;
     });
@@ -6067,7 +6204,8 @@ function createRuntimeSessionController(options = {}) {
     throw new TypeError("Performance raw event is invalid");
   }
 
-  function recordPerformanceEvent(request) {
+  function recordPerformanceEvent(request, physicalKey) {
+    validateGestureKey(physicalKey);
     if (request === null || typeof request !== "object" ||
         !exactKeys(request, ["sessionId", "eventId", "event"])) {
       return Promise.reject(new TypeError("Performance event request is invalid"));
@@ -6092,6 +6230,9 @@ function createRuntimeSessionController(options = {}) {
     const gestureKey = Object.hasOwn(event, "gesture_id")
       ? `gesture:${sessionId}:${event.gesture_id}`
       : null;
+    if (event.kind === "pad_release" && physicalKey !== undefined &&
+        liveLaneOwners(gestureKey, {sessionId, slot: event.slot}).some(owner =>
+          owner.sharedClaim?.owner.gestureKey === physicalKey)) endPhysicalGesture(physicalKey);
     return submitLiveInput(async entry => {
       const value = await boundedRequest("performance.record.event", {
         session_id: sessionId,
@@ -6104,7 +6245,10 @@ function createRuntimeSessionController(options = {}) {
                 headeredRecording.nextRecordingSequence,
             }
           : {}),
-      }, {beforeDispatch() { entry.submitted = true; }});
+      }, {originalStartedAt: entry.startedAt, beforeDispatch() {
+        entry.submitted = true;
+        submitSharedGesture(entry.sharedClaim);
+      }});
       if (headered) {
         // The window advances only on a fresh admission; an exact replay
         // reuses the retained receipt.
@@ -6141,7 +6285,7 @@ function createRuntimeSessionController(options = {}) {
         replayed: value.replayed,
         projectRevision: value.project_revision,
       });
-    }, classification, gestureKey, {sessionId, eventId, slot: event.slot});
+    }, classification, gestureKey, {sessionId, eventId, slot: event.slot, physicalKey});
   }
 
   function wireFxGesture(event) {
@@ -6443,6 +6587,8 @@ function createRuntimeSessionController(options = {}) {
       const value = await boundedRequest("performance.record.stop", {
         session_id: sessionId, request_id: requestId,
       }, {beforeDispatch() { entry.submitted = true; }});
+      if (value.request_id !== requestId || value.session_id !== sessionId)
+        throw markPostResponseFailure(protocolMismatch("Performance stop changed its original owner"));
       if (headeredRecording !== null &&
           headeredRecording.sessionId === sessionId) {
         headeredRecording = null;
@@ -6451,12 +6597,14 @@ function createRuntimeSessionController(options = {}) {
         if (owner.identity.sessionId === sessionId) {
           liveLaneOpenPads.delete(key);
           liveLaneReleaseReservations.delete(owner);
+          settleSharedGesture(owner.sharedClaim);
         }
       }
       for (const owner of liveLanePendingPresses) {
         if (owner.identity.sessionId === sessionId && owner.submitted) {
           liveLanePendingPresses.delete(owner);
           liveLaneReleaseReservations.delete(owner);
+          settleSharedGesture(owner.sharedClaim);
         }
       }
       return Object.freeze({
@@ -7060,7 +7208,14 @@ function createRuntimeSessionController(options = {}) {
       throw new TypeError("Runtime release source is invalid");
     }
     if (patternInputProfile !== null) {
-      const startedAt = monotonicNow();
+      const reservation = matchingProfileReleaseReservation(flatSlot, source, gestureKey);
+      // A foreign slot/source or a journal-only key has no original Pattern
+      // physical Release authority. Merely returning false cannot end it.
+      // Slot-only compatibility may consume its real Native owner, but it
+      // cannot attest keyup of an explicitly leased physical gesture.
+      if (reservation && (gestureKey !== undefined || !leasedPhysicalKeys.has(reservation.gestureKey)))
+        endPhysicalGesture(reservation.gestureKey);
+      const startedAt = physicalGestureOwners.get(reservation?.gestureKey)?.releaseStartedAt ?? monotonicNow();
       return queueProfileRelease(flatSlot, source, startedAt, gestureKey);
     }
     const owners = [...liveLaneOpenPads.values(), ...liveLanePendingPresses].filter(owner => {
@@ -7068,6 +7223,10 @@ function createRuntimeSessionController(options = {}) {
       return typeof key === "object" && key.slot === flatSlot && key.source === source &&
         (gestureKey === undefined || key.gestureKey === gestureKey);
     });
+    for (const owner of owners) {
+      if (gestureKey !== undefined || !leasedPhysicalKeys.has(owner.identity.physicalKey))
+        endPhysicalGesture(owner.identity.physicalKey);
+    }
     // Same FIFO as the original Press, including a parked header/receipt.
     // Profile Release above continues independently through its reserved lane.
     const key = owners.length === 1 ? owners[0].gestureKey : owners.length > 1
@@ -7077,7 +7236,7 @@ function createRuntimeSessionController(options = {}) {
       // That is not a Native owner and owes no fabricated wire Release.
       if (owners.length !== 0 && owners.every(owner => !owner.submitted)) return false;
       return normalizeAccepted(await boundedRequest("trigger", {slot: flatSlot, kind: "release"},
-        {beforeDispatch() { entry.submitted = true; }}));
+        {originalStartedAt: entry.startedAt, beforeDispatch() { entry.submitted = true; }}));
     }, "pad_release", key, {slot: flatSlot, legacy: true});
   }
 
@@ -7190,6 +7349,7 @@ function createRuntimeSessionController(options = {}) {
       if (liveLaneQueue[index].cancelled) {
         const [entry] = liveLaneQueue.splice(index, 1);
         liveLanePendingPresses.delete(entry);
+        settleSharedGesture(entry.sharedClaim);
         for (const owner of entry.releaseOwners) liveLaneReleaseReservations.delete(owner);
         if (liveLaneCleanupReservation === entry) liveLaneCleanupReservation = null;
         entry.reject(typedError(
@@ -8067,6 +8227,7 @@ function createRuntimeSessionController(options = {}) {
     inspectPerformance,
     beginPerformanceRecording,
     recordPerformanceEvent,
+    reserveInputGesture,
     applyFxGesture,
     applyPerformanceLiveControl,
     requestPerformancePatternLaunch,

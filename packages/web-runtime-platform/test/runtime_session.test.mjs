@@ -82,6 +82,7 @@ const API = [
   "querySequenceStatus",
   "recordSequenceEvent",
   "recordPerformanceEvent",
+  "reserveInputGesture",
   "renamePerformance",
   "release",
   "reloadSnapshot",
@@ -4032,6 +4033,9 @@ test("Sample preview, release, stop, and retry use exact Runtime-only envelopes"
   const projectId = "11111111-1111-4111-8111-111111111111";
   const patternId = "22222222-2222-4222-8222-222222222222";
   const {session} = fixture({
+    // This envelope-shape oracle models no elapsed time. A separate original
+    // clock witness below proves queue time is charged, with exact budgets.
+    now: () => 0,
     send: async (envelope, transportOptions) => {
       calls.push({envelope, transportOptions});
       if (envelope.operation === "sample.preview.set" ||
@@ -11969,3 +11973,450 @@ test("unknown Performance cleanup keeps the singleton token after its caller rej
   assert.equal(await f.session.close(), true);
   assert.equal(await f.session.waitForTerminalCleanup(), true);
 });
+
+
+// Shared physical capacity witnesses use original public APIs and actual
+// producer/consumer IDs. Injected transports prove SDK ownership, not hearing.
+const SHARED_SESSION = "51000000-0000-4000-8000-000000000001";
+function sharedId(group, index) {
+  return `51000000-0000-4000-${group}-${String(index + 1).padStart(12, "0")}`;
+}
+function sharedPerformanceReply(e) {
+  if (e.operation === "performance.record.event") return success(e, {
+    event_id: e.payload.event_id, accepted_tick: 0, input_sequence: 1,
+    coalesced: false, replayed: false, project_revision: null});
+  if (e.operation === "performance.record.stop") return success(e, {
+    request_id: e.payload.request_id, session_id: e.payload.session_id,
+    performance_id: sharedId("8800", 0), state: "stopped", pending_event_count: 0,
+    replayed: false, project_revision: null});
+  return null;
+}
+function sharedPad(index, kind = "pad_press", slot = 0) {
+  return {sessionId: SHARED_SESSION, eventId: sharedId(kind === "pad_press" ? "8100" : "8300", index),
+    event: {kind, gestureId: sharedId("8200", index), slot,
+      ...(kind === "pad_press" ? {velocity: 100} : {})}};
+}
+
+test("64 physical presses share Pattern and Performance positions and both actual domains must retire", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const keys = Array.from({length: 64}, () => ({}));
+  const leases = keys.map(key => f.session.reserveInputGesture(key, 0, "pointer"));
+  assert.ok(leases.every(lease => lease !== null));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  // Distinct physical keys on the SAME Pad remain distinct retained presses.
+  const bothDomains = keys.flatMap((key, index) => index % 2 === 0
+    // Creator's real observer enters Performance BEFORE deferred Pattern work.
+    ? [f.session.recordPerformanceEvent(sharedPad(index), key), f.session.trigger(0, 100, "pointer", key)]
+    : [f.session.trigger(0, 100, "pointer", key), f.session.recordPerformanceEvent(sharedPad(index), key)]);
+  await Promise.all(bothDomains);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 64);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 64);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(64), {}), {code: "HOST_STATE_INVALID"});
+  assert.equal(await f.session.trigger(0, 100, "pointer", {}), false);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 64);
+  // Neither a duplicate domain nor a foreign local key can borrow a position.
+  await assert.rejects(f.session.recordPerformanceEvent({...sharedPad(0), eventId: sharedId("8400", 0)}, keys[0]),
+    /already owns a Press/);
+  for (let index = 0; index < 64; index += 1) {
+    leases[index].releasePhysical();
+    await f.session.recordPerformanceEvent(sharedPad(index, "pad_release"), keys[index]);
+  }
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "Performance Release alone is not Pattern caller/physical retirement");
+  assert.equal(await f.session.release(0, "pointer", keys[0]), true);
+  const freshKey = {};
+  const freshLease = f.session.reserveInputGesture(freshKey, 0, "pointer");
+  assert.notEqual(freshLease, null);
+  freshLease.cancelUnsubmittedPattern();
+  for (let index = 1; index < 64; index += 1)
+    assert.equal(await f.session.release(0, "pointer", keys[index]), true);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 128);
+  const finalKey = {};
+  const finalLease = f.session.reserveInputGesture(finalKey, 0, "pointer");
+  assert.notEqual(finalLease, null);
+  await f.session.trigger(0, 100, "pointer", finalKey);
+  finalLease.releasePhysical();
+  assert.equal(await f.session.release(0, "pointer", finalKey), true);
+  await f.session.close();
+});
+
+test("uncorrelated direct callers share the combined 64 cap without guessing UUID or Pad equivalence", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  for (let index = 0; index < 32; index += 1)
+    assert.notEqual(await f.session.trigger(0, 100, "pointer"), false);
+  for (let index = 0; index < 32; index += 1)
+    await f.session.recordPerformanceEvent(sharedPad(index));
+  assert.equal(await f.session.trigger(0, 100, "pointer"), false);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(32)),
+    error => error.code === "HOST_STATE_INVALID" && error.details.pending === false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 32);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 32);
+  await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"));
+  await f.session.recordPerformanceEvent(sharedPad(32));
+  for (let index = 0; index < 32; index += 1)
+    assert.equal(await f.session.release(0, "pointer"), true);
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 0)});
+  assert.notEqual(await f.session.trigger(0, 100, "pointer"), false);
+  assert.equal(await f.session.release(0, "pointer"), true);
+  await f.session.close();
+});
+
+test("definite unsubmitted preparation frees capacity and its stale leased key cannot resurrect", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  lease.cancelUnsubmittedPattern();
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  assert.equal(f.session.reserveInputGesture(key, 0, "pointer"), null);
+  assert.equal(await f.session.trigger(0, 100, "pointer", key), false);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(0), key), {code: "HOST_STATE_INVALID"});
+  lease.releasePhysical();
+  assert.equal(f.sent.filter(e => /input.request|record.event/.test(e.operation)).length, 0);
+  for (const other of others) other.cancelUnsubmittedPattern();
+  // A known local trigger refusal transfers no physical/caller debt.
+  for (let index = 0; index < 64; index += 1) {
+    const refusedKey = {};
+    const refused = f.session.reserveInputGesture(refusedKey, 0, "pointer");
+    assert.notEqual(refused, null);
+    assert.equal(await f.session.trigger(0, 0, "pointer", refusedKey), false);
+    refused.cancelUnsubmittedPattern();
+  }
+  const fresh = {};
+  const accepted = f.session.reserveInputGesture(fresh, 0, "pointer");
+  assert.notEqual(accepted, null);
+  assert.notEqual(await f.session.trigger(0, 100, "pointer", fresh), false);
+  accepted.releasePhysical();
+  assert.equal(await f.session.release(0, "pointer", fresh), true);
+  await f.session.close();
+});
+
+test("unknown Performance Press retains its shared place after physical and Pattern release until real Stop", async () => {
+  let losePress = true;
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation === "performance.record.event" && losePress) {
+      losePress = false;
+      throw Object.assign(new Error("original journal Press receipt lost"),
+        {code: "HOST_TIMEOUT", details: {pending: true}});
+    }
+    return sharedPerformanceReply(e);
+  }});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.trigger(0, 100, "pointer", key);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(0), key), {code: "HOST_TIMEOUT"});
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  lease.releasePhysical();
+  assert.equal(await f.session.release(0, "pointer", key), true);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "observer rejection and one-sided real release do not retire unknown journal ownership");
+  assert.equal((await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION,
+    requestId: sharedId("8700", 1)})).state, "stopped");
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+test("a cancelled Pattern preparation cannot be reattached while the same physical journal owner lives", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), key);
+  lease.cancelUnsubmittedPattern();
+  assert.equal(await f.session.trigger(0, 100, "pointer", key), false);
+  lease.releasePhysical();
+  await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"), key);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0);
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+test("synthetic journal Release and Stop reuse the exact UUID owner without ending its physical lease", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), key);
+  lease.cancelUnsubmittedPattern(); // Only the journal received this physical press.
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  // The Host closes journal gestures with the genuine original UUID. That
+  // does not attest that the pointer is physically up.
+  await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"));
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 2)});
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  lease.releasePhysical();
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+test("Creator preparation time spends the original one-second Pattern input budget before any admission", async () => {
+  let now = 0;
+  const f = inputProfileFixture({now: () => now});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  now = 1001;
+  await assert.rejects(f.session.trigger(0, 100, "pointer", key),
+    error => error.code === "HOST_TIMEOUT" && error.details.pending === false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0);
+  // No Native handoff occurred; local capacity can return without a fake ACK.
+  lease.cancelUnsubmittedPattern();
+  const keys = Array.from({length: 64}, () => ({}));
+  const leases = keys.map(x => f.session.reserveInputGesture(x, 0, "pointer"));
+  assert.ok(leases.every(x => x !== null));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  for (const item of leases) item.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+for (const elapsed of [650, 1001]) {
+  test(`legacy queued Release spends its original one-second budget at the real Host handoff (${elapsed}ms)`, async () => {
+    let now = 0;
+    let resolveQuery;
+    let startedQuery;
+    const queryStarted = new Promise(resolve => {startedQuery = resolve;});
+    const releaseOptions = [];
+    let sequence = 0;
+    const f = fixture({now: () => now, send: async (e, options) => {
+      if (e.operation === "project.inspect") {
+        startedQuery();
+        return new Promise(resolve => {resolveQuery = () => resolve(success(e, defaultResult(e.operation)));});
+      }
+      if (e.operation === "trigger") {
+        if (e.payload.kind === "release") {
+          releaseOptions.push(options.deadlineMs);
+          return success(e, {accepted: true});
+        }
+        return success(e, {sequence: ++sequence});
+      }
+      return success(e, defaultResult(e.operation));
+    }});
+    await f.session.start();
+    await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+    const key = {};
+    assert.equal((await f.session.trigger(0, 100, "pointer", key)).sequence, 1);
+    const query = f.session.inspectProject();
+    await queryStarted;
+    const release = f.session.release(0, "pointer", key);
+    // Observe the original rejection immediately while its actual dispatch
+    // remains parked; no timeout is widened or reset by query completion.
+    const result = release.then(value => ({value}), error => ({error}));
+    await drainTasks();
+    assert.deepEqual(releaseOptions, []);
+    now = elapsed;
+    resolveQuery();
+    await query;
+    const observed = await result;
+    if (elapsed < 1000) {
+      assert.equal(observed.value, true);
+      assert.deepEqual(releaseOptions, [1000 - elapsed]);
+    } else {
+      assert.equal(observed.error.code, "HOST_TIMEOUT");
+      assert.equal(observed.error.details.pending, false);
+      assert.deepEqual(releaseOptions, [], "expired original Release never reaches Native");
+      // Only a fresh explicit retry after definite non-submission may use a
+      // new budget, matching the still-retained original Press owner.
+      assert.equal(await f.session.release(0, "pointer", key), true);
+      assert.deepEqual(releaseOptions, [1000]);
+    }
+    assert.equal((await f.session.trigger(0, 100, "pointer", {})).sequence, 2);
+    assert.equal(await f.session.release(0, "pointer"), true);
+    await f.session.close();
+  });
+}
+
+
+test("foreign Pattern Release cannot end a journal-only or differently-addressed original physical lease", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const journalKey = {};
+  const journalLease = f.session.reserveInputGesture(journalKey, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), journalKey);
+  journalLease.cancelUnsubmittedPattern();
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  assert.equal(await f.session.release(1, "pointer", journalKey), false);
+  assert.equal(await f.session.release(0, "keyboard", journalKey), false);
+  assert.equal(await f.session.release(0, "pointer", journalKey), false,
+    "journal-only owner has no Pattern Press whose Release can attest keyup");
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 3)});
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "foreign false and genuine journal Stop cannot retire a still-held physical lease");
+  journalLease.releasePhysical();
+  const patternKey = {};
+  const patternLease = f.session.reserveInputGesture(patternKey, 0, "pointer");
+  assert.notEqual(patternLease, null);
+  assert.notEqual(await f.session.trigger(0, 100, "pointer", patternKey), false);
+  assert.equal(await f.session.release(1, "pointer", patternKey), false);
+  assert.equal(await f.session.release(0, "keyboard", patternKey), false);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  assert.equal(await f.session.release(0, "pointer", patternKey), true,
+    "only the exact original Pattern owner is actual matching Release authority");
+  const finalLease = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(finalLease, null);
+  finalLease.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+test("foreign legacy Release success is not the journal-only physical owner's matching keyup", async () => {
+  const f = fixture({send: async e => {
+    const performance = sharedPerformanceReply(e);
+    if (performance !== null) return performance;
+    if (e.operation === "trigger") return success(e, {accepted: true});
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), key);
+  lease.cancelUnsubmittedPattern();
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  // Preserve the old foreign wire API: a Native no-owner Release may return
+  // true. Only a matching original local Press could attest physical end.
+  assert.equal(await f.session.release(1, "pointer", key), true);
+  assert.equal(await f.session.release(0, "keyboard", key), true);
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 4)});
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  lease.releasePhysical();
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+for (const receipt of ["foreign-session", "foreign-request", "original-owner"]) {
+  test(`shared journal capacity requires the original Stop session and request receipt (${receipt})`, async () => {
+    let losePress = true;
+    const stopRequestId = sharedId("8700", 5);
+    const stops = [];
+    const f = inputProfileFixture({extraSend: e => {
+      if (e.operation === "performance.record.event" && losePress) {
+        losePress = false;
+        throw Object.assign(new Error("original Press receipt lost"),
+          {code: "HOST_TIMEOUT", details: {pending: true}});
+      }
+      if (e.operation === "performance.record.stop") {
+        stops.push(e.payload);
+        return success(e, {
+          request_id: receipt === "foreign-request" ? sharedId("8700", 6) : e.payload.request_id,
+          session_id: receipt === "foreign-session" ? sharedId("8900", 0) : e.payload.session_id,
+          performance_id: sharedId("8800", 0), state: "stopped", pending_event_count: 0,
+          replayed: false, project_revision: null});
+      }
+      return sharedPerformanceReply(e);
+    }});
+    await activateInputProfile(f);
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "pointer");
+    await assert.rejects(f.session.recordPerformanceEvent(sharedPad(0), key), {code: "HOST_TIMEOUT"});
+    lease.cancelUnsubmittedPattern();
+    lease.releasePhysical();
+    const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+    assert.ok(others.every(x => x !== null));
+    assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+    const stop = f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: stopRequestId});
+    if (receipt === "original-owner") {
+      const result = await stop;
+      assert.equal(result.requestId, stopRequestId);
+      assert.equal(result.sessionId, SHARED_SESSION);
+      const next = f.session.reserveInputGesture({}, 0, "pointer");
+      assert.notEqual(next, null, "only this original genuine Stop can retire its unknown journal owner");
+      next.cancelUnsubmittedPattern();
+    } else {
+      await assert.rejects(stop, {code: "HOST_PROTOCOL_MISMATCH"});
+      assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+        "a valid outer envelope with a foreign nested receipt is no refund authority");
+      await assert.rejects(f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: stopRequestId}),
+        /cleanup token is already reserved/);
+    }
+    assert.deepEqual(stops, [{session_id: SHARED_SESSION, request_id: stopRequestId}]);
+    for (const other of others) other.cancelUnsubmittedPattern();
+    await f.session.close();
+    if (receipt !== "original-owner") assert.equal(await f.session.waitForTerminalCleanup(), false,
+      "a Pattern/backend close cannot substitute for the unknown journal Stop receipt");
+  });
+}
+
+
+for (const profile of [true, false]) {
+  test(`${profile ? "profile" : "legacy"} keyless Native Release preserves a still-held leased physical place after journal cleanup`, async () => {
+    const legacyInputs = [];
+    let sequence = 0;
+    const f = profile ? inputProfileFixture({extraSend: sharedPerformanceReply})
+      : fixture({send: async e => {
+        const performance = sharedPerformanceReply(e);
+        if (performance !== null) return performance;
+        if (e.operation === "trigger") {
+          legacyInputs.push(e.payload);
+          return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+        }
+        return success(e, defaultResult(e.operation));
+      }});
+    if (profile) await activateInputProfile(f);
+    else {
+      await f.session.start();
+      await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+    }
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "keyboard");
+    await f.session.recordPerformanceEvent(sharedPad(0), key);
+    assert.notEqual(await f.session.trigger(0, 100, "keyboard", key), false);
+    lease.cancelUnsubmittedPattern(); // Already transferred; this is not a refund.
+    const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+    assert.ok(others.every(x => x !== null));
+    // Preserve actual old slot/source selection and native consume while the
+    // physical keyboard is still down. This caller supplied NO physical key.
+    assert.equal(await f.session.release(0, "keyboard"), true);
+    if (profile) {
+      const releases = f.sent.filter(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "release");
+      assert.equal(releases.length, 1);
+      assert.equal(releases[0].payload.held_press_sequence, "1");
+      assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 2);
+    } else {
+      assert.deepEqual(legacyInputs, [{slot: 0, velocity: 100}, {slot: 0, kind: "release"}]);
+    }
+    // Synthetic journal Release reuses the original UUID owner without a
+    // physical key. Neither it nor a real matching journal Stop is keyup.
+    await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"));
+    assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+    await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 7)});
+    assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+      "both actual domains settled but their real physical lease is still held");
+    lease.releasePhysical();
+    const nextKey = {};
+    const nextLease = f.session.reserveInputGesture(nextKey, 0, "keyboard");
+    assert.notEqual(nextLease, null, "only actual physical end returned the shared place");
+    assert.notEqual(await f.session.trigger(0, 100, "keyboard", nextKey), false);
+    assert.equal(await f.session.release(0, "keyboard", nextKey), true,
+      "explicit original key still ends the fresh physical gesture and consumes its Native owner");
+    const finalLease = f.session.reserveInputGesture({}, 0, "pointer");
+    assert.notEqual(finalLease, null);
+    finalLease.cancelUnsubmittedPattern();
+    for (const other of others) other.cancelUnsubmittedPattern();
+    await f.session.close();
+  });
+}

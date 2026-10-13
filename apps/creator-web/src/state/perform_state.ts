@@ -373,7 +373,7 @@ export interface PerformController {
   retryWavBind(): Promise<void>;
   exportWav(): Promise<void>;
   discard(): Promise<void>;
-  recordRawEvent(event: PerformanceRawEvent): Promise<void>;
+  recordRawEvent(event: PerformanceRawEvent, physicalKey?: object): Promise<void>;
   engageFx(fx: PerformanceFx, value: number): string;
   moveFx(gestureId: string, fx: PerformanceFx, value: number): void;
   releaseFx(gestureId: string, fx: PerformanceFx): void;
@@ -500,15 +500,30 @@ export function createPerformController(options: PerformControllerOptions): Perf
   const appendRawEvent = (
     sessionId: string,
     event: PerformanceRawEvent,
+    physicalKey?: object,
   ): Promise<void> => {
     const owner = recordingOwner;
-    const operation = rawEventTail.then(async () => {
-      try {
-        await session.recordPerformanceEvent({sessionId, eventId: createId(), event});
-      } catch (error) {
+    const request = {sessionId, eventId: createId(), event};
+    // Admit now, before our completion/refresh tail retains the Press. The
+    // SDK owns queue bounds and original Release positions; this tail only
+    // sequences projection after actual receipts. Attach a rejection observer
+    // immediately even when an earlier completion is still held.
+    let admission: Promise<unknown>;
+    try {
+      admission = physicalKey === undefined
+        ? session.recordPerformanceEvent(request)
+        : session.recordPerformanceEvent(request, physicalKey);
+    } catch (error) { admission = Promise.reject(error); }
+    const outcome = Promise.resolve(admission).then(
+      value => ({ok: true as const, value}),
+      error => {
         rememberShutdownFailure(owner, "raw-event", error);
-        throw error;
-      }
+        return {ok: false as const, error};
+      },
+    );
+    const operation = rawEventTail.then(async () => {
+      const result = await outcome;
+      if (!result.ok) throw result.error;
       await controller.refreshAuthority();
     });
     rawEventTail = operation.catch(fail);
@@ -1120,7 +1135,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
         }
       });
     },
-    recordRawEvent(event) {
+    recordRawEvent(event, physicalKey) {
       if (!["recording", "flushing"].includes(state.recording.phase) ||
           state.recording.sessionId === null) {
         return Promise.resolve();
@@ -1132,7 +1147,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
         openPadGestures.delete(event.gestureId);
       }
       const sessionId = state.recording.sessionId;
-      return appendRawEvent(sessionId, event);
+      return appendRawEvent(sessionId, event, physicalKey);
     },
     engageFx(fx, value) {
       const existing = openFxGestures.get(fx);

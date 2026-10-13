@@ -902,9 +902,10 @@ function Workspace({
       onEmptyPadCancel: (key?: object) => {void padCapture.current?.cancel(key);},
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
-      onPerformancePadEvent: (event: PerformancePadInputEvent) => {
+      onPerformancePadEvent: (event: PerformancePadInputEvent,
+        _source: import("./runtime/runtime_types").RuntimeTriggerSource, gestureKey: object) => {
         if (activeModeRef.current !== "perform") return;
-        void performControllerRef.current?.recordRawEvent(event).catch(() => {});
+        void performControllerRef.current?.recordRawEvent(event, gestureKey).catch(() => {});
       },
     };
     const controller = isSampleSession(session)

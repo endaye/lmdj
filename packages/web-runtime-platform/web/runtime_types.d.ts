@@ -285,10 +285,19 @@ export interface RuntimeLifecycleSession {
   waitForTerminalCleanup(): Promise<boolean>;
 }
 
+/** Local physical ownership only; neither method manufactures a Native ACK. */
+export interface InputGestureLease {
+  cancelUnsubmittedPattern(): void;
+  releasePhysical(): void;
+}
+
 /** Same already-running frozen Session; never a second input/controller owner. */
 export interface RuntimeSessionNamespace {
   readonly session: RuntimeLifecycleSession & PatternTransportRuntimeSession & MonitorOutputSession &
     WebAudioClockSession & WebPerformanceCaptureSession & Readonly<{
+    /** Synchronous combined admission before caller queues retain this press. */
+    reserveInputGesture(key: object, slot: number, source?: "pointer" | "keyboard" | "midi"):
+      InputGestureLease | null;
     /** Opaque local reference; exact hold correlation requires the negotiated input profile. */
     trigger(slot: number, velocity: number, source?: "pointer" | "keyboard" | "midi", gestureKey?: object):
       Promise<false | Readonly<{sequence: number; slot: number; velocity: number; source: "pointer" | "keyboard" | "midi"}>>;
@@ -871,7 +880,7 @@ export interface PerformanceRuntimeSession {
     sessionId: string;
     eventId: string;
     event: PerformanceRawEvent | PerformanceHeaderedEvent;
-  }>): Promise<PerformanceEventResult>;
+  }>, physicalKey?: object): Promise<PerformanceEventResult>;
   applyFxGesture(event: PerformanceFxGesture): Promise<Readonly<{
     applied: true;
   }>>;

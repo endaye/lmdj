@@ -1562,8 +1562,10 @@ up to 1024. A known-profile SDK ingress may conservatively use
 existing direct unprobed input API does not gain an activation/probe prerequisite;
 its local conservative limit cannot prove an unknown Native capacity. The
 cross-domain relationship between Performance UUIDs and Pattern opaque gesture
-keys is an explicit pending product decision. Do not invent identity conversion
-or claim that separately bounded queues establish a shared global limit.
+keys was pending at this integration checkpoint. The user settled it in the
+shared gesture capacity addendum below: one combined limit of 64 real gestures,
+with one physical press counted once. Do not invent identity conversion or
+claim that separately bounded queues establish that shared limit.
 
 **Independent SDK review repairs.** The frozen two-file source review found
 three additional defects within these existing boundaries. A definitely
@@ -1576,8 +1578,8 @@ behind durable completion. Performance's release exception belongs to one
 matching locally received gesture, and cleanup has one reserved token;
 foreign or duplicate Releases and repeated cleanup requests must not create
 an unbounded exception queue. Preserve original request/receipt identities
-and truthful refusal results. These repairs do not decide the pending
-cross-domain capacity or gesture-identity contract.
+and truthful refusal results. These repairs preceded the shared-capacity
+decision below and do not implement that contract by themselves.
 
 **Observer and portal integration.** Observe both actual `send` and optional
 `sendRetained` in the two original Perform navigation journeys. Preserve real
@@ -1661,3 +1663,109 @@ Reason: current combined registry, budgets, real input ownership and
 product/cue capture boundaries must match the integrated sources and diagrams.
 Task source review, runtime verification, merge, release and physical/hearing
 acceptance remain separate facts. No release or worktree cleanup is requested.
+
+
+## S6 shared gesture capacity followup (2026-10-13)
+
+**Decision and current premise.** The user explicitly chose a combined maximum
+of 64 retained real Pad gestures across Pattern and Performance recording;
+one physical press entering both domains consumes one place. Matching Release
+for an already admitted gesture remains admissible at capacity. This settles
+the formerly pending product decision above. It does not authorize deriving an
+opaque physical identity from a persisted UUID or weakening ownership fences.
+
+The isolated implementation base is
+`3545d43aa6f791df2b1410ce23e3ba8e83e24460`. The first refreshed integration
+target was `9fb83ce0f70de1bc9114711bf9e854dfa6bb7081`; the precommit refresh
+on 2026-10-13 is `fe6f30bbf3897d3b09e25e4e85f4b1b22df7db23`. PRs #2114
+(UI decisions), #2115 (current-Groove cancellation), #2107 (retained Pad ASSIGN)
+and #2116 (Facade replay regressions) have since merged. Their actual diffs
+add ASSIGN publication/SDK behavior and unrelated UI/replay coverage; they do
+not deliver the shared physical-gesture ledger, App key forwarding or immediate
+Perform admission. Those premises remain outstanding. A read-only merge preview
+found a conflict in `packages/web-runtime-platform/test/control_runtime_test.cpp`
+where the S6 and ASSIGN suites both add coverage. Preserve both complete suites
+in a separate integration step after freezing this verified source Task; the
+current source Task does not overwrite the other owner’s changes. The existing input controller already
+has an opaque gesture key and a Performance UUID mapping, but App drops the
+observer's key and Perform queues events before SDK admission. Separate SDK
+Pattern and Performance limits therefore do not establish the chosen combined
+limit. This premise remains outstanding. Preserve previously delivered source
+and all historical test outcomes; this followup does not repeat S4.
+
+**Declared files.** Root owns the four documentation files. The SDK/Host author
+owns eight product/test paths; a separate component-test author owns only
+`input_controller.test.ts` and `perform_surface.test.tsx`. These assignments
+have no concurrent writers. A reviewer independent of each changed path
+reviews its final delta:
+
+- `packages/web-runtime-platform/web/runtime_session.mjs`
+- `packages/web-runtime-platform/web/runtime_types.d.ts`
+- `packages/web-runtime-platform/test/runtime_session.test.mjs`
+- `apps/creator-web/src/runtime/input_controller.ts`
+- `apps/creator-web/src/runtime/runtime_types.ts`
+- `apps/creator-web/src/app.tsx`
+- `apps/creator-web/src/state/perform_state.ts`
+- `apps/creator-web/test/input_controller.test.ts`
+- `apps/creator-web/test/perform_surface.test.tsx`
+- `tests/platform/web/creator/creator_web_perform.spec.mjs`
+- `docs/prd/decisions/2026-10-11-performance-live-control-encoding.md`
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md`
+- `apps/docs-site/docs/platform/web-runtime.mdx`
+- `apps/docs-site/docs/hosts/creator-interactions.mdx`
+
+**Implementation boundaries.** Reserve capacity synchronously before either
+Creator queue retains a new physical press. Use one session-local ledger keyed
+by the original opaque physical identity; pass that identity through App and
+Perform to the SDK without putting it in wire messages or Project Truth.
+Convert a provisional producer reservation into its actual Pattern/Performance
+owners, or release it only after definite non-submission. Retain submitted,
+response-unknown and physical-hold debts until their actual matching release,
+consumer completion or explicit owner closure permits retirement. An observer
+rejection or UI finally callback is not retirement authority. Direct callers
+without a physical key count independently; never guess equivalence from Pad,
+UUID spelling or timing. A repeated domain claim must not double-count a press
+or bypass duplicate-event rejection. Existing release and cleanup bounds stay
+intact. Preserve exact legacy schemas and public call compatibility.
+
+**Lowest-tier verification and defects caught.** Add public Session regressions
+for the 64th/65th distinct physical gesture, the same press in both domains,
+different keys on the same Pad, definite non-submission, retained unknown debt,
+and matching release at capacity followed by actual retirement and fresh reuse.
+Run the complete original SDK owning suite. Creator input/Perform components
+must prove the original key survives App routing, queue ingress is bounded
+before deferred work, refused presses produce no second-domain orphan, and
+physical keyup still reaches its original owner. Run complete owning component
+files and TypeScript, followed by the full Creator unit suite. Extend the
+existing packaged Perform journey only where needed to prove the real key
+routing; preserve every original Record-off, Stop and reopened Truth leg.
+Component transport fixtures do not prove physical audio or storage durability.
+
+Run the original complete Portal check for the changed documented behavior.
+After those lower-tier checks pass, an atomic source commit may freeze the
+candidate for the original clean-tree browser proofs. Final S6 acceptance still
+requires its declared full Creator, Web Host, held-I/O, mutation, Native and
+selected committed-head lane obligations and independent current-head review.
+No test, timeout, worker count, stress round or journey leg is reduced. Original
+1-second input, opening-only 5 seconds, 30-second component and 300-second
+normal stress limits remain unchanged. Do not automatically retry the failed
+3545 full Creator: its eight groups completed with 128 PASS, 1 FAIL and 11 SKIP,
+exit 1. The Record-off failure follows a restart-required runtime state; the
+specific input operation causing that state is still under investigation.
+
+### Version Management
+
+The additive local SDK reservation/identity companion adds to S6's existing
+`web-runtime-platform` MINOR debt at the next coordinated version settlement.
+Creator behavior adds to its existing Host debt. This Task allocates no Module,
+Contract, Product Build or Assembly identity and creates no snapshot or release.
+Persisted and wire contracts remain unchanged; reconsider the declared debt if
+implementation cannot preserve those boundaries.
+
+### Documentation Impact
+
+Documentation impact: required. Update `/platform/web-runtime/` and
+`/hosts/creator-interactions/` with the combined admission and Release behavior,
+and record the settled decision in the existing Performance encoding decision.
+Implementation, verification, merge and physical/hearing acceptance remain
+separate. No cleanup is authorized by this followup.

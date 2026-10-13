@@ -4,7 +4,7 @@ import {
   createMidiAdapter,
   createPointerAdapter,
 } from "@lmdj/web-runtime-platform/input_adapters.mjs";
-import type {PerformanceRawEvent} from
+import type {InputGestureLease, PerformanceRawEvent} from
   "@lmdj/web-runtime-platform/runtime_types";
 
 import type {CreatorAction, Bank} from "../state/creator_state";
@@ -181,6 +181,18 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   const sampleGestureTokens = new Map<string, SampleGestureToken[]>();
   // A voice or visual token can end while its physical input is still held.
   const physicalGestures = new Map<object, PhysicalGesture>();
+  const inputLeases = new Map<object, InputGestureLease>();
+  function cancelPatternPreparation(key: object) {
+    inputLeases.get(key)?.cancelUnsubmittedPattern();
+    if (physicalGestures.get(key)?.released) inputLeases.delete(key);
+  }
+  function endPhysicalInput(key: object) {
+    inputLeases.get(key)?.releasePhysical();
+    const physical = physicalGestures.get(key);
+    if (physical === undefined || physical.triggerInvoked) inputLeases.delete(key);
+    // Do not cancel preparation here: a released queued one-shot may still
+    // legally play. Its own cancellation/transfer settles that interest.
+  }
   const runtimeAgnosticGestures = new Set<string>();
   const loopToggleSlots = new Map<number, number>();
   const stoppingLoopSlots = new Set<number>();
@@ -277,6 +289,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     removeSampleToken(currentGesture, token);
     const physical = physicalGestures.get(token.gestureKey);
     if (physical !== undefined && !physical.triggerInvoked) {
+      cancelPatternPreparation(token.gestureKey);
       physicalGestures.delete(token.gestureKey);
     }
     if (ownsGesture) {
@@ -377,14 +390,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   }
 
   function submitPhysicalRelease(gestureKey: object, physical: PhysicalGesture) {
-    if (sampleOptions === null || !physical.triggerInvoked ||
+    if (typeof session.release !== "function" || !physical.triggerInvoked ||
         !physical.released || physical.releaseSubmitted) return;
     // Reserve locally before invoking the SDK. The SDK owns any unknown Native
     // debt and joins this intent with safety cleanup; UI disposal is no ACK.
     physical.releaseSubmitted = true;
     let result: Promise<boolean>;
     try {
-      result = sampleOptions.session.release(physical.slot, physical.source, gestureKey);
+      result = session.release(physical.slot, physical.source, gestureKey);
     } catch (error: unknown) {
       if (!disposed) dispatch(inputErrorAction(error));
       physicalGestures.delete(gestureKey);
@@ -410,6 +423,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     const physical = physicalGestures.get(gestureKey);
     if (physical === undefined) return;
     physical.released = true;
+    endPhysicalInput(gestureKey);
     submitPhysicalRelease(gestureKey, physical);
   }
 
@@ -431,14 +445,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         } catch { wake(false); }
       } else wake(false);
     }
+    endPhysicalInput(gestureKey);
+    observePerformanceRelease(gestureKey, slot, source);
+    releasePhysicalGesture(gestureKey);
     if (captureGestures.delete(gestureKey)) {
+      inputLeases.delete(gestureKey);
       options.onEmptyPadRelease?.(gestureKey);
       dispatch({type: "pad-released", slot});
       return;
     }
     const currentGesture = gesture(source, slot);
-    observePerformanceRelease(gestureKey, slot, source);
-    releasePhysicalGesture(gestureKey);
     const mode = gestureModes.get(currentGesture);
     const sampleToken = sampleGestureTokens.get(currentGesture)?.find(token => token.gestureKey === gestureKey);
     if (sampleOptions !== null) {
@@ -475,14 +491,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   ) {
     pendingTouchWakes.get(gestureKey)?.(false);
     pendingTouchWakes.delete(gestureKey);
+    endPhysicalInput(gestureKey);
+    observePerformanceRelease(gestureKey, slot, source);
+    releasePhysicalGesture(gestureKey);
     if (captureGestures.delete(gestureKey)) {
+      inputLeases.delete(gestureKey);
       options.onEmptyPadCancel?.(gestureKey);
       dispatch({type: "pad-released", slot});
       return;
     }
     const currentGesture = gesture(source, slot);
-    observePerformanceRelease(gestureKey, slot, source);
-    releasePhysicalGesture(gestureKey);
     activeGestures.delete(currentGesture);
     gestureModes.delete(currentGesture);
     const sampleToken = sampleGestureTokens.get(currentGesture)?.find(token => token.gestureKey === gestureKey);
@@ -493,6 +511,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     dispatch({type: "pad-released", slot});
     const physical = physicalGestures.get(gestureKey);
     if (physical !== undefined && !physical.triggerInvoked) {
+      cancelPatternPreparation(gestureKey);
       physicalGestures.delete(gestureKey);
     }
   }
@@ -611,6 +630,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     mode: SampleTriggerMode | null,
     sampleToken?: SampleGestureToken,
     muted = false,
+    physicalKey = sampleToken?.gestureKey,
   ) {
     const clearRejectedAttempt = () => {
       if (sampleToken === undefined) {
@@ -621,21 +641,24 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       }
       return clearSampleAttempt(currentGesture, sampleToken);
     };
-    const physical = sampleToken === undefined
-      ? undefined : physicalGestures.get(sampleToken.gestureKey);
+    const physical = physicalKey === undefined
+      ? undefined : physicalGestures.get(physicalKey);
     if (physical !== undefined) physical.triggerInvoked = true;
     let triggerResult: Promise<TriggerAdmission | false>;
     try {
-      triggerResult = sampleToken === undefined
+      triggerResult = physicalKey === undefined
         ? session.trigger(slot, velocity, source)
-        : session.trigger(slot, velocity, source, sampleToken.gestureKey);
+        : session.trigger(slot, velocity, source, physicalKey);
+      // The synchronous SDK entry has transferred or refused preparation.
+      if (physicalKey !== undefined) cancelPatternPreparation(physicalKey);
     } catch (error: unknown) {
+      if (physicalKey !== undefined) cancelPatternPreparation(physicalKey);
       triggerResult = Promise.reject(error);
     }
     // Keyup may precede inspection or await the original trigger's durable
     // result. Submit directly after invocation, never after its completion.
-    if (physical !== undefined && sampleToken !== undefined) {
-      submitPhysicalRelease(sampleToken.gestureKey, physical);
+    if (physical !== undefined && physicalKey !== undefined) {
+      submitPhysicalRelease(physicalKey, physical);
     }
     return triggerResult.then(
       (admission) => {
@@ -708,6 +731,26 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     gestureKey: object,
   ) {
     if (options.canUsePad?.(slot) === false) return;
+    const lease = session.reserveInputGesture?.(gestureKey, slot, source);
+    if (lease === null) return; // No observer, wake or queue can retain a refused Press.
+    if (lease !== undefined) inputLeases.set(gestureKey, lease);
+    if (sampleOptions !== null || lease !== undefined)
+      physicalGestures.set(gestureKey, {slot, source, released: false,
+        triggerInvoked: false, releaseSubmitted: false});
+    try { triggerPrepared(slot, velocity, source, gestureKey); }
+    catch (error: unknown) {
+      cancelPatternPreparation(gestureKey);
+      physicalGestures.delete(gestureKey);
+      dispatch(inputErrorAction(error));
+    }
+  }
+
+  function triggerPrepared(
+    slot: number,
+    velocity: number,
+    source: RuntimeTriggerSource,
+    gestureKey: object,
+  ) {
     const currentGesture = gesture(source, slot);
     // Called synchronously by the adapter, while the native musical event is
     // still active. Ignored keys and compatibility mouse events never get here.
@@ -722,19 +765,28 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     observePerformancePress(gestureKey, slot, velocity, source);
     const armedCaptureSlot = getArmedCaptureSlot();
     if (armedCaptureSlot === slot && onArmedCaptureStop !== undefined) {
+      cancelPatternPreparation(gestureKey);
+      physicalGestures.delete(gestureKey);
       onArmedCaptureStop(slot, source);
       return;
     }
     if (sampleOptions === null) {
       activeGestures.add(currentGesture);
       if (activation === null) {
-        sessionTrigger(slot, velocity, source, currentGesture, null);
+        sessionTrigger(slot, velocity, source, currentGesture, null, undefined, false,
+          typeof session.reserveInputGesture === "function" ? gestureKey : undefined);
       } else {
         void activation.then((ready) => {
           if (!disposed && generation === inputGeneration && ready) {
-            return sessionTrigger(slot, velocity, source, currentGesture, null);
+            return sessionTrigger(slot, velocity, source, currentGesture, null, undefined, false,
+              typeof session.reserveInputGesture === "function" ? gestureKey : undefined);
           }
-        }).catch(() => {}).finally(() => {
+          cancelPatternPreparation(gestureKey);
+          physicalGestures.delete(gestureKey);
+        }).catch(() => {
+          cancelPatternPreparation(gestureKey);
+          physicalGestures.delete(gestureKey);
+        }).finally(() => {
           if (generation === inputGeneration) activeGestures.delete(currentGesture);
         });
       }
@@ -750,8 +802,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         action: {type: "slot-selected", slot},
       });
     }
-    if (stopAcceptedLoopToggle(slot)) return;
+    if (stopAcceptedLoopToggle(slot)) {
+      cancelPatternPreparation(gestureKey);
+      physicalGestures.delete(gestureKey);
+      return;
+    }
     if (!sampleOptions.isAssigned(slot)) {
+      cancelPatternPreparation(gestureKey);
+      physicalGestures.delete(gestureKey);
       if (options.onEmptyPadPress?.(slot, gestureKey, source, activation)) {
         captureGestures.add(gestureKey);
         dispatch({type: "pad-pressed", slot, outcome: "admitted"});
@@ -760,11 +818,13 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       sampleOptions.onFilePickIntent(slot, source);
       return;
     }
-    if (!sampleOptions.isAvailable(slot)) return;
+    if (!sampleOptions.isAvailable(slot)) {
+      cancelPatternPreparation(gestureKey);
+      physicalGestures.delete(gestureKey);
+      return;
+    }
 
     const sampleToken: SampleGestureToken = {released: false, gestureKey};
-    physicalGestures.set(gestureKey, {slot, source, released: false,
-      triggerInvoked: false, releaseSubmitted: false});
     activeGestures.add(currentGesture);
     addSampleToken(currentGesture, sampleToken);
     if (activation === null && !sampleOptions.isRuntimeCurrent()) {
@@ -781,18 +841,24 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     const action = async () => {
       if (disposed || generation !== inputGeneration || !hasSampleToken(currentGesture, sampleToken)) {
+        cancelPatternPreparation(gestureKey);
         return;
       }
       if (stopAcceptedLoopToggle(slot)) {
+        cancelPatternPreparation(gestureKey);
         removeSampleToken(currentGesture, sampleToken);
         physicalGestures.delete(gestureKey);
         return;
       }
       try {
         if (disposed || generation !== inputGeneration ||
-            !hasSampleToken(currentGesture, sampleToken)) return;
+            !hasSampleToken(currentGesture, sampleToken)) {
+          cancelPatternPreparation(gestureKey);
+          return;
+        }
         const inspect = await inspectSampleJourney(sampleOptions.session, slot);
         if (disposed || generation !== inputGeneration || !hasSampleToken(currentGesture, sampleToken)) {
+          cancelPatternPreparation(gestureKey);
           return;
         }
         if (inspect.assetId === null) {
@@ -868,6 +934,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         );
       } catch (error: unknown) {
         if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
+          cancelPatternPreparation(gestureKey);
           return;
         }
         if (clearSampleAttempt(currentGesture, sampleToken)) {
@@ -898,7 +965,10 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         dispatch({type: "pad-released", slot});
       }
     }, error => {
-      if (disposed || !hasSampleToken(currentGesture, sampleToken)) return;
+      if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
+        cancelPatternPreparation(gestureKey);
+        return;
+      }
       if (clearSampleAttempt(currentGesture, sampleToken)) {
         dispatch({type: "pad-released", slot});
       }
@@ -1026,6 +1096,11 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     pointer.clearPressed();
     keyboard.clearPressed();
     midi.clearPressed();
+    for (const [key, lease] of inputLeases) {
+      lease.releasePhysical();
+      lease.cancelUnsubmittedPattern();
+      inputLeases.delete(key);
+    }
     dispatch({type: "pressed-cleared"});
   }
 

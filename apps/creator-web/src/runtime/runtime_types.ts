@@ -287,6 +287,10 @@ export interface RuntimeDiagnostics {
 }
 
 export interface CreatorRuntimeSession {
+  /** Optional for older external Session doubles; the current SDK supplies it. */
+  reserveInputGesture?(key: object, slot: number, source: RuntimeTriggerSource):
+    import("@lmdj/web-runtime-platform/runtime_types").InputGestureLease | null;
+  release?(slot: number, source: RuntimeTriggerSource, gestureKey?: object): Promise<boolean>;
   start(): Promise<boolean>;
   close(): Promise<boolean>;
   // Production SDK observes the original terminal cleanup. Optional only for

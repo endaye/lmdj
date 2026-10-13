@@ -96,7 +96,7 @@ function sessionFixture(initialStatus = status("ready")) {
   const listeners = new Set<(value: typeof initialStatus) => void>();
   const calls = {
     raw: vi.fn(async ({eventId}: {eventId: string; event: Record<string, unknown>;
-      sessionId: string}) => ({eventId,
+      sessionId: string}, _physicalKey?: object) => ({eventId,
       acceptedTick: 1, inputSequence: 1, coalesced: false,
       replayed: false, projectRevision: null})),
     fx: vi.fn(async (_event: Record<string, unknown>) => ({applied: true as const})),
@@ -107,7 +107,7 @@ function sessionFixture(initialStatus = status("ready")) {
       committedRevision: 8, replayed: false, projectRevision: 8})),
     flush: vi.fn(async () => ({performanceId: ids.performance,
       committedRevision: 9, replayed: false, projectRevision: 9})),
-    stop: vi.fn(async () => ({requestId: "stop", sessionId: ids.session,
+    stop: vi.fn(async (_request: {sessionId: string; requestId: string}) => ({requestId: "stop", sessionId: ids.session,
       performanceId: ids.performance, state: "stopped" as const,
       pendingEventCount: 0, replayed: false, projectRevision: null})),
     capture: vi.fn(async (sink: {onStopped(): void}) => ({
@@ -958,7 +958,12 @@ test("closes raw admission before Stop drains its synthetic releases", async () 
   expect(fixture.controller.getState().recording.phase).toBe("stopping");
   await fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "too-late",
     slot: 1, velocity: 100});
-  expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(1);
+  // Both original Press and its synthetic matching Release enter the SDK
+  // now; its reserved queue orders the Release behind the held receipt. The
+  // later external Press remains refused by the Host stopping phase.
+  expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event))
+    .toEqual([{kind: "pad_press", gestureId: "open", slot: 0, velocity: 100},
+      {kind: "pad_release", gestureId: "open", slot: 0}]);
   firstEvent.resolve({eventId: "event", acceptedTick: 1, inputSequence: 1,
     coalesced: false, replayed: false, projectRevision: null});
   await Promise.all([first, stopping]);
@@ -2442,3 +2447,135 @@ for (const operation of ["raw-event", "flush"] as const) {
     expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
   });
 }
+
+
+test("admits Perform presses and physical release to the SDK before the first receipt settles", async () => {
+  const fixture = controllerFixture();
+  const firstReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise);
+  const view = renderSurface(fixture);
+  const firstKey = Object.freeze({});
+  const secondKey = Object.freeze({});
+  let pending: Promise<void>[] = [];
+  try {
+    await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+    await fixture.controller.record();
+    pending = [
+      fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "physical-first",
+        slot: 0, velocity: 100}, firstKey),
+      fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "physical-second",
+        slot: 0, velocity: 100}, secondKey),
+      fixture.controller.recordRawEvent({kind: "pad_release", gestureId: "physical-first",
+        slot: 0}, firstKey),
+    ];
+    // These are real Perform-controller calls into the Session double, not
+    // proof of the SDK's aggregate ledger or Native/durable completion.
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(3);
+    expect(fixture.runtime.calls.raw.mock.calls.map(([, key]) => key))
+      .toEqual([firstKey, secondKey, firstKey]);
+    expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.sessionId))
+      .toEqual([ids.session, ids.session, ids.session]);
+    expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event.kind))
+      .toEqual(["pad_press", "pad_press", "pad_release"]);
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await Promise.all(pending);
+    await fixture.controller.stop();
+    expect(fixture.controller.getState().recording.phase).toBe("stopped");
+  } finally {
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await Promise.all(pending.map(operation => operation.catch(() => {})));
+    view.unmount();
+  }
+});
+
+test("Stop retains the original journal owner and waits for its matching release before finalizing", async () => {
+  const fixture = controllerFixture();
+  const pressReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  const releaseReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  fixture.runtime.calls.raw.mockReturnValueOnce(pressReceipt.promise)
+    .mockReturnValueOnce(releaseReceipt.promise);
+  const view = renderSurface(fixture);
+  const physicalKey = Object.freeze({});
+  let press: Promise<void> | undefined;
+  let stopping: Promise<void> | undefined;
+  try {
+    await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+    await fixture.controller.record();
+    press = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "original-owner",
+      slot: 3, velocity: 100}, physicalKey);
+    stopping = fixture.controller.stop();
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
+    const [submittedPress, submittedRelease] = fixture.runtime.calls.raw.mock.calls;
+    expect(submittedPress?.[1]).toBe(physicalKey);
+    // Synthetic Stop may join the SDK's original (Session, gestureId) owner
+    // mapping without a second physical-key argument; never invent an owner.
+    expect(submittedRelease?.[0]).toMatchObject({sessionId: submittedPress?.[0].sessionId,
+      event: {kind: "pad_release", gestureId: "original-owner", slot: 3}});
+    expect(fixture.controller.getState().recording.phase).toBe("stopping");
+    expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+    expect(fixture.captureStop).not.toHaveBeenCalled();
+    pressReceipt.resolve({eventId: "press", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await press;
+    expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+    releaseReceipt.resolve({eventId: "release", acceptedTick: 2, inputSequence: 2,
+      coalesced: false, replayed: false, projectRevision: null});
+    await stopping;
+    expect(fixture.runtime.calls.stop).toHaveBeenCalledTimes(1);
+    expect(fixture.runtime.calls.stop.mock.calls[0]?.[0]).toMatchObject({sessionId: ids.session});
+    expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+    expect(fixture.order.indexOf("core-stop")).toBeLessThan(fixture.order.indexOf("capture-stop"));
+    expect(fixture.order.indexOf("capture-stop")).toBeLessThan(fixture.order.indexOf("tail-drained"));
+    expect(fixture.controller.getState().recording).toMatchObject({phase: "stopped",
+      wav: {state: "sealed", durableFrames: 100, reason: "stopped"}});
+  } finally {
+    pressReceipt.resolve({eventId: "press", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    releaseReceipt.resolve({eventId: "release", acceptedTick: 2, inputSequence: 2,
+      coalesced: false, replayed: false, projectRevision: null});
+    await press?.catch(() => {});
+    await stopping?.catch(() => {});
+    view.unmount();
+  }
+});
+
+test("observes a later SDK rejection while an earlier Perform receipt is still held", async () => {
+  const fixture = controllerFixture();
+  const firstReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  const original = new Error("second SDK admission rejected before first receipt");
+  fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise)
+    .mockRejectedValueOnce(original);
+  const view = renderSurface(fixture);
+  let first: Promise<void> | undefined;
+  let rejected: Promise<unknown> | undefined;
+  try {
+    await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+    await fixture.controller.record();
+    first = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "held-first",
+      slot: 0, velocity: 100}, Object.freeze({}));
+    rejected = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "rejected-second",
+      slot: 1, velocity: 100}, Object.freeze({})).then(() => null, error => error);
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
+    // Leave one ordinary event-loop turn with the first receipt still held.
+    // Vitest's unhandled-rejection check must remain clean: observing this
+    // SDK rejection cannot wait for the projection/completion tail to drain.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await first;
+    expect(await rejected).toBe(original);
+    // #1680: the public rejection retains the original error, while the
+    // surface projects the existing catalogue message for an untyped error.
+    expect(fixture.controller.getState().error).toBe(
+      "Something went wrong in Creator. Try again. Details are in Developer diagnostics.",
+    );
+  } finally {
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await first?.catch(() => {});
+    await rejected;
+    view.unmount();
+  }
+});

@@ -15,6 +15,7 @@ import type {
   RuntimeHostState,
   RuntimeOutcome,
   RuntimeVoiceState,
+  RuntimeTriggerSource,
   SampleInspect,
   SampleTriggerMode,
 } from "../src/runtime/runtime_types";
@@ -227,7 +228,8 @@ interface SampleFixtureOptions {
   getAuditionPlayback?: (slot: number) => PadPlayback | null;
   getArmedCaptureSlot?: () => number | null;
   onArmedCaptureStop?: (slot: number, source: import("../src/runtime/runtime_types").RuntimeTriggerSource) => void;
-  onPerformancePadEvent?: (event: PerformancePadInputEvent) => void;
+  onPerformancePadEvent?: (event: PerformancePadInputEvent,
+    source: RuntimeTriggerSource, key: object) => void;
 }
 
 function sampleFixture(options: SampleFixtureOptions = {}) {
@@ -2389,5 +2391,158 @@ describe("Creator exact physical gesture ownership", () => {
     controller.dispose();
     expect(trigger).toHaveBeenCalledExactlyOnceWith(0, 100, "keyboard");
     expect(value.triggerKeys).toEqual([undefined]);
+  });
+});
+
+
+describe("shared gesture reservation at Creator input ingress", () => {
+  function reservationWitness(value: ReturnType<typeof sampleFixture>, limit = 64) {
+    // This double controls SDK refusal only. These component tests prove the
+    // Creator boundary respects it; the SDK suite owns aggregate capacity.
+    const leases: Array<{key: object; slot: number; source: RuntimeTriggerSource;
+      lease: {cancelUnsubmittedPattern: ReturnType<typeof vi.fn>;
+        releasePhysical: ReturnType<typeof vi.fn>}}> = [];
+    const reserve = vi.fn((key: object, slot: number, source: RuntimeTriggerSource) => {
+      if (leases.length === limit) return null;
+      const lease = Object.freeze({cancelUnsubmittedPattern: vi.fn(), releasePhysical: vi.fn()});
+      leases.push({key, slot, source, lease});
+      return lease;
+    });
+    value.session.reserveInputGesture = reserve;
+    return {reserve, leases};
+  }
+
+  test.each(["inspection", "activation"] as const)(
+    "reserves before held %s and keeps the refused 65th physical key out of both producers",
+    async heldBoundary => {
+      const inspection = deferred<SampleInspect>();
+      const activation = deferred<boolean>();
+      const observer = vi.fn();
+      const activate = vi.fn(() => activation.promise);
+      const value = sampleFixture({
+        inspectSample: () => inspection.promise,
+        ...(heldBoundary === "activation" ? {activateAudioForGesture: activate} : {}),
+        onPerformancePadEvent: observer,
+      });
+      const witness = reservationWitness(value);
+      try {
+        for (let pointerId = 1; pointerId <= 65; pointerId++) {
+          expect(value.controller.pointerDown({type: "pointerdown", pointerId,
+            pointerType: "mouse", isPrimary: true, button: 0,
+            target: document.body, isTrusted: true}, 0)).toBe(true);
+        }
+        expect(witness.reserve).toHaveBeenCalledTimes(65);
+        expect(new Set(witness.reserve.mock.calls.map(([key]) => key)).size).toBe(65);
+        expect(witness.leases).toHaveLength(64);
+        expect(observer).toHaveBeenCalledTimes(64);
+        expect(observer.mock.calls.every(([event]) => event.kind === "pad_press")).toBe(true);
+        expect(observer.mock.calls.map(([, , key]) => key))
+          .toEqual(witness.leases.map(({key}) => key));
+        expect(value.inspectCalls).toEqual(heldBoundary === "inspection" ? [0] : []);
+        expect(activate).toHaveBeenCalledTimes(heldBoundary === "activation" ? 64 : 0);
+        expect(value.triggers).toEqual([]);
+        // Releasing a refused adapter key cannot fabricate a domain owner.
+        expect(value.controller.pointerUp({pointerId: 65}, 0)).toBe(true);
+        expect(observer).toHaveBeenCalledTimes(64);
+        expect(value.releases).toEqual([]);
+      } finally {
+        value.controller.dispose();
+        activation.resolve(false);
+        inspection.resolve(sampleInspect(0));
+        await settle();
+      }
+      expect(value.triggers).toEqual([]);
+    },
+  );
+
+  test("a released queued one-shot keeps its original key through both observers and SDK input", async () => {
+    const inspection = deferred<SampleInspect>();
+    const observer = vi.fn();
+    const value = sampleFixture({inspectSample: () => inspection.promise,
+      onPerformancePadEvent: observer});
+    const witness = reservationWitness(value);
+    try {
+      value.controller.keyDown({code: "KeyZ", target: document.body});
+      const originalKey = witness.leases[0]!.key;
+      value.controller.keyUp({code: "KeyZ"});
+      expect(observer.mock.calls.map(([event]) => event.kind)).toEqual(["pad_press", "pad_release"]);
+      expect(observer.mock.calls.map(([, , key]) => key)).toEqual([originalKey, originalKey]);
+      expect(witness.leases[0]!.lease.releasePhysical).toHaveBeenCalled();
+      expect(value.triggers).toEqual([]);
+      expect(value.releases).toEqual([]);
+      inspection.resolve(sampleInspect(0));
+      await settle();
+      await settle();
+      expect(value.triggerKeys).toEqual([originalKey]);
+      expect(value.releaseKeys).toEqual([originalKey]);
+      expect(value.triggers).toEqual([{slot: 0, velocity: 100, source: "keyboard"}]);
+      expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
+      expect(witness.leases[0]!.lease.cancelUnsubmittedPattern).toHaveBeenCalled();
+    } finally {
+      value.controller.dispose();
+      inspection.resolve(sampleInspect(0));
+      await settle();
+    }
+  });
+
+  test("cancel settles the queued key without transferring it to a different physical press", async () => {
+    const inspection = deferred<SampleInspect>();
+    const observer = vi.fn();
+    const value = sampleFixture({inspectSample: () => inspection.promise,
+      onPerformancePadEvent: observer});
+    const witness = reservationWitness(value);
+    const down = {type: "pointerdown", pointerType: "mouse", isPrimary: true,
+      button: 0, target: document.body};
+    try {
+      value.controller.pointerDown({...down, pointerId: 1}, 0);
+      value.controller.pointerDown({...down, pointerId: 2}, 0);
+      const [first, cancelled] = witness.leases;
+      expect(first!.key).not.toBe(cancelled!.key);
+      expect(value.controller.pointerCancel({type: "pointercancel", pointerId: 2}, 0)).toBe(true);
+      expect(cancelled!.lease.releasePhysical).toHaveBeenCalled();
+      expect(cancelled!.lease.cancelUnsubmittedPattern).toHaveBeenCalled();
+      expect(observer.mock.calls.map(([, , key]) => key))
+        .toEqual([first!.key, cancelled!.key, cancelled!.key]);
+      value.controller.pointerUp({pointerId: 1}, 0);
+      inspection.resolve(sampleInspect(0));
+      await settle();
+      await settle();
+      expect(value.inspectCalls).toEqual([0]);
+      expect(value.triggerKeys).toEqual([first!.key]);
+      expect(value.releaseKeys).toEqual([first!.key]);
+      expect(observer.mock.calls.map(([event]) => event.kind))
+        .toEqual(["pad_press", "pad_press", "pad_release", "pad_release"]);
+    } finally {
+      value.controller.dispose();
+      inspection.resolve(sampleInspect(0));
+      await settle();
+    }
+  });
+
+  test("definite pre-trigger inspection failure settles preparation but waits for actual keyup", async () => {
+    const inspection = deferred<SampleInspect>();
+    const observer = vi.fn();
+    const value = sampleFixture({inspectSample: () => inspection.promise,
+      onPerformancePadEvent: observer});
+    const witness = reservationWitness(value);
+    try {
+      value.controller.keyDown({code: "KeyZ", target: document.body});
+      const {key, lease} = witness.leases[0]!;
+      inspection.reject(Object.assign(new Error("sample unavailable before submission"), {code: "NOT_FOUND"}));
+      await settle();
+      await settle();
+      expect(lease.cancelUnsubmittedPattern).toHaveBeenCalled();
+      expect(lease.releasePhysical).not.toHaveBeenCalled();
+      expect(value.triggers).toEqual([]);
+      expect(value.releases).toEqual([]);
+      expect(value.actions).toContainEqual({type: "runtime-changed", phase: "failed", errorCode: "NOT_FOUND"});
+      value.controller.keyUp({code: "KeyZ"});
+      expect(lease.releasePhysical).toHaveBeenCalled();
+      expect(observer.mock.calls.map(([, , originalKey]) => originalKey)).toEqual([key, key]);
+      expect(value.releases).toEqual([]);
+    } finally {
+      value.controller.dispose();
+      await settle();
+    }
   });
 });

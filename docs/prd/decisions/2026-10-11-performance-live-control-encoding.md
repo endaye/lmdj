@@ -427,6 +427,15 @@ waiting input；另给已接收的最多64个Pad gesture各一条matching releas
 同时最多64个Host open Pad gesture，新增第65个press拒绝且不报告admitted，给每个
 已接收gesture预留其release位置。cleanup取消尚未Core接收的waiting输入时明确reject其
 promise，不静默丢弃；Core已admitted的release/Journal仍先完成。
+2026-10-13 用户进一步确定：Pattern 与 Performance 合计最多保留 64 个真实
+Pad 手势，同一次物理按下进入两个录音域时只占一个名额。S6 共享接纳以
+同一 Session 的 physical owner 为准，不能把两套独立上限当作合计上限。Creator 在自己的
+延迟队列之前同步接纳，并将原 opaque physical gesture key 传到 SDK；该 key
+只存在于当前 Session，不进入 wire 或 Project Truth，也不能从 UUID 或 Pad
+编号猜测。没有 physical key 的直接调用保守地独立计数。已提交、结果未知或
+仍被按住的手势继续占有名额；只有真实匹配 Release、消费者结算或明确的 owner
+关闭能清偿对应责任。容量满不拒绝已有手势的 matching Release，观察者超时或
+UI 回调结束不释放真实 owner。各域原有去重、顺序和 cleanup 边界继续适用。
 这些是原FIFO的容量规则，不增另一套调度器；mapping/expected序号到dequeue才取。
 W1/C1 owning压力oracle延迟begin/receipt并超额调用，验证普通pending≤1、已接收
 Pad release仍完成、cleanup优先完成；不能把Host未接收的输入报告为Core admitted。
