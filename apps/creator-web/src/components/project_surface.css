@@ -1,0 +1,79 @@
+/* #2112 U04: Project / LOCAL, Figma 401:3860. U01 owns shared action
+   face/hit sizing and the separate effective-size acceptance after scaling. */
+.project-touch-list .surface-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+}
+.project-touch-list .project-chooser-header {
+  justify-content: space-between;
+  gap: var(--creator-group-gap);
+}
+.project-touch-list .project-your {
+  font: 500 var(--creator-heading-size)/20px var(--creator-font-action);
+  letter-spacing: 0;
+}
+.project-touch-list .project-local-count {
+  color: var(--creator-muted);
+  font: 10px/14px var(--creator-font-mono);
+}
+.project-touch-list .project-create-row,
+.project-touch-list .project-open-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--creator-group-gap);
+  margin-top: 0;
+}
+.hardware-workspace .project-touch-list .local-projects,
+.project-touch-list .local-projects {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+  margin: var(--creator-group-gap) 0;
+}
+.project-touch-list .local-projects > li {
+  display: grid;
+  background: var(--creator-base);
+  border-radius: 7px;
+  padding: 12px;
+  gap: 6px;
+}
+.hardware-workspace .project-touch-list .local-projects .project-card {
+  display: block;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  min-height: max(44px, var(--creator-control-hit));
+  text-align: left;
+}
+.project-touch-list .project-card-index { display: none; }
+.project-touch-list .project-card-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .project-touch-list .project-card-text strong {
+  font: 500 14px/20px var(--creator-font-action);
+  letter-spacing: 0;
+}
+.hardware-workspace .project-touch-list .is-selected .project-card-text strong {
+  font-size: var(--creator-value-size);
+  line-height: 25px;
+}
+.hardware-workspace .project-touch-list .project-card-text span {
+  font: 10px/14px var(--creator-font-mono);
+  letter-spacing: 0;
+}
+.hardware-workspace .project-touch-list .project-card-text .project-card-current {
+  color: var(--creator-lime);
+}
+.project-touch-list .project-open {
+  width: 100%;
+  min-height: max(44px, var(--creator-control-hit));
+}
+.project-touch-list .project-browse-hint {
+  margin: var(--creator-group-gap) 0 0;
+  color: var(--creator-muted);
+  font: 10px/14px var(--creator-font-mono);
+}

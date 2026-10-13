@@ -290,13 +290,40 @@ async function inspectTruth(page) {
   return inspected.project;
 }
 
-test("Project arrows follow the rendered three-column list and only OPEN changes Project", async ({page}) => {
+test("Project arrows follow the single list and only Open changes Project", async ({page}, testInfo) => {
+  // Observe the same native transport the application uses; navigation must
+  // neither reopen a Project nor produce a Pad trigger, even without audio.
+  await page.addInitScript(() => {
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get: () => exposed,
+      set(host) {
+        const transport = host.transport;
+        window.__projectNavigationCommands = [];
+        host.transport = Object.freeze({
+          send(...args) {
+            if (["project.open", "trigger"].includes(args[0]?.operation)) {
+              window.__projectNavigationCommands.push(structuredClone(args[0]));
+            }
+            return transport.send(...args);
+          },
+          subscribe: (...args) => transport.subscribe(...args),
+          subscribeFailure: (...args) => transport.subscribeFailure(...args),
+          terminate: (...args) => transport.terminate(...args),
+          get terminated() { return transport.terminated; },
+          get terminalOwnerReleased() { return transport.terminalOwnerReleased; },
+        });
+        exposed = host;
+      },
+    });
+  });
   await page.goto("/");
   await waitForBootProject(page);
   const keys = page.getByTestId("physical-controls");
   const touch = page.getByTestId("touch-workspace");
-  // Four real local Projects expose a complete row and a shorter final row.
-  // Create them through the existing UI, not a cloned DOM or fake inventory.
+  // Four real local Projects force scrolling in the single column. Create
+  // them through the UI rather than cloning cards or fabricating inventory.
   for (let index = 0; index < 3; index += 1) {
     const before = await inspectTruth(page);
     await keys.getByRole("button", {name: "Project", exact: true}).click();
@@ -309,61 +336,106 @@ test("Project arrows follow the rendered three-column list and only OPEN changes
   const cards = touch.locator(".project-card");
   await expect(cards).toHaveCount(4);
   const labels = await cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-label")));
+  const before = await inspectTruth(page);
+  const commandsBefore = await page.evaluate(() => window.__projectNavigationCommands);
   const expectSelection = async (index) => {
     await expect.poll(() => cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-pressed"))))
       .toEqual([0, 1, 2, 3].map(cardIndex => String(cardIndex === index)));
+    expect(await inspectTruth(page)).toEqual(before);
+    expect(await page.evaluate(() => window.__projectNavigationCommands)).toEqual(commandsBefore);
+    // The entire selected card, including its explicit Open action, must be
+    // visible after rail/encoder navigation without a Playwright auto-scroll.
+    const visible = await touch.evaluate(element => {
+      const card = element.querySelector(".local-projects .is-selected").getBoundingClientRect();
+      const panel = element.getBoundingClientRect();
+      return card.top >= panel.top - 1 && card.bottom <= panel.bottom + 1 &&
+        card.left >= panel.left - 1 && card.right <= panel.right + 1;
+    });
+    expect(visible).toBe(true);
   };
-  const before = await inspectTruth(page);
   for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
     await page.setViewportSize(viewport);
-    await touch.evaluate(element => {element.scrollTop = 0;});
     await expectConsoleFitsStage(page);
+    await cards.nth(0).click();
+    await expectSelection(0);
+    await page.screenshot({path:testInfo.outputPath(`project-list-top-${viewport.width}x${viewport.height}.png`)});
     const geometry = await touch.evaluate(element => ({
       width: element.clientWidth, scrollWidth: element.scrollWidth,
+      listWidth: element.querySelector(".local-projects").getBoundingClientRect().width,
+      headingWidth: element.querySelector(".project-chooser-header").getBoundingClientRect().width,
+      createWidth: element.querySelector(".project-create-row").getBoundingClientRect().width,
       cards: [...element.querySelectorAll(".project-card")].map(card => ({
         rect: card.getBoundingClientRect().toJSON(), width: card.clientWidth, scrollWidth: card.scrollWidth,
+        fullId: card.title,
       })),
     }));
     expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
-    for (const card of geometry.cards) expect(card.scrollWidth).toBeLessThanOrEqual(card.width);
-    const [first, second, third, fourth] = geometry.cards.map(card => card.rect);
-    expect(second.left).toBeGreaterThan(first.right);
-    expect(third.left).toBeGreaterThan(second.right);
-    expect(second.top).toBeCloseTo(first.top, 0);
-    expect(third.top).toBeCloseTo(first.top, 0);
-    expect(fourth.left).toBeCloseTo(first.left, 0);
-    expect(fourth.top).toBeGreaterThan(first.bottom);
+    expect(geometry.headingWidth, "Project title row spans the same content width as the cards").toBeCloseTo(geometry.listWidth, 0);
+    expect(geometry.createWidth, "New and Import fill the same content width as the cards").toBeCloseTo(geometry.listWidth, 0);
+    for (const [index, card] of geometry.cards.entries()) {
+      expect(card.scrollWidth).toBeLessThanOrEqual(card.width);
+      expect(card.fullId).toMatch(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/);
+      expect(card.rect.left).toBeCloseTo(geometry.cards[0].rect.left, 0);
+      if (index > 0) expect(card.rect.top).toBeGreaterThan(geometry.cards[index - 1].rect.bottom);
+    }
     await cards.nth(1).scrollIntoViewIfNeeded();
     const target = await cards.nth(1).boundingBox();
     const hit = await page.evaluate(({x, y}) =>
       document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
     {x: target.x + target.width / 2, y: target.y + target.height / 2});
     expect(hit).toBe(labels[1]);
-    await cards.nth(0).click();
-    await expectSelection(0);
-    await expect(keys.getByRole("button", {name: "Previous Project row — ↑", exact: true})).toBeDisabled();
-    await keys.getByRole("button", {name: "Next Project — →", exact: true}).click();
+    await cards.nth(1).click();
     await expectSelection(1);
-    expect(await inspectTruth(page)).toEqual(before);
-    await keys.getByRole("button", {name: "Next Project row — ↓", exact: true}).click();
-    await expectSelection(3);
-    await expect(keys.getByRole("button", {name: "Next Project row — ↓", exact: true})).toBeDisabled();
-    expect(await inspectTruth(page)).toEqual(before);
-    await keys.getByRole("button", {name: "Previous Project row — ↑", exact: true}).click();
+    await keys.getByRole("button", {name: "Previous Project — ↑", exact: true}).click();
     await expectSelection(0);
+    await expect(keys.getByRole("button", {name: "Previous Project — ↑", exact: true})).toBeDisabled();
+    for (const name of ["Undo — SHIFT + ←", "Redo — SHIFT + →"]) {
+      await expect(keys.getByRole("button", {name, exact: true})).toBeDisabled();
+    }
+    for (let index = 1; index <= 3; index += 1) {
+      await keys.getByRole("button", {name: "Next Project — ↓", exact: true}).click();
+      await expectSelection(index);
+    }
+    await expect(keys.getByRole("button", {name: "Next Project — ↓", exact: true})).toBeDisabled();
+    for (let index = 2; index >= 0; index -= 1) {
+      await keys.getByRole("button", {name: "Previous Project — ↑", exact: true}).click();
+      await expectSelection(index);
+    }
+    const encoder = keys.getByRole("button", {name: "Encoder 1 — Select Project", exact: true});
+    await encoder.focus();
+    await page.keyboard.press("ArrowUp");
+    await expectSelection(1);
+    const scrollBefore = await touch.evaluate(element => element.scrollTop);
+    const scroller = keys.getByRole("button", {name: "Encoder 2 — Scroll Projects", exact: true});
+    await scroller.focus();
+    await page.keyboard.press("ArrowUp");
+    expect(await touch.evaluate(element => element.scrollTop)).toBeGreaterThan(scrollBefore);
+    await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "true");
     expect(await inspectTruth(page)).toEqual(before);
+    expect(await page.evaluate(() => window.__projectNavigationCommands)).toEqual(commandsBefore);
+    await encoder.focus();
+    await page.keyboard.press("ArrowUp");
+    await expectSelection(2);
+    await page.screenshot({path:testInfo.outputPath(`project-list-selected-${viewport.width}x${viewport.height}.png`)});
   }
   const currentIndex = await cards.evaluateAll(elements => elements.findIndex(element =>
     element.parentElement.getAttribute("aria-current") === "true"));
   expect(currentIndex).toBeGreaterThanOrEqual(0);
   const targetIndex = currentIndex === 3 ? 0 : 3;
   await cards.nth(targetIndex).click();
-  expect(await inspectTruth(page)).toEqual(before);
+  await expectSelection(targetIndex);
   const selectedId = labels[targetIndex].slice("Select Project ".length);
   await page.getByRole("button", {name: `Open Project ${selectedId}`, exact: true}).click();
   await expect(page.getByRole("heading", {name: `Project ${selectedId}`, exact: true}))
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  expect((await inspectTruth(page)).project_id.slice(0, 8)).toBe(selectedId);
+  const opened = await inspectTruth(page);
+  expect(opened.project_id.slice(0, 8)).toBe(selectedId);
+  const commandsAfter = await page.evaluate(() => window.__projectNavigationCommands);
+  expect(commandsAfter.slice(commandsBefore.length).map(command => command.operation)).toEqual(["project.open"]);
+  expect(commandsAfter.at(-1).payload.project_id).toBe(opened.project_id);
+  await page.reload();
+  await waitForProjectReopen(page, selectedId);
+  expect(await inspectTruth(page)).toEqual(opened);
 });
 
 test("commits Tempo only on release and keeps Project Truth across a reload", async ({page}) => {
