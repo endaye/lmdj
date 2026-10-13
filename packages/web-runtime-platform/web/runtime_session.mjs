@@ -5155,6 +5155,18 @@ function createRuntimeSessionController(options = {}) {
 
   async function queryPerformanceRecordingStatus() {
     const value = await recoverableQuery("performance.record.status", {});
+    // A Pattern launch ACK is an internal durable admission. Its next cursor
+    // can advance after the launch-request receipt; echo the observed Core
+    // cursor for the same active binding, without regressing on an old read.
+    if (headeredRecording !== null && value.state === "active" &&
+        value.profile === "header_input_sequence" &&
+        value.session_id === headeredRecording.sessionId &&
+        value.performance_id === headeredRecording.performanceId &&
+        value.control_epoch === headeredRecording.controlEpoch &&
+        BigInt(value.next_recording_sequence) >
+          BigInt(headeredRecording.nextRecordingSequence)) {
+      headeredRecording.nextRecordingSequence = value.next_recording_sequence;
+    }
     return Object.freeze({
       state: value.state,
       sessionId: value.session_id,

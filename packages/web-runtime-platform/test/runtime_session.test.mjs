@@ -8218,3 +8218,60 @@ test("the dual-ready gate parks recorded inputs until Core-ready and the started
   assert.equal(eventEnvelope.length, 1);
   await session.close();
 });
+
+
+for (const variant of ["ack", "delayed-status", "other-session", "other-epoch"]) {
+  test(`headered recording cursor follows matching observed status: ${variant}`, async () => {
+    const sessionId = "40000000-0000-4000-8000-000000000060";
+    const performanceId = "40000000-0000-4000-8000-000000000061";
+    let observedSequence = "2";
+    let events = 0;
+    const sent = [];
+    const {session} = fixture({send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {performance_id: performanceId, committed_revision: 1,
+            replayed: false, profile: "header_input_sequence", control_epoch: LIVE_EPOCH,
+            core_control_ready: true, next_recording_sequence: "1", fx_bindings: [],
+            project_revision: 1});
+        case "performance.record.status": {
+          const result = {state: "active", session_id: variant === "other-session"
+              ? "40000000-0000-4000-8000-000000000099" : sessionId,
+            performance_id: performanceId, journal_revision: 1, next_flush_seq: 1,
+            pending_event_count: 0, open_pad_gestures: 0, open_fx_gestures: 0,
+            hold: false, pending_launch: null, last_launch_ack: null,
+            profile: "header_input_sequence", control_epoch: variant === "other-epoch"
+              ? "40000000-0000-4000-8000-000000000098" : LIVE_EPOCH,
+            core_control_ready: true, next_recording_sequence: observedSequence,
+            pending_admission: null, project_revision: null};
+          return success(envelope, result);
+        }
+        case "performance.record.event":
+          sent.push(envelope.payload.expected_recording_sequence);
+          events += 1;
+          return success(envelope, {event_id: envelope.payload.event_id, accepted_tick: events,
+            input_sequence: String(events), next_recording_sequence: String(events + 1),
+            result: "no_audio", coalesced: false, gesture_generation: null,
+            recording_gesture_id: null, replayed: false, project_revision: null});
+        default: return success(envelope, defaultResult(envelope.operation));
+      }
+    }});
+    await session.start();
+    await session.beginPerformanceRecording({sessionId, performanceId,
+      expectedRevision: 0, controlEpoch: LIVE_EPOCH});
+    const input = () => session.recordPerformanceEvent({sessionId,
+      eventId: webcrypto.randomUUID(), event: {kind: "hold_on"}});
+    if (variant === "delayed-status") {
+      await input();
+      // A stale status payload must not roll back a later admitted receipt.
+      observedSequence = "1";
+    }
+    await session.queryPerformanceRecordingStatus();
+    await input();
+    const expected = variant === "other-session" || variant === "other-epoch" ? "1"
+      : "2";
+    assert.equal(sent.at(-1), expected,
+      "the next real input must echo the matching Core cursor without regression");
+    await session.close();
+  });
+}
