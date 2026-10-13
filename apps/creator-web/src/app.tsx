@@ -3130,6 +3130,24 @@ function Workspace({
         </section>
       )}
 
+              {recoveryOffer !== null &&
+                recoveryOffer.projectId === state.project.current?.projectId && (
+                <RecoveryPrompt
+                  key={recoveryOffer.id}
+                  counts={{
+                    sequence: recoveryOffer.sequence.length,
+                    performance: recoveryOffer.performance.length,
+                  }}
+                  onKeep={keepInterruptedRecordings}
+                  onDiscard={discardInterruptedRecordings}
+                  onOpen={(mode) => {
+                    selectMode(mode);
+                    setRecoveryOffer(null);
+                  }}
+                  onClose={() => setRecoveryOffer(null)}
+                />
+              )}
+
               {!systemOpen && ["sample", "slice"].includes(activeMode) &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
                 {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
@@ -3449,23 +3467,6 @@ function Workspace({
           } catch (error) {reportFailure("Prepare default sounds", error); throw error;}
         }}
         onDetails={openSystem} />
-              {recoveryOffer !== null &&
-                recoveryOffer.projectId === state.project.current?.projectId && (
-                <RecoveryPrompt
-                  key={recoveryOffer.id}
-                  counts={{
-                    sequence: recoveryOffer.sequence.length,
-                    performance: recoveryOffer.performance.length,
-                  }}
-                  onKeep={keepInterruptedRecordings}
-                  onDiscard={discardInterruptedRecordings}
-                  onOpen={(mode) => {
-                    selectMode(mode);
-                    setRecoveryOffer(null);
-                  }}
-                  onClose={() => setRecoveryOffer(null)}
-                />
-              )}
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}

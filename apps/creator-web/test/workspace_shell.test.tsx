@@ -5072,20 +5072,53 @@ test("returning from System preserves focus acquired by the next creative contro
   }
 });
 
-test("recovery More options leaves System and opens its Sequence destination", async () => {
+test("recovery precedes page content and its direct Sequence exit leaves System", async () => {
   const fixture = mutableSampleRuntimeFixture();
   const {session, apply, discard} = interruptedSequenceSession(fixture);
   render(<App initialState={ready} runtimeFactory={() => session} />);
   const region = await interruptedRegion();
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  const navigation = screen.getByRole("navigation", {name: "Workspace navigation"});
+  expect(region.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING)
+    .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   await userEvent.click(screen.getByRole("button", {name: "System"}));
+  const system = screen.getByRole("region", {name: "System"});
+  expect(region.compareDocumentPosition(system) & Node.DOCUMENT_POSITION_FOLLOWING)
+    .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(system.contains(region)).toBe(false);
   expect(screen.getByRole("button", {name: "Back to music"})).toBeTruthy();
   expect(screen.queryByRole("region", {name: "Sequence editor"})).toBeNull();
-  await userEvent.click(within(region).getByRole("button", {name: "More options"}));
+  await userEvent.click(within(region).getByRole("button", {name: "Open Sequence"}));
   expect(screen.queryByRole("button", {name: "Back to music"})).toBeNull();
   expect(screen.getByRole("region", {name: "Sequence editor"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Sequence"}).getAttribute("aria-current")).toBe("page");
   expect(apply).not.toHaveBeenCalled();
   expect(discard).not.toHaveBeenCalled();
+});
+
+test("both Recovery destinations stay explicit and Open Perform preserves their candidates", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const sequence = interruptedSequenceSession(fixture);
+  const take = {sessionId: "take-session", performanceId: "take", reason: "owner_lost",
+    durableEventCount: 2, pendingEventCount: 0, fingerprint: "f".repeat(64)};
+  const performance = performanceSessionStubs([take]);
+  const session = Object.assign(sequence.session, performance.stubs);
+  render(<App initialState={ready} runtimeFactory={() => session} />);
+  const region = await interruptedRegion();
+  expect(within(region).getByRole("button", {name: "Open Sequence"})).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "System"}));
+  await userEvent.click(within(region).getByRole("button", {name: "Open Perform"}));
+  expect(screen.queryByRole("button", {name: "Back to music"})).toBeNull();
+  expect(screen.getByRole("main", {name: "Perform"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Perform"}).getAttribute("aria-current"))
+    .toBe("page");
+  expect(screen.queryByRole("region", {name: "Interrupted recording"})).toBeNull();
+  expect(await session.listSequenceRecovery()).toEqual([INTERRUPTED]);
+  expect(await session.listPerformanceRecovery()).toEqual([take]);
+  expect(sequence.apply).not.toHaveBeenCalled();
+  expect(sequence.discard).not.toHaveBeenCalled();
+  expect(performance.stubs.applyPerformanceRecovery).not.toHaveBeenCalled();
+  expect(performance.stubs.discardPerformanceRecovery).not.toHaveBeenCalled();
 });
 
 test("recovery Open Sequence after a refused Keep leaves System with the take retained", async () => {

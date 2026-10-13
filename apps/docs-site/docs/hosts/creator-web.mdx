@@ -506,6 +506,8 @@ When a Project opens in a Runtime Session and it holds recordings an earlier
 owner left unfinished, Creator asks once. The trigger is boot, a library open,
 a take-back, a reload or a Runtime replacement. Creator reads the Sequence and
 Performance recovery lists, then shows an **Interrupted recording** region.
+The **Recording recovery** card follows active recording Stop / Review notices
+and precedes normal page content. It stays available during a System visit.
 It names how many recordings there are and where each was made. A revision
 change within the same open never asks again. A recording interrupted while
 the Project stays open appears only in its existing list.
@@ -516,10 +518,15 @@ to the original Pattern, and Performance apply through the Perform controller.
 A recording the Core refuses, such as an unresolved admission, stays in its
 list. The region then names it and offers **Open Sequence** or **Open
 Perform**. **Discard…** needs a second confirmation, because a discarded
-recording cannot be restored. **More options** opens the list where the
-recordings are, and **Decide later** closes the region. Neither changes
-anything. The region is not an alert, and it takes no focus, because Enter and
-Space also play Pads.
+recording cannot be restored; **Cancel** returns to the question without
+writing anything. The initial question directly offers **Open Sequence** and/or
+**Open Perform**, according to the actual candidate counts. Either leaves
+System if necessary, opens its destination and closes the prompt, preserving
+all candidates. **Decide later** only closes the prompt. The card's phase label
+reflects asking, confirmation, working, completion or remaining candidates;
+it never represents an unfinished operation as saved. The region is nonmodal,
+does not lock background navigation and takes no focus, because Enter and Space
+also play Pads.
 
 In the Sequence recovery list, restoring into another Pattern now sits behind a
 **More** disclosure. Recover original Pattern and Discard stay visible.
