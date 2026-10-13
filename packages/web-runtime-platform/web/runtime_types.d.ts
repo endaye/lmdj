@@ -758,6 +758,8 @@ export interface PerformanceHeaderedBeginResult extends PerformanceLifecycleResu
   readonly coreControlReady: boolean;
   readonly nextRecordingSequence: string;
   readonly fxBindings: readonly PerformanceFxBinding[];
+  // Present only when this begin supplied a sink; the exact owned SDK handle.
+  readonly capture?: PerformanceMasterCapture;
 }
 
 export type PerformanceHeaderedEvent =

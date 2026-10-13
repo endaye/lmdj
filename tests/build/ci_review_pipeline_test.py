@@ -5,6 +5,7 @@ Backend network/authentication and GitHub writes are explicitly O1 gaps. The
 tests do not turn a mocked write into evidence of platform permissions.
 """
 import copy
+import base64
 import hashlib
 import json
 import os
@@ -816,6 +817,7 @@ class PipelineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(pipeline, "git", return_value=("c" * 40 + "\n").encode()), \
                 mock.patch.object(pipeline, "fetch"), mock.patch.object(pipeline, "authenticate", side_effect=auth), \
+                mock.patch.object(pipeline, "prepare_fixed_input"), \
                 (mock.patch.object(pipeline, "previous_records", return_value=([], unavailable))
                  if prior_reviews is None else contextlib.nullcontext()), \
                 mock.patch.object(pipeline, "api", return_value={"id": 5}), \
@@ -1042,6 +1044,235 @@ class PipelineTests(unittest.TestCase):
         head = git("rev-parse", "HEAD")
         return repository, base, head
 
+    def make_real_partial_input(self):
+        repository, base, _ = self.make_real_t2_repo()
+        # Clone before this head exists: a warmed fixture cannot expose #2118.
+        remote = repository.parent / "remote.git"
+        partial = repository.parent / "partial"
+
+        def git(cwd, *args):
+            result = subprocess.run(["git", *map(str, args)], cwd=cwd, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            return result.stdout.decode().strip()
+
+        git(repository, "reset", "--hard", base)
+        git(repository, "clone", "--bare", repository, remote)
+        git(remote, "config", "uploadpack.allowFilter", "true")
+        git(repository, "clone", "--filter=blob:none", remote.as_uri(), partial)
+        (repository / "source.txt").write_text("fresh head after clone\n", encoding="utf-8")
+        (repository / "added.txt").write_text("new blob\n", encoding="utf-8")
+        git(repository, "add", ".")
+        git(repository, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "-qm", "fresh head")
+        head = git(repository, "rev-parse", "HEAD")
+        git(repository, "push", remote, "HEAD:refs/heads/fresh")
+        git(partial, "fetch", "origin", head)
+        new_oids = [git(repository, "rev-parse", head + ":" + path)
+                    for path in ("source.txt", "added.txt")]
+        missing = git(partial, "rev-list", "--objects", head, "--missing=print")
+        for oid in new_oids:
+            self.assertIn("?" + oid, missing)
+        self.assertEqual(git(partial, "config", "remote.origin.promisor"), "true")
+        self.assertEqual(git(partial, "config", "remote.origin.partialclonefilter"), "blob:none")
+        return repository, partial, base, head, git
+
+    def collect_partial_input(self, partial, base, head, output):
+        target = {"review": "true", "head_sha": head, "base_sha": base, "body": "fixture"}
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "2118",
+                       "HEAD_SHA": head, "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                       "GITHUB_TOKEN": "fixture-only", "AUTO_RECHECK": "false"}
+        with mock.patch.dict(os.environ, environment, clear=False), \
+                mock.patch.object(pipeline, "ROOT", partial), \
+                mock.patch.object(pipeline, "response_schema", return_value={}), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value={}), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", side_effect=[target, target]):
+            witness = pipeline.collect_t2(output)
+        document = pipeline.read(output / "t2-input.json")
+        t2.authenticate_input(document)
+        self.assertIsNotNone(witness)
+        self.assertEqual(document["identity"]["head_sha"], head)
+        self.assertFalse((output / "collection-failure.json").exists())
+        return document
+
+    def test_partial_clone_prepares_fresh_head_before_complete_collection(self):
+        repository, partial, base, head, git = self.make_real_partial_input()
+        remote = repository.parent / "remote.git"
+        # A second runner starts with an independent object cache.
+        second = repository.parent / "second-runner"
+        git(repository, "clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), second)
+        git(second, "update-ref", "HEAD", base)
+        for index, checkout in enumerate((partial, second)):
+            document = self.collect_partial_input(checkout, base, head, repository.parent / f"complete-{index}")
+            self.assertEqual({item["path"] for item in document["files"]}, {"source.txt", "added.txt"})
+            for item in document["files"]:
+                for side, revision in (("base", base), ("head", head)):
+                    blob = item[side]
+                    if blob is None:
+                        continue
+                    expected = subprocess.run(["git", "show", revision + ":" + item["path"]],
+                                              cwd=repository, capture_output=True, check=True).stdout
+                    self.assertEqual(blob["byte_length"], len(expected))
+                    self.assertEqual(blob["sha256"], hashlib.sha256(expected).hexdigest())
+                    self.assertEqual(base64.b64decode(blob["data_b64"], validate=True), expected)
+            full = subprocess.run(["git", "diff", "--no-ext-diff", "--no-textconv", "--full-index", base, head],
+                                  cwd=repository, capture_output=True, check=True).stdout
+            self.assertEqual(document["diff"]["text"].encode(), full)
+        # The next head must prepare newly absent bytes, not reuse the warm proof.
+        (repository / "source.txt").write_text("second fresh head\n", encoding="utf-8")
+        git(repository, "add", "source.txt")
+        git(repository, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "-qm", "second fresh head")
+        next_head = git(repository, "rev-parse", "HEAD")
+        git(repository, "push", remote, "HEAD:refs/heads/fresh")
+        git(partial, "fetch", "origin", next_head)
+        oid = git(repository, "rev-parse", next_head + ":source.txt")
+        self.assertIn("?" + oid, git(partial, "rev-list", "--objects", next_head, "--missing=print"))
+        document = self.collect_partial_input(partial, base, next_head, repository.parent / "next-complete")
+        self.assertEqual(next(item["head"]["object_id"] for item in document["files"]
+                              if item["path"] == "source.txt"), oid)
+
+    def test_partial_clone_prepares_rename_and_base_attributes_before_canonical_collection(self):
+        repository, base, head = self.make_real_rename_repo(pure=False, attributes=True)
+        remote, partial = repository.parent / "remote.git", repository.parent / "partial"
+        def git(cwd, *args):
+            return subprocess.run(["git", *map(str, args)], cwd=cwd, capture_output=True,
+                                  check=True).stdout.decode().strip()
+        git(repository, "clone", "--bare", repository, remote)
+        git(remote, "config", "uploadpack.allowFilter", "true")
+        git(repository, "clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), partial)
+        git(partial, "update-ref", "HEAD", base)
+        attribute_oid = git(repository, "rev-parse", base + ":contracts/.gitattributes")
+        self.assertIn("?" + attribute_oid, git(partial, "rev-list", "--objects", "--all", "--missing=print"))
+        document = self.collect_partial_input(partial, base, head, repository.parent / "rename-complete")
+        self.assertEqual([(item["change_kind"], item["old_path"], item["path"]) for item in document["files"]],
+                         [("renamed", "contracts/old.txt", "apps/creator-web/new.txt")])
+        self.assertEqual(pipeline.input_producer.missing_input_objects(
+            partial, [attribute_oid], base=base), ())
+        self.assertEqual(git(partial, "cat-file", "blob", attribute_oid), "*.txt diff")
+        self.assertIn("+changed", document["diff"]["text"])
+
+    def test_preparation_preserves_missing_base_attribute_binary_semantics(self):
+        repository, base, _ = self.make_real_t2_repo()
+        def git(cwd, *args):
+            return subprocess.run(["git", *map(str, args)], cwd=cwd, capture_output=True,
+                                  check=True).stdout.decode().strip()
+        git(repository, "reset", "--hard", base)
+        (repository / ".gitattributes").write_text("*.txt -diff\n")
+        git(repository, "add", ".gitattributes")
+        git(repository, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "-qm", "base binary attribute")
+        base = git(repository, "rev-parse", "HEAD")
+        (repository / "source.txt").write_text("changed\n")
+        git(repository, "add", "source.txt")
+        git(repository, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "-qm", "new content")
+        head = git(repository, "rev-parse", "HEAD")
+        remote, partial = repository.parent / "remote.git", repository.parent / "partial"
+        git(repository, "clone", "--bare", repository, remote)
+        git(remote, "config", "uploadpack.allowFilter", "true")
+        git(repository, "clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), partial)
+        git(partial, "update-ref", "HEAD", base)
+        document = self.collect_partial_input(partial, base, head, repository.parent / "binary-complete")
+        self.assertEqual(document["files"][0]["change_kind"], "binary")
+        self.assertIn("Binary files", document["diff"]["text"])
+        self.assertNotIn("+changed", document["diff"]["text"])
+
+    def test_partial_clone_preparation_keeps_generated_only_and_boundary_rename_dispositions(self):
+        for crossing in (False, True):
+            with self.subTest(crossing=crossing):
+                repository, base, head = self.make_real_generated_only_repo()
+                def git(cwd, *args):
+                    return subprocess.run(["git", *map(str, args)], cwd=cwd, capture_output=True,
+                                          check=True).stdout.decode().strip()
+                if crossing:
+                    base = head
+                    git(repository, "mv", "apps/architecture-portal/versioned_provenance/version-1.0.57.0.json",
+                        "reviewable.json")
+                    git(repository, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                        "commit", "-qm", "cross boundary")
+                    head = git(repository, "rev-parse", "HEAD")
+                remote, partial = repository.parent / "remote.git", repository.parent / "partial"
+                git(repository, "clone", "--bare", repository, remote)
+                git(remote, "config", "uploadpack.allowFilter", "true")
+                git(repository, "clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), partial)
+                git(partial, "update-ref", "HEAD", base)
+                identity = {"repository": "endaye/lmdj", "pull_request": 2118, "base_sha": base,
+                            "head_sha": head, "control_sha": base, "run_id": "99", "run_attempt": 1}
+                with mock.patch.object(pipeline, "ROOT", partial), \
+                        mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-only"}):
+                    pipeline.prepare_fixed_input(identity)
+                if crossing:
+                    with self.assertRaisesRegex(pipeline.input_producer.InputCollectionError,
+                                                "crosses the generated-artifact boundary"):
+                        pipeline.input_producer.build_input(partial, identity)
+                else:
+                    with self.assertRaises(pipeline.input_producer.GeneratedOnlyInput) as raised:
+                        pipeline.input_producer.build_input(partial, identity)
+                    self.assertEqual(raised.exception.receipt["status"], "generated-only")
+                    self.assertTrue(pipeline.input_producer.generated_only_excluded_valid(
+                        raised.exception.receipt["excluded_generated"]))
+
+    def test_preparation_preserves_checkout_metadata_and_never_executes_hooks_or_pr_files(self):
+        repository, partial, base, head, git = self.make_real_partial_input()
+        sentinel = repository.parent / "executed"
+        pr_script = repository / "added.txt"
+        pr_script.write_text(f"#!/bin/sh\ntouch {sentinel}\n")
+        pr_script.chmod(0o755)
+        git(repository, "add", "added.txt")
+        git(repository, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "-qm", "untrusted executable bytes")
+        head = git(repository, "rev-parse", "HEAD")
+        git(repository, "push", repository.parent / "remote.git", "HEAD:refs/heads/fresh")
+        git(partial, "fetch", "origin", head)
+        hook = partial / ".git/hooks/reference-transaction"
+        hook.write_text(f"#!/bin/sh\ntouch {sentinel}\n")
+        hook.chmod(0o755)
+        git(partial, "config", "fetch.prune", "true")
+        git(partial, "config", "fetch.writeCommitGraph", "true")
+        git(partial, "config", "diff.external", str(hook))
+        (partial / ".git/info/attributes").write_text("* -diff\n")
+        (partial / "source.txt").write_text("uncommitted trusted worktree bytes\n")
+
+        def snapshot():
+            # No status/index refresh: compare the complete working files directly.
+            return {"refs": git(partial, "show-ref", "--head"),
+                    "metadata": {name: (partial / ".git" / name).read_bytes()
+                                 if (partial / ".git" / name).exists() else None
+                                 for name in ("HEAD", "index", "config", "FETCH_HEAD", "shallow", "packed-refs")},
+                    "worktree": {str(path.relative_to(partial)): path.read_bytes()
+                                 for path in partial.rglob("*") if path.is_file()
+                                 and ".git" not in path.relative_to(partial).parts}}
+        before = snapshot()
+        identity = {"repository": "endaye/lmdj", "pull_request": 2118, "base_sha": base,
+                    "head_sha": head, "control_sha": base, "run_id": "99", "run_attempt": 1}
+        with mock.patch.object(pipeline, "ROOT", partial), \
+                mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-only"}):
+            pipeline.prepare_fixed_input(identity)
+        self.assertEqual(snapshot(), before)
+        self.assertFalse(sentinel.exists())
+        document = pipeline.input_producer.build_input(partial, identity)
+        self.assertIn("fresh head after clone", document["diff"]["text"])
+        self.assertNotIn("uncommitted", document["diff"]["text"])
+        self.assertFalse(sentinel.exists())
+
+    def test_preparation_transport_failure_and_incomplete_readback_never_publish_input(self):
+        for failure in ("transport", "readback"):
+            with self.subTest(failure=failure):
+                repository, partial, base, head, _ = self.make_real_partial_input()
+                output = repository.parent / "failed"
+                original = pipeline.input_producer._bounded_process
+                def stop_transport(command, **kwargs):
+                    if "--stdin" in command and "fetch" in command:
+                        if failure == "transport":
+                            raise pipeline.input_producer.InputCollectionError("Git object or diff read failed")
+                        return b""  # A successful process alone is not complete preparation.
+                    return original(command, **kwargs)
+                with mock.patch.object(pipeline.input_producer, "_bounded_process", side_effect=stop_transport):
+                    with self.assertRaises(pipeline.input_producer.InputCollectionError):
+                        self.collect_partial_input(partial, base, head, output)
+                self.assertEqual(sorted(path.name for path in output.iterdir()), ["collection-failure.json"])
+                self.assertEqual(pipeline.read(output / "collection-failure.json")["status"], "failed")
+
     def make_real_bounded_failure_repo(self):
         """Build the over-budget refusal with real Git byte-path objects."""
         temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-bounded-failure-")
@@ -1075,7 +1306,7 @@ class PipelineTests(unittest.TestCase):
         head = commit([b"source.txt", b"z-later.txt", *invalid], parent=base)
         return repository, base, head
 
-    def make_real_rename_repo(self, *, pure):
+    def make_real_rename_repo(self, *, pure, attributes=False):
         temporary = tempfile.TemporaryDirectory(prefix="lmdj-pipeline-rename-")
         self.addCleanup(temporary.cleanup)
         repository = Path(temporary.name) / "repo"
@@ -1088,6 +1319,10 @@ class PipelineTests(unittest.TestCase):
             return result.stdout.decode().strip()
 
         git("init", "-q")
+        if attributes:
+            (repository / ".gitattributes").write_text("*.txt diff\n")
+            (repository / "contracts/.gitattributes").write_text("*.txt diff\n")
+            (repository / "apps/creator-web/.gitattributes").write_text("*.txt diff\n")
         (repository / "contracts/old.txt").write_text(
             "one\ntwo\nthree\nkeep\nend\n", encoding="utf-8")
         git("add", ".")
@@ -1239,6 +1474,41 @@ class PipelineTests(unittest.TestCase):
                     ],
                 }, sort_keys=True))
 
+    def test_cold_partial_publisher_prepares_rename_inputs_before_independent_inventory(self):
+        repository, base, head = self.make_real_rename_repo(pure=False, attributes=True)
+        output = self.directory / "cold-publisher"
+        document, witness = self.collect_real_t2(repository, base, head, output)
+        self.complete_real_t3(repository, output, document, witness)
+        context = pipeline.read(output / "context.json")
+        remote, partial = repository.parent / "remote.git", repository.parent / "publisher"
+        def git(cwd, *args):
+            return subprocess.run(["git", *map(str, args)], cwd=cwd, capture_output=True,
+                                  check=True).stdout.decode().strip()
+        git(repository, "clone", "--bare", repository, remote)
+        git(remote, "config", "uploadpack.allowFilter", "true")
+        git(repository, "clone", "--filter=blob:none", "--no-checkout", remote.as_uri(), partial)
+        oids = pipeline.input_producer.required_input_objects(partial, document["identity"])
+        self.assertTrue(pipeline.input_producer.missing_input_objects(partial, oids, base=base))
+        environment = {"GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "1151",
+                       "HEAD_SHA": head, "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                       "GITHUB_TOKEN": "fixture-only", "GIT_NO_LAZY_FETCH": "1"}
+        # A cold publisher is a separate real checkout. Ordinary commit fetch
+        # is retained; API/auth/model transport are the only external doubles.
+        with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(pipeline, "ROOT", partial), \
+                mock.patch.object(pipeline.test_scope, "load_policy", return_value=test_scope.load_policy(ROOT)), \
+                mock.patch.object(pipeline, "authenticate", return_value=context["identity"]), \
+                mock.patch.object(pipeline, "previous_records", return_value=([], False)), \
+                mock.patch.object(pipeline, "publish_model") as published, \
+                mock.patch.object(pipeline.pr_review_target, "github_request") as labels:
+            pipeline.publish(output)
+        self.assertEqual(pipeline.input_producer.missing_input_objects(partial, oids, base=base), ())
+        self.assertEqual(published.call_count, 1)
+        self.assertEqual(labels.call_count, 1)
+        record = pipeline.read(output / "scope.json")
+        self.assertEqual(record["head_sha"], head)
+        self.assertEqual(record["changed_paths"], ["apps/creator-web/new.txt", "contracts/old.txt"])
+
     def test_synchronize_collection_publishes_authenticated_batch_in_same_input(self):
         from ci_review_recheck_test import BatchPlatform
         import review_recheck
@@ -1260,7 +1530,9 @@ class PipelineTests(unittest.TestCase):
             return api.git(*args)
         with mock.patch.dict(os.environ, environment), mock.patch.object(pipeline, "git", side_effect=git), \
                 mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "prepare_fixed_input"), \
                 mock.patch.object(pipeline.input_producer, "build_input", return_value=copy.deepcopy(api.document)), \
+                mock.patch.object(pipeline, "read_repair_source", side_effect=api.read_source), \
                 mock.patch.object(review_recheck, "client", return_value=api), \
                 mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target):
             # Source transport is supplied; actual auth and atomic publication run.
@@ -1307,6 +1579,7 @@ class PipelineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(pipeline, "git", side_effect=git), \
                 mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "prepare_fixed_input"), \
                 mock.patch.object(producer, "build_input", side_effect=refusal), \
                 mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target):
             self.assertIsNone(pipeline.collect_t2(output))
@@ -1389,6 +1662,7 @@ class PipelineTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment, clear=False), \
                 mock.patch.object(pipeline, "git", return_value=(identity["control_sha"] + "\n").encode()), \
                 mock.patch.object(pipeline, "fetch"), \
+                mock.patch.object(pipeline, "prepare_fixed_input"), \
                 mock.patch.object(pipeline, "authenticate", side_effect=lambda *args, **kwargs: identity), \
                 mock.patch.object(pipeline, "previous_records", return_value=([], False)), \
                 mock.patch.object(pipeline, "publish_model"), \

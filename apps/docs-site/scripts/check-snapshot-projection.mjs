@@ -3,7 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
-import {projectionManifest} from './lib/snapshot-provenance.mjs';
+import {projectionManifest, reconstructAuthenticatedSourceCommit} from './lib/snapshot-provenance.mjs';
 import {requireRevision, resolveChangedFiles} from './lib/changed-files.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -30,9 +30,13 @@ function remedy(version, detail) {
  * already landed snapshot may be authorized by a squash witness, and a witness
  * names the introducing commit, so it can only be written after the squash
  * exists — which is exactly why a snapshot introduced here cannot have one and
- * must instead project the tree it ships with.
+ * must instead project the tree it ships with. The after-the-fact main
+ * interval replay runs once the witness may have landed, so it alone may
+ * consult `authorizeDivergence`: a witness that reconstructs the authenticated
+ * source commit from the introducing tree authorizes that exact introduction,
+ * and everything else still fails closed.
  */
-export async function checkSnapshotProjection({addedFiles, readMetadata, readProjection}) {
+export async function checkSnapshotProjection({addedFiles, readMetadata, readProjection, authorizeDivergence = async () => false}) {
   const errors = [];
   const metadataFiles = [...new Set(addedFiles)]
     .filter((file) => METADATA_PATTERN.test(file))
@@ -59,25 +63,30 @@ export async function checkSnapshotProjection({addedFiles, readMetadata, readPro
     try {
       actual = await readProjection(recorded.files.map((entry) => entry.path));
     } catch (error) {
-      errors.push(remedy(
-        version,
-        `${file}: a projected path is absent from this change's own tree (${error.message})`,
-      ));
+      if (!await authorizeDivergence(metadata)) {
+        errors.push(remedy(
+          version,
+          `${file}: a projected path is absent from this change's own tree (${error.message})`,
+        ));
+      }
       continue;
     }
     if (JSON.stringify(actual) !== JSON.stringify(recorded)) {
-      errors.push(remedy(
-        version,
-        `${file}: the recorded source projection does not match this change's own tree`,
-      ));
+      if (!await authorizeDivergence(metadata)) {
+        errors.push(remedy(
+          version,
+          `${file}: the recorded source projection does not match this change's own tree`,
+        ));
+      }
     }
   }
   return errors;
 }
 
-async function checkAtRevision(repoRoot, headSha, addedFiles, {allowMissing = true} = {}) {
+async function checkAtRevision(repoRoot, headSha, addedFiles, {allowMissing = true, authorizeDivergence} = {}) {
   return checkSnapshotProjection({
     addedFiles,
+    authorizeDivergence,
     readMetadata: async (file) => {
       const exists = await execFileAsync('git', ['cat-file', '-e', `${headSha}:${file}`], {cwd: repoRoot})
         .then(() => true, () => false);
@@ -118,6 +127,7 @@ export async function checkRevisionProjection({repoRoot, mode = 'own-tree', base
     const baseIndex = history.indexOf(baseSha);
     if (baseIndex < 0) throw new Error('base is outside target first-parent history');
     const revisions = history.slice(0, baseIndex).reverse();
+    const portalRoot = path.join(repoRoot, 'apps', 'architecture-portal');
     const errors = [];
     let checked = 0;
     for (const revision of revisions) {
@@ -126,7 +136,22 @@ export async function checkRevisionProjection({repoRoot, mode = 'own-tree', base
       const {stdout} = await execFileAsync('git', ['diff', '--no-renames', '--name-only', '-z', '--diff-filter=A', `${revision}^1`, revision], {cwd: repoRoot});
       const files = stdout.split('\0').filter((file) => METADATA_PATTERN.test(file));
       checked += files.length;
-      errors.push(...(await checkAtRevision(repoRoot, revision, files, {allowMissing: false})).map((error) =>
+      // A divergence is authorized only by a squash witness at the audited
+      // head that reconstructs the recorded source commit from this exact
+      // introducing tree — the same acceptance the landed-snapshot verifier
+      // applies. The witness may land after the introduction it authorizes,
+      // so it is read at the head, and every failure stays an error.
+      const authorizeDivergence = async (metadata) => {
+        try {
+          await reconstructAuthenticatedSourceCommit({
+            repoRoot, portalRoot, metadata, headRevision: headSha, introducing: revision,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      errors.push(...(await checkAtRevision(repoRoot, revision, files, {allowMissing: false, authorizeDivergence})).map((error) =>
         `why: introducing commit ${revision}: ${error.split('; re-run ')[0]}; remedy: investigate this exact introduction and repair provenance through its authorized workflow; never rewrite a frozen snapshot to match later mutable pages`));
     }
     return {errors, checked};

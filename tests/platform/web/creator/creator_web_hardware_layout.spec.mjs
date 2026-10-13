@@ -15,25 +15,28 @@ function rounded(box) {
   };
 }
 
-// Desktop Final T2: the console scales to fit the stage, so its layout is
-// asserted in console units -- every page box mapped back through the scale
-// the console was drawn at -- and its fit in page pixels against the stage.
+// Full and compact shells both scale to fit without shrinking below 1 in the
+// supported viewports. Assert each layout's own dimensions, not a weakened
+// version of the full 880×592 oracle. Portrait rotation is covered separately.
 async function consoleGeometry(page) {
   const raw = await page.getByTestId("hardware-console").boundingBox();
-  const scale = raw.width / 880;
+  const compact = await page.locator("html").getAttribute("data-creator-layout") === "compact";
+  const width = compact ? Math.min(880, page.viewportSize().width - 16) : 880;
+  const scale = raw.width / width;
   const box = async (locator) => {
     const b = await locator.boundingBox();
     return rounded({x: (b.x - raw.x) / scale, y: (b.y - raw.y) / scale,
       width: b.width / scale, height: b.height / scale});
   };
-  return {raw, scale, box};
+  return {raw, scale, box, compact, width};
 }
 
 async function expectConsoleFitsStage(page) {
   const stage = await page.locator("#root").boundingBox();
-  const {raw, scale} = await consoleGeometry(page);
-  // Proportional: the 880:592 ratio survives the scale.
-  expect(Math.abs(raw.height - 592 * scale)).toBeLessThanOrEqual(1);
+  const {raw, scale, compact, width} = await consoleGeometry(page);
+  const height = compact ? 544 : 592;
+  expect(Math.abs(raw.height - height * scale)).toBeLessThanOrEqual(1);
+  expect(scale).toBeGreaterThanOrEqual(1);
   // Inside the stage on both axes, and centred in it.
   expect(raw.x).toBeGreaterThanOrEqual(stage.x - 1);
   expect(raw.y).toBeGreaterThanOrEqual(stage.y - 1);
@@ -41,12 +44,21 @@ async function expectConsoleFitsStage(page) {
   expect(raw.y + raw.height).toBeLessThanOrEqual(stage.y + stage.height + 1);
   expect(Math.abs((stage.x + stage.width / 2) - (raw.x + raw.width / 2))).toBeLessThanOrEqual(2);
   expect(Math.abs((stage.y + stage.height / 2) - (raw.y + raw.height / 2))).toBeLessThanOrEqual(2);
-  // Filled: one axis meets the stage (the console's 24px margins included).
-  const fills = Math.min(
-    Math.abs(stage.width - 880 * scale),
-    Math.abs(stage.height - 640 * scale),
-  );
-  expect(fills).toBeLessThanOrEqual(2);
+  if (compact) {
+    // Compact reserves actual margins and never grows to consume them.
+    expect(scale).toBe(1);
+    expect(raw.x - stage.x).toBeGreaterThanOrEqual(8);
+    expect(stage.x + stage.width - raw.x - raw.width).toBeGreaterThanOrEqual(8);
+    expect(raw.y - stage.y).toBeGreaterThanOrEqual(4);
+    expect(stage.y + stage.height - raw.y - raw.height).toBeGreaterThanOrEqual(4);
+  } else {
+    // Full retains its original fill-to-stage oracle, including 24px margins.
+    const fills = Math.min(
+      Math.abs(stage.width - width * scale),
+      Math.abs(stage.height - 640 * scale),
+    );
+    expect(fills).toBeLessThanOrEqual(2);
+  }
   return scale;
 }
 
@@ -95,38 +107,56 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   expect(pad).toMatchObject({width: 80, height: 80});
   const encoders = await box(page.getByTestId("physical-encoders"));
   expect(encoders).toMatchObject({
-    x: physical.x,
-    y: physical.y + 80 + 16,
-    width: 80,
-    height: 80,
+    x: physical.x - 6,
+    y: physical.y + 80 + 16 - 6,
+    width: 92,
+    height: 92,
   });
   const encoder = await box(page.getByRole("button", {
     name: "Encoder 1 — Start",
   }));
-  expect(encoder).toMatchObject({width: 32, height: 32});
+  expect(encoder).toMatchObject({width: 44, height: 44});
+  expect(await box(page.getByRole("button", {name: "Encoder 1 — Start"}).locator("svg")))
+    .toMatchObject({width: 32, height: 32});
   const keyBlock = await box(page.getByTestId("physical-keys"));
   expect(keyBlock).toMatchObject({
-    x: physical.x,
-    y: pads.y,
-    width: 80,
-    height: 368,
+    x: physical.x - 6,
+    y: pads.y - 6,
+    width: 92,
+    height: 380,
   });
   const keys = page.getByTestId("physical-controls");
   for (const bank of ["Bank A", "Bank B", "Bank C", "Bank D"]) {
     const bankBox = await box(keys.getByRole("button", {name: bank, exact: true}));
-    expect(bankBox).toMatchObject({width: 32, height: 32});
+    expect(bankBox).toMatchObject({width: 44, height: 44});
+    const face = await keys.getByRole("button", {name: bank, exact: true}).evaluate(element => {
+      const style = getComputedStyle(element, "::before");
+      return {width: style.width, height: style.height, inset: style.top};
+    });
+    expect(face).toEqual({width: "32px", height: "32px", inset: "6px"});
   }
-  // #1770: the −/+ placeholder row is gone and SHIFT holds its row as one
-  // full-width key (both 32px cells plus the 16px gap) directly above the
-  // record/play row, keeping the 8-row 368px key block. Rows step 48px
-  // (32px key + 16px gap), so SHIFT's row starts 6 steps into the block.
+  for (const [name, text] of [["Project", "PRJ"], ["Sample", "SMP"],
+    ["Sequence", "SEQ"], ["Perform", "PRF"], ["Record", "REC"], ["Play/Stop", "PLAY"]]) {
+    await expect(keys.getByRole("button", {name, exact: true})).toHaveText(text);
+  }
+  await expect(keys.getByRole("button", {name: "Record", exact: true}))
+    .toHaveCSS("color", "rgb(229, 173, 196)");
+  await expect(keys.getByRole("button", {name: "Play/Stop", exact: true}))
+    .toHaveCSS("color", "rgb(221, 244, 120)");
+  // Interaction UI puts SHIFT after Bank D and before both direction rows.
+  // Its 80px face keeps the original centres; the 92px target shares the
+  // unchanged 48px pitch, so SHIFT still starts four rows down.
   const shift = await box(keys.getByRole("button", {name: /^SHIFT/}));
   expect(shift).toMatchObject({
-    x: physical.x,
-    y: keyBlock.y + 6 * 48,
-    width: 80,
-    height: 32,
+    x: keyBlock.x,
+    y: keyBlock.y + 4 * 48,
+    width: 92,
+    height: 44,
   });
+  const up = await box(keys.getByRole("button", {name: /^Previous Pad — ↑$/}));
+  const left = await box(keys.getByRole("button", {name: "Previous Sample page — ←", exact: true}));
+  expect(up.y).toBe(keyBlock.y + 5 * 48);
+  expect(left.y).toBe(keyBlock.y + 6 * 48);
   // Undo/Redo is the SHIFT + ← / → chord on the direction row; the lamp, not
   // a greyed button pair, reports availability, and nothing sits outside the
   // console frame.
@@ -148,20 +178,17 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(keys.getByRole("button", {name: "Sequence", exact: true}))
     .toBeEnabled();
   await expect(keys.getByRole("button", {name: /^Perform/})).toBeVisible();
-  // V1 replaced the transport glyphs with the Desktop Final icon exports, so
-  // these keys carry no text at all now; the accessible name is what V1
-  // promised to keep, and the icon is what it promised to change.
+  // Interaction UI uses readable transport faces while retaining the full
+  // accessible identities used by the native controls and keyboard journey.
   const record = keys.getByRole("button", {name: "Record", exact: true});
-  await expect(record).toHaveClass(/\bhas-icon\b/);
-  await expect(record.locator("svg")).toHaveCount(1);
-  await expect(record).toHaveText("");
+  await expect(record.locator("svg")).toHaveCount(0);
+  await expect(record).toHaveText("REC");
   const playStop = keys.getByRole("button", {
     name: "Play/Stop",
     exact: true,
   });
-  await expect(playStop).toHaveClass(/\bhas-icon\b/);
-  await expect(playStop.locator("svg")).toHaveCount(1);
-  await expect(playStop).toHaveText("");
+  await expect(playStop.locator("svg")).toHaveCount(0);
+  await expect(playStop).toHaveText("PLAY");
   const shot = process.env.LMDJ_HARDWARE_CONSOLE_SHOT;
   if (shot) {
     await page.getByTestId("hardware-console").screenshot({path: shot});
@@ -171,10 +198,11 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(page.getByRole("button", {name: "Existing workspace"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
 
-  // A short window shrinks the console instead of scrolling it; a wide one
-  // is limited by its height. Both keep the ratio and stay centred.
+  // Short windows use the compact geometry before fitting, retaining every
+  // control and actual targets without outer scrolling or overlap.
   for (const viewport of [{width: 768, height: 600}, {width: 1280, height: 720}]) {
     await page.setViewportSize(viewport);
+    await expect(page.locator("html")).toHaveAttribute("data-creator-layout", "compact");
     await expect.poll(async () => (await consoleGeometry(page)).scale).toBeLessThan(1.2);
     await expectConsoleFitsStage(page);
     // A tap on a known Pad still lands on that Pad under the scale.
@@ -282,13 +310,40 @@ async function inspectTruth(page) {
   return inspected.project;
 }
 
-test("Project arrows follow the rendered three-column list and only OPEN changes Project", async ({page}) => {
+test("Project arrows follow the single list and only Open changes Project", async ({page}, testInfo) => {
+  // Observe the same native transport the application uses; navigation must
+  // neither reopen a Project nor produce a Pad trigger, even without audio.
+  await page.addInitScript(() => {
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get: () => exposed,
+      set(host) {
+        const transport = host.transport;
+        window.__projectNavigationCommands = [];
+        host.transport = Object.freeze({
+          send(...args) {
+            if (["project.open", "trigger"].includes(args[0]?.operation)) {
+              window.__projectNavigationCommands.push(structuredClone(args[0]));
+            }
+            return transport.send(...args);
+          },
+          subscribe: (...args) => transport.subscribe(...args),
+          subscribeFailure: (...args) => transport.subscribeFailure(...args),
+          terminate: (...args) => transport.terminate(...args),
+          get terminated() { return transport.terminated; },
+          get terminalOwnerReleased() { return transport.terminalOwnerReleased; },
+        });
+        exposed = host;
+      },
+    });
+  });
   await page.goto("/");
   await waitForBootProject(page);
   const keys = page.getByTestId("physical-controls");
   const touch = page.getByTestId("touch-workspace");
-  // Four real local Projects expose a complete row and a shorter final row.
-  // Create them through the existing UI, not a cloned DOM or fake inventory.
+  // Four real local Projects force scrolling in the single column. Create
+  // them through the UI rather than cloning cards or fabricating inventory.
   for (let index = 0; index < 3; index += 1) {
     const before = await inspectTruth(page);
     await keys.getByRole("button", {name: "Project", exact: true}).click();
@@ -301,61 +356,106 @@ test("Project arrows follow the rendered three-column list and only OPEN changes
   const cards = touch.locator(".project-card");
   await expect(cards).toHaveCount(4);
   const labels = await cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-label")));
+  const before = await inspectTruth(page);
+  const commandsBefore = await page.evaluate(() => window.__projectNavigationCommands);
   const expectSelection = async (index) => {
     await expect.poll(() => cards.evaluateAll(elements => elements.map(element => element.getAttribute("aria-pressed"))))
       .toEqual([0, 1, 2, 3].map(cardIndex => String(cardIndex === index)));
+    expect(await inspectTruth(page)).toEqual(before);
+    expect(await page.evaluate(() => window.__projectNavigationCommands)).toEqual(commandsBefore);
+    // The entire selected card, including its explicit Open action, must be
+    // visible after rail/encoder navigation without a Playwright auto-scroll.
+    const visible = await touch.evaluate(element => {
+      const card = element.querySelector(".local-projects .is-selected").getBoundingClientRect();
+      const panel = element.getBoundingClientRect();
+      return card.top >= panel.top - 1 && card.bottom <= panel.bottom + 1 &&
+        card.left >= panel.left - 1 && card.right <= panel.right + 1;
+    });
+    expect(visible).toBe(true);
   };
-  const before = await inspectTruth(page);
   for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
     await page.setViewportSize(viewport);
-    await touch.evaluate(element => {element.scrollTop = 0;});
     await expectConsoleFitsStage(page);
+    await cards.nth(0).click();
+    await expectSelection(0);
+    await page.screenshot({path:testInfo.outputPath(`project-list-top-${viewport.width}x${viewport.height}.png`)});
     const geometry = await touch.evaluate(element => ({
       width: element.clientWidth, scrollWidth: element.scrollWidth,
+      listWidth: element.querySelector(".local-projects").getBoundingClientRect().width,
+      headingWidth: element.querySelector(".project-chooser-header").getBoundingClientRect().width,
+      createWidth: element.querySelector(".project-create-row").getBoundingClientRect().width,
       cards: [...element.querySelectorAll(".project-card")].map(card => ({
         rect: card.getBoundingClientRect().toJSON(), width: card.clientWidth, scrollWidth: card.scrollWidth,
+        fullId: card.title,
       })),
     }));
     expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
-    for (const card of geometry.cards) expect(card.scrollWidth).toBeLessThanOrEqual(card.width);
-    const [first, second, third, fourth] = geometry.cards.map(card => card.rect);
-    expect(second.left).toBeGreaterThan(first.right);
-    expect(third.left).toBeGreaterThan(second.right);
-    expect(second.top).toBeCloseTo(first.top, 0);
-    expect(third.top).toBeCloseTo(first.top, 0);
-    expect(fourth.left).toBeCloseTo(first.left, 0);
-    expect(fourth.top).toBeGreaterThan(first.bottom);
+    expect(geometry.headingWidth, "Project title row spans the same content width as the cards").toBeCloseTo(geometry.listWidth, 0);
+    expect(geometry.createWidth, "New and Import fill the same content width as the cards").toBeCloseTo(geometry.listWidth, 0);
+    for (const [index, card] of geometry.cards.entries()) {
+      expect(card.scrollWidth).toBeLessThanOrEqual(card.width);
+      expect(card.fullId).toMatch(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/);
+      expect(card.rect.left).toBeCloseTo(geometry.cards[0].rect.left, 0);
+      if (index > 0) expect(card.rect.top).toBeGreaterThan(geometry.cards[index - 1].rect.bottom);
+    }
     await cards.nth(1).scrollIntoViewIfNeeded();
     const target = await cards.nth(1).boundingBox();
     const hit = await page.evaluate(({x, y}) =>
       document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label"),
     {x: target.x + target.width / 2, y: target.y + target.height / 2});
     expect(hit).toBe(labels[1]);
-    await cards.nth(0).click();
-    await expectSelection(0);
-    await expect(keys.getByRole("button", {name: "Previous Project row — ↑", exact: true})).toBeDisabled();
-    await keys.getByRole("button", {name: "Next Project — →", exact: true}).click();
+    await cards.nth(1).click();
     await expectSelection(1);
-    expect(await inspectTruth(page)).toEqual(before);
-    await keys.getByRole("button", {name: "Next Project row — ↓", exact: true}).click();
-    await expectSelection(3);
-    await expect(keys.getByRole("button", {name: "Next Project row — ↓", exact: true})).toBeDisabled();
-    expect(await inspectTruth(page)).toEqual(before);
-    await keys.getByRole("button", {name: "Previous Project row — ↑", exact: true}).click();
+    await keys.getByRole("button", {name: "Previous Project — ↑", exact: true}).click();
     await expectSelection(0);
+    await expect(keys.getByRole("button", {name: "Previous Project — ↑", exact: true})).toBeDisabled();
+    for (const name of ["Undo — SHIFT + ←", "Redo — SHIFT + →"]) {
+      await expect(keys.getByRole("button", {name, exact: true})).toBeDisabled();
+    }
+    for (let index = 1; index <= 3; index += 1) {
+      await keys.getByRole("button", {name: "Next Project — ↓", exact: true}).click();
+      await expectSelection(index);
+    }
+    await expect(keys.getByRole("button", {name: "Next Project — ↓", exact: true})).toBeDisabled();
+    for (let index = 2; index >= 0; index -= 1) {
+      await keys.getByRole("button", {name: "Previous Project — ↑", exact: true}).click();
+      await expectSelection(index);
+    }
+    const encoder = keys.getByRole("button", {name: "Encoder 1 — Select Project", exact: true});
+    await encoder.focus();
+    await page.keyboard.press("ArrowUp");
+    await expectSelection(1);
+    const scrollBefore = await touch.evaluate(element => element.scrollTop);
+    const scroller = keys.getByRole("button", {name: "Encoder 2 — Scroll Projects", exact: true});
+    await scroller.focus();
+    await page.keyboard.press("ArrowUp");
+    expect(await touch.evaluate(element => element.scrollTop)).toBeGreaterThan(scrollBefore);
+    await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "true");
     expect(await inspectTruth(page)).toEqual(before);
+    expect(await page.evaluate(() => window.__projectNavigationCommands)).toEqual(commandsBefore);
+    await encoder.focus();
+    await page.keyboard.press("ArrowUp");
+    await expectSelection(2);
+    await page.screenshot({path:testInfo.outputPath(`project-list-selected-${viewport.width}x${viewport.height}.png`)});
   }
   const currentIndex = await cards.evaluateAll(elements => elements.findIndex(element =>
     element.parentElement.getAttribute("aria-current") === "true"));
   expect(currentIndex).toBeGreaterThanOrEqual(0);
   const targetIndex = currentIndex === 3 ? 0 : 3;
   await cards.nth(targetIndex).click();
-  expect(await inspectTruth(page)).toEqual(before);
+  await expectSelection(targetIndex);
   const selectedId = labels[targetIndex].slice("Select Project ".length);
   await page.getByRole("button", {name: `Open Project ${selectedId}`, exact: true}).click();
   await expect(page.getByRole("heading", {name: `Project ${selectedId}`, exact: true}))
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  expect((await inspectTruth(page)).project_id.slice(0, 8)).toBe(selectedId);
+  const opened = await inspectTruth(page);
+  expect(opened.project_id.slice(0, 8)).toBe(selectedId);
+  const commandsAfter = await page.evaluate(() => window.__projectNavigationCommands);
+  expect(commandsAfter.slice(commandsBefore.length).map(command => command.operation)).toEqual(["project.open"]);
+  expect(commandsAfter.at(-1).payload.project_id).toBe(opened.project_id);
+  await page.reload();
+  await waitForProjectReopen(page, selectedId);
+  expect(await inspectTruth(page)).toEqual(opened);
 });
 
 test("commits Tempo only on release and keeps Project Truth across a reload", async ({page}) => {
@@ -443,9 +543,9 @@ test("the console loads both bundled font roles under its distribution CSP", asy
 });
 
 // The hit box is laid out at its full size, rather than enlarged over a
-// neighbour. Read the painted face inset and the transformed target geometry;
-// a CSS class alone cannot prove either property. Sequence keeps its approved
-// full-height Mono controls. Physical iPad ergonomics remain a separate check.
+// neighbour. Read the separately painted face and transformed target geometry;
+// a CSS class alone cannot prove either property. These design-unit checks do
+// not discharge the separate minimum effective CSS-pixel target acceptance.
 test("compact actions keep their font, visible face and separate hit boxes after scaling", async ({page}) => {
   await page.goto("/");
   await waitForBootProject(page);
@@ -465,21 +565,24 @@ test("compact actions keep their font, visible face and separate hit boxes after
       await expect(group).toBeVisible();
       const rendered = await group.locator("button").evaluateAll(elements => elements.map(element => {
         const style = getComputedStyle(element);
+        const face = getComputedStyle(element, "::before");
         const rect = element.getBoundingClientRect();
-        const inset = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
         return {text:element.textContent, height:element.offsetHeight,
-          face:element.offsetHeight - inset, family:style.fontFamily,
-          size:style.fontSize, clip:style.backgroundClip, rect:rect.toJSON()};
+          face:parseFloat(face.height), radius:face.borderRadius, family:style.fontFamily,
+          size:style.fontSize, leading:style.lineHeight, weight:style.fontWeight,
+          rect:rect.toJSON()};
       }));
       expect(rendered.length).toBeGreaterThan(1);
       for (const button of rendered) {
         expect(button.height, `${mode}: ${button.text}`).toBe(44);
-        expect(button.face).toBe(mode === "Sequence" ? 44 : 36);
-        expect(button.family).toMatch(mode === "Sequence" ? /^"IBM Plex Mono"/ : /^"Space Grotesk"/);
-        if (mode !== "Sequence") {
-          expect(button.size).toBe("12px");
-          expect(button.clip).toBe("padding-box");
-        }
+        expect(button.rect.width).toBeGreaterThanOrEqual(44);
+        expect(button.rect.height).toBeGreaterThanOrEqual(44);
+        expect(button.face).toBe(32);
+        expect(button.radius).toBe("6px");
+        expect(button.family).toMatch(/^"IBM Plex Mono"/);
+        expect(button.size).toBe("9px");
+        expect(button.leading).toBe("13px");
+        expect(button.weight).toBe("400");
       }
       for (let i=0; i<rendered.length; i++) for (let j=i+1; j<rendered.length; j++) {
         const a=rendered[i].rect, b=rendered[j].rect;
@@ -740,16 +843,17 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   await wakeAudioWithPad(page, {padAddress: "A01"});
   await page.getByRole("button", {name: "Perform", exact: true}).click();
   const filter = page.getByRole("slider", {name: "Filter", exact: true});
-  await expect(filter).toHaveValue("500");
+  await expect(page.getByRole("button", {name: "Encoder 1 — Cutoff", exact: true})).toBeEnabled();
+  await expect(filter).toHaveValue("1000");
   const acceptedFxBefore = await page.evaluate(() => window.__performPadRequests
-    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length);
-  await page.getByRole("button", {name: "Encoder 1 — Filter", exact: true}).press("ArrowUp");
-  await expect(filter).toHaveValue("510");
+    .filter(request => request.operation === "performance.live.control" && request.ok === true).length);
+  await page.getByRole("button", {name: "Encoder 1 — Cutoff", exact: true}).press("ArrowDown");
+  await expect(filter).toHaveValue("990");
   const hold = page.getByRole("button", {name: "HOLD", exact: true});
   await hold.click();
   await expect(hold).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => page.evaluate(() => window.__performPadRequests
-    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length))
+    .filter(request => request.operation === "performance.live.control" && request.ok === true).length))
     .toBe(acceptedFxBefore + 2);
   const master = page.getByRole("slider", {name: "MASTER", exact: true});
   const monitorBefore = Number(await master.inputValue());
@@ -764,7 +868,7 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
     await down.click();
     await expect(page.getByTestId("pad-matrix").locator('[aria-current="true"]'))
       .toHaveAttribute("aria-label", new RegExp(`^Pad ${slot === 16 ? "B01" : `A${String(slot + 1).padStart(2, "0")}`} —`));
-    await expect(filter).toHaveValue("510");
+    await expect(filter).toHaveValue("990");
     await expect(hold).toHaveAttribute("aria-pressed", "true");
     await expect(master).toHaveValue(String(monitorBefore - 1));
   }
@@ -772,6 +876,7 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   expect(await inspectTruth(page)).toEqual(truth);
   const requests = await page.evaluate(() => window.__performPadRequests);
   expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
-    "pattern.transport.input.request", "performance.fx.gesture", "performance.record.begin", "performance.record.stop",
+    "pattern.transport.input.request", "performance.fx.gesture", "performance.live.control",
+    "performance.record.begin", "performance.record.stop",
     "pattern.transport.request"].includes(request.operation))).toEqual([]);
 });

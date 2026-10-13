@@ -78,7 +78,7 @@ class WitnessPrTest(pr_fixture.PrTest):
     def test_body_declares_required_task_checks_without_closing_issues(self):
         self.assertEqual(pr_fixture.check_pr_body(self.document["body"]), [])
         for text in ("scripts/docs-site.sh check", "python3 tests/build/ci_change_scope_test.py",
-                     "git diff --cached --check", "Version impact: none",
+                     "python3 tests/build/version_test.py", "git diff --cached --check", "Version impact: none",
                      self.spec["witness"]["sha256"], self.spec["witness_receipt_sha256"]):
             self.assertIn(text, self.document["body"])
         self.assertNotIn("releases/tag/", self.document["body"])

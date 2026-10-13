@@ -654,7 +654,7 @@ test("empty Pad microphone press commits one Artifact on release and reopens exa
   const before = await inspectProjectTruth(page);
   // The Pad recording source is a System setting (brand mark entry).
   await page.getByRole("button", {name: "System", exact: true}).click();
-  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("microphone");
+  await page.getByRole("group", {name: "Pad recording source"}).getByRole("button", {name: "Microphone", exact: true}).click();
   await page.getByRole("button", {name: "Back to music", exact: true}).click();
   const pad = page.getByRole("button", {name: /^Pad A01 — empty/});
   const status = page.getByRole("region", {name: "Pad recording"});

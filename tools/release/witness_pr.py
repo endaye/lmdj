@@ -51,7 +51,7 @@ def pr_document(spec):
             f"Independent Task binding: `{spec['task_binding_sha256']}`\n\n"
             f"Task verification evidence: `{spec['task_evidence_sha256']}`\n\n"
             "Required Task commands (the authority gate must confirm recorded exit 0):\n\n"
-            "- `scripts/docs-site.sh check`\n- `python3 tests/build/ci_change_scope_test.py`\n- `git diff --cached --check`\n\n"
+            "- `scripts/docs-site.sh check`\n- `python3 tests/build/ci_change_scope_test.py`\n- `python3 tests/build/version_test.py`\n- `git diff --cached --check`\n\n"
             "Adds only the exact officially generated and verified witness. Retains the original "
             "candidate target and immutable snapshot. The actual witness squash and bytes must be "
             "verified after merge. No complete-CI pass, releasable intent, tag, Release, deployment "

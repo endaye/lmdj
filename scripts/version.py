@@ -1037,11 +1037,13 @@ P1_COMPONENT_CONSUMERS = frozenset({"core-cli", "core-mcp", "native-host",
                                    "cardputer-host", "web-runtime-host"})
 P1_MANIFEST_PATHS = {name: f"{'packages' if name in ('project-io', 'application-facade', 'web-runtime-platform') else 'apps'}/{name}/module.json"
                      for name in P1_COMPONENT_SEEDS.keys() | P1_COMPONENT_CONSUMERS}
+CARDPUTER_IDENTITY_FILES = frozenset({"products/lmdj/src/cardputer_assembly.cpp",
+                                      "apps/cardputer-host/CMakeLists.txt"})
 P1_BUILD_MATERIAL_FILES = frozenset({
     "products/lmdj/version.json", "products/lmdj/assembly.json",
     "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
-    *P1_MANIFEST_PATHS.values(), "products/lmdj/src/cardputer_assembly.cpp",
-    "apps/cardputer-host/CMakeLists.txt", "apps/creator-web/package.json",
+    *P1_MANIFEST_PATHS.values(), *CARDPUTER_IDENTITY_FILES,
+    "apps/creator-web/package.json",
     "apps/creator-web/package-lock.json", "tests/build/version_test.py",
     "apps/core-mcp/pyproject.toml", "apps/core-mcp/lmdj_core_mcp/__init__.py",
     "apps/docs-site/docs/operations/creator-changelog.mdx",
@@ -1227,13 +1229,39 @@ def _p1_identity_material(root, expected, reserved, old_assembly_sha, new_assemb
     return files
 
 
+def _cardputer_identity_material(root, reserved, assembly_bytes):
+    """Regenerate the hand-copied Cardputer identity literals from their sources."""
+    manifest = _load_object(root / "apps/cardputer-host/module.json", "Cardputer Host manifest")
+    if manifest.get("contract") != "lmdj.module.v1" or manifest.get("module") != "cardputer-host" \
+            or type(manifest.get("version")) is not str:
+        raise ValueError("why: Cardputer Host manifest identity is invalid; remedy: restore apps/cardputer-host/module.json before allocation")
+    assembly_sha = hashlib.sha256(assembly_bytes).hexdigest()
+    files = {}
+    name = "products/lmdj/src/cardputer_assembly.cpp"
+    text = (root / name).read_text(encoding="utf-8")
+    profile = re.search(r'(return \{\s*")([^"]+)(",\s*")([^"]+)(",\s*")([0-9a-f]{64})(",)', text)
+    if profile is None:
+        raise ValueError("why: Cardputer profile identity literals are missing; remedy: restore the hand-copied Product Build, Host version and Assembly digest block in products/lmdj/src/cardputer_assembly.cpp")
+    files[name] = (text[:profile.start()] + profile.group(1) + str(reserved) + profile.group(3)
+                   + manifest["version"] + profile.group(5) + assembly_sha + profile.group(7)
+                   + text[profile.end():]).encode("utf-8")
+    name = "apps/cardputer-host/CMakeLists.txt"
+    text = (root / name).read_text(encoding="utf-8")
+    project = re.search(r'(set\(PROJECT_VER ")([^"]+)("\))', text)
+    if project is None:
+        raise ValueError("why: Cardputer PROJECT_VER literal is missing; remedy: restore set(PROJECT_VER ...) in apps/cardputer-host/CMakeLists.txt")
+    files[name] = (text[:project.start()] + project.group(1) + str(reserved) + project.group(3)
+                   + text[project.end():]).encode("utf-8")
+    return files
+
+
 def render_build_material(
     repo_root: Path,
     expected: ProductVersion,
     reserved: ProductVersion,
     *, material_profile: str | None = None,
 ) -> dict[str, bytes]:
-    """Render four candidate files using canonical Assembly generators.
+    """Render the candidate identity files using canonical Assembly generators.
 
     The caller supplies a passive, exact-input tree and a verified reservation.
     This function does not allocate a number, modify that tree, run candidate
@@ -1297,9 +1325,11 @@ def render_build_material(
     compiled = _render_compiled_assembly(reserved, assembly, repo_root=root)
     lock = _lock_document(reserved, root / assembly_name, assembly, compiled,
                           repo_root=root, assembly_bytes=assembly_bytes)
-    return {version_name:_canonical_json(version_document).encode("utf-8"),
-            assembly_name:assembly_bytes, lock_name:_canonical_json(lock).encode("utf-8"),
-            compiled_name:compiled}
+    files = {version_name:_canonical_json(version_document).encode("utf-8"),
+             assembly_name:assembly_bytes, lock_name:_canonical_json(lock).encode("utf-8"),
+             compiled_name:compiled}
+    files.update(_cardputer_identity_material(root, reserved, assembly_bytes))
+    return files
 
 
 def _artifact_overlays(

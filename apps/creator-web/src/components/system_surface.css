@@ -1,0 +1,75 @@
+/* System owns only this touch workspace; control geometry belongs to U01. */
+.hardware-workspace .system-surface {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  font: 400 9px/13px var(--creator-font-mono);
+}
+.hardware-workspace .system-surface[hidden] { display: none; }
+.hardware-workspace .system-surface header {
+  gap: 8px;
+  min-height: 20px;
+}
+.hardware-workspace .system-surface h2 {
+  margin: 0;
+  font: 500 14px/20px var(--creator-font-action);
+  text-transform: uppercase;
+}
+.hardware-workspace .system-surface header > span {
+  color: var(--creator-muted);
+  text-transform: uppercase;
+}
+.hardware-workspace .system-surface .system-back {
+  width: 100%;
+  background: var(--creator-lime);
+  color: var(--creator-base);
+}
+.hardware-workspace .system-status {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--creator-base);
+  font: 400 11px/15px var(--creator-font-mono);
+}
+.system-status > div { display: flex; justify-content: space-between; gap: 12px; }
+.system-status dt { color: var(--creator-muted); text-transform: uppercase; }
+.system-status dd { margin: 0; overflow-wrap: anywhere; }
+.hardware-workspace .system-surface .touch-system {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.hardware-workspace .system-recording-source { display: grid; gap: 4px; min-width: 0; }
+.hardware-workspace .system-recording-source h3 {
+  margin: 0;
+  color: var(--creator-muted);
+  font: inherit;
+  text-transform: uppercase;
+}
+.hardware-workspace .system-recording-source .touch-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.hardware-workspace .system-surface button { min-width: 0; }
+.hardware-workspace .system-recording-source p { margin: 0; color: var(--creator-muted); }
+.hardware-workspace .system-surface :is(.creator-details, .diagnostics-log, .system-providers) {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .system-surface summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--creator-raised);
+  cursor: pointer;
+}
+.hardware-workspace .system-surface summary::after { content: "+"; margin-left: auto; }
+.hardware-workspace .system-surface details[open] > summary::after { content: "−"; }
+.hardware-workspace .system-providers ul { padding-inline-start: 16px; }

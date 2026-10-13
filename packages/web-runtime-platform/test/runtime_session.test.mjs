@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import {webcrypto} from "node:crypto";
 import {readFileSync} from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
+import {MasterTapBatchQueue} from
+  "../../../apps/creator-web/src/record/master_tap_source.ts";
 import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
 import {createUserGestureToken} from "../web/input_adapters.mjs";
+import {createPerformanceMasterTap} from "../web/performance_master_capture.mjs";
 import {createRuntimeSession} from "../web/runtime_session.mjs";
 import {decodeLegacyPatternTransportStatus} from "./fixtures/legacy_pattern_transport_status.mjs";
 
@@ -1729,6 +1733,156 @@ test("underlying terminal acknowledgement releases session capture ownership", a
     ["stopped"],
   ]);
   await second.stop();
+});
+
+// Use the existing capture factory and actual processor, as in the capture
+// controller suite. The port/context stand-ins do not prove browser scheduling
+// or physical audio; explicit ACK delivery exposes the SDK ownership window.
+function masterCaptureFixture({send, holdStarted = false} = {}) {
+  const commands = [];
+  const messages = [];
+  const pendingStarted = [];
+  const order = [];
+  let node;
+  let Processor;
+  let lowerStarts = 0;
+  class ProcessorBase {
+    constructor() {
+      this.port = {
+        onmessage: null,
+        postMessage(message) {
+          messages.push(message);
+          order.push(`tap:${message.type}:${message.generation}`);
+          if (holdStarted && message.type === "started") {
+            pendingStarted.push(message);
+          } else {
+            node.port.onmessage({data: message});
+          }
+        },
+      };
+    }
+  }
+  vm.runInNewContext(readFileSync(
+    new URL("../web/performance_master_tap_worklet.js", import.meta.url), "utf8",
+  ), {
+    AudioWorkletProcessor: ProcessorBase,
+    Float32Array,
+    Number,
+    registerProcessor(name, constructor) {
+      assert.equal(name, "lmdj-perform-master-tap");
+      Processor = constructor;
+    },
+  });
+  const processor = new Processor();
+  const runtime = fixture({
+    send,
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: RESOURCE_LIMITS,
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    async createPerformanceMasterTap(options) {
+      options.context.audioWorklet = {async addModule() {}};
+      const previousNode = globalThis.AudioWorkletNode;
+      globalThis.AudioWorkletNode = class extends EventTarget {
+        constructor() {
+          super();
+          node = this;
+          this.port = {
+            onmessage: null,
+            postMessage(message) {
+              commands.push(message);
+              order.push(`host:${message.type}:${message.generation}`);
+              processor.port.onmessage({data: message});
+            },
+          };
+        }
+        connect() {}
+        disconnect() {}
+      };
+      try {
+        const controller = await createPerformanceMasterTap(options);
+        return {
+          ...controller,
+          start(...arguments_) {
+            lowerStarts += 1;
+            return controller.start(...arguments_);
+          },
+        };
+      } finally {
+        if (previousNode === undefined) delete globalThis.AudioWorkletNode;
+        else globalThis.AudioWorkletNode = previousNode;
+      }
+    },
+  });
+  return {
+    ...runtime, processor, commands, messages, order,
+    get lowerStarts() { return lowerStarts; },
+    receive(message) { node.port.onmessage({data: message}); },
+    acknowledgeStart() {
+      assert.equal(pendingStarted.length, 1);
+      node.port.onmessage({data: pendingStarted.shift()});
+    },
+  };
+}
+
+test("a terminal capture's first late stop preserves a newer pending SDK owner", async () => {
+  const runtime = masterCaptureFixture({holdStarted: true});
+  const {session} = runtime;
+  const terminals = [];
+  const sink = {
+    onBatch() { assert.fail("no PCM was rendered"); },
+    onFailure(...values) { terminals.push(["failure", ...values]); },
+    onStopped() { terminals.push(["stopped"]); },
+  };
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const firstStart = session.startPerformanceMasterCapture(sink);
+  runtime.acknowledgeStart();
+  const first = await firstStart;
+  // Malformed current-generation traffic terminates A before its wrapper's
+  // first stop; the real lower controller retains A's settled stop promise.
+  runtime.receive({type: "batch", generation: 1, sequence: 1, channels: []});
+  assert.deepEqual(terminals, [["failure", "tap-failure", 0], ["stopped"]]);
+  let secondStarted = false;
+  const secondStart = session.startPerformanceMasterCapture(sink).then((value) => {
+    secondStarted = true;
+    return value;
+  });
+  await drainTasks();
+  assert.equal(runtime.lowerStarts, 2);
+  assert.equal(secondStarted, false);
+
+  const firstStop = first.stop();
+  assert.equal(first.stop(), firstStop);
+  await firstStop;
+  await assert.rejects(session.startPerformanceMasterCapture(sink), (error) => {
+    assert.equal(error.code, "HOST_STATE_INVALID");
+    assert.equal(error.message,
+      "Performance master capture is already active; stop the current capture before starting another");
+    return true;
+  });
+  assert.equal(runtime.lowerStarts, 2, "C must be refused before the lower start");
+  assert.equal(runtime.commands.filter(({type}) => type === "start").length, 2);
+
+  // A's late ACK cannot release B; only B's matching ACK completes its start.
+  runtime.receive(runtime.messages.find(({type}) => type === "started"));
+  await drainTasks();
+  assert.equal(secondStarted, false);
+  runtime.acknowledgeStart();
+  const second = await secondStart;
+  assert.equal(Object.isFrozen(second), true);
+  const secondStop = second.stop();
+  assert.equal(second.stop(), secondStop);
+  await secondStop;
+  assert.deepEqual(runtime.commands.filter(({type}) => type === "stop"), [
+    {type: "stop", generation: 1}, {type: "stop", generation: 2},
+  ]);
+  assert.deepEqual(terminals, [
+    ["failure", "tap-failure", 0], ["stopped"], ["stopped"],
+  ]);
+  await session.close();
+  assert.equal(runtime.commands.filter(({type}) => type === "stop").length, 2);
 });
 
 test("interruption and close each settle the active capture once", async () => {
@@ -11454,17 +11608,21 @@ test("the dual-ready gate parks recorded inputs until Core-ready and the started
   let coreReady = false;
   let tapStarted = null;
   let tapBinding = null;
+  let platformCapture = null;
+  let captureStops = 0;
+  let beginCommandId = null;
   const sentOperations = [];
   const tapController = {
     destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
     start(sink, binding) {
       tapBinding = binding;
       return new Promise((resolve) => {
-        tapStarted = () => resolve({
+        platformCapture = {
           generation: 1,
           binding,
-          stop: async () => {},
-        });
+          stop: async () => { captureStops += 1; sink.onStopped(); },
+        };
+        tapStarted = () => resolve(platformCapture);
       });
     },
     failProcessor() {},
@@ -11484,6 +11642,7 @@ test("the dual-ready gate parks recorded inputs until Core-ready and the started
       sentOperations.push(envelope.operation);
       switch (envelope.operation) {
         case "performance.record.begin":
+          beginCommandId = envelope.payload.command_id;
           return success(envelope, {
             performance_id: performanceId,
             committed_revision: 1,
@@ -11567,6 +11726,7 @@ test("the dual-ready gate parks recorded inputs until Core-ready and the started
   assert.notEqual(tapBinding, null);
   assert.equal(tapBinding.control_epoch, LIVE_EPOCH);
   assert.equal(tapBinding.session_id, sessionId);
+  assert.equal(tapBinding.begin_command_id, beginCommandId);
   await drainTasks();
   assert.equal(beginSettled, false);
   assert.equal(sentOperations.includes("performance.record.event"), false);
@@ -11575,12 +11735,67 @@ test("the dual-ready gate parks recorded inputs until Core-ready and the started
   tapStarted();
   const begun = await begin;
   assert.equal(begun.coreControlReady, true);
+  assert.equal(Object.isFrozen(begun), true);
+  assert.equal(Object.isFrozen(begun.capture), true);
+  assert.deepEqual(Object.keys(begun.capture), ["stop"]);
+  assert.notEqual(begun.capture, platformCapture);
   await parked;
   assert.equal(sentOperations.includes("performance.record.event"), true);
   const eventEnvelope = sentOperations
     .map((operation, index) => ({operation, index}))
     .filter(({operation}) => operation === "performance.record.event");
   assert.equal(eventEnvelope.length, 1);
+  const captureStop = begun.capture.stop();
+  assert.equal(begun.capture.stop(), captureStop);
+  await captureStop;
+  assert.equal(captureStops, 1);
+  await session.close();
+  assert.equal(captureStops, 1);
+});
+
+test("legacy and no-sink headered begins retain exact result shapes and initial FX identities", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000050";
+  const performanceId = "40000000-0000-4000-8000-000000000051";
+  const gestureGeneration = "40000000-0000-4000-8000-000000000052";
+  const recordingGestureId = "40000000-0000-4000-8000-000000000053";
+  const runtime = masterCaptureFixture({send: async (envelope) => {
+    if (envelope.operation !== "performance.record.begin") {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    const lifecycle = {
+      performance_id: performanceId, committed_revision: 1,
+      replayed: false, project_revision: 1,
+    };
+    return success(envelope, Object.hasOwn(envelope.payload, "control_epoch") ? {
+      ...lifecycle, profile: "header_input_sequence", control_epoch: LIVE_EPOCH,
+      core_control_ready: true, next_recording_sequence: "0",
+      fx_bindings: [{fx: "delay", gesture_generation: gestureGeneration,
+        recording_gesture_id: recordingGestureId}],
+    } : lifecycle);
+  }});
+  const {session} = runtime;
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const legacy = await session.beginPerformanceRecording({
+    sessionId, performanceId, expectedRevision: 0,
+  });
+  assert.deepEqual(legacy, {
+    performanceId, committedRevision: 1, replayed: false, projectRevision: 1,
+  });
+  assert.equal(Object.isFrozen(legacy), true);
+  const headered = await session.beginPerformanceRecording({
+    sessionId, performanceId, expectedRevision: 0, controlEpoch: LIVE_EPOCH,
+  });
+  assert.deepEqual(headered, {
+    performanceId, committedRevision: 1, replayed: false, projectRevision: 1,
+    profile: "header_input_sequence", controlEpoch: LIVE_EPOCH,
+    coreControlReady: true, nextRecordingSequence: "0",
+    fxBindings: [{fx: "delay", gestureGeneration, recordingGestureId}],
+  });
+  assert.equal(Object.isFrozen(headered), true);
+  assert.equal(Object.isFrozen(headered.fxBindings), true);
+  assert.equal(Object.isFrozen(headered.fxBindings[0]), true);
+  assert.equal(runtime.lowerStarts, 0);
   await session.close();
 });
 
@@ -12988,3 +13203,229 @@ test("direct exact replay cannot submit a still-prepared Press outside its token
   for (const other of others) other.cancelUnsubmittedPattern();
   await f.session.close();
 });
+for (const variant of ["ack", "delayed-status", "other-session", "other-epoch"]) {
+  test(`headered recording cursor follows matching observed status: ${variant}`, async () => {
+    const sessionId = "40000000-0000-4000-8000-000000000060";
+    const performanceId = "40000000-0000-4000-8000-000000000061";
+    let observedSequence = "2";
+    let events = 0;
+    const sent = [];
+    const {session} = fixture({send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {performance_id: performanceId, committed_revision: 1,
+            replayed: false, profile: "header_input_sequence", control_epoch: LIVE_EPOCH,
+            core_control_ready: true, next_recording_sequence: "1", fx_bindings: [],
+            project_revision: 1});
+        case "performance.record.status": {
+          const result = {state: "active", session_id: variant === "other-session"
+              ? "40000000-0000-4000-8000-000000000099" : sessionId,
+            performance_id: performanceId, journal_revision: 1, next_flush_seq: 1,
+            pending_event_count: 0, open_pad_gestures: 0, open_fx_gestures: 0,
+            hold: false, pending_launch: null, last_launch_ack: null,
+            profile: "header_input_sequence", control_epoch: variant === "other-epoch"
+              ? "40000000-0000-4000-8000-000000000098" : LIVE_EPOCH,
+            core_control_ready: true, next_recording_sequence: observedSequence,
+            pending_admission: null, project_revision: null};
+          return success(envelope, result);
+        }
+        case "performance.record.event":
+          sent.push(envelope.payload.expected_recording_sequence);
+          events += 1;
+          return success(envelope, {event_id: envelope.payload.event_id, accepted_tick: events,
+            input_sequence: String(events), next_recording_sequence: String(events + 1),
+            result: "no_audio", coalesced: false, gesture_generation: null,
+            recording_gesture_id: null, replayed: false, project_revision: null});
+        default: return success(envelope, defaultResult(envelope.operation));
+      }
+    }});
+    await session.start();
+    await session.beginPerformanceRecording({sessionId, performanceId,
+      expectedRevision: 0, controlEpoch: LIVE_EPOCH});
+    const input = () => session.recordPerformanceEvent({sessionId,
+      eventId: webcrypto.randomUUID(), event: {kind: "hold_on"}});
+    if (variant === "delayed-status") {
+      await input();
+      // A stale status payload must not roll back a later admitted receipt.
+      observedSequence = "1";
+    }
+    await session.queryPerformanceRecordingStatus();
+    await input();
+    const expected = variant === "other-session" || variant === "other-epoch" ? "1"
+      : "2";
+    assert.equal(sent.at(-1), expected,
+      "the next real input must echo the matching Core cursor without regression");
+    await session.close();
+  });
+}
+
+for (const coreStopFails of [false, true]) {
+  test(`headered owned capture drains final PCM and the queue after Core stop ${coreStopFails ? "failure" : "receipt"}`, async () => {
+    const sessionId = "40000000-0000-4000-8000-000000000060";
+    const performanceId = "40000000-0000-4000-8000-000000000061";
+    const gestureId = "40000000-0000-4000-8000-000000000062";
+    const gestureGeneration = "40000000-0000-4000-8000-000000000063";
+    const recordingGestureId = "40000000-0000-4000-8000-000000000064";
+    const coreFailure = {code: "IO_ERROR", message: "Core stop journal failed", details: {}};
+    let finishCoreStop;
+    let finishWrites;
+    let finishSeal;
+    const coreStopped = new Promise((resolve) => { finishCoreStop = resolve; });
+    const writesReady = new Promise((resolve) => { finishWrites = resolve; });
+    const sealReady = new Promise((resolve) => { finishSeal = resolve; });
+    let sequence = 0;
+    const runtime = masterCaptureFixture({send: async (envelope) => {
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId, committed_revision: 1,
+            replayed: false, project_revision: 1,
+            profile: "header_input_sequence", control_epoch: LIVE_EPOCH,
+            core_control_ready: true, next_recording_sequence: "0",
+            fx_bindings: [{fx: "delay", gesture_generation: gestureGeneration,
+              recording_gesture_id: recordingGestureId}],
+          });
+        case "performance.record.event":
+          runtime.order.push(envelope.payload.event.kind);
+          sequence += 1;
+          return success(envelope, {
+            event_id: envelope.payload.event_id, accepted_tick: 4,
+            input_sequence: String(sequence), next_recording_sequence: String(sequence),
+            result: "no_audio", coalesced: false, gesture_generation: null,
+            recording_gesture_id: null, replayed: false, project_revision: null,
+          });
+        case "performance.record.stop":
+          runtime.order.push("core:stop-request");
+          await coreStopped;
+          runtime.order.push(coreStopFails ? "core:stop-failed" : "core:stop-receipt");
+          return coreStopFails ? {
+            protocol_version: 1, request_id: envelope.request_id,
+            ok: false, error: coreFailure,
+          } : success(envelope, {
+            request_id: envelope.payload.request_id, session_id: sessionId,
+            performance_id: performanceId, state: "stopped", pending_event_count: 0,
+            replayed: false, project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    }});
+    // The actual queue owns append/seal ordering. This controlled writer
+    // models durable receipts; it does not exercise OPFS or the Creator UI.
+    const appended = [];
+    let durableFrames = 0;
+    const queue = new MasterTapBatchQueue({
+      queueBatchLimit: 32,
+      async appendChannels(channels) {
+        await writesReady;
+        appended.push(channels);
+        durableFrames += channels[0].length;
+        runtime.order.push(`writer:append:${channels[0].length}`);
+        return {state: "active", durableFrames, byteLength: 44 + durableFrames * 4, reason: null};
+      },
+      async seal(reason) {
+        runtime.order.push("writer:seal");
+        await sealReady;
+        return {state: "sealed", durableFrames, byteLength: 44 + durableFrames * 4, reason};
+      },
+    }, {
+      onFailure() { assert.fail("capture and writer must remain healthy"); },
+      requestCaptureStop() { assert.fail("normal owner cleanup stops the capture"); },
+    });
+    const {session} = runtime;
+    await session.start();
+    await session.activateAudio(createUserGestureToken({isTrusted: true}));
+    const begun = await session.beginPerformanceRecording({
+      sessionId, performanceId, expectedRevision: 0, controlEpoch: LIVE_EPOCH,
+      captureSink: queue,
+    });
+    assert.equal(Object.isFrozen(begun.capture), true);
+    assert.deepEqual(begun.fxBindings, [{fx: "delay", gestureGeneration, recordingGestureId}]);
+    assert.equal(Object.isFrozen(begun.fxBindings[0]), true);
+    const full = [new Float32Array(4_800).fill(0.25), new Float32Array(4_800).fill(-0.5)];
+    const partial = [Float32Array.from({length: 127}, (_, i) => i / 128), new Float32Array(127).fill(-0.25)];
+    for (const input of [full, partial]) {
+      const output = input.map((channel) => new Float32Array(channel.length));
+      assert.equal(runtime.processor.process([input], [output]), true);
+      assert.deepEqual(output, input);
+    }
+    assert.equal(queue.pendingBatches, 1, "partial PCM stays in the worklet until stop");
+    const press = await session.recordPerformanceEvent({
+      sessionId, eventId: "40000000-0000-4000-8000-000000000065",
+      event: {kind: "pad_press", slot: 2, gestureId, velocity: 100},
+    });
+    assert.equal(press.inputSequence, "1");
+    const release = await session.recordPerformanceEvent({
+      sessionId, eventId: "40000000-0000-4000-8000-000000000066",
+      event: {kind: "pad_release", slot: 2, gestureId},
+    });
+    assert.equal(release.inputSequence, "2");
+
+    let observedCoreFailure = null;
+    let ownerSettled = false;
+    const stopping = (async () => {
+      try {
+        const stopped = await session.stopPerformanceRecording({
+          sessionId, requestId: "40000000-0000-4000-8000-000000000067",
+        });
+        assert.equal(stopped.state, "stopped");
+      } catch (error) {
+        observedCoreFailure = error;
+      }
+      const captureStop = begun.capture.stop();
+      assert.equal(begun.capture.stop(), captureStop);
+      await captureStop;
+      runtime.order.push("owner:capture-stopped");
+      const sealed = await queue.settled;
+      runtime.order.push("owner:queue-settled");
+      if (observedCoreFailure !== null) throw observedCoreFailure;
+      return sealed;
+    })();
+    const outcome = stopping.then(
+      (value) => { ownerSettled = true; return {value}; },
+      (error) => { ownerSettled = true; return {error}; },
+    );
+    await drainTasks();
+    assert.deepEqual(runtime.order.slice(-3), ["pad_press", "pad_release", "core:stop-request"]);
+    assert.equal(runtime.commands.some(({type}) => type === "stop"), false);
+    finishCoreStop();
+    await drainTasks();
+    assert.deepEqual(runtime.commands.filter(({type}) => type === "stop"), [
+      {type: "stop", generation: 1},
+    ]);
+    assert.deepEqual(runtime.messages.map(({type}) => type), ["started", "batch", "batch", "stopped"]);
+    assert.deepEqual({...runtime.messages.at(-1)}, {type: "stopped", generation: 1, finalSequence: 2});
+    assert.equal(queue.pendingBatches, 2);
+    assert.equal(queue.sealed, false);
+    assert.deepEqual(appended, []);
+    assert.equal(ownerSettled, false, "capture ACK cannot stand in for durable PCM");
+    finishWrites();
+    await drainTasks();
+    assert.deepEqual(appended.map((channels) => [...channels]), [full, partial]);
+    assert.equal(queue.pendingBatches, 0);
+    assert.equal(queue.sealed, true);
+    assert.equal(ownerSettled, false, "queue settlement still awaits the seal receipt");
+    finishSeal();
+    const completed = await outcome;
+    const sealed = await queue.settled;
+    assert.deepEqual(sealed, {
+      state: "sealed", durableFrames: 4_927, byteLength: 19_752,
+      reason: "stopped", droppedFrames: 0,
+    });
+    if (coreStopFails) {
+      assert.equal(completed.error, observedCoreFailure);
+      assert.equal(completed.error.code, coreFailure.code);
+      assert.equal(completed.error.message, "Host request was rejected");
+    } else {
+      assert.equal(observedCoreFailure, null);
+      assert.equal(completed.value, sealed);
+    }
+    assert.deepEqual(runtime.order.slice(-9), [
+      coreStopFails ? "core:stop-failed" : "core:stop-receipt",
+      "host:stop:1", "tap:batch:1", "tap:stopped:1", "owner:capture-stopped",
+      "writer:append:4800", "writer:append:127", "writer:seal", "owner:queue-settled",
+    ]);
+    await session.close();
+    assert.equal(runtime.commands.filter(({type}) => type === "stop").length, 1);
+  });
+}

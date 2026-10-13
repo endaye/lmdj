@@ -129,7 +129,6 @@ test("New Project creates a Project, lists it and lands on Sample", async () => 
   await waitFor(() => expect(sampleKeyIsCurrent()).toBe(true));
   expect(fixture.calls.filter((call) => call === "createProject")).toHaveLength(1);
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2);
 });
 
@@ -303,7 +302,6 @@ test("Duplicate opens a copy under a new identity and lists both Projects", asyn
   expect(copyId).not.toBe(LISTED.projectId);
   expect(fixture.calls).toContain(`duplicateProject:${LISTED.projectId}`);
   await screen.findByRole("heading", {name: `Project ${copyId.slice(0, 8)}`});
-  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2);
 });
 
@@ -351,7 +349,6 @@ test("a stored copy with an invalid summary is reported and still listed", async
   expect((await screen.findByRole("alert")).textContent)
     .toBe("Duplicate failed: This copy of Creator is out of date. Reload the page to load the current version.");
   expect(screen.getByRole("heading", {name: "Project 11111111"})).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
   await waitFor(() =>
     expect(screen.getAllByRole("button", {name: /^Select Project /})).toHaveLength(2));
 });

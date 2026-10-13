@@ -39,6 +39,20 @@ Creator Web 与诊断 Web Runtime Host 共用 Platform 和同一 Wasm Runtime。
 ## 4. 架构与数据流
 Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Runtime Session 的 `createProject` 在串行 Project action 上发出 `project.create`，先校验调用方给出的 Project/Pattern 身份、BPM 与 Bar 数，再只接受指名同一身份、revision 0 的结果；`duplicateProject({sourceProjectId, projectId})` 在同一串行 lane 上发出 `project.duplicate`，发送前拒绝非法或相同的身份，只接受指名新身份、revision 0 的 Local Project summary；Host 只复制、不替换当前打开的 Project、writer lease 或 Runtime，调用方另行 `openProject` 打开副本。Host 在 running、有 active Sequence 或未完成 Sample import 时以 `HOST_STATE_INVALID` 拒绝，另一标签页持有源 Project 时返回 `PROJECT_BUSY`，目标身份已被使用时返回 `DUPLICATE_ID`；源 Project 有未完成录制（含崩溃 owner 留下的 active Journal）时返回 `HOST_STATE_INVALID` 与 “source Project has an unfinished recording”，而不是被通用 sanitizer 还原成请求无效。发布前 deadline 已过则不发布任何副本，由 bridge 报告 `HOST_TIMEOUT`。Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。全局 Pattern transport 的 live overlay 发布由 Facade 协调器在控制节拍上驱动：Platform 实现 `publish_overlay` 能力（prepare 走 Runtime Snapshot），service tick 持续服务开着的录音，同 Pattern 的排队发布在落地前 coalesce，Record-off 可撤回尚未被 audio claim 的 overlay 后提交；已 claim 的 publication 保留原 busy/边界结算——无 beat restart。
 ## 5. API 与 Contract 边界
+
+headered `beginPerformanceRecording({controlEpoch, captureSink, ...})` 在 Core
+control-ready 与本次 binding 的 tap `started` ACK 都到达后，返回可选只读
+`capture`：它就是本次 start 已创建并冻结的 SDK `PerformanceMasterCapture`
+wrapper，不是 lower handle，也不通过全局 current capture 查找停止目标。legacy
+begin 与未提供 sink 的 headered 结果不增加这个键；初始 FX binding 映射保持原样。
+调用方先完成录制输入及 matching releases，等待 `stopPerformanceRecording` 的 Core
+receipt，再调用这个确切的 `capture.stop()`，最后等待自己的 `queue.settled`。
+Core stop 失败仍须清理该 capture 并等待队列结算，再报告原 Core 失败。capture stop
+保留同一个缓存 Promise，底层 stop 至多调用一次；active 与 pending ownership 清理
+各自匹配原 owner，旧录制首次迟到的 stop/finally 不能清除下一次 start 的 pending
+reservation。worklet 先 flush 最后不足 4800 帧的批次，再发带 `finalSequence` 的
+stopped ACK；这个 ACK 不代表 PCM 已耐久写入，队列须完成全部 append 后才 seal。
+
 Platform 校验 canonical distribution manifest，但该同构建协议不是公开跨版本 Contract。`1.0.44.0` 的 manifest gate 要求恰好十三项 resource limit：`decoded_float_pcm_bytes_per_bank` 67108864、`decoded_float_pcm_bytes_total` 134217728、`decoded_float_pcm_bytes_resident` 268435456、`imported_wav_bytes` 68157440、`ingest_channels` 2、`ingest_decoded_frames` 43200000、`ingest_source_bytes` 104857600、`perform_recording_frames` 86400000、`perform_recording_queue_batches` 32，以及本 Build 新增的四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1048576、`maximum_soundset_blob_bytes` 68157440、`maximum_soundset_unique_bytes` 268435456 与 `maximum_soundset_staging_bytes` 536870912；键集是精确匹配，多一项默认值即拒绝，每一项都必须是正的安全整数并逐值比对。这正是 Platform 本次取 MAJOR 的依据：一份在 `1.0.43.0` 下合法的分发清单，在本 Build 的 gate 下被拒绝。四项上限是 Host 容量事实，经 `ApplicationConfig` 到达 Core；浏览器侧 Catalog 对象的暂存缓冲是另一回事，不在 manifest 内。资产清单同样精确：声明 `compatible_hosts` 的 Creator 分发必须恰好携带一个 `perform_master_tap_worklet` 角色的资产，诊断 Host 分发必须为零；重复路径、缺失或错误的角色计数、非法 digest 与资产路径，都是 fail-closed 的 inventory 缺陷而不是可容忍的默认值；resource limit、Emscripten 身份与 host allowlist 也逐项精确比对。更早的不可变分发包保留各自的精确身份，不被回溯要求携带 Stage 10 字段。Project Bundle 与 WAV sidecar 只通过 Facade 的 bounded streaming API 进入 Core，Browser 不解析 Project/WAV。
 Creator 资产集合由实际 Host manifest 与生成的 `expected_assets` 选择。
 Native gate 对进入离线主版本范围的 Creator 清单要求恰好一个 `offline_worker`；

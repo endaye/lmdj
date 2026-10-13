@@ -5,7 +5,7 @@ import {fireEvent} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
-import {HardwareConsole, fitConsoleToStage} from "../src/components/hardware_console";
+import {HardwareConsole, consoleLayoutForViewport, fitConsoleToStage} from "../src/components/hardware_console";
 import {PhysicalControls} from "../src/components/physical_controls";
 
 test("overview contains no action while touch workspace remains actionable", () => {
@@ -35,7 +35,7 @@ test("names the four hardware regions for the console shell", () => {
   expect(screen.getByRole("region", {name: "Touch workspace"})).toBeTruthy();
 });
 
-test("names D01–D04 physical keys by accessible name and exported icons", () => {
+test("compact rail text preserves the full accessible key names", () => {
   render(<PhysicalControls
     activeMode="project"
     activeBank={0}
@@ -46,22 +46,16 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
     onRecord={() => {}}
     recordEnabled
   />);
-  for (const name of [
-    "Project", "Sample", "Sequence", "Perform",
-    "Bank A", "Bank B", "Bank C", "Bank D",
-  ]) {
+  for (const [name, label] of [
+    ["Project", "PRJ"], ["Sample", "SMP"], ["Sequence", "SEQ"], ["Perform", "PRF"],
+    ["Bank A", "A"], ["Bank B", "B"], ["Bank C", "C"], ["Bank D", "D"],
+    ["Record", "REC"], ["Play/Stop — needs a playable Project and running audio", "PLAY"],
+  ] as const) {
     const key = screen.getByRole("button", {name});
-    if (name.startsWith("Bank ")) {
-      expect(key.textContent).toBe(name.slice(-1));
-    } else {
-      expect(key.querySelector("svg")).toBeTruthy();
-      expect(key.textContent).toBe("");
-    }
+    expect(key.textContent).toBe(label);
+    expect(key.querySelector("svg")).toBeNull();
   }
-  expect(screen.getByRole("button", {name: "Record"}).querySelector("svg")).toBeTruthy();
-  expect(screen.getByRole("button", {
-    name: "Play/Stop — needs a playable Project and running audio",
-  }).querySelector("svg")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Project"}).getAttribute("aria-current")).toBe("page");
   // The −/+ placeholder row is gone; SHIFT holds its row as one full-width key.
   expect(screen.queryByRole("button", {name: /^Decrease/})).toBeNull();
   expect(screen.queryByRole("button", {name: /^Increase/})).toBeNull();
@@ -71,6 +65,36 @@ test("names D01–D04 physical keys by accessible name and exported icons", () =
   expect(screen.getAllByRole("button", {
     name: /Encoder \d — unassigned until hardware mapping is approved/,
   })).toHaveLength(4);
+});
+
+test("native Tab order places SHIFT after Banks and before both direction rows", async () => {
+  const user = userEvent.setup();
+  const onToggleShift = vi.fn();
+  render(<>
+    <PhysicalControls activeMode="project" activeBank={0} sequenceEnabled performEnabled
+      onSelectMode={() => {}} onSelectBank={() => {}}
+      onRecord={() => {}} recordEnabled onPlayStop={() => {}} playEnabled
+      history={{shifted: false, onToggleShift, undoAvailable: true, redoAvailable: true,
+        onUndo: () => {}, onRedo: () => {}, undoTitle: "Undo", redoTitle: "Redo"}}
+      padStep={{backLabel: "Previous object — ↑", forwardLabel: "Next object — ↓",
+        backAvailable: true, forwardAvailable: true, onBack: () => {}, onForward: () => {}}}
+      directionStep={{backLabel: "Previous page — ←", forwardLabel: "Next page — →",
+        backAvailable: true, forwardAvailable: true, onBack: () => {}, onForward: () => {}}}
+    />
+    <button type="button">After rail</button>
+  </>);
+  const order = ["Project", "Sample", "Sequence", "Perform",
+    "Bank A", "Bank B", "Bank C", "Bank D", "SHIFT — engage the Undo/Redo layer",
+    "Previous object — ↑", "Next object — ↓", "Previous page — ←", "Next page — →",
+    "Record", "Play/Stop", "After rail"];
+  for (const name of order) {
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", {name}));
+    if (name.startsWith("SHIFT")) {
+      await user.keyboard("{Enter}");
+      expect(onToggleShift).toHaveBeenCalledTimes(1);
+    }
+  }
 });
 
 test("the disabled Perform key names only its real gate: a playable Project", () => {
@@ -137,7 +161,7 @@ test("the rail SHIFT chord gates Undo/Redo behind the modifier with lamp availab
   expect(onRedo).not.toHaveBeenCalled();
 });
 
-test("physical icons are inline SVG so the img-src 'self' CSP cannot blank them", () => {
+test("retained Logo and encoder graphics remain inline under the local-only CSP", () => {
   // The packaged Host ships under `img-src 'self'`; an `<img>` fed a Vite
   // `data:` URL renders as a broken image there, which is how the D01–D04
   // icons vanished on device without a journey noticing.
@@ -156,8 +180,8 @@ test("physical icons are inline SVG so the img-src 'self' CSP cannot blank them"
   expect(container.querySelectorAll("img")).toHaveLength(0);
   expect(container.querySelectorAll("[src]")).toHaveLength(0);
   const svgs = container.querySelectorAll("svg");
-  // Brand mark, four encoders, four mode keys, Record, Play/Stop.
-  expect(svgs).toHaveLength(11);
+  // Only the brand mark and four encoders are graphical. Key labels are text.
+  expect(svgs).toHaveLength(5);
   for (const svg of svgs) {
     expect(svg.getAttribute("aria-hidden")).toBe("true");
     expect(svg.querySelector("path")).toBeTruthy();
@@ -306,9 +330,38 @@ test("a narrow portrait stage turns the console and never enlarges it", () => {
   expect(fitConsoleToStage({width: 900, height: 2000}, console, true)?.scale).toBe(1);
 });
 
+test("compact fitting keeps its reserved outer margins instead of enlarging the shell", () => {
+  const compact = {width: 752, height: 552};
+  expect(fitConsoleToStage({width: 768, height: 852}, compact, false, 1))
+    .toEqual({scale: 1, dx: 8, dy: 150, rotate: false});
+  expect(fitConsoleToStage({width: 768, height: 552}, compact, false, 1))
+    .toEqual({scale: 1, dx: 8, dy: 0, rotate: false});
+});
+
 test("an unmeasured stage or console is not fitted", () => {
   expect(fitConsoleToStage({width: 0, height: 600}, {width: 880, height: 640}, false)).toBeNull();
   expect(fitConsoleToStage({width: 800, height: 600}, {width: 0, height: 0}, false)).toBeNull();
+});
+
+test.each([
+  [{width: 1440, height: 900}, "full"],
+  [{width: 1024, height: 768}, "full"],
+  [{width: 1280, height: 600}, "compact"],
+  [{width: 768, height: 600}, "compact"],
+  [{width: 768, height: 900}, "compact"],
+  [{width: 768, height: 1024}, "full"],
+] as const)("chooses the nonshrinking console layout at %j", (viewport, expected) => {
+  expect(consoleLayoutForViewport(viewport)).toBe(expected);
+});
+
+test("layout selection returns to the same viewport policy after compact resize", () => {
+  for (const height of [736, 735, 600, 735, 736]) {
+    expect(consoleLayoutForViewport({width: 1280, height})).toBe(height >= 736 ? "full" : "compact");
+  }
+  // Full portrait needs room for the unshrunk, rotated 880 px width plus
+  // the original 96 px of header/footer. Compact chrome cannot alter that.
+  expect(consoleLayoutForViewport({width: 768, height: 975})).toBe("compact");
+  expect(consoleLayoutForViewport({width: 768, height: 976})).toBe("full");
 });
 
 

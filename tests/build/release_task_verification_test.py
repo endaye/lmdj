@@ -36,6 +36,7 @@ class VerificationTest(unittest.TestCase):
         (self.repo / ".gitignore").write_text(".task-count\n")
         (self.repo / "scripts/docs-site.sh").write_text("printf 'portal\\n'\nprintf 'run\\n' >> .task-count\n")
         (self.repo / "tests/build/ci_change_scope_test.py").write_text("print('ownership')\n")
+        (self.repo / "tests/build/version_test.py").write_text("print('identity')\n")
         (self.repo / "evidence").write_text("base\n")
         self.git("-C", str(self.repo), "add", ".")
         self.git("-C", str(self.repo), "commit", "-m", "base")
@@ -79,7 +80,7 @@ class VerificationTest(unittest.TestCase):
         verifier = self.verifier()
         result = verifier.run(self.scope)
         rows = self.state()["commands"]
-        self.assertEqual([r["exit_code"] for r in rows], [0, 0, 0])
+        self.assertEqual([r["exit_code"] for r in rows], [0, 0, 0, 0])
         self.assertEqual(rows[0]["output_bytes"], len(b"portal\n"))
         self.assertEqual(rows[-1]["arguments"][-1], self.spec["base_revision"])
         self.assertEqual(verifier.run(self.scope), result)
@@ -187,7 +188,7 @@ class VerificationTest(unittest.TestCase):
         self.amend()
         with self.assertRaisesRegex(TaskVerificationError, "git diff --cached --check exited 2"):
             self.verifier().run(self.scope)
-        self.assertEqual([r["exit_code"] for r in self.state()["commands"]], [0, 0, 2])
+        self.assertEqual([r["exit_code"] for r in self.state()["commands"]], [0, 0, 0, 2])
 
     def test_local_whitespace_config_and_info_attributes_cannot_weaken_check(self):
         (self.repo / "evidence").write_text("published  \n")

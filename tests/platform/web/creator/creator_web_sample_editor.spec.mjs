@@ -7,7 +7,7 @@ import {
   sequencePattern,
 } from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
-import {readFile} from "node:fs/promises";
+import {readFile, writeFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {
@@ -1653,3 +1653,115 @@ test("contextual Sample encoders merge one save, cancel old targets and restore 
   expect((await rawRequest(page, "project.inspect", {})).result).toEqual(truth);
   await noErrors();
 });
+
+for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
+  {width: 768, height: 600}]) {
+  test(`Playback groups real toggle readbacks and keyboard actions at ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium");
+    test.setTimeout(180_000);
+    const noErrors = recordPageErrors(page);
+    await page.setViewportSize(viewport);
+    await page.goto("/index.html");
+    await openProjectPageAfterBoot(page);
+    const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
+    if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", {name: "Import .lmdj"}).click();
+    await (await chooser).setFiles(bundle);
+    await expect(page.getByRole("heading", {name: "Project 00000000"}))
+      .toBeVisible({timeout: 120_000});
+    let revision = (await rawRequest(page, "project.inspect", {})).result.project.revision;
+    await page.getByRole("button", {name: "Sample", exact: true}).click();
+    await showSamplePage(page, "Playback");
+    const controls = page.getByRole("region", {name: "Pad A01 Sample controls", exact: true});
+    const toggles = controls.locator(".sample-toggle-row");
+    const button = (name) => toggles.getByRole("button", {name, exact: true});
+    await expect(button("One Shot")).toBeEnabled();
+    await expect(toggles.getByRole("button")).toHaveText([
+      "Loop: Off", "One Shot: On", "Mute: Off", "Reverse: Off",
+    ]);
+    await toggles.scrollIntoViewIfNeeded();
+    const geometry = await toggles.evaluate((element) => {
+      const bounds = (item) => {
+        const box = item.getBoundingClientRect();
+        return {x: box.x, y: box.y, right: box.right, bottom: box.bottom,
+          width: box.width, height: box.height};
+      };
+      const rect = bounds(element);
+      const buttons = [...element.querySelectorAll("button")].map((item) => {
+        const box = bounds(item);
+        const points = [[box.width / 2, 1], [box.width / 2, box.height - 1],
+          [1, box.height / 2], [box.width - 1, box.height / 2],
+          [box.width / 2, box.height / 2]];
+        return {label: item.textContent, ...box,
+          horizontalOverflow: item.scrollWidth - item.clientWidth,
+          hits: points.map(([x, y]) => document.elementFromPoint(box.x + x, box.y + y)
+            ?.closest("button") === item)};
+      });
+      const overlaps = buttons.flatMap((left, index) => buttons.slice(index + 1)
+        .filter((right) => left.x < right.right && left.right > right.x &&
+          left.y < right.bottom && left.bottom > right.y));
+      return {rect, buttons, overlaps: overlaps.length,
+        horizontalOverflow: element.scrollWidth - element.clientWidth,
+        insideViewport: rect.x >= 0 && rect.y >= 0 &&
+          rect.right <= innerWidth && rect.bottom <= innerHeight};
+    });
+    expect(geometry.insideViewport).toBe(true);
+    expect(geometry.horizontalOverflow).toBe(0);
+    expect(geometry.overlaps).toBe(0);
+    expect(geometry.buttons).toHaveLength(4);
+    const [loop, primary, mute, reverse] = geometry.buttons;
+    expect(loop.y).toBeCloseTo(primary.y, 1);
+    expect(mute.y).toBeCloseTo(reverse.y, 1);
+    expect(mute.y).toBeGreaterThan(loop.bottom);
+    expect(loop.x).toBeCloseTo(mute.x, 1);
+    expect(primary.x).toBeCloseTo(reverse.x, 1);
+    expect(primary.x).toBeGreaterThan(loop.right);
+    for (const item of geometry.buttons) {
+      expect(item.width).toBeCloseTo(loop.width, 1);
+      expect(item.horizontalOverflow, item.label).toBe(0);
+      expect(item.width, item.label).toBeGreaterThanOrEqual(44);
+      expect(item.height, item.label).toBeGreaterThanOrEqual(44);
+      expect(item.hits, item.label).toEqual([true, true, true, true, true]);
+    }
+    // U01 supplies shared 32-face/44-actual sizing. Check its real Playback
+    // consumers, including unpainted target edges after scrolling into view;
+    // rectangles alone cannot rule out clipping or another hit owner.
+    const geometryPath = testInfo.outputPath("playback-toggles-geometry.json");
+    const screenshotPath = testInfo.outputPath("playback-toggles.png");
+    await writeFile(geometryPath, JSON.stringify(geometry, null, 2));
+    await page.screenshot({path: screenshotPath});
+    await testInfo.attach("playback-toggles-geometry", {path: geometryPath, contentType: "application/json"});
+    await testInfo.attach("playback-toggles", {path: screenshotPath, contentType: "image/png"});
+
+    await button("Loop").focus();
+    for (const name of ["One Shot", "Mute", "Reverse"]) {
+      await page.keyboard.press("Tab");
+      await expect(button(name)).toBeFocused();
+    }
+    const commitToggle = async (name, key, expectedPlayback, nextName, text, pressed) => {
+      await button(name).focus();
+      await expect(button(name)).toBeFocused();
+      await page.keyboard.press(key);
+      revision += 1;
+      await expect.poll(async () => {
+        const inspected = (await rawRequest(page, "sample.inspect", {slot: SLOT_A1})).result;
+        return {revision: inspected.project_revision, playback: inspected.playback};
+      }, {timeout: REPORT_REVISION_TIMEOUT_MS}).toEqual({
+        revision, playback: expect.objectContaining(expectedPlayback),
+      });
+      await expect(button(nextName)).toBeEnabled();
+      await expect(button(nextName)).toHaveText(text);
+      await expect(button(nextName)).toHaveAttribute("aria-pressed", String(pressed));
+    };
+    await commitToggle("Reverse", "Space", {reverse: true}, "Reverse", "Reverse: On", true);
+    await commitToggle("Loop", "Enter", {trigger_mode: "loop_toggle"}, "Loop", "Loop: On", true);
+    await expect(button("Hold")).toHaveText("Hold: On");
+    await commitToggle("Hold", "Space", {trigger_mode: "loop_gate"}, "Hold", "Hold: Off", false);
+    await commitToggle("Mute", "Enter", {muted: true}, "Mute", "Mute: On", true);
+    await commitToggle("Loop", "Space", {trigger_mode: "gate"}, "Loop", "Loop: Off", false);
+    await expect(button("One Shot")).toHaveText("One Shot: Off");
+    await commitToggle("One Shot", "Enter", {trigger_mode: "one_shot"}, "One Shot", "One Shot: On", true);
+    await noErrors();
+  });
+}

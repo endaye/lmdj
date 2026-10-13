@@ -1,3 +1,4 @@
+import {writeFile} from "node:fs/promises";
 import {showPerformPage} from "./fixtures/creator_navigation.mjs";
 import {
   createSequencePattern,
@@ -237,6 +238,69 @@ async function inspectTruth(page) {
   const inspected = await page.evaluate(() =>
     window.lmdjWebRuntimeHost.inspection.inspectProject());
   return inspected.project;
+}
+
+async function recordRecoveryLayout(page, prompt, testInfo, phase) {
+  // Project reopen deliberately scrolls to its heading. Bring the recovery
+  // card into the real scroll viewport; CSS visibility alone cannot prove it.
+  await prompt.scrollIntoViewIfNeeded();
+  const layout = await prompt.evaluate(node => {
+    const scroller = node.closest('[data-testid="touch-workspace"]');
+    return {
+      card: node.getBoundingClientRect().toJSON(),
+      viewport: scroller.getBoundingClientRect().toJSON(),
+      scroll: {top: scroller.scrollTop, height: scroller.scrollHeight,
+        clientHeight: scroller.clientHeight, width: scroller.scrollWidth,
+        clientWidth: scroller.clientWidth},
+      controls: [...node.querySelectorAll("button:not(:disabled)")].map(button => ({
+        name: button.textContent.trim(), rect: button.getBoundingClientRect().toJSON(),
+      })),
+    };
+  });
+  const tall = layout.card.height > layout.viewport.height;
+  if (tall) await prompt.getByRole("heading", {name: "Recording recovery"}).scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath(`recovery-${phase}${tall ? "-top" : ""}.png`)});
+  const buttons = prompt.locator("button:not(:disabled)");
+  await expect(buttons).toHaveCount(phase === "asking" ? 4 : 2);
+  layout.visibleControls = [];
+  for (let index = 0; index < await buttons.count(); index++) {
+    const button = buttons.nth(index);
+    await button.scrollIntoViewIfNeeded();
+    const measured = await button.evaluate(node => {
+      const rect = node.getBoundingClientRect();
+      const scroller = node.closest('[data-testid="touch-workspace"]');
+      const points = [[rect.width / 2, rect.height / 2], [rect.width / 2, 1],
+        [rect.width / 2, rect.height - 1], [1, rect.height / 2],
+        [rect.width - 1, rect.height / 2]];
+      return {name: node.textContent.trim(), rect: rect.toJSON(),
+        viewport: scroller.getBoundingClientRect().toJSON(), scrollTop: scroller.scrollTop,
+        hits: points.map(([x, y]) => document.elementFromPoint(rect.x + x, rect.y + y)
+          ?.closest("button") === node)};
+    });
+    layout.visibleControls.push(measured);
+  }
+  if (tall) await page.screenshot({path: testInfo.outputPath(`recovery-${phase}-bottom.png`)});
+  const receipt = testInfo.outputPath(`recovery-${phase}-geometry.json`);
+  await writeFile(receipt, JSON.stringify(layout, null, 2));
+  await testInfo.attach(`recovery-${phase}-geometry`, {path: receipt, contentType: "application/json"});
+  expect(layout.scroll.width).toBeLessThanOrEqual(layout.scroll.clientWidth);
+  for (const control of layout.visibleControls) {
+    expect(control.rect.width, control.name).toBeGreaterThanOrEqual(44);
+    expect(control.rect.height, control.name).toBeGreaterThanOrEqual(44);
+    expect(control.rect.left, control.name).toBeGreaterThanOrEqual(control.viewport.left);
+    expect(control.rect.right, control.name).toBeLessThanOrEqual(control.viewport.right);
+    expect(control.rect.top, control.name).toBeGreaterThanOrEqual(control.viewport.top);
+    expect(control.rect.bottom, control.name).toBeLessThanOrEqual(control.viewport.bottom);
+    expect(control.hits, control.name).toEqual([true, true, true, true, true]);
+  }
+  for (let index = 0; index < layout.controls.length; index++) {
+    const a = layout.controls[index];
+    for (const b of layout.controls.slice(index + 1)) {
+      const overlap = Math.max(0, Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left)) *
+        Math.max(0, Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top));
+      expect(overlap, `${a.name} / ${b.name}`).toBe(0);
+    }
+  }
 }
 
 // Sequence uses PPQ 960 in 4/4. Recovery keeps an unreleased attack's
@@ -749,7 +813,7 @@ test("Record-off ticket loss reconciles the same command; Pattern switch and sto
 // seals it as owner_lost (#1367). No terminal transfer can arrive any more, so
 // Apply recovers the heard take into the Pattern (#1515), and a fresh
 // recording then opens a new journal.
-test("reopening after owner loss asks once and keeps the heard take", async ({page, browserName}) => {
+test("reopening after owner loss asks once and keeps the heard take", async ({page, browserName}, testInfo) => {
   // #1680: the reopen prompt over the same recovery candidate the Sequence
   // list shows; Keep restores it to its original Pattern.
   test.skip(browserName !== "chromium");
@@ -776,6 +840,21 @@ test("reopening after owner loss asks once and keeps the heard take", async ({pa
   const lostTruth = await inspectTruth(page);
   expect(lostTruth.revision).toBe(imported.revision);
   expect(lostTruth.patterns[patternId].events).toHaveLength(0);
+
+  await expect(prompt.getByRole("heading", {name: "Recording recovery"})).toBeVisible();
+  await expect(prompt.getByRole("button", {name: "Open Sequence"})).toBeVisible();
+  await expect(prompt.getByRole("button", {name: "Open Perform"})).toHaveCount(0);
+  expect(await prompt.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await recordRecoveryLayout(page, prompt, testInfo, "asking");
+  // Confirmation remains reversible: neither opening it nor cancelling may
+  // commit or discard the durable interrupted take that Keep will restore.
+  await prompt.getByRole("button", {name: "Discard…", exact: true}).click();
+  await expect(prompt).toContainText("This cannot be undone.");
+  expect(await inspectTruth(page)).toEqual(lostTruth);
+  await recordRecoveryLayout(page, prompt, testInfo, "confirm-discard");
+  await prompt.getByRole("button", {name: "Cancel", exact: true}).click();
+  await expect(prompt.getByRole("button", {name: "Keep recording"})).toBeVisible();
+  expect(await inspectTruth(page)).toEqual(lostTruth);
 
   await prompt.getByRole("button", {name: "Keep recording"}).click();
   await expect(prompt).toContainText("The interrupted recording is back in this Project.",
@@ -827,8 +906,12 @@ test("owner loss surfaces the interrupted recording and recovers the heard take"
   expect(lostTruth.revision).toBe(imported.revision);
   expect(lostTruth.patterns[patternId].events).toHaveLength(0);
 
-  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  const prompt = page.getByRole("region", {name: "Interrupted recording"});
+  await expect(prompt).toBeVisible({timeout: 60_000});
+  await prompt.getByRole("button", {name: "Open Sequence"}).click();
+  await expect(prompt).toHaveCount(0);
   await expect(page.getByRole("region", {name: "Sequence editor"})).toBeVisible();
+  expect(await inspectTruth(page)).toEqual(lostTruth);
   const recoveryRegion = page.getByRole("region", {name: "Sequence recovery"});
   await expect(recoveryRegion).toBeVisible({timeout: 60_000});
   await expect(recoveryRegion).toContainText("owner_lost");

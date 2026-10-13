@@ -2031,13 +2031,18 @@ original complete Portal check before commit. Heavy Portal/Native/Wasm/Creator
 runs remain held during Root UI #2112's window; lightweight Node checks do not
 claim those lanes. All S6 original full acceptance obligations remain.
 
-Verification in progress: corrected actual pre-JS/SDK metadata RED has five
+Completed diagnostic Task `6890efdef2c213ca3fe7abb39654bc9cabeae371`:
+corrected actual pre-JS/SDK metadata RED has five
 missing-field failures (373 PASS / 5 FAIL); first fixture-shape failure remains
 retained separately. Metadata-only draft passed all 523 SDK tests. The console
 capture RED then observed missing first-fault snapshots; corrected final source
-passes the complete SDK set, 525 PASS / 0 FAIL / 0 SKIP. No Portal/native/browser
-acceptance is inferred. Independent final updated-diff review and original
-complete Portal remain required before committing this Task.
+passes the complete SDK set, 525 PASS / 0 FAIL / 0 SKIP. Independent review of
+all six files and 17 hunks found no remaining P0/P1/P2. The original complete
+Portal check naturally ended exit 0 with 177 PASS and 50 routes checked;
+tracked inputs and the reviewed source hashes remained unchanged. These
+receipts describe this diagnostic commit, not a later integrated candidate
+or Native/browser acceptance. Its owned processes exited, and the shared
+window was explicitly released before Root UI resumed heavy work.
 
 ### Version Management
 
@@ -2052,3 +2057,87 @@ state diagnostic fields and their limits. No architecture edge changes.
 
 Pitfall impact: none; owning product regressions express the error provenance
 invariant. No new gate, shortened journey, deadline, worker or stress budget.
+
+
+## S6 followup — integrate delivered main354 source
+
+Task inputs are owner `6890efdef2c213ca3fe7abb39654bc9cabeae371`, main
+`35455f7576fc96ad253f2d5a523ba457e1df9321`, and merge base
+`fe6f30bbf3897d3b09e25e4e85f4b1b22df7db23`. The private pre-edit inventory
+declares 101 output paths: the complete automatic incoming changes from the
+18 main commits, this plan, and five explicit conflict resolutions. No other
+owner's worktree is edited. This integrates delivered source; it does not
+reimplement the incoming UI, review tooling or identity Tasks.
+
+Explicit resolution files are `apps/creator-web/src/state/perform_state.ts`,
+`apps/creator-web/test/perform_surface.test.tsx`, Platform
+`web/runtime_session.mjs` and `test/runtime_session.test.mjs`, and
+`tests/platform/web/creator/creator_web_hardware_layout.spec.mjs`.
+Keep both complete SDK test additions and the equivalent braced capture-owner
+guard. The hardware navigation oracle retains both forbidden Pattern input
+and typed live-control requests and every original journey assertion.
+
+Current main C1 supplies independent typed Filter/FX controls and a headered
+recording path. It first obtains the Core begin receipt and mappings, then
+starts the exact capture handle; recording opens only after both gates.
+Preserve that order and the legacy capture-first fallback. Combine them with
+S6's synchronous prepared physical Pad reservation, the authoritative shared
+64-gesture ledger, original event identities and retained shutdown owners.
+Every actual typed, Pad and legacy journal submission uses one Host FIFO.
+Capacity refusal must not replace the tail of already admitted actions;
+sessionless work resumed after Stop must not acquire the old recording's
+failure debt. Preserve original Core/capture/WAV retirement and unknown-owner
+recovery, rather than treating a plain rejected capture start as retirement.
+
+Private Host revision 2 received two P2 findings: a refusal could truncate
+the admitted FIFO, and the unknown-capture Save oracle checked an unused
+store method. Revision 3 retains the admitted tail and checks the actual
+`session.savePerformance` producer, binding and stopped identity. Its new
+combination oracles cover held typed Filter plus prepared Pad, unknown capture,
+recording failure debt, sessionless failure attribution and two independently
+held admitted controls before a reserved Pad pair. Independent revision 3
+review covered both files and all 17 resolution hunks, with no remaining
+P0/P1/P2. Root verified the independent raw session binding and adopted the
+exact reviewed file hashes. Actual owning execution remains required;
+authored assertions are not RED/GREEN evidence.
+
+H1 remains a separate outstanding repair: an observed matching recording
+cursor can advance while a prepared input waits for the Host request tail,
+after its payload copied the earlier sequence. A private exact-main SDK model
+observed wire sequence 1 versus status sequence 2. That is not a Native or
+browser proof and does not explain the old three Creator failures. Declare
+and verify the repair on the actual combined source before final S6 acceptance.
+
+Lowest-tier integration checks are the complete SDK Node suite, Creator
+typecheck, complete input/Perform component files and original Creator unit
+selection, combined Facade gesture-status tests on a fresh Native build,
+the original complete Portal check and the owning identity tests for imported
+Cardputer literals. Independent review must bind the final resolved source.
+All selected exact-head batch-only lanes, original Native 30-second component
+and 300-second/64-round stress checks, rebuilt budget and navigation mutation
+proofs, separate held-IO proof and original full eight-group Creator remain
+S6 final-candidate obligations. Keep every worker, deadline and journey leg.
+The original full Creator 127 PASS / 3 FAIL / 11 SKIP remains a failure.
+
+Root UI's U12b Capture owns the shared heavy window. Integration stays within
+source/static work and previously permitted lightweight Node checks until
+that owner explicitly releases the required window. No Native, Wasm, Portal,
+full Creator or new heavy run is admitted by this plan.
+
+### Version Management
+
+Version impact: none for this integration; import existing committed main
+identity literals exactly and preserve the unshipped S6/C1 version debts.
+No Product Build, Assembly, immutable snapshot, tag, Release or Channel is
+allocated. Compatible H1 repair requires its own scoped version assessment.
+
+### Documentation Impact
+
+Documentation impact: required. Preserve incoming current pages on
+`/assembly/lmdj/`, `/core/modules/application-facade/`,
+`/core/modules/web-runtime-platform/`, `/hosts/creator-web/`,
+`/hosts/creator-interactions/`, `/platform/input/`,
+`/operations/testing-and-proof/` and `/operations/version-and-release/`.
+This addendum records integration boundaries; complete Portal verification
+is required before commit. Incoming immutable snapshots and witnesses remain
+unchanged.

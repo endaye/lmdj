@@ -123,7 +123,7 @@ def current_head(api, repository, number, head):
             "PR is closed, draft, retargeted or has a different head")
 
 
-def collect(api, document, comment_id, *, git, fetch, allow_resolved=False, reader=None, threads=None):
+def collect(api, document, comment_id, *, git, fetch, read_source, allow_resolved=False, reader=None, threads=None):
     """Original review auth is the existing retained-artifact reader, not a bot name."""
     import review_wait
     identity = document["identity"]
@@ -159,8 +159,7 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False, read
             "finding path has no current text source in the complete PR input")
     fetch(original)
     require(git("merge-base", original, head).decode().strip() == original, "original reviewed head is not an ancestor")
-    original_content = git("show", original + ":" + path).decode("utf-8")
-    fix_diff = git("diff", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", original, head, "--", path).decode("utf-8")
+    original_content, fix_diff = read_source(identity, original, path)
     require(bool(fix_diff.strip()), "finding source is unchanged since the original review")
     request = {"comment_id": comment_id, "thread_id": thread, "original_head": original,
                "path": path, "original_line": comment["original_line"], "body": comment["body"], "original_content": original_content,
@@ -171,7 +170,7 @@ def collect(api, document, comment_id, *, git, fetch, allow_resolved=False, read
     return request
 
 
-def collect_batch(api, document, *, git, fetch):
+def collect_batch(api, document, *, git, fetch, read_source):
     """Bound costly authentication; absent evidence never turns into resolution."""
     import review_failure_report
     import review_wait
@@ -212,7 +211,7 @@ def collect_batch(api, document, *, git, fetch):
             report.append({**row, "status": "deferred", "reason": "per-run candidate bound; use manual recheck"})
             continue
         try:
-            request = collect(api, document, row["comment_id"], git=git, fetch=fetch, reader=reader, threads=threads)
+            request = collect(api, document, row["comment_id"], git=git, fetch=fetch, read_source=read_source, reader=reader, threads=threads)
         except refusals as error:
             report.append({**row, "status": "not_rechecked", "reason": str(error)})
         else:
@@ -248,7 +247,7 @@ def set_resolved(api, thread, resolved):
     require(data.get("id") == thread and data.get("isResolved") is resolved, "thread mutation was not confirmed")
 
 
-def publish(api, document, native, *, git, fetch, request=None, reader=None, threads=None):
+def publish(api, document, native, *, git, fetch, read_source, request=None, reader=None, threads=None):
     identity = document["identity"]
     request = document["repair_request"] if request is None else request
     repository, number, head = identity["repository"], identity["pull_request"], identity["head_sha"]
@@ -272,7 +271,7 @@ def publish(api, document, native, *, git, fetch, request=None, reader=None, thr
         return [c for c in comments if c not in receipts], receipts
 
     # Reconstruct source/provenance independently of the downloaded request.
-    fresh = collect(api, document, request["comment_id"], git=git, fetch=fetch, allow_resolved=True, reader=reader, threads=threads)
+    fresh = collect(api, document, request["comment_id"], git=git, fetch=fetch, read_source=read_source, allow_resolved=True, reader=reader, threads=threads)
     fresh["conversation"], receipts = without_receipt(fresh["conversation"])
     require(fresh == request, "source finding, fix diff or conversation changed since model input")
 
@@ -316,7 +315,7 @@ def publish(api, document, native, *, git, fetch, request=None, reader=None, thr
     return {"verdict": "resolved", "resolved": True, "request_sha256": digest(request)}
 
 
-def publish_batch(api, document, native, *, git, fetch, record=None):
+def publish_batch(api, document, native, *, git, fetch, read_source, record=None):
     """Persist each far-side receipt; a later refusal cannot erase earlier effects."""
     import review_wait
     auth = engine.authenticate_input(document)
@@ -326,7 +325,7 @@ def publish_batch(api, document, native, *, git, fetch, record=None):
     threads = thread_inventory(api, identity["repository"], identity["pull_request"])
     receipts = []
     for request in auth["repair_requests"]:
-        receipt = publish(api, document, native, git=git, fetch=fetch, request=request,
+        receipt = publish(api, document, native, git=git, fetch=fetch, read_source=read_source, request=request,
                           reader=reader, threads=threads)
         receipts.append({"comment_id": request["comment_id"], **receipt})
         if record:

@@ -28,9 +28,11 @@ class ChecksFixture(task_fixture.TaskFixture):
         material = witness_fixture.cut_fixture.snapshot_fixture.fixture_module.material_fixture.MaterialTest
         original = material.commit
         def commit(fixture):
-            name = fixture.root / "tests/build/ci_change_scope_test.py"
-            name.parent.mkdir(parents=True, exist_ok=True)
-            name.write_text("print('ownership fixture')\n")
+            for name, text in (("tests/build/ci_change_scope_test.py", "print('ownership fixture')\n"),
+                               ("tests/build/version_test.py", "print('identity fixture')\n")):
+                filename = fixture.root / name
+                filename.parent.mkdir(parents=True, exist_ok=True)
+                filename.write_text(text)
             return original(fixture)
         with patch.object(material, "commit", commit), patch.object(witness_fixture, "SCRIPT", SCRIPT):
             super()._prepare_seed()
@@ -82,16 +84,16 @@ class ChecksLifecycleTest(ChecksFixture):
         self.checks.executor._execute = execute
         result = self.prepare_checks()
         rows = self.check_state()["commands"]
-        self.assertEqual([row["phase"] for row in rows], ["staged"] * 3 + ["committed"] * 3)
-        self.assertEqual([row["status"] for row in rows], ["verified"] * 6)
-        self.assertEqual(len(outputs), 6)
+        self.assertEqual([row["phase"] for row in rows], ["staged"] * 4 + ["committed"] * 4)
+        self.assertEqual([row["status"] for row in rows], ["verified"] * 8)
+        self.assertEqual(len(outputs), 8)
         for row, raw in zip(rows, outputs):
             self.assertEqual(row["result"], [0, sha256(raw).hexdigest(), len(raw)])
-        for offset in (0, 3):
-            self.assertEqual(outputs[offset:offset + 2], [b"portal fixture\n", b"ownership fixture\n"])
+        for offset in (0, 4):
+            self.assertEqual(outputs[offset:offset + 3], [b"portal fixture\n", b"ownership fixture\n", b"identity fixture\n"])
             # Actual Git may emit version-dependent deprecation diagnostics.
             # Authenticate the real combined bytes above, never assume silence.
-            self.assertEqual(rows[offset + 2]["arguments"][-1], self.base)
+            self.assertEqual(rows[offset + 3]["arguments"][-1], self.base)
         self.assertEqual(result["checks"]["sha256"], canonical_sha256(self.check_state()))
         spec = self.spec(result)
         self.checks = self.new_checks()
@@ -238,11 +240,11 @@ class ChecksResumeTest(ChecksFixture):
         _, result = os.waitpid(pid, 0)
         self.assertEqual(os.waitstatus_to_exitcode(result), 39)
         rows = self.check_state()["commands"]
-        self.assertEqual([row["phase"] for row in rows], ["staged"] * 3)
-        self.assertEqual([row["status"] for row in rows], ["verified"] * 3)
+        self.assertEqual([row["phase"] for row in rows], ["staged"] * 4)
+        self.assertEqual([row["status"] for row in rows], ["verified"] * 4)
         self.assertNotEqual(self.task.revision("HEAD"), self.base)
         completed = self.prepare_checks()
-        self.assertEqual(len(self.check_state()["commands"]), 6)
+        self.assertEqual(len(self.check_state()["commands"]), 8)
         self.assertEqual(self.checks.verify(self.spec(completed)), completed["checks"])
         self.assertEqual(self.check_calls(), ["check", "check"])
 

@@ -274,7 +274,6 @@ test("boot creates a stored Project, New Project adds one, and a reload reopens 
   await expect(emptyPads).toHaveCount(16);
   expect((await inspectProject(page)).project).toEqual(secondTruth);
   await page.getByRole("button", {name: "Project", exact: true}).click();
-  await page.getByRole("button", {name: "Open local"}).click();
   await expect(page.getByRole("button", {name: /^Select Project [0-9a-f]{8}$/})).toHaveCount(2);
 });
 
