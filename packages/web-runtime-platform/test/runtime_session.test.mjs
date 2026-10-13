@@ -26,6 +26,7 @@ const API = [
   "applyPerformanceRecovery",
   "applySequenceRecovery",
   "assignPatternSlot",
+  "assignPad",
   "beginPerformanceRecording",
   "beginPerformanceReplay",
   "beginSequence",
@@ -3051,6 +3052,269 @@ test("Sample query rejects noncanonical cache identity and waveform buckets", as
     waveform.session.queryWaveform(query),
     (error) => error.code === "HOST_PROTOCOL_MISMATCH",
   );
+});
+
+const ASSIGN_REQUEST = Object.freeze({
+  commandId: "20000000-0000-4000-8000-000000000063",
+  expectedRevision: 7,
+  slot: 63,
+  assetId: "11111111-1111-4111-8111-111111111111",
+});
+
+function assignmentResult(payload, overrides = {}) {
+  return {slot: payload.slot, asset_id: payload.asset_id,
+    committed_revision: 8, replayed: false, project_revision: 8,
+    runtime_revision: 8, runtime_published: true, ...overrides};
+}
+
+test("retained Asset assignment sends explicit A01 and D16 with caller identity and original budget", async () => {
+  const seen = [];
+  const {session} = fixture({send: async (envelope, options) => {
+    if (envelope.operation !== "pad.assign") {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    seen.push({payload: structuredClone(envelope.payload), budget: options.deadlineMs});
+    return success(envelope, assignmentResult(envelope.payload));
+  }});
+  await session.start();
+  for (const slot of [0, 63]) {
+    const commandId = slot === 0
+      ? "20000000-0000-4000-8000-000000000001" : ASSIGN_REQUEST.commandId;
+    const result = await session.assignPad({...ASSIGN_REQUEST, slot, commandId});
+    assert.deepEqual(result, {slot, assetId: ASSIGN_REQUEST.assetId,
+      committedRevision: 8, replayed: false, projectRevision: 8,
+      runtimeRevision: 8, runtimePublished: true, snapshotError: null});
+    assert.ok(Object.isFrozen(result));
+  }
+  assert.deepEqual(seen, [{bank: 0, pad: 0}, {bank: 3, pad: 15}].map((slot, index) => ({
+    payload: {command_id: index === 0
+      ? "20000000-0000-4000-8000-000000000001" : ASSIGN_REQUEST.commandId, expected_revision: 7,
+      slot, asset_id: ASSIGN_REQUEST.assetId}, budget: 30_000,
+  })));
+  await session.close();
+});
+
+test("assignment validates non-null retained identity and explicit destination before sending", async () => {
+  let assignments = 0;
+  const {session} = fixture({send: async envelope => {
+    if (envelope.operation === "pad.assign") assignments++;
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  for (const change of [{assetId: null}, {assetId: "foreign"}, {commandId: null},
+    {commandId: "not-a-command"},
+    {expectedRevision: -1}, {expectedRevision: Number.MAX_SAFE_INTEGER + 1},
+    {extra: true}]) {
+    await assert.rejects(session.assignPad({...ASSIGN_REQUEST, ...change}), TypeError);
+  }
+  for (const slot of [-1, 64, 1.5]) {
+    await assert.rejects(session.assignPad({...ASSIGN_REQUEST, slot}), RangeError);
+  }
+  await assert.rejects(session.assignPad(null), TypeError);
+  assert.equal(assignments, 0);
+  await session.close();
+});
+
+test("queued assignment captures every identity field before a Project action finishes", async () => {
+  const opened = Promise.withResolvers();
+  const seen = [];
+  const {session} = fixture({send: async envelope => {
+    seen.push(envelope.operation);
+    if (envelope.operation === "project.open") {
+      await opened.promise;
+      return success(envelope, {});
+    }
+    if (envelope.operation === "pad.assign") {
+      assert.deepEqual(envelope.payload, {command_id: ASSIGN_REQUEST.commandId,
+        expected_revision: 7, slot: {bank: 3, pad: 15}, asset_id: ASSIGN_REQUEST.assetId});
+      return success(envelope, assignmentResult(envelope.payload));
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const opening = session.openProject(ASSIGN_REQUEST.assetId,
+    "22222222-2222-4222-8222-222222222222");
+  const request = {...ASSIGN_REQUEST};
+  const assignment = session.assignPad(request);
+  Object.assign(request, {commandId: "20000000-0000-4000-8000-000000000064",
+    expectedRevision: 99, slot: 0, assetId: "22222222-2222-4222-8222-222222222222"});
+  await drainTasks();
+  assert.deepEqual(seen, ["project.open"]);
+  opened.resolve();
+  await opening;
+  assert.equal((await assignment).slot, 63);
+  assert.deepEqual(seen, ["project.open", "pad.assign"]);
+  await session.close();
+});
+
+test("assignment also waits for an outstanding native query on the existing Host lane", async () => {
+  const held = Promise.withResolvers();
+  const seen = [];
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  const {session} = fixture({send: async (envelope, options) => {
+    if (!["sample.inspect", "pad.assign"].includes(envelope.operation)) {
+      return success(envelope, defaultResult(envelope.operation));
+    }
+    seen.push(envelope.operation);
+    maximumInFlight = Math.max(maximumInFlight, ++inFlight);
+    try {
+      if (envelope.operation === "sample.inspect") {
+        await held.promise;
+        return success(envelope, {project_revision: 7, slot: {bank: 0, pad: 0},
+          asset_id: ASSIGN_REQUEST.assetId, playback: WIRE_PLAYBACK,
+          metadata: {sample_rate: 48_000, channels: 1, source_frames: 100},
+          waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`});
+      }
+      assert.equal(options.deadlineMs, 30_000);
+      return success(envelope, assignmentResult(envelope.payload));
+    } finally { inFlight--; }
+  }});
+  await session.start();
+  const query = session.inspectSample(0);
+  await drainTasks();
+  const assignment = session.assignPad(ASSIGN_REQUEST);
+  await drainTasks();
+  assert.deepEqual(seen, ["sample.inspect"]);
+  held.resolve();
+  await Promise.all([query, assignment]);
+  assert.deepEqual(seen, ["sample.inspect", "pad.assign"]);
+  assert.equal(maximumInFlight, 1);
+  await session.close();
+});
+
+test("assignment preserves a known commit whose Runtime publication failed", async () => {
+  const error = {code: "WEB_RUNTIME_RESOURCE_LIMIT", message: "Runtime preparation refused",
+    details: {resource: "resident_pcm_bytes", observed: 200, limit: 100}};
+  const {session} = fixture({send: async envelope => success(envelope,
+    envelope.operation === "pad.assign" ? assignmentResult(envelope.payload,
+      {runtime_published: false, runtime_revision: 7, snapshot_error: error})
+      : defaultResult(envelope.operation))});
+  await session.start();
+  assert.deepEqual(await session.assignPad(ASSIGN_REQUEST), {slot: 63,
+    assetId: ASSIGN_REQUEST.assetId, committedRevision: 8, replayed: false,
+    projectRevision: 8, runtimeRevision: 7, runtimePublished: false, snapshotError: error});
+  await session.close();
+});
+
+test("assignment rejects publication failure without a valid typed error", async () => {
+  const invalid = [
+    {runtime_published: false, runtime_revision: 7},
+    {runtime_published: false, runtime_revision: 7, snapshot_error: {
+      code: "NOT_A_TYPED_ERROR", message: "failed", details: {},
+    }},
+  ];
+  const {session} = fixture({send: async envelope => success(envelope,
+    envelope.operation === "pad.assign"
+      ? assignmentResult(envelope.payload, invalid.shift()) : defaultResult(envelope.operation))});
+  await session.start();
+  while (invalid.length) {
+    await assert.rejects(session.assignPad(ASSIGN_REQUEST), {code: "HOST_PROTOCOL_MISMATCH"});
+  }
+  await session.close();
+});
+
+test("assignment rejects mismatched destination, Asset and publication authority", async () => {
+  const invalid = [{slot: {bank: 0, pad: 0}}, {asset_id: null},
+    {asset_id: "22222222-2222-4222-8222-222222222222"}, {replayed: 1},
+    {committed_revision: 7},
+    {committed_revision: 9, project_revision: 9, runtime_revision: 9},
+    {project_revision: 7}, {runtime_revision: null}, {runtime_revision: 7},
+    {runtime_revision: 9}, {extra: true}, {runtime_published: "true"},
+    {snapshot_error: {code: "COOK_FAILED", message: "failed", details: {}}}];
+  const {session} = fixture({send: async envelope => success(envelope,
+    envelope.operation === "pad.assign"
+      ? assignmentResult(envelope.payload, invalid.shift()) : defaultResult(envelope.operation))});
+  await session.start();
+  while (invalid.length) {
+    await assert.rejects(session.assignPad(ASSIGN_REQUEST), {code: "HOST_PROTOCOL_MISMATCH"});
+  }
+  await session.close();
+});
+
+test("a lost assignment receipt sends once; only an explicit caller replay repeats the same identity", async () => {
+  const sent = [];
+  const {session} = fixture({send: async envelope => {
+    if (envelope.operation === "pad.assign") {
+      sent.push(structuredClone(envelope.payload));
+      if (sent.length === 1) throw Object.assign(new Error("lost receipt"), {code: "HOST_TIMEOUT"});
+      return success(envelope, assignmentResult(envelope.payload,
+        {replayed: true, project_revision: 9, runtime_revision: 9}));
+    }
+    return success(envelope, envelope.operation === "history.inspect"
+      ? HISTORY_STATUS : defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.assignPad(ASSIGN_REQUEST), {code: "HOST_TIMEOUT"});
+  await session.inspectAuthoringHistory();
+  await drainTasks();
+  assert.equal(sent.length, 1);
+  const replay = await session.assignPad(ASSIGN_REQUEST);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.committedRevision, 8);
+  assert.equal(replay.projectRevision, 9);
+  assert.deepEqual(sent[1], sent[0]);
+  await session.close();
+});
+
+test("assignment keeps the typed conflict and never replaces its command identity", async () => {
+  const seen = [];
+  const {session} = fixture({send: async envelope => {
+    if (envelope.operation === "pad.assign") {
+      seen.push(envelope.payload);
+      return {protocol_version: 1, request_id: envelope.request_id, ok: false,
+        error: {code: "REVISION_CONFLICT", message: "Project revision changed",
+          details: {actual_revision: 9, expected_revision: 7}}};
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.assignPad(ASSIGN_REQUEST), error =>
+    error.code === "REVISION_CONFLICT" && error.details.actual_revision === 9 &&
+    error.details.expected_revision === 7);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].command_id, ASSIGN_REQUEST.commandId);
+  await session.close();
+  await assert.rejects(session.assignPad(ASSIGN_REQUEST), {code: "HOST_STATE_INVALID"});
+  assert.equal(seen.length, 1);
+});
+
+test("closing revokes an assignment still waiting on the native request lane", async () => {
+  const held = Promise.withResolvers();
+  let assignments = 0;
+  const {session} = fixture({send: async envelope => {
+    if (envelope.operation === "sample.inspect") {
+      await held.promise;
+      return success(envelope, {project_revision: 7, slot: {bank: 0, pad: 0},
+        asset_id: null, playback: WIRE_PLAYBACK, metadata: null,
+        waveform_cache_identity: null});
+    }
+    if (envelope.operation === "pad.assign") assignments++;
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const query = session.inspectSample(0);
+  await drainTasks();
+  const assignment = session.assignPad(ASSIGN_REQUEST);
+  const refused = assert.rejects(assignment, {code: "HOST_STATE_INVALID"});
+  const closing = session.close();
+  await drainTasks();
+  held.resolve();
+  await Promise.all([query, refused, closing]);
+  assert.equal(assignments, 0);
+});
+
+test("assignment retains the fatal owner's typed cause without sending", async () => {
+  let assignments = 0;
+  const runtime = fixture({send: async envelope => {
+    if (envelope.operation === "pad.assign") assignments++;
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await runtime.session.start();
+  runtime.emitFailure(Object.assign(new Error("native owner lost"), {code: "HOST_RESTART_REQUIRED"}));
+  await assert.rejects(runtime.session.assignPad(ASSIGN_REQUEST), {code: "HOST_RESTART_REQUIRED"});
+  assert.equal(assignments, 0);
+  await runtime.session.close();
 });
 
 test("Project open and Sample mutations share one lane without conflict retry", async () => {
