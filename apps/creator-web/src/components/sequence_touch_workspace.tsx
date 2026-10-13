@@ -190,7 +190,7 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
       </header>
       {props.showRefresh === false || transport.status?.publicationPending !== true
         ? null
-        : <p role="status">committed, publication pending</p>}
+        : <p role="status">publication pending</p>}
       {layer === "edit" ? (selectedPattern === undefined ? null : (
         <SequenceGrid
           key={selectedPatternId}

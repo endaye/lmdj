@@ -11720,7 +11720,13 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   LMDJ_CHECK(outstanding->outstanding_cancellation->activation_frame == 24'000);
   LMDJ_CHECK(engine.telemetry().rendered_frames == 129);
   LMDJ_CHECK(engine.pattern_telemetry().canceled_publications == 1);
-  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
+  const auto canceled_status = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(canceled_status.at("pending_switch").is_null());
+  // The target is withdrawn, but its exact audio-owned slot is not retired.
+  LMDJ_CHECK(canceled_status.at("publication_pending") == true);
+  LMDJ_CHECK(canceled_status.at("phase") == "idle" &&
+      canceled_status.at("playing") == true && canceled_status.at("recording") == false);
+  LMDJ_CHECK(engine.telemetry().rendered_frames == 129);
   const auto bundle = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj");
   const auto truth_before = inspect_project(temp.path(), kProjectId).at("result").at("project");
   const auto no_journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
@@ -11752,6 +11758,8 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   LMDJ_CHECK(recording.at("origin_frame") == 0 && recording.at("transport_epoch") == 2);
   const auto fenced = engine.pattern_transport_observation();
   LMDJ_CHECK(fenced && !fenced->outstanding_cancellation);
+  // Only the actual production receipt retires canceled B's publication fence.
+  LMDJ_CHECK(recording.at("publication_pending") == false);
   LMDJ_CHECK(fenced->current_generation == a_generation && fenced->current_origin_frame == 0);
   const auto journal = lmdj::project_io::SequenceJournal{}.read_active(bundle);
   LMDJ_CHECK(journal.has_value() && journal.value().pattern_id.value() == kPatternId);

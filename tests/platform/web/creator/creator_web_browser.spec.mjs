@@ -23,7 +23,7 @@ async function importProject(page) {
   await chooser.setFiles(bundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("64 / 64 Pads used", {exact: true})).toBeVisible();
+  await expect(page.getByTestId("project-overview").getByText(/^64 Pads · \d+ Patterns$/)).toBeVisible();
 }
 
 async function inspectProject(page) {

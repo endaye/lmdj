@@ -633,12 +633,14 @@ async function enterLoopToggleSample(page) {
   await expect(hold).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
 }
 
-async function armPadOutcomeObservation(pad) {
-  await pad.evaluate((element) => {
+async function armPadOutcomeObservation(pad, acceptedOutcomes = null) {
+  await pad.evaluate((element, acceptedOutcomes) => {
     element.removeAttribute("data-proof-outcome-observed");
+    const matchesOutcome = (value) => value !== null && value !== "idle" &&
+      (acceptedOutcomes === null || acceptedOutcomes.includes(value));
     const observeOutcome = () => {
       const outcome = element.getAttribute("data-outcome");
-      if (outcome !== null && outcome !== "idle") {
+      if (matchesOutcome(outcome)) {
         element.setAttribute("data-proof-outcome-observed", outcome);
         return true;
       }
@@ -646,9 +648,7 @@ async function armPadOutcomeObservation(pad) {
     };
     if (observeOutcome()) return;
     const observer = new MutationObserver((records) => {
-      const observed = records.some((record) =>
-        record.oldValue !== null && record.oldValue !== "idle"
-      );
+      const observed = records.some((record) => matchesOutcome(record.oldValue));
       if (observed || observeOutcome()) {
         element.setAttribute("data-proof-outcome-observed", "true");
         observer.disconnect();
@@ -659,7 +659,7 @@ async function armPadOutcomeObservation(pad) {
       attributeFilter: ["data-outcome"],
       attributeOldValue: true,
     });
-  });
+  }, acceptedOutcomes);
 }
 
 async function latchLoopToggle(page) {
@@ -994,26 +994,258 @@ test.describe("synthetic Web MIDI", () => {
     });
   });
 
-  test("notes 36 through 51 map to the selected Bank and listeners clean up", async ({page, browserName}) => {
+  test("notes 36 through 51 map to the selected Bank and listeners clean up", async ({page, browserName}, testInfo) => {
     test.skip(browserName !== "chromium");
     test.setTimeout(180_000);
+    // Optional diagnostics only; SDK default transport and all original gates stay.
+    const priorDocuments = [];
+    const observationNotes = [];
+    try {
+    await page.addInitScript(() => {
+      try {
+      const events = [];
+      const observerErrors = [];
+      const firstErrors = new Map();
+      const padNodes = new Map();
+      let attachmentAttempted = false;
+      const nativeThen = Promise.prototype.then;
+      let generation = 0;
+      let callSerial = 0;
+      let padSerial = 0;
+      // Entire extraction and fallback are isolated, including hostile getters.
+      function observe(kind, owner, action) {
+        try { return action(); }
+        catch {
+          try { observerErrors.push({kind, generation: owner, observation_failed: true}); }
+          catch { /* Even a failed diagnostic fallback cannot affect delivery. */ }
+          return undefined;
+        }
+      }
+      function record(kind, owner, read, isError = false) {
+        observe(kind, owner, () => {
+          const entry = {ordinal: events.length + 1, kind, generation: owner,
+            observed_at_ms: performance.now(), value: structuredClone(read())};
+          events.push(entry);
+          if (isError && !firstErrors.has(owner)) firstErrors.set(owner, entry);
+        });
+      }
+      const errorValue = error => ({name: error?.name, code: error?.code,
+        message: error?.message, details: error?.details, stack: error?.stack});
+      const optionsValue = options => options == null ? options :
+        Object.fromEntries(Object.entries(options).map(([key, value]) => [key,
+          key === "signal" && value instanceof AbortSignal
+            ? {observer_type: "AbortSignal", aborted: value.aborted, reason: value.reason}
+            : value]));
+      function decorateInitialHost(host, owner) {
+        const property = Object.getOwnPropertyDescriptor(host, "transport");
+        if (!property || !("value" in property) || property.writable !== true) {
+          record("host-unobserved", owner, () => ({reason: "transport property is not writable data"}));
+          return;
+        }
+        const nativeTransport = property.value;
+        const descriptors = Object.getOwnPropertyDescriptors(nativeTransport);
+        if (!Object.isFrozen(nativeTransport) || typeof descriptors.send?.value !== "function") {
+          record("host-unobserved", owner, () => ({reason: "actual original frozen transport not established"}));
+          return;
+        }
+        const wrapper = Object.create(Object.getPrototypeOf(nativeTransport));
+        for (const key of Reflect.ownKeys(descriptors)) {
+          const descriptor = descriptors[key];
+          if (typeof descriptor.value === "function") {
+            const method = descriptor.value;
+            descriptor.value = function (...arguments_) {
+              if (key === "send" || key === "sendRetained") {
+                const call = ++callSerial;
+                record("request", owner, () => ({call, lane: key,
+                  request: arguments_[0], options: optionsValue(arguments_[1])}));
+                let original;
+                try { original = Reflect.apply(method, nativeTransport, arguments_); }
+                catch (error) {
+                  record("request-threw", owner, () => ({call, lane: key,
+                    error: errorValue(error)}), true);
+                  throw error;
+                }
+                observe("reply-observer-installation", owner, () => {
+                  // The side Promise always fulfills: both callbacks only call
+                  // the nonthrowing observation boundary and return undefined.
+                  Reflect.apply(nativeThen, original, [response => {
+                    observe("reply-fields", owner, () => {
+                      record("reply", owner, () => ({call, lane: key, response}),
+                        response?.ok === false);
+                    });
+                  }, error => {
+                    record("request-rejected", owner, () => ({call, lane: key,
+                      error: errorValue(error)}), true);
+                  }]);
+                });
+                return original;
+              }
+              // Includes both subscriptions and terminate: original listener
+              // identity, receiver, arguments and unsubscribe/return value.
+              return Reflect.apply(method, nativeTransport, arguments_);
+            };
+          } else if (descriptor.get || descriptor.set) {
+            const get = descriptor.get;
+            const set = descriptor.set;
+            if (get) descriptor.get = function () { return Reflect.apply(get, nativeTransport, []); };
+            if (set) descriptor.set = function (value) { return Reflect.apply(set, nativeTransport, [value]); };
+          }
+        }
+        Object.defineProperties(wrapper, descriptors);
+        if (!Object.isExtensible(nativeTransport)) Object.preventExtensions(wrapper);
+        // Native transport remains frozen and untouched; same actual Host object.
+        Object.defineProperty(host, "transport", {...property, value: wrapper});
+        record("initial-host-attached", owner, () => ({host_identity_preserved: true,
+          native_transport_frozen: true, bootstrap_rpc: "UNOBSERVED",
+          already_registered_notifications: "UNOBSERVED", later_generation_rpc: "UNOBSERVED"}));
+      }
+      Object.defineProperty(window, "__LMDJ_WEB_HOST_SEAMS__", {
+        configurable: false,
+        get() {
+          const owner = ++generation;
+          record("generation-created", owner, () => ({}));
+          // Deliberately no transport seam: the SDK keeps its real default
+          // unavailable, partial-owner, optional-method and terminal semantics.
+          return {onDiagnostics(value) {
+            observe("diagnostics-fields", owner, () => {
+              record("diagnostics", owner, () => value,
+                value.error_code !== null && value.error_code !== undefined);
+            });
+          }};
+        },
+      });
+      const padValue = (element, entry) => ({node_id: entry.id,
+        armed_generation: entry.generation, label: element.getAttribute("aria-label"),
+        connected: element.isConnected, outcome: element.getAttribute("data-outcome"),
+        proof_outcome: element.getAttribute("data-proof-outcome-observed")});
+      const connectivity = new MutationObserver(() => observe("pad-connectivity", generation, () => {
+        for (const [element, entry] of padNodes) {
+          if (entry.connected === element.isConnected) continue;
+          entry.connected = element.isConnected;
+          record("pad-connectivity", entry.generation, () => padValue(element, entry));
+        }
+      }));
+      window.__creatorMidiObservation = Object.freeze({
+        attachInitialHost() {
+          if (attachmentAttempted) return;
+          attachmentAttempted = true;
+          observe("initial-host-attachment", generation, () => {
+            // Exactly one read at the original successful activation far side.
+            // Session publishes this own immutable public session marker only
+            // after its actual loaded owner equals the global Host.
+            const host = window.lmdjWebRuntimeHost;
+            const session = host && Object.getOwnPropertyDescriptor(host, "session");
+            if (generation !== 1 || !session || !("value" in session) ||
+                session.configurable !== false || session.writable !== false ||
+                session.value === null || typeof session.value !== "object") {
+              record("host-unobserved", generation, () => ({reason: "initial successful Host binding not established"}));
+              return;
+            }
+            decorateInitialHost(host, generation);
+          });
+        },
+        watchPad(element) {
+          observe("pad-observer-installation", generation, () => {
+            if (padNodes.has(element)) return;
+            const entry = {id: ++padSerial, generation, connected: element.isConnected};
+            padNodes.set(element, entry);
+            record("pad-armed", entry.generation, () => padValue(element, entry));
+            const observer = new MutationObserver(records => observe("pad-records", entry.generation, () => {
+              for (let index = 0; index < records.length; index += 1) {
+                const mutation = records[index];
+                const next = records.slice(index + 1).find(candidate =>
+                  candidate.attributeName === mutation.attributeName);
+                record("pad-attribute", entry.generation, () => ({...padValue(element, entry),
+                  attribute: mutation.attributeName, old_value: mutation.oldValue,
+                  new_value: next ? next.oldValue : element.getAttribute(mutation.attributeName)}));
+              }
+            }));
+            observer.observe(element, {attributes: true, attributeOldValue: true,
+              attributeFilter: ["data-outcome", "data-proof-outcome-observed", "aria-label"]});
+            connectivity.observe(document, {childList: true, subtree: true});
+          });
+        },
+        snapshot() {
+          return observe("snapshot", generation, () => structuredClone({
+            document_time_origin: performance.timeOrigin, events,
+            observer_errors: observerErrors, first_observed_errors: [...firstErrors],
+            pad_nodes: [...padNodes].map(([element, entry]) => padValue(element, entry)),
+          })) ?? {observation_missing: true};
+        },
+      });
+      } catch {
+        try { window.__creatorMidiObservation = Object.freeze({attachInitialHost() {}, watchPad() {},
+          snapshot() { return {observer_initialization_failed: true}; }}); }
+        catch { /* Initialization evidence may itself be unavailable. */ }
+      }
+    });
+    } catch { observationNotes.push("observer-init-script-unavailable"); }
+    try {
     await page.goto("/index.html");
     await importAndActivate(page);
+    try {
+      await page.evaluate(() => window.__creatorMidiObservation?.attachInitialHost());
+    } catch { observationNotes.push("initial-host-attachment-unavailable"); }
     await page.getByTestId("physical-controls").getByRole("button", {name: "Bank C", exact: true}).click();
     await clickCreatorSystemAction(page, "Enable MIDI");
-    await page.evaluate(() => {
-      for (let note = 36; note <= 51; note += 1) window.__creatorMidi.emit(note);
-    });
-    await expect.poll(async () => {
+    await test.step("observe the MIDI burst before System releases it", async () => {
+      const pads = Array.from({length: 16}, (_, index) => page.getByRole("button", {
+        name: new RegExp(`^Pad C${String(index + 1).padStart(2, "0")} — assigned — Key [ZXCVASDFQWER1234]$`),
+      }));
+      await Promise.all(pads.map(pad => expect(pad).toHaveAttribute(
+        "data-outcome", "idle", {timeout: 30_000},
+      )));
+      // Arm every real Bank-C Pad before the original synchronous note-on
+      // burst. An admission alone is not that Pad's Runtime outcome.
+      try {
+        await Promise.all(pads.map(pad => pad.evaluate(element =>
+          window.__creatorMidiObservation?.watchPad(element))));
+      } catch { observationNotes.push("pad-observer-arming-unavailable"); }
+      await Promise.all(pads.map(pad => armPadOutcomeObservation(pad, ["started", "capacity"])));
+      await page.evaluate(() => {
+        for (let note = 36; note <= 51; note += 1) window.__creatorMidi.emit(note);
+      });
+      await Promise.all(pads.map(pad => expect(pad).toHaveAttribute(
+        "data-proof-outcome-observed", /.+/, {timeout: 30_000},
+      )));
+      // This journey has no note-off burst. Enter System once, after every
+      // press outcome, so its real clearPressed transition releases the notes.
       const value = await report(page);
-      return [value.trigger_admitted_count, value.trigger_outcome_count];
-    }, {timeout: 30_000}).toEqual([17, 17]);
+      expect([value.trigger_admitted_count, value.trigger_outcome_count]).toEqual([17, 17]);
+      // Far-side UI release only: idle does not attest Native Release consume.
+      await Promise.all(pads.map(pad => expect(pad).toHaveAttribute(
+        "data-outcome", "idle", {timeout: 30_000},
+      )));
+    }, {timeout: 30_000});
     await page.evaluate(() => {
       window.dispatchEvent(new PageTransitionEvent("pagehide"));
     });
     await expect.poll(() => page.evaluate(() => window.__creatorMidi.listenerCount()))
       .toBe(0);
+    try {
+      priorDocuments.push(await page.evaluate(() => window.__creatorMidiObservation?.snapshot() ??
+        {observer_missing: true}));
+    } catch { observationNotes.push("pre-reload-observer-memory-unavailable"); }
     await page.reload();
+    } finally {
+      // Optional attachment reads only test memory and never changes the journey result.
+      const proof = {prior_documents: priorDocuments, observation_notes: observationNotes,
+        current_document: null};
+      try {
+        proof.current_document = page.isClosed() ? {page_closed: true} :
+          await page.evaluate(() => window.__creatorMidiObservation?.snapshot() ??
+            {observer_missing: true});
+      } catch { observationNotes.push("final-observer-memory-unavailable"); }
+      try {
+        await testInfo.attach("original-midi-host-observation", {
+          body: JSON.stringify(proof), contentType: "application/json",
+        });
+      } catch {
+        try { testInfo.annotations.push({type: "diagnostic-advisory",
+          description: "Original MIDI observer attachment unavailable; journey result preserved"}); }
+        catch { /* Missing diagnostic metadata is advisory too. */ }
+      }
+    }
   });
 });
 

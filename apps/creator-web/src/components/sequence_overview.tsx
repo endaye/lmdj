@@ -71,7 +71,7 @@ export function SequenceOverview({
     : state.errorCode !== null
       ? userMessage(state.errorCode).message
       : transport?.status?.publicationPending === true
-        ? "Committed, publication pending"
+        ? "Publication pending"
         : null;
   const overview = useMemo(() => pattern === undefined
     ? null

@@ -1194,7 +1194,7 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
       await expect.poll(async () => {
         const status = await inspect();
         const position = (status.runtime_frame - status.origin_frame) % barFrames;
-        return status.playing && status.pending_switch == null &&
+        return status.playing && !status.publication_pending && status.pending_switch == null &&
           position >= 0 && position < barFrames / 5;
       }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS, intervals: [50]}).toBe(true);
     };

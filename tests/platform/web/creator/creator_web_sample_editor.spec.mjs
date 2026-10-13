@@ -280,7 +280,7 @@ async function importV1SampleProject(page) {
   await (await chooserPromise).setFiles(sampleBundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("44 / 64 Pads used", {exact: true})).toBeVisible();
+  await expect(page.getByTestId("project-overview").getByText(/^44 Pads · \d+ Patterns$/)).toBeVisible();
   await expect(page.locator(".creator-details-facts")).toContainText("Rev46");
   await expectProjectRevision(page, 46);
 }
@@ -738,7 +738,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.locator(".creator-details-facts")).toContainText("Rev60");
-  await expect(page.getByText("45 / 64 Pads used", {exact: true})).toBeVisible();
+  await expect(page.getByTestId("project-overview").getByText(/^45 Pads · \d+ Patterns$/)).toBeVisible();
   await enterSampleEditor(page);
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true})).toBeVisible();
   await expectProjectRevision(page, 60);

@@ -6569,10 +6569,14 @@ Json ControlRuntime::dispatch(
         // One short continuation step per inspection turn.
         static_cast<void>(impl_->transport_continuation_step());
       }
+      const auto pattern_state = impl_->engine.pattern_transport_observation();
       return success(pattern_transport_status_json(
           true,
           impl_->transport->controller->inspect(),
-          impl_->transport->publish_pending,
+          // Withdrawal clears pending_switch before audio retires its slot.
+          // Add only that observed fence to the transport's own completion.
+          impl_->transport->publish_pending ||
+              (pattern_state && pattern_state->outstanding_cancellation),
           impl_->engine.telemetry().rendered_frames,
           impl_->current_pattern_id_json(),
           impl_->pending_transport_switch_json()));

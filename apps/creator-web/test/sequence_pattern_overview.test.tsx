@@ -145,7 +145,7 @@ test("shows one status line, the most severe first", () => {
   const status = () => screen.getByTestId("sequence-overview")
     .querySelectorAll(".sequence-overview-status");
   expect(status()).toHaveLength(1);
-  expect(status()[0]!.textContent).toBe("Committed, publication pending");
+  expect(status()[0]!.textContent).toBe("Publication pending");
   view.rerender(
     <SequenceOverview project={project}
       state={{...initialSequenceState, errorCode: "HOST_TIMEOUT"}}

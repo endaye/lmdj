@@ -370,7 +370,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         <output role="status" aria-label="Pattern transport status">
           Pattern transport: {transportStatusLabel(props.transport)}
           {props.transport.status?.publicationPending === true
-            ? " · committed, publication pending"
+            ? " · publication pending"
             : ""}
         </output>
       ) : null}

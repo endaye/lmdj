@@ -215,6 +215,6 @@ test("published Creator completes authoring, playback, and durable reload", asyn
   // so a still-rendering overview settles on whichever surface this Host
   // serves, instead of branching on a single visibility snapshot.
   await expect(
-    page.getByText(/^64 \/ 64( Pads used)?$/).filter({visible: true}),
+    page.getByTestId("project-overview").getByText(/^64 Pads · \d+ Patterns$/).filter({visible: true}),
   ).toBeVisible();
 });

@@ -137,8 +137,16 @@ live Pad press/release 在 enqueue 接受后的既有位置注入 admission 候�
 coordinator 打开的窗口下界单调分配，release 复用其归属 press 的 watermark 作为
 correlation；journaling 响应不早于 durable append，unknown enqueue 绝不自动重试。
 录音的 preparation、audio receipt、journal settlement 与 committed Pattern publication
-是四个分别持有的 completion（`publication_pending` 单独可见）。显式 Suspend、Project
-替换与 Close 进入同一 shutdown barrier：acknowledged Pattern Stop → admission closure →
+是四个分别持有的 completion（`publication_pending` 单独可见）。已 engaged 的
+`pattern.transport.inspect` 将 transport 自身未完成的 publication completion 与 Engine
+observation 中明确存在的 `outstanding_cancellation` 取或：撤回切换清空 `pending_switch`
+后，audio 仍可能持有尚未退休的取消槽。暂时无法取得一致 observation 本身不新增此状态。
+切换 admission 对延后编辑、外来 pending authority、未退休取消或 observation 不可得的
+原有保守 guard 保持不变；该较宽 guard 不作为此 status 字段的判定条件。
+该字段只描述读取时的观测；true 不证明 Project Truth 已经提交，false 不是下一次切换的
+admission reservation，也不保证后续请求获准。此投影不改变取消退休条件或 COUNT-IN 与
+live Pad press/release 的独立 admission、budget 和物理 hold 归属。
+显式 Suspend、Project 替换与 Close 进入同一 shutdown barrier：acknowledged Pattern Stop → admission closure →
 journal settlement 或 recoverable refusal → input release → 生命周期 effect；receipt 不到达的
 unknown closure 使 Suspend fail closed，且未决 admission 原样保留，不允许 clean
 replacement 声明。跨身份 `snapshot.reload`（或停止态 Pattern 切换）与 engagement 协调：
