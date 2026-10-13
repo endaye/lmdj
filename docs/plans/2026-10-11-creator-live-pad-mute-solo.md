@@ -667,3 +667,46 @@ Review repair verification before commit: complete Perform file 143/143 PASS
 197/197 PASS, TypeScript exit 0 and normal Portal exit 0 (179 tests/52 pages/
 10 diagram sources/20 outputs/50 routes). All tracked repair paths are the five
 already-declared C2 paths above. Final clean-head complete proof remains owed.
+
+## Native cancellation apply-point caller correction
+
+The full `fe46dffa52b7075e185474d212c93d6f29936207` run completed all original
+eight groups and naturally exited 1: 77 UI files/1595 tests passed; browsers
+160 PASS/1 FAIL/11 existing skips. The sole failure was the existing Perform
+Launch cancellation/requeue journey, with `idle` instead of expected `pending`.
+The complete raw log is retained with SHA256
+`37c8807255e33a4cf6aaef06885310330e8bf59e5008e528dd850a0419504c1b`.
+All C2 masks, FX/HOLD first-screen, recovery, Sample, Capture and deployment
+legs passed. The complete results, trace, diagnostics, distribution and natural
+22-PID release readback are retained in `proof-final-fe46dffa/`; this run stays FAIL.
+
+Actual transport diagnostics have zero capture losses and no unknown outcomes.
+The first switch was accepted for frame 365312. Withdrawal succeeded and logical
+`pending_switch` became null at frame 281856. Requeue at about frame 285000 was
+positively refused with `HOST_STATE_INVALID/pattern_publication_pending`, before
+any new publication. This was not a C2 mask or changed-epoch failure.
+
+Current native source explains the missing far side: `cancel_pattern_publication`
+clears the audio-owned token, but retains its audio-local slot until the original
+activation frame; `RealtimeEngine::render` reclaims it then. The Control Runtime
+correctly refuses an outstanding cancellation in `foreign_pattern_publication_pending`.
+Logical cancellation alone is not native retirement.
+
+Keep every original leg and assertion. Save the first accepted target's activation
+frame, observe actual Runtime crossing that boundary with the existing launch
+deadline and 50 ms sampling, then assert the withdrawn target never became current
+and pending remains null. Only then enter the unchanged early-bar phase and issue
+the original final Launch. This adds the missing cancellation far-side assertion,
+with no command retry, synthetic response, fixed delay, timeout increase, worker
+change or Core/S6 source repair. Only the already-declared Perform browser file
+and plan change. The entire Perform browser file is verified before a new clean-head
+complete proof. All prior successes and failures remain exact-input historical receipts.
+
+The entire Perform browser file then exited 0: 18/18 PASS, including the unchanged
+Launch/withdraw/requeue, FX/HOLD, both recovery, C2 initial/later masks, PCM, leave,
+save/reopen/Replay legs. Raw log SHA256:
+`18fead05e12b48561f67b14c790a5341526b3206b25c9628e2dda0ee3e69d7eb`.
+This development verification does not substitute for final clean-head eight-group
+proof. Product, CSS, SDK, Core and producer files are identical to fe46dffa; the
+current real 30-scene/480-Pad geometry receipts remain tied to those exact product
+inputs, with no broad physical/UNKNOWN acceptance.

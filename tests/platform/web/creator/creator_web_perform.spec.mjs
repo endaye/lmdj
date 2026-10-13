@@ -1204,7 +1204,10 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
       elements.length === 1 ? elements[0].getAttribute("data-launch") : null),
       {timeout: 5_000, intervals: [50]}).toBe("pending");
     await expect(cue).toHaveText("LAST LAUNCH — → QUEUED SLOT 02");
-    expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
+    const queuedSwitch = await inspect();
+    expect(queuedSwitch.current_pattern_id).toBe(PATTERN_ID);
+    expect(queuedSwitch.pending_switch.pattern_id).toBe(secondPattern);
+    const withdrawnApplyFrame = queuedSwitch.pending_switch.activation_frame;
     await expect(first).toHaveAttribute("data-launch", "acknowledged");
     await expect(page.getByTestId("perform-counter")).toContainText("/ 01 · BEAT");
     // Pressing the currently playing slot withdraws the unclaimed target.
@@ -1212,6 +1215,14 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
     await expect.poll(async () => (await inspect()).pending_switch).toBe(null);
     await expect(second).toHaveAttribute("data-launch", "idle");
     expect((await inspect()).current_pattern_id).toBe(PATTERN_ID);
+    // An audio-owned withdrawn slot retires at its old apply point. Logical
+    // pending=null alone cannot admit another publication before that fence.
+    await expect.poll(async () => (await inspect()).runtime_frame,
+      {timeout: LAUNCH_TRANSITION_TIMEOUT_MS, intervals: [50]})
+      .toBeGreaterThanOrEqual(withdrawnApplyFrame);
+    const afterWithdrawal = await inspect();
+    expect(afterWithdrawal.pending_switch).toBe(null);
+    expect(afterWithdrawal.current_pattern_id).toBe(PATTERN_ID);
     await earlyBar();
     await second.click();
     await expect.poll(() => second.evaluateAll((elements) =>
