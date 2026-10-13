@@ -332,8 +332,8 @@ original budgets/legs,12:43:32.308288–12:44:45.574283 UTC:7 PASS,0 failures,
 All30 geometry records retain minimum observed control width164 and height44
 CSS px, five owned points, zero overlap and zero horizontal overflow. The24
 Volume records each contain exactly one `dB` text rectangle within the unit
-box, number row and visible content, without overlapping or shrinking the
-input. Six invalid-Tone records correctly have no unit. The six save-focus
+box, number row and visible content, without overlap or reducing the input
+below its44px minimum. Six invalid-Tone records correctly have no unit. The six save-focus
 records retain exact System fallback focus after the opener becomes enabled.
 Actual1440×900 draft,768×1024 range-minimum and768×600 invalid-Tone PNGs were
 inspected; the previously observed `dB` wrap is absent. `st`/`ms` remain shared
