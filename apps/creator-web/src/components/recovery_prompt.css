@@ -1,0 +1,75 @@
+/* #2112 U12a, Figma 408:3114. U01 owns shared action face/hit geometry;
+   this nonmodal card keeps the existing touch controls and scroll container. */
+.recovery-prompt.recovery-layout {
+  display: grid;
+  gap: var(--creator-group-gap);
+  min-width: 0;
+  margin: 0 0 var(--creator-group-gap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.recovery-layout .recovery-prompt-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px var(--creator-group-gap);
+}
+
+.recovery-layout .recovery-prompt-heading h2 {
+  margin: 0;
+  color: var(--creator-text);
+  font: 500 var(--creator-heading-size)/20px var(--creator-font-action);
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.recovery-layout .recovery-prompt-heading span {
+  color: var(--creator-muted);
+  font: 10px/14px var(--creator-font-mono);
+  text-transform: uppercase;
+}
+
+.recovery-layout .recovery-prompt-notice {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+  color: var(--creator-muted);
+  font: 500 12px/17px var(--creator-font-action);
+  overflow-wrap: anywhere;
+}
+
+.recovery-layout .recovery-prompt-notice h3 {
+  margin: 0;
+  color: #f2b584;
+  font: 500 var(--creator-value-size)/25px var(--creator-font-action);
+}
+
+.recovery-layout .recovery-prompt-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+}
+
+.recovery-layout .recovery-prompt-destinations {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+}
+
+.recovery-layout .touch-control {
+  min-width: 0;
+  min-height: max(44px, var(--creator-control-hit));
+  overflow-wrap: anywhere;
+}
+
+.recovery-layout .is-danger {
+  color: #e5adc4;
+}

@@ -671,9 +671,9 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 | 默认声音失败或不能播放 | System details | 打开 System 查看。不自动重试。 |
 | Slice 等内容已保存但不能播放 | Retry audio preparation | 重新准备已保存的内容，不重新采用切片。 |
 | Sample 或 Project 已保存但不能播放 | Sample playback details／Project playback details 折叠项 | 只读：保存与准备状态。重试仍用对应按钮。 |
-| 打开的 Project 有中断的录音 | Keep recording(s) | 逐份恢复到原来的位置，显示完成数和剩余数；被拒绝的继续等待处理。必要时提示 Open Sequence／Perform。 |
+| 打开的 Project 有中断的录音 | Keep recording | 逐份恢复到原来的位置；全部完成时确认结果，部分失败时显示真实剩余数量及对应出口，被拒绝的继续等待处理。 |
 | 同上 | Discard… → Discard | 确认后丢掉这些录音，不能 Undo。Cancel 回到询问。已有内容不变。 |
-| 同上 | More options／Open Sequence／Open Perform | 打开有候选的页面处理，不自动保留或丢弃。 |
+| 同上 | Open Sequence／Open Perform | 按真实候选数量直接显示一个或两个出口；离开 System 并打开对应页面，收起提示，候选不变。 |
 | 同上 | Decide later／Close | 只收起提示，候选仍保留在对应页面。 |
 | 导入的 .lmdj 身份重复 | Open local Project | 显示本地 Project 列表并刷新。不覆盖，也不自动打开。 |
 | Project 正被占用 | Retry project | 重试原来的读取或打开。不会强行占用。 |
@@ -681,6 +681,10 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 | 等待对方回应 | Cancel | 取消请求。不会关闭对方。 |
 | Runtime 超时或需要重启 | Retry runtime | 重新启动 Runtime 并重新打开内容。未保存的草稿不保证保留。 |
 | Runtime 就绪且有错误 | Dismiss | 关闭错误提示。不重试，也不撤销已保存的内容。 |
+
+Recording recovery 卡片位于正在录音的 Stop／Review 通知之后、常规页面之前，
+System 打开时仍可操作。标题、候选数量和阶段标签来自实际状态；未完成和部分
+恢复不会显示为完成。它不是模态框，不自动抢焦点，也不锁定背景导航。
 
 ## 10. 当前没有的交互 \{#not-available\}
 
