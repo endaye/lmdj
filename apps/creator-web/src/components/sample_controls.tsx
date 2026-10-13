@@ -419,6 +419,7 @@ export function SampleControls({
       {numericEdit !== null ? (
         <SampleParameterEditor
           parameter={numericEdit.parameter}
+          padLabel={numericEdit.padLabel}
           value={numericEdit.playback[numericEdit.parameter.field] / numericEdit.parameter.scale}
           returnFocus={numericEdit.returnFocus}
           onPreview={(display) => {
