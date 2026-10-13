@@ -9,6 +9,7 @@ import {
   type CaptureListener,
 } from "../capture/capture_controller";
 import {ModalDialog} from "./modal_dialog";
+import "./capture_panel.css";
 import {
   captureStopReasonMessage,
   initialCaptureState,
@@ -103,6 +104,13 @@ function secondsLabel(frames: number): string {
 
 function trimSecondsLabel(frames: number): string {
   return `${(frames / CAPTURE_SAMPLE_RATE).toFixed(3)} s`;
+}
+
+function recordedTimeLabel(frames: number): string {
+  const milliseconds = Math.floor(frames * 1000 / CAPTURE_SAMPLE_RATE);
+  return `${String(Math.floor(milliseconds / 60_000)).padStart(2, "0")}:${
+    String(Math.floor(milliseconds / 1000) % 60).padStart(2, "0")}.${
+    String(milliseconds % 1000).padStart(3, "0")}`;
 }
 
 export function CapturePanel({
@@ -292,6 +300,7 @@ export function CapturePanel({
     if (canvas === null || buffer === null || buffer.frameCount === 0) return;
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
+    ctx.fillStyle = state.phase === "recording" ? "#7c877b" : "#95d4df";
     const bins = buffer.envelope(WAVEFORM_BINS, 0, buffer.frameCount);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const mid = canvas.height / 2;
@@ -573,18 +582,17 @@ export function CapturePanel({
     }
   };
 
-  // P2-D1: the panel is a viewport-anchored modal with fixed outer geometry.
-  // Three fixed regions — header, a fixed-height waveform/meter view that is
-  // always rendered, and a bottom action row — so entering "recording" only
-  // swaps region contents and "Stop" sits exactly where "Record into Pad N"
-  // was. Phase details (messages, selection values) scroll inside the
-  // content region under the view.
+  // The modal keeps fixed outer geometry and a separate action region. Phase
+  // details scroll without taking Stop or Commit out of the visible panel.
   const renderView = () => {
     switch (state.phase) {
       case "recording":
         return (
           <>
-            <p>{secondsLabel(state.frameCount)} recorded</p>
+            <p className="capture-recording-target">Recording into {padLabel}</p>
+            <output className="capture-recorded-time" aria-label={`${padLabel} recorded time`} aria-live="off">
+              {recordedTimeLabel(state.frameCount)}
+            </output>
             <meter
               min={0}
               max={1}
@@ -608,7 +616,6 @@ export function CapturePanel({
         const midpointPct = (startPct + endPct) / 2;
         return (
           <>
-            <p>{secondsLabel(state.frameCount)} captured</p>
             <div
               ref={trimWaveformRef}
               className="capture-trim-waveform"
@@ -709,7 +716,7 @@ export function CapturePanel({
       case "recording":
         return (
           <>
-            <p>Input: {inputLabelText}</p>
+            <p className="capture-input-name">Input: {inputLabelText}</p>
             {deviceChanged && <p role="status">{DEVICE_CHANGE_NOTICE}</p>}
           </>
         );
@@ -717,7 +724,18 @@ export function CapturePanel({
       case "commit-error": {
         return (
           <>
-            <p>Input: {inputLabelText}</p>
+            <div className="capture-trim-values" aria-label={`${padLabel} selection times`}>
+              <div><span>START → END</span><span>
+                <output aria-label={`${padLabel} Start value`}>{trimSecondsLabel(state.selectionStart)}</output>
+                {" → "}
+                <output aria-label={`${padLabel} End value`}>{trimSecondsLabel(selectionEnd)}</output>
+              </span></div>
+              <div><span>SELECTION</span><output aria-label={`${padLabel} Duration`}>
+                {trimSecondsLabel(state.selectionFrames)}
+              </output></div>
+            </div>
+            <p className="capture-input-name"><span>Input: {inputLabelText}</span>
+              <span> · {secondsLabel(state.frameCount)} captured</span></p>
             {silenceRefused && <p role="alert">{SILENT_TAKE_MESSAGE}</p>}
             {captureStopReasonMessage(state.stopReason) !== null && (
               <p>{captureStopReasonMessage(state.stopReason)}</p>
@@ -725,17 +743,6 @@ export function CapturePanel({
             {state.phase === "commit-error" && (
               <p role="alert">{state.errorMessage}</p>
             )}
-            <div className="capture-trim-values" aria-label={`${padLabel} selection times`}>
-              <span>Start<output aria-label={`${padLabel} Start value`}>
-                {trimSecondsLabel(state.selectionStart)}
-              </output></span>
-              <span>End<output aria-label={`${padLabel} End value`}>
-                {trimSecondsLabel(selectionEnd)}
-              </output></span>
-              <span>Duration<output aria-label={`${padLabel} Duration`}>
-                {trimSecondsLabel(state.selectionFrames)}
-              </output></span>
-            </div>
           </>
         );
       }
@@ -751,6 +758,7 @@ export function CapturePanel({
         return (
           <button
             ref={primaryRef}
+            className="touch-control is-primary"
             type="button"
             disabled={recordingBusy}
             onClick={(event) => {
@@ -764,9 +772,9 @@ export function CapturePanel({
       case "recording":
         return (
           <>
-            <button ref={primaryRef} type="button" onClick={handleStop}>Stop</button>
+            <button ref={primaryRef} className="touch-control is-primary" type="button" onClick={handleStop}>Stop</button>
             {onContinueInSequence === undefined ? null : (
-              <button type="button" onClick={onContinueInSequence}>
+              <button className="touch-control" type="button" onClick={onContinueInSequence}>
                 Continue in Sequence
               </button>
             )}
@@ -777,6 +785,7 @@ export function CapturePanel({
         return (
           <>
             <button
+              className="touch-control capture-crop"
               type="button"
               disabled={state.selectionStart === 0 &&
                         state.selectionFrames === state.frameCount}
@@ -786,12 +795,13 @@ export function CapturePanel({
             </button>
             <button
               ref={primaryRef}
+              className="touch-control is-primary"
               type="button"
               onClick={() => void handleCommit()}
             >
               Commit
             </button>
-            <button type="button" onClick={handleDiscard}>Discard</button>
+            <button className="touch-control is-danger" type="button" onClick={handleDiscard}>Discard</button>
           </>
         );
       default:
@@ -799,17 +809,22 @@ export function CapturePanel({
     }
   };
 
+  const hasTake = state.phase === "trimming" || state.phase === "commit-error" || state.phase === "committing";
   const contents = (
     <>
       <div className="capture-panel-header">
-        <h2>{padLabel} Capture</h2>
-        <button type="button" onClick={handleClose}>Close</button>
+        <div>
+          <h2>{hasTake ? "RECORDED SAMPLE" : "RECORD SAMPLE"}</h2>
+          <span className="capture-panel-target">TARGET {padLabel}</span>
+        </div>
+        <button className="touch-control is-danger" type="button" onClick={handleClose}>Close</button>
       </div>
       <div className="capture-panel-content">
-        <div className="capture-panel-view">{renderView()}</div>
+        <div className={`capture-panel-view is-${state.phase}`}>{renderView()}</div>
         {renderDetails()}
       </div>
-      <div className="capture-panel-actions">{renderActions()}</div>
+      <div className={`capture-panel-actions is-${state.phase}`}>{renderActions()}</div>
+      {hasTake && <p className="capture-save-note">Not saved yet. Commit writes to the original Pad.</p>}
     </>
   );
 
@@ -825,7 +840,8 @@ export function CapturePanel({
       label={`${padLabel} Pad Capture`}
       returnFocus={returnFocus}
       onCancel={handleClose}
-      dialogClassName="capture-panel-dialog"
+      dialogClassName="capture-panel-dialog capture-interaction-dialog"
+      placement="touch-workspace"
       resolveInitialFocus={resolvePrimaryFocus}
       dialogRef={dialogElementRef}
     >

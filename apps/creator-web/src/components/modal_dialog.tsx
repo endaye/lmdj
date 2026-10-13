@@ -1,4 +1,4 @@
-import {useEffect, useRef, type ReactNode, type RefObject} from "react";
+import {useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject} from "react";
 
 interface ContainedBackground {
   element: HTMLElement;
@@ -19,6 +19,9 @@ export interface ModalDialogProps {
   // phase offers no primary action (the element carries tabIndex={-1}, so it
   // is programmatically focusable but never joins the Tab trap below).
   dialogRef?: RefObject<HTMLDialogElement | null>;
+  // Presentation only: native top-layer ownership and the default centered
+  // consumers remain unchanged. The touch rectangle may itself be rotated.
+  placement?: "touch-workspace";
   children: ReactNode;
 }
 
@@ -58,6 +61,7 @@ export function ModalDialog({
   label,
   resolveInitialFocus,
   dialogRef: externalDialogRef,
+  placement,
   children,
 }: ModalDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -65,6 +69,56 @@ export function ModalDialog({
   cancelRef.current = onCancel;
   const initialFocusRef = useRef(resolveInitialFocus);
   initialFocusRef.current = resolveInitialFocus;
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (placement !== "touch-workspace" || dialog === null) return;
+    const anchor = dialog.closest<HTMLElement>('[data-testid="touch-workspace"]');
+    if (anchor === null) return;
+    const workspace = anchor.closest<HTMLElement>(".hardware-workspace");
+    const previousStyle = dialog.style.cssText;
+    const update = () => {
+      const rect = anchor.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || anchor.offsetWidth <= 0 || anchor.offsetHeight <= 0) return;
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      const availableWidth = Math.max(1, viewportWidth - 16);
+      const availableHeight = Math.max(1, viewportHeight - 16);
+      // Preserve upright clientX trim gestures in a rotated console. Native
+      // dialogs escape ancestor transforms, so only reproduce its scale.
+      // Smaller available space reflows/scrolls instead of shrinking 44px hits.
+      const width = Math.min(anchor.offsetWidth, availableWidth);
+      const height = Math.min(anchor.offsetHeight, availableHeight);
+      const scale = Math.max(1, Math.min(rect.width / anchor.offsetWidth,
+        rect.height / anchor.offsetHeight, availableWidth / width, availableHeight / height));
+      Object.assign(dialog.style, {
+        position: "fixed",
+        left: `${Math.max(8, Math.min(rect.left, viewportWidth - width * scale - 8))}px`,
+        top: `${Math.max(8, Math.min(rect.top, viewportHeight - height * scale - 8))}px`,
+        right: "auto", bottom: "auto", margin: "0",
+        width: `${width}px`, height: `${height}px`,
+        maxWidth: "none", maxHeight: "none",
+        transform: `scale(${scale})`, transformOrigin: "0 0",
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    resize?.observe(anchor);
+    if (workspace !== null) resize?.observe(workspace);
+    // Stage fitting writes the transform after React's commit, without always
+    // changing the anchor's natural size. Observe that exact owner only.
+    const transform = workspace === null ? null : new MutationObserver(update);
+    if (workspace !== null) transform?.observe(workspace, {attributes: true, attributeFilter: ["style"]});
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+      resize?.disconnect();
+      transform?.disconnect();
+      dialog.style.cssText = previousStyle;
+    };
+  }, [placement]);
 
   useEffect(() => {
     const dialog = dialogRef.current;

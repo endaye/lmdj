@@ -1,11 +1,11 @@
 import {showSampleDetails, showSamplePage} from "./fixtures/creator_navigation.mjs";
 import {clickCreatorSystemAction, selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
-import {readFile} from "node:fs/promises";
+import {readFile, writeFile} from "node:fs/promises";
 
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 
-import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
+import {CAPTURE_FIXTURE_SAMPLE_RATE, CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
 // Play/Stop and Record are the console's physical keys. Their accessible
@@ -171,8 +171,8 @@ async function selectPadWithoutPress(page, label) {
 
 // Record until the panel reports at least `seconds` of buffered audio. The
 // fixture is CAPTURE_FIXTURE_SECONDS long and Chromium loops it, so waiting on
-// the panel's own elapsed readout is what makes this deterministic rather than
-// sleeping for a wall-clock duration.
+// delivered frame count is the duration authority, independent of the timer's
+// display format and without sleeping for a wall-clock duration.
 async function recordAtLeast(page, padLabel, seconds) {
   await showSamplePage(page, "Pad");
   await page.getByRole("button", {name: "Record Sample"}).click();
@@ -181,10 +181,10 @@ async function recordAtLeast(page, padLabel, seconds) {
   await panel.getByRole("button", {name: `Record into ${padLabel}`}).click();
   await expect(panel.getByRole("button", {name: "Stop"}))
     .toBeVisible({timeout: 30_000});
-  await expect(panel).toContainText(
-    new RegExp(`${seconds}\\.\\d s|${seconds + 1}\\.\\d s`),
+  const waveform = panel.getByRole("img", {name: `${padLabel} capture waveform`});
+  await expect.poll(async () => Number(await waveform.getAttribute("data-frame-count")),
     {timeout: 60_000},
-  );
+  ).toBeGreaterThanOrEqual(Math.ceil(seconds * CAPTURE_FIXTURE_SAMPLE_RATE));
   return panel;
 }
 
@@ -199,6 +199,98 @@ async function expectWithinViewport(page, locator) {
   expect(box.y).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+}
+
+const captureViewports = [
+  {width: 1440, height: 900}, {width: 1280, height: 720},
+  {width: 1280, height: 600}, {width: 1024, height: 768},
+  {width: 768, height: 600}, {width: 768, height: 1024},
+];
+
+async function expectCaptureGeometry(page, panel, testInfo, name) {
+  await expect.poll(() => panel.evaluate((dialog) => {
+    const a = dialog.getBoundingClientRect();
+    const b = document.querySelector('[data-testid="touch-workspace"]').getBoundingClientRect();
+    return Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(a[key] - b[key])));
+  })).toBeLessThanOrEqual(1);
+  const geometry = await panel.evaluate((dialog) => {
+    const box = (element) => {
+      const r = element.getBoundingClientRect();
+      return {x: r.x, y: r.y, width: r.width, height: r.height,
+        right: r.right, bottom: r.bottom};
+    };
+    const controls = Array.from(dialog.querySelectorAll("button")).map((button) => {
+      const r = box(button);
+      const points = [[0.5, 0.5], [0.05, 0.5], [0.95, 0.5], [0.5, 0.05], [0.5, 0.95]];
+      return {...r, label: button.textContent.trim(), disabled: button.disabled,
+        hits: points.map(([x, y]) => {
+          const hit = document.elementFromPoint(r.x + r.width * x, r.y + r.height * y);
+          return hit !== null && (hit === button || button.contains(hit));
+        })};
+    });
+    const overlaps = controls.flatMap((a, index) => controls.slice(index + 1).filter((b) =>
+      Math.min(a.right, b.right) - Math.max(a.x, b.x) > 0.5 &&
+      Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > 0.5,
+    ).map((b) => [a.label, b.label]));
+    return {dialog: box(dialog), anchor: box(document.querySelector('[data-testid="touch-workspace"]')),
+      controls, overlaps, transform: getComputedStyle(dialog).transform,
+      contentOverflow: dialog.querySelector(".capture-panel-content").scrollWidth -
+        dialog.querySelector(".capture-panel-content").clientWidth,
+      documentOverflow: document.documentElement.scrollWidth - innerWidth};
+  });
+  const path = testInfo.outputPath(`${name}-geometry.json`);
+  await writeFile(path, JSON.stringify(geometry, null, 2));
+  await testInfo.attach(`${name} geometry`, {path, contentType: "application/json"});
+  const screenshot = testInfo.outputPath(`${name}.png`);
+  await page.screenshot({path: screenshot});
+  await testInfo.attach(name, {path: screenshot, contentType: "image/png"});
+  for (const key of ["x", "y", "width", "height"]) {
+    expect(Math.abs(geometry.dialog[key] - geometry.anchor[key]), key).toBeLessThanOrEqual(1);
+  }
+  expect(geometry.controls.length).toBeGreaterThanOrEqual(2);
+  expect(geometry.overlaps).toEqual([]);
+  expect(geometry.contentOverflow).toBeLessThanOrEqual(1);
+  expect(geometry.documentOverflow).toBeLessThanOrEqual(0);
+  for (const control of geometry.controls) {
+    expect(control.width, control.label).toBeGreaterThanOrEqual(44 - 0.1);
+    expect(control.height, control.label).toBeGreaterThanOrEqual(44 - 0.1);
+    expect(control.hits, control.label).toEqual([true, true, true, true, true]);
+  }
+  await expectWithinViewport(page, panel);
+}
+
+async function expectFocusedTrimHandleGeometry(page, handle, testInfo, name) {
+  await handle.focus();
+  await expect(handle).toBeFocused();
+  const geometry = await handle.evaluate((input) => {
+    const box = (element) => {
+      const r = element.getBoundingClientRect();
+      return {x: r.x, y: r.y, width: r.width, height: r.height,
+        right: r.right, bottom: r.bottom};
+    };
+    const content = input.closest(".capture-panel-content");
+    return {handle: box(input), content: box(content),
+      focused: document.activeElement === input,
+      opacity: getComputedStyle(input).opacity,
+      value: input.value,
+      contentOverflow: content.scrollWidth - content.clientWidth};
+  });
+  const path = testInfo.outputPath(`${name}-geometry.json`);
+  await writeFile(path, JSON.stringify(geometry, null, 2));
+  await testInfo.attach(`${name} geometry`, {path, contentType: "application/json"});
+  const screenshot = testInfo.outputPath(`${name}.png`);
+  await page.screenshot({path: screenshot});
+  await testInfo.attach(name, {path: screenshot, contentType: "image/png"});
+  expect(geometry.focused).toBe(true);
+  expect(geometry.opacity).toBe("1");
+  expect(geometry.handle.width).toBeGreaterThanOrEqual(44 - 0.1);
+  expect(geometry.handle.height).toBeGreaterThanOrEqual(44 - 0.1);
+  expect(geometry.handle.x).toBeGreaterThanOrEqual(geometry.content.x - 0.1);
+  expect(geometry.handle.y).toBeGreaterThanOrEqual(geometry.content.y - 0.1);
+  expect(geometry.handle.right).toBeLessThanOrEqual(geometry.content.right + 0.1);
+  expect(geometry.handle.bottom).toBeLessThanOrEqual(geometry.content.bottom + 0.1);
+  expect(geometry.contentOverflow).toBeLessThanOrEqual(1);
+  await expectWithinViewport(page, handle);
 }
 
 test("the capture panel and its primary actions stay within the viewport (F1/F2)", async ({page}, testInfo) => {
@@ -222,6 +314,11 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await expectWithinViewport(
     page, panel.getByRole("button", {name: "Record into Pad A01"}),
   );
+  for (const viewport of captureViewports) {
+    await page.setViewportSize(viewport);
+    await expectCaptureGeometry(page, panel, testInfo, `idle-${viewport.width}x${viewport.height}`);
+  }
+  await page.setViewportSize({width: 1280, height: 720});
 
   // recording: entering the phase must not change the outer geometry, and
   // Stop must sit inside the viewport without any scrolling.
@@ -230,6 +327,12 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await expect(stop).toBeVisible({timeout: 30_000});
   await expectWithinViewport(page, panel);
   await expectWithinViewport(page, stop);
+  for (const viewport of captureViewports) {
+    await page.setViewportSize(viewport);
+    await expectCaptureGeometry(page, panel, testInfo, `recording-${viewport.width}x${viewport.height}`);
+    await expect(stop).toBeFocused();
+  }
+  await page.setViewportSize({width: 1280, height: 720});
 
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
@@ -238,6 +341,9 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
 test("records, trims and commits a capture onto an empty Pad", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
+  // The console rotates here; Capture stays upright and its original complete
+  // horizontal pointer-trim/commit journey must still produce exact frames.
+  await page.setViewportSize({width: 768, height: 1024});
   await installProjectInspectProbe(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
@@ -256,6 +362,35 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   const end = panel.getByRole("slider", {name: /^Pad A01 End —/});
   await expect(start).toBeEnabled();
   await expect(end).toBeEnabled();
+  await expectCaptureGeometry(page, panel, testInfo, "portrait-trim");
+  const commitAction = panel.getByRole("button", {name: "Commit"});
+  await expect(commitAction).toBeFocused();
+  const discardAction = panel.getByRole("button", {name: "Discard"});
+  await discardAction.focus();
+  await page.keyboard.press("Tab");
+  await expect(panel.getByRole("button", {name: "Close"})).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(discardAction).toBeFocused();
+
+  // Both native keyboard inputs must keep their complete 44px box inside
+  // the scrolling content at the unchanged full-range selection. The small
+  // pointer grip zones have separate, pre-existing geometry; these assertions
+  // do not claim that their pointer targets are 44px.
+  const retainedSelection = {start: await start.inputValue(), end: await end.inputValue()};
+  for (const viewport of captureViewports) {
+    await page.setViewportSize(viewport);
+    const size = `${viewport.width}x${viewport.height}`;
+    await expectCaptureGeometry(page, panel, testInfo, `trim-${size}`);
+    await expectFocusedTrimHandleGeometry(page, start, testInfo, `trim-start-focused-${size}`);
+    await expectFocusedTrimHandleGeometry(page, end, testInfo, `trim-end-focused-${size}`);
+    await expect(start).toHaveValue(retainedSelection.start);
+    await expect(end).toHaveValue(retainedSelection.end);
+  }
+  // Restore the original portrait/focus context before every original real
+  // pointer trim, inert-middle, commit, saved-waveform, frame/byte and revision leg below.
+  await page.setViewportSize({width: 768, height: 1024});
+  await discardAction.focus();
+  await expect(discardAction).toBeFocused();
   const initialStart = Number(await start.inputValue());
   const initialEnd = Number(await end.inputValue());
   expect(initialStart).toBe(0);
@@ -320,6 +455,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
     .toBeVisible({timeout: 180_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", {name: "Record Sample"})).toBeFocused();
   await expect(page.getByRole("button", {name: "Pad A01 — assigned — Key Z", exact: true}))
     .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
