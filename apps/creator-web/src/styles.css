@@ -1857,14 +1857,16 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   inline-size: 120px;
   accent-color: var(--creator-lime);
 }
-.hardware-workspace .perform-fx-more {
+.hardware-workspace .perform-fx-more,
+.hardware-workspace .perform-fx-filter {
   border: 0;
   border-radius: 8px;
   background: var(--creator-raised);
   color: var(--creator-text);
   letter-spacing: .06em;
 }
-.hardware-workspace .perform-fx-more[aria-expanded="true"] {
+.hardware-workspace .perform-fx-more[aria-expanded="true"],
+.hardware-workspace .perform-fx-filter[aria-expanded="true"] {
   background: var(--creator-blue);
   color: var(--creator-base);
 }
@@ -1883,6 +1885,38 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .hardware-workspace .perform-fx-more-bank input[type="range"] {
   inline-size: 80px;
   accent-color: var(--creator-blue);
+}
+.hardware-workspace .perform-filter-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--creator-raised);
+}
+.hardware-workspace .perform-filter-panel output {
+  grid-column: 1 / -1;
+  color: var(--creator-muted);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-filter-types {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+.hardware-workspace .perform-filter-types button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--creator-base);
+  color: var(--creator-text);
+  letter-spacing: .06em;
+}
+.hardware-workspace .perform-filter-types button[aria-pressed="true"] {
+  background: var(--creator-blue);
+  color: var(--creator-base);
 }
 .hardware-workspace .perform-hold {
   border: 0;
@@ -2063,7 +2097,8 @@ html[data-creator-layout="compact"] {
 .hardware-workspace .perform-surface { gap: 8px; }
 .perform-launch-groups,
 .perform-fx-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
-.perform-fx-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* HOLD, FX / MORE and FILTER share the actions row. */
+.perform-fx-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .hardware-workspace .perform-launch-groups button {
   min-height: 44px;
   padding: 4px;
@@ -2098,8 +2133,9 @@ html[data-creator-layout="compact"] {
 .hardware-workspace .perform-live-faders { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
 .hardware-workspace .perform-live-faders.has-master { grid-template-columns: repeat(4, minmax(44px, 1fr)); }
 .hardware-workspace .perform-live-faders.has-master .perform-fader { padding-inline: 0; }
-.hardware-workspace .perform-fx-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hardware-workspace .perform-fx-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .hardware-workspace .perform-fx-more-bank { grid-template-columns: minmax(0, 1fr); padding: 4px; }
+.hardware-workspace .perform-filter-panel { grid-template-columns: minmax(0, 1fr); padding: 4px; }
 
 .hardware-workspace .perform-fader { grid-template-columns: minmax(0, 1fr); padding-inline: 4px; }
 .hardware-workspace .perform-fx-actions button { padding-inline: 4px; }

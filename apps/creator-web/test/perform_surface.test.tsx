@@ -13,6 +13,8 @@ import {
 } from "../src/state/pattern_transport_state";
 import {
   createPerformController,
+  cutoffHzToPosition,
+  cutoffPositionToHz,
   type PerformControllerDependencies,
 } from "../src/state/perform_state";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
@@ -24,6 +26,50 @@ const ids = {
   session: "44444444-4444-4444-8444-444444444444",
   performance: "55555555-5555-4555-8555-555555555555",
 };
+
+const LIVE_EPOCH = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+function liveGateState(value = 0) {
+  return {engaged: false, frozen: false, value};
+}
+
+function liveState(overrides: Record<string, unknown> = {}) {
+  return {
+    hold: false,
+    filter: {mode: "independent" as const, engaged: false, frozen: false,
+      type: "lp" as const, cutoffHz: 20000, resonanceMilli: 0},
+    otherFx: {
+      delay: liveGateState(), reverb: liveGateState(),
+      stutter: liveGateState(), gate: liveGateState(),
+      reverse: liveGateState(), crush: liveGateState(),
+      cutter: liveGateState(),
+    },
+    mutedSlots: [] as number[], soloSlots: [] as number[],
+    ...overrides,
+  };
+}
+
+function liveStatusUnavailable() {
+  return {
+    available: false as const, controlEpoch: null, accepted: null,
+    applied: null, acceptedControlSequence: null, appliedControlSequence: null,
+    resetPending: false, beginPending: false, projectRevision: null,
+  };
+}
+
+function liveStatusAvailable(overrides: Record<string, unknown> = {}) {
+  return {
+    available: true as const, controlEpoch: LIVE_EPOCH,
+    accepted: liveState(), applied: liveState(),
+    runtimeGenerations: {
+      filter: null, delay: null, reverb: null, stutter: null,
+      gate: null, reverse: null, crush: null, cutter: null,
+    },
+    acceptedControlSequence: "0", appliedControlSequence: "0",
+    resetPending: false, beginPending: false, projectRevision: null,
+    ...overrides,
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -87,18 +133,22 @@ function status(
 
 function sessionFixture(initialStatus = status("ready")) {
   let captureStatus = initialStatus;
+  let liveCommandIndex = 0;
   const listeners = new Set<(value: typeof initialStatus) => void>();
   const calls = {
+    // The raw/begin doubles keep loose promise shapes so a test can stage the
+    // headered profile's receipts; the session cast pins the real contract.
     raw: vi.fn(async ({eventId}: {eventId: string; event: Record<string, unknown>;
-      sessionId: string}) => ({eventId,
+      sessionId: string}): Promise<unknown> => ({eventId,
       acceptedTick: 1, inputSequence: 1, coalesced: false,
       replayed: false, projectRevision: null})),
     fx: vi.fn(async (_event: Record<string, unknown>) => ({applied: true as const})),
     launch: vi.fn(async ({requestId}: {requestId: string; patternSlot: number}) => ({
       requestId, state: "pending" as const, targetTick: 1920, projectRevision: null,
     })),
-    begin: vi.fn(async () => ({performanceId: ids.performance,
-      committedRevision: 8, replayed: false, projectRevision: 8})),
+    begin: vi.fn(async (_request?: Record<string, unknown>): Promise<unknown> =>
+      ({performanceId: ids.performance,
+        committedRevision: 8, replayed: false, projectRevision: 8})),
     flush: vi.fn(async () => ({performanceId: ids.performance,
       committedRevision: 9, replayed: false, projectRevision: 9})),
     stop: vi.fn(async () => ({requestId: "stop", sessionId: ids.session,
@@ -107,6 +157,27 @@ function sessionFixture(initialStatus = status("ready")) {
     capture: vi.fn(async (sink: {onStopped(): void}) => ({
       stop: vi.fn(async () => sink.onStopped()),
     })),
+    // The typed producer defaults to the honest unavailable answer (headless /
+    // pre-W1 Core): every legacy path above keeps its existing behaviour, and
+    // typed tests stage an available status themselves. The mock's return type
+    // stays loose so both answers fit; the session cast pins the real shape.
+    liveStatus: vi.fn(async (): Promise<unknown> => liveStatusUnavailable()),
+    liveControl: vi.fn(async ({controlEpoch, intent}: {
+      controlEpoch: string;
+      intent: {kind: string; phase?: string; gestureGeneration?: string};
+    }) => {
+      liveCommandIndex += 1;
+      return {
+        commandId: `command-${liveCommandIndex}`,
+        controlEpoch, controlSequence: `${liveCommandIndex}`,
+        gestureGeneration: intent.kind === "fx_release" ||
+            intent.kind === "filter_release" ? null
+          : intent.phase === "move" ? null
+          : `generation-${liveCommandIndex}`,
+        accepted: true as const, applied: true,
+        replayed: false, projectRevision: null,
+      };
+    }),
   };
   const session = {
     performanceMasterCaptureStatus: () => captureStatus,
@@ -119,6 +190,8 @@ function sessionFixture(initialStatus = status("ready")) {
     beginPerformanceRecording: calls.begin,
     recordPerformanceEvent: calls.raw,
     applyFxGesture: calls.fx,
+    applyPerformanceLiveControl: calls.liveControl,
+    queryPerformanceLiveStatus: calls.liveStatus,
     requestPerformancePatternLaunch: calls.launch,
     flushPerformanceRecording: calls.flush,
     stopPerformanceRecording: calls.stop,
@@ -168,7 +241,8 @@ function authority(overrides: Record<string, unknown> = {}) {
 // Gate for the fake-tool-stub-strictness escalation (#726): the Perform
 // controller reaches these session methods without any test opting in —
 // connect() subscribes the capture status and refreshes the performance and
-// recovery lists, and perform_surface.tsx polls refreshReplay every 250 ms.
+// recovery lists plus the live-control status, and perform_surface.tsx polls
+// refreshReplay every 250 ms.
 // A bare vi.fn() resolves undefined where the real session returns a value,
 // and the gap only fires when a test outlives one poll tick (#713). Keep the
 // list in step with the controller's connect() and interval paths.
@@ -177,6 +251,7 @@ test("wall-clock-reachable session double methods keep faithful defaults", () =>
     "subscribePerformanceMasterCaptureStatus",
     "listPerformances",
     "listPerformanceRecovery",
+    "queryPerformanceLiveStatus",
     "queryPerformanceReplayStatus",
   ] as const;
   const {session} = sessionFixture();
@@ -1820,4 +1895,919 @@ test("touch continues a rotary FX gesture until page exit journals its matching 
   expect(events.every((event) => event.gestureId === id)).toBe(true);
   expect(fixture.controller.getState().fx.reverb).toBe(500);
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
+});
+
+// ---------------------------------------------------------------------------
+// C1 typed independent Filter and live-control consumer oracles.
+// ---------------------------------------------------------------------------
+
+// A typed producer double updates its own readback. A receipt alone must never
+// turn the controller's optimistic value into a Core fact.
+function enableTypedCore(calls: ReturnType<typeof sessionFixture>["calls"]) {
+  let applied = liveState();
+  let sequence = "0";
+  const apply = calls.liveControl.getMockImplementation()!;
+  calls.liveControl.mockImplementation(async (request) => {
+    const receipt = await apply(request);
+    sequence = receipt.controlSequence;
+    const intent = request.intent as Record<string, unknown>;
+    if (intent.kind === "filter_parameter") {
+      const field = {type: "type", cutoff_hz: "cutoffHz",
+        resonance_milli: "resonanceMilli"}[intent.parameter as string];
+      applied = {...applied, filter: {...applied.filter,
+        [field!]: intent.value, engaged: true, frozen: false}};
+    } else if (intent.kind === "filter_release") {
+      applied = {...applied, filter: {...applied.filter,
+        engaged: false, frozen: applied.hold}};
+    } else if (intent.kind === "fx_parameter" || intent.kind === "fx_release") {
+      const fx = intent.fx as keyof typeof applied.otherFx;
+      applied = {...applied, otherFx: {...applied.otherFx,
+        [fx]: intent.kind === "fx_parameter"
+          ? {value: intent.value, engaged: true, frozen: false}
+          : {...applied.otherFx[fx], engaged: false, frozen: applied.hold,
+              value: applied.hold ? applied.otherFx[fx].value : 0}}};
+    } else if (intent.kind === "hold_on" || intent.kind === "hold_off") {
+      applied = {...applied, hold: intent.kind === "hold_on"};
+    }
+    return receipt;
+  });
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    accepted: applied, applied,
+    acceptedControlSequence: sequence, appliedControlSequence: sequence,
+  }));
+}
+
+function headeredBegin(fxBindings: readonly Record<string, unknown>[] = []) {
+  return async (request?: Record<string, unknown>) => ({
+    performanceId: ids.performance, committedRevision: 8, replayed: false,
+    projectRevision: 8, profile: "header_input_sequence" as const,
+    controlEpoch: typeof request?.controlEpoch === "string"
+      ? request.controlEpoch : LIVE_EPOCH,
+    coreControlReady: true, nextRecordingSequence: "0", fxBindings,
+  });
+}
+
+test("typed Filter state reads back from Core: OFF, LP, 20 kHz, 0%", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  expect(fixture.controller.getState().filter).toMatchObject({
+    type: "lp", cutoffHz: 20000, resonanceMilli: 0,
+    engaged: false, frozen: false, provenance: "core",
+  });
+  // The main group's first fader keeps its legacy slot and name; the typed
+  // change is the readback — Core Hz, never a percentage-derived guess.
+  expect(screen.getByRole("slider", {name: "Filter"})).toBeTruthy();
+  expect(screen.getByText("20.0 kHz")).toBeTruthy();
+});
+
+test("a Filter ACK stays pending until the applied Core tuple is read back", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const applied = deferred<ReturnType<typeof liveStatusAvailable>>();
+  calls.liveStatus.mockImplementationOnce(() => applied.promise);
+  fixture.controller.turnFilterCutoff(-1);
+  await waitFor(() => expect(calls.liveStatus).toHaveBeenCalledTimes(2));
+  expect(fixture.controller.getState().filter.provenance).toBe("pending");
+  const core = liveState({filter: {mode: "independent", type: "hp",
+    cutoffHz: 18000, resonanceMilli: 123, engaged: true, frozen: false}});
+  applied.resolve(liveStatusAvailable({accepted: core, applied: core,
+    acceptedControlSequence: "1", appliedControlSequence: "1"}));
+  await waitFor(() => expect(fixture.controller.getState().filter).toMatchObject({
+    type: "hp", cutoffHz: 18000, resonanceMilli: 123, provenance: "core",
+  }));
+});
+
+test("an older live-status response cannot overwrite a later Filter turn", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const oldStatus = deferred<ReturnType<typeof liveStatusAvailable>>();
+  calls.liveStatus.mockImplementationOnce(() => oldStatus.promise);
+  const oldRead = fixture.controller.refreshLiveStatus();
+  fixture.controller.turnFilterCutoff(-1);
+  await waitFor(() => expect(fixture.controller.getState().filter.provenance).toBe("core"));
+  expect(fixture.controller.getState().filter.cutoffHz).toBe(cutoffPositionToHz(990));
+  oldStatus.resolve(liveStatusAvailable());
+  await oldRead;
+  expect(fixture.controller.getState().filter.cutoffHz).toBe(cutoffPositionToHz(990));
+});
+
+test("a delayed Filter read cannot overwrite a later HOLD and HOLD reads applied Core state", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const delayed = deferred<ReturnType<typeof liveStatusAvailable>>();
+  calls.liveStatus.mockImplementationOnce(() => delayed.promise);
+  fixture.controller.turnFilterCutoff(-1);
+  await waitFor(() => expect(calls.liveStatus).toHaveBeenCalledTimes(2));
+  fixture.controller.toggleHold();
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(2));
+  const current = liveState({filter: {mode: "independent", type: "lp",
+    cutoffHz: cutoffPositionToHz(990), resonanceMilli: 0, engaged: true, frozen: false}});
+  delayed.resolve(liveStatusAvailable({accepted: current, applied: current,
+    acceptedControlSequence: "1", appliedControlSequence: "1"}));
+  await waitFor(() => expect(calls.liveStatus).toHaveBeenCalledTimes(3));
+  expect(fixture.controller.getState().hold).toBe(true);
+  expect(fixture.controller.getState().filter.provenance).toBe("core");
+});
+
+test("an old recording-status read cannot clear a later admitted HOLD", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const old = deferred<ReturnType<typeof authority>>();
+  const query = fixture.runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>;
+  query.mockImplementationOnce(() => old.promise).mockResolvedValue(authority({hold: true}));
+  const oldRead = fixture.controller.refreshAuthority();
+  fixture.controller.toggleHold();
+  await waitFor(() => expect(fixture.controller.getState().authority?.hold).toBe(true));
+  old.resolve(authority({hold: false}));
+  await oldRead;
+  expect(fixture.controller.getState().authority?.hold).toBe(true);
+  await fixture.controller.stop();
+});
+
+test("a late Filter ACK cannot adopt an old epoch's generation", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const oldAck = deferred<void>();
+  const apply = calls.liveControl.getMockImplementation()!;
+  calls.liveControl.mockImplementationOnce(async (request) => {
+    const result = await apply(request);
+    await oldAck.promise;
+    return result;
+  });
+  fixture.controller.turnFilterCutoff(-1);
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(1));
+  const newEpoch = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    controlEpoch: newEpoch, acceptedControlSequence: "2", appliedControlSequence: "2",
+  }));
+  await fixture.controller.refreshLiveStatus();
+  oldAck.resolve();
+  fixture.controller.turnFilterCutoff(-1);
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(2));
+  expect(calls.liveControl.mock.calls[1]?.[0]).toMatchObject({
+    controlEpoch: newEpoch, intent: {phase: "engage"},
+  });
+  expect(calls.liveControl.mock.calls[1]?.[0].intent.gestureGeneration).toBeUndefined();
+});
+
+test("changing only Filter type owns a gesture that page exit releases", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  fixture.controller.setFilterType("hp");
+  await waitFor(() => expect(fixture.controller.getState().filter.provenance).toBe("core"));
+  await fixture.controller.leave();
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(2));
+  expect(calls.liveControl.mock.calls[1]?.[0].intent).toEqual({
+    kind: "filter_release", gestureGeneration: "generation-1",
+  });
+});
+
+test("Filter overflow is explicit and preserves the admitted move and matching release", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const first = deferred<void>();
+  const apply = calls.liveControl.getMockImplementation()!;
+  calls.liveControl.mockImplementationOnce(async (request) => {
+    await first.promise;
+    return apply(request);
+  });
+  const token = fixture.controller.touchFilterEngage("cutoff");
+  fixture.controller.touchFilterMove(token, "cutoff", 700);
+  fixture.controller.touchFilterMove(token, "cutoff", 600);
+  fixture.controller.touchFilterRelease(token, "cutoff");
+  await waitFor(() => expect(fixture.controller.getState().error).not.toBeNull());
+  expect(calls.liveControl).toHaveBeenCalledTimes(1);
+  first.resolve();
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(3));
+  expect(calls.liveControl.mock.calls.map(([request]) => request.intent)).toEqual([
+    {kind: "filter_parameter", phase: "engage", parameter: "cutoff_hz", value: 20000},
+    {kind: "filter_parameter", phase: "move", parameter: "cutoff_hz",
+      value: cutoffPositionToHz(700), gestureGeneration: "generation-1"},
+    {kind: "filter_release", gestureGeneration: "generation-1"},
+  ]);
+  await waitFor(() => expect(fixture.controller.getState().filter).toMatchObject({
+    cutoffHz: cutoffPositionToHz(700), engaged: false, provenance: "core",
+  }));
+});
+
+test("typed Pad reservations stay bounded until matching releases finish", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const first = deferred<void>();
+  const raw = calls.raw.getMockImplementation()!;
+  calls.raw.mockImplementationOnce(async request => { await first.promise; return raw(request); });
+  const pending: Promise<void>[] = [];
+  for (let slot = 0; slot < 64; slot += 1) {
+    pending.push(fixture.controller.recordRawEvent({kind: "pad_press",
+      gestureId: `pad-${slot}`, slot, velocity: 100}));
+    pending.push(fixture.controller.recordRawEvent({kind: "pad_release",
+      gestureId: `pad-${slot}`, slot}));
+  }
+  const overflow = fixture.controller.recordRawEvent({kind: "pad_press",
+    gestureId: "pad-65", slot: 0, velocity: 100});
+  const observed = overflow.then(() => "accepted", error => String(error));
+  // Release submission does not free its reserved slot while Core is stalled.
+  await expect(observed).resolves.toMatch(/Too many open Pad gestures/);
+  first.resolve();
+  await Promise.all(pending);
+  expect(calls.raw).toHaveBeenCalledTimes(128);
+  expect(calls.raw.mock.calls.filter(([request]) => request.event.kind === "pad_release"))
+    .toHaveLength(64);
+  await fixture.controller.recordRawEvent({kind: "pad_press",
+    gestureId: "pad-after-drain", slot: 0, velocity: 100});
+  expect(calls.raw).toHaveBeenCalledTimes(129);
+  await fixture.controller.stop();
+});
+
+test("Stop cancels a waiting typed move but finishes the admitted gesture release", async () => {
+  const reportFailure = vi.fn();
+  const fixture = controllerFixture({reportFailure});
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const first = deferred<void>();
+  calls.raw.mockImplementation(async ({eventId, event}) => {
+    if (event.phase === "engage") await first.promise;
+    return {eventId, gestureGeneration: "recorded-generation",
+      recordingGestureId: "recorded-filter", replayed: false};
+  });
+  const token = fixture.controller.touchFilterEngage("cutoff");
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+  fixture.controller.touchFilterMove(token, "cutoff", 700);
+  fixture.controller.touchFilterRelease(token, "cutoff");
+  const stopped = fixture.controller.stop();
+  first.resolve();
+  await stopped;
+  expect(calls.raw.mock.calls.map(([request]) => request.event.kind)).toEqual([
+    "filter_parameter", "filter_release",
+  ]);
+  expect(reportFailure).toHaveBeenCalledWith("Perform", expect.objectContaining({
+    code: "HOST_STATE_INVALID", message: "Live input was cancelled before Core admission",
+  }));
+  expect(calls.stop).toHaveBeenCalledTimes(1);
+});
+
+test("begin-pending Filter inputs wait for both ACKs and dequeue against the Core mapping", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  const begin = deferred<void>();
+  calls.begin.mockImplementation(async (request) => {
+    await begin.promise;
+    return headeredBegin([{fx: "filter", gestureGeneration: "start-generation",
+      recordingGestureId: "start-filter"}])(request);
+  });
+  const capture = deferred<void>();
+  calls.capture.mockImplementation(async (sink: {onStopped(): void}) => {
+    await capture.promise;
+    return {stop: vi.fn(async () => sink.onStopped())};
+  });
+  renderSurface(fixture);
+  await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+  const starting = fixture.controller.record();
+  await waitFor(() => expect(calls.begin).toHaveBeenCalledTimes(1));
+  fixture.controller.setFilterType("hp");
+  fixture.controller.turnFilterCutoff(-1);
+  expect(calls.raw).not.toHaveBeenCalled();
+  expect(calls.liveControl).not.toHaveBeenCalled();
+  begin.resolve();
+  await waitFor(() => expect(calls.capture).toHaveBeenCalledTimes(1));
+  expect(calls.raw).not.toHaveBeenCalled();
+  capture.resolve();
+  await starting;
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(2));
+  expect(calls.raw.mock.calls.map(([request]) => request.event)).toEqual([
+    {kind: "filter_parameter", phase: "move", parameter: "type", value: "hp",
+      gestureId: "start-filter", gestureGeneration: "start-generation"},
+    {kind: "filter_parameter", phase: "move", parameter: "cutoff_hz",
+      value: cutoffPositionToHz(990), gestureId: "start-filter",
+      gestureGeneration: "start-generation"},
+  ]);
+  expect(calls.liveControl).not.toHaveBeenCalled();
+});
+
+test("FILTER group maps Type/Cutoff/Resonance and entering it calls no producer", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  let current: ContextualEncoders | null = null;
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onEncodersReady={(value) => { current = value; }} />);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  expect(Object.values(current!.bindings).map((binding) => binding.label))
+    .toEqual(["Cutoff", "Delay", "Reverb"]);
+  fixture.runtime.calls.liveControl.mockClear();
+  fixture.runtime.calls.liveStatus.mockClear();
+  // Entering the group is pure UI state: no control and not even a status
+  // query, and no audible enable.
+  await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  expect(Object.values(current!.bindings).map((binding) => binding.label))
+    .toEqual(["Type", "Cutoff", "Resonance"]);
+  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.liveStatus).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().filter.engaged).toBe(false);
+  // The MORE group is preserved.
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  expect(Object.values(current!.bindings).map((binding) => binding.label))
+    .toEqual(["Crush", "Stutter", "Gate"]);
+});
+
+test("Cutoff rotary walks the log range with exact endpoints and SHIFT fine steps", async () => {
+  expect(cutoffPositionToHz(0)).toBe(20);
+  expect(cutoffPositionToHz(1000)).toBe(20000);
+  expect(cutoffHzToPosition(20)).toBe(0);
+  expect(cutoffHzToPosition(20000)).toBe(1000);
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  let current: ContextualEncoders | null = null;
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onEncodersReady={(value) => { current = value; }} />);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  // SHIFT fine: one position below the 20 kHz rest engages the gesture.
+  act(() => current!.bindings[1]!.onTurn(-1, true));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(1));
+  expect(fixture.controller.getState().filter.cutoffHz)
+    .toBe(cutoffPositionToHz(999));
+  expect(fixture.runtime.calls.liveControl.mock.calls[0]?.[0]).toMatchObject({
+    controlEpoch: LIVE_EPOCH,
+    intent: {kind: "filter_parameter", phase: "engage", parameter: "cutoff_hz",
+      value: cutoffPositionToHz(999)},
+  });
+  await waitFor(() =>
+    expect(fixture.controller.getState().filter.provenance).toBe("core"));
+  // Coarse: ±10 positions per detent, moving on the Core-issued generation.
+  act(() => current!.bindings[1]!.onTurn(-1));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(2));
+  expect(fixture.controller.getState().filter.cutoffHz)
+    .toBe(cutoffPositionToHz(989));
+  expect(fixture.runtime.calls.liveControl.mock.calls[1]?.[0].intent)
+    .toMatchObject({kind: "filter_parameter", phase: "move",
+      parameter: "cutoff_hz", value: cutoffPositionToHz(989),
+      gestureGeneration: "generation-1"});
+  // The bottom endpoint clamps exactly at 20 Hz.
+  act(() => current!.bindings[1]!.onTurn(-200));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(3));
+  expect(fixture.controller.getState().filter.cutoffHz).toBe(20);
+});
+
+test("FILTER ENC1 cycles the type and engages on the first actual change", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  let current: ContextualEncoders | null = null;
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onEncodersReady={(value) => { current = value; }} />);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  act(() => current!.bindings[1]!.onTurn(1));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(1));
+  expect(fixture.controller.getState().filter.type).toBe("hp");
+  expect(fixture.runtime.calls.liveControl.mock.calls[0]?.[0].intent)
+    .toMatchObject({kind: "filter_parameter", phase: "engage",
+      parameter: "type", value: "hp"});
+  act(() => current!.bindings[1]!.onTurn(1));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(2));
+  expect(fixture.controller.getState().filter.type).toBe("bp");
+  expect(fixture.runtime.calls.liveControl.mock.calls[1]?.[0].intent)
+    .toMatchObject({kind: "filter_parameter", phase: "move",
+      parameter: "type", value: "bp", gestureGeneration: "generation-1"});
+  // The wrap-around keeps cycling without a new engage.
+  act(() => current!.bindings[1]!.onTurn(1));
+  await waitFor(() =>
+    expect(fixture.controller.getState().filter.type).toBe("lp"));
+});
+
+test("Cutoff touch keeps the pointer lifecycle with the Core generation", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  const cutoff = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(cutoff, {pointerId: 3});
+  expect(fixture.controller.getState().filter.provenance).toBe("pending");
+  fireEvent.change(cutoff, {target: {value: "500"}});
+  fireEvent.pointerUp(cutoff, {pointerId: 3});
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(3));
+  const intents = fixture.runtime.calls.liveControl.mock.calls
+    .map(([request]) => request.intent);
+  // Touch-down engages at the current value: entering changes no sound.
+  expect(intents[0]).toMatchObject({kind: "filter_parameter", phase: "engage",
+    parameter: "cutoff_hz", value: 20000});
+  expect(intents[1]).toMatchObject({kind: "filter_parameter", phase: "move",
+    parameter: "cutoff_hz", value: cutoffPositionToHz(500),
+    gestureGeneration: "generation-1"});
+  expect(intents[2]).toEqual({kind: "filter_release",
+    gestureGeneration: "generation-1"});
+  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().filter.engaged).toBe(false);
+});
+
+test("Cutoff pointer cancel releases exactly like pointer-up", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  const cutoff = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(cutoff, {pointerId: 3});
+  fireEvent.change(cutoff, {target: {value: "640"}});
+  fireEvent.pointerCancel(cutoff, {pointerId: 3});
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(3));
+  const kinds = fixture.runtime.calls.liveControl.mock.calls
+    .map(([request]) => request.intent.kind);
+  expect(kinds).toEqual(["filter_parameter", "filter_parameter", "filter_release"]);
+});
+
+test("rotary rest and group switches keep the Filter gesture; page exit releases it", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  let current: ContextualEncoders | null = null;
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onEncodersReady={(value) => { current = value; }} />);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  act(() => current!.bindings[1]!.onTurn(-5));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(1));
+  const cutoffHz = fixture.controller.getState().filter.cutoffHz;
+  // Group switches and page navigation never release the rotary gesture.
+  await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  selectPerformPage("Slots");
+  selectPerformPage("Live");
+  expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.getState().filter.cutoffHz).toBe(cutoffHz);
+  expect(fixture.controller.getState().filter.engaged).toBe(true);
+  // Page exit is the one rotary release, frozen far-side under HOLD.
+  await fixture.controller.leave();
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(2));
+  expect(fixture.runtime.calls.liveControl.mock.calls[1]?.[0].intent).toEqual({
+    kind: "filter_release", gestureGeneration: "generation-1",
+  });
+});
+
+test("Delay touch and HOLD ride the typed generation route", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  const delay = screen.getByRole("slider", {name: "Delay"});
+  fireEvent.pointerDown(delay, {pointerId: 4});
+  fireEvent.change(delay, {target: {value: "630"}});
+  fireEvent.pointerUp(delay, {pointerId: 4});
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(3));
+  const intents = fixture.runtime.calls.liveControl.mock.calls
+    .map(([request]) => request.intent);
+  expect(intents[0]).toMatchObject({kind: "fx_parameter", phase: "engage",
+    fx: "delay", value: 0});
+  expect(intents[1]).toMatchObject({kind: "fx_parameter", phase: "move",
+    fx: "delay", value: 630, gestureGeneration: "generation-1"});
+  expect(intents[2]).toEqual({kind: "fx_release", fx: "delay",
+    gestureGeneration: "generation-1"});
+  await userEvent.click(screen.getByRole("button", {name: "HOLD"}));
+  await waitFor(() =>
+    expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(4));
+  expect(fixture.runtime.calls.liveControl.mock.calls[3]?.[0].intent)
+    .toEqual({kind: "hold_on"});
+  // The legacy session-free gesture op stays silent on the typed route.
+  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
+});
+
+const TYPED_FX = ["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"] as const;
+test.each(TYPED_FX)("%s keeps its Core generation when move receipts carry no new binding", async fx => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const gesture = fixture.controller.engageFx(fx, 600);
+  await waitFor(() => expect(fixture.controller.getState().fx[fx]).toBe(600));
+  await waitFor(() => expect(calls.liveStatus).toHaveBeenCalledTimes(2));
+  fixture.controller.moveFx(gesture, fx, 630);
+  await waitFor(() => expect(calls.liveStatus).toHaveBeenCalledTimes(3));
+  fixture.controller.moveFx(gesture, fx, 640);
+  await waitFor(() => expect(calls.liveStatus).toHaveBeenCalledTimes(4));
+  fixture.controller.releaseFx(gesture, fx);
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(4));
+  expect(calls.liveControl.mock.calls.map(([request]) => request.intent)).toEqual([
+    {kind: "fx_parameter", phase: "engage", fx, value: 600},
+    {kind: "fx_parameter", phase: "move", fx, value: 630, gestureGeneration: "generation-1"},
+    {kind: "fx_parameter", phase: "move", fx, value: 640, gestureGeneration: "generation-1"},
+    {kind: "fx_release", fx, gestureGeneration: "generation-1"},
+  ]);
+});
+
+test("headered recording adopts the Core begin mapping and never seeds a fake engage", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  const stateWithDelay = liveState();
+  stateWithDelay.otherFx.delay = {engaged: true, frozen: false, value: 600};
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    accepted: stateWithDelay, applied: stateWithDelay,
+  }));
+  calls.begin.mockImplementation(headeredBegin([
+    {fx: "delay", gestureGeneration: "gen-live-9",
+      recordingGestureId: "rec-delay-1"},
+  ]));
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  // The initial mirror is the Core readback, not a Host percentage default.
+  expect(fixture.controller.getState().fx.delay).toBe(600);
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await waitFor(() =>
+    expect(fixture.controller.getState().recording.phase).toBe("recording"));
+  expect(calls.begin.mock.calls[0]?.[0]).toMatchObject({
+    controlEpoch: LIVE_EPOCH});
+  // The D0 fence runs before the capture start, and the mapping-covered
+  // gesture journals nothing at begin: no fake engage seeds the recording.
+  expect(fixture.order.indexOf("begin")).toBeLessThan(
+    fixture.order.indexOf("capture"));
+  expect(calls.raw).not.toHaveBeenCalled();
+  // A touch on the adopted gesture pairs move/release against the mapping.
+  const delay = screen.getByRole("slider", {name: "Delay"});
+  fireEvent.pointerDown(delay, {pointerId: 4});
+  fireEvent.change(delay, {target: {value: "640"}});
+  fireEvent.pointerUp(delay, {pointerId: 4});
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(3));
+  const events = calls.raw.mock.calls.map(([request]) => request.event);
+  expect(events[0]).toEqual({kind: "fx_move", fx: "delay", value: 600,
+    gestureId: "rec-delay-1", gestureGeneration: "gen-live-9"});
+  expect(events[1]).toEqual({kind: "fx_move", fx: "delay", value: 640,
+    gestureId: "rec-delay-1", gestureGeneration: "gen-live-9"});
+  expect(events[2]).toEqual({kind: "fx_release", fx: "delay",
+    gestureId: "rec-delay-1", gestureGeneration: "gen-live-9"});
+  // Recording applies gestures through the journal; the sessionless typed
+  // producer stays silent meanwhile.
+  expect(calls.liveControl).not.toHaveBeenCalled();
+});
+
+for (const starting of ["engaged", "frozen"] as const) {
+  test.each(TYPED_FX)(`%s adopts the ${starting} Core recording start without synthetic events`, async fx => {
+    const fixture = controllerFixture();
+    const {calls} = fixture.runtime;
+    const core = liveState({hold: starting === "frozen"});
+    core.otherFx[fx] = {value: 700, engaged: starting === "engaged", frozen: starting === "frozen"};
+    calls.liveStatus.mockImplementation(async () => liveStatusAvailable({accepted: core, applied: core}));
+    const binding = {fx, gestureGeneration: "begin-generation", recordingGestureId: "begin-binding"};
+    calls.begin.mockImplementation(headeredBegin(starting === "engaged" ? [binding] : []));
+    calls.raw.mockImplementation(async ({eventId, event}) => ({eventId,
+      gestureGeneration: event.kind === "fx_engage" ? "new-generation" : null,
+      recordingGestureId: event.kind === "fx_engage" ? "new-binding" : null, replayed: false}));
+    fixture.controller.connect();
+    await fixture.controller.refreshRecovery();
+    await fixture.controller.refreshLiveStatus();
+    expect(fixture.controller.getState().fx[fx]).toBe(700);
+    await fixture.controller.record();
+    expect(calls.raw).not.toHaveBeenCalled();
+    const gesture = fixture.controller.engageFx(fx, 640);
+    await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+    // A move receipt carries no replacement binding in the actual Core.
+    if (starting === "engaged") {
+      expect(calls.raw.mock.calls[0]?.[0].event).toEqual({kind: "fx_move", fx, value: 640,
+        gestureGeneration: "begin-generation", gestureId: "begin-binding"});
+    } else {
+      expect(calls.raw.mock.calls[0]?.[0].event).toEqual({kind: "fx_engage", fx, value: 640});
+    }
+    fixture.controller.releaseFx(gesture, fx);
+    await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(2));
+    expect(calls.raw.mock.calls[1]?.[0].event).toEqual({kind: "fx_release", fx,
+      gestureGeneration: starting === "engaged" ? "begin-generation" : "new-generation",
+      gestureId: starting === "engaged" ? "begin-binding" : "new-binding"});
+    await fixture.controller.stop();
+  });
+}
+
+test("headered begin keeps a mapped legacy Filter on the scalar event route", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  const scalar = liveState({filter: {mode: "legacy", value: 630,
+    engaged: true, frozen: false}});
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    accepted: scalar, applied: scalar,
+  }));
+  calls.begin.mockImplementation(headeredBegin([{fx: "filter",
+    gestureGeneration: "legacy-generation", recordingGestureId: "legacy-binding"}]));
+  renderSurface(fixture);
+  await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+  await fixture.controller.record();
+  const gesture = fixture.controller.engageFx("filter", 640);
+  fixture.controller.releaseFx(gesture, "filter");
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(2));
+  expect(calls.raw.mock.calls.map(([request]) => request.event)).toEqual([
+    {kind: "fx_move", fx: "filter", value: 640,
+      gestureId: "legacy-binding", gestureGeneration: "legacy-generation"},
+    {kind: "fx_release", fx: "filter", gestureId: "legacy-binding",
+      gestureGeneration: "legacy-generation"},
+  ]);
+});
+
+test("the three independent Filter parameters journal once each per recording", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  calls.raw.mockImplementation(async ({eventId}) => ({
+    eventId, acceptedTick: 1, inputSequence: "1", nextRecordingSequence: "1",
+    result: "published" as const, coalesced: false as const,
+    gestureGeneration: "gen-rec-1", recordingGestureId: "rec-filter-1",
+    replayed: false as const, projectRevision: null,
+  }));
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await waitFor(() =>
+    expect(fixture.controller.getState().recording.phase).toBe("recording"));
+  act(() => fixture.controller.setFilterType("hp"));
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+  act(() => fixture.controller.turnFilterCutoff(-10));
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(2));
+  act(() => fixture.controller.turnFilterResonance(5));
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(3));
+  const events = calls.raw.mock.calls.map(([request]) => request.event);
+  expect(events[0]).toEqual({kind: "filter_parameter", phase: "engage",
+    parameter: "type", value: "hp"});
+  expect(events[1]).toEqual({kind: "filter_parameter", phase: "move",
+    parameter: "cutoff_hz", value: cutoffPositionToHz(900),
+    gestureId: "rec-filter-1", gestureGeneration: "gen-rec-1"});
+  expect(events[2]).toEqual({kind: "filter_parameter", phase: "move",
+    parameter: "resonance_milli", value: 50,
+    gestureId: "rec-filter-1", gestureGeneration: "gen-rec-1"});
+});
+
+test("the first Pad waits for the capture start ACK in a headered recording", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  const gate = deferred<void>();
+  calls.capture.mockImplementation(async (sink: {onStopped(): void}) => {
+    fixture.order.push("capture");
+    await gate.promise;
+    return {stop: vi.fn(async () => sink.onStopped())};
+  });
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  // The Core fence proved (begin resolved) but the capture ACK is still out:
+  // the first Pad is gated, not dropped into a silent journal.
+  await waitFor(() => expect(calls.begin).toHaveBeenCalled());
+  expect(fixture.controller.getState().recording.phase).toBe("starting");
+  await fixture.controller.recordRawEvent({kind: "pad_press",
+    gestureId: "pad-1", slot: 0, velocity: 100});
+  expect(calls.raw).not.toHaveBeenCalled();
+  gate.resolve();
+  await waitFor(() =>
+    expect(fixture.controller.getState().recording.phase).toBe("recording"));
+  await fixture.controller.recordRawEvent({kind: "pad_press",
+    gestureId: "pad-2", slot: 1, velocity: 100});
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+  expect(calls.raw.mock.calls[0]?.[0].event)
+    .toMatchObject({kind: "pad_press", slot: 1});
+});
+
+test("headered capture start failure compensates the already committed begin", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  calls.capture.mockRejectedValueOnce(new Error("capture start refused"));
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  expect(calls.begin).toHaveBeenCalledTimes(1);
+  expect(calls.capture).toHaveBeenCalledTimes(1);
+  expect(calls.stop).toHaveBeenCalledWith({sessionId: ids.session,
+    requestId: expect.any(String)});
+  expect(fixture.store.discard).toHaveBeenCalledWith({
+    expectedRevision: 8, performanceId: ids.performance,
+  });
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.phase).toBe("idle");
+  expect(calls.raw).not.toHaveBeenCalled();
+});
+
+test("an unavailable typed producer keeps the legacy Filter and says so", async () => {
+  const fixture = controllerFixture();
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(false));
+  // The legacy scalar fader stays; no Hz is guessed from a percentage.
+  expect(screen.getByRole("slider", {name: "Filter"})).toBeTruthy();
+  expect(screen.queryByText("20.0 kHz")).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
+  expect(screen.getByRole("status", {name: "Filter status"}).textContent)
+    .toContain("unavailable");
+  expect(screen.getByRole("slider", {name: "Cutoff"})
+    .hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", {name: "HP"}).hasAttribute("disabled"))
+    .toBe(true);
+  // Legacy gestures still take the legacy route.
+  const filter = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(filter, {pointerId: 3});
+  fireEvent.change(filter, {target: {value: "630"}});
+  fireEvent.pointerUp(filter, {pointerId: 3});
+  await waitFor(() =>
+    expect(fixture.runtime.calls.fx).toHaveBeenCalledTimes(3));
+  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
+});
+
+test("a far-side rejection surfaces and the next control re-engages honestly", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  calls.liveControl.mockRejectedValueOnce(Object.assign(
+    new Error("stale control epoch"), {code: "PROJECT_BUSY"}));
+  act(() => fixture.controller.turnFilterCutoff(-1));
+  await waitFor(() =>
+    expect(fixture.controller.getState().error).not.toBeNull());
+  expect(calls.liveControl).toHaveBeenCalledTimes(1);
+  // The failed engage issued no generation, so the next turn engages afresh
+  // instead of moving on a generation the Core never issued.
+  act(() => fixture.controller.turnFilterCutoff(-1));
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(2));
+  expect(calls.liveControl.mock.calls[1]?.[0].intent)
+    .toMatchObject({phase: "engage", parameter: "cutoff_hz"});
+  await waitFor(() =>
+    expect(fixture.controller.getState().filter.provenance).toBe("core"));
+});
+
+test("HOLD freeze is shown only from the Core readback after release", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  await userEvent.click(screen.getByRole("button", {name: "HOLD"}));
+  const cutoff = screen.getByRole("slider", {name: "Filter"});
+  fireEvent.pointerDown(cutoff, {pointerId: 3});
+  fireEvent.change(cutoff, {target: {value: "700"}});
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(3));
+  const frozen = liveState({hold: true, filter: {
+    mode: "independent" as const, engaged: false, frozen: true,
+    type: "lp" as const, cutoffHz: cutoffPositionToHz(700), resonanceMilli: 0,
+  }});
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    accepted: frozen, applied: frozen,
+  }));
+  fireEvent.pointerUp(cutoff, {pointerId: 3});
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(4));
+  expect(calls.liveControl.mock.calls[3]?.[0].intent).toEqual({
+    kind: "filter_release", gestureGeneration: "generation-2",
+  });
+  await waitFor(() =>
+    expect(fixture.controller.getState().filter.frozen).toBe(true));
+  expect(fixture.controller.getState().filter).toMatchObject({
+    engaged: false, provenance: "core", cutoffHz: cutoffPositionToHz(700),
+  });
+  expect(fixture.controller.getState().hold).toBe(true);
+});
+
+test("a recording-time Filter release reads frozen back from Core", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  const engaged = liveState({filter: {
+    mode: "independent" as const, engaged: true, frozen: false,
+    type: "lp" as const, cutoffHz: 2000, resonanceMilli: 100,
+  }});
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    accepted: engaged, applied: engaged,
+  }));
+  calls.begin.mockImplementation(headeredBegin([
+    {fx: "filter", gestureGeneration: "gen-live-1",
+      recordingGestureId: "rec-filter-1"},
+  ]));
+  renderSurface(fixture);
+  await waitFor(() =>
+    expect(fixture.controller.getState().filter.engaged).toBe(true));
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await waitFor(() =>
+    expect(fixture.controller.getState().recording.phase).toBe("recording"));
+  // The release pairs against the begin mapping; the frozen flag arrives only
+  // with the release-settled Core readback.
+  const frozen = liveState({filter: {
+    mode: "independent" as const, engaged: false, frozen: true,
+    type: "lp" as const, cutoffHz: 2000, resonanceMilli: 100,
+  }});
+  calls.liveStatus.mockImplementation(async () => liveStatusAvailable({
+    accepted: frozen, applied: frozen,
+  }));
+  const token = fixture.controller.touchFilterEngage("cutoff");
+  fixture.controller.touchFilterRelease(token, "cutoff");
+  await waitFor(() =>
+    expect(fixture.controller.getState().filter.frozen).toBe(true));
+  expect(fixture.controller.getState().filter).toMatchObject({
+    engaged: false, provenance: "core", cutoffHz: 2000,
+  });
+  expect(calls.raw.mock.calls.map(([request]) => request.event))
+    .toContainEqual({kind: "filter_release", gestureId: "rec-filter-1",
+      gestureGeneration: "gen-live-1"});
+});
+
+test("a legacy Filter gesture opened before the first status answer keeps its route until release", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  const statusGate = deferred<ReturnType<typeof liveStatusAvailable>>();
+  calls.liveStatus.mockImplementation(() => statusGate.promise);
+  let current: ContextualEncoders | null = null;
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
+    onEncodersReady={(value) => { current = value; }} />);
+  // The answer is still in flight: the fader and ENC1 are the legacy scalar
+  // Filter and gestures take the legacy route.
+  const filter = screen.getByRole("slider", {name: "Filter"});
+  expect((filter as HTMLInputElement).value).toBe("500");
+  expect(Object.values(current!.bindings).map((binding) => binding.label))
+    .toEqual(["Filter", "Delay", "Reverb"]);
+  fireEvent.pointerDown(filter, {pointerId: 3});
+  fireEvent.change(filter, {target: {value: "630"}});
+  await waitFor(() => expect(calls.fx).toHaveBeenCalledTimes(2));
+  // The typed producer answers while the legacy gesture is open: neither the
+  // surface nor the gesture flips route mid-gesture.
+  act(() => { statusGate.resolve(liveStatusAvailable()); });
+  await waitFor(() =>
+    expect(fixture.controller.getState().liveControl.available).toBe(true));
+  expect(fixture.controller.getState().legacyFilterGesture).toBe(true);
+  expect((screen.getByRole("slider", {name: "Filter"}) as HTMLInputElement)
+    .value).toBe("630");
+  expect(screen.getByText("63%")).toBeTruthy();
+  expect(screen.queryByText("20.0 kHz")).toBeNull();
+  expect(Object.values(current!.bindings).map((binding) => binding.label))
+    .toEqual(["Filter", "Delay", "Reverb"]);
+  // An alternate FILTER-group binding cannot bypass the pinned legacy
+  // lifetime while the same physical gesture is still open.
+  act(() => {
+    fixture.controller.turnFilterType(1);
+    fixture.controller.turnFilterCutoff(-1);
+    fixture.controller.turnFilterResonance(1);
+  });
+  expect(calls.liveControl).not.toHaveBeenCalled();
+  fireEvent.change(filter, {target: {value: "640"}});
+  await waitFor(() => expect(calls.fx).toHaveBeenCalledTimes(3));
+  expect(calls.liveControl).not.toHaveBeenCalled();
+  // Release closes the gesture on its original route; only then does the
+  // surface adopt the typed Cutoff readback.
+  fireEvent.pointerUp(filter, {pointerId: 3});
+  await waitFor(() => expect(calls.fx).toHaveBeenCalledTimes(4));
+  expect(calls.fx.mock.calls.map(([event]) => event.kind))
+    .toEqual(["fx_engage", "fx_move", "fx_move", "fx_release"]);
+  expect(calls.liveControl).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(fixture.controller.getState().legacyFilterGesture).toBe(false));
+  expect((screen.getByRole("slider", {name: "Filter"}) as HTMLInputElement)
+    .value).toBe("1000");
+  expect(screen.getByText("20.0 kHz")).toBeTruthy();
+  expect(Object.values(current!.bindings).map((binding) => binding.label))
+    .toEqual(["Cutoff", "Delay", "Reverb"]);
 });

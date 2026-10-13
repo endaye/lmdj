@@ -17,7 +17,12 @@ import {
   type PerformController,
   type PerformState,
 } from "../state/perform_state";
-import {FxSliderBank, type MonitorVolumeControl} from "./fx_slider_bank";
+import {
+  formatCutoffHz,
+  FxSliderBank,
+  type FxGroup,
+  type MonitorVolumeControl,
+} from "./fx_slider_bank";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
 
 export interface PerformSurfaceProps {
@@ -167,21 +172,58 @@ export function PerformSurface(props: PerformSurfaceProps) {
   }, [page]);
   const [fxGestureActive, setFxGestureActive] = useState(false);
   useEffect(() => { controller.setBank(props.bank); }, [controller, props.bank]);
-  const [moreEncoders, setMoreEncoders] = useState(false);
+  const [encoderGroup, setEncoderGroup] = useState<FxGroup>("main");
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getState,
     controller.getState,
   );
   const encoders = useMemo<ContextualEncoders>(() => {
-    const group: readonly PerformanceFx[] = moreEncoders
-      ? ["crush", "stutter", "gate"] : ["filter", "delay", "reverb"];
-    return {bindings: Object.fromEntries(group.map((fx, index) => [index + 1, {
-      label: fx[0]!.toUpperCase() + fx.slice(1),
-      value: `${(state.fx[fx] / 10).toFixed(1)}%`,
-      onTurn: (detents: number, fine?: boolean) => controller.turnFx(fx, detents, fine),
-    }]))};
-  }, [controller, moreEncoders, state.fx]);
+    if (encoderGroup === "filter") {
+      // The FILTER group is pure UI state: entering it calls no producer and
+      // engages nothing (D04); the first actual turn engages.
+      return {bindings: {
+        1: {label: "Type", value: state.filter.type.toUpperCase(),
+          onTurn: (detents: number) => controller.turnFilterType(detents)},
+        2: {label: "Cutoff", value: formatCutoffHz(state.filter.cutoffHz),
+          onTurn: (detents: number, fine?: boolean) =>
+            controller.turnFilterCutoff(detents, fine)},
+        3: {label: "Resonance",
+          value: `${(state.filter.resonanceMilli / 10).toFixed(1)}%`,
+          onTurn: (detents: number, fine?: boolean) =>
+            controller.turnFilterResonance(detents, fine)},
+      }};
+    }
+    if (encoderGroup === "more") {
+      const group = ["crush", "stutter", "gate"] as const;
+      return {bindings: Object.fromEntries(group.map((fx, index) => [index + 1, {
+        label: fx[0]!.toUpperCase() + fx.slice(1),
+        value: `${(state.fx[fx] / 10).toFixed(1)}%`,
+        onTurn: (detents: number, fine?: boolean) => controller.turnFx(fx, detents, fine),
+      }]))};
+    }
+    // Main group: ENC1 is the independent Filter cutoff when the typed
+    // producer answered; an unavailable producer — or a legacy Filter
+    // gesture still open from before the first answer — keeps the legacy
+    // scalar Filter turn.
+    const typed = state.liveControl.available && !state.legacyFilterGesture;
+    return {bindings: {
+      1: typed
+        ? {label: "Cutoff", value: formatCutoffHz(state.filter.cutoffHz),
+            onTurn: (detents: number, fine?: boolean) =>
+              controller.turnFilterCutoff(detents, fine)}
+        : {label: "Filter", value: `${(state.fx.filter / 10).toFixed(1)}%`,
+            onTurn: (detents: number, fine?: boolean) =>
+              controller.turnFx("filter", detents, fine)},
+      2: {label: "Delay", value: `${(state.fx.delay / 10).toFixed(1)}%`,
+        onTurn: (detents: number, fine?: boolean) =>
+          controller.turnFx("delay", detents, fine)},
+      3: {label: "Reverb", value: `${(state.fx.reverb / 10).toFixed(1)}%`,
+        onTurn: (detents: number, fine?: boolean) =>
+          controller.turnFx("reverb", detents, fine)},
+    }};
+  }, [controller, encoderGroup, state.fx, state.filter,
+    state.liveControl.available, state.legacyFilterGesture]);
   useEffect(() => {
     props.onEncodersReady?.(encoders);
     return () => props.onEncodersReady?.(null);
@@ -276,8 +318,17 @@ export function PerformSurface(props: PerformSurfaceProps) {
       </dl></details> : null}
       <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
         onClick={() => controller.toggleHold()}>HOLD</button>} active={page === "live"} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
+        filter={state.filter}
+        legacyFilterGesture={state.legacyFilterGesture}
+        onFilterType={(type) => controller.setFilterType(type)}
+        onFilterTouchEngage={(parameter) => controller.touchFilterEngage(parameter)}
+        onFilterTouchMove={(token, parameter, value) =>
+          controller.touchFilterMove(token, parameter, value)}
+        onFilterTouchRelease={(token, parameter) =>
+          controller.touchFilterRelease(token, parameter)}
         monitorVolume={props.monitorVolume}
-        onGroupChange={setMoreEncoders}
+        group={encoderGroup}
+        onGroupChange={setEncoderGroup}
         onEngage={(fx, value) => controller.engageFx(fx, value)}
         onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
         onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />

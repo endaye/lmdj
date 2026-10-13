@@ -183,7 +183,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - Sample 工程参数转动时立即预览，同一 Pad 的多参数停转 400 ms 后合并为一次保存／Undo。转回起点不保存。Sequence ENC3 的 BPM 当前只有即时读数预览，播放和节拍器仍等提交后发布；可听即时预览尚未实现。
 - Sample 作者锁定、Sequence 录音或传输结算时，相关工程参数旋钮不可用，未提交的预览作废；ENC4 保持监听职责。
 - 未提交的 Sample／BPM 旋钮草稿在离页、切 Pad／Project／Pattern、打开 System、Escape 或 Undo／Redo 前取消。下一轮从已保存的值开始；已经发出的请求保留真实结算结果。
-- Perform 旋钮停转或切 FX／MORE 组保持效果值；离开 Perform／打开 System 按 HOLD 释放拥有的手势，使用既有单值效果。
+- Perform 旋钮停转或切组（主组／FILTER／FX·MORE）保持效果值与手势；离开 Perform／打开 System 按 HOLD 释放拥有的手势。七段单值效果之外，Filter 是独立参数组（LP／HP／BP、20 Hz–20 kHz 对数 Cutoff、0–100% Resonance），初值 OFF／LP／20 kHz／0%，读回只认 Core，进 FILTER 组不发声。
 
 这些映射、细调、监听记忆和 400 ms 生命周期遵循[已批准的旋钮决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-09-contextual-encoders-and-monitor-volume.md)。Swing 保留在 Sequence SETUP 触摸区。可听 BPM 已批准[保持当前音乐位置继续播放](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)，完整实现与验收仍待完成。
 
@@ -534,7 +534,7 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 
 | 控件 | 在 Perform 页的作用 |
 | --- | --- |
-| ENC1／ENC2／ENC3 | 主 FX 为 Filter／Delay／Reverb；FX／MORE 组为 Crush／Stutter／Gate；Reverse 与 Cutter 只有触摸推子，没有旋钮。每格 10/1000，SHIFT 1/1000；停转和换组保持值。 |
+| ENC1／ENC2／ENC3 | 主组为 Cutoff（独立 Filter）／Delay／Reverb；FILTER 组为 Type（LP／HP／BP）／同一 Cutoff／Resonance；FX／MORE 组为 Crush／Stutter／Gate；Reverse 与 Cutter 只有触摸推子，没有旋钮。七段单值 FX 每格 10/1000、SHIFT 1/1000；Cutoff 按 20 Hz–20 kHz 对数走，粗调每格 10 个对数位置、SHIFT 细调 1 个；Resonance 0–100%。停转和换组保持值与手势。 |
 | ↑／↓ | 静默选择上一／下一当前 Pad，A01–D16 首尾停止；空 Pad 也可选择，跨界同步 Bank，不触发声音、不写工程或历史。SHIFT 或 System 中不可用。 |
 | 其余左栏 | ENC4 监听音量；不按 SHIFT 的 ← → 尚不可用，其余见[第 1 章](#global)。演出录制中或待保存时 Record 不可用。Bank 键直接选择演奏组，不改变当前 Pad；Pad 方向跨界时也会同步 Bank。 |
 | 16 个 Pad | 仍是声音 Pad，不是 Pattern Launch 键。演出录制中，按下和松开都会记录。 |
@@ -554,8 +554,8 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 停止 | Pattern Launch 01–16 | 直接选中该槽的 Pattern，之后按 Play 从它开始。空槽不做任何事。 |
 | 全局 Pattern 录音但没有演出录制、transport 命令处理中或状态未知 | Pattern Launch | 不可用；全局 Pattern 录音中切换已批准、尚未交付，见[第 2 章](#planned)。 |
 | 演出录制正在启动、停止、保存、丢弃或处于失败阶段 | Pattern Launch | 暂不可用；等该操作完成或恢复。稳定的 idle／stopped 才可按全局 transport 选择／预约，recording／flushing 走演出 Launch。 |
-| 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；显示百分比。演出录制中同时记录；触摸与旋钮调同一 FX 时共用拥有的手势。 |
-| 可用时 | FX / MORE | 展开或收起 Stutter、Gate、Reverse、Crush、Cutter 五个触摸推子，同时把旋钮组切到 Crush／Stutter／Gate。旋钮效果保持；收起时释放这些触摸推子上未结束的手势。 |
+| 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；Delay／Reverb 显示百分比，Filter 是独立滤波的 Cutoff，按 Core 读回显示 Hz（OFF／LP／20 kHz／0% 起；producer 不可用时不从百分比反推 Hz，FILTER 面板如实显示 unavailable）。演出录制中同时记录；触摸与旋钮调同一参数时共用拥有的手势。 |
+| 可用时 | FX / MORE 与 FILTER | FX / MORE 展开或收起 Stutter、Gate、Reverse、Crush、Cutter 五个触摸推子，同时把旋钮组切到 Crush／Stutter／Gate；FILTER 打开独立滤波面板（LP／HP／BP 类型段、Cutoff、Resonance）并把旋钮组切到 Type／Cutoff／Resonance。进入 FILTER 组不调用任何 producer、不改变声音；旋钮效果保持；收起 MORE 或 FILTER 时释放其触摸推子上未结束的手势。HOLD 下松开由 Core 冻结，面板读回 frozen。 |
 | 可用时 | HOLD | 开关 FX 保持：松开推子后效果按规则保留。与 Sample 的循环 Hold 不同。 |
 | 监听音量已恢复且可用时 | MASTER | 0–100% 的本设备监听音量，与 ENC4 共用，下次打开恢复。不写工程，不改变录音、重采样或导出电平，也不随演出录制／回放变化。 |
 | 可录制，其他录音空闲 | Record Performance | 开始记录演出操作和主输出 WAV；Launch 变为可用。准备失败时显示原因。 |
