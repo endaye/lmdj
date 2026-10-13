@@ -5,7 +5,7 @@ import {fireEvent} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
-import {HardwareConsole, fitConsoleToStage} from "../src/components/hardware_console";
+import {HardwareConsole, consoleLayoutForViewport, fitConsoleToStage} from "../src/components/hardware_console";
 import {PhysicalControls} from "../src/components/physical_controls";
 
 test("overview contains no action while touch workspace remains actionable", () => {
@@ -330,9 +330,38 @@ test("a narrow portrait stage turns the console and never enlarges it", () => {
   expect(fitConsoleToStage({width: 900, height: 2000}, console, true)?.scale).toBe(1);
 });
 
+test("compact fitting keeps its reserved outer margins instead of enlarging the shell", () => {
+  const compact = {width: 752, height: 552};
+  expect(fitConsoleToStage({width: 768, height: 852}, compact, false, 1))
+    .toEqual({scale: 1, dx: 8, dy: 150, rotate: false});
+  expect(fitConsoleToStage({width: 768, height: 552}, compact, false, 1))
+    .toEqual({scale: 1, dx: 8, dy: 0, rotate: false});
+});
+
 test("an unmeasured stage or console is not fitted", () => {
   expect(fitConsoleToStage({width: 0, height: 600}, {width: 880, height: 640}, false)).toBeNull();
   expect(fitConsoleToStage({width: 800, height: 600}, {width: 0, height: 0}, false)).toBeNull();
+});
+
+test.each([
+  [{width: 1440, height: 900}, "full"],
+  [{width: 1024, height: 768}, "full"],
+  [{width: 1280, height: 600}, "compact"],
+  [{width: 768, height: 600}, "compact"],
+  [{width: 768, height: 900}, "compact"],
+  [{width: 768, height: 1024}, "full"],
+] as const)("chooses the nonshrinking console layout at %j", (viewport, expected) => {
+  expect(consoleLayoutForViewport(viewport)).toBe(expected);
+});
+
+test("layout selection returns to the same viewport policy after compact resize", () => {
+  for (const height of [736, 735, 600, 735, 736]) {
+    expect(consoleLayoutForViewport({width: 1280, height})).toBe(height >= 736 ? "full" : "compact");
+  }
+  // Full portrait needs room for the unshrunk, rotated 880 px width plus
+  // the original 96 px of header/footer. Compact chrome cannot alter that.
+  expect(consoleLayoutForViewport({width: 768, height: 975})).toBe("compact");
+  expect(consoleLayoutForViewport({width: 768, height: 976})).toBe("full");
 });
 
 

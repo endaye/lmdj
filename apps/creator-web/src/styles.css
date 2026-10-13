@@ -33,14 +33,19 @@
   --creator-lime: #ddf478;
   --creator-blue: #9ec9f5;
   --creator-purple: #c5a5f4;
+  --creator-rose: #e5adc4;
+  --creator-ink: #20251c;
   --creator-blue-tint: #314352;
   --creator-purple-tint: #443750;
   /* The bundled IBM Plex Mono above; the system monospace faces remain as
      the fallback while it loads. */
   --creator-font-action: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --creator-font-heading: var(--creator-font-action);
   --creator-control-hit: 44px;
-  --creator-control-face: 36px;
-  --creator-action-size: 12px;
+  --creator-control-face: 32px;
+  --creator-control-radius: 6px;
+  --creator-action-size: 9px;
+  --creator-action-leading: 13px;
   --creator-heading-size: 14px;
   --creator-value-size: 18px;
   --creator-panel-padding: 16px;
@@ -925,35 +930,56 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 .physical-encoders,
 .physical-keys {
   display: grid;
-  grid-template-columns: 32px 32px;
-  justify-content: space-between;
-  align-content: space-between;
+  grid-template-columns: repeat(2, var(--creator-control-hit));
+  gap: 4px;
+  width: 92px;
+  /* Keep the original face centres and 48px pitch. The six extra pixels on
+     each side belong to the button itself, leaving a real 4px target gap. */
+  margin: -6px;
 }
 .physical-encoders {
-  grid-template-rows: 32px 32px;
-  height: 80px;
+  grid-template-rows: repeat(2, var(--creator-control-hit));
+  height: 92px;
 }
 .physical-keys {
-  grid-template-rows: repeat(8, 32px);
-  height: 368px;
+  grid-template-rows: repeat(8, var(--creator-control-hit));
+  height: 380px;
 }
 .physical-encoder,
 .physical-key {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  width: var(--creator-control-hit);
+  height: var(--creator-control-hit);
+  min-width: var(--creator-control-hit);
+  min-height: var(--creator-control-hit);
   padding: 0;
-  border-radius: 4px;
-  font-size: 12px;
+  border: 0;
+  border-radius: var(--creator-control-radius);
+  font: 400 var(--creator-action-size)/var(--creator-action-leading) var(--creator-font-mono);
   color: var(--creator-text);
+  background: transparent;
+}
+.physical-key::before,
+.physical-encoder::before {
+  content: "";
+  box-sizing: border-box;
+  position: absolute;
+  z-index: -1;
+  inset: 6px;
+  border-radius: var(--creator-control-radius);
+  pointer-events: none;
+}
+.physical-key::before {
   background: var(--creator-raised);
   border: .5px solid var(--creator-line);
 }
 .physical-encoder {
-  border: 0;
   border-radius: 50%;
-  background: transparent;
 }
+.physical-encoder::before { border-radius: 50%; }
 .physical-encoder svg,
 .physical-key svg {
   display: block;
@@ -966,10 +992,14 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   height: 32px;
 }
 .physical-key.is-active {
-  color: #20251c;
-  background: var(--creator-text);
-  border: 2px solid var(--creator-lime);
+  color: var(--creator-ink);
 }
+.physical-key.is-active::before {
+  background: var(--creator-text);
+  border: 1.5px solid var(--creator-lime);
+}
+.physical-key:not(:disabled):hover::before { border-color: var(--creator-lime); }
+.physical-key:disabled { color: var(--creator-text); opacity: .35; }
 .physical-key.is-active.has-icon[aria-label="Project"] svg,
 .physical-key.is-active.has-icon[aria-label="Sample"] svg,
 .physical-key.is-active.has-icon[aria-label="Perform"] svg,
@@ -980,17 +1010,15 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   display: grid;
   place-items: center;
 }
-/* SHIFT is one full-width row spanning both 32px cells plus the inter-column
-   gap, so the 8-row 368px key-block geometry is preserved. */
+/* SHIFT spans both targets. Its painted 80px face keeps the original size. */
 .physical-key.is-shift {
   grid-column: 1 / -1;
-  width: 80px;
-  font-size: 10px;
-  letter-spacing: .08em;
+  width: 92px;
+  letter-spacing: 0;
 }
 /* TE-style availability lamp: the key lights while its shifted action is
    possible instead of greying a button pair. */
-.physical-key.is-lit {
+.physical-key.is-lit::before {
   border: 1.5px solid var(--creator-lime);
   box-shadow: 0 0 6px rgb(221 244 120 / 55%);
 }
@@ -1257,25 +1285,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   .perform-live-header, .perform-replay article) { flex-wrap: wrap; }
 .hardware-workspace .candidate-target { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
-/* Touch kit (2026-10-04 decision, item 6): 44 px controls, 8 px radius,
-   raised fill, selected solid accent; cards 10 px; spacing 8 or 12 only. */
-.touch-control {
-  min-height: 44px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--creator-raised);
-  color: var(--creator-text);
-  font: inherit;
-  font-size: 12px;
-  letter-spacing: .06em;
-}
-.touch-control[aria-pressed="true"],
-.touch-control.is-primary {
-  background: var(--creator-lime);
-  color: var(--creator-base);
-}
-.touch-control:disabled { color: var(--creator-muted); opacity: .55; }
+/* Layout primitives shared by Sequence and other touch surfaces. The current
+   Interaction UI face and state rules are applied with the ordinary buttons
+   below; cards and musical editors keep their own content geometry. */
 .touch-segment {
   display: grid;
   grid-auto-flow: column;
@@ -1923,9 +1935,9 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 
 
-/* Stage fit (Desktop Final T2, START HERE): the console keeps its fixed
-   880×592 hardware geometry and scales proportionally to fill the stage,
-   centred, at any window size. These rules pin the workspace to the stage's
+/* Stage fit keeps the full 880×592 Figma layout whenever it fits without
+   shrinking targets. Otherwise the compact rules below reflow the four
+   regions first. These rules pin the workspace to the stage's
    top-left corner; main.tsx measures the stage and sets the workspace's
    width/height/transform, because CSS cannot divide two lengths to derive the
    fit scale. A narrow portrait stage is also turned 90° counter-clockwise so
@@ -1944,6 +1956,47 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 @media (max-width: 959px) and (orientation: portrait) {
   body { min-width: 0; }
+}
+
+/* The viewport-based decision in main.tsx is independent of these chrome
+   sizes. At 768×600, a 752×544 console plus 8px margins exactly fits the
+   552px stage: every ordinary target remains at least 44 actual CSS pixels. */
+html[data-creator-layout="compact"] {
+  .site-header, .site-footer { height: 24px; padding-inline: 8px; }
+  .site-wordmark { font-size: 16px; }
+  .site-product { font-size: 10px; }
+  .hardware-console {
+    width: min(880px, calc(100vw - 16px));
+    height: 544px;
+    margin-block: 4px;
+  }
+  .hardware-console > [aria-label="Physical controls"] {
+    left: 8px; top: 8px; width: 92px; height: 528px;
+  }
+  .physical-controls { height: 528px; grid-template-rows: 48px 92px 380px; row-gap: 4px; }
+  .physical-brand { justify-self: center; }
+  .physical-brand, .physical-brand svg { width: 48px; height: 48px; }
+  .physical-encoders, .physical-keys { margin: 0; }
+  .hardware-console > [aria-label="Overview display"] {
+    left: 108px; top: 8px; right: 8px; width: auto; height: 152px;
+  }
+  .overview-display { padding: 8px; gap: 4px; }
+  /* All eight 10px Sequence rows and their 3px gaps remain visible:
+     header 18 + readbacks 12 + rows 101 + two 2px gaps = 135 of 136px. */
+  .overview-display.is-sequence { gap: 2px; }
+  .sample-overview-pad, .perform-overview-state, .sequence-overview-position,
+  .sequence-overview-status.is-encoder-status { top: 8px; right: 8px; }
+  .hardware-console > [aria-label="Touch workspace"] { left: auto; top: 168px; right: 8px; }
+  .hardware-console > [aria-label="Pad matrix"] {
+    left: 108px; top: 168px; width: calc(100% - 492px);
+    display: grid; place-items: center;
+  }
+  .hardware-console .pad-grid {
+    width: 100%; max-width: 368px; height: auto; aspect-ratio: 1;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 8px;
+  }
+  .hardware-console .pad { width: 100%; height: 100%; min-height: 44px; }
 }
 
 /* Pad colour controls (#1207): the selected Pad's five colours and restore,
@@ -2082,34 +2135,77 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
   border-color: var(--creator-line);
 }
 
-/* D01/D03/D04 compact actions: a 36-unit face inside a 44-unit hit box.
-   Transparent block borders reserve the hit inset in normal layout, so
-   adjacent controls never need overlapping absolute hit expansions. The
-   console transform scales both; these are design units, not device pixels.
-   Sequence's approved Mono/44-unit controls are an explicit exception. */
+/* Interaction UI 400:85: a 32-unit face inside at least a 44-unit target.
+   The target reserves its entire footprint in normal flow. A separate painted
+   face retains its actual 6px corner radius and selected outline; transparent
+   borders would subtract their thickness from the inner radius. Long labels
+   can grow with their content, never clip to manufacture a compact layout.
+   Stage scaling affects these design units; measured CSS-pixel acceptance is
+   a separate prerequisite, not implied by the 44-unit token. */
 .hardware-console > [aria-label="Touch workspace"] button:not(
-  .sequence-touch-workspace button, .project-card,
-  .perform-pattern-slots button, .waveform-editor [role="slider"]
-) {
+  .project-card, .perform-pattern-slots button,
+  .waveform-editor [role="slider"], .pad-colour-swatch
+),
+.touch-control {
+  --control-fill: var(--creator-raised);
+  --control-text: var(--creator-text);
+  --control-line: transparent;
+  --control-inset: calc((var(--creator-control-hit) - var(--creator-control-face)) / 2);
+  position: relative;
+  isolation: isolate;
+  min-width: var(--creator-control-hit);
   min-height: var(--creator-control-hit);
-  padding: 0 8px;
+  padding: var(--control-inset) 8px;
   border: 0;
-  border-block: calc((var(--creator-control-hit) - var(--creator-control-face)) / 2) solid transparent;
-  border-radius: 8px;
-  background-clip: padding-box;
-  font-family: var(--creator-font-action);
-  font-size: var(--creator-action-size);
-  font-weight: 500;
-  line-height: 16px;
+  border-radius: var(--creator-control-radius);
+  color: var(--control-text);
+  background: transparent;
+  font: 400 var(--creator-action-size)/var(--creator-action-leading) var(--creator-font-mono);
   letter-spacing: 0;
+
+  &::before {
+    content: "";
+    box-sizing: border-box;
+    position: absolute;
+    z-index: -1;
+    inset: var(--control-inset) 0;
+    border: 1px solid var(--control-line);
+    border-radius: var(--creator-control-radius);
+    background: var(--control-fill);
+    pointer-events: none;
+  }
+
+  &:is(.is-primary, .project-open) {
+    --control-fill: var(--creator-lime);
+    --control-text: var(--creator-ink);
+  }
+  &:is([aria-pressed="true"], [aria-current="page"], [aria-current="step"]) {
+    --control-fill: var(--creator-screen);
+    --control-text: var(--creator-lime);
+    --control-line: var(--creator-lime);
+  }
+  &.is-danger { --control-text: var(--creator-rose); }
+  &:not(:disabled):hover { --control-line: var(--creator-lime); }
+  &:not(:disabled):focus-visible {
+    outline: 3px solid var(--creator-lime);
+    outline-offset: 2px;
+  }
+  &:disabled {
+    color: var(--control-text);
+    opacity: .4;
+    cursor: not-allowed;
+  }
 }
-.hardware-console > [aria-label="Touch workspace"] button:disabled {
+.hardware-console > [aria-label="Touch workspace"] .pad-colour-swatch:disabled {
   opacity: .45;
   cursor: not-allowed;
 }
-.hardware-workspace :is(.project-surface, .sample-surface, .perform-surface) h1 {
+.hardware-workspace :is(.project-surface, .sample-surface, .perform-surface) h1,
+.hardware-workspace .project-your {
+  font-family: var(--creator-font-heading);
   font-size: var(--creator-heading-size);
-  font-weight: 400;
+  font-weight: 500;
+  line-height: 20px;
 }
 .hardware-workspace :is(.sequence-param-card output, .perform-fader-value) {
   font-size: var(--creator-value-size);
@@ -2124,8 +2220,8 @@ button.physical-brand[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--
 }
 
 .physical-encoder:disabled { opacity: .45; }
-.physical-encoder:not(:disabled):hover { background: rgb(241 242 233 / 8%); }
-.physical-encoder:not(:disabled):active { box-shadow: 0 0 0 2px var(--creator-lime); }
+.physical-encoder:not(:disabled):hover::before { background: rgb(241 242 233 / 8%); }
+.physical-encoder:not(:disabled):active::before { box-shadow: 0 0 0 2px var(--creator-lime); }
 
 /* Readbacks occupy Sequence's former context row, preserving all eight rows. */
 .encoder-readbacks {
