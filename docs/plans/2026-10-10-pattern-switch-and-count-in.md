@@ -1769,3 +1769,58 @@ Documentation impact: required. Update `/platform/web-runtime/` and
 and record the settled decision in the existing Performance encoding decision.
 Implementation, verification, merge and physical/hearing acceptance remain
 separate. No cleanup is authorized by this followup.
+
+## S6 followup — preserve ordinary Pad observer timeout semantics in Creator
+
+Local base `61c4ebfd5be2135338bf228db32482c347137cbe` integrates main's
+ASSIGN behavior with S6. Refreshed main
+`45c8f479aa350cd490a100044a4723428976e2be` adds rail labels and SHIFT ordering
+without changing the outstanding input-error classification. The SDK's existing
+ordinary-input test proves that the original one-second observer can reject
+while its original input remains retained and the SDK stays running. Creator
+currently turns every `HOST_TIMEOUT` into `restart-required`, contradicting the
+ordinary-input decision above. The precise originating operation in the
+original full Creator Record-off failure remains unknown.
+
+The precommit refresh to `50ecc7107a3347878e1d5aa7f72b031d7d58eb98`
+adds the single-column Project browser. Its App delta moves the Sound Sets
+entry and its tests change Project selection/navigation; it does not change
+the input observer, diagnostics callback, or ordinary/fatal timeout premise.
+
+Declared files: `apps/creator-web/src/runtime/input_controller.ts`,
+`apps/creator-web/src/app.tsx`,
+`apps/creator-web/test/input_controller.test.ts`,
+`apps/creator-web/test/workspace_shell.test.tsx`, this plan, and
+`apps/docs-site/docs/hosts/creator-interactions.mdx`.
+
+First establish an actual short RED through the real controller/reducer and
+rendered App: ordinary pending input expiry must leave Record-off usable while
+retaining the original error and same-key physical Release. Classify only a
+trigger/Release observer's `HOST_TIMEOUT` with `details.pending === true` and
+the same SDK's current `running` state and null error as nonfatal. Do not
+publish a ready state, clear another failure, cancel retained work, manufacture
+consumption, or change the original caller deadline. Unknown timeouts, failed
+recovery probes, activation, inspection, Sample controls and protocol failures
+retain their existing fatal handling. Keep the original error in the bounded
+Host diagnostics without changing history-failure bookkeeping.
+
+Lowest-tier verification: deterministic new cases fail on the original Host
+source; after repair, run both complete owning component files and TypeScript,
+then the full Creator unit suite and original complete Portal check. The
+rendered case must actually submit Record-off with the original session and a
+new command, then observe recording false and playback continuing. Preserve
+fatal negative controls. These fixtures do not prove Native/OPFS completion or
+physical audio. The original complete eight-group Creator proof, other S6
+acceptance obligations and current-head shipping evidence remain required;
+this repair does not erase the original full-run failure.
+
+### Version Management
+
+This corrective Host projection change is included in S6's existing Creator
+Host version debt. No additional manifest identity, Product Build, snapshot or
+release is allocated by this Task; SDK and wire contracts are unchanged.
+
+### Documentation Impact
+
+Documentation impact: required. Update `/hosts/creator-interactions/` to
+distinguish a retained ordinary Pad observer expiry from a failed Runtime.

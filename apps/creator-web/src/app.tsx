@@ -871,6 +871,10 @@ function Workspace({
     if (!session || runtimePhase !== "ready") return;
     const common = {
       session,
+      onInputObservationError: (error: unknown) => {
+        const record = diagnosticRecord("Pad input", error);
+        setDiagnostics((records) => appendDiagnostic(records, record));
+      },
       getActiveBank: () => stateRef.current.activeBank,
       isAssigned: (slot: number) =>
         (stateRef.current.project.current?.pads[slot]?.assetId !== null &&

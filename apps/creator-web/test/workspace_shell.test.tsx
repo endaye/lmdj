@@ -6837,3 +6837,121 @@ test("Perform Pad steps preserve held FX, HOLD, monitor volume and transport own
     expect(fixture.inspectProject()).toEqual(truth);
   } finally {rendered.unmount(); vi.unstubAllGlobals();}
 });
+
+
+test.each(["running", "failed"] as const)(
+  "ordinary retained Pad timeout leaves Record-off reachable only while SDK is %s",
+  async sdkState => {
+    const fixture = mutableSampleRuntimeFixture();
+    // This component seam publishes running only at boot. No later state
+    // event, prop replacement or fake readiness transition repairs the UI.
+    const publishRunning = vi.fn(controlledSampleAudio(fixture.session));
+    const pending = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+    const observedRejection = pending.promise.catch(error => error);
+    const trigger = vi.spyOn(fixture.session, "trigger")
+      .mockImplementation((_slot, _velocity, _source, _key) => pending.promise);
+    const release = vi.spyOn(fixture.session, "release").mockResolvedValue(true);
+    const close = vi.spyOn(fixture.session, "close");
+    const initialStatus = engagedTransportStatus({recording: true});
+    let actualStatus = initialStatus;
+    let originalSessionId: string | undefined;
+    const inspect = vi.fn(async (sessionId: string) => {
+      originalSessionId ??= sessionId;
+      return actualStatus;
+    });
+    const request = vi.fn(async (command: PatternTransportRequest): Promise<PatternTransportTicket> => {
+      actualStatus = engagedTransportStatus({playing: true, recording: false,
+        transportEpoch: command.expectedEpoch, commandId: command.commandId});
+      return {sessionId: command.sessionId, commandId: command.commandId,
+        submit: "accepted", status: actualStatus};
+    });
+    const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+      inspectPatternTransport: inspect,
+      requestPatternTransport: request,
+    });
+    const factory = vi.fn(() => session);
+    const rendered = render(<App initialState={ready} runtimeFactory={factory} />);
+    const recordKey = () => within(screen.getByTestId("physical-controls"))
+      .getByRole("button", {name: /^Record\b/});
+    const playStopKey = () => within(screen.getByTestId("physical-controls"))
+      .getByRole("button", {name: /^Play\/Stop/});
+    const timeout = Object.assign(new Error("original Pad observer deadline expired"), {
+      code: "HOST_TIMEOUT", details: {pending: true},
+    });
+    try {
+      await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+      await publishRunning();
+      const diagnostics = session.diagnostics;
+      let actualSdkState: "running" | "failed" = "running";
+      session.diagnostics = () => ({...diagnostics(), state: actualSdkState,
+        error_code: actualSdkState === "failed" ? "HOST_TIMEOUT" : null});
+      await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+      await waitFor(() => expect(transportPhase()).toBe("recording"));
+      // Establish actual rendered admission before introducing the error;
+      // a boot/monitor failure must not masquerade as this regression's RED.
+      await waitFor(() => expect(recordKey()).toHaveProperty("disabled", false));
+      expect(recordKey().getAttribute("aria-current")).toBe("page");
+      expect(screen.getByTestId("creator-phase").textContent).toBe("running");
+      expect(session.diagnostics().state).toBe("running");
+      expect(request).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, {key: "z", code: "KeyZ"});
+      await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
+      const originalKey = trigger.mock.calls[0]![3];
+      expect(originalKey).toBeDefined();
+      expect(trigger.mock.calls[0]!.slice(0, 3)).toEqual([0, 100, "keyboard"]);
+      actualSdkState = sdkState;
+      await act(async () => {pending.reject(timeout);});
+      await flushAsyncTurns();
+      expect(await observedRejection).toBe(timeout);
+      fireEvent.keyUp(window, {key: "z", code: "KeyZ"});
+      await flushAsyncTurns();
+      expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+      expect(session.diagnostics().state).toBe(sdkState);
+      expect(session.diagnostics().error_code)
+        .toBe(sdkState === "failed" ? "HOST_TIMEOUT" : null);
+      expect(publishRunning).toHaveBeenCalledTimes(1);
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+      if (sdkState === "failed") {
+        expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
+        expect(recordKey()).toHaveProperty("disabled", true);
+        expect(playStopKey()).toHaveProperty("disabled", true);
+        expect(request).not.toHaveBeenCalled();
+        return;
+      }
+      expect(screen.getByTestId("creator-phase").textContent).toBe("running");
+      expect(recordKey()).toHaveProperty("disabled", false);
+      expect(playStopKey()).toHaveProperty("disabled", false);
+      await userEvent.click(recordKey());
+      await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      const command = request.mock.calls[0]![0];
+      expect(originalSessionId).toBeDefined();
+      expect(command).toMatchObject({sessionId: originalSessionId, intent: "record",
+        expectedEpoch: initialStatus.transportEpoch + 1, expectedRevision: null});
+      expect(command.commandId).toEqual(expect.any(String));
+      expect(command.commandId).not.toBe(initialStatus.commandId);
+      await waitFor(() => expect(transportPhase()).toBe("playing"));
+      expect(screen.getByTestId("creator-phase").textContent).toBe("running");
+      expect(recordKey().getAttribute("aria-current")).toBeNull();
+      expect(playStopKey().getAttribute("aria-current")).toBe("page");
+      expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+      expect(publishRunning).toHaveBeenCalledTimes(1);
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", {name: "System"}));
+      fireEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+      const diagnosticsPanel = screen.getByRole("region", {name: "Developer diagnostics"});
+      const originalErrorRecord = within(diagnosticsPanel).getByText(timeout.message).closest("li");
+      expect(originalErrorRecord).not.toBeNull();
+      expect(within(originalErrorRecord!).getByText("Pad input")).toBeTruthy();
+      expect(within(originalErrorRecord!).getByText("HOST_TIMEOUT")).toBeTruthy();
+      expect(JSON.parse(originalErrorRecord!.querySelector("pre")!.textContent!))
+        .toEqual({pending: true});
+    } finally {
+      pending.reject(timeout);
+      await observedRejection;
+      rendered.unmount();
+      await flushAsyncTurns();
+    }
+  },
+);

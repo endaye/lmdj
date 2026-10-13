@@ -66,6 +66,7 @@ export type PerformancePadInputEvent = Extract<
 >;
 
 interface CreatorInputControllerCommonOptions {
+  onInputObservationError?: (error: unknown) => void;
   onAdverseLifecycle?: () => void;
   canUsePad?: (slot: number) => boolean;
   onEmptyPadPress?: (slot: number, key: object, source: RuntimeTriggerSource,
@@ -389,6 +390,21 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     );
   }
 
+  function reportInputObservationError(error: unknown) {
+    const issue = error as TypedRuntimeError | null;
+    if (issue?.code === "HOST_TIMEOUT" && issue.details?.pending === true) {
+      const diagnostics = session.diagnostics();
+      if (diagnostics.state === "running" && diagnostics.error_code === null) {
+        // Only this caller's observation expired. The SDK still owns the
+        // original input and its eventual consumption; do not invent a Host
+        // failure or overwrite another Creator failure with a ready state.
+        options.onInputObservationError?.(error);
+        return;
+      }
+    }
+    dispatch(inputErrorAction(error));
+  }
+
   function submitPhysicalRelease(gestureKey: object, physical: PhysicalGesture) {
     if (typeof session.release !== "function" || !physical.triggerInvoked ||
         !physical.released || physical.releaseSubmitted) return;
@@ -410,7 +426,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
           errorCode: "HOST_PROTOCOL_MISMATCH"});
       }
     }, (error: unknown) => {
-      if (!disposed) dispatch(inputErrorAction(error));
+      if (!disposed) reportInputObservationError(error);
     }).finally(() => {
       // Only our observation ends here. SDK owner/consumer debts remain there.
       if (physicalGestures.get(gestureKey) === physical) {
@@ -718,7 +734,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
             if (mode === "loop_toggle") loopToggleSlots.delete(slot);
             if (clearedGesture) dispatch({type: "pad-released", slot});
           }
-          dispatch(inputErrorAction(error));
+          reportInputObservationError(error);
         }
       },
     );

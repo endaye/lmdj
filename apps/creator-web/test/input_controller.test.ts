@@ -22,6 +22,7 @@ import type {
 import {
   creatorReducer,
   initialCreatorState,
+  selectCanStartGesture,
   type CreatorAction,
   type CreatorState,
 } from "../src/state/creator_state";
@@ -213,6 +214,7 @@ function deferred<T>() {
 }
 
 interface SampleFixtureOptions {
+  onInputObservationError?: (error: unknown) => void;
   onEmptyPadPress?: (slot: number, key: object, source: import("../src/runtime/runtime_types").RuntimeTriggerSource,
     activation: Promise<boolean> | null) => boolean;
   onEmptyPadRelease?: (key: object) => void;
@@ -288,6 +290,8 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
   };
   const controller = createCreatorInputController({
     session,
+    ...(options.onInputObservationError === undefined
+      ? {} : {onInputObservationError: options.onInputObservationError}),
     ...(options.onEmptyPadPress === undefined ? {} : {onEmptyPadPress: options.onEmptyPadPress}),
     ...(options.onEmptyPadRelease === undefined ? {} : {onEmptyPadRelease: options.onEmptyPadRelease}),
     ...(options.onEmptyPadCancel === undefined ? {} : {onEmptyPadCancel: options.onEmptyPadCancel}),
@@ -2546,3 +2550,181 @@ describe("shared gesture reservation at Creator input ingress", () => {
     }
   });
 });
+
+
+test.each(["running", "failed"] as const)(
+  "retained ordinary Pad timeout keeps the live Host usable only while SDK is %s",
+  async sdkState => {
+    const onInputObservationError = vi.fn();
+    const value = sampleFixture({onInputObservationError});
+    const pending = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+    const observedRejection = pending.promise.catch(error => error);
+    const trigger = vi.fn((slot: number, velocity: number, source: RuntimeTriggerSource,
+      originalKey?: object) => {
+      value.triggerKeys.push(originalKey);
+      value.triggers.push({slot, velocity, source});
+      return pending.promise;
+    });
+    value.session.trigger = trigger;
+    const diagnostics = value.session.diagnostics;
+    let actualSdkState: "running" | "failed" = "running";
+    value.session.diagnostics = () => ({...diagnostics(), state: actualSdkState,
+      error_code: actualSdkState === "failed" ? "HOST_TIMEOUT" : null});
+    const timeout = Object.assign(new Error("original Pad observer deadline expired"), {
+      code: "HOST_TIMEOUT", details: {pending: true},
+    });
+    try {
+      expect(value.controller.keyDown({code: "KeyZ", target: document.body})).toBe(true);
+      await settle();
+      await settle();
+      expect(trigger).toHaveBeenCalledTimes(1);
+      const originalKey = value.triggerKeys[0];
+      expect(originalKey).toBeDefined();
+      expect(value.state().runtime.phase).toBe("ready");
+      actualSdkState = sdkState;
+      pending.reject(timeout);
+      await settle();
+      await settle();
+      expect(await observedRejection).toBe(timeout);
+      // Public rejection is observed; it cannot erase this real adapter's
+      // physical debt or substitute an inferred release/owner retirement.
+      expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
+      await settle();
+      expect(value.releaseKeys).toEqual([originalKey]);
+      expect(value.releases).toEqual([{slot: 0, source: "keyboard"}]);
+      expect(value.session.diagnostics().state).toBe(sdkState);
+      expect(value.session.diagnostics().error_code)
+        .toBe(sdkState === "failed" ? "HOST_TIMEOUT" : null);
+      expect(value.state().runtime.phase)
+        .toBe(sdkState === "running" ? "ready" : "restart-required");
+      expect(selectCanStartGesture(value.state())).toBe(sdkState === "running");
+      if (sdkState === "running") {
+        expect(onInputObservationError).toHaveBeenCalledTimes(1);
+        expect(onInputObservationError.mock.calls[0]![0]).toBe(timeout);
+        expect(value.actions.filter(action => action.type === "runtime-changed")).toEqual([]);
+      } else {
+        expect(onInputObservationError).not.toHaveBeenCalled();
+        expect(value.actions).toContainEqual({type: "runtime-changed",
+          phase: "restart-required", errorCode: "HOST_TIMEOUT"});
+      }
+      value.controller.dispose();
+      expect(value.releaseKeys).toEqual([originalKey]);
+    } finally {
+      pending.reject(timeout);
+      value.controller.dispose();
+      await observedRejection;
+      await settle();
+    }
+  },
+);
+
+
+test("a retained ordinary Pad timeout cannot overwrite an independent Creator failure", async () => {
+  const onInputObservationError = vi.fn();
+  const value = sampleFixture({onInputObservationError});
+  const pending = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+  const observedRejection = pending.promise.catch(error => error);
+  value.session.trigger = (_slot, _velocity, _source, originalKey) => {
+    value.triggerKeys.push(originalKey);
+    return pending.promise;
+  };
+  const independentFailure = {type: "runtime-changed" as const,
+    phase: "failed" as const, errorCode: "HOST_PROTOCOL_MISMATCH"};
+  const timeout = Object.assign(new Error("original Pad observer deadline expired"), {
+    code: "HOST_TIMEOUT", details: {pending: true},
+  });
+  try {
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    await settle();
+    expect(value.triggerKeys).toHaveLength(1);
+    const originalKey = value.triggerKeys[0];
+    expect(originalKey).toBeDefined();
+    value.dispatch(independentFailure);
+    expect(value.session.diagnostics().state).toBe("running");
+    expect(value.session.diagnostics().error_code).toBeNull();
+    pending.reject(timeout);
+    await settle();
+    await settle();
+    expect(await observedRejection).toBe(timeout);
+    value.controller.keyUp({code: "KeyZ"});
+    await settle();
+    expect(value.releaseKeys).toEqual([originalKey]);
+    expect(value.state().runtime).toMatchObject({phase: "failed",
+      errorCode: "HOST_PROTOCOL_MISMATCH"});
+    expect(selectCanStartGesture(value.state())).toBe(false);
+    expect(value.actions.filter(action => action.type === "runtime-changed"))
+      .toEqual([independentFailure]);
+  } finally {
+    pending.reject(timeout);
+    value.controller.dispose();
+    await observedRejection;
+    await settle();
+  }
+});
+
+
+test.each(["running", "failed"] as const)(
+  "retained physical Release timeout keeps the live Host usable only while SDK is %s",
+  async sdkState => {
+    const onInputObservationError = vi.fn();
+    const value = sampleFixture({onInputObservationError});
+    const pending = deferred<boolean>();
+    const observedRejection = pending.promise.catch(error => error);
+    const release = vi.fn((slot: number, source: RuntimeTriggerSource, originalKey?: object) => {
+      value.releaseKeys.push(originalKey);
+      value.releases.push({slot, source});
+      return pending.promise;
+    });
+    value.session.release = release;
+    const diagnostics = value.session.diagnostics;
+    let actualSdkState: "running" | "failed" = "running";
+    value.session.diagnostics = () => ({...diagnostics(), state: actualSdkState,
+      error_code: actualSdkState === "failed" ? "HOST_TIMEOUT" : null});
+    const timeout = Object.assign(new Error("original physical Release observer deadline expired"), {
+      code: "HOST_TIMEOUT", details: {pending: true},
+    });
+    try {
+      expect(value.controller.keyDown({code: "KeyZ", target: document.body})).toBe(true);
+      await settle();
+      await settle();
+      expect(value.triggerKeys).toHaveLength(1);
+      const originalKey = value.triggerKeys[0];
+      expect(originalKey).toBeDefined();
+      expect(value.state().runtime.phase).toBe("ready");
+      actualSdkState = sdkState;
+      expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
+      expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+      pending.reject(timeout);
+      await settle();
+      await settle();
+      expect(await observedRejection).toBe(timeout);
+      expect(value.session.diagnostics().state).toBe(sdkState);
+      expect(value.session.diagnostics().error_code)
+        .toBe(sdkState === "failed" ? "HOST_TIMEOUT" : null);
+      expect(value.state().runtime.phase)
+        .toBe(sdkState === "running" ? "ready" : "restart-required");
+      expect(selectCanStartGesture(value.state())).toBe(sdkState === "running");
+      if (sdkState === "running") {
+        expect(onInputObservationError).toHaveBeenCalledTimes(1);
+        expect(onInputObservationError.mock.calls[0]![0]).toBe(timeout);
+        expect(value.actions.filter(action => action.type === "runtime-changed")).toEqual([]);
+      } else {
+        expect(onInputObservationError).not.toHaveBeenCalled();
+        expect(value.actions).toContainEqual({type: "runtime-changed",
+          phase: "restart-required", errorCode: "HOST_TIMEOUT"});
+      }
+      // Rejecting the observer is neither a positive release receipt nor
+      // permission to submit a duplicate physical Release from cleanup.
+      expect(value.controller.keyUp({code: "KeyZ"})).toBe(false);
+      value.controller.dispose();
+      expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+      expect(value.releaseKeys).toEqual([originalKey]);
+    } finally {
+      pending.reject(timeout);
+      value.controller.dispose();
+      await observedRejection;
+      await settle();
+    }
+  },
+);
