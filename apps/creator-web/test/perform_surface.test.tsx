@@ -15,6 +15,7 @@ import {
   createPerformController,
   cutoffHzToPosition,
   cutoffPositionToHz,
+  selectLivePadGate,
   type PerformControllerDependencies,
 } from "../src/state/perform_state";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
@@ -1576,6 +1577,11 @@ test("a current replay poll reply still refreshes the playing state", async () =
 test("refuses to leave while replay neutral reset remains pending", async () => {
   const fixture = controllerFixture({maximumStatusQueries: 2,
     waitForStatusQuery: async () => {}});
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  fixture.controller.togglePadGate("solo", 63);
+  await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
   const session = fixture.runtime.session;
   (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
     .mockResolvedValue({replayId: "replay-1", state: "playing", resolvedRevision: 7,
@@ -1588,6 +1594,9 @@ test("refuses to leave while replay neutral reset remains pending", async () => 
   await expect(fixture.controller.leave()).rejects.toThrow(/neutral reset timed out/i);
   expect(fixture.controller.getState().replay?.state).toBe("playing");
   expect(fixture.controller.getState().replayNeutral).toBe(false);
+  expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind))
+    .toEqual(["pad_solo"]);
+  expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]);
 });
 
 test("renders saved replay after moving resampling to empty Pad capture", async () => {
@@ -1907,10 +1916,7 @@ function enableTypedCore(calls: ReturnType<typeof sessionFixture>["calls"]) {
   let applied = liveState();
   let sequence = "0";
   const apply = calls.liveControl.getMockImplementation()!;
-  calls.liveControl.mockImplementation(async (request) => {
-    const receipt = await apply(request);
-    sequence = receipt.controlSequence;
-    const intent = request.intent as Record<string, unknown>;
+  const updateMaskAndFx = (intent: Record<string, unknown>) => {
     if (intent.kind === "filter_parameter") {
       const field = {type: "type", cutoff_hz: "cutoffHz",
         resonance_milli: "resonanceMilli"}[intent.parameter as string];
@@ -1926,8 +1932,29 @@ function enableTypedCore(calls: ReturnType<typeof sessionFixture>["calls"]) {
           ? {value: intent.value, engaged: true, frozen: false}
           : {...applied.otherFx[fx], engaged: false, frozen: applied.hold,
               value: applied.hold ? applied.otherFx[fx].value : 0}}};
+    } else if (intent.kind === "pad_mute" || intent.kind === "pad_solo") {
+      const field = intent.kind === "pad_mute" ? "mutedSlots" : "soloSlots";
+      const slots = new Set(applied[field]);
+      if (intent.enabled) slots.add(intent.slot as number);
+      else slots.delete(intent.slot as number);
+      applied = {...applied, [field]: [...slots].sort((a, b) => a - b)};
+    } else if (intent.kind === "clear_pad_gates") {
+      applied = {...applied, mutedSlots: [], soloSlots: []};
     } else if (intent.kind === "hold_on" || intent.kind === "hold_off") {
       applied = {...applied, hold: intent.kind === "hold_on"};
+    }
+  };
+  calls.liveControl.mockImplementation(async (request) => {
+    const receipt = await apply(request);
+    sequence = receipt.controlSequence;
+    updateMaskAndFx(request.intent);
+    return receipt;
+  });
+  const raw = calls.raw.getMockImplementation()!;
+  calls.raw.mockImplementation(async (request) => {
+    const receipt = await raw(request);
+    if (["pad_mute", "pad_solo", "clear_pad_gates"].includes(String(request.event.kind))) {
+      updateMaskAndFx(request.event);
     }
     return receipt;
   });
@@ -2810,4 +2837,403 @@ test("a legacy Filter gesture opened before the first status answer keeps its ro
   expect(screen.getByText("20.0 kHz")).toBeTruthy();
   expect(Object.values(current!.bindings).map((binding) => binding.label))
     .toEqual(["Cutoff", "Delay", "Reverb"]);
+});
+
+// C2: the masks below are producer readbacks, never a Host-authored Project.
+test("current Pad controls expose independent multi-Solo and Mute priority across all 64 slots", async () => {
+  const fixture = controllerFixture();
+  enableTypedCore(fixture.runtime.calls);
+  const view = render(<PerformSurface controller={fixture.controller} project={project}
+    bank={0} currentPad={0} />);
+  await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", {name: "Solo A01"}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true"));
+  view.rerender(<PerformSurface controller={fixture.controller} project={project}
+    bank={3} currentPad={63} />);
+  expect(screen.getByRole("status", {name: "Live Pad status"}).textContent).toContain("Silenced · other Pads soloed");
+  fireEvent.click(screen.getByRole("button", {name: "Solo D16"}));
+  await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([0, 63]));
+  fireEvent.click(screen.getByRole("button", {name: "Mute D16"}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Mute D16"}).getAttribute("aria-pressed")).toBe("true"));
+  expect(screen.getByRole("button", {name: "Solo D16"}).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("status", {name: "Live Pad status"}).textContent).toContain("Silenced · Mute");
+  expect(selectLivePadGate(fixture.controller.getState().padGates, 0)).toEqual({muted: false, solo: true, silenced: false});
+  view.rerender(<PerformSurface controller={fixture.controller} project={project}
+    bank={0} currentPad={0} />);
+  expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", {name: "Mute A01"}).getAttribute("aria-pressed")).toBe("false");
+  expect(fixture.runtime.session.savePerformance).not.toHaveBeenCalled();
+});
+
+test("Pad gate admission stays pending until the applied mask is read back", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const stale = await calls.liveStatus();
+  const delayed = deferred<unknown>();
+  calls.liveStatus.mockImplementationOnce(() => delayed.promise);
+  fixture.controller.togglePadGate("mute", 63);
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(1));
+  expect(fixture.controller.getState().padGates).toMatchObject({mutedSlots: [], provenance: "pending"});
+  fixture.controller.togglePadGate("solo", 0);
+  expect(calls.liveControl).toHaveBeenCalledTimes(1);
+  delayed.resolve({...stale as object, acceptedControlSequence: "1"});
+  await waitFor(() => expect(fixture.controller.getState().padGates).toMatchObject({mutedSlots: [63], provenance: "core"}));
+});
+
+test("unavailable Pad gates preserve unknown state and send no fabricated neutral command", async () => {
+  const fixture = controllerFixture();
+  render(<PerformSurface controller={fixture.controller} project={project} bank={0} currentPad={0} />);
+  expect(screen.getByRole("button", {name: "Mute A01"})).toHaveProperty("disabled", true);
+  expect(screen.getByRole("status", {name: "Live Pad status"}).textContent).toContain("Unavailable");
+  fixture.controller.togglePadGate("mute", 0);
+  await fixture.controller.leave();
+  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
+});
+
+test("leave waits for the far-side empty masks and HOLD cannot preserve Pad gates", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  fixture.controller.togglePadGate("solo", 63);
+  await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+  fixture.controller.toggleHold();
+  await waitFor(() => expect(fixture.controller.getState().hold).toBe(true));
+  await fixture.controller.refreshLiveStatus();
+  const old = await calls.liveStatus();
+  const wait = deferred<unknown>();
+  calls.liveStatus.mockImplementationOnce(() => wait.promise);
+  let left = false;
+  const leaving = fixture.controller.leave().then(() => { left = true; });
+  await waitFor(() => expect(calls.liveControl.mock.calls.at(-1)?.[0].intent.kind).toBe("clear_pad_gates"));
+  fixture.controller.togglePadGate("mute", 0);
+  expect(left).toBe(false);
+  wait.resolve({...old as object, acceptedControlSequence: "3"});
+  await leaving;
+  expect(fixture.controller.getState().padGates).toMatchObject({mutedSlots: [], soloSlots: [], provenance: "core"});
+  expect(fixture.controller.getState().hold).toBe(true);
+  expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind)).toEqual(["pad_solo", "hold_on", "clear_pad_gates"]);
+});
+
+test("a Pad control queued for an old epoch cannot mutate its replacement", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  const delayed = deferred<Awaited<ReturnType<typeof calls.liveControl>>>();
+  calls.liveControl.mockImplementationOnce(() => delayed.promise);
+  fixture.controller.turnFx("delay", 1);
+  await waitFor(() => expect(calls.liveControl).toHaveBeenCalledTimes(1));
+  fixture.controller.togglePadGate("mute", 63);
+  calls.liveStatus.mockResolvedValue(liveStatusAvailable({controlEpoch: "replacement"}));
+  await fixture.controller.refreshLiveStatus();
+  delayed.resolve({commandId: "old", controlEpoch: LIVE_EPOCH, controlSequence: "1",
+    gestureGeneration: "old", accepted: true, applied: true, replayed: false, projectRevision: null});
+  await fixture.controller.refreshLiveStatus();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(calls.liveControl).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.getState().padGates.mutedSlots).toEqual([]);
+});
+
+test("recording freezes preexisting Pad masks and journals later changes and leave cleanup", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  fixture.controller.togglePadGate("solo", 63);
+  await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+  let initial: unknown;
+  calls.begin.mockImplementation(async (request) => {
+    initial = (await calls.liveStatus() as ReturnType<typeof liveStatusAvailable>).applied;
+    return headeredBegin()(request);
+  });
+  await fixture.controller.record();
+  expect(initial).toMatchObject({soloSlots: [63], mutedSlots: []});
+  expect(calls.raw).not.toHaveBeenCalled();
+  fixture.controller.togglePadGate("mute", 63);
+  await waitFor(() => expect(fixture.controller.getState().padGates.mutedSlots).toEqual([63]));
+  await fixture.controller.leave();
+  expect(calls.raw.mock.calls.map(([request]) => request.event)).toEqual([
+    {kind: "pad_mute", slot: 63, enabled: true}, {kind: "clear_pad_gates"},
+  ]);
+  expect(fixture.controller.getState().recording.phase).toBe("stopped");
+  expect(fixture.controller.getState().padGates).toMatchObject({mutedSlots: [], soloSlots: []});
+  expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind)).toEqual(["pad_solo"]);
+});
+
+for (const exit of ["leave", "close"] as const) {
+  test(`Pad gate ${exit} rejects an owner epoch replacement during reset acknowledgement`, async () => {
+    const fixture = controllerFixture();
+    const {calls} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    fixture.controller.togglePadGate("solo", 63);
+    await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+    const replacementEpoch = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const replacement = liveState({mutedSlots: [9]});
+    calls.liveStatus.mockResolvedValue(liveStatusAvailable({
+      controlEpoch: replacementEpoch, accepted: replacement, applied: replacement,
+    }));
+    await expect(fixture.controller[exit]()).rejects.toThrow(
+      "Performance Pad gate owner changed before reset acknowledgement");
+    expect(calls.liveControl.mock.calls.filter(([request]) =>
+      request.intent.kind === "clear_pad_gates")).toHaveLength(1);
+    expect(calls.liveControl.mock.calls.every(([request]) =>
+      request.controlEpoch === LIVE_EPOCH)).toBe(true);
+    expect(fixture.controller.getState().padGates).not.toMatchObject({
+      mutedSlots: [], soloSlots: [], provenance: "core",
+    });
+  });
+}
+
+test("a refused gate reset blocks leave instead of declaring empty masks", async () => {
+  const fixture = controllerFixture({maximumStatusQueries: 2, waitForStatusQuery: async () => {}});
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  fixture.controller.togglePadGate("mute", 0);
+  await waitFor(() => expect(fixture.controller.getState().padGates.mutedSlots).toEqual([0]));
+  calls.liveControl.mockRejectedValueOnce(new Error("reset refused"));
+  await expect(fixture.controller.leave()).rejects.toThrow("reset refused");
+  expect(fixture.controller.getState().padGates.mutedSlots).toEqual([0]);
+});
+
+for (const exit of ["leave", "close"] as const) {
+  test(`${exit} retires an active Replay publisher before acknowledging empty Pad masks`, async () => {
+    const fixture = controllerFixture({maximumStatusQueries: 2,
+      waitForStatusQuery: async () => {}});
+    const {calls, session} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    fixture.controller.togglePadGate("solo", 63);
+    await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+    let replaying = true;
+    const read = calls.liveStatus.getMockImplementation()!;
+    calls.liveStatus.mockImplementation(async () => {
+      const status = await read() as ReturnType<typeof liveStatusAvailable>;
+      // The recorded mask remains published while Replay owns the sink.
+      // Clearing the live mask alone cannot establish an empty readback.
+      return replaying ? {...status, applied: {...status.applied, soloSlots: [63]}} : status;
+    });
+    (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({replayId: "replay-1", state: "playing", resolvedRevision: 7,
+        eventCursor: 0, eventCount: 4, projectRevision: null});
+    (session.stopPerformanceReplay as ReturnType<typeof vi.fn>)
+      .mockImplementation(async ({requestId}) => {
+        replaying = false;
+        return {replayId: "replay-1", requestId, state: "stopped", resolvedRevision: 7,
+          eventCursor: 0, eventCount: 4, replayed: false, projectRevision: null};
+      });
+    await fixture.controller.beginReplay(ids.performance);
+    await fixture.controller[exit]();
+    expect(session.stopPerformanceReplay).toHaveBeenCalledTimes(1);
+    expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind))
+      .toEqual(["pad_solo", "clear_pad_gates"]);
+    const status = await calls.liveStatus() as ReturnType<typeof liveStatusAvailable>;
+    expect(status.applied).toMatchObject({mutedSlots: [], soloSlots: []});
+    if (exit === "leave") {
+      expect(fixture.controller.getState().padGates)
+        .toMatchObject({mutedSlots: [], soloSlots: [], provenance: "core"});
+    }
+    expect(calls.raw).not.toHaveBeenCalled();
+  });
+}
+
+for (const exit of ["leave", "close"] as const) {
+  test(`P2 ${exit} awaits an admitted begin and its terminal publisher before mask clear`, async () => {
+    const fixture = controllerFixture();
+    const {calls, session} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    fixture.controller.togglePadGate("solo", 63);
+    await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+    const beginReply = deferred<unknown>();
+    const neutralFence = deferred<void>();
+    const clearReply = deferred<void>();
+    let publishing = false;
+    const begin = session.beginPerformanceReplay as ReturnType<typeof vi.fn>;
+    const stop = session.stopPerformanceReplay as ReturnType<typeof vi.fn>;
+    begin.mockImplementation(() => beginReply.promise.then((reply) => {
+      publishing = true;
+      return reply;
+    }));
+    stop.mockImplementation(async ({replayId, requestId}) => {
+      await neutralFence.promise;
+      publishing = false;
+      return {replayId, requestId, state: "stopped", resolvedRevision: 7,
+        eventCursor: 0, eventCount: 4, replayed: false, projectRevision: null};
+    });
+    const apply = calls.liveControl.getMockImplementation()!;
+    calls.liveControl.mockImplementation(async (request) => {
+      if (request.intent.kind === "clear_pad_gates") await clearReply.promise;
+      return apply(request);
+    });
+    const entering = fixture.controller.beginReplay(ids.performance);
+    let exited = false;
+    let exitError: unknown;
+    const leaving = fixture.controller[exit]().then(() => { exited = true; },
+      (error) => { exitError = error; });
+    try {
+      // On the frozen candidate this puts begin's reply inside the exit's
+      // post-check clear wait. The repair instead waits for admitted begin.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      beginReply.resolve({replayId: begin.mock.calls[0]![0].replayId,
+        state: "playing", resolvedRevision: 7, eventCursor: 0, eventCount: 4,
+        projectRevision: null});
+      await entering;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(stop, "admitted begin's publisher must reach Stop before clear")
+        .toHaveBeenCalledTimes(1);
+      expect(exited).toBe(false);
+      expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind))
+        .toEqual(["pad_solo"]);
+    } finally {
+      neutralFence.resolve();
+      clearReply.resolve();
+      await leaving;
+    }
+    expect(exitError).toBeUndefined();
+    expect(exited).toBe(true);
+    expect(publishing, "exit cannot complete with a live Replay publisher").toBe(false);
+    const status = await calls.liveStatus() as ReturnType<typeof liveStatusAvailable>;
+    expect(status.applied).toMatchObject({mutedSlots: [], soloSlots: []});
+  });
+
+  test(`P2 ${exit} refuses a new begin while exit acknowledgement is pending`, async () => {
+    const fixture = controllerFixture();
+    const {calls, session} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    fixture.controller.togglePadGate("solo", 63);
+    await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+    const clearReply = deferred<void>();
+    const apply = calls.liveControl.getMockImplementation()!;
+    calls.liveControl.mockImplementation(async (request) => {
+      if (request.intent.kind === "clear_pad_gates") await clearReply.promise;
+      return apply(request);
+    });
+    const begin = session.beginPerformanceReplay as ReturnType<typeof vi.fn>;
+    begin.mockResolvedValue({replayId: "late-begin", state: "stopped",
+      resolvedRevision: 7, eventCursor: 0, eventCount: 0, projectRevision: null});
+    const leaving = fixture.controller[exit]();
+    try {
+      await waitFor(() => expect(calls.liveControl.mock.calls.at(-1)?.[0].intent.kind)
+        .toBe("clear_pad_gates"));
+      await fixture.controller.beginReplay(ids.performance);
+      expect(begin, "exit admission must close Session begin admission").not.toHaveBeenCalled();
+    } finally {
+      clearReply.resolve();
+      await leaving;
+    }
+  });
+
+  test(`P2 ${exit} preserves an unknown admitted-begin failure instead of completing exit`, async () => {
+    const reportFailure = vi.fn();
+    const fixture = controllerFixture({reportFailure});
+    const {calls, session} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    fixture.controller.togglePadGate("solo", 63);
+    await waitFor(() => expect(fixture.controller.getState().padGates.soloSlots).toEqual([63]));
+    const beginReply = deferred<unknown>();
+    (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+      .mockImplementation(() => beginReply.promise);
+    const entering = fixture.controller.beginReplay(ids.performance);
+    const leaving = fixture.controller[exit]().then(
+      () => ({state: "completed" as const}),
+      (error: unknown) => ({state: "failed" as const, error}));
+    const error = Object.assign(new Error("Replay begin receipt unavailable"), {code: "HOST_TIMEOUT"});
+    beginReply.reject(error);
+    await entering;
+    const result = await leaving;
+    expect(result, "an unknown begin cannot establish publisher quiescence")
+      .toEqual({state: "failed", error});
+    expect(reportFailure).toHaveBeenCalledWith("Perform", error);
+    expect(fixture.controller.getState().error).not.toBeNull();
+    expect(calls.liveControl.mock.calls.map(([request]) => request.intent.kind))
+      .toEqual(["pad_solo"]);
+  });
+}
+
+for (const take of ["same", "other"] as const) {
+  test(`P2 already-playing ${take} take admits no redundant begin and preserves Stop, leave, new begin`, async () => {
+    const fixture = controllerFixture();
+    const {calls, session} = fixture.runtime;
+    enableTypedCore(calls);
+    await fixture.controller.refreshLiveStatus();
+    let activeReplayId: string | null = null;
+    let producerBegins = 0;
+    const begin = session.beginPerformanceReplay as ReturnType<typeof vi.fn>;
+    const stop = session.stopPerformanceReplay as ReturnType<typeof vi.fn>;
+    begin.mockImplementation(async ({replayId}) => {
+      if (activeReplayId !== null) {
+        // Facade refuses before a second producer begins. SDK keeps these
+        // validated fields but replaces the original human message.
+        throw Object.assign(new Error("Host request was rejected"), {
+          name: "HostProtocolError", code: "INVALID_ARGUMENT",
+          details: Object.freeze({active_replay_id: activeReplayId}),
+        });
+      }
+      producerBegins += 1;
+      activeReplayId = replayId;
+      return {replayId, state: "playing", resolvedRevision: 7,
+        eventCursor: 0, eventCount: 4, projectRevision: null};
+    });
+    stop.mockImplementation(async ({replayId, requestId}) => {
+      expect(replayId, "Stop must retire the original owner").toBe(activeReplayId);
+      activeReplayId = null;
+      return {replayId, requestId, state: "stopped", resolvedRevision: 7,
+        eventCursor: 0, eventCount: 4, replayed: false, projectRevision: null};
+    });
+    await fixture.controller.beginReplay(ids.performance);
+    const originalReplayId = fixture.controller.getState().replay!.replayId;
+    const nextTake = take === "same" ? ids.performance : "88888888-8888-4888-8888-888888888888";
+    await fixture.controller.beginReplay(nextTake);
+    expect(begin, "public playing truth must prevent a redundant Session begin")
+      .toHaveBeenCalledTimes(1);
+    expect(producerBegins).toBe(1);
+    expect(fixture.controller.getState().replay)
+      .toMatchObject({replayId: originalReplayId, state: "playing"});
+    await fixture.controller.stopReplay();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(activeReplayId).toBeNull();
+    await fixture.controller.leave();
+    const status = await calls.liveStatus() as ReturnType<typeof liveStatusAvailable>;
+    expect(status.applied).toMatchObject({mutedSlots: [], soloSlots: []});
+    await fixture.controller.beginReplay(nextTake);
+    expect(begin).toHaveBeenCalledTimes(2);
+    expect(begin.mock.calls[1]![0].performanceId).toBe(nextTake);
+    expect(producerBegins).toBe(2);
+    expect(fixture.controller.getState().replay)
+      .toMatchObject({replayId: activeReplayId, state: "playing"});
+    expect(fixture.controller.getState().error).toBeNull();
+  });
+}
+
+test("P2 a post-publication INVALID_ARGUMENT remains ambiguous and blocks exit", async () => {
+  const reportFailure = vi.fn();
+  const fixture = controllerFixture({reportFailure});
+  const {calls, session} = fixture.runtime;
+  enableTypedCore(calls);
+  await fixture.controller.refreshLiveStatus();
+  let publishing = false;
+  const error = Object.assign(new Error("Host request was rejected"), {
+    name: "HostProtocolError", code: "INVALID_ARGUMENT", details: Object.freeze({}),
+  });
+  (session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
+    .mockImplementation(async () => {
+      publishing = true; // producer published, but header/reset outcome is unknown
+      throw error;
+    });
+  await fixture.controller.beginReplay(ids.performance);
+  await expect(fixture.controller.leave()).rejects.toBe(error);
+  expect(publishing).toBe(true);
+  expect(reportFailure).toHaveBeenCalledWith("Perform", error);
+  expect(calls.liveControl).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().error).not.toBeNull();
+  expect(fixture.controller.getState().replay).toBeNull();
 });

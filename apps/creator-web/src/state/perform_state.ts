@@ -166,6 +166,22 @@ function headeredFxEngage(
   return {kind: "fx_engage", fx, value} as PerformanceHeaderedEvent;
 }
 
+export interface LivePadGates {
+  readonly mutedSlots: readonly number[];
+  readonly soloSlots: readonly number[];
+  readonly provenance: "core" | "pending" | "unavailable";
+}
+
+const PAD_GATES_UNAVAILABLE: LivePadGates = Object.freeze({
+  mutedSlots: Object.freeze([]), soloSlots: Object.freeze([]), provenance: "unavailable",
+});
+
+export function selectLivePadGate(gates: LivePadGates, slot: number) {
+  const muted = gates.mutedSlots.includes(slot);
+  const solo = gates.soloSlots.includes(slot);
+  return {muted, solo, silenced: muted || (gates.soloSlots.length > 0 && !solo)};
+}
+
 export interface PerformState {
   readonly bank: Bank;
   readonly captureStatus: PerformanceMasterCaptureStatus;
@@ -187,6 +203,7 @@ export interface PerformState {
   // keeps the legacy fader and encoder until it closes; the typed surface
   // never flips an open gesture mid-route.
   readonly legacyFilterGesture: boolean;
+  readonly padGates: LivePadGates;
   readonly performances: readonly PerformanceSummary[];
   readonly recovery: readonly PerformanceRecoverySummary[];
   readonly recoveryLoaded: boolean;
@@ -211,6 +228,7 @@ export type PerformAction =
   | {readonly type: "filter"; readonly filter: FilterControlState}
   | {readonly type: "filter-legacy-gesture"; readonly open: boolean}
   | {readonly type: "live-status"; readonly status: PerformanceLiveStatus}
+  | {readonly type: "pad-gates-pending"}
   | {readonly type: "hold"; readonly value: boolean}
   | {readonly type: "performances"; readonly values: readonly PerformanceSummary[]}
   | {readonly type: "recovery"; readonly values: readonly PerformanceRecoverySummary[]}
@@ -252,6 +270,7 @@ export function initialPerformState(
     filter: FILTER_UNAVAILABLE,
     liveControl: Object.freeze({available: false, epoch: null}),
     legacyFilterGesture: false,
+    padGates: PAD_GATES_UNAVAILABLE,
     performances: Object.freeze([]),
     recovery: Object.freeze([]),
     recoveryLoaded: false,
@@ -298,6 +317,7 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
         return Object.freeze({...state,
           liveControl: Object.freeze({available: false, epoch: null}),
           filter: FILTER_UNAVAILABLE,
+          padGates: Object.freeze({...state.padGates, provenance: "unavailable"}),
         });
       }
       const applied = action.status.applied;
@@ -318,10 +338,18 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
           provenance: action.status.appliedControlSequence ===
             action.status.acceptedControlSequence ? "core" as const : "pending" as const,
         } : FILTER_UNAVAILABLE),
+        padGates: Object.freeze({
+          mutedSlots: Object.freeze([...applied.mutedSlots]),
+          soloSlots: Object.freeze([...applied.soloSlots]),
+          provenance: action.status.appliedControlSequence ===
+            action.status.acceptedControlSequence ? "core" : "pending",
+        }),
         hold: applied.hold,
         fx: Object.freeze(fx),
       });
     }
+    case "pad-gates-pending": return Object.freeze({...state,
+      padGates: Object.freeze({...state.padGates, provenance: "pending"})});
     case "hold": return Object.freeze({...state, hold: action.value});
     case "performances": return Object.freeze({...state,
       performances: Object.freeze([...action.values])});
@@ -339,6 +367,8 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
       filter: Object.freeze({...FILTER_DEFAULT,
         provenance: state.liveControl.available ? "pending" as const
           : "unavailable" as const}),
+      padGates: Object.freeze({...state.padGates, provenance:
+        state.liveControl.available ? "pending" : "unavailable"}),
       replayNeutral: true,
     });
     // Recording start/stop is an independent toggle from FX (#1674): the live
@@ -483,6 +513,7 @@ export interface PerformController {
   turnFx(fx: PerformanceFx, detents: number, fine?: boolean): void;
   releaseEncoderFx(): void;
   toggleHold(): void;
+  togglePadGate(kind: "mute" | "solo", slot: number): void;
   refreshLiveStatus(): Promise<void>;
   setFilterType(type: PerformanceFilterTypeName): void;
   turnFilterType(detents: number): void;
@@ -530,6 +561,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
   let closePromise: Promise<void> | null = null;
   let leavePromise: Promise<void> | null = null;
   let recordSetupPromise: Promise<void> | null = null;
+  let replayBeginPromise: Promise<void> | null = null;
   let rawEventTail: Promise<void> = Promise.resolve();
   let flushPromise: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
@@ -890,6 +922,40 @@ export function createPerformController(options: PerformControllerOptions): Perf
     dispatch({type: "filter", filter: {...state.filter, engaged: false,
       provenance: liveControlEpoch() === null ? "unavailable" : "pending"}});
   };
+  const clearPadGates = async () => {
+    const epoch = liveControlEpoch();
+    if (epoch === null || (state.padGates.provenance === "core" &&
+        state.padGates.mutedSlots.length === 0 && state.padGates.soloSlots.length === 0)) return;
+    dispatch({type: "pad-gates-pending"});
+    await enqueueControl(async () => {
+      if (epoch !== liveControlEpoch()) return;
+      const sessionId = activeRecordingId();
+      if (sessionId !== null && recordingProfile === "headered") {
+        await session.recordPerformanceEvent({sessionId, eventId: createId(),
+          event: {kind: "clear_pad_gates"}});
+        await controller.refreshAuthority();
+      } else {
+        await session.applyPerformanceLiveControl({controlEpoch: epoch,
+          intent: {kind: "clear_pad_gates"}});
+      }
+      // Admission is not reset completion. Navigation waits for the same
+      // owner's actual empty applied masks; HOLD only owns FX.
+      for (let attempt = 0; attempt < maximumStatusQueries; attempt += 1) {
+        const status = await session.queryPerformanceLiveStatus();
+        if (status.available && status.controlEpoch !== epoch) {
+          throw new Error("Performance Pad gate owner changed before reset acknowledgement");
+        }
+        if (status.available && !status.resetPending &&
+            status.appliedControlSequence === status.acceptedControlSequence &&
+            status.applied.mutedSlots.length === 0 && status.applied.soloSlots.length === 0) {
+          if (!closed && liveControlEpoch() === epoch) dispatch({type: "live-status", status});
+          return;
+        }
+        await waitForStatusQuery();
+      }
+      throw new Error("Performance Pad gate reset acknowledgement timed out");
+    }, true, false);
+  };
   const clearRecordingBindings = () => {
     recordingProfile = "legacy";
     recordingFxBindings.clear();
@@ -1032,16 +1098,22 @@ export function createPerformController(options: PerformControllerOptions): Perf
     leave() {
       if (leavePromise !== null) return leavePromise;
       const operation = (async () => {
+        // An admitted begin may already own a producer before its reply.
+        // Keep the result on this owner so the Stop below can retire it.
+        await replayBeginPromise;
         await recordSetupPromise?.catch(() => {});
         cancelWaitingControls();
         controller.releaseEncoderFx();
         await controlTail;
-        await controller.stop().catch(fail);
-        await finalizationPromise?.catch(fail);
-        await projectMutationTail;
+        // Replay is another Pad-mask publisher. Retire it and await its
+        // existing neutral-reset acknowledgement before clearing live masks.
         if (state.replay !== null && state.replay.state === "playing") {
           await controller.stopReplay();
         }
+        await clearPadGates().catch((error) => { fail(error); throw error; });
+        await controller.stop().catch(fail);
+        await finalizationPromise?.catch(fail);
+        await projectMutationTail;
       })();
       const tracked = operation.finally(() => {
         if (leavePromise === tracked) leavePromise = null;
@@ -1537,6 +1609,30 @@ export function createPerformController(options: PerformControllerOptions): Perf
         void session.applyFxGesture({kind: value ? "hold_on" : "hold_off"}).catch(fail);
       }
     },
+    togglePadGate(kind, slot) {
+      const epoch = liveControlEpoch();
+      if (closed || leavePromise !== null || epoch === null ||
+          !Number.isInteger(slot) || slot < 0 || slot > 63 ||
+          state.padGates.provenance !== "core" || state.replay?.state === "playing" ||
+          !["idle", "recording", "flushing", "stopped"].includes(state.recording.phase) ||
+          !admitOrdinaryControl()) return;
+      const slots = kind === "mute" ? state.padGates.mutedSlots : state.padGates.soloSlots;
+      const intent = {kind: kind === "mute" ? "pad_mute" as const : "pad_solo" as const,
+        slot, enabled: !slots.includes(slot)};
+      dispatch({type: "pad-gates-pending"});
+      void enqueueControl(async () => {
+        if (closed || epoch !== liveControlEpoch()) return;
+        const sessionId = activeRecordingId();
+        if (sessionId !== null) {
+          if (recordingProfile !== "headered") throw new Error(
+            "Live Pad controls require a headered Performance recording");
+          await session.recordPerformanceEvent({sessionId, eventId: createId(), event: intent});
+          await controller.refreshAuthority();
+        } else {
+          await session.applyPerformanceLiveControl({controlEpoch: epoch, intent});
+        }
+      }).catch(fail);
+    },
     async refreshLiveStatus() {
       await readLiveStatus();
     },
@@ -1669,13 +1765,29 @@ export function createPerformController(options: PerformControllerOptions): Perf
         await loadRecovery("discarded");
       } catch (error) { fail(error); }
     },
-    async beginReplay(performanceId) {
-      try {
+    beginReplay(performanceId) {
+      if (closed || leavePromise !== null) return Promise.resolve();
+      if (replayBeginPromise !== null) return replayBeginPromise.catch(() => {});
+      // This owner's confirmed publisher stays active until terminal Stop.
+      if (state.replay?.state === "playing") return Promise.resolve();
+      const operation = (async () => {
         replayPollGeneration += 1;
         dispatch({type: "replay", replay: await session.beginPerformanceReplay({
           replayId: createId(), performanceId,
         })});
-      } catch (error) { fail(error); }
+      })();
+      const tracked = operation.then(() => {
+        if (replayBeginPromise === tracked) replayBeginPromise = null;
+      }, (error) => {
+        // The producer may exist even when its begin receipt is unknown.
+        // Retain this rejection: exit cannot declare quiescence or clear.
+        fail(error);
+        throw error;
+      });
+      replayBeginPromise = tracked;
+      // UI callers retain the existing reported-error contract; exit awaits
+      // the owned promise itself and therefore observes the failure.
+      return tracked.catch(() => {});
     },
     async stopReplay() {
       if (state.replay === null) return;
@@ -1691,8 +1803,9 @@ export function createPerformController(options: PerformControllerOptions): Perf
           if (replay.state !== "playing") {
             dispatch({type: "error", message: null});
             dispatch({type: "neutral"});
-            // The neutral reset retires every runtime generation; the epoch
-            // and filter/frozen facts come back only from a Core readback.
+            // Neutral retires the FX gesture bindings. This producer keeps
+            // the control epoch for the same Project/engine start; applied
+            // facts and any owner/engine change require a Core readback.
             clearLiveGenerations();
             void controller.refreshLiveStatus().catch(fail);
             return;
