@@ -894,10 +894,11 @@ class RealtimeEngine final {
     PadControlOrigin origin = PadControlOrigin::host_input;
     std::uint8_t pattern_slot = kNoPatternSlot;
     // The voice's live Pad gate gain (D04 Mute/Solo): 1.0 is fully open. A
-    // newly disallowed voice ramps to 0 over 96 frames while its cursor keeps
-    // advancing, and a re-allowed voice ramps back to its current sound; the
-    // multiply is skipped at exactly 1.0 so an ungated voice stays
-    // bit-identical. Audition voices are never gated.
+    // newly disallowed voice closes immediately while its DSP/cursor keeps
+    // advancing; its post-Tone/EQ contribution is also blocked. A re-allowed
+    // voice ramps back over 96 frames to its current sound. The multiply is
+    // skipped at exactly 1.0 so an ungated voice stays bit-identical.
+    // Audition voices are never gated; shared FX tails remain untouched.
     float live_gate = 1.0F;
     // A voice whose playback carries a non-neutral DSP block renders through
     // the shared kernel; every other voice keeps the original path, whose

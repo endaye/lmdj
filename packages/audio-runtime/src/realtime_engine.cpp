@@ -3089,24 +3089,19 @@ void RealtimeEngine::render(
             voice.release_scale;
       }
       // The live Pad gate (D04 Mute/Solo): a project Pad voice whose Pad is
-      // muted, or unsoloed while any Solo is active, ramps to zero over 96
-      // frames while its cursor keeps advancing; re-allowing ramps it back to
-      // the current sound without retriggering. Audition voices bypass the
-      // gate, and bytes already inside the shared Delay/Reverb decay on their
-      // own because the gate sits before the shared-FX input.
-      if (!is_audition_bank_slot(voice.bank_slot)) {
-        if (pad_live_gated(voice.slot)) {
-          if (voice.live_gate > 0.0F) {
-            voice.live_gate -= kRealtimeRampScale;
-            if (voice.live_gate < 0.0F) {
-              voice.live_gate = 0.0F;
-            }
-          }
-        } else if (voice.live_gate < 1.0F) {
-          voice.live_gate += kRealtimeRampScale;
-          if (voice.live_gate > 1.0F) {
-            voice.live_gate = 1.0F;
-          }
+      // muted, or unsoloed while any Solo is active, contributes no input
+      // from the first frame under the applied mask. DSP and cursor/lifetime
+      // still advance; re-allowing ramps back to the current sound without
+      // retriggering. Audition bypasses the gate, and already accepted shared
+      // Delay/Reverb tails remain in the shared bus.
+      const bool live_gated = !is_audition_bank_slot(voice.bank_slot) &&
+                              pad_live_gated(voice.slot);
+      if (live_gated) {
+        voice.live_gate = 0.0F;
+      } else if (voice.live_gate < 1.0F) {
+        voice.live_gate += kRealtimeRampScale;
+        if (voice.live_gate > 1.0F) {
+          voice.live_gate = 1.0F;
         }
       }
       const auto live_gate = voice.live_gate;
@@ -3137,6 +3132,11 @@ void RealtimeEngine::render(
           value *= detail::voice_dsp_end_fade(voice.dsp) *
                    detail::voice_dsp_release_declick(
                        voice.releasing, voice.release_frames_remaining);
+        }
+        // Zero filter input still leaves Tone/EQ memory. Keep evaluating it,
+        // but block its contribution before it enters the shared FX bus.
+        if (live_gated) {
+          value = 0.0F;
         }
         left[frame] += value * voice.dsp.pan_left;
         right[frame] += value * voice.dsp.pan_right;
