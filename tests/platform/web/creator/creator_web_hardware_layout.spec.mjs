@@ -839,16 +839,17 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   await wakeAudioWithPad(page, {padAddress: "A01"});
   await page.getByRole("button", {name: "Perform", exact: true}).click();
   const filter = page.getByRole("slider", {name: "Filter", exact: true});
-  await expect(filter).toHaveValue("500");
+  await expect(page.getByRole("button", {name: "Encoder 1 — Cutoff", exact: true})).toBeEnabled();
+  await expect(filter).toHaveValue("1000");
   const acceptedFxBefore = await page.evaluate(() => window.__performPadRequests
-    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length);
-  await page.getByRole("button", {name: "Encoder 1 — Filter", exact: true}).press("ArrowUp");
-  await expect(filter).toHaveValue("510");
+    .filter(request => request.operation === "performance.live.control" && request.ok === true).length);
+  await page.getByRole("button", {name: "Encoder 1 — Cutoff", exact: true}).press("ArrowDown");
+  await expect(filter).toHaveValue("990");
   const hold = page.getByRole("button", {name: "HOLD", exact: true});
   await hold.click();
   await expect(hold).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => page.evaluate(() => window.__performPadRequests
-    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length))
+    .filter(request => request.operation === "performance.live.control" && request.ok === true).length))
     .toBe(acceptedFxBefore + 2);
   const master = page.getByRole("slider", {name: "MASTER", exact: true});
   const monitorBefore = Number(await master.inputValue());
@@ -863,7 +864,7 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
     await down.click();
     await expect(page.getByTestId("pad-matrix").locator('[aria-current="true"]'))
       .toHaveAttribute("aria-label", new RegExp(`^Pad ${slot === 16 ? "B01" : `A${String(slot + 1).padStart(2, "0")}`} —`));
-    await expect(filter).toHaveValue("510");
+    await expect(filter).toHaveValue("990");
     await expect(hold).toHaveAttribute("aria-pressed", "true");
     await expect(master).toHaveValue(String(monitorBefore - 1));
   }
@@ -871,6 +872,6 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   expect(await inspectTruth(page)).toEqual(truth);
   const requests = await page.evaluate(() => window.__performPadRequests);
   expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
-    "performance.fx.gesture", "performance.record.begin", "performance.record.stop",
+    "performance.fx.gesture", "performance.live.control", "performance.record.begin", "performance.record.stop",
     "pattern.transport.request"].includes(request.operation))).toEqual([]);
 });
