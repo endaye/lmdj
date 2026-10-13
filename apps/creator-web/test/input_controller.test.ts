@@ -2416,6 +2416,128 @@ describe("shared gesture reservation at Creator input ingress", () => {
     return {reserve, leases};
   }
 
+  test("ready Sample preparation advances while an earlier Press completion is held", async () => {
+    const inspections = [deferred<SampleInspect>(), deferred<SampleInspect>()];
+    type TriggerResult = Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>;
+    const completions = [deferred<TriggerResult>(), deferred<TriggerResult>()];
+    const value = sampleFixture({inspectSample: slot => inspections[slot]!.promise});
+    const witness = reservationWitness(value);
+    // This is the existing controlled Session boundary, not a Native ACK.
+    // A public trigger promise stays held after its synchronous invocation;
+    // the real SDK owns its bounded admission and independent consume loop.
+    value.session.trigger = (slot, velocity, source, key) => {
+      value.triggerKeys.push(key);
+      value.triggers.push({slot, velocity, source});
+      return completions[slot]!.promise;
+    };
+    const resolveCompletions = () => {
+      completions[0]!.resolve({sequence: 1, slot: 0, velocity: 100, source: "keyboard"});
+      completions[1]!.resolve({sequence: 2, slot: 1, velocity: 100, source: "keyboard"});
+    };
+    try {
+      expect(value.controller.keyDown({code: "KeyZ", target: document.body})).toBe(true);
+      expect(value.controller.keyDown({code: "KeyX", target: document.body})).toBe(true);
+      const firstKey = witness.leases[0]!.key;
+      const secondKey = witness.leases[1]!.key;
+      expect(firstKey).not.toBe(secondKey);
+      // Preserve serialized Sample inspection: unresolved preparation, unlike
+      // a dispatched trigger's completion, still owns this ordering boundary.
+      expect(value.inspectCalls).toEqual([0]);
+      expect(value.triggers).toEqual([]);
+      inspections[0]!.resolve(sampleInspect(0));
+      await settle();
+      await settle();
+      expect(value.triggerKeys).toEqual([firstKey]);
+      // RED on the frozen source: it waits for completions[0] instead of
+      // starting this next inspection. No timer or deadline is advanced.
+      expect(value.inspectCalls).toEqual([0, 1]);
+      inspections[1]!.resolve(sampleInspect(1));
+      await settle();
+      await settle();
+      expect(value.triggerKeys).toEqual([firstKey, secondKey]);
+      expect(value.triggers).toEqual([
+        {slot: 0, velocity: 100, source: "keyboard"},
+        {slot: 1, velocity: 100, source: "keyboard"},
+      ]);
+      // Both public completions remain unresolved. A real second keyup must
+      // reach its same opaque key once, independently of the first Press.
+      expect(value.controller.keyUp({code: "KeyX"})).toBe(true);
+      expect(value.controller.keyUp({code: "KeyX"})).toBe(false);
+      expect(value.releaseKeys).toEqual([secondKey]);
+      expect(value.releases).toEqual([{slot: 1, source: "keyboard"}]);
+      expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
+      expect(value.releaseKeys).toEqual([secondKey, firstKey]);
+      expect(witness.leases.map(({lease}) => lease.releasePhysical.mock.calls.length))
+        .toEqual([1, 1]);
+      resolveCompletions();
+      await settle();
+      await settle();
+      value.controller.dispose();
+      expect(value.releaseKeys).toEqual([secondKey, firstKey]);
+      expect(value.actions.filter(action => action.type === "runtime-changed")).toEqual([]);
+    } finally {
+      value.controller.dispose();
+      inspections[0]!.resolve(sampleInspect(0));
+      inspections[1]!.resolve(sampleInspect(1));
+      resolveCompletions();
+      await settle();
+    }
+  });
+
+  test("a held loop-toggle orders its next same-Pad stop without blocking another Pad", async () => {
+    const value = sampleFixture({inspectSample: async slot =>
+      sampleInspect(slot, slot === 0 ? "loop_toggle" : "one_shot")});
+    const witness = reservationWitness(value);
+    const firstCompletion = deferred<void>();
+    const trigger = value.session.trigger;
+    let first = true;
+    value.session.trigger = (slot, velocity, source, key) => {
+      const result = trigger(slot, velocity, source, key);
+      if (slot === 0 && first) {
+        first = false;
+        return firstCompletion.promise.then(() => result);
+      }
+      return result;
+    };
+    try {
+      value.controller.keyDown({code: "KeyZ", target: document.body});
+      value.controller.keyUp({code: "KeyZ"});
+      await settle();
+      expect(value.triggers.map(({slot}) => slot)).toEqual([0]);
+      value.controller.keyDown({code: "KeyZ", target: document.body});
+      value.controller.keyUp({code: "KeyZ"});
+      value.controller.keyDown({code: "KeyX", target: document.body});
+      await settle();
+      await settle();
+      // The original loop-toggle stop depends on its first admission. That
+      // same-Pad dependency must not hold a different Pad's preparation.
+      expect(value.triggerKeys).toEqual([witness.leases[0]!.key, witness.leases[2]!.key]);
+      expect(value.stopped).toEqual([]);
+      firstCompletion.resolve();
+      await settle();
+      await settle();
+      expect(value.stopped).toEqual([0]);
+      expect(value.triggers.map(({slot}) => slot)).toEqual([0, 1]);
+      expect(witness.leases[1]!.lease.cancelUnsubmittedPattern).toHaveBeenCalled();
+      value.controller.keyUp({code: "KeyX"});
+      value.controller.keyDown({code: "KeyZ", target: document.body});
+      await settle();
+      await settle();
+      expect(value.triggerKeys).toEqual([
+        witness.leases[0]!.key, witness.leases[2]!.key, witness.leases[3]!.key,
+      ]);
+      expect(value.stopped).toEqual([0]);
+      value.controller.keyUp({code: "KeyZ"});
+      expect(value.releaseKeys).toEqual([
+        witness.leases[0]!.key, witness.leases[2]!.key, witness.leases[3]!.key,
+      ]);
+    } finally {
+      firstCompletion.resolve();
+      value.controller.dispose();
+      await settle();
+    }
+  });
+
   test.each(["inspection", "activation"] as const)(
     "reserves before held %s and keeps the refused 65th physical key out of both producers",
     async heldBoundary => {
@@ -2728,3 +2850,101 @@ test.each(["running", "failed"] as const)(
     }
   },
 );
+
+
+test.each(["running", "failed"] as const)(
+  "known unsubmitted Pad expiry is local only while the SDK is %s",
+  async sdkState => {
+    const onInputObservationError = vi.fn();
+    const value = sampleFixture({onInputObservationError});
+    const pending = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+    const observedRejection = pending.promise.catch(error => error);
+    value.session.trigger = (slot, velocity, source, key) => {
+      value.triggerKeys.push(key);
+      value.triggers.push({slot, velocity, source});
+      return pending.promise;
+    };
+    const diagnostics = value.session.diagnostics;
+    let actualSdkState: "running" | "failed" = "running";
+    value.session.diagnostics = () => ({...diagnostics(), state: actualSdkState,
+      error_code: actualSdkState === "failed" ? "HOST_TIMEOUT" : null});
+    // Matches the SDK's definite before-dispatch expiry; it asserts no
+    // Native admission or successful ticket consumption in this Host fixture.
+    const timeout = Object.assign(new Error("Original Pattern input deadline expired"), {
+      code: "HOST_TIMEOUT", details: {pending: false},
+    });
+    try {
+      value.controller.keyDown({code: "KeyZ", target: document.body});
+      await settle();
+      await settle();
+      expect(value.triggerKeys).toHaveLength(1);
+      actualSdkState = sdkState;
+      pending.reject(timeout);
+      await settle();
+      await settle();
+      expect(await observedRejection).toBe(timeout);
+      expect(value.session.diagnostics().state).toBe(sdkState);
+      expect(value.state().runtime.phase)
+        .toBe(sdkState === "running" ? "ready" : "restart-required");
+      if (sdkState === "running") {
+        expect(onInputObservationError).toHaveBeenCalledExactlyOnceWith(timeout);
+        expect(value.actions.filter(action => action.type === "runtime-changed")).toEqual([]);
+      } else {
+        expect(onInputObservationError).not.toHaveBeenCalled();
+        expect(value.actions).toContainEqual({type: "runtime-changed",
+          phase: "restart-required", errorCode: "HOST_TIMEOUT"});
+      }
+    } finally {
+      pending.reject(timeout);
+      value.controller.dispose();
+      await observedRejection;
+      await settle();
+    }
+  },
+);
+
+
+test("a matching Release expiry is not hidden by healthy SDK diagnostics", async () => {
+  const onInputObservationError = vi.fn();
+  const value = sampleFixture({onInputObservationError});
+  const pending = deferred<boolean>();
+  const observedRejection = pending.promise.catch(error => error);
+  const release = vi.fn((slot: number, source: RuntimeTriggerSource, key?: object) => {
+    value.releaseKeys.push(key);
+    value.releases.push({slot, source});
+    return pending.promise;
+  });
+  value.session.release = release;
+  const timeout = Object.assign(new Error("Original Pattern input deadline expired"), {
+    code: "HOST_TIMEOUT", details: {pending: false},
+  });
+  try {
+    value.controller.keyDown({code: "KeyZ", target: document.body});
+    await settle();
+    await settle();
+    expect(value.triggerKeys).toHaveLength(1);
+    const originalKey = value.triggerKeys[0];
+    expect(originalKey).toBeDefined();
+    expect(value.controller.keyUp({code: "KeyZ"})).toBe(true);
+    expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+    pending.reject(timeout);
+    await settle();
+    await settle();
+    expect(await observedRejection).toBe(timeout);
+    expect(value.session.diagnostics().state).toBe("running");
+    expect(value.session.diagnostics().error_code).toBeNull();
+    // The Press and its matching Release are different ownership boundaries.
+    // No successful Release receipt was observed by this controlled boundary.
+    expect(onInputObservationError).not.toHaveBeenCalled();
+    expect(value.actions).toContainEqual({type: "runtime-changed",
+      phase: "restart-required", errorCode: "HOST_TIMEOUT"});
+    expect(value.controller.keyUp({code: "KeyZ"})).toBe(false);
+    value.controller.dispose();
+    expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+  } finally {
+    pending.reject(timeout);
+    value.controller.dispose();
+    await observedRejection;
+    await settle();
+  }
+});

@@ -197,6 +197,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   const runtimeAgnosticGestures = new Set<string>();
   const loopToggleSlots = new Map<number, number>();
   const stoppingLoopSlots = new Set<number>();
+  const pendingLoopAdmissions = new Map<number, Promise<void>>();
   const admissions = new Map<number, AdmissionRecord>();
   const earlyOutcomes = new Map<number, RuntimeOutcome>();
   const performanceGestureIds = new Map<object, string>();
@@ -390,14 +391,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     );
   }
 
-  function reportInputObservationError(error: unknown) {
+  function reportInputObservationError(error: unknown, operation: "press" | "release") {
     const issue = error as TypedRuntimeError | null;
-    if (issue?.code === "HOST_TIMEOUT" && issue.details?.pending === true) {
+    if (issue?.code === "HOST_TIMEOUT" &&
+        (issue.details?.pending === true ||
+          (operation === "press" && issue.details?.pending === false))) {
       const diagnostics = session.diagnostics();
       if (diagnostics.state === "running" && diagnostics.error_code === null) {
-        // Only this caller's observation expired. The SDK still owns the
-        // original input and its eventual consumption; do not invent a Host
-        // failure or overwrite another Creator failure with a ready state.
+        // A retained observation or a definitely unsubmitted Press expired.
+        // Neither is a Runtime failure. Pending owner debts stay in the SDK;
+        // a matching Release's definite failure keeps its original handling.
         options.onInputObservationError?.(error);
         return;
       }
@@ -426,7 +429,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
           errorCode: "HOST_PROTOCOL_MISMATCH"});
       }
     }, (error: unknown) => {
-      if (!disposed) reportInputObservationError(error);
+      if (!disposed) reportInputObservationError(error, "release");
     }).finally(() => {
       // Only our observation ends here. SDK owner/consumer debts remain there.
       if (physicalGestures.get(gestureKey) === physical) {
@@ -734,7 +737,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
             if (mode === "loop_toggle") loopToggleSlots.delete(slot);
             if (clearedGesture) dispatch({type: "pad-released", slot});
           }
-          reportInputObservationError(error);
+          reportInputObservationError(error, "press");
         }
       },
     );
@@ -855,9 +858,27 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       );
       return;
     }
+    const failSampleAttempt = (error: unknown) => {
+      if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
+        cancelPatternPreparation(gestureKey);
+        return;
+      }
+      if (clearSampleAttempt(currentGesture, sampleToken)) {
+        dispatch({type: "pad-released", slot});
+      }
+      dispatch(inputErrorAction(error));
+    };
     const action = async () => {
       if (disposed || generation !== inputGeneration || !hasSampleToken(currentGesture, sampleToken)) {
         cancelPatternPreparation(gestureKey);
+        return;
+      }
+      const pendingLoop = pendingLoopAdmissions.get(slot);
+      if (pendingLoop !== undefined) {
+        // A same-Pad toggle needs the first admission to decide stop versus
+        // start. Park outside the preparation tail so other Pads can advance.
+        // Re-enter with the original token, lease and lifecycle checks.
+        void pendingLoop.then(enqueue, enqueue);
         return;
       }
       if (stopAcceptedLoopToggle(slot)) {
@@ -893,14 +914,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         if (!sampleOptions.isRuntimeCurrent()) {
           runtimeAgnosticGestures.add(currentGesture);
           if (sampleToken.released) activeGestures.add(currentGesture);
-          await sessionTrigger(
+          void sessionTrigger(
             slot,
             velocity,
             source,
             currentGesture,
             null,
             sampleToken,
-          );
+          ).catch(failSampleAttempt);
           return;
         }
         let effectivePlayback = inspect.playback;
@@ -939,7 +960,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
           clearSampleAttempt(currentGesture, sampleToken);
           return;
         }
-        await sessionTrigger(
+        // Preparation and invocation keep their order, but the SDK's public
+        // completion must not block the next already-reserved physical input.
+        const completion = sessionTrigger(
           slot,
           velocity,
           source,
@@ -948,15 +971,22 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
           sampleToken,
           effectivePlayback.muted,
         );
+        if (mode === "loop_toggle") {
+          pendingLoopAdmissions.set(slot, completion);
+          const clearPending = () => {
+            if (pendingLoopAdmissions.get(slot) === completion) {
+              pendingLoopAdmissions.delete(slot);
+            }
+          };
+          void completion.then(clearPending, error => {
+            clearPending();
+            failSampleAttempt(error);
+          });
+        } else {
+          void completion.catch(failSampleAttempt);
+        }
       } catch (error: unknown) {
-        if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
-          cancelPatternPreparation(gestureKey);
-          return;
-        }
-        if (clearSampleAttempt(currentGesture, sampleToken)) {
-          dispatch({type: "pad-released", slot});
-        }
-        dispatch(inputErrorAction(error));
+        failSampleAttempt(error);
       }
     };
     const enqueue = () => {
@@ -1094,6 +1124,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     options.onEmptyPadCancel?.();
     captureGestures.clear();
     inputGeneration += 1;
+    pendingLoopAdmissions.clear();
     for (const wake of pendingTouchWakes.values()) wake(false);
     pendingTouchWakes.clear();
     options.onAdverseLifecycle?.();

@@ -1824,3 +1824,69 @@ release is allocated by this Task; SDK and wire contracts are unchanged.
 
 Documentation impact: required. Update `/hosts/creator-interactions/` to
 distinguish a retained ordinary Pad observer expiry from a failed Runtime.
+
+
+## S6 followup — separate Sample preparation from Pad completion
+
+The frozen `7e85ecff` original complete Creator proof finished all eight groups
+with 128 PASS, 2 FAIL and 11 SKIP, exit 1. Preserve that result and its unchanged
+source inventory. The original global Pattern playback/Record-off/navigation/
+Stop/reopen journey passed in this run; the remaining failures are the MIDI
+17/17 observation and the separate Perform FX Release journey. Neither that
+passing journey nor a source diagnosis clears the full failure. Refreshed main
+`613e23c26bb0ae54dccd75003b8858ac484b0faf` adds Sound Sets layout and does not
+deliver either input repair; this Task remains based on the frozen candidate.
+
+The MIDI trace records HOST_TIMEOUT and Creator restart-required after the
+sixteen-note burst; later Export report is disabled, retaining the last sampled
+3/3 counts. It does not expose the exact exception details or per-note Native
+ledger. Source inspection independently proves that `sampleTriggerTail` awaits
+the complete public Press result even though the SDK already separates short
+admission from eventual consumption. Subsequent physical reservations spend
+their original one-second age while waiting for that Host completion barrier.
+
+Declare only `apps/creator-web/src/runtime/input_controller.ts`, its existing
+`test/input_controller.test.ts`, this plan, and
+`apps/docs-site/docs/hosts/creator-interactions.mdx`. Keep Sample inspection and
+ready trigger invocation ordered, and observe each completion independently using the
+same original physical key and error handling. Genuine matching Release remains
+independent of Press completion. Do not alter SDK ownership, capture/early-gate
+suppression, loop-toggle behavior, the shared 64 places or original deadlines.
+A positively known unsubmitted Press expiry may report a local diagnostic while
+the actual SDK is running and error-free; a matching Release's definite failure
+and an actually failed SDK retain their original failure handling.
+
+The pre-fix component RED produced the two intended assertion failures: second
+inspection blocked by the first completion, and healthy SDK misclassified after
+a known unsubmitted Press expiry. Its actual-SDK-failed and matching-Release
+negative controls passed. The first repair passed all 152 owning tests, 1508
+Creator unit tests, TypeScript and the original Portal check. Independent review
+then found a same-Pad loop-toggle regression: a second trigger could arrive
+before the first admission and leave a false loop latch. A new held-completion
+case failed on that repair. Preserve this RED and the review finding alongside
+the earlier passing checks.
+
+Retain that loop-toggle dependency per Pad outside the global preparation tail.
+Wake the original token only after the first admission has been observed,
+rechecking lifecycle and token identity without renewing its lease or deadline.
+Unrelated Pads still prepare and invoke while the first completion is held. The
+second same-Pad press follows the existing stop path, and a third press starts
+again. With this correction the complete owning file passes 153 tests. These are
+controlled Session/Host boundary witnesses, not actual Native admission or a
+full MIDI/browser PASS. Refresh TypeScript, full Creator units, original Portal
+check and independent final-diff review on this correction before commit.
+Preserve the original sixteen-note 17/17 and listener cleanup,
+complete eight-group Creator, all selected lanes and S6's other owning proofs
+on the final combined candidate; do not retry the full failure before repairing
+the separately identified FX ordering/admission defect.
+
+### Version Management
+
+No identity allocation. This Host correctness repair adds to the existing S6
+Creator version debt at the next coordinated settlement; no SDK/API, Contract,
+Product Build, Assembly, release or snapshot change.
+
+### Documentation Impact
+
+Documentation impact: required on `/hosts/creator-interactions/` to distinguish
+local unsubmitted Press expiry from matching Release and actual Runtime failure.
