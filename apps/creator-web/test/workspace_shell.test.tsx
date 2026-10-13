@@ -6627,3 +6627,199 @@ test.each(["Project", "Sample"])("%s SHIFT leaves up/down unassigned and left/ri
   expect(update).not.toHaveBeenCalled();
   expect(fixture.revision).toBe(3);
 });
+
+test("Perform Pad arrows silently visit all 64 shared Pads and stop at both boundaries", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const trigger = vi.spyOn(fixture.session, "trigger");
+  const release = vi.spyOn(fixture.session, "release");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  const undo = vi.fn();
+  const redo = vi.fn();
+  Object.assign(fixture.session, sequenceSessionStubs(), {undoAuthoring: undo, redoAuthoring: redo});
+  setRunningAudioFixture(fixture.session);
+  const truth = structuredClone(fixture.inspectProject());
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const address = (slot: number) => `${"ABCD"[Math.floor(slot / 16)]}${String(slot % 16 + 1).padStart(2, "0")}`;
+  const assertCurrent = (slot: number) => {
+    const matrix = screen.getByTestId("pad-matrix");
+    const current = within(matrix).getByRole("button", {name: new RegExp(`^Pad ${address(slot)} —`)});
+    expect(matrix.querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+    expect(current.getAttribute("aria-current")).toBe("true");
+    expect(current.classList.contains("is-selected")).toBe(true);
+    expect(screen.getByRole("button", {name: `Bank ${"ABCD"[Math.floor(slot / 16)]}`})
+      .getAttribute("aria-current")).toBe("page");
+  };
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    assertCurrent(0);
+    const up = () => screen.getByRole("button", {name: "Previous Pad — ↑"});
+    const down = () => screen.getByRole("button", {name: "Next Pad — ↓"});
+    expect(up()).toHaveProperty("disabled", true);
+    fireEvent.click(up());
+    assertCurrent(0);
+    for (let slot = 1; slot < 64; slot += 1) {
+      fireEvent.click(down());
+      assertCurrent(slot);
+    }
+    expect(down()).toHaveProperty("disabled", true);
+    fireEvent.click(down());
+    assertCurrent(63);
+    for (let slot = 62; slot >= 0; slot -= 1) {
+      fireEvent.click(up());
+      assertCurrent(slot);
+    }
+    expect(up()).toHaveProperty("disabled", true);
+    fireEvent.click(up());
+    assertCurrent(0);
+    for (let step = 0; step < 3; step += 1) fireEvent.click(down());
+    assertCurrent(3);
+    // The edit object and overview read the reducer selection, including an
+    // empty Pad; navigating to them is a separate far-side projection leg.
+    fireEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByRole("button", {name: "Add Sample to Pad A04"});
+    expect(screen.getByTestId("overview-display").textContent).toContain("A04");
+    fireEvent.click(screen.getByRole("button", {name: "Sequence"}));
+    await screen.findByTestId("sequence-grid");
+    expect(screen.getByTestId("sequence-overview").textContent).toContain("A04");
+    assertCurrent(3);
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    assertCurrent(3);
+    await flushAsyncTurns();
+    expect(trigger).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(undo).not.toHaveBeenCalled();
+    expect(redo).not.toHaveBeenCalled();
+    expect(fixture.inspectProject()).toEqual(truth);
+  } finally {rendered.unmount();}
+});
+
+test("Perform Pad arrows are unavailable under SHIFT and System while history keeps its owner", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const historyResult = async () => {
+    fixture.revision += 1;
+    return {committedRevision: fixture.revision, runtimeRevision: fixture.revision,
+      runtimePublished: true, snapshotError: null};
+  };
+  const undo = vi.fn(historyResult);
+  const redo = vi.fn(historyResult);
+  Object.assign(fixture.session, sequenceSessionStubs(), {
+    inspectAuthoringHistory: async () => ({sessionId: "history", projectRevision: fixture.revision,
+      canUndo: true, canRedo: true, undoCount: 1, redoCount: 1,
+      undoLabel: "Edit", redoLabel: "Edit", disabledReason: ""}),
+    undoAuthoring: undo, redoAuthoring: redo,
+  });
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  const current = () => screen.getByTestId("pad-matrix").querySelector('[aria-current="true"]');
+  const assertA02 = () => expect(current()?.getAttribute("aria-label")).toMatch(/^Pad A02 —/);
+  const shift = () => screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"});
+  const assertUnassigned = () => {
+    const up = screen.getByRole("button", {name: "Up — unassigned until direction mapping is approved"});
+    const down = screen.getByRole("button", {name: "Down — unassigned until direction mapping is approved"});
+    expect(up).toHaveProperty("disabled", true);
+    expect(down).toHaveProperty("disabled", true);
+    fireEvent.click(up);
+    fireEvent.click(down);
+    assertA02();
+  };
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+    assertA02();
+    fireEvent.click(shift());
+    assertUnassigned();
+    const undoKey = screen.getByRole("button", {name: "Undo — SHIFT + ←"});
+    await waitFor(() => expect(undoKey).toHaveProperty("disabled", false));
+    fireEvent.click(undoKey);
+    await waitFor(() => expect(undo).toHaveBeenCalledTimes(1));
+    await flushAsyncTurns();
+    assertA02();
+    expect(screen.getByRole("button", {name: "Next Pad — ↓"})).toHaveProperty("disabled", false);
+    fireEvent.click(shift());
+    assertUnassigned();
+    const redoKey = screen.getByRole("button", {name: "Redo — SHIFT + →"});
+    await waitFor(() => expect(redoKey).toHaveProperty("disabled", false));
+    fireEvent.click(redoKey);
+    await waitFor(() => expect(redo).toHaveBeenCalledTimes(1));
+    await flushAsyncTurns();
+    assertA02();
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    assertUnassigned();
+    fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
+    assertA02();
+    fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+    expect(current()?.getAttribute("aria-label")).toMatch(/^Pad A03 —/);
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(redo).toHaveBeenCalledTimes(1);
+    expect(fixture.revision).toBe(5);
+  } finally {rendered.unmount();}
+});
+
+test("Perform Pad steps preserve held FX, HOLD, monitor volume and transport ownership", async () => {
+  const factory = new IDBFactory();
+  await writeMonitorVolumePreference(41, factory);
+  vi.stubGlobal("indexedDB", factory);
+  const fixture = mutableSampleRuntimeFixture();
+  const performance = performanceSessionStubs([]);
+  const captureStatus = {state: "configured" as const, error: null,
+    config: {performRecordingFrames: 86_400_000, performRecordingQueueBatches: 32}};
+  const applyFxGesture = vi.fn(async () => ({applied: true as const}));
+  const setMonitorVolume = vi.fn();
+  const requestTransport = vi.fn();
+  const trigger = vi.spyOn(fixture.session, "trigger");
+  const release = vi.spyOn(fixture.session, "release");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  Object.assign(fixture.session, sequenceSessionStubs(), performance.stubs, {
+    performanceMasterCaptureStatus: () => captureStatus,
+    subscribePerformanceMasterCaptureStatus: (listener: (status: typeof captureStatus) => void) => {
+      listener(captureStatus);
+      return () => {};
+    },
+    applyFxGesture, monitorVolume: () => 100, monitorDestination: () => null, setMonitorVolume,
+    requestPatternTransport: requestTransport,
+    inspectPatternTransport: async () => engagedTransportStatus({playing: true}),
+  });
+  setRunningAudioFixture(fixture.session);
+  const truth = structuredClone(fixture.inspectProject());
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await waitFor(() => expect(setMonitorVolume).toHaveBeenCalledExactlyOnceWith(41));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    const filter = await screen.findByRole("slider", {name: "Filter"});
+    fireEvent.keyDown(await screen.findByRole("button", {name: "Encoder 1 — Filter"}), {key: "ArrowUp"});
+    expect(filter).toHaveProperty("value", "510");
+    const hold = screen.getByRole("button", {name: "HOLD"});
+    fireEvent.click(hold);
+    expect(hold.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("button", {name: "Encoder 4 — Output Volume"}), {key: "ArrowUp"});
+    expect(screen.getByRole("slider", {name: "MASTER"})).toHaveProperty("value", "42");
+    await flushAsyncTurns();
+    expect(applyFxGesture.mock.calls).toEqual([
+      [{kind: "fx_engage", fx: "filter", value: 510}], [{kind: "hold_on"}],
+    ]);
+    const fxCalls = structuredClone(applyFxGesture.mock.calls);
+    const monitorCalls = structuredClone(setMonitorVolume.mock.calls);
+    for (let slot = 1; slot <= 20; slot += 1) {
+      fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+      expect(filter).toHaveProperty("value", "510");
+      expect(hold.getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByRole("slider", {name: "MASTER"})).toHaveProperty("value", "42");
+    }
+    expect(screen.getByRole("button", {name: /^Pad B05 —/}).getAttribute("aria-current")).toBe("true");
+    await flushAsyncTurns();
+    expect(applyFxGesture.mock.calls).toEqual(fxCalls);
+    expect(setMonitorVolume.mock.calls).toEqual(monitorCalls);
+    expect(await readMonitorVolumePreference(factory)).toBe(42);
+    expect(requestTransport).not.toHaveBeenCalled();
+    expect(performance.stubs.beginPerformanceRecording).not.toHaveBeenCalled();
+    expect(performance.stubs.stopPerformanceRecording).not.toHaveBeenCalled();
+    expect(performance.stubs.recordPerformanceEvent).not.toHaveBeenCalled();
+    expect(trigger).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(fixture.inspectProject()).toEqual(truth);
+  } finally {rendered.unmount(); vi.unstubAllGlobals();}
+});

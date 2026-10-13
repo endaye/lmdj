@@ -178,7 +178,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 - 单击旋钮没有额外动作。
 - ENC1–3 随页面和参数组变化，见 Project、Sample、Sequence 和 Perform 的控件速查卡。System／Sound Sets／Slice 的 ENC1–3 未分配。上屏持续显示四个当前功能和数值。
 - ENC4 在所有页面固定为 Output Volume：每格 1%，范围 0–100%，默认 100%，可恢复已记住的 0%。监听会话和偏好恢复就绪后才可转动。它立即改变本设备监听，包括节拍器；音量存 IndexedDB，不写 Project／Undo，也不改变录音、重采样或导出电平。
-- ↑↓ 在 Sample／Sequence 选择当前 Pad，在 Project 的三列列表选择上一／下一行。Project／Sample 的 SHIFT＋↑↓ 未分配；Perform 的普通方向映射仍待接线，见[第 2 章](#planned)。
+- ↑↓ 在 Sample／Sequence／Perform 选择同一个当前 Pad，在 Project 的三列列表选择上一／下一行。Perform 按 A01–D16 首尾停止，跨界同步 Bank，并在矩阵中高亮；SHIFT 或 System 中不提供 Perform Pad 方向。Project／Sample 的 SHIFT＋↑↓ 未分配；完整 Perform 三组导航仍待滤波接线，见[第 2 章](#planned)。
 - ← → 不按 SHIFT 时在 Project 选择相邻项、Sample 切现有子页、Sequence 切 Pattern；按 SHIFT 时在所有页面做 Undo/Redo。左栏方向按钮不接管文本输入或聚焦旋钮的键盘方向键。
 - Sample 工程参数转动时立即预览，同一 Pad 的多参数停转 400 ms 后合并为一次保存／Undo。转回起点不保存。Sequence ENC3 的 BPM 当前只有即时读数预览，播放和节拍器仍等提交后发布；可听即时预览尚未实现。
 - Sample 作者锁定、Sequence 录音或传输结算时，相关工程参数旋钮不可用，未提交的预览作废；ENC4 保持监听职责。
@@ -281,7 +281,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | Record count-in | ● 始终控制 Pattern 事件录音，当前停止时按下立即开始。 | 停止时按 ● 可选 Off／1／2 小节预备拍，默认 Off；录音过程中不重新 count-in。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
 | Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
-| 三页普通方向导航 | Project ←/→ 选相邻项、↑/↓ 在三列列表移一行，OPEN 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。 | Perform ↑/↓ 选 Pad、←/→ 切 PRIMARY／FILTER／MORE 并保持效果仍待接线与验收；Project／Sample 接线不关闭完整 K2 或 #1822。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
+| 三页普通方向导航 | Project ←/→ 选相邻项、↑/↓ 在三列列表移一行，OPEN 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | Perform 独立滤波 | 底层音频能力已加入；Creator 仍是旧单值 Filter。 | 主组为 Cutoff／Delay／Reverb；FILTER 组为 LP／HP／BP、Cutoff、Resonance。初始 OFF，LP／20 kHz／0%；参数完整录制和回放。需要剩余接线与验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | 底层 64-Pad 门控已加入；Creator 尚无实时按钮及完整录放流程。 | 多 Solo、Mute 优先；切 Bank／Pattern 保持，离开 Perform／换工程清空；录制起点状态和后续变化。立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
@@ -529,7 +529,8 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 控件 | 在 Perform 页的作用 |
 | --- | --- |
 | ENC1／ENC2／ENC3 | 主 FX 为 Filter／Delay／Reverb；FX／MORE 组为 Crush／Stutter／Gate；Reverse 与 Cutter 只有触摸推子，没有旋钮。每格 10/1000，SHIFT 1/1000；停转和换组保持值。 |
-| 其余左栏 | ENC4 监听音量；↑↓ 和不按 SHIFT 的 ← → 不可用，其余见[第 1 章](#global)。演出录制中或待保存时 Record 不可用。Bank 键是本页唯一的 Bank 入口。 |
+| ↑／↓ | 静默选择上一／下一当前 Pad，A01–D16 首尾停止；空 Pad 也可选择，跨界同步 Bank，不触发声音、不写工程或历史。SHIFT 或 System 中不可用。 |
+| 其余左栏 | ENC4 监听音量；不按 SHIFT 的 ← → 尚不可用，其余见[第 1 章](#global)。演出录制中或待保存时 Record 不可用。Bank 键直接选择演奏组，不改变当前 Pad；Pad 方向跨界时也会同步 Bank。 |
 | 16 个 Pad | 仍是声音 Pad，不是 Pattern Launch 键。演出录制中，按下和松开都会记录。 |
 | 上屏 | 当前与待切换的 Pattern 槽、全局播放状态、bar／beat、进度条、Bank、Quantize、已分配槽位数。 |
 | 触摸区 | Live、Slots、Takes、Replay 四个子页；缺少能力时显示还在等待音频或录音存储。 |
