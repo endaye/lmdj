@@ -168,6 +168,23 @@ function safeErrorDetails(error) {
       details[name] = value;
     }
   }
+  // Only deadline failures expose bounded original RPC provenance. Other
+  // errors keep the existing privacy filter, including request-ID removal.
+  if (["HOST_TIMEOUT", "HOST_RESTART_REQUIRED"].includes(error.code)) {
+    if (typeof source.operation === "string" && /^[a-z][a-z0-9._-]{0,63}$/.test(source.operation)) {
+      details.operation = source.operation;
+    }
+    if (typeof source.request_id === "string" && UUID_PATTERN.test(source.request_id)) {
+      details.request_id = source.request_id;
+    }
+    if (Number.isFinite(source.deadline_ms) && source.deadline_ms >= 0 && source.deadline_ms <= 0xffff_ffff) {
+      details.deadline_ms = source.deadline_ms;
+    }
+    if (Number.isFinite(source.deadline_at_ms) && source.deadline_at_ms >= 0) {
+      details.deadline_at_ms = source.deadline_at_ms;
+    }
+    if (Number.isSafeInteger(source.cancel_return)) details.cancel_return = source.cancel_return;
+  }
   return Object.freeze(details);
 }
 

@@ -1965,3 +1965,90 @@ Assembly, immutable snapshot or release allocation in this repair Task.
 Documentation impact: required on `/core/modules/web-runtime-platform/` and
 `/hosts/creator-interactions/`, with the current Module source diagram and its
 official generated outputs updated in the same Task.
+
+
+## S6 followup — preserve the first transport deadline provenance
+
+Task base `005e339d638bc95e05e77fbbf339b77f7695ab07`; refreshed integration
+main `edb05dbb14c0f6ed28abeeeceab742fc3e282080` (2026-10-13). Live #1959
+retains the approved count-in decision; its closed question does not complete
+S6. Original eight-group Creator on this base naturally ended exit 1:
+127 PASS / 3 FAIL / 11 SKIP. MIDI, Grid and persisted-owner Perform traces
+still lack the exact first failed RPC. Grid's final inspect reuses the earlier
+sealed transport Error; that call did not itself exhaust its deadline.
+
+Premises checked at both revisions: actual pre-JS emits empty details for its
+original HOST_TIMEOUT; settlement watchdog supplies only terminal state and
+unknown mutation outcome. No successor changes implement provenance. The SDK
+sanitizer discards request identity, including the existing non-timeout
+resource-limit negative control. Preserve that control and all original
+failures. Independent source audit also confirms that query abort rewrites
+pending.deadlineAt, so original timing must be captured before submit.
+
+Declare exactly six files: Platform `src/web-runtime-pre.js`,
+`test/runtime_loader.test.mjs`, `web/runtime_session.mjs`,
+`test/runtime_session.test.mjs`; Portal
+`apps/docs-site/docs/core/modules/web-runtime-platform.mdx`; this plan.
+No additional API/type/Native/Creator files or capacity policy are changed.
+
+A further observed main ref is `18a5a1ffa69ea91cd0380075e89e9b753cb0cc7c`.
+PR #2138 (`7d27e33d`) changes headered capture ownership/result and its Portal
+paragraph; #2134 (`edb05dbb`) changes the observed headered recording cursor.
+Their producer/consumer deltas do not add timeout provenance or change this
+Task's sanitizer. They remain separately bound integration work before the
+final S6 candidate; no claim that they explain or clear the original failures.
+
+Snapshot only scalar operation, request_id, normalized deadline_ms and original
+monotonic deadline_at_ms before the real submit call. Capture cancel_return
+from the first deadline/abort helper invocation without adding an invocation;
+retain it through settlement polling and later cleanup. Attach those scalars
+to the original deadline/watchdog error. A helper return of -1 also covers
+exception/unavailable fallback and is not a Native not-found or retirement
+receipt. Retained rejection still adds pending:true; the first fatal Error
+remains identical for other pending callers, subscribers and late callers.
+Normal intentional termination keeps its exact empty-details shape.
+
+The existing acceptance report omits error_details and Developer diagnostics
+mount only with System. Thus first fatal HOST_TIMEOUT/HOST_RESTART_REQUIRED seal
+also emits one bounded JSON console snapshot with prefix
+`lmdj-web-host-deadline-diagnostic `, before caller/observer rejection. Capture
+only code and the five individually validated provenance scalars; a missing or
+throwing console is ignored without changing rejection or original cleanup.
+No message, stack, Project, payload, sidecar or extra RPC is emitted. Late sends,
+cleanup and retained timeouts do not emit another fatal snapshot; normal
+terminate emits none. This creates local evidence but does not prove a browser
+collector retained it, especially on external CDP pages.
+
+Lowest-tier tests execute the actual pre-JS in its existing VM fixture with a
+controlled clock and modeled Bridge responses. RED must show missing original
+provenance, not a Native/browser timeout. Cover fatal first-error reuse,
+submission-time input mutation, settlement and abort with the original cutoff,
+retained timeout preserving the sealed first fault, successful response and
+normal terminate. SDK checks preserve bounded valid timeout metadata, reject
+malformed scalar metadata, and retain the original non-timeout negative control.
+Run the complete SDK Node set, independent final declared-diff review, and
+original complete Portal check before commit. Heavy Portal/Native/Wasm/Creator
+runs remain held during Root UI #2112's window; lightweight Node checks do not
+claim those lanes. All S6 original full acceptance obligations remain.
+
+Verification in progress: corrected actual pre-JS/SDK metadata RED has five
+missing-field failures (373 PASS / 5 FAIL); first fixture-shape failure remains
+retained separately. Metadata-only draft passed all 523 SDK tests. The console
+capture RED then observed missing first-fault snapshots; corrected final source
+passes the complete SDK set, 525 PASS / 0 FAIL / 0 SKIP. No Portal/native/browser
+acceptance is inferred. Independent final updated-diff review and original
+complete Portal remain required before committing this Task.
+
+### Version Management
+
+Compatible local error diagnostic repair adds to the existing unshipped Web
+Runtime Platform correctness debt. No identity, Build, Assembly, snapshot or
+release allocation. Existing S6 version debts remain.
+
+### Documentation Impact
+
+Documentation impact: required on `/core/modules/web-runtime-platform/` to
+state diagnostic fields and their limits. No architecture edge changes.
+
+Pitfall impact: none; owning product regressions express the error provenance
+invariant. No new gate, shortened journey, deadline, worker or stress budget.

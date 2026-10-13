@@ -637,3 +637,34 @@ packaged loader 在首次 await 前串行保留同一窗口的 Module 注入，�
 此新增 API 另欠下一协调结算的 Web Runtime Platform MINOR；Creator 消费
 修复欠 PATCH。本段不分配身份，当前 packaged recovery、完整 Creator 与
 真实 OPFS/PCM/物理验收仍需各自原始旅程证据。
+
+### 原始 transport 期限错误的来源
+
+实际 pre-JS 的期限 `HOST_TIMEOUT` 与 publication settlement watchdog 的
+`HOST_RESTART_REQUIRED` 保存原请求的 `operation`、`request_id`、归一化的
+`deadline_ms`、原始 monotonic cutoff `deadline_at_ms`，以及首次期限／查询
+取消 helper 的 `cancel_return`。这些标量在 submit 前取快照；查询 abort
+改变当前等待期限、后续 settlement poll 与清理都不覆盖原记录。`cancel_return`
+是 helper 的返回值；`-1` 也可能来自异常或未初始化兜底，不能单独解释为
+Native not-found、消费、持久化或 owner 释放证明。
+
+transport 封存后，其他 pending／late caller 与失败订阅者继续接收同一个首个
+Error；后续失败不把原 operation 换成最后一次 inspect。retained RPC 的自身
+超时仍标记 `pending:true`，不替换已封存的首个错误；主动正常 terminate 的
+原 code、message 与空 details 保持不变。
+
+SDK 仅在上述两个错误码上投影这些字段：operation 限小写操作名且最长 64，
+request_id 限合法 lowercase UUID，deadline_ms 限有限数值 `0..0xffffffff`
+（保留原小数），deadline_at_ms 限有限非负数，cancel_return 限 safe integer。
+不记录 request/payload、sidecar、路径或 stack；其他错误保持原隐私过滤。
+该局部诊断修复的 VM／SDK 检查不证明 Native、浏览器、OPFS、PCM 或完整 S6
+验收通过。原完整 Creator 的失败和原期限继续保留，实际首个故障请求仍需
+新的已协调运行获取。
+
+首次 fatal 期限封存还在 caller／observer 拒绝之前通过 console 发出一条
+`lmdj-web-host-deadline-diagnostic ` 前缀的 JSON 快照，只含上述经过逐项校验
+的五个标量和 `code`；不输出 message、stack 或请求内容。它不依赖 System
+页面挂载或 React effect。console 缺失／抛错不阻止原错误与清理，后续 late
+caller、清理和 retained 自身超时不重复输出；正常 terminate 不输出。console
+发出与浏览器 collector 实际留存仍是两个事实，external CDP 页面尤其需另行
+确认捕获，不能把一次 Node VM 日志当作浏览器采证或运行验收。

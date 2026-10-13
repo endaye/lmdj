@@ -314,11 +314,16 @@ if (typeof globalThis.window !== "undefined") {
     return error;
   }
 
-  function restartRequiredFailure() {
+  function requestDeadlineDetails(pending) {
+    return {...pending.deadlineProvenance, cancel_return: pending.cancelReturn};
+  }
+
+  function restartRequiredFailure(pending) {
     return transportFailure(
       "HOST_RESTART_REQUIRED",
       "Project publication settlement did not complete; restart and inspect before retrying",
       {
+        ...requestDeadlineDetails(pending),
         terminal_state: "restart-required",
         mutation_outcome: "unknown",
       },
@@ -377,6 +382,7 @@ if (typeof globalThis.window !== "undefined") {
     }
     pending.abortError = transportAbortError();
     const cancellation = cancelQueryRequest(requestId);
+    pending.cancelReturn ??= cancellation;
     if (cancellation < -1 || cancellation > 1) {
       failClosed(transportFailure(
         "HOST_TIMEOUT", "formal Web Host request cancellation failed"));
@@ -476,6 +482,30 @@ if (typeof globalThis.window !== "undefined") {
     if (transportTerminated) return false;
     transportTerminated = true;
     terminalTransportError = error;
+    // Preserve the first deadline origin even when no System surface/React
+    // diagnostic is mounted. Console failure cannot affect settlement.
+    if (["HOST_TIMEOUT", "HOST_RESTART_REQUIRED"].includes(error.code)) {
+      try {
+        const source = error.details ?? {};
+        const capsule = {code: error.code};
+        if (typeof source.operation === "string" && /^[a-z][a-z0-9._-]{0,63}$/.test(source.operation)) {
+          capsule.operation = source.operation;
+        }
+        if (typeof source.request_id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.request_id)) {
+          capsule.request_id = source.request_id;
+        }
+        if (Number.isFinite(source.deadline_ms) && source.deadline_ms >= 0 && source.deadline_ms <= 0xffff_ffff) {
+          capsule.deadline_ms = source.deadline_ms;
+        }
+        if (Number.isFinite(source.deadline_at_ms) && source.deadline_at_ms >= 0) {
+          capsule.deadline_at_ms = source.deadline_at_ms;
+        }
+        if (Number.isSafeInteger(source.cancel_return)) capsule.cancel_return = source.cancel_return;
+        console.warn("lmdj-web-host-deadline-diagnostic " + JSON.stringify(capsule));
+      } catch {
+        // Neither absent logging nor a throwing observer can alter the fault.
+      }
+    }
     const entries = [...pendingRequests.entries()];
     pendingRequests.clear();
     for (const [requestId, pending] of entries) {
@@ -539,10 +569,12 @@ if (typeof globalThis.window !== "undefined") {
         () => onRequestDeadline(requestId), remaining);
       return true;
     }
-    if (
-      pending.deadlineLinearized === true ||
-      cancelControlRequest(requestId) === 0
-    ) {
+    let cancellation;
+    if (pending.deadlineLinearized !== true) {
+      cancellation = cancelControlRequest(requestId);
+      pending.cancelReturn ??= cancellation;
+    }
+    if (pending.deadlineLinearized === true || cancellation === 0) {
       pending.deadlineLinearized = true;
       if (pending.settlementDeadlineAt === null) {
         pending.settlementDeadlineAt =
@@ -552,9 +584,9 @@ if (typeof globalThis.window !== "undefined") {
         pending.settlementDeadlineAt - performance.now();
       if (settlementRemaining <= 0) {
         if (pending.retained) {
-          rejectRetainedRequest(requestId, pending, restartRequiredFailure());
+          rejectRetainedRequest(requestId, pending, restartRequiredFailure(pending));
         } else {
-          failClosed(restartRequiredFailure());
+          failClosed(restartRequiredFailure(pending));
         }
         return false;
       }
@@ -565,7 +597,7 @@ if (typeof globalThis.window !== "undefined") {
       return true;
     }
     const error = transportFailure(
-      "HOST_TIMEOUT", "formal Web Host request timed out");
+      "HOST_TIMEOUT", "formal Web Host request timed out", requestDeadlineDetails(pending));
     if (pending.retained) rejectRetainedRequest(requestId, pending, error);
     else failClosed(error);
     return false;
@@ -733,6 +765,14 @@ if (typeof globalThis.window !== "undefined") {
       ? Math.min(0xffff_ffff, Math.max(0, options.deadlineMs))
       : 30_000;
     const deadlineAt = performance.now() + deadlineMs;
+    // Local scalars only: never retain the Project payload or sidecar. Capture
+    // before submit; query abort may later change the active cutoff.
+    const deadlineProvenance = Object.freeze({
+      operation: request.operation,
+      request_id: request.request_id,
+      deadline_ms: deadlineMs,
+      deadline_at_ms: deadlineAt,
+    });
     const envelopePointer = envelope.byteLength === 0
       ? 0
       : _malloc(envelope.byteLength);
@@ -794,6 +834,8 @@ if (typeof globalThis.window !== "undefined") {
         retained,
         timeout: 0,
         deadlineAt,
+        deadlineProvenance,
+        cancelReturn: null,
         deadlineLinearized: false,
         settlementDeadlineAt: null,
         abortError: null,

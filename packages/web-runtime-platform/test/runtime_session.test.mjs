@@ -2885,6 +2885,37 @@ test("Host-state failures expose only allowlisted structured details", async () 
   assert.deepEqual(session.diagnostics().error_details, states.at(-1).errorDetails);
 });
 
+for (const code of ["HOST_TIMEOUT", "HOST_RESTART_REQUIRED"]) {
+test(`timeout diagnostics retain bounded original request provenance (${code})`, async () => {
+  const {emitFailure, session} = fixture();
+  const states = [];
+  session.subscribeHostState((state) => states.push(state));
+  await session.start();
+  const details = {operation: "project.inspect",
+    request_id: "11111111-1111-4111-8111-111111111111",
+    deadline_ms: 1000.5, deadline_at_ms: 1100.5, cancel_return: -1,
+    terminal_state: "restart-required", mutation_outcome: "unknown"};
+  emitFailure(Object.assign(new Error("private path"), {code,
+    details: {...details, payload: {path: "/private"}, sidecar: [1, 2], path: "/private"}}));
+  await drainTasks();
+  assert.deepEqual(states.at(-1).errorDetails, details);
+  assert.deepEqual(session.diagnostics().error_details, details);
+  assert.equal(Object.isFrozen(session.diagnostics().error_details), true);
+});
+}
+
+test("timeout diagnostics reject malformed provenance without coercion", async () => {
+  const {emitFailure, session} = fixture();
+  await session.start();
+  emitFailure(Object.assign(new Error("private path"), {code: "HOST_TIMEOUT", details: {
+    operation: "/private/project", request_id: "not-an-original-uuid",
+    deadline_ms: 0x1_0000_0000, deadline_at_ms: Infinity, cancel_return: "1",
+    payload: {private: true}, sidecar: [1],
+  }}));
+  await drainTasks();
+  assert.deepEqual(session.diagnostics().error_details, {});
+});
+
 test("defaults diagnostics to session-owned input listeners", async () => {
   const browserWindow = trackedEventTarget();
   const {session} = fixture({browserWindow});
