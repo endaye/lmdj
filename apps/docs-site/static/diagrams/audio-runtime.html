@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="d561d600d44869e6f0308c1dab704ce3569852fc6ac79df8b218492e261a0776">
-  <title id="title">Audio Runtime Module</title><desc id="description">不可变 Pattern、SEQ SNAP 边界、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</desc>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="8ee8c05724ee436d5a68fa9bf2a63661d29c69911935fea8cb53f125a631fcd8">
+  <title id="title">Audio Runtime Module</title><desc id="description">不可变 Pattern、连续分数 tempo clock、SEQ SNAP 边界、持续 Voice、精确 cutoff 锚点与有界实时输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -10,7 +10,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变 Pattern、SEQ SNAP 边界、保相位替换与持续 Voice、显式 transport cutoff 回执和有界实时输出</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变 Pattern、连续分数 tempo clock、SEQ SNAP 边界、持续 Voice、精确 cutoff 锚点与有界实时输出</text>
 
   <g class="connection"><path class="edge-mask" d="M 250 218 H 290 V 218 H 330"/><path class="edge" d="M 250 218 H 290 V 218 H 330" marker-end="url(#arrow)"/></g>
 <g class="connection"><path class="edge-mask" d="M 570 218 H 605 V 218 H 640"/><path class="edge" d="M 570 218 H 605 V 218 H 640" marker-end="url(#arrow)"/><text x="605" y="209">slot token + 64-bit identity</text></g>
@@ -34,7 +34,7 @@
       <rect class="node-mask" x="326" y="166" width="248" height="104" rx="18"/>
       <rect class="node" x="330" y="170" width="240" height="96" rx="14"/>
       <text class="node-title" x="346" y="202">Pattern / Voice Owners</text>
-      <text class="node-detail" x="346" y="228">origin · retained PCM generations</text>
+      <text class="node-detail" x="346" y="228">fractional clock · retained PCM</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="636" y="166" width="238" height="104" rx="18"/>
@@ -82,9 +82,9 @@
       <rect class="node-mask" x="636" y="376" width="258" height="104" rx="18"/>
       <rect class="node" x="640" y="380" width="250" height="96" rx="14"/>
       <text class="node-title" x="656" y="412">Retained Receipt</text>
-      <text class="node-detail" x="656" y="438">F / origin / identity / cutoff</text>
+      <text class="node-detail" x="656" y="438">F / physical origin / exact anchor</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Pattern Transport / Phase</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Beat/Bar/End use claimed geometry; audio applies both. Phase keeps voices. Stop ramps; Fence keeps origin.</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Pattern Transport / Phase</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Beat/Bar/End use the continuous clock or actual claimed Pattern geometry. Tempo keeps position and voices; ordinary replacement starts tick zero. Fence retains the exact cutoff anchor.</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Telemetry</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff. Runtime-only Facade owns OPEN/BUSY drain; its audio-only consumed counter is not proof of a started Voice.</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master FX</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock. The single Filter stage also has a typed independent branch (TPT SVF, LP/HP/BP, integer Hz cutoff, milli-percent resonance) with bit-exact OFF bypass; accepted control shadow and audio-applied state/sequence/epoch stay separate. Live Mute/Solo is a per-voice gain gate before the shared FX input: both 64-bit masks apply as one atomic pair over the same bounded lane, muted wins over soloed, the audition sentinel is unreachable, and bytes already inside the shared Delay/Reverb decay on their own.</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread. Reclaimed decoded PCM bytes refund Project Banks only; the reserved audition pool contributes no Project reservation refund.</div></foreignObject></g>
