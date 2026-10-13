@@ -609,6 +609,26 @@ Each of these failures is recorded in Developer diagnostics.
 
 ## Sequence Pattern grid editing
 
+### Live Pad Mute and Solo
+
+Perform's Live page names the current Pad (A01–D16) beside separate Mute and
+Solo buttons. Both buttons can be on. Multiple Pads may be soloed; Mute takes
+priority, and any non-soloed Pad is silenced while a Solo exists. The Pad matrix
+shows MUTE, SOLO and SILENCED separately from Project colour and current selection.
+The displayed masks come from Core's applied 64-slot state. Pending controls stay
+pending until readback; unavailable controls are disabled without claiming neutral.
+
+Bank and Pattern changes retain the masks. Pad strikes and the existing ↑/↓ keys
+choose the current Pad; these controls add no keyboard/MIDI mapping. Leaving
+Perform or replacing the Project clears the gates and waits for applied readback,
+even with HOLD on. HOLD only retains FX. The controls use the shared bounded
+Performance input queue; old-epoch replies cannot mutate a replacement owner.
+
+Performance recording captures existing masks in its initial state and journals
+later changes through the typed producer. Stop/Save/reopen/Replay retain that
+history. Live masks never write Pad `playback.muted`, authoring Undo or localStorage.
+They do not change the listening MASTER or recording/output level.
+
 ### Pad colour
 
 <StatusBadge status="implemented" /> Desktop Final T7 implements the owner's [Pad colour rule](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-pad-colour-source.md) (#1821) and its [defaults and retention](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-08-pad-colour-defaults-and-retention.md) on top of the Project 5.3.0 Pad colour fields.
@@ -757,7 +777,7 @@ Session 拒绝更新时，保留最后已接受的读数和偏好。MASTER 保�
 输入命中宽度，不参与 FX engage/move/release、HOLD 或 Performance 事件录制；
 切 FX / MORE 或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
 Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍器，但录音、
-重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 与作品电平表仍各有自己的实施边界。
+重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费；作品电平表另有自己的实施边界。
 
 Ordinary Sequence touch buttons share the common 44 px target, 32 px
 painted face and 6 px face radius. Grid cells, note gestures and continuous

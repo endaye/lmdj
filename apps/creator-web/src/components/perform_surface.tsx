@@ -14,6 +14,7 @@ import {
 import {transportStatusLabel} from "./transport_status";
 import {
   PERFORMANCE_FX_ORDER,
+  selectLivePadGate,
   type PerformController,
   type PerformState,
 } from "../state/perform_state";
@@ -23,12 +24,14 @@ import {
   type FxGroup,
   type MonitorVolumeControl,
 } from "./fx_slider_bank";
+import {slotAddress} from "../state/view_model";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
 
 export interface PerformSurfaceProps {
   readonly controller: PerformController;
   readonly project: ProjectView;
   readonly bank: Bank;
+  readonly currentPad?: number;
   // The Perform surface renders the same global Pattern transport projection
   // every other mode consumes; it never drives it.
   readonly transport?: PatternTransportState;
@@ -252,6 +255,11 @@ export function PerformSurface(props: PerformSurfaceProps) {
     : state.captureStatus.state === "unavailable"
       ? performCaptureUnavailableMessage(state.captureStatus.error.code)
       : null;
+  const currentPad = props.currentPad;
+  const currentGate = currentPad === undefined ? null : selectLivePadGate(state.padGates, currentPad);
+  const gatesDisabled = currentGate === null || state.padGates.provenance !== "core" ||
+    state.replay?.state === "playing" ||
+    !["idle", "recording", "flushing", "stopped"].includes(state.recording.phase);
   const performing = ["recording", "flushing"].includes(state.recording.phase);
   // #1958: without a Performance recording, Launch drives the global transport
   // through selection. Unsettled Performance operations still own their
@@ -332,6 +340,24 @@ export function PerformSurface(props: PerformSurfaceProps) {
         onEngage={(fx, value) => controller.engageFx(fx, value)}
         onMove={(gestureId, fx, value) => controller.moveFx(gestureId, fx, value)}
         onRelease={(gestureId, fx) => controller.releaseFx(gestureId, fx)} />
+      {page === "live" && currentPad !== undefined && currentGate !== null ? (
+        <section className="perform-pad-gates" aria-label="Current Pad live controls">
+          <strong>Current Pad {slotAddress(currentPad)}</strong>
+          <button type="button" aria-label={`Mute ${slotAddress(currentPad)}`}
+            aria-pressed={currentGate.muted} disabled={gatesDisabled}
+            onClick={() => controller.togglePadGate("mute", currentPad)}>Mute</button>
+          <button type="button" aria-label={`Solo ${slotAddress(currentPad)}`}
+            aria-pressed={currentGate.solo} disabled={gatesDisabled}
+            onClick={() => controller.togglePadGate("solo", currentPad)}>Solo</button>
+          <output role="status" aria-label="Live Pad status">
+            {state.padGates.provenance === "unavailable" ? "Unavailable" :
+              state.padGates.provenance === "pending" ? "Pending" :
+              currentGate.muted ? "Silenced · Mute" :
+              currentGate.silenced ? "Silenced · other Pads soloed" :
+              currentGate.solo ? "Active · Solo" : "Active"}
+          </output>
+        </section>
+      ) : null}
       <RecordingPanel page={page} navigationDisabled={fxGestureActive} onReview={() => setPage("takes")} state={state} canRecord={!props.recordingBusy && controller.canRecord()}
         onRecord={() => { void controller.record(); }}
         onFlush={() => { void controller.flush(); }}

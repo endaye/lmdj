@@ -11,7 +11,7 @@ export const AUDIO_TRANSITION_TIMEOUT_MS = 35_000;
 export const PROJECT_TRANSITION_TIMEOUT_MS = 125_000;
 
 export async function openPerform(page) {
-  const perform = page.getByRole("button", {name: "Perform"});
+  const perform = page.getByRole("button", {name: "Perform", exact: true});
   await expect(perform).toBeEnabled({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await perform.click();
   await expect(page.getByRole("main", {name: "Perform"})).toBeVisible();

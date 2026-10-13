@@ -2087,7 +2087,7 @@ test("a hard-left Pad pan silences the right channel of the recorded master outp
 // lmdj.project.v5 5.2.0. Replaces an assigned Pad's sample with the stereo
 // 4 800-frame witness sawtooth (a ~495 Hz fundamental with every harmonic),
 // exactly as installPerformWitnessSample does for Pad A01.
-async function installWitnessOn(page, padName, key) {
+async function installWitnessOn(page, padName, key, buffer = pcm16Wav({channels: 2})) {
   const pad = page.getByRole("button", {name: new RegExp(`^${padName} — assigned — Key ${key}$`)});
   await expect(pad).toBeVisible({timeout: AUDIO_TRANSITION_TIMEOUT_MS});
   await pad.evaluate((element) => element.click());
@@ -2097,7 +2097,7 @@ async function installWitnessOn(page, padName, key) {
   await (await chooser).setFiles({
     name: "tone-witness-stereo.wav",
     mimeType: "audio/wav",
-    buffer: pcm16Wav({channels: 2}),
+    buffer,
   });
   await expect(page.getByRole("dialog", {name: `Replace ${padName}?`})).toBeVisible();
   await page.getByRole("button", {name: "Confirm replace"}).click();
@@ -2376,4 +2376,170 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   await expect(filterStatus).toContainText("core");
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
+});
+
+
+// C2 observes real Core output and the real Master tap. No audio implementation,
+// request, input sequence or capture acknowledgement is replaced by this observer.
+test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and reopened replay", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(420_000);
+  await page.addInitScript(() => {
+    const NativeNode = window.AudioWorkletNode;
+    window.__gateReplayPcm = [];
+    window.__gateCaptureEnabled = false;
+    window.AudioWorkletNode = class extends NativeNode {
+      constructor(context, name, options) {
+        super(context, name, options);
+        if (name === "lmdj-perform-master-tap") this.port.addEventListener("message", ({data}) => {
+          if (window.__gateCaptureEnabled && data?.type === "batch") {
+            window.__gateReplayPcm.push(Array.from(data.channels[0]));
+          }
+        });
+      }
+    };
+  });
+  await importActivateAndPerform(page);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  const quietWitness = pcm16Wav({channels: 2});
+  for (let offset = 44; offset < quietWitness.length; offset += 2) {
+    quietWitness.writeInt16LE(Math.round(quietWitness.readInt16LE(offset) / 2), offset);
+  }
+  await installWitnessOn(page, "Pad A01", "Z", quietWitness);
+  await page.getByRole("button", {name: "Bank D", exact: true}).click();
+  await installWitnessOn(page, "Pad D16", "4");
+  await openPerform(page);
+  await assignThenMovePattern(page);
+  const selectPad = async (slot) => {
+    // A Bank change may hide the current Pad. The explicit control label still
+    // names the one current selection and is the navigation starting point.
+    const label = await page.getByRole("region", {name: "Current Pad live controls"}).locator("strong").textContent();
+    const address = /([A-D])(\d{2})/.exec(label);
+    let selected = (address[1].charCodeAt(0) - 65) * 16 + Number(address[2]) - 1;
+    while (selected !== slot) {
+      const step = selected < slot ? 1 : -1;
+      await page.getByRole("button", {name: step > 0 ? "Next Pad — ↓" : "Previous Pad — ↑"}).click();
+      selected += step;
+    }
+    await page.getByRole("button", {name: `Bank ${String.fromCharCode(65 + Math.floor(slot / 16))}`, exact: true}).click();
+    await expect(page.getByRole("button", {name: `Mute ${String.fromCharCode(65 + Math.floor(slot / 16))}${String(slot % 16 + 1).padStart(2, "0")}`})).toBeVisible();
+  };
+  const gate = async (kind, slot, enabled) => {
+    await selectPad(slot);
+    const name = `${kind} ${String.fromCharCode(65 + Math.floor(slot / 16))}${String(slot % 16 + 1).padStart(2, "0")}`;
+    const button = page.getByRole("button", {name, exact: true});
+    await expect(button).toBeEnabled({timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+    await button.click();
+    await expect(button).toHaveAttribute("aria-pressed", String(enabled), {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+    await expect(button).toBeEnabled();
+  };
+  const before = await inspectProjectTruth(page);
+  await gate("Solo", 0, true);
+  await gate("Mute", 63, true);
+  await expect(page.getByRole("status", {name: "Live Pad status"})).toHaveText("Silenced · Mute");
+  expect(await inspectProjectTruth(page)).toEqual(before);
+  const recording = await beginRecording(page);
+  let pointer = 60;
+  const strike = async (slot) => {
+    await selectPad(slot);
+    const address = `${String.fromCharCode(65 + Math.floor(slot / 16))}${String(slot % 16 + 1).padStart(2, "0")}`;
+    const pad = page.getByRole("button", {name: new RegExp(`^Pad ${address} —`)});
+    const pointerId = pointer++;
+    await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId});
+    await expect(recording).toContainText(/open Pads\s*[:·]\s*1/i, {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    await page.waitForTimeout(180);
+    await pad.dispatchEvent("pointerup", {button: 0, isPrimary: true, pointerId});
+    await expect(recording).toContainText(/open Pads\s*[:·]\s*0/i, {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    await page.waitForTimeout(200);
+  };
+  await strike(63); // initial mute + initial other Solo: silence before any event change
+  await strike(0);  // A, half amplitude
+  const launch = page.getByRole("button", {name: "Launch Pattern 2"});
+  await launch.click();
+  await expect(launch).toHaveAttribute("data-launch", "acknowledged", {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+  await expect(page.getByRole("button", {name: "Solo A01"})).toHaveAttribute("aria-pressed", "true");
+  await gate("Solo", 63, true);
+  await gate("Mute", 63, false);
+  await strike(63); // B, full amplitude; both A and D are Solo
+  await gate("Mute", 0, true);
+  await strike(0);  // mute wins over A's Solo
+  await gate("Mute", 63, true);
+  await strike(63); // mute wins over D's Solo
+  await gate("Mute", 63, false);
+  await strike(63); // B again
+  await gate("Mute", 0, false);
+  await strike(0);  // A again
+  await stopRecording(page);
+  const recorded = parsePcm16StereoWav(await exportPerformanceWav(page));
+  const signature = (channel) => {
+    const values = [];
+    let from = 0;
+    for (;;) {
+      const start = channel.findIndex((value, index) => index >= from && Math.abs(value) > 256);
+      if (start < 0) break;
+      values.push(rms(channel.slice(start, start + 4_800)));
+      from = start + 4_800 + 128;
+    }
+    return values;
+  };
+  const captured = signature(recorded.left);
+  expect(captured).toHaveLength(4);
+  expect(captured[0]).toBeGreaterThan(2_000);
+  expect(captured[1] / captured[0]).toBeCloseTo(2, 1);
+  expect(captured[2] / captured[0]).toBeCloseTo(2, 1);
+  expect(captured[3] / captured[0]).toBeCloseTo(1, 1);
+  await savePerformanceWithBusyRetry(page, "Gate Set");
+  await expect(page.getByRole("status", {name: "WAV binding status"})).toContainText("bound");
+  const savedRevision = await projectRevision(page);
+
+  // Live exit owns an acknowledged clear, even when HOLD would preserve FX.
+  await showPerformPage(page, "Live");
+  await selectPad(63);
+  const mute = page.getByRole("button", {name: "Mute D16"});
+  if (await mute.getAttribute("aria-pressed") === "false") await gate("Mute", 63, true);
+  const hold = page.getByRole("button", {name: "HOLD", exact: true});
+  if (await hold.getAttribute("aria-pressed") === "false") await hold.click();
+  await expect(hold).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", {name: "Sequence", exact: true}).click();
+  await expect(page.getByRole("main", {name: "Perform", exact: true})).toHaveCount(0);
+  await openPerform(page);
+  await expect(page.getByRole("button", {name: "Mute D16"})).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", {name: "Solo D16"})).toHaveAttribute("aria-pressed", "false");
+  await selectPad(0);
+  await expect(page.getByRole("button", {name: "Solo A01"})).toHaveAttribute("aria-pressed", "false");
+  expect(await projectRevision(page)).toBe(savedRevision);
+  const after = await inspectProjectTruth(page);
+  expect(after.project.banks).toEqual(before.project.banks);
+
+  // Reopen before replay; record that replay into an empty Pad using the real
+  // Internal playback source. The PCM observer sees only the actual tap batches.
+  await page.reload();
+  await openLocalProject(page);
+  expect(await projectRevision(page)).toBe(savedRevision);
+  await activateAudio(page);
+  await openPerform(page);
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  await page.getByRole("group", {name: "Pad recording source"}).getByRole("button", {name: "Internal playback", exact: true}).click();
+  await page.getByRole("button", {name: "Back to music", exact: true}).click();
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByRole("button", {name: "Bank B", exact: true}).click();
+  await page.getByRole("button", {name: /^Pad B01 — assigned/}).click();
+  await showSamplePage(page, "Pad");
+  await page.getByRole("button", {name: "Delete Pad B01", exact: true}).click();
+  await expect(page.getByRole("button", {name: /^Pad B01 — empty/})).toBeVisible();
+  await openPerform(page);
+  await showPerformPage(page, "Replay");
+  await page.getByRole("button", {name: /^Pad B01 — empty/}).focus();
+  await page.evaluate(() => { window.__gateReplayPcm = []; window.__gateCaptureEnabled = true; });
+  await page.keyboard.down("KeyZ");
+  await expect(page.getByRole("region", {name: "Pad recording"})).toContainText("recording");
+  await page.getByRole("button", {name: "Replay Gate Set"}).click();
+  const replay = page.getByRole("status", {name: "Replay status"});
+  await expect(replay).toContainText("playing", {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+  await expect(replay).toContainText("complete", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.keyboard.up("KeyZ");
+  await expect(page.getByRole("button", {name: /^Pad B01 — assigned/})).toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  const replayed = signature(await page.evaluate(() => window.__gateReplayPcm.flat().map(value => value * 32768)));
+  expect(replayed).toHaveLength(4);
+  for (let index = 0; index < 4; index += 1) expect(replayed[index] / captured[index]).toBeCloseTo(1, 1);
 });

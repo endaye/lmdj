@@ -209,12 +209,12 @@ test("published Creator completes authoring, playback, and durable reload", asyn
     await expect(page.getByRole("heading", {name: `Project ${imported}`}))
       .toBeVisible({timeout: 120_000});
   }
-  // Current Hosts render the overview definition "64 / 64 Pads used"; older
-  // Hosts expose the bare Project summary "64 / 64" (which current Hosts keep
-  // in the tree hidden). Anchor both shapes and keep only the visible match,
-  // so a still-rendering overview settles on whichever surface this Host
-  // serves, instead of branching on a single visibility snapshot.
+  // The current Project overview names assigned Pads and Patterns; historical
+  // Hosts retain either usage summary. Keep the exact 64-Pad far side across
+  // those immutable presentations, without a one-shot visibility branch.
   await expect(
-    page.getByText(/^64 \/ 64( Pads used)?$/).filter({visible: true}),
+    page.getByText(/^64 \/ 64( Pads used)?$/)
+      .or(page.getByTestId("project-overview").getByText(/^64 Pads · \d+ Patterns$/))
+      .filter({visible: true}),
   ).toBeVisible();
 });
