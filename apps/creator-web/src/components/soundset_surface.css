@@ -1,0 +1,157 @@
+/* #2112 U09: page layout only. Shared touch actions own their face and hit size. */
+.hardware-workspace .soundset-surface {
+  overflow: visible;
+  gap: var(--creator-group-gap);
+}
+.hardware-workspace .soundset-surface .soundset-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.hardware-workspace .soundset-surface .soundset-header h2 {
+  font: 500 var(--creator-heading-size)/20px var(--creator-font-action);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.soundset-surface .soundset-step-label {
+  font: 10px/14px var(--creator-font-mono);
+  color: var(--creator-muted);
+  padding-top: 3px;
+}
+.hardware-workspace .soundset-surface .soundset-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--creator-group-gap);
+}
+.hardware-workspace .soundset-surface .soundset-list > li {
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  padding: 12px;
+}
+.hardware-workspace .soundset-surface .soundset-list h3,
+.hardware-workspace .soundset-surface .soundset-target-card h3 {
+  font: 500 var(--creator-value-size)/25px var(--creator-font-action);
+  overflow-wrap: anywhere;
+}
+.hardware-workspace .soundset-surface .soundset-card-summary,
+.hardware-workspace .soundset-surface .soundset-attribution,
+.hardware-workspace .soundset-surface .soundset-metadata,
+.hardware-workspace .soundset-surface .soundset-target-card p {
+  margin: 0;
+  font: 10px/14px var(--creator-font-mono);
+  color: var(--creator-muted);
+}
+.soundset-surface .soundset-metadata summary {
+  cursor: pointer;
+  min-height: var(--creator-control-hit);
+  text-decoration: underline;
+  display: flex;
+  align-items: center;
+}
+.soundset-surface .soundset-metadata dl,
+.soundset-surface .soundset-metadata dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.soundset-surface .soundset-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.soundset-surface .soundset-browse-actions,
+.soundset-surface .soundset-audition-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--creator-group-gap);
+}
+.hardware-workspace .soundset-surface .soundset-inspect {
+  gap: var(--creator-group-gap);
+}
+.hardware-workspace .soundset-surface .soundset-license {
+  font: 11px/15px var(--creator-font-mono);
+  color: var(--creator-muted);
+}
+.hardware-workspace .soundset-surface .soundset-slots {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(8, auto);
+  grid-auto-flow: column;
+  gap: 4px var(--creator-group-gap);
+}
+.hardware-workspace .soundset-surface .soundset-slots > li {
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+}
+.hardware-workspace .soundset-surface .soundset-slots button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.soundset-surface .soundset-slot-index { flex: none; min-width: 0; font-size: inherit; }
+.soundset-surface .soundset-slot-empty {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: var(--creator-control-hit);
+  padding: 4px;
+  color: var(--creator-muted);
+  font: 9px/13px var(--creator-font-mono);
+}
+.soundset-surface .soundset-target-card {
+  width: 100%;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--creator-base);
+  display: grid;
+  gap: 6px;
+}
+.soundset-surface .soundset-target-card h3 { margin: 0; }
+.hardware-workspace .soundset-surface .soundset-target,
+.hardware-workspace .soundset-surface .soundset-preview {
+  gap: var(--creator-group-gap);
+  justify-items: stretch;
+}
+.hardware-workspace .soundset-surface .soundset-map-cell {
+  border: 0;
+  min-height: 36px;
+  padding: 4px;
+  gap: 0;
+}
+.hardware-workspace .soundset-surface .soundset-map-cell[data-plan="collision"] {
+  color: var(--creator-apricot, #f2b584);
+}
+.hardware-workspace .soundset-surface .soundset-policy {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--creator-group-gap);
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.soundset-surface .soundset-policy legend {
+  font: 10px/14px var(--creator-font-mono);
+  color: var(--creator-muted);
+  margin-bottom: 4px;
+}
+.hardware-workspace .soundset-surface .soundset-policy label {
+  min-width: 0;
+  min-height: var(--creator-control-hit);
+  padding: 4px 6px;
+  border: 1px solid var(--creator-line);
+  border-radius: 6px;
+  background: var(--creator-raised);
+  font: 9px/13px var(--creator-font-mono);
+}
+.soundset-surface .soundset-policy label:has(:checked) {
+  border-color: var(--creator-lime);
+  color: var(--creator-lime);
+}
+.soundset-surface .soundset-policy label:has(:focus-visible) {
+  outline: 2px solid var(--creator-text);
+  outline-offset: 2px;
+}
+.soundset-surface .soundset-policy:disabled { opacity: .45; }

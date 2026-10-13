@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-10-04
     occurrence: https://github.com/endaye/lmdj/pull/1808
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-13
+    occurrence: https://github.com/endaye/lmdj/pull/2102
+    observed_by: opencode (GLM 5.3)
 exit: gate:tests/build/version_test.py
 ---
 

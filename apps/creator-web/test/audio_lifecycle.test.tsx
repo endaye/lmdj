@@ -234,14 +234,14 @@ test("Project actions stay disabled until audio suspension settles", async () =>
   await user.click(screen.getByRole("button", {name: "Suspend audio"}));
   await user.click(screen.getByRole("button", {name: "Back to music"}));
   await screen.findByText("Audio suspending");
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}).hasAttribute("disabled"))
     .toBe(true);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(true);
 
   await act(async () => finishSuspend?.(true));
   await screen.findByText("Audio suspended");
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(false);
@@ -318,14 +318,14 @@ test("automatic reopen owns the same Project action lane until completion", asyn
     errorCode: "HOST_RESTART_REQUIRED",
   });
   await waitFor(() => expect(second.calls).toContain("lane-second:open"));
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}).hasAttribute("disabled"))
     .toBe(true);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(true);
 
   finishReopen?.();
   await waitFor(() => expect(second.calls).toContain("lane-second:reload"));
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}).hasAttribute("disabled"))
     .toBe(false);
 });
 
@@ -363,7 +363,7 @@ test("Runtime replacement cannot leave an aborted import permanently visible", a
   await waitFor(() =>
     expect(screen.getByTestId("creator-phase").textContent).toBe("ready"));
   expect(second.calls).toEqual(["import-second:start", "import-second:list"]);
-  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}).hasAttribute("disabled"))
     .toBe(false);
   expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(false);
@@ -893,7 +893,8 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
   await latch(6);
   await act(async () => value.emit({state: "audio-suspended", errorCode: null}));
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
-  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+  // The Project browser already lists local Projects; reopening still crosses
+  // the actual Open action and its fresh Runtime/Voice assertions below.
   await userEvent.click(screen.getByRole("button", {name: "Open Project 11111111"}));
   await screen.findByRole("heading", {name: "Project 11111111"});
   await act(async () => value.emit({state: "running", errorCode: null}));

@@ -4,6 +4,7 @@ import {EqEditor} from "./eq_editor";
 import {ModalDialog} from "./modal_dialog";
 import {ParameterSlider, type SampleParameterSpec} from "./parameter_slider";
 import {SampleParameterEditor} from "./sample_parameter_editor";
+import "./sample_controls_layout.css";
 import type {
   PadPlayback,
   SampleLoopMode,
@@ -197,7 +198,7 @@ export function SampleControls({
             triggerMode: modeFor(!loop, primary),
           })}
         >
-          Loop
+          Loop<span aria-hidden="true">: {loop ? "On" : "Off"}</span>
         </button>
         <button
           type="button"
@@ -208,7 +209,7 @@ export function SampleControls({
             triggerMode: modeFor(loop, !primary),
           })}
         >
-          {loop ? "Hold" : "One Shot"}
+          {loop ? "Hold" : "One Shot"}<span aria-hidden="true">: {primary ? "On" : "Off"}</span>
         </button>
         <button
           type="button"
@@ -216,7 +217,7 @@ export function SampleControls({
           disabled={disabled}
           onClick={() => onCommit({...playback, muted: !playback.muted})}
         >
-          Mute
+          Mute<span aria-hidden="true">: {playback.muted ? "On" : "Off"}</span>
         </button>
         <button
           type="button"
@@ -224,7 +225,7 @@ export function SampleControls({
           disabled={disabled}
           onClick={() => onCommit({...playback, reverse: !playback.reverse})}
         >
-          Reverse
+          Reverse<span aria-hidden="true">: {playback.reverse ? "On" : "Off"}</span>
         </button>
       </div>
       {loop ? (

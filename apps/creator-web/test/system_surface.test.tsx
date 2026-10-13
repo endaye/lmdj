@@ -1,7 +1,7 @@
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
-import {SystemSurface, ProviderSettings} from "../src/components/system_surface";
+import {SystemSurface, SystemStatus, PadRecordingSource, ProviderSettings} from "../src/components/system_surface";
 import {CandidateSurface} from "../src/components/candidate_surface";
 import type {CreatorCandidateRuntimeSession} from "../src/runtime/runtime_types";
 
@@ -9,6 +9,56 @@ test("System focuses its heading and offers an explicit return without changing 
   const back = vi.fn();render(<SystemSurface onBack={back}><p>Settings</p></SystemSurface>);
   expect(document.activeElement).toBe(screen.getByRole("heading", {name:"System"}));
   await userEvent.click(screen.getByRole("button", {name:"Back to music"}));expect(back).toHaveBeenCalledOnce();
+});
+
+test("hidden System retains details and only focuses its heading when entered", async () => {
+  const user = userEvent.setup();
+  const view = (active: boolean) => <SystemSurface active={active} onBack={() => {}}>
+    <details><summary>Project details</summary><p>Retained facts</p></details>
+  </SystemSurface>;
+  const rendered = render(view(false));
+  expect(screen.queryByRole("heading", {name: "System"})).toBeNull();
+  expect(document.activeElement).toBe(document.body);
+  rendered.rerender(view(true));
+  expect(document.activeElement).toBe(screen.getByRole("heading", {name: "System"}));
+  await user.click(screen.getByText("Project details"));
+  const details = screen.getByText("Retained facts").closest("details")!;
+  expect(details.open).toBe(true);
+  rendered.rerender(view(false));
+  expect(screen.queryByRole("button", {name: "Back to music"})).toBeNull();
+  rendered.rerender(view(true));
+  expect(details.open).toBe(true);
+  expect(document.activeElement).toBe(screen.getByRole("heading", {name: "System"}));
+});
+
+test("System status displays actual audio and MIDI states", () => {
+  const rendered = render(<SystemStatus audio="recovering" midi={{permission: "denied", connectedInputCount: 0}} />);
+  expect(screen.getByLabelText("System audio status").textContent).toBe("recovering");
+  expect(screen.getByLabelText("System MIDI status").textContent).toBe("denied");
+  rendered.rerender(<SystemStatus audio="running" midi={{permission: "granted", connectedInputCount: 2}} />);
+  expect(screen.getByLabelText("System audio status").textContent).toBe("running");
+  expect(screen.getByLabelText("System MIDI status").textContent).toBe("2 inputs");
+});
+
+test("recording source segments dispatch a distinct source and stay locked during a take", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  const rendered = render(<PadRecordingSource source="microphone" disabled={false} onChange={onChange} />);
+  const microphone = screen.getByRole("button", {name: "Microphone"});
+  const playback = screen.getByRole("button", {name: "Internal playback"});
+  expect(microphone.getAttribute("aria-pressed")).toBe("true");
+  await user.click(microphone);
+  expect(onChange).not.toHaveBeenCalled();
+  playback.focus();
+  await user.keyboard("{Enter}");
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("master");
+  rendered.rerender(<PadRecordingSource source="master" disabled onChange={onChange} />);
+  expect(playback.getAttribute("aria-pressed")).toBe("true");
+  expect(microphone.hasAttribute("disabled")).toBe(true);
+  expect(playback.hasAttribute("disabled")).toBe(true);
+  await user.click(microphone);
+  expect(onChange).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("Source changes are temporarily unavailable.")).toBeTruthy();
 });
 test("Provider permission revocation refreshes and preserves other grants", async () => {
   const configure = vi.fn(async permissions => ({granted_permissions:permissions}));

@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import traceback
 import unittest
@@ -46,6 +47,9 @@ class PreparationFixture(setup_fixture.SetupFixture):
             owned = material.root / 'tests/build/ci_change_scope_test.py'
             owned.parent.mkdir(parents=True, exist_ok=True)
             owned.write_text("print('actual ownership fixture')\n")
+            identity = material.root / 'tests/build/version_test.py'
+            identity.parent.mkdir(parents=True, exist_ok=True)
+            identity.write_text("print('actual identity fixture')\n")
             return original(material)
         with patch.object(setup_fixture.fixture.MaterialTest, 'commit', seed):
             super().setUp()
@@ -312,6 +316,16 @@ class PreparationObserverBoundaryTest(checks_fixture.ChecksFixture):
 
 
 class CoordinatedPreparationFixture(PreparationFixture):
+    # The scoped export carries the real tests/build/version_test.py, so the
+    # Task command executes it, not the legacy stub: also materialize the
+    # passive sources that identity suite reads, and keep its Python bytecode
+    # caches untracked like the real repository's ignore policy does.
+    VERSION_TEST_INPUTS = ("scripts/version.py",
+        "apps/native-host/src/main.cpp", "apps/native-host/CMakeLists.txt",
+        "apps/creator-web/src/main.tsx", "apps/creator-web/tools/package.py",
+        "apps/web-runtime-host/src/main.mjs", "apps/web-runtime-host/tools/package.py",
+        "packages/web-runtime-platform/CMakeLists.txt")
+
     def setUp(self):
         self.material_authorized = []
         inputs = CandidateInputs(ROOT, material_scope=P1_MATERIAL_SCOPE)
@@ -320,6 +334,11 @@ class CoordinatedPreparationFixture(PreparationFixture):
         original = setup_fixture.fixture.MaterialTest.commit
         def seed(material):
             exporter._export(frozen, material.root)
+            for name in self.VERSION_TEST_INPUTS:
+                target = material.root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / name, target)
+            (material.root / '.gitignore').write_text('.fixture-*\n__pycache__/\n')
             return original(material)
         with patch.object(setup_fixture.fixture.MaterialTest, 'commit', seed):
             super().setUp()

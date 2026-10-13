@@ -23,6 +23,7 @@ from .publication_workspace import PublicationWorkspace
 CHECKS = (
     ("scripts/docs-site.sh check", ("bash", "scripts/docs-site.sh", "check"), 900),
     ("python3 tests/build/ci_change_scope_test.py", ("python3", "tests/build/ci_change_scope_test.py"), 120),
+    ("python3 tests/build/version_test.py", ("python3", "tests/build/version_test.py"), 120),
     ("git diff --cached --check", ("git", "-c", "core.hooksPath=" + os.devnull,
         "-c", "core.fsmonitor=false", "-c", "core.attributesFile=" + os.devnull,
         "-c", "core.whitespace=blank-at-eol,blank-at-eof,space-before-tab",

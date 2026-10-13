@@ -33,6 +33,26 @@ GLM-5.3-FlashX（智谱国内开放平台按量计费端点，API 模型名 `glm
 base/head 全量字节与精确 diff）→ `run-engine.sh --witness`（读回安装的引擎、
 bundle 与 `runtime.toml` 身份）→ `run-engine.sh --input`（引擎，`flock` 单槽位）→
 `capture --backend deepseek` → `finalize`；随后由独立 publisher 发布，merged-PR scope map 不变。
+
+`collect-t2` 在完整采集前准备固定输入对象：可信控制代码解析当前目标和
+merge base，先以不做 rename 匹配的树元数据枚举变更两侧 blob 与相关的
+base `.gitattributes`，再从既有 origin 显式获取缺失的不可变 OID。
+这一阶段只补对象，不 checkout PR，不改 refs、工作文件、index、配置或
+`FETCH_HEAD`，并关闭维护、prune、tag 和 submodule 操作。持久 runner 的
+`blob:none` 缓存可能缺少新 head 的内容；一次 commit fetch 或另一台
+runner 的成功不能证明本次完整输入已经可读。
+准备后仍须在隔离对象视图读回完整性，随后原采集器执行 canonical rename、
+base 属性隔离、全量字节与 diff 认证；采集器始终禁止 lazy fetch。
+独立 publisher 在自己的 checkout 重新准备当前 base/head 输入，不能依赖
+采集 runner 的缓存。历史 finding 的 recheck 只在原评审、路径、ancestor 与
+conversation 认证后，准备该路径的旧/新 blob 及原 review head 的相关属性；
+它不获取其他历史变更。源码与修复 diff 仍通过禁止网络的对象视图读取，
+原有字节限制、当前头复核和线程发布保护保持不变。显式 Git 传输使用独占
+进程组，在超时、输出超界和结束时清理其后代，避免父进程退出后仍写对象。
+传输失败、对象仍缺失或目标变化均不产生成功输入回执，也不能进入模型评审。
+本地真实 partial-clone 测试与生产当前头评审是不同的验收：只有采用已合入
+可信控制代码的新 run，才能证明实际 runner 的准备和最终发布成功。
+
 `capture` 的 backend 记录链起点（deepseek）；引擎后备到 GLM 产出的评审
 与该步骤不冲突，attempts 仍按可信 provider 顺序校验。
 引擎进程只拿到 `PR_AGENT_DEEPSEEK_API_KEY` 与 `PR_AGENT_ZAI_API_KEY`，没有

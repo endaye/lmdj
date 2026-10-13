@@ -60,8 +60,10 @@ The common Figma frame is 752×176 with 16 padding, 22 heading, 68–74 body
 and 24 readbacks. Reuse existing offline fonts and colour tokens. Preserve
 supported facts the examples omit, including no Project/Pad, publication
 pending, Sample saved/audio pending, unknown/unavailable and queued versus
-playing. Figma data is not a runtime value oracle. Small-screen scaling is a
-separate pending decision; this read-only Task adds no hit targets or scaling
+playing. Figma data is not a runtime value oracle. At the initial Task base,
+small-screen scaling was a separate pending decision. The later approved
+adaptive policy and U01 implementation are now included by the committed-main
+integration below. This read-only display Task adds no hit targets or scaling
 policy and does not weaken the approved 44 minimum actual hit area.
 
 ## Declared files
@@ -317,3 +319,82 @@ clean-source merge checkpoint after this result, solely as the input to the
 normal packager. Fresh build/package and the two complete browser files will
 bind to that merge head; their final receipts will be handed to Root for PR
 Verification without another source or plan amend.
+
+
+## Committed-main integration after C1 and Recovery
+
+Root admitted a source-only merge from the pushed head
+`12f3ec5834274ce9fc5aacd901e056d2627953af` to captured fresh main
+`35455f7576fc96ad253f2d5a523ba457e1df9321`, retaining the pushed history.
+The complete original 15-file Task diff and a hash inventory of 50 existing
+receipt/artifact files were preserved under
+`build/verification/u03a-integrate-35455f75/` before the merge. Live #2112 was
+read again; its older integration status is historical, not current source
+proof. Main includes U01 actual-target/adaptive layout, U05a Playback, U06a
+Grid Tools, U09 Sound Sets, U11 System, U12a Recovery and C1 typed Filter.
+The last advancement from `0909a301` to `35455f75` changes only release/version
+inputs; none of the Creator or owning Host Portal inputs changed in that step.
+
+The original `12f3ec` input completed its normal build/package and both full
+Chromium hardware-layout/accessibility files, with 15 passes and the existing
+WebKit-only skip. Those results remain bound to the old input. They do not
+verify the newly integrated C1, Recovery or compact 152px upper display.
+
+`git merge --no-commit --no-ff` reported exactly two content conflicts, both
+inside the declared Host Portal files. The System table combines U03's
+independent upper Project/Audio/MIDI display with U11's actual touch groups.
+The shared historical paragraph keeps U01's adaptive geometry and U03's
+explicit historical T9/T10/T11 attribution. Its former statement that all
+remaining V4 capabilities are absent is now explicitly historical, pointing
+to main's existing C1 Filter section. All separate Project, Playback, Grid
+Tools, Sound Set, System, Recovery and C1 sections are retained. No producer,
+controller, interface or lifecycle decision is changed by the resolution.
+
+The automatically merged `workspace_shell.test.tsx` differs from captured main
+only in U03's independent Bank and Quantize assertions. All incoming System,
+Sound Set, Recovery and Project cases remain byte-for-byte present. The whole
+hardware-layout browser file differs from captured main only by the six
+loading/inspect assertions from the earlier U03 repair. Main's complete
+adaptive/44px geometry and C1 Cutoff/HOLD/MASTER journey remain intact,
+including every request/readback, silent Pad traversal and Truth assertion.
+The overview production components are unchanged from `12f3ec`.
+
+The later automated review's proposed assigned-Pad `UNAVAILABLE` trigger does
+not match the current source: `padContent` returns a real category or SAMPLE
+for assigned Pads, EMPTY for an unassigned existing Pad, and UNAVAILABLE only
+when the selected slot is absent from Project projection. The existing
+LOADING repair, assigned-loading-to-inspect component case and actual held
+inspect browser leg are retained; no production branch is changed to conflate
+missing authority with a pending request. Root owns review-thread disposition.
+
+This integration remains source-only at this declaration: all eight whole
+owning component files, Creator typecheck, scope ownership, whole Portal,
+fresh normal build/package and both complete browser files are UNRUN for the
+combined input. Their full selections, deadlines and journey legs are retained.
+Root must release the shared resource window before execution; S6 currently
+owns the Portal window. No clean merge checkpoint, push or PR transition is
+claimed by static conflict resolution. Device, audible output and the full
+35-screen acceptance remain separate from these Task checks.
+
+
+Root then admitted one complete low-tier sequence on the frozen integration
+index tree `a4bf312925e6765090c9f550bafdb4c309659ce4`. It ran from
+2026-10-13 08:03:36.418 UTC to 08:05:09.761 UTC, without test filtering,
+retries, source edits or deadline changes. The same eight whole component
+files passed 258/258 (Vitest 80.90 seconds); full `tsc --noEmit`, syntax checks
+of both complete owning browser files, the full 77-test scope suite (8.988
+seconds), and staged/unstaged whitespace checks each exited 0. The component
+log retains the non-failing jsdom stylesheet and Node localStorage warnings.
+No product or test source was changed in response to them.
+
+All 15 source hashes and the entire index tree matched before and after the
+sequence. Raw logs and exact commands, timestamps, exit codes, log SHA-256s
+and observed owned process groups are in
+`build/verification/u03a-integrate-35455f75/low-tier-run-receipt.json` and its
+sibling logs. `low-tier-after-release.json` records the natural terminal exit
+0 and confirms that runner PID 20016 and all seven command groups are absent.
+The low-tier window is explicitly released. Only this plan's result record
+changes afterward; all product, CSS, tests and both Portal pages retain the
+tested bytes. Whole Portal, normal fresh build/package and both full browser
+journeys remain UNRUN for this integrated candidate, awaiting Root's heavy
+admission. The merge is still uncommitted and no PR action has been taken.

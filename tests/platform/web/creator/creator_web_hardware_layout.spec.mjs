@@ -15,25 +15,28 @@ function rounded(box) {
   };
 }
 
-// Desktop Final T2: the console scales to fit the stage, so its layout is
-// asserted in console units -- every page box mapped back through the scale
-// the console was drawn at -- and its fit in page pixels against the stage.
+// Full and compact shells both scale to fit without shrinking below 1 in the
+// supported viewports. Assert each layout's own dimensions, not a weakened
+// version of the full 880×592 oracle. Portrait rotation is covered separately.
 async function consoleGeometry(page) {
   const raw = await page.getByTestId("hardware-console").boundingBox();
-  const scale = raw.width / 880;
+  const compact = await page.locator("html").getAttribute("data-creator-layout") === "compact";
+  const width = compact ? Math.min(880, page.viewportSize().width - 16) : 880;
+  const scale = raw.width / width;
   const box = async (locator) => {
     const b = await locator.boundingBox();
     return rounded({x: (b.x - raw.x) / scale, y: (b.y - raw.y) / scale,
       width: b.width / scale, height: b.height / scale});
   };
-  return {raw, scale, box};
+  return {raw, scale, box, compact, width};
 }
 
 async function expectConsoleFitsStage(page) {
   const stage = await page.locator("#root").boundingBox();
-  const {raw, scale} = await consoleGeometry(page);
-  // Proportional: the 880:592 ratio survives the scale.
-  expect(Math.abs(raw.height - 592 * scale)).toBeLessThanOrEqual(1);
+  const {raw, scale, compact, width} = await consoleGeometry(page);
+  const height = compact ? 544 : 592;
+  expect(Math.abs(raw.height - height * scale)).toBeLessThanOrEqual(1);
+  expect(scale).toBeGreaterThanOrEqual(1);
   // Inside the stage on both axes, and centred in it.
   expect(raw.x).toBeGreaterThanOrEqual(stage.x - 1);
   expect(raw.y).toBeGreaterThanOrEqual(stage.y - 1);
@@ -41,12 +44,21 @@ async function expectConsoleFitsStage(page) {
   expect(raw.y + raw.height).toBeLessThanOrEqual(stage.y + stage.height + 1);
   expect(Math.abs((stage.x + stage.width / 2) - (raw.x + raw.width / 2))).toBeLessThanOrEqual(2);
   expect(Math.abs((stage.y + stage.height / 2) - (raw.y + raw.height / 2))).toBeLessThanOrEqual(2);
-  // Filled: one axis meets the stage (the console's 24px margins included).
-  const fills = Math.min(
-    Math.abs(stage.width - 880 * scale),
-    Math.abs(stage.height - 640 * scale),
-  );
-  expect(fills).toBeLessThanOrEqual(2);
+  if (compact) {
+    // Compact reserves actual margins and never grows to consume them.
+    expect(scale).toBe(1);
+    expect(raw.x - stage.x).toBeGreaterThanOrEqual(8);
+    expect(stage.x + stage.width - raw.x - raw.width).toBeGreaterThanOrEqual(8);
+    expect(raw.y - stage.y).toBeGreaterThanOrEqual(4);
+    expect(stage.y + stage.height - raw.y - raw.height).toBeGreaterThanOrEqual(4);
+  } else {
+    // Full retains its original fill-to-stage oracle, including 24px margins.
+    const fills = Math.min(
+      Math.abs(stage.width - width * scale),
+      Math.abs(stage.height - 640 * scale),
+    );
+    expect(fills).toBeLessThanOrEqual(2);
+  }
   return scale;
 }
 
@@ -95,26 +107,33 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   expect(pad).toMatchObject({width: 80, height: 80});
   const encoders = await box(page.getByTestId("physical-encoders"));
   expect(encoders).toMatchObject({
-    x: physical.x,
-    y: physical.y + 80 + 16,
-    width: 80,
-    height: 80,
+    x: physical.x - 6,
+    y: physical.y + 80 + 16 - 6,
+    width: 92,
+    height: 92,
   });
   const encoder = await box(page.getByRole("button", {
     name: "Encoder 1 — Start",
   }));
-  expect(encoder).toMatchObject({width: 32, height: 32});
+  expect(encoder).toMatchObject({width: 44, height: 44});
+  expect(await box(page.getByRole("button", {name: "Encoder 1 — Start"}).locator("svg")))
+    .toMatchObject({width: 32, height: 32});
   const keyBlock = await box(page.getByTestId("physical-keys"));
   expect(keyBlock).toMatchObject({
-    x: physical.x,
-    y: pads.y,
-    width: 80,
-    height: 368,
+    x: physical.x - 6,
+    y: pads.y - 6,
+    width: 92,
+    height: 380,
   });
   const keys = page.getByTestId("physical-controls");
   for (const bank of ["Bank A", "Bank B", "Bank C", "Bank D"]) {
     const bankBox = await box(keys.getByRole("button", {name: bank, exact: true}));
-    expect(bankBox).toMatchObject({width: 32, height: 32});
+    expect(bankBox).toMatchObject({width: 44, height: 44});
+    const face = await keys.getByRole("button", {name: bank, exact: true}).evaluate(element => {
+      const style = getComputedStyle(element, "::before");
+      return {width: style.width, height: style.height, inset: style.top};
+    });
+    expect(face).toEqual({width: "32px", height: "32px", inset: "6px"});
   }
   for (const [name, text] of [["Project", "PRJ"], ["Sample", "SMP"],
     ["Sequence", "SEQ"], ["Perform", "PRF"], ["Record", "REC"], ["Play/Stop", "PLAY"]]) {
@@ -125,14 +144,14 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(keys.getByRole("button", {name: "Play/Stop", exact: true}))
     .toHaveCSS("color", "rgb(221, 244, 120)");
   // Interaction UI puts SHIFT after Bank D and before both direction rows.
-  // Its full-width face keeps both 32px cells and their 16px gutter; the
-  // unchanged eight-row block steps 48px, so SHIFT starts four rows down.
+  // Its 80px face keeps the original centres; the 92px target shares the
+  // unchanged 48px pitch, so SHIFT still starts four rows down.
   const shift = await box(keys.getByRole("button", {name: /^SHIFT/}));
   expect(shift).toMatchObject({
-    x: physical.x,
+    x: keyBlock.x,
     y: keyBlock.y + 4 * 48,
-    width: 80,
-    height: 32,
+    width: 92,
+    height: 44,
   });
   const up = await box(keys.getByRole("button", {name: /^Previous Pad — ↑$/}));
   const left = await box(keys.getByRole("button", {name: "Previous Sample page — ←", exact: true}));
@@ -179,10 +198,11 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(page.getByRole("button", {name: "Existing workspace"})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Activate audio"})).toHaveCount(0);
 
-  // A short window shrinks the console instead of scrolling it; a wide one
-  // is limited by its height. Both keep the ratio and stay centred.
+  // Short windows use the compact geometry before fitting, retaining every
+  // control and actual targets without outer scrolling or overlap.
   for (const viewport of [{width: 768, height: 600}, {width: 1280, height: 720}]) {
     await page.setViewportSize(viewport);
+    await expect(page.locator("html")).toHaveAttribute("data-creator-layout", "compact");
     await expect.poll(async () => (await consoleGeometry(page)).scale).toBeLessThan(1.2);
     await expectConsoleFitsStage(page);
     // A tap on a known Pad still lands on that Pad under the scale.
@@ -523,9 +543,9 @@ test("the console loads both bundled font roles under its distribution CSP", asy
 });
 
 // The hit box is laid out at its full size, rather than enlarged over a
-// neighbour. Read the painted face inset and the transformed target geometry;
-// a CSS class alone cannot prove either property. Sequence keeps its approved
-// full-height Mono controls. Physical iPad ergonomics remain a separate check.
+// neighbour. Read the separately painted face and transformed target geometry;
+// a CSS class alone cannot prove either property. These design-unit checks do
+// not discharge the separate minimum effective CSS-pixel target acceptance.
 test("compact actions keep their font, visible face and separate hit boxes after scaling", async ({page}) => {
   await page.goto("/");
   await waitForBootProject(page);
@@ -545,21 +565,24 @@ test("compact actions keep their font, visible face and separate hit boxes after
       await expect(group).toBeVisible();
       const rendered = await group.locator("button").evaluateAll(elements => elements.map(element => {
         const style = getComputedStyle(element);
+        const face = getComputedStyle(element, "::before");
         const rect = element.getBoundingClientRect();
-        const inset = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
         return {text:element.textContent, height:element.offsetHeight,
-          face:element.offsetHeight - inset, family:style.fontFamily,
-          size:style.fontSize, clip:style.backgroundClip, rect:rect.toJSON()};
+          face:parseFloat(face.height), radius:face.borderRadius, family:style.fontFamily,
+          size:style.fontSize, leading:style.lineHeight, weight:style.fontWeight,
+          rect:rect.toJSON()};
       }));
       expect(rendered.length).toBeGreaterThan(1);
       for (const button of rendered) {
         expect(button.height, `${mode}: ${button.text}`).toBe(44);
-        expect(button.face).toBe(mode === "Sequence" ? 44 : 36);
-        expect(button.family).toMatch(mode === "Sequence" ? /^"IBM Plex Mono"/ : /^"Space Grotesk"/);
-        if (mode !== "Sequence") {
-          expect(button.size).toBe("12px");
-          expect(button.clip).toBe("padding-box");
-        }
+        expect(button.rect.width).toBeGreaterThanOrEqual(44);
+        expect(button.rect.height).toBeGreaterThanOrEqual(44);
+        expect(button.face).toBe(32);
+        expect(button.radius).toBe("6px");
+        expect(button.family).toMatch(/^"IBM Plex Mono"/);
+        expect(button.size).toBe("9px");
+        expect(button.leading).toBe("13px");
+        expect(button.weight).toBe("400");
       }
       for (let i=0; i<rendered.length; i++) for (let j=i+1; j<rendered.length; j++) {
         const a=rendered[i].rect, b=rendered[j].rect;
@@ -822,16 +845,17 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   await wakeAudioWithPad(page, {padAddress: "A01"});
   await page.getByRole("button", {name: "Perform", exact: true}).click();
   const filter = page.getByRole("slider", {name: "Filter", exact: true});
-  await expect(filter).toHaveValue("500");
+  await expect(page.getByRole("button", {name: "Encoder 1 — Cutoff", exact: true})).toBeEnabled();
+  await expect(filter).toHaveValue("1000");
   const acceptedFxBefore = await page.evaluate(() => window.__performPadRequests
-    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length);
-  await page.getByRole("button", {name: "Encoder 1 — Filter", exact: true}).press("ArrowUp");
-  await expect(filter).toHaveValue("510");
+    .filter(request => request.operation === "performance.live.control" && request.ok === true).length);
+  await page.getByRole("button", {name: "Encoder 1 — Cutoff", exact: true}).press("ArrowDown");
+  await expect(filter).toHaveValue("990");
   const hold = page.getByRole("button", {name: "HOLD", exact: true});
   await hold.click();
   await expect(hold).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => page.evaluate(() => window.__performPadRequests
-    .filter(request => request.operation === "performance.fx.gesture" && request.ok === true).length))
+    .filter(request => request.operation === "performance.live.control" && request.ok === true).length))
     .toBe(acceptedFxBefore + 2);
   const master = page.getByRole("slider", {name: "MASTER", exact: true});
   const monitorBefore = Number(await master.inputValue());
@@ -846,7 +870,7 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
     await down.click();
     await expect(page.getByTestId("pad-matrix").locator('[aria-current="true"]'))
       .toHaveAttribute("aria-label", new RegExp(`^Pad ${slot === 16 ? "B01" : `A${String(slot + 1).padStart(2, "0")}`} —`));
-    await expect(filter).toHaveValue("510");
+    await expect(filter).toHaveValue("990");
     await expect(hold).toHaveAttribute("aria-pressed", "true");
     await expect(master).toHaveValue(String(monitorBefore - 1));
   }
@@ -854,6 +878,6 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   expect(await inspectTruth(page)).toEqual(truth);
   const requests = await page.evaluate(() => window.__performPadRequests);
   expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
-    "performance.fx.gesture", "performance.record.begin", "performance.record.stop",
+    "performance.fx.gesture", "performance.live.control", "performance.record.begin", "performance.record.stop",
     "pattern.transport.request"].includes(request.operation))).toEqual([]);
 });

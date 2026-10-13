@@ -127,6 +127,57 @@ test("the snap selector marks the current snap and reports a change", () => {
   expect(callbacks.onSnapChange).toHaveBeenCalledWith("off");
 });
 
+test("Grid tools exposes edit mode before grid snap and explains both gestures", () => {
+  renderGrid();
+  fireEvent.click(screen.getByRole("button", {name: "Grid tools"}));
+  const dialog = screen.getByRole("dialog", {name: "Grid tools"});
+  const mode = within(dialog).getByRole("heading", {name: "EDIT MODE"});
+  const snap = within(dialog).getByRole("heading", {name: "GRID SNAP"});
+  expect(mode.compareDocumentPosition(snap) & Node.DOCUMENT_POSITION_FOLLOWING)
+    .not.toBe(0);
+  expect(within(dialog).getByText("EDIT VIEW")).toBeTruthy();
+  expect(within(dialog).getByText(
+    "NOTE: tap a note to delete. VEL: drag to edit velocity.",
+  )).toBeTruthy();
+});
+
+test("Grid tools keeps both modes and every snap reachable without editing notes", () => {
+  const {callbacks, rerender} = renderGrid();
+  fireEvent.click(screen.getByRole("button", {name: "Grid tools"}));
+  const dialog = screen.getByRole("dialog", {name: "Grid tools"});
+  const mode = within(dialog).getByRole("group", {name: "Edit mode"});
+  expect(within(mode).getByRole("button", {name: "Note mode"})
+    .getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(within(mode).getByRole("button", {name: "Velocity mode"}));
+  expect(callbacks.onEditModeChange).toHaveBeenLastCalledWith("vel");
+  rerender({editMode: "vel"});
+  expect(within(mode).getByRole("button", {name: "Velocity mode"})
+    .getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(within(mode).getByRole("button", {name: "Note mode"}));
+  expect(callbacks.onEditModeChange).toHaveBeenLastCalledWith("note");
+  const snap = within(dialog).getByRole("group", {name: "Snap"});
+  for (const value of ["1/4", "1/8", "1/16", "1/32", "off"]) {
+    fireEvent.click(within(snap).getByRole("button", {name: `Snap ${value}`}));
+    expect(callbacks.onSnapChange).toHaveBeenLastCalledWith(value);
+  }
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+  expect(callbacks.onSelectionChange).not.toHaveBeenCalled();
+});
+
+test.each(["Done", "Escape"])("Grid tools %s returns focus without changing selection", (action) => {
+  const {callbacks} = renderGrid({selection: [{bank: 0, pad: 0, onsetTick: 0}]});
+  const trigger = screen.getByRole("button", {name: "Grid tools"});
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole("dialog", {name: "Grid tools"});
+  if (action === "Done") fireEvent.click(within(dialog).getByRole("button", {name: "Done"}));
+  else fireEvent.keyDown(dialog, {key: "Escape"});
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(screen.getByRole("group", {name: "Note selection"}).textContent).toContain("1 selected");
+  expect(callbacks.onEdit).not.toHaveBeenCalled();
+  expect(callbacks.onSelectionChange).not.toHaveBeenCalled();
+});
+
 test("reports the whole Pattern as the viewport when the grid is not scrolled", () => {
   const {callbacks} = renderGrid({bank: 0});
   expect(callbacks.onViewportChange).toHaveBeenCalledWith({

@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import stat
 import subprocess
 import tempfile
@@ -488,11 +489,11 @@ def _git_environment() -> dict[str, str]:
 
 def _bounded_process(command: list[str], *, cwd: Path, input_data: bytes = b"",
                      max_output: int = MAX_INVENTORY_BYTES, env: Mapping[str, str] | None = None) -> bytes:
-    """Run a fixed Git read with a hard stdout/stderr capture bound."""
+    """Run owned Git work with bounded IO and an owned transport process group."""
     try:
         process = subprocess.Popen(
             command, cwd=str(cwd), env=dict(env or _git_environment()), stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         )
     except OSError as error:
         raise InputCollectionError("Git read could not be started") from error
@@ -520,8 +521,6 @@ def _bounded_process(command: list[str], *, cwd: Path, input_data: bytes = b"",
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                process.kill()
-                process.wait()
                 raise InputCollectionError("Git read exceeded its bounded time limit")
             events = selector.select(remaining)
             if not events:
@@ -569,33 +568,32 @@ def _bounded_process(command: list[str], *, cwd: Path, input_data: bytes = b"",
                 if key.data == "stdout":
                     total += len(chunk)
                     if total > max_output:
-                        process.kill()
-                        process.wait()
                         raise InputCollectionError("Git read exceeded its bounded output limit")
                     output.append(chunk)
                 else:
                     stderr_total += len(chunk)
                     if stderr_total > MAX_STDERR_BYTES:
-                        process.kill()
-                        process.wait()
                         raise InputCollectionError("Git read exceeded its bounded diagnostic limit")
         try:
             returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.wait()
             raise InputCollectionError("Git read exceeded its bounded time limit") from error
         if returncode != 0:
             raise InputCollectionError("Git object or diff read failed")
         return b"".join(output)
     finally:
+        # Fetch can spawn transport/index-pack children. Kill our session's
+        # group even if its leader already exited; a parent-only kill leaves
+        # children holding pipes or writing objects after a failed preparation.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
         selector.close()
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None and not stream.closed:
                 stream.close()
-        if process.poll() is None:
-            process.kill()
-            process.wait()
 
 
 def _repository_object_directory(repository: Path) -> Path:
@@ -816,14 +814,16 @@ def _body(section: str) -> str:
     return section.split("\n", 1)[1] if "\n" in section else ""
 
 
-def _object_metadata(repository: Path, oids: Sequence[str]) -> dict[str, tuple[str, int]]:
+def _object_metadata(repository: Path, oids: Sequence[str], *,
+                     attr_source: str | None = None) -> dict[str, tuple[str, int]]:
     unique = sorted({oid for oid in oids if oid != "0" * 40})
     if not unique:
         return {}
     if any(not _OID_RE.fullmatch(oid) for oid in unique):
         raise InputCollectionError("Git blob object identity is malformed")
     payload = ("\n".join(unique) + "\n").encode("ascii")
-    result = _git(repository, "cat-file", "--batch-check", input_data=payload, max_output=MAX_INVENTORY_BYTES)
+    result = _git(repository, "cat-file", "--batch-check", input_data=payload,
+                  max_output=MAX_INVENTORY_BYTES, attr_source=attr_source)
     lines = result.splitlines()
     if len(lines) != len(unique):
         raise InputCollectionError("Git object metadata inventory is incomplete")
@@ -960,8 +960,8 @@ def _file_input(repository: Path, record: dict[str, Any], section: str,
     return file_value, represented
 
 
-def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str, Any]:
-    """Build and authenticate a complete ``lmdj.pr-agent-input.v1`` document."""
+def _fixed_repository(repository: str | Path, identity: Mapping[str, Any]) -> tuple[Path, dict[str, Any]]:
+    """Check the fixed identity before either preparation or collection."""
     try:
         value = validate_identity(identity)
     except ValueError as error:
@@ -980,6 +980,134 @@ def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str
         if error.result is not None:
             raise
         raise _refuse(str(error), value, global_reason=str(error)) from error
+    return root, value
+
+
+def _attribute_objects(root: Path, base: str, paths: Sequence[str]) -> set[str]:
+    """Read only committed ancestor attributes needed by the selected paths."""
+    oids = set()
+    attributes = {".gitattributes"}
+    attribute_bytes = len(".gitattributes") + 1
+    for path in paths:
+        if not _path_is_safe(path):
+            raise InputCollectionError(f"path {path!r} is unsafe or unsupported")
+        parts = path.split("/")
+        for depth in range(1, len(parts)):
+            name = "/".join(parts[:depth] + [".gitattributes"])
+            if name not in attributes:
+                attribute_bytes += len(name.encode("utf-8")) + 1
+                if attribute_bytes > MAX_INVENTORY_BYTES:
+                    raise InputCollectionError("base attribute paths exceed the bounded inventory limit")
+                attributes.add(name)
+    # Literal, bounded batches avoid pathspec interpretation and argv limits.
+    names = sorted(attributes)
+    total = 0
+    for offset in range(0, len(names), 128):
+        payload = _git(root, "--literal-pathspecs", "ls-tree", "-z", "--full-tree",
+                       base, "--", *names[offset:offset + 128],
+                       attr_source=base)
+        total += len(payload)
+        if total > MAX_INVENTORY_BYTES:
+            raise InputCollectionError("base attribute inventory exceeds its bounded output limit")
+        if payload and not payload.endswith(b"\0"):
+            raise InputCollectionError("base attribute inventory is incomplete")
+        for row in payload.split(b"\0")[:-1]:
+            header, path = row.split(b"\t", 1)
+            mode, kind, oid = header.decode("ascii").split()
+            if path.decode("utf-8") not in attributes or not _OID_RE.fullmatch(oid):
+                raise InputCollectionError("base attribute object identity is malformed")
+            if kind == "blob" and mode in {"100644", "100755"}:
+                oids.add(oid)
+    return oids
+
+
+def required_input_objects(repository: str | Path, identity: Mapping[str, Any]) -> tuple[str, ...]:
+    """Discover immutable blobs without fetching or content-dependent rename reads.
+
+    This is preparation metadata, not the collector's canonical inventory. All
+    changed sides (including generated rename candidates) and ancestor base
+    attributes are needed before the existing isolated diff can run unchanged.
+    Gitlink targets belong to another repository and are never fetched here.
+    """
+    root, value = _fixed_repository(repository, identity)
+    raw = b""
+    records = []
+    try:
+        raw = _git(root, "diff", "--raw", "-z", "--abbrev=40", "--no-renames",
+                   "--no-ext-diff", "--no-textconv", value["base_sha"], value["head_sha"], "--",
+                   attr_source=value["base_sha"])
+        if not raw:
+            return ()  # The unchanged collector owns the empty-input refusal.
+        records = _parse_raw_inventory(raw)
+        oids = set()
+        for record in records:
+            for side in ("old", "new"):
+                if record[side + "_mode"] in {"100644", "100755", "120000"}:
+                    oids.add(record[side + "_oid"])
+        oids.update(_attribute_objects(root, value["base_sha"],
+                                       [path for record in records for path in record["paths"]]))
+        return tuple(sorted(oids))
+    except (InputCollectionError, ValueError, UnicodeError) as error:
+        evidence = {}
+        if not records and raw:
+            records, evidence = _parse_raw_inventory_failure(raw)
+        raise _refuse(str(error), value, records, global_reason=str(error),
+                      raw_evidence=evidence or None) from error
+
+
+def missing_input_objects(repository: Path, oids: Sequence[str], *, base: str) -> tuple[str, ...]:
+    """Read preparation availability through the collector's no-network view."""
+    metadata = _object_metadata(repository, oids, attr_source=base)
+    if any(kind not in {"blob", "missing"} for kind, _ in metadata.values()):
+        raise InputCollectionError("required preparation object is not a blob")
+    return tuple(oid for oid in sorted(metadata) if metadata[oid][0] == "missing")
+
+
+def required_repair_objects(repository: str | Path, identity: Mapping[str, Any],
+                            original: str, path: str) -> tuple[str, ...]:
+    """Inventory only an already authenticated finding path and its attributes."""
+    root, value = _fixed_repository(repository, identity)
+    if not isinstance(original, str) or not _OID_RE.fullmatch(original) or not _path_is_safe(path):
+        raise InputCollectionError("repair source identity is malformed")
+    _commit_exists(root, original)
+    ancestor = _git(root, "merge-base", original, value["head_sha"], max_output=4096,
+                    attr_source=original).decode("ascii").strip()
+    if original == value["head_sha"] or ancestor != original:
+        raise InputCollectionError("original repair head is not a distinct ancestor")
+    oids = _attribute_objects(root, original, [path])
+    for revision in (original, value["head_sha"]):
+        row = _git(root, "--literal-pathspecs", "ls-tree", "-z", "--full-tree",
+                   revision, "--", path, attr_source=original)
+        if row.count(b"\0") != 1 or not row.endswith(b"\0"):
+            raise InputCollectionError("repair path has no single source blob")
+        try:
+            header, actual_path = row[:-1].split(b"\t", 1)
+            mode, kind, oid = header.decode("ascii").split()
+        except (ValueError, UnicodeError) as error:
+            raise InputCollectionError("repair source object identity is malformed") from error
+        if (actual_path.decode("utf-8") != path or kind != "blob"
+                or mode not in {"100644", "100755", "120000"} or not _OID_RE.fullmatch(oid)):
+            raise InputCollectionError("repair path has no supported source blob")
+        oids.add(oid)
+    return tuple(sorted(oids))
+
+
+def read_repair_source(repository: Path, original: str, head: str, path: str) -> tuple[str, str]:
+    """Read prepared repair bytes without repository config, hooks or transport."""
+    try:
+        content = _git(repository, "show", original + ":" + path,
+                       max_output=t2.MAX_BLOB_BYTES, attr_source=original).decode("utf-8")
+        diff = _git(repository, "--literal-pathspecs", "diff", "--full-index", "--no-ext-diff",
+                    "--no-textconv", "--no-renames", "--unified=3", original, head, "--", path,
+                    max_output=t2.MAX_REPAIR_BYTES, attr_source=original).decode("utf-8")
+    except UnicodeError as error:
+        raise InputCollectionError("repair source is not UTF-8") from error
+    return content, diff
+
+
+def build_input(repository: str | Path, identity: Mapping[str, Any]) -> dict[str, Any]:
+    """Build and authenticate a complete ``lmdj.pr-agent-input.v1`` document."""
+    root, value = _fixed_repository(repository, identity)
     try:
         inventory_payload = _git(
             root, "diff", "--name-status", "-z", "--find-renames=50%", "--no-ext-diff", "--no-textconv",

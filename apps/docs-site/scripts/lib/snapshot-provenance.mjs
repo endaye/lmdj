@@ -236,7 +236,10 @@ async function readSquashWitness(repoRoot, portalRoot, headRevision, version) {
   return readFile(worktreePath);
 }
 
-async function reconstructAuthenticatedSourceCommit({
+// Exported so the main-interval projection audit accepts exactly the
+// witness-authorized divergences this verifier accepts, instead of a second
+// authorization rule that could drift from the landed-snapshot verdict.
+export async function reconstructAuthenticatedSourceCommit({
   repoRoot, portalRoot, metadata, headRevision, introducing,
 }) {
   const bytes = await readSquashWitness(repoRoot, portalRoot, headRevision, metadata.product_build);

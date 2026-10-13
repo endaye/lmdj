@@ -1,3 +1,4 @@
+import {writeFile} from "node:fs/promises";
 import {selectedSequencePatternId} from "./fixtures/creator_navigation.mjs";
 import {expect, test} from "./fixtures/refusal_diagnostics.mjs";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
@@ -299,6 +300,95 @@ async function redo(page) {
   await shiftAndPress(page, "Redo — SHIFT + →");
 }
 
+for (const viewport of [{width: 1440, height: 900}, {width: 1024, height: 768},
+  {width: 768, height: 600}]) {
+  test(`Grid tools groups fit and preserve native keyboard choices at ${viewport.width}x${viewport.height}`, async ({page, browserName}) => {
+    test.skip(browserName !== "chromium");
+    await page.setViewportSize(viewport);
+    await page.goto("/index.html");
+    await openProjectPageAfterBoot(page);
+    await page.getByRole("button", {name: "Sequence", exact: true}).click();
+    const before = await inspectTruth(page);
+    const trigger = page.getByRole("button", {name: "Grid tools", exact: true});
+    await trigger.click();
+    const dialog = page.getByRole("dialog", {name: "Grid tools", exact: true});
+    await expect(dialog.getByRole("heading", {name: "EDIT MODE"})).toBeVisible();
+    await expect(dialog.getByRole("heading", {name: "GRID SNAP"})).toBeVisible();
+    await expect(dialog.getByText("NOTE: tap a note to delete. VEL: drag to edit velocity."))
+      .toBeVisible();
+    const geometry = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const bounds = (item) => {
+        const box = item.getBoundingClientRect();
+        return {x: box.x, y: box.y, right: box.right, bottom: box.bottom,
+          width: box.width, height: box.height};
+      };
+      const controls = [...element.querySelectorAll("button")].map(bounds);
+      const overlaps = controls.flatMap((left, index) => controls.slice(index + 1)
+        .filter((right) => left.x < right.right && left.right > right.x &&
+          left.y < right.bottom && left.bottom > right.y));
+      const mode = element.querySelector('[aria-label="Edit mode"]');
+      const snap = element.querySelector('[aria-label="Snap"]');
+      return {insideViewport: rect.left >= 0 && rect.top >= 0 &&
+          rect.right <= innerWidth && rect.bottom <= innerHeight,
+        horizontalOverflow: element.scrollWidth - element.clientWidth,
+        overlaps: overlaps.length, controls,
+        modeBeforeSnap: mode.getBoundingClientRect().bottom < snap.getBoundingClientRect().top,
+        snapRows: [...snap.querySelectorAll("button")].map((button) => button.getBoundingClientRect().top)};
+    });
+    expect(geometry.insideViewport).toBe(true);
+    expect(geometry.horizontalOverflow).toBeLessThanOrEqual(0);
+    expect(geometry.overlaps, "normal-flow control hit boxes must not overlap").toBe(0);
+    expect(geometry.controls).toHaveLength(8);
+    expect(geometry.modeBeforeSnap).toBe(true);
+    expect(geometry.snapRows).toHaveLength(5);
+    expect(geometry.snapRows[0]).toBe(geometry.snapRows[1]);
+    expect(geometry.snapRows[1]).toBe(geometry.snapRows[2]);
+    expect(geometry.snapRows[3]).toBe(geometry.snapRows[4]);
+    expect(geometry.snapRows[3]).toBeGreaterThan(geometry.snapRows[2]);
+    // Shared 32-face/44-actual sizing remains U01's acceptance. This Task
+    // records actual hit geometry and proves grouping adds no overlap.
+    const geometryPath = test.info().outputPath("grid-tools-geometry.json");
+    const screenshotPath = test.info().outputPath("grid-tools.png");
+    await writeFile(geometryPath, JSON.stringify(geometry, null, 2));
+    await dialog.screenshot({path: screenshotPath});
+    await test.info().attach("grid-tools-geometry", {
+      path: geometryPath, contentType: "application/json",
+    });
+    await test.info().attach("grid-tools", {
+      path: screenshotPath, contentType: "image/png",
+    });
+    await expect(dialog.getByRole("button", {name: "Note mode"})).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(dialog.getByRole("button", {name: "Velocity mode"})).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(dialog.getByRole("button", {name: "Velocity mode"}))
+      .toHaveAttribute("aria-pressed", "true");
+    for (let index = 0; index < 5; index += 1) await page.keyboard.press("Tab");
+    await expect(dialog.getByRole("button", {name: "Snap off"})).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(dialog.getByRole("button", {name: "Snap off"}))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Tab");
+    await expect(dialog.getByRole("button", {name: "Done", exact: true})).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveText("FREE · VEL");
+    await page.keyboard.press("Enter");
+    await expect(dialog.getByRole("button", {name: "Velocity mode"}))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect(dialog.getByRole("button", {name: "Snap off"}))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    const after = await inspectTruth(page);
+    expect(after.revision).toBe(before.revision);
+    expect(after.patterns).toEqual(before.patterns);
+  });
+}
+
 test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal while recording, in-place playback swaps and reopen", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(360_000);
@@ -358,8 +448,12 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   // Velocity: a vertical drag in VEL mode sets velocity; a later note takes
   // the last velocity the grid set.
   await page.getByRole("button", {name: "Grid tools", exact: true}).click();
+  await expect(page.getByRole("dialog", {name: "Grid tools", exact: true})
+    .getByRole("heading", {name: "EDIT MODE"})).toBeVisible();
   await page.getByRole("button", {name: "Velocity mode"}).click();
   await page.getByRole("dialog", {name: "Grid tools", exact: true}).getByRole("button", {name: "Done", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toBeFocused();
+  await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toContainText("VEL");
   {
     // Rows are 13 px since the EDIT layer fits all sixteen (T5): press near
     // the row's foot and drag up to its middle, past the 4 px drag threshold.
@@ -373,6 +467,8 @@ test("grid gestures edit Truth one command at a time, with Undo/Redo, refusal wh
   await page.getByRole("button", {name: "Grid tools", exact: true}).click();
   await page.getByRole("button", {name: "Note mode"}).click();
   await page.getByRole("dialog", {name: "Grid tools", exact: true}).getByRole("button", {name: "Done", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toBeFocused();
+  await expect(page.getByRole("button", {name: "Grid tools", exact: true})).toContainText("NOTE");
   await awaitTruthEvents(page, patternId, [event(2, 960, 960, 64)]);
   await undo(page);
   await awaitTruthEvents(page, patternId, [event(2, 960, 960, 100)]);
@@ -616,7 +712,7 @@ test("Sequence view controls scroll bars and navigate Pads without changing sele
   await assertViewOnly();
   await page.getByRole("button", {name: "Project", exact: true}).click();
   await expect(physicalKey(page, "Encoder 1 — Select Project")).toBeEnabled();
-  await expect(physicalKey(page, "Previous Project row — ↑")).toBeDisabled();
+  await expect(physicalKey(page, "Previous Project — ↑")).toBeDisabled();
 });
 
 

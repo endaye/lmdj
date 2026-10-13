@@ -1,5 +1,5 @@
 import {DefaultSoundsStatus} from "./components/default_sounds_status";
-import {SystemSurface, ProviderSettings} from "./components/system_surface";
+import {SystemSurface, SystemStatus, PadRecordingSource, ProviderSettings} from "./components/system_surface";
 import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
 import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
 import {createDefaultSeedController} from "./runtime/default_seed_controller";
@@ -3130,21 +3130,41 @@ function Workspace({
         </section>
       )}
 
-              {!systemOpen && ["sample", "soundset", "slice"].includes(activeMode) &&
+              {recoveryOffer !== null &&
+                recoveryOffer.projectId === state.project.current?.projectId && (
+                <RecoveryPrompt
+                  key={recoveryOffer.id}
+                  counts={{
+                    sequence: recoveryOffer.sequence.length,
+                    performance: recoveryOffer.performance.length,
+                  }}
+                  onKeep={keepInterruptedRecordings}
+                  onDiscard={discardInterruptedRecordings}
+                  onOpen={(mode) => {
+                    selectMode(mode);
+                    setRecoveryOffer(null);
+                  }}
+                  onClose={() => setRecoveryOffer(null)}
+                />
+              )}
+
+              {!systemOpen && ["sample", "slice"].includes(activeMode) &&
               <nav className="touch-navigation" aria-label="Workspace navigation">
                 {activeMode === "sample" && <button type="button" disabled={!sliceEnabled}
                   onClick={() => selectMode("slice")}>Slice</button>}
-                {(activeMode === "soundset" || activeMode === "slice") &&
-                  <button type="button" onClick={() => selectMode(activeMode === "slice" ? "sample" : "project")}>
-                    Back to {activeMode === "slice" ? "Sample" : "Project"}
+                {activeMode === "slice" &&
+                  <button type="button" onClick={() => selectMode("sample")}>
+                    Back to Sample
                   </button>}
               </nav>}
-              {systemOpen && <SystemSurface onBack={() => {
+              <SystemSurface active={systemOpen} onBack={() => {
                 setSystemOpen(false);
                 // The entry stays mounted. Restore focus in this gesture so
                 // a later frame cannot blur the user's next parameter edit.
                 systemEntry.current?.focus();
               }}>
+              {systemOpen && <>
+              <SystemStatus audio={state.audio.phase} midi={midi} />
               <section className="touch-system" aria-label="Audio and MIDI settings">
                 <button
                   type="button"
@@ -3164,38 +3184,28 @@ function Workspace({
                 >
                   Enable MIDI
                 </button>
-                <button
-                  type="button"
+              </section>
+              {padCaptureState !== null && <PadRecordingSource
+                source={padCaptureState.source} disabled={padCaptureState.phase !== "idle"}
+                onChange={source => {
+                  padCapture.current?.setSource(source);
+                  try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
+                }} />}
+              </>}
+              <CreatorDetails state={state} midi={midi}
+                {...(buildIdentity ? {buildIdentity} : {})} />
+              {systemOpen && <>
+                <button type="button"
                   disabled={state.runtime.phase !== "ready" ||
                     runtimeActions.onExportReport === undefined}
-                  onClick={runtimeActions.onExportReport}
-                >
-                  Export report
-                </button>
-              </section>
-              {padCaptureState !== null && (
-                <section className="touch-system" aria-label="Pad recording settings">
-                  <label>Pad recording source
-                    <select aria-label="Pad recording source" value={padCaptureState.source}
-                      disabled={padCaptureState.phase !== "idle"}
-                      onChange={event => {
-                        const source = event.currentTarget.value as PadCaptureSource;
-                        padCapture.current?.setSource(source);
-                        try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
-                      }}>
-                      <option value="microphone">Microphone</option>
-                      <option value="master">Internal playback</option>
-                    </select>
-                  </label>
-                </section>
-              )}
-                {isCandidateSession(session) && <ProviderSettings session={session} />}
+                  onClick={runtimeActions.onExportReport}>Export report</button>
+                {isCandidateSession(session) && <details className="system-providers">
+                  <summary>Provider settings</summary>
+                  <ProviderSettings session={session} />
+                </details>}
                 <DiagnosticsLog records={diagnostics} />
-              </SystemSurface>}
-              <div hidden={!systemOpen}>
-                <CreatorDetails state={state} midi={midi}
-                  {...(buildIdentity ? {buildIdentity} : {})} />
-              </div>
+              </>}
+              </SystemSurface>
               <div hidden={systemOpen}>
               {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
@@ -3359,6 +3369,7 @@ function Workspace({
               ) : activeMode === "soundset" && isSoundSetSession(session) ? (
                 <SoundSetSurface
                   session={session}
+                  onBack={() => selectMode("project")}
                   projectRevision={state.project.current?.revision ?? null}
                   activeBank={state.activeBank}
                   onInstalled={(revision) => {
@@ -3456,23 +3467,6 @@ function Workspace({
           } catch (error) {reportFailure("Prepare default sounds", error); throw error;}
         }}
         onDetails={openSystem} />
-              {recoveryOffer !== null &&
-                recoveryOffer.projectId === state.project.current?.projectId && (
-                <RecoveryPrompt
-                  key={recoveryOffer.id}
-                  counts={{
-                    sequence: recoveryOffer.sequence.length,
-                    performance: recoveryOffer.performance.length,
-                  }}
-                  onKeep={keepInterruptedRecordings}
-                  onDiscard={discardInterruptedRecordings}
-                  onOpen={(mode) => {
-                    selectMode(mode);
-                    setRecoveryOffer(null);
-                  }}
-                  onClose={() => setRecoveryOffer(null)}
-                />
-              )}
               <ErrorPanel
                 code={state.runtime.errorCode}
                 details={state.runtime.errorDetails}

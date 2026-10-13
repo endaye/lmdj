@@ -47,7 +47,7 @@ def pr_document(spec):
             f"Candidate target: `{spec['target_revision']}`\n\n"
             f"Task verification evidence: `{spec['task_evidence_sha256']}`\n\n"
             "Required Task commands (the authority gate must confirm recorded exit 0):\n\n"
-            "- `scripts/docs-site.sh check`\n- `python3 tests/build/ci_change_scope_test.py`\n- `git diff --cached --check`\n\n"
+            "- `scripts/docs-site.sh check`\n- `python3 tests/build/ci_change_scope_test.py`\n- `python3 tests/build/version_test.py`\n- `git diff --cached --check`\n\n"
             "Records the verified publication and frozen changelog. No tag, Release, deployment or Channel mutation is requested.\n\n"
             "Version impact: none\n\nReason: publication evidence only; no product allocation or snapshot rewrite.\n\n"
             f"Documentation impact: required\n\nAffected portal pages: /releases/ /releases/{build}/\n\n"

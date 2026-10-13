@@ -969,25 +969,41 @@ async function recordShortPerformance(
   page,
   {name = "Night Set", withFx = false, tailMs = 0} = {},
 ) {
-  await beginRecording(page);
+  const recordingStatus = await beginRecording(page);
   const pad = page.getByRole("button", {name: /^Pad A01\b/});
   await pad.dispatchEvent("pointerdown", {
     button: 0,
     isPrimary: true,
     pointerId: 71,
   });
+  await expect(recordingStatus).toContainText(/open Pads\s*[:·]\s*1/i,
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await page.waitForTimeout(120);
   await pad.dispatchEvent("pointerup", {
     button: 0,
     isPrimary: true,
     pointerId: 71,
   });
+  await expect(recordingStatus).toContainText(/open Pads\s*[:·]\s*0/i,
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   if (withFx) {
-    const filter = page.getByRole("slider", {name: "Filter"});
+    const filter = page.getByRole("slider", {name: "Filter", exact: true});
+    await page.getByRole("button", {name: "FILTER", exact: true}).click();
+    const filterStatus = page.getByRole("status", {name: "Filter status"});
     await filter.dispatchEvent("pointerdown", {pointerId: 72});
+    await expect(filterStatus).toHaveText("engaged · core",
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await filter.fill("630");
+    await expect(filterStatus).toHaveText("engaged · core",
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    await expect(filter).toHaveValue("630");
     await filter.dispatchEvent("pointerup", {pointerId: 72});
+    await expect(filterStatus).toHaveText("OFF · core",
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    await page.getByRole("button", {name: "FILTER", exact: true}).click();
     await page.getByRole("button", {name: "HOLD"}).click();
+    await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   }
   if (tailMs > 0) {
     // Give the Performance a real musical span so a later replay is still
@@ -1498,8 +1514,9 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
     pointerId: 24,
   });
 
-  const filter = page.getByRole("slider", {name: "Filter"});
+  const filter = page.getByRole("slider", {name: "Filter", exact: true});
   await filter.dispatchEvent("pointerdown", {pointerId: 22});
+  // Core status counts the independent Filter alongside ordinary FX (#2124).
   await expect(recordingStatus).toContainText(/open FX\s*[:·]\s*1/i);
   await filter.fill("630");
   await pad.dispatchEvent("pointerdown", {
@@ -1587,7 +1604,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   );
   // The Pad recording source is a System setting (brand mark entry).
   await page.getByRole("button", {name: "System", exact: true}).click();
-  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
+  await page.getByRole("group", {name: "Pad recording source"}).getByRole("button", {name: "Internal playback", exact: true}).click();
   await page.getByRole("button", {name: "Back to music", exact: true}).click();
   await page.getByRole("button", {name: "Stop Replay"}).click();
   await expect(replayStatus).toContainText("stopped", {timeout: 30_000});
@@ -1656,6 +1673,7 @@ test("a recorded rotary FX survives touch takeover and closes the same Core gest
     expect(response.ok).toBe(true);
     return response.result;
   };
+  await expect(page.getByRole("slider", {name: "Reverb", exact: true})).toHaveValue("0");
   const knob = page.getByRole("button", {name: "Encoder 3 — Reverb", exact: true});
   await knob.focus();
   await page.keyboard.press("ArrowUp");
@@ -1665,7 +1683,7 @@ test("a recorded rotary FX survives touch takeover and closes the same Core gest
   expect((await authority()).open_fx_gestures).toBe(1);
   await page.getByRole("button", {name: "FX / MORE"}).click();
   const reverb = page.getByRole("slider", {name: "Reverb", exact: true});
-  await expect(reverb).toHaveValue("510");
+  await expect(reverb).toHaveValue("10");
   await reverb.dispatchEvent("pointerdown", {pointerId: 91});
   await reverb.fill("651");
   await reverb.dispatchEvent("pointerup", {pointerId: 91});
@@ -1679,7 +1697,7 @@ test("a recorded rotary FX survives touch takeover and closes the same Core gest
   expect(stoppedFx.state).toBe("active");
   expect(stoppedFx.hold).toBe(false);
   await page.getByRole("button", {name: "Back to music", exact: true}).click();
-  await expect(reverb).toHaveValue("500");
+  await expect(reverb).toHaveValue("0");
   await stopRecording(page);
   await savePerformanceWithBusyRetry(page, "Rotary touch");
   await expect(page.getByRole("status", {name: "WAV binding status"})).toContainText("bound");
@@ -2003,10 +2021,17 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     timeout: 30_000,
   });
   await showPerformPage(page, "Live");
-  // Replay neutralizes these FX; device monitoring has its own 0–100 range
-  // and must retain the accepted nondefault value rather than reset with FX.
-  for (const name of ["Filter", "Delay", "Reverb"]) {
-    await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("500");
+  // Replay releases the independent Filter while retaining its last tuple;
+  // OFF is a Core readback, and device monitoring keeps its own
+  // 0–100 range rather than resetting with FX.
+  await expect(page.getByRole("slider", {name: "Filter", exact: true}))
+    .toHaveValue("630");
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  await expect(page.getByRole("status", {name: "Filter status"}))
+    .toHaveText("OFF · core");
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  for (const name of ["Delay", "Reverb"]) {
+    await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("0");
   }
   await expect(master).toHaveValue("37");
   await expect(page.getByRole("button", {name: "HOLD"}))
@@ -2143,14 +2168,16 @@ test("native FX drag-off releases before paging without stopping the recording",
   test.setTimeout(180_000);
   await importActivateAndPerform(page);
   const status = await beginRecording(page);
-  const filter = page.getByRole("slider", {name: "Filter", exact: true});
+  // A typed seven-FX fader: its engage counts as an open_fx gesture far-side
+  // (an engaged independent Filter would be the separate open_filter).
+  const fader = page.getByRole("slider", {name: "Delay", exact: true});
   // Record lives below the live panel. Scroll back with native input before
   // aiming the pointer, including the sticky page bar's occlusion.
   const touch = page.getByTestId("touch-workspace");
   await touch.hover();
   await page.mouse.wheel(0, -1200);
   await expect.poll(() => touch.evaluate(element => element.scrollTop)).toBe(0);
-  await filter.evaluate(element => {
+  await fader.evaluate(element => {
     // Chromium's native range thumb owns capture in its UA shadow tree.
     // The public input receives retargeted events, but hasPointerCapture on
     // that outer element is false. Observe the native capture-phase events
@@ -2162,18 +2189,18 @@ test("native FX drag-off releases before paging without stopping the recording",
       }, {capture: true, once: true});
     }
   });
-  const box = await filter.boundingBox();
+  const box = await fader.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 3);
-  await expect(filter).toHaveAttribute("data-proof-captured", "true");
+  await expect(fader).toHaveAttribute("data-proof-captured", "true");
   const pages = page.getByRole("navigation", {name: "Perform pages"});
   for (const button of await pages.getByRole("button").all()) await expect(button).toBeDisabled();
   await expect(status).toContainText("open FX: 1", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await page.mouse.move(box.x - 40, box.y - 10);
   await page.mouse.up();
   await expect(status).toContainText("open FX: 0", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(filter).toHaveAttribute("data-proof-released", "true");
+  await expect(fader).toHaveAttribute("data-proof-released", "true");
   for (const button of await pages.getByRole("button").all()) await expect(button).toBeEnabled();
   for (const name of ["Slots", "Takes", "Replay", "Live"]) {
     await showPerformPage(page, name);
@@ -2184,4 +2211,169 @@ test("native FX drag-off releases before paging without stopping the recording",
   await page.getByRole("button", {name: "Review recording", exact: true}).click();
   await expect(page.getByRole("textbox", {name: "Performance name"})).toBeVisible();
   await expect(page.getByRole("button", {name: "Save Performance"})).toBeEnabled();
+});
+
+// C1 typed independent Filter journey (D04/D0/W1 consumer). Every leg keeps a
+// far-side assertion: Control→PCM against the exported master capture, HOLD
+// freeze and page exit inside one recording, then Stop/Save/reopen/Replay.
+// Read both the gesture count and the independent Filter's applied state.
+test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save and replay", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(420_000);
+  await observeMasterCaptureBatches(page);
+  await importActivateAndPerform(page);
+  await installPerformWitnessSample(page);
+  await assignThenMovePattern(page);
+
+  // The main group's first fader is the typed Filter with a Core Hz readback.
+  const cutoff = page.getByRole("slider", {name: "Filter", exact: true});
+  await expect(cutoff).toBeVisible();
+  await expect(cutoff).toHaveValue("1000");
+  await expect(page.getByTestId("touch-workspace")
+    .getByText("20.0 kHz", {exact: true})).toBeVisible();
+  await expect(page.getByRole("button",
+    {name: "Encoder 1 — Cutoff", exact: true})).toBeEnabled();
+
+  // Entering the FILTER group is pure UI: still OFF, no enable.
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  const filterStatus = page.getByRole("status", {name: "Filter status"});
+  await expect(filterStatus).toContainText("OFF");
+  await expect(filterStatus).toContainText("core");
+  await expect(page.getByRole("button", {name: "LP", exact: true}))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("slider", {name: "Resonance", exact: true}))
+    .toHaveValue("0");
+  // FILTER-group encoders remap while the open Filter gesture stays untouched.
+  await expect(page.getByRole("button",
+    {name: "Encoder 1 — Type", exact: true})).toBeEnabled();
+  await expect(page.getByRole("button",
+    {name: "Encoder 3 — Resonance", exact: true})).toBeEnabled();
+  // A type segment change is an actual control: engage + readback.
+  await page.getByRole("button", {name: "HP", exact: true}).click();
+  await expect(filterStatus).toContainText("engaged");
+  await expect(filterStatus).toContainText("core");
+  await page.getByRole("button", {name: "LP", exact: true}).click();
+  await expect(filterStatus).toHaveText("engaged · core",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  // Leaving the group must not release the gesture (D04 rest semantics).
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  await expect(page.getByRole("status", {name: "Filter status"})).toHaveCount(0);
+
+  const recordingStatus = await beginRecording(page);
+  const pad = page.getByRole("button", {name: /^Pad A01\b/});
+  const strike = async (pointerId) => {
+    await pad.dispatchEvent("pointerdown", {
+      button: 0, isPrimary: true, pointerId,
+    });
+    await expect(recordingStatus).toContainText(/open Pads\s*[:·]\s*1/i,
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+    await page.waitForTimeout(120);
+    await pad.dispatchEvent("pointerup", {
+      button: 0, isPrimary: true, pointerId,
+    });
+    await expect(recordingStatus).toContainText(/open Pads\s*[:·]\s*0/i,
+      {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  };
+  // Hit 1 dry: the segment leg left the Filter engaged at LP with a fully
+  // open 20 kHz cutoff, so the sawtooth passes untouched.
+  await strike(31);
+
+  // Engage the cutoff touch at the current value (no audible change), sweep
+  // low, and hold it over hit 2.
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  await cutoff.dispatchEvent("pointerdown", {pointerId: 32});
+  await expect(filterStatus).toHaveText("engaged · core",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await cutoff.fill("100");
+  // The next audible Pad witnesses the applied tuple. Core readback also
+  // keeps this journey within the bounded ordinary-input admission window.
+  await expect(filterStatus).toHaveText("engaged · core",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(cutoff).toHaveValue("100");
+  await strike(33);
+  await cutoff.dispatchEvent("pointerup", {pointerId: 32});
+  // Complete the first gesture far-side before a new ordinary input uses the
+  // bounded 1+1 admission window. UI pointer-up alone is not an ACK.
+  await expect(recordingStatus).toContainText(/open FX\s*[:·]\s*0/i,
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+
+  // HOLD leg: an engaged-then-released Filter freezes far-side under HOLD.
+  await page.getByRole("button", {name: "HOLD"}).click();
+  await expect(page.getByRole("button", {name: "HOLD"}))
+    .toHaveAttribute("aria-pressed", "true");
+  await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await cutoff.dispatchEvent("pointerdown", {pointerId: 34});
+  await expect(filterStatus).toHaveText("engaged · core",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await cutoff.fill("300");
+  await expect(filterStatus).toHaveText("engaged · core",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(cutoff).toHaveValue("300");
+  await cutoff.dispatchEvent("pointerup", {pointerId: 34});
+  // HOLD is a journaled far-side fact while the recording runs.
+  await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(filterStatus).toContainText("frozen",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  // A last hit while frozen keeps the recording span long enough for the
+  // replay leg to still be playing after save and reopen.
+  await page.waitForTimeout(1_500);
+  await strike(35);
+
+  // Page-exit leg: System retains the recording; the notice owns Stop.
+  await page.getByRole("button", {name: "System", exact: true}).click();
+  const notice = page.getByRole("region", {name: "Performance recording notice"});
+  await expect(notice.getByRole("status")).toContainText("recording");
+  await expect(page.getByRole("main", {name: "Perform", exact: true})).toHaveCount(0);
+  await notice.getByRole("button", {name: "Stop Performance", exact: true}).click();
+  await expect(notice.getByRole("status")).toContainText("Ready to save or discard",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await notice.getByRole("button", {name: "Review Performance recording", exact: true}).click();
+  await expect(page.getByRole("status", {name: "WAV recording status"}))
+    .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+
+  // Control→PCM from the exported master capture: the dry hit carries the
+  // sawtooth; the swept hit keeps only a residue at least 20 dB below.
+  const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
+  const first = firstSignalFrame(wav.left);
+  const open = wav.left.slice(first, first + 4_800);
+  const secondStart = firstSignalFrame(wav.left, first + 4_800 + 2_400);
+  const filtered = wav.left.slice(secondStart, secondStart + 4_800);
+  expect(rms(open)).toBeGreaterThan(4_000);
+  expect(rms(filtered)).toBeLessThan(rms(open) / 10);
+  expect(rms(filtered)).toBeGreaterThan(0);
+
+  await savePerformanceWithBusyRetry(page, "Filtered Set");
+  const savedRevision = await projectRevision(page);
+  await expect(page.getByRole("status", {name: "WAV binding status"}))
+    .toContainText("bound");
+
+  // Reopen from the far side, then replay the journaled typed Filter moves.
+  await page.reload();
+  await openLocalProject(page);
+  expect(await projectRevision(page)).toBe(savedRevision);
+  await activateAudio(page);
+  await openPerform(page);
+  await showPerformPage(page, "Replay");
+  await expect(page.getByText("Filtered Set", {exact: true})).toBeVisible();
+  await page.getByRole("button", {name: "Replay Filtered Set"}).click();
+  const replayStatus = page.getByRole("status", {name: "Replay status"});
+  await expect(replayStatus).toContainText("playing", {timeout: 30_000});
+  await expect(replayStatus).toContainText(
+    new RegExp(`resolved revision\\s*[:·]\\s*${savedRevision}`, "i"),
+  );
+  await page.getByRole("button", {name: "Stop Replay"}).click();
+  await expect(replayStatus).toContainText("stopped", {timeout: 30_000});
+
+  // The replay neutral reset includes the independent Filter: the readback
+  // returns to OFF from Core, never from a Host default.
+  await showPerformPage(page, "Live");
+  await page.getByRole("button", {name: "FILTER", exact: true}).click();
+  await expect(filterStatus).toContainText("OFF",
+    {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(filterStatus).toContainText("core");
+  await expect(page.getByRole("button", {name: "HOLD"}))
+    .toHaveAttribute("aria-pressed", "false");
 });

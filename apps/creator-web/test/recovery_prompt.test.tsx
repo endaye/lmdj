@@ -1,4 +1,4 @@
-import {render, screen} from "@testing-library/react";
+import {render, screen, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
 
@@ -52,9 +52,12 @@ test("Keep reports progress, then that the recording is back", async () => {
   await userEvent.click(screen.getByRole("button", {name: "Keep recording"}));
   expect(handlers.onKeep).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("status").textContent).toBe("Keeping…");
+  expect(screen.getByText("Keeping")).toBeTruthy();
+  expect(screen.queryByRole("button")).toBeNull();
   kept.resolve({sequence: 0, performance: 0});
   expect((await screen.findByText("The interrupted recording is back in this Project.")).getAttribute("role"))
     .toBe("status");
+  expect(screen.getByText("Complete")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", {name: "Close"}));
   expect(handlers.onClose).toHaveBeenCalledTimes(1);
 });
@@ -93,19 +96,22 @@ test("a confirmed Discard discards and says so", async () => {
   await userEvent.click(screen.getByRole("button", {name: "Discard recording"}));
   expect(handlers.onDiscard).toHaveBeenCalledTimes(1);
   expect((await screen.findByRole("status")).textContent).toBe("The interrupted recording was discarded.");
+  expect(screen.getByText("Complete")).toBeTruthy();
 });
 
-test("More options opens where the recordings are listed, Sequence first", async () => {
+test("both destinations open independently without keeping or discarding", async () => {
   const handlers = renderPrompt({sequence: 1, performance: 1});
-  await userEvent.click(screen.getByRole("button", {name: "More options"}));
-  expect(handlers.onOpen).toHaveBeenCalledWith("sequence");
+  await userEvent.click(screen.getByRole("button", {name: "Open Sequence"}));
+  await userEvent.click(screen.getByRole("button", {name: "Open Perform"}));
+  expect(handlers.onOpen.mock.calls).toEqual([["sequence"], ["perform"]]);
   expect(handlers.onKeep).not.toHaveBeenCalled();
   expect(handlers.onDiscard).not.toHaveBeenCalled();
 });
 
-test("More options opens Perform when only Perform holds a recording", async () => {
+test("offers only Perform when only Perform holds a recording", async () => {
   const handlers = renderPrompt({sequence: 0, performance: 1});
-  await userEvent.click(screen.getByRole("button", {name: "More options"}));
+  expect(screen.queryByRole("button", {name: "Open Sequence"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Open Perform"}));
   expect(handlers.onOpen).toHaveBeenCalledWith("perform");
 });
 
@@ -117,9 +123,9 @@ test("Decide later closes without keeping or discarding", async () => {
   expect(handlers.onDiscard).not.toHaveBeenCalled();
 });
 
-test("offers no More options when nothing is waiting", () => {
+test("offers no destination when nothing is waiting", () => {
   renderPrompt({sequence: 0, performance: 0});
-  expect(screen.queryByRole("button", {name: "More options"})).toBeNull();
+  expect(screen.queryByRole("button", {name: /^Open /})).toBeNull();
 });
 
 test("discarding several recordings names how many in the button and the result", async () => {
@@ -133,4 +139,49 @@ test("keeping several recordings names how many came back", async () => {
   renderPrompt({sequence: 1, performance: 1});
   await userEvent.click(screen.getByRole("button", {name: "Keep recording"}));
   expect(await screen.findByText("The 2 interrupted recordings are back in this Project.")).toBeTruthy();
+});
+
+test("presents the recovery card and direct actions in the design order", () => {
+  renderPrompt({sequence: 2, performance: 1});
+  expect(within(region()).getByRole("heading", {name: "Recording recovery"})).toBeTruthy();
+  expect(within(region()).getByText("Action needed")).toBeTruthy();
+  expect(within(region()).getByRole("heading", {name: "3 unfinished recordings are here"})).toBeTruthy();
+  expect(within(region()).getAllByRole("button").map(button => button.textContent)).toEqual([
+    "Keep recording", "Open Sequence", "Open Perform", "Decide later", "Discard…",
+  ]);
+});
+
+test("offers only Sequence when only Sequence holds a recording", () => {
+  renderPrompt({sequence: 1, performance: 0});
+  expect(screen.getByRole("button", {name: "Open Sequence"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Open Perform"})).toBeNull();
+});
+
+test("Discard progress has no actions and partial completion uses remaining destinations", async () => {
+  const discarded = deferred<RecoveryCounts>();
+  const handlers = renderPrompt({sequence: 2, performance: 1}, {onDiscard: () => discarded.promise});
+  await userEvent.click(screen.getByRole("button", {name: "Discard…"}));
+  expect(screen.getByText("Confirm discard")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "Discard 3 recordings"}));
+  expect(screen.getByRole("status").textContent).toBe("Discarding…");
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(handlers.onDiscard).toHaveBeenCalledTimes(1);
+  discarded.resolve({sequence: 0, performance: 1});
+  await screen.findByRole("button", {name: "Open Perform"});
+  expect(screen.getByRole("status").textContent).toMatch(/could not be discarded here\s+\(1 in Perform\)/);
+  expect(screen.getByText("Action needed")).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Open Sequence"})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Open Perform"}));
+  expect(handlers.onOpen).toHaveBeenCalledWith("perform");
+  expect(handlers.onKeep).not.toHaveBeenCalled();
+});
+
+test("a Discard that throws retains both destinations instead of declaring completion", async () => {
+  renderPrompt({sequence: 1, performance: 1}, {onDiscard: async () => { throw new Error("x"); }});
+  await userEvent.click(screen.getByRole("button", {name: "Discard…"}));
+  await userEvent.click(screen.getByRole("button", {name: "Discard 2 recordings"}));
+  await screen.findByRole("button", {name: "Open Sequence"});
+  expect(screen.getByRole("button", {name: "Open Perform"})).toBeTruthy();
+  expect(screen.getByText("Action needed")).toBeTruthy();
+  expect(screen.queryByText("Complete")).toBeNull();
 });

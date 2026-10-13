@@ -1,0 +1,54 @@
+/* Grid Tools only: keep controls in normal flow and the existing scrollable
+   ModalDialog. Shared control faces and hit areas remain owned by the kit. */
+.sequence-picker-dialog.sequence-grid-tools-dialog {
+  width: min(368px, calc(100vw - 32px));
+  gap: 8px;
+}
+
+.sequence-grid-tools-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sequence-grid-tools-dialog .sequence-grid-tools-heading h2 {
+  font-family: var(--creator-font-action);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.sequence-grid-tools-heading > span,
+.sequence-grid-tools-controls > h3,
+.sequence-grid-tools-help {
+  margin: 0;
+  color: var(--creator-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 14px;
+}
+
+.sequence-grid-tools-controls,
+.sequence-grid-tools-mode,
+.sequence-grid-tools-snap {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sequence-grid-tools-mode {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sequence-grid-tools-snap {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.sequence-grid-tools-snap > button {
+  grid-column: span 2;
+}
+
+.sequence-grid-tools-snap > button:nth-child(n + 4) {
+  grid-column: span 3;
+}

@@ -248,6 +248,53 @@ def fetch(*refs):
     git("-c", "http.extraheader=AUTHORIZATION: basic " + credential, "fetch", "--no-tags", "origin", *refs)
 
 
+def _prepare_objects(oids, *, base):
+    """Transport only an immutable caller-selected object inventory."""
+    missing = input_producer.missing_input_objects(ROOT, oids, base=base)
+    if missing:
+        credential = base64.b64encode(("x-access-token:" + os.environ["GITHUB_TOKEN"]).encode()).decode()
+        # Only fixed object IDs go over stdin. No ref update, checkout,
+        # maintenance, submodule, local config write or lazy fetch is allowed.
+        input_producer._bounded_process([
+            "git", "--no-replace-objects", "--no-pager",
+            "-c", "http.extraheader=AUTHORIZATION: basic " + credential,
+            "-c", "fetch.negotiationAlgorithm=noop", "-c", "core.hooksPath=" + os.devnull,
+            "fetch", "--no-filter", "--no-tags", "--no-write-fetch-head",
+            "--no-auto-maintenance", "--no-write-commit-graph", "--no-prune", "--no-prune-tags",
+            "--recurse-submodules=no", "--refmap=", "--stdin", "origin",
+        ], cwd=ROOT, input_data=("\n".join(missing) + "\n").encode("ascii"),
+            env=input_producer._git_environment())
+        if input_producer.missing_input_objects(ROOT, oids, base=base):
+            raise input_producer.InputCollectionError("fixed input objects remain missing after preparation")
+    print("Fixed input object preparation: " + json.dumps({
+        "required": len(oids), "missing_before": len(missing), "missing_after": 0,
+        "required_sha256": hashlib.sha256(("\n".join(oids) + "\n").encode("ascii")).hexdigest(),
+    }, sort_keys=True))
+
+
+def prepare_fixed_input(identity):
+    """Explicit transport precedes, and never runs inside, isolated collection."""
+    try:
+        oids = input_producer.required_input_objects(ROOT, identity)
+        _prepare_objects(oids, base=identity["base_sha"])
+    except input_producer.InputCollectionError as error:
+        if error.result is not None:
+            raise
+        raise input_producer._refuse(str(error), identity, global_reason=str(error)) from error
+
+
+def read_repair_source(identity, original, path):
+    """Prepare an authenticated finding's exact source before isolated reads."""
+    try:
+        oids = input_producer.required_repair_objects(ROOT, identity, original, path)
+        _prepare_objects(oids, base=original)
+        return input_producer.read_repair_source(ROOT, original, identity["head_sha"], path)
+    except input_producer.InputCollectionError as error:
+        raise review_scope.ReviewScopeError(
+            "why: repair source preparation refused: " + str(error)
+            + "; remedy: recollect the authenticated finding or review it manually") from error
+
+
 def api(path, store=None):
     if store is not None and path in store:
         return store[path]
@@ -402,6 +449,7 @@ def collect_t2(directory):
         "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
     }
     try:
+        prepare_fixed_input(identity)
         document = input_producer.build_input(ROOT, identity)
     except input_producer.GeneratedOnlyInput as error:
         # Every excluded path is a Portal snapshot/provenance artifact: publish
@@ -443,10 +491,10 @@ def collect_t2(directory):
         import review_recheck
         api = review_recheck.client(repo)
         if mode == "single":
-            request = review_recheck.collect(api, document, int(os.environ["RECHECK_COMMENT_ID"]), git=git, fetch=fetch)
+            request = review_recheck.collect(api, document, int(os.environ["RECHECK_COMMENT_ID"]), git=git, fetch=fetch, read_source=read_repair_source)
             review_recheck.attach(document, request)
         else:
-            requests, report = review_recheck.collect_batch(api, document, git=git, fetch=fetch)
+            requests, report = review_recheck.collect_batch(api, document, git=git, fetch=fetch, read_source=read_repair_source)
             review_recheck.attach_batch(document, requests)
             # Operational selection evidence, not model or resolution authority.
             rendered = json.dumps(report, sort_keys=True, ensure_ascii=True)
@@ -825,6 +873,13 @@ def publish(directory):
     authenticate(identity, store)
     policy = test_scope.load_policy(ROOT)
     fetch(identity["base_sha"], identity["head_sha"])
+    # The publisher may run on a different cold runner from collection.
+    prepare_fixed_input({
+        "repository": identity["repository"], "pull_request": identity["pr_number"],
+        "base_sha": identity["base_sha"], "head_sha": identity["head_sha"],
+        "control_sha": identity["control_sha"], "run_id": str(identity["run_id"]),
+        "run_attempt": identity["run_attempt"],
+    })
     actual = input_producer.reviewable_inventory(
         change_scope.read_git_inventory(ROOT, identity["base_sha"], identity["head_sha"]))
     paths = review_scope.changed_path_inventory([
@@ -903,10 +958,10 @@ def publish(directory):
         api = review_recheck.client(identity["repository"])
         try:
             if mode == "batch":
-                receipt = review_recheck.publish_batch(api, repair_document, repair_native, git=git, fetch=fetch,
+                receipt = review_recheck.publish_batch(api, repair_document, repair_native, git=git, fetch=fetch, read_source=read_repair_source,
                             record=lambda value: save(directory / "repair-recheck.json", value))
             else:
-                receipt = review_recheck.publish(api, repair_document, repair_native, git=git, fetch=fetch)
+                receipt = review_recheck.publish(api, repair_document, repair_native, git=git, fetch=fetch, read_source=read_repair_source)
         except (review_scope.ReviewScopeError, t2.EngineError, reporting.ReportingError,
                 review_wait.Refused) as error:
             # The review and its labels are already published, and

@@ -47,9 +47,11 @@ class TransitionFixture(fixture.WitnessFixture):
             item.tool = fixture.cut_fixture.snapshot_fixture.fixture_module.material_fixture.CandidateBuildMaterial(item.root, item.state)
             item.tool.reservations.enroll(item.request["repository"])
         def seeded(item):
-            filename = item.root / "tests/build/ci_change_scope_test.py"
-            filename.parent.mkdir(parents=True, exist_ok=True)
-            filename.write_text("print('ownership fixture')\n")
+            for name, text in (("tests/build/ci_change_scope_test.py", "print('ownership fixture')\n"),
+                               ("tests/build/version_test.py", "print('identity fixture')\n")):
+                filename = item.root / name
+                filename.parent.mkdir(parents=True, exist_ok=True)
+                filename.write_text(text)
             return original(item)
         script = fixture.SCRIPT.replace("*) exit 64 ;;", """check)
   printf 'check\\n' >> .fixture-check-calls
