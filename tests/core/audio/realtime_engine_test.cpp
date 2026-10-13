@@ -6177,8 +6177,8 @@ void pad_gates_address_slots_0_and_63_and_preserve_across_replacement() {
   auto out = render_take(engine, 128);
   LMDJ_CHECK(out.back() == 0.25F);
 
-  // Mute A01: its voice ramps to silence over exactly 96 frames; D16 is
-  // untouched. (The ramp/tail PCM proof is the next test.)
+  // Mute A01: its input closes immediately; D16 is untouched.
+  // The first-frame/tail PCM proof is the next test.
   LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
   out = render_take(engine, kRampFrames + 32);
   LMDJ_CHECK(out.back() == -0.25F);
@@ -6265,14 +6265,17 @@ void pad_gates_pcm_oracle_mute_tail_and_restore() {
     if (!with_delay) {
       LMDJ_CHECK(out.back() == 0.0F);
     }
-    // Mute A01: its gate ramps 1 -> 0 over exactly the 96-frame window.
+    // Mute A01: no grace window after the new mask applies. Retain the
+    // original 96-frame observation and all later tail/restore legs.
     LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
     out = render_take(engine, kRampFrames);
     if (!with_delay) {
-      // Constant content makes the gate shape directly readable: the mix
-      // decreases strictly to exactly the B01 level at the 96th frame.
-      for (std::size_t i = 1; i < out.size(); ++i) {
-        LMDJ_CHECK(out[i] <= out[i - 1]);
+      for (std::size_t frame = 0; frame < out.size(); ++frame) {
+        if (out[frame] != -0.5F) {
+          std::fprintf(stderr, "live gate close frame=%zu actual=%.9g expected=-0.5\n",
+                       frame, out[frame]);
+        }
+        LMDJ_CHECK(out[frame] == -0.5F);
       }
       LMDJ_CHECK(out.back() == -0.5F);
       out = render_take(engine, 64);
@@ -6280,6 +6283,9 @@ void pad_gates_pcm_oracle_mute_tail_and_restore() {
         LMDJ_CHECK(value == -0.5F);
       }
     } else {
+      for (const auto value : out) {
+        LMDJ_CHECK(value == 0.0F);
+      }
       // The shared Delay tail is still audible after the gate closes and
       // decays on its own; it is not a leak through the closed gate. The
       // value-500 Delay swaps its ping-pong buffer every 12,000 frames
@@ -6318,6 +6324,244 @@ void pad_gates_pcm_oracle_mute_tail_and_restore() {
   }
 }
 
+// Diagnostics identify the first divergent applied-frame sample, not merely
+// a later peak or the gain field used by the implementation.
+void check_pad_gate_sample(float left, float right, float expected_left,
+                           float expected_right, std::size_t frame) {
+  if (left != expected_left || right != expected_right) {
+    std::fprintf(stderr,
+        "live gate PCM frame=%zu actual=(%.9g,%.9g) expected=(%.9g,%.9g)\n",
+        frame, left, right, expected_left, expected_right);
+  }
+  LMDJ_CHECK(left == expected_left && right == expected_right);
+}
+
+void pad_gates_cut_current_input_at_the_first_applied_frame() {
+  for (const std::uint8_t slot : {std::uint8_t{0}, std::uint8_t{63}}) {
+    for (const bool solo : {false, true}) {
+      for (const bool other_pad : {false, true}) {
+        const auto other = static_cast<std::uint8_t>(63 - slot);
+        const std::vector<float> affected(4'800, 0.5F);
+        const std::vector<float> unaffected(4'800, -0.25F);
+        auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+        const ResolvedPlayback playback{0, 4'800, TriggerMode::loop_gate, 1.0F, false};
+        LMDJ_CHECK(bank.set_sample(slot, affected, playback).has_value());
+        LMDJ_CHECK(bank.set_sample(other, unaffected, playback).has_value());
+        RealtimeEngine engine;
+        LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+        LMDJ_CHECK(engine.start().has_value());
+        LMDJ_CHECK(engine.enqueue_control(control(1, slot, PadControlKind::press, 127)) ==
+                   EnqueueResult::accepted);
+        if (other_pad) {
+          LMDJ_CHECK(engine.enqueue_control(control(2, other, PadControlKind::press, 127)) ==
+                     EnqueueResult::accepted);
+        }
+        const auto warm = render_channels(engine, 128);
+        const float survivor = other_pad ? -0.25F : 0.0F;
+        check_pad_gate_sample(warm.left.back(), warm.right.back(),
+                              0.5F + survivor, 0.5F + survivor, 127);
+        const auto muted = solo ? std::uint64_t{0} : std::uint64_t{1} << slot;
+        const auto soloed = solo ? std::uint64_t{1} << other : std::uint64_t{0};
+        LMDJ_CHECK(engine.enqueue_pad_gates(muted, soloed) == FxEnqueueResult::accepted);
+        const auto accepted = engine.pad_gates_status();
+        LMDJ_CHECK(accepted.accepted_sequence == 1 && accepted.applied.sequence == 0);
+        LMDJ_CHECK(accepted.accepted.muted_mask == muted &&
+                   accepted.accepted.solo_mask == soloed);
+        const auto out = render_channels(engine, 128);
+        const auto applied = engine.pad_gates_status();
+        LMDJ_CHECK(applied.applied.sequence == accepted.accepted_sequence);
+        LMDJ_CHECK(applied.applied.epoch == engine.telemetry().start_epoch);
+        LMDJ_CHECK(applied.applied.state.muted_mask == muted &&
+                   applied.applied.state.solo_mask == soloed);
+        for (std::size_t frame = 0; frame < out.left.size(); ++frame) {
+          check_pad_gate_sample(out.left[frame], out.right[frame], survivor, survivor, frame);
+        }
+        LMDJ_CHECK(engine.telemetry().active_voices == (other_pad ? 2U : 1U));
+        engine.stop();
+      }
+    }
+  }
+}
+
+void pad_gates_block_primed_tone_and_eq_memory() {
+  for (const bool eq : {false, true}) {
+    RealtimeEngine engine;
+    const std::vector<float> affected(8'000, 0.5F);
+    const std::vector<float> unaffected(8'000, 0.125F);
+    auto dsp = low_passed();
+    if (eq) {
+      dsp.tone = 0;
+      dsp.eq_flags = lmdj::cooker::ResolvedVoiceDsp::kEqLow;
+      dsp.eq_low_freq_hz = 120;
+      dsp.eq_low_gain_millidb = -6'000;
+    }
+    auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+    LMDJ_CHECK(bank.set_sample(0, affected,
+        dsp_playback(0, 8'000, TriggerMode::loop_gate, dsp)).has_value());
+    LMDJ_CHECK(bank.set_sample(63, unaffected,
+        {0, 8'000, TriggerMode::loop_gate, 1.0F, false}).has_value());
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    LMDJ_CHECK(engine.enqueue_control(control(1, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    LMDJ_CHECK(engine.enqueue_control(control(2, 63, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    const auto warm = render_channels(engine, 4'096);
+    LMDJ_CHECK(warm.left.back() > 0.125F && warm.right.back() > 0.125F);
+    LMDJ_CHECK(engine.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+    const auto out = render_channels(engine, 256);
+    const auto applied = engine.pad_gates_status().applied;
+    LMDJ_CHECK(applied.sequence == 1 && applied.epoch == 1);
+    for (std::size_t frame = 0; frame < out.left.size(); ++frame) {
+      check_pad_gate_sample(out.left[frame], out.right[frame], 0.125F, 0.125F, frame);
+    }
+    LMDJ_CHECK(engine.telemetry().active_voices == 2);
+    engine.stop();
+  }
+}
+
+void pad_gates_block_current_and_future_pattern_input() {
+  for (const bool future : {false, true}) {
+    auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, 120, -16'384);
+    snapshot.events[0].onset_tick = future ? 12 : 0;  // frame 300 or 0
+    snapshot.events[0].duration_tick = 80;           // 2,000 frames
+    RealtimeEngine gated, audible;
+    for (auto* engine : {&gated, &audible}) {
+      LMDJ_CHECK(engine->publish_sample_bank(
+          PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) == PublishResult::accepted);
+      auto pattern = PreparedPatternView::from_snapshot(snapshot);
+      LMDJ_CHECK(pattern.has_value());
+      LMDJ_CHECK(engine->publish_pattern_view(std::move(pattern.value())).result ==
+                 PatternPublishResult::accepted);
+      LMDJ_CHECK(engine->start().has_value());
+    }
+    const auto prefix = render_channels(gated, 256);
+    const auto reference_prefix = render_channels(audible, 256);
+    LMDJ_CHECK(prefix.left == reference_prefix.left && prefix.right == reference_prefix.right);
+    LMDJ_CHECK(gated.telemetry().started_voices == (future ? 0U : 1U));
+    LMDJ_CHECK(gated.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+    const auto out = render_channels(gated, 512);
+    const auto control_out = render_channels(audible, 512);
+    const auto applied = gated.pad_gates_status().applied;
+    LMDJ_CHECK(applied.sequence == 1 && applied.epoch == 1);
+    for (std::size_t frame = 0; frame < out.left.size(); ++frame) {
+      check_pad_gate_sample(out.left[frame], out.right[frame], 0.0F, 0.0F, frame);
+    }
+    LMDJ_CHECK(peak_of(control_out.left, 0, control_out.left.size()) > 0.0F);
+    LMDJ_CHECK(peak_of(control_out.right, 0, control_out.right.size()) > 0.0F);
+    // The common gate does not change Pattern scheduling or kill its voice.
+    LMDJ_CHECK(gated.telemetry().started_voices == 1 && gated.telemetry().active_voices == 1);
+    LMDJ_CHECK(gated.enqueue_pad_gates(0, 0) == FxEnqueueResult::accepted);
+    const auto reopened = render_channels(gated, 128);
+    check_pad_gate_sample(reopened.left.back(), reopened.right.back(), -0.5F, -0.5F, 127);
+    LMDJ_CHECK(gated.telemetry().started_voices == 1);
+    gated.stop();
+    audible.stop();
+  }
+}
+
+void pad_gates_preserve_shared_fx_from_an_independent_input_stream() {
+  for (const auto fx : {PerformanceFx::delay, PerformanceFx::reverb}) {
+    for (const bool other_pad : {false, true}) {
+      // No envelope formula is copied into the oracle: both source signals
+      // are zero for the first 256 frames, past their ordinary attack, then
+      // exact binary fractions. The input oracle never reads live_gate.
+      constexpr std::uint32_t prefix_frames = 1'280;
+      constexpr std::uint32_t tail_frames = 48'000;
+      constexpr std::uint32_t source_frames = prefix_frames + tail_frames;
+      std::vector<float> affected(source_frames, 0.25F);
+      std::vector<float> unaffected(source_frames, 0.125F);
+      std::fill_n(affected.begin(), 256, 0.0F);
+      std::fill_n(unaffected.begin(), 256, 0.0F);
+      RealtimeEngine engine;
+      auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+      const ResolvedPlayback playback{0, source_frames, TriggerMode::loop_gate, 1.0F, false};
+      LMDJ_CHECK(bank.set_sample(0, affected, playback).has_value());
+      LMDJ_CHECK(bank.set_sample(63, unaffected, playback).has_value());
+      LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+      LMDJ_CHECK(engine.prepare_master_fx(120).has_value());
+      LMDJ_CHECK(engine.start().has_value());
+      LMDJ_CHECK(engine.enqueue_fx_gesture({FxGestureKind::engage, fx, 500}) ==
+                 FxEnqueueResult::accepted);
+      lmdj::audio::MasterFxChain reference;
+      LMDJ_CHECK(reference.prepare({48'000, 120}).has_value());
+      LMDJ_CHECK(reference.apply_gesture({FxGestureKind::engage, fx, 500}));
+      LMDJ_CHECK(engine.enqueue_control(control(1, 0, PadControlKind::press, 127)) ==
+                 EnqueueResult::accepted);
+      if (other_pad) {
+        LMDJ_CHECK(engine.enqueue_control(control(2, 63, PadControlKind::press, 127)) ==
+                   EnqueueResult::accepted);
+      }
+      const float survivor = other_pad ? 0.125F : 0.0F;
+      RenderedChannels input{std::vector<float>(prefix_frames, 0.25F + survivor),
+                             std::vector<float>(prefix_frames, 0.25F + survivor)};
+      std::fill_n(input.left.begin(), 256, 0.0F);
+      std::fill_n(input.right.begin(), 256, 0.0F);
+      reference.process(input.left.data(), input.right.data(), prefix_frames);
+      const auto prefix = render_channels(engine, prefix_frames);
+      LMDJ_CHECK(prefix.left == input.left && prefix.right == input.right);
+      LMDJ_CHECK(prefix.left.back() > 0.0F && prefix.right.back() > 0.0F);
+      LMDJ_CHECK(engine.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+      RenderedChannels expected{std::vector<float>(tail_frames, survivor),
+                                std::vector<float>(tail_frames, survivor)};
+      reference.process(expected.left.data(), expected.right.data(), tail_frames);
+      const auto actual = render_channels(engine, tail_frames);
+      const auto applied = engine.pad_gates_status().applied;
+      LMDJ_CHECK(applied.sequence == 1 && applied.epoch == 1);
+      // Exact input and same FX API permit exact equality: no tolerance can
+      // hide an extra affected-Pad sample or an erased shared tail.
+      for (std::size_t frame = 0; frame < actual.left.size(); ++frame) {
+        check_pad_gate_sample(actual.left[frame], actual.right[frame],
+                              expected.left[frame], expected.right[frame], frame);
+      }
+      if (!other_pad) {
+        // Independent positive legs: each channel retains an actual tail,
+        // and later windows decay; silence alone cannot pass the oracle.
+        for (const auto* channel : {&actual.left, &actual.right}) {
+          const auto early = peak_of(*channel, 0, 12'000);
+          const auto later = peak_of(*channel, 24'000, tail_frames);
+          LMDJ_CHECK(early > 0.0F && later > 0.0F && later < early);
+        }
+      } else {
+        LMDJ_CHECK(actual.left.back() > 0.0F && actual.right.back() > 0.0F);
+      }
+      LMDJ_CHECK(engine.telemetry().active_voices == (other_pad ? 2U : 1U));
+      engine.stop();
+    }
+  }
+}
+
+void pad_gates_do_not_shorten_an_existing_release() {
+  for (const auto kind : {PadControlKind::release, PadControlKind::stop_slot}) {
+    RealtimeEngine engine;
+    const std::vector<float> sample(8'000, 0.5F);
+    start_with_playback(engine, sample,
+        dsp_playback(0, 8'000, TriggerMode::loop_gate, envelope_dsp(0, 240)));
+    LMDJ_CHECK(engine.enqueue_control(control(1, 0, PadControlKind::press, 127)) ==
+               EnqueueResult::accepted);
+    render_channels(engine, 200);
+    LMDJ_CHECK(engine.enqueue_control(control(2, 0, kind)) == EnqueueResult::accepted);
+    const auto release = render_channels(engine, 16);
+    LMDJ_CHECK(release.left.back() > 0.0F && release.right.back() > 0.0F);
+    const auto edges = drain_voice_states(engine, 2);
+    LMDJ_CHECK(edges[0].state == RuntimeVoiceState::started);
+    LMDJ_CHECK(edges[1].state == RuntimeVoiceState::stopped);
+    LMDJ_CHECK(engine.enqueue_pad_gates(1, 0) == FxEnqueueResult::accepted);
+    const auto remaining = (kind == PadControlKind::release ? 240U : 96U) - 16U;
+    const auto gated = render_channels(engine, remaining - 1);
+    for (std::size_t frame = 0; frame < gated.left.size(); ++frame) {
+      check_pad_gate_sample(gated.left[frame], gated.right[frame], 0.0F, 0.0F, frame);
+    }
+    LMDJ_CHECK(engine.telemetry().active_voices == 1);
+    const auto ended = render_channels(engine, 1);
+    check_pad_gate_sample(ended.left[0], ended.right[0], 0.0F, 0.0F, remaining - 1);
+    LMDJ_CHECK(engine.telemetry().active_voices == 0);
+    std::array<RuntimeVoiceStateEvent, 1> extra{};
+    LMDJ_CHECK(engine.drain_voice_states(extra) == 0);
+    engine.stop();
+  }
+}
+
 void pad_gates_cursor_continues_while_gated() {
   // A01 sweeps 0..1 over a 4096-frame loop, so its cursor position is
   // readable in the mix. The voice is muted across the loop wrap; the
@@ -6342,7 +6586,7 @@ void pad_gates_cursor_continues_while_gated() {
       control(2, 1, PadControlKind::press, 127)) == EnqueueResult::accepted);
   auto out = render_take(engine, 200);       // cursor 200 at the mute point
   LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
-  out = render_take(engine, kRampFrames);    // cursor 296 when fully gated
+  out = render_take(engine, kRampFrames);    // cursor 296, advancing while gated
   LMDJ_CHECK(out.back() == -0.5F);
   out = render_take(engine, 3'900);          // cursor 4196, past the wrap
   LMDJ_CHECK(out.back() == -0.5F);
@@ -6376,7 +6620,7 @@ void pad_gates_do_not_reach_the_audition_sentinel() {
              EnqueueResult::accepted);
   auto out = render_take(engine, 128);
   LMDJ_CHECK(out.back() == 0.25F);
-  // Mute slot 0: the project voice ramps out; the audition continues alone.
+  // Mute slot 0: the project input closes; the audition continues alone.
   LMDJ_CHECK(engine.enqueue_pad_gates(0x1, 0) == FxEnqueueResult::accepted);
   out = render_take(engine, kRampFrames + 32);
   LMDJ_CHECK(out.back() == -0.25F);
@@ -6575,6 +6819,11 @@ int main() {
   pattern_generation_preserves_its_non_reused_exhaustion_boundary();
   pad_gates_address_slots_0_and_63_and_preserve_across_replacement();
   pad_gates_pcm_oracle_mute_tail_and_restore();
+  pad_gates_cut_current_input_at_the_first_applied_frame();
+  pad_gates_block_primed_tone_and_eq_memory();
+  pad_gates_block_current_and_future_pattern_input();
+  pad_gates_preserve_shared_fx_from_an_independent_input_stream();
+  pad_gates_do_not_shorten_an_existing_release();
   pad_gates_cursor_continues_while_gated();
   pad_gates_do_not_reach_the_audition_sentinel();
   pad_gates_queue_full_and_stale_epoch_fail_closed();
