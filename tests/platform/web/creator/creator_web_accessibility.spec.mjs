@@ -199,6 +199,10 @@ for (const viewport of [
       .getByRole("button", {name: "Project", exact: true}).focus();
     const expectedFocusOrder = [
       "Sample", "Sequence", "Perform", "Bank A", "Bank B", "Bank C", "Bank D",
+      // #2108 wired the Project rail directions into the physical column; on
+      // the first Project "Previous Project — ←" is disabled and skipped,
+      // while "Next Project — →" is an enabled tab stop before SHIFT.
+      "Next Project — →",
       "SHIFT — engage the Undo/Redo layer",
       "Record", "Play/Stop", "Pad A13 — assigned — Key 1",
     ];
