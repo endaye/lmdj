@@ -1,4 +1,4 @@
-import {useEffect, useRef, type ReactNode, type MouseEvent, type Ref} from "react";
+import {useEffect, useRef, type MouseEvent, type Ref} from "react";
 
 import type {CreatorMode} from "./creator_mode";
 import type {Bank} from "../state/creator_state";
@@ -6,13 +6,8 @@ import {BANK_NAMES} from "../state/view_model";
 import {
   EncoderIcon,
   LogoIcon,
-  PerformIcon,
-  PlayIcon,
-  ProjectIcon,
-  RecordIcon,
-  SampleIcon,
-  SequenceIcon,
 } from "./hardware_icons";
+import "./physical_controls.css";
 import type {EncoderPosition} from "./hardware_icons";
 export type {EncoderPosition} from "./hardware_icons";
 
@@ -163,7 +158,6 @@ interface PhysicalKeyProps {
   className?: string;
   current?: boolean;
   disabled?: boolean;
-  icon?: ReactNode;
   lit?: boolean;
   pressed?: boolean;
   title?: string;
@@ -176,7 +170,6 @@ function PhysicalKey({
   className = "",
   current = false,
   disabled = false,
-  icon,
   lit = false,
   pressed,
   title,
@@ -185,7 +178,7 @@ function PhysicalKey({
   return (
     <button
       type="button"
-      className={`physical-key${className}${current ? " is-active" : ""}${lit ? " is-lit" : ""}${icon === undefined ? "" : " has-icon"}`}
+      className={`physical-key${className}${current ? " is-active" : ""}${lit ? " is-lit" : ""}`}
       aria-current={current ? "page" : undefined}
       {...(pressed === undefined ? {} : {"aria-pressed": pressed})}
       aria-label={ariaLabel ?? label}
@@ -193,18 +186,9 @@ function PhysicalKey({
       {...(title === undefined ? {} : {title})}
       {...(onClick === undefined ? {} : {onClick})}
     >
-      {icon === undefined ? label : icon}
+      {label}
     </button>
   );
-}
-
-function modeIcon(mode: "project" | "sample" | "sequence" | "perform", current: boolean): ReactNode {
-  switch (mode) {
-    case "project": return <ProjectIcon />;
-    case "sample": return <SampleIcon />;
-    case "sequence": return <SequenceIcon active={current} />;
-    case "perform": return <PerformIcon />;
-  }
 }
 
 export function PhysicalControls({
@@ -250,28 +234,26 @@ export function PhysicalControls({
       </div>
       <div className="physical-keys" data-testid="physical-keys">
         <PhysicalKey
-          label="Project"
-          icon={modeIcon("project", activeMode === "project")}
+          label="PRJ"
+          ariaLabel="Project"
           current={activeMode === "project"}
           onClick={() => onSelectMode("project")}
         />
         <PhysicalKey
-          label="Sample"
-          icon={modeIcon("sample", activeMode === "sample")}
+          label="SMP"
+          ariaLabel="Sample"
           current={activeMode === "sample"}
           onClick={() => onSelectMode("sample")}
         />
         <PhysicalKey
-          label="Sequence"
-          icon={modeIcon("sequence", activeMode === "sequence")}
+          label="SEQ"
           ariaLabel={sequenceEnabled ? "Sequence" : "Sequence — open a playable Project first"}
           current={activeMode === "sequence"}
           disabled={!sequenceEnabled}
           onClick={() => onSelectMode("sequence")}
         />
         <PhysicalKey
-          label="Perform"
-          icon={modeIcon("perform", activeMode === "perform")}
+          label="PRF"
           ariaLabel={performEnabled
             ? "Perform"
             : "Perform — open a playable Project first"}
@@ -288,6 +270,16 @@ export function PhysicalControls({
             onClick={() => onSelectBank(bank as Bank)}
           />
         ))}
+        <PhysicalKey
+          label="SHIFT"
+          className=" is-shift"
+          ariaLabel={history === undefined
+            ? "SHIFT — history layer unavailable"
+            : "SHIFT — engage the Undo/Redo layer"}
+          pressed={history?.shifted ?? false}
+          disabled={history === undefined}
+          {...(history === undefined ? {} : {onClick: history.onToggleShift})}
+        />
         <PhysicalKey label="↑"
           ariaLabel={padStep?.backLabel ?? "Up — unassigned until direction mapping is approved"}
           disabled={!padStep?.backAvailable} lit={padStep?.backAvailable ?? false}
@@ -332,18 +324,8 @@ export function PhysicalControls({
           </>
         )}
         <PhysicalKey
-          label="SHIFT"
-          className=" is-shift"
-          ariaLabel={history === undefined
-            ? "SHIFT — history layer unavailable"
-            : "SHIFT — engage the Undo/Redo layer"}
-          pressed={history?.shifted ?? false}
-          disabled={history === undefined}
-          {...(history === undefined ? {} : {onClick: history.onToggleShift})}
-        />
-        <PhysicalKey
-          label="●"
-          icon={<RecordIcon />}
+          label="REC"
+          className=" is-record"
           ariaLabel={recording
             ? "Record — stop recording Pad events into the current Pattern"
             : "Record"}
@@ -352,8 +334,8 @@ export function PhysicalControls({
           {...(onRecord === undefined ? {} : {onClick: onRecord})}
         />
         <PhysicalKey
-          label="▶"
-          icon={<PlayIcon />}
+          label="PLAY"
+          className=" is-play"
           ariaLabel={playEnabled
             ? (playing ? "Play/Stop — Pattern is playing" : "Play/Stop")
             : "Play/Stop — needs a playable Project and running audio"}

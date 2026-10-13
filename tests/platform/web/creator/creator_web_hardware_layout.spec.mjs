@@ -116,17 +116,28 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
     const bankBox = await box(keys.getByRole("button", {name: bank, exact: true}));
     expect(bankBox).toMatchObject({width: 32, height: 32});
   }
-  // #1770: the −/+ placeholder row is gone and SHIFT holds its row as one
-  // full-width key (both 32px cells plus the 16px gap) directly above the
-  // record/play row, keeping the 8-row 368px key block. Rows step 48px
-  // (32px key + 16px gap), so SHIFT's row starts 6 steps into the block.
+  for (const [name, text] of [["Project", "PRJ"], ["Sample", "SMP"],
+    ["Sequence", "SEQ"], ["Perform", "PRF"], ["Record", "REC"], ["Play/Stop", "PLAY"]]) {
+    await expect(keys.getByRole("button", {name, exact: true})).toHaveText(text);
+  }
+  await expect(keys.getByRole("button", {name: "Record", exact: true}))
+    .toHaveCSS("color", "rgb(229, 173, 196)");
+  await expect(keys.getByRole("button", {name: "Play/Stop", exact: true}))
+    .toHaveCSS("color", "rgb(221, 244, 120)");
+  // Interaction UI puts SHIFT after Bank D and before both direction rows.
+  // Its full-width face keeps both 32px cells and their 16px gutter; the
+  // unchanged eight-row block steps 48px, so SHIFT starts four rows down.
   const shift = await box(keys.getByRole("button", {name: /^SHIFT/}));
   expect(shift).toMatchObject({
     x: physical.x,
-    y: keyBlock.y + 6 * 48,
+    y: keyBlock.y + 4 * 48,
     width: 80,
     height: 32,
   });
+  const up = await box(keys.getByRole("button", {name: /^Previous Pad — ↑$/}));
+  const left = await box(keys.getByRole("button", {name: "Previous Sample page — ←", exact: true}));
+  expect(up.y).toBe(keyBlock.y + 5 * 48);
+  expect(left.y).toBe(keyBlock.y + 6 * 48);
   // Undo/Redo is the SHIFT + ← / → chord on the direction row; the lamp, not
   // a greyed button pair, reports availability, and nothing sits outside the
   // console frame.
@@ -148,20 +159,17 @@ test("renders the 880×592 hardware shell and keeps the overview read-only", asy
   await expect(keys.getByRole("button", {name: "Sequence", exact: true}))
     .toBeEnabled();
   await expect(keys.getByRole("button", {name: /^Perform/})).toBeVisible();
-  // V1 replaced the transport glyphs with the Desktop Final icon exports, so
-  // these keys carry no text at all now; the accessible name is what V1
-  // promised to keep, and the icon is what it promised to change.
+  // Interaction UI uses readable transport faces while retaining the full
+  // accessible identities used by the native controls and keyboard journey.
   const record = keys.getByRole("button", {name: "Record", exact: true});
-  await expect(record).toHaveClass(/\bhas-icon\b/);
-  await expect(record.locator("svg")).toHaveCount(1);
-  await expect(record).toHaveText("");
+  await expect(record.locator("svg")).toHaveCount(0);
+  await expect(record).toHaveText("REC");
   const playStop = keys.getByRole("button", {
     name: "Play/Stop",
     exact: true,
   });
-  await expect(playStop).toHaveClass(/\bhas-icon\b/);
-  await expect(playStop.locator("svg")).toHaveCount(1);
-  await expect(playStop).toHaveText("");
+  await expect(playStop.locator("svg")).toHaveCount(0);
+  await expect(playStop).toHaveText("PLAY");
   const shot = process.env.LMDJ_HARDWARE_CONSOLE_SHOT;
   if (shot) {
     await page.getByTestId("hardware-console").screenshot({path: shot});

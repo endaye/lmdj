@@ -1,0 +1,4 @@
+/* Interaction UI text transport faces. Active transport keeps the shared
+   active key's dark ink on its light face. Geometry belongs to the control kit. */
+.physical-key.is-record:not(.is-active) { color: var(--creator-rose, #e5adc4); }
+.physical-key.is-play:not(.is-active) { color: var(--creator-lime); }
