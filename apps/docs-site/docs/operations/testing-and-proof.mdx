@@ -26,7 +26,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 `pr-review.yml` 的 `Review fallback` job 运行一个模型步骤：固定版本
 PR-Agent `0.45.0`（source commit `53072488`）经 LiteLLM `1.100.0`，主后端
 DeepSeek-V4.1-Flash（API 模型名 `deepseek-flash`），引擎内后备
-GLM-5.3-Flash（智谱国内开放平台按量计费端点，API 模型名 `glm-5.3-flash`），
+GLM-5.3-FlashX（智谱国内开放平台按量计费端点，API 模型名 `glm-5.3-flashx`），
 运行在 Netcup 主机 `netcup01` 上已安装的 release 内。供应商 fallback 由引擎
 在单次运行内拥有（`provider_order = ["deepseek", "glm"]`），workflow 不加
 第二个模型步骤。步骤顺序固定为 `collect-t2`（完整可信输入：
@@ -41,6 +41,12 @@ GitHub token；DeepSeek 请求显式 `thinking: disabled`，GLM-5.3 思考不可
 `max_tokens` 4096，单请求 60 秒、单次评审 600 秒上限。
 预算由引擎内的 append-only ledger 强制：每 PR USD 1、试点累计与每月
 USD 100（2026-09-17 由 USD 20 上调），按 1M context 峰值价预留、按实际 usage 结算。
+FlashX 使用同系列极速推理服务，保留 1M 完整输入能力，用于缓解 Flash 在大输入
+下耗尽 60 秒整次响应窗口的问题。标准价为每百万输入 CNY 2、输出 CNY 7，沿用
+CNY 7 / USD 的保守换算；单次最大预留约 USD 0.304，两次主后端失败预留后仍可
+在 USD 1 内调用一次 FlashX。历史账本继续计入全局预算，超时和评审门禁不放宽。
+源码配置合入后须安装到主机并取得真实大输入成功证据，才能认定超时事件已修复；
+厂商标称速度或小输入成功不能替代该验收。
 Kimi 和 Grok 仅保留为历史兼容身份，不会被此 workflow 注入凭据或自动调用。
 
 模型结果按完整 YAML 文档校验，兼容单个包住整个文档的 Markdown YAML 围栏；

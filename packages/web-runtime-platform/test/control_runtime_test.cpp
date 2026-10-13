@@ -13,6 +13,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -702,6 +703,9 @@ struct FakeCoordinator final {
 
   static std::uint64_t acknowledged_generation(void* context) noexcept {
     auto& self = *static_cast<FakeCoordinator*>(context);
+    if (self.before_acknowledgement) {
+      self.before_acknowledgement();
+    }
     ++self.acknowledgement_calls;
     if (self.acknowledgement_poll_delay_ms != 0) {
       std::this_thread::sleep_for(
@@ -711,7 +715,8 @@ struct FakeCoordinator final {
         ++self.acknowledgement_polls >= self.acknowledgement_delay_polls) {
       self.acknowledged = self.begin_acknowledgement;
     }
-    if (self.render_on_acknowledgement_poll && self.engine != nullptr) {
+    if (self.render_on_acknowledgement_poll && self.engine != nullptr &&
+        self.acknowledgement_calls >= self.render_after_acknowledgement_call) {
       std::array<float, 128> left{};
       std::array<float, 128> right{};
       self.engine->render(left.data(), right.data(), 128);
@@ -767,7 +772,9 @@ struct FakeCoordinator final {
   bool called = false;
   bool render_during_await = false;
   bool render_on_acknowledgement_poll = false;
+  std::uint32_t render_after_acknowledgement_call = 0;
   bool observe_engine_generation = false;
+  std::function<void()> before_acknowledgement;
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
   bool quiescence_established = false;
@@ -795,6 +802,7 @@ struct OneShotAudioBackend final {
       float* left,
       float* right,
       std::uint32_t frames) noexcept;
+  std::uint64_t (*enqueued_events)(void* context) noexcept = nullptr;
 };
 
 class OneShotAudioDriver final {
@@ -811,6 +819,10 @@ class OneShotAudioDriver final {
                std::uint32_t frames) noexcept {
               static_cast<RealtimeEngine*>(context)->render(
                   left, right, frames);
+            },
+            [](void* context) noexcept {
+              return static_cast<RealtimeEngine*>(context)
+                  ->telemetry().enqueued_events;
             },
         }) {}
 
@@ -888,19 +900,74 @@ class OneShotAudioDriver final {
     return completed_; // Incremented only after the actual backend callback returns.
   }
 
-  void schedule_bank_transition() {
+  void schedule_bank_transition(
+      std::uint32_t frame_count = 128,
+      bool drain_sample_controls = false) {
+    LMDJ_CHECK(frame_count > 0 && frame_count <= 128);
     const auto target_generation =
         backend_.bank_telemetry(backend_.context).accepted_publications + 1;
     LMDJ_CHECK(target_generation != 0);
+    std::uint64_t control_target = 0;
+    if (drain_sample_controls) {
+      LMDJ_CHECK(backend_.enqueued_events != nullptr);
+      control_target = backend_.enqueued_events(backend_.context) + 2;
+      LMDJ_CHECK(control_target >= 2);
+    }
     std::lock_guard lock(mutex_);
-    if (bank_transition_target_generation_ != 0) {
+    if (bank_transition_target_generation_ != 0 ||
+        sample_control_target_events_ != 0 ||
+        (drain_sample_controls && permits_ != 0)) {
       throw std::runtime_error(
           "one-shot bank transition already in flight");
     }
+    if (drain_sample_controls) {
+      sample_control_expected_events_ = control_target;
+      sample_control_target_events_ = control_target;
+      ++sample_control_permits_;
+    }
     ++permits_;
     ++bank_transition_permits_;
+    frame_count_ = frame_count;
     bank_transition_target_generation_ = target_generation;
     changed_.notify_all();
+  }
+
+  void wait_for_bank_transition() {
+    wait_until([this] {
+      std::lock_guard lock(mutex_);
+      // The render has returned before run clears this target and records
+      // completion in the same critical section. This adds no render permit.
+      return bank_transition_target_generation_ == 0;
+    });
+  }
+
+  void schedule_sample_mutation_controls() {
+    LMDJ_CHECK(backend_.enqueued_events != nullptr);
+    const auto target = backend_.enqueued_events(backend_.context) + 2;
+    LMDJ_CHECK(target >= 2);
+    std::lock_guard lock(mutex_);
+    if (bank_transition_target_generation_ != 0 ||
+        sample_control_target_events_ != 0 || permits_ != 0) {
+      throw std::runtime_error("one-shot sample controls already in flight");
+    }
+    // Only the serialized mutation is a producer in these scopes; replay
+    // service, other dispatches and manual callbacks remain outside them.
+    // The count wakes one callback, never proves Bank or ACK admission.
+    sample_control_expected_events_ = target;
+    sample_control_target_events_ = target;
+    ++permits_;
+    ++sample_control_permits_;
+    changed_.notify_all();
+  }
+
+  void wait_for_sample_mutation_controls() {
+    wait_until([this] {
+      std::lock_guard lock(mutex_);
+      return sample_control_target_events_ == 0;
+    });
+    // A foreign producer must not satisfy the two-control completion seam.
+    LMDJ_CHECK(backend_.enqueued_events(backend_.context) ==
+               sample_control_expected_events_);
   }
 
  private:
@@ -910,6 +977,7 @@ class OneShotAudioDriver final {
     while (true) {
       bool wait_for_bank_transition = false;
       std::uint64_t bank_transition_target_generation = 0;
+      std::uint64_t sample_control_target_events = 0;
       std::uint32_t frame_count = 128;
       {
         std::unique_lock lock(mutex_);
@@ -926,6 +994,27 @@ class OneShotAudioDriver final {
           bank_transition_target_generation =
               bank_transition_target_generation_;
         }
+        if (sample_control_permits_ != 0) {
+          --sample_control_permits_;
+          sample_control_target_events = sample_control_target_events_;
+        }
+      }
+      while (sample_control_target_events != 0 &&
+             backend_.enqueued_events(backend_.context) <
+                 sample_control_target_events &&
+             !stop_requested_.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      if (wait_for_bank_transition && sample_control_target_events != 0) {
+        if (stop_requested_.load(std::memory_order_acquire)) {
+          return;
+        }
+        // The same driver drains committed controls before waiting for Bank
+        // admission, then retains the original separately bounded Bank render.
+        // Both callbacks use the requested size; non-FIFO uses one frame each
+        // so its old 96-frame kernel lease survives admission and exact ACK.
+        backend_.render(
+            backend_.context, left.data(), right.data(), frame_count);
       }
       while (wait_for_bank_transition &&
              backend_.bank_telemetry(backend_.context)
@@ -956,6 +1045,9 @@ class OneShotAudioDriver final {
         if (wait_for_bank_transition) {
           bank_transition_target_generation_ = 0;
         }
+        if (sample_control_target_events != 0) {
+          sample_control_target_events_ = 0;
+        }
         ++completed_;
       }
       changed_.notify_all();
@@ -967,7 +1059,10 @@ class OneShotAudioDriver final {
   std::condition_variable changed_;
   std::size_t permits_ = 0;
   std::size_t bank_transition_permits_ = 0;
+  std::size_t sample_control_permits_ = 0;
   std::uint64_t bank_transition_target_generation_ = 0;
+  std::uint64_t sample_control_target_events_ = 0;
+  std::uint64_t sample_control_expected_events_ = 0;
   std::size_t completed_ = 0;
   std::uint32_t frame_count_ = 128;
   std::atomic<bool> stop_requested_{false};
@@ -1079,7 +1174,7 @@ void test_one_shot_bank_transition_rejects_overlap_until_completion() {
   LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 0);
 }
 
-void import_and_assign(
+Json import_and_assign(
     ControlRuntime& runtime,
     std::span<const std::byte> wav,
     std::string_view asset_id,
@@ -1090,7 +1185,7 @@ void import_and_assign(
       "asset.import",
       import_payload(import_command, starting_revision, asset_id, wav),
       wav));
-  check_success(runtime.dispatch(
+  return check_locked_success_result(runtime.dispatch(
       "pad.assign",
       assign_payload(
           assign_command, starting_revision + 1, asset_id),
@@ -1109,6 +1204,763 @@ Json inspect_project(
             (std::string(project_id) + ".lmdj"))
                .generic_string()},
       });
+}
+
+Json inspect_assignment_playback(
+    const std::filesystem::path& root,
+    std::uint64_t revision,
+    std::uint32_t bank,
+    std::uint32_t pad,
+    std::string_view asset_id,
+    std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> storage_platform) {
+  auto config = make_application_config(root);
+  config.storage_platform = std::move(storage_platform);
+  Application observer(std::move(config));
+  const auto response = observer.query(
+      {{"operation", "sample.inspect"},
+       {"project_path",
+        (root / "projects" / (std::string(kProjectId) + ".lmdj"))
+            .generic_string()},
+       {"slot", slot(bank, pad)}});
+  check_exact_keys(response, {"ok", "result", "project_revision"});
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("project_revision") == revision);
+  const auto& result = response.at("result");
+  check_exact_keys(result, {"project_revision", "slot", "asset_id", "playback",
+                           "metadata", "waveform_cache_identity"});
+  LMDJ_CHECK(result.at("project_revision") == revision);
+  LMDJ_CHECK(result.at("slot") == slot(bank, pad));
+  LMDJ_CHECK(result.at("asset_id") == asset_id);
+  LMDJ_CHECK(result.at("playback").is_object());
+  return result.at("playback");
+}
+
+void test_retained_asset_assignment_replaces_the_destination_pcm() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto source = mono_pcm16_wav(256);
+  auto destination = mono_pcm16_wav(256);
+  for (std::size_t frame = 0; frame < 256; ++frame) {
+    write_u16(source, 44 + frame * 2, 12'000);
+    write_u16(destination, 44 + frame * 2,
+              static_cast<std::uint16_t>(-6'000));
+  }
+  import_and_assign(*runtime, source, kAssetId, 96'000, 96'001, 0);
+  check_success(runtime->dispatch(
+      "asset.import", import_payload(96'002, 2, uuid(96'003), destination),
+      destination));
+  check_success(runtime->dispatch(
+      "pad.assign", assign_payload(96'004, 3, uuid(96'003), 1), {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  coordinator.render_on_acknowledgement_poll = true;
+  LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+                 .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  std::array<float, 128> left{}, right{};
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 1}, {"velocity", 127}}, {}));
+  runtime->engine().render(left.data(), right.data(), 128);
+  LMDJ_CHECK(left.front() == 0 && right.front() == 0);
+  // F6's existing 96-frame attack starts at zero; subsequent frames identify Y.
+  LMDJ_CHECK(std::all_of(left.begin() + 1, left.end(),
+                         [](float value) { return value < 0; }));
+  LMDJ_CHECK(std::all_of(right.begin() + 1, right.end(),
+                         [](float value) { return value < 0; }));
+  runtime->engine().render(left.data(), right.data(), 128);
+  const auto generation =
+      runtime->engine().bank_telemetry().current_generation;
+
+  // Public authoring succeeds on the old producer, but its destination Bank
+  // still contains the negative Y sample. The far side must hear retained X.
+  {
+    OneShotAudioDriver audio(runtime->engine());
+    audio.schedule_sample_mutation_controls();
+    coordinator.before_acknowledgement = [&] {
+      audio.wait_for_sample_mutation_controls();
+    };
+    check_success(runtime->dispatch(
+        "pad.assign", assign_payload(96'005, 4, kAssetId, 1), {}));
+    coordinator.before_acknowledgement = {};
+  }
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 1}, {"velocity", 127}}, {}));
+  runtime->engine().render(left.data(), right.data(), 128);
+  LMDJ_CHECK(left.front() == 0 && right.front() == 0);
+  LMDJ_CHECK(std::all_of(left.begin() + 1, left.end(),
+                         [](float value) { return value > 0; }));
+  LMDJ_CHECK(std::all_of(right.begin() + 1, right.end(),
+                         [](float value) { return value > 0; }));
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation ==
+             generation + 1);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(truth.at("project_revision") == 5);
+  LMDJ_CHECK(truth.at("result").at("project").at("banks").at(0).at("pads").at(0)
+                 .at("asset_id") == kAssetId);
+  LMDJ_CHECK(truth.at("result").at("project").at("banks").at(0).at("pads").at(1)
+                 .at("asset_id") == kAssetId);
+  check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+struct RetainedAssignmentFixture {
+  explicit RetainedAssignmentFixture(bool pattern_transport = false)
+      : runtime(make_owned_runtime()) {
+    auto initial = create_payload();
+    if (pattern_transport) initial["pattern_transport"] = true;
+    check_success(runtime->dispatch("project.create", initial, {}));
+    auto x = mono_pcm16_wav(256);
+    auto y = mono_pcm16_wav(256);
+    for (std::size_t frame = 0; frame < 256; ++frame) {
+      write_u16(x, 44 + frame * 2, 12'000);
+      write_u16(y, 44 + frame * 2, static_cast<std::uint16_t>(-6'000));
+    }
+    import_and_assign(*runtime, x, kAssetId, 96'100, 96'101, 0);
+    check_success(runtime->dispatch(
+        "asset.import", import_payload(96'102, 2, uuid(96'103), y), y));
+    check_success(runtime->dispatch(
+        "pad.assign", assign_payload(96'104, 3, uuid(96'103), 1), {}));
+    check_success(runtime->dispatch(
+        "sample.update_pad",
+        {{"command_id", uuid(96'105)}, {"expected_revision", 4},
+         {"slot", slot(0, 1)},
+         {"playback", playback_payload(0, 256, "gate", -600)}}, {}));
+    check_success(runtime->dispatch(
+        "pad.colour.set",
+        {{"command_id", uuid(96'106)}, {"expected_revision", 5},
+         {"slot", slot(0, 1)}, {"colour", 2}}, {}));
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    artifact_bytes.emplace(sha256(x), std::move(x));
+    artifact_bytes.emplace(sha256(y), std::move(y));
+  }
+
+  std::unique_ptr<ControlRuntime> make_owned_runtime() const {
+    auto config = make_application_config(temp.path());
+    config.storage_platform = storage_platform;
+    auto created = ControlRuntime::create(
+        temp.path(), std::move(config), kWebLimits);
+    LMDJ_CHECK(created.has_value());
+    return std::move(created.value());
+  }
+
+  Json truth() {
+    return check_locked_success_result(runtime->dispatch(
+        "project.inspect", Json::object(), {})).at("project");
+  }
+
+  Json history() {
+    return check_locked_success_result(runtime->dispatch(
+        "history.inspect", Json::object(), {}));
+  }
+
+  void activate() {
+    coordinator.engine = &runtime->engine();
+    coordinator.observe_engine_generation = true;
+    coordinator.render_on_acknowledgement_poll = true;
+    LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+                   .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  }
+
+  void check_pcm(std::uint8_t pad, bool positive) {
+    check_success(runtime->dispatch(
+        "trigger", {{"slot", pad}, {"velocity", 127}}, {}));
+    runtime->engine().render(left.data(), right.data(), 128);
+    const auto sign = [positive](float value) {
+      return positive ? value > 0 : value < 0;
+    };
+    LMDJ_CHECK(left.front() == 0 && right.front() == 0);
+    LMDJ_CHECK(std::all_of(left.begin() + 1, left.end(), sign));
+    LMDJ_CHECK(std::all_of(right.begin() + 1, right.end(), sign));
+    runtime->engine().render(left.data(), right.data(), 128);
+  }
+
+  Json assign_live(const Json& payload) {
+    OneShotAudioDriver audio(runtime->engine());
+    audio.schedule_sample_mutation_controls();
+    coordinator.before_acknowledgement = [&] {
+      audio.wait_for_sample_mutation_controls();
+    };
+    auto response = runtime->dispatch("pad.assign", payload, {});
+    coordinator.before_acknowledgement = {};
+    return response;
+  }
+
+  void check_artifacts() const {
+    for (const auto& [digest, bytes] : artifact_bytes) {
+      const auto path = temp.path() / "projects" /
+                        (std::string(kProjectId) + ".lmdj") / "assets" /
+                        (digest + ".wav");
+      const auto saved = read_bytes(path);
+      LMDJ_CHECK(saved.size() == bytes.size());
+      LMDJ_CHECK(sha256(saved) == digest);
+      LMDJ_CHECK(saved == bytes);
+    }
+  }
+
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> storage_platform =
+      lmdj::project_io::make_default_project_storage_platform();
+  std::unique_ptr<ControlRuntime> runtime;
+  std::map<std::string, std::vector<std::byte>> artifact_bytes;
+  std::array<float, 128> left{}, right{};
+};
+
+void test_assignment_history_restores_whole_truth_pcm_and_reopens() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  const auto source_playback = inspect_assignment_playback(
+      fixture.temp.path(), 6, 0, 0, kAssetId,
+      fixture.storage_platform);
+  const auto destination_playback = inspect_assignment_playback(
+      fixture.temp.path(), 6, 0, 1, uuid(96'103),
+      fixture.storage_platform);
+  LMDJ_CHECK(source_playback == playback_payload(0, std::nullopt));
+  LMDJ_CHECK(destination_playback == playback_payload(0, 256, "gate", -600));
+  const auto history = fixture.history();
+  fixture.activate();
+  fixture.check_pcm(1, false);
+  const auto assigned = check_exact_success(fixture.assign_live(
+      assign_payload(96'110, 6, kAssetId, 1)),
+      {"slot", "asset_id", "committed_revision", "replayed",
+       "project_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(assigned.at("committed_revision") == 7);
+  LMDJ_CHECK(assigned.at("runtime_revision") == 7);
+  LMDJ_CHECK(assigned.at("runtime_published") == true);
+  auto expected = before;
+  expected["revision"] = 7;
+  expected["banks"][0]["pads"][1]["asset_id"] = kAssetId;
+  LMDJ_CHECK(fixture.truth() == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  fixture.check_artifacts();
+  fixture.check_pcm(1, true);
+  const auto after = fixture.history();
+  LMDJ_CHECK(after.at("undo_count").get<unsigned>() ==
+             history.at("undo_count").get<unsigned>() + 1);
+  LMDJ_CHECK(after.at("undo_label") == "Assign Pad");
+
+  check_success(fixture.runtime->dispatch("history.undo",
+      {{"session_id", after.at("session_id")}, {"command_id", uuid(96'111)},
+       {"expected_revision", 7}}, {}));
+  auto undone = before;
+  undone["revision"] = 8;
+  LMDJ_CHECK(fixture.truth() == undone);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 8, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 8, 0, 1, uuid(96'103),
+      fixture.storage_platform) == destination_playback);
+  fixture.check_artifacts();
+  fixture.check_pcm(1, false);
+
+  check_success(fixture.runtime->dispatch("history.redo",
+      {{"session_id", after.at("session_id")}, {"command_id", uuid(96'112)},
+       {"expected_revision", 8}}, {}));
+  expected["revision"] = 9;
+  LMDJ_CHECK(fixture.truth() == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 9, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 9, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  fixture.check_artifacts();
+  fixture.check_pcm(1, true);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+  check_success(fixture.runtime->dispatch("host.close", Json::object(), {}));
+  fixture.runtime.reset();
+  fixture.runtime = fixture.make_owned_runtime();
+  check_success(fixture.runtime->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(fixture.truth() == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 9, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 9, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  fixture.check_artifacts();
+  LMDJ_CHECK(fixture.history().at("undo_count") == 0);
+  LMDJ_CHECK(fixture.history().at("session_id") != after.at("session_id"));
+  fixture.activate();
+  fixture.check_pcm(1, true);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_same_asset_assignment_retains_destination_playback() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  const auto assigned = check_locked_success_result(fixture.runtime->dispatch(
+      "pad.assign", assign_payload(96'120, 6, uuid(96'103), 1), {}));
+  auto expected = before;
+  expected["revision"] = 7;
+  LMDJ_CHECK(fixture.truth() == expected);
+  LMDJ_CHECK(assigned.at("replayed") == false);
+  LMDJ_CHECK(assigned.at("runtime_revision") == 7);
+  fixture.activate();
+  fixture.check_pcm(1, false);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_assignment_d16_and_native_null_preserve_materials() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  auto assignment = assign_payload(96'130, 6, kAssetId);
+  assignment["slot"] = slot(3, 15);
+  const auto assigned = check_locked_success_result(
+      fixture.runtime->dispatch("pad.assign", assignment, {}));
+  LMDJ_CHECK(assigned.at("slot") == slot(3, 15));
+  auto expected = before;
+  expected["revision"] = 7;
+  expected["banks"][3]["pads"][15]["asset_id"] = kAssetId;
+  LMDJ_CHECK(fixture.truth() == expected);
+  fixture.check_artifacts();
+  fixture.activate();
+  fixture.check_pcm(63, true);
+  assignment["command_id"] = uuid(96'131);
+  assignment["expected_revision"] = 7;
+  assignment["asset_id"] = nullptr;
+  const auto cleared = check_locked_success_result(
+      fixture.assign_live(assignment));
+  LMDJ_CHECK(cleared.at("asset_id").is_null());
+  auto empty = before;
+  empty["revision"] = 8;
+  LMDJ_CHECK(fixture.truth() == empty);
+  fixture.check_artifacts();
+  fixture.runtime->engine().render(fixture.left.data(), fixture.right.data(), 128);
+  LMDJ_CHECK(std::all_of(fixture.left.begin(), fixture.left.end(),
+                         [](float value) { return value == 0; }));
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_assignment_replay_after_later_edit_publishes_current_truth() {
+  RetainedAssignmentFixture fixture;
+  const auto assignment = assign_payload(96'140, 6, kAssetId, 1);
+  check_success(fixture.runtime->dispatch("pad.assign", assignment, {}));
+  check_success(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'141, 7, uuid(96'103), 1), {}));
+  const auto current = fixture.truth();
+  const auto history = fixture.history();
+  fixture.activate();
+  const auto replay = check_locked_success_result(
+      fixture.assign_live(assignment));
+  LMDJ_CHECK(replay.at("replayed") == true);
+  LMDJ_CHECK(replay.at("committed_revision") == 7);
+  LMDJ_CHECK(replay.at("project_revision") == 8);
+  LMDJ_CHECK(replay.at("runtime_revision") == 8);
+  LMDJ_CHECK(replay.at("runtime_published") == true);
+  LMDJ_CHECK(fixture.truth() == current);
+  LMDJ_CHECK(fixture.history() == history);
+  fixture.check_pcm(1, false);
+  auto mismatch = assignment;
+  mismatch["asset_id"] = uuid(96'103);
+  check_error(fixture.runtime->dispatch("pad.assign", mismatch, {}), "INVALID_ARGUMENT");
+  LMDJ_CHECK(fixture.truth() == current);
+  LMDJ_CHECK(fixture.history() == history);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_missing_asset_assignment_keeps_truth_history_and_live_voice() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  const auto history = fixture.history();
+  fixture.activate();
+  check_success(fixture.runtime->dispatch("trigger", {{"slot", 1}, {"velocity", 127}}, {}));
+  fixture.runtime->engine().render(fixture.left.data(), fixture.right.data(), 1);
+  const auto generation = fixture.runtime->engine().bank_telemetry().current_generation;
+  check_error(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'150, 6, uuid(96'151), 1), {}), "MISSING_ASSET");
+  fixture.runtime->engine().render(fixture.left.data(), fixture.right.data(), 128);
+  LMDJ_CHECK(std::all_of(fixture.left.begin(), fixture.left.end(),
+                         [](float value) { return value < 0; }));
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().current_generation == generation);
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.history() == history);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_stale_assignment_keeps_truth_history_and_live_voice() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  const auto history = fixture.history();
+  fixture.activate();
+  check_success(fixture.runtime->dispatch("trigger", {{"slot", 1}, {"velocity", 127}}, {}));
+  fixture.runtime->engine().render(fixture.left.data(), fixture.right.data(), 1);
+  const auto generation = fixture.runtime->engine().bank_telemetry().current_generation;
+  const auto error = check_error(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'160, 5, kAssetId, 1), {}), "REVISION_CONFLICT");
+  LMDJ_CHECK(error.at("details").at("actual_revision") == 6);
+  fixture.runtime->engine().render(fixture.left.data(), fixture.right.data(), 128);
+  LMDJ_CHECK(std::all_of(fixture.left.begin(), fixture.left.end(),
+                         [](float value) { return value < 0; }));
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().current_generation == generation);
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.history() == history);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_foreign_asset_assignment_cannot_import_another_project_material() {
+  RetainedAssignmentFixture fixture;
+  auto other = make_runtime(fixture.temp.path());
+  const auto project_id = uuid(96'210);
+  const auto pattern_id = uuid(96'211);
+  const auto foreign_id = uuid(96'212);
+  check_success(other->dispatch("project.create", create_payload(project_id, pattern_id), {}));
+  const auto wav = mono_pcm16_wav(32);
+  check_success(other->dispatch("asset.import", import_payload(96'213, 0, foreign_id, wav), wav));
+  const auto foreign = inspect_project(fixture.temp.path(), project_id);
+  const auto before = fixture.truth();
+  const auto history = fixture.history();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  check_error(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'214, 6, foreign_id, 1), {}), "MISSING_ASSET");
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.history() == history);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == generation);
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), project_id) == foreign);
+  fixture.check_artifacts();
+}
+
+void test_assignment_post_commit_deadline_retains_identity_and_truth() {
+  RetainedAssignmentFixture fixture;
+  FakeRuntimeClock clock;
+  LMDJ_CHECK(ControlRuntimeClockAccess::install(*fixture.runtime, clock.seam())
+                 .has_value());
+  const auto before = fixture.truth();
+  const auto source_playback = inspect_assignment_playback(
+      fixture.temp.path(), 6, 0, 0, kAssetId,
+      fixture.storage_platform);
+  const auto destination_playback = inspect_assignment_playback(
+      fixture.temp.path(), 6, 0, 1, uuid(96'103),
+      fixture.storage_platform);
+  LMDJ_CHECK(source_playback == playback_payload(0, std::nullopt));
+  LMDJ_CHECK(destination_playback == playback_payload(0, 256, "gate", -600));
+  const auto history = fixture.history();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  const auto assignment = assign_payload(96'170, 6, kAssetId, 1);
+  const auto submitted = clock.current;
+  CommitDeadlineCrossing crossing{clock};
+  Json response;
+  {
+    const lmdj::facade::detail::MutationPublishScope scope(crossing.token());
+    response = fixture.runtime->dispatch("pad.assign", assignment, {}, submitted);
+  }
+  const auto result = check_exact_success(response,
+      {"slot", "asset_id", "committed_revision", "replayed", "project_revision",
+       "runtime_revision", "runtime_published", "snapshot_error"});
+  LMDJ_CHECK(result.at("committed_revision") == 7);
+  LMDJ_CHECK(result.at("project_revision") == 7);
+  LMDJ_CHECK(result.at("asset_id") == kAssetId);
+  LMDJ_CHECK(result.at("runtime_revision") == 6);
+  LMDJ_CHECK(result.at("runtime_published") == false);
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "HOST_TIMEOUT");
+  LMDJ_CHECK(!fixture.runtime->failed());
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == generation);
+  auto expected = before;
+  expected["revision"] = 7;
+  expected["banks"][0]["pads"][1]["asset_id"] = kAssetId;
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), kProjectId).at("result").at("project") == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(fixture.history().at("undo_count").get<unsigned>() ==
+             history.at("undo_count").get<unsigned>() + 1);
+  const auto replay = check_locked_success_result(fixture.runtime->dispatch(
+      "pad.assign", assignment, {}, clock.current));
+  LMDJ_CHECK(replay.at("replayed") == true);
+  LMDJ_CHECK(replay.at("runtime_published") == true);
+  LMDJ_CHECK(fixture.truth() == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(fixture.history().at("undo_count").get<unsigned>() ==
+             history.at("undo_count").get<unsigned>() + 1);
+}
+
+void test_assignment_waits_for_its_real_bank_acknowledgement() {
+  RetainedAssignmentFixture fixture;
+  fixture.activate();
+  const auto generation = fixture.runtime->engine().bank_telemetry().current_generation;
+  const auto polls = fixture.coordinator.acknowledgement_calls;
+  fixture.coordinator.render_after_acknowledgement_call = polls + 3;
+  const auto response = check_locked_success_result(fixture.assign_live(
+      assign_payload(96'180, 6, kAssetId, 1)));
+  LMDJ_CHECK(response.at("runtime_published") == true);
+  LMDJ_CHECK(fixture.coordinator.acknowledgement_calls >= polls + 3);
+  LMDJ_CHECK(fixture.coordinator.acknowledged == generation + 1);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().current_generation == generation + 1);
+  fixture.check_pcm(1, true);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_assignment_ack_timeout_keeps_commit_and_fails_closed() {
+  RetainedAssignmentFixture fixture;
+  fixture.activate();
+  const auto generation = fixture.runtime->engine().bank_telemetry().current_generation;
+  FakeRuntimeClock clock;
+  LMDJ_CHECK(ControlRuntimeClockAccess::install(*fixture.runtime, clock.seam())
+                 .has_value());
+  // The original 30 s budget remains unchanged. This clock advances only
+  // after setup; no callback applies the candidate generation.
+  fixture.coordinator.render_on_acknowledgement_poll = false;
+  const auto accepted =
+      fixture.runtime->engine().bank_telemetry().accepted_publications;
+  Json result;
+  {
+    OneShotAudioDriver audio(fixture.runtime->engine());
+    audio.schedule_sample_mutation_controls();
+    fixture.coordinator.before_acknowledgement = [&] {
+      audio.wait_for_sample_mutation_controls();
+      const auto bank = fixture.runtime->engine().bank_telemetry();
+      LMDJ_CHECK(bank.accepted_publications == accepted + 1);
+      LMDJ_CHECK(bank.pending_publications == 1);
+      LMDJ_CHECK(bank.current_generation == generation);
+      clock.advance_per_read = std::chrono::seconds(1);
+    };
+    result = check_locked_success_result(fixture.runtime->dispatch(
+        "pad.assign", assign_payload(96'181, 6, kAssetId, 1), {}, clock.current));
+    fixture.coordinator.before_acknowledgement = {};
+  }
+  LMDJ_CHECK(result.at("committed_revision") == 7);
+  LMDJ_CHECK(result.at("project_revision") == 7);
+  LMDJ_CHECK(result.at("runtime_published") == false);
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "HOST_TIMEOUT");
+  LMDJ_CHECK(fixture.runtime->failed());
+  LMDJ_CHECK(fixture.coordinator.acknowledged == generation);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().current_generation == generation);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == accepted + 1);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().pending_publications == 1);
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), kProjectId).at("result").at("project")
+                 .at("banks").at(0).at("pads").at(1).at("asset_id") == kAssetId);
+  // The authoring event exists once even though the Runtime is terminal.
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), kProjectId).at("project_revision") == 7);
+  check_error(fixture.runtime->dispatch("trigger", {{"slot", 1}, {"velocity", 127}},
+      {}, clock.current), "HOST_STATE_INVALID");
+  // A failed owner refuses further commands. Destroy it before acquiring a
+  // fresh owner, rather than pretending host.close succeeded after failure.
+  fixture.runtime.reset();
+  fixture.runtime = make_runtime(fixture.temp.path());
+  check_success(fixture.runtime->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(fixture.history().at("undo_count") == 0);
+  fixture.check_artifacts();
+  fixture.activate();
+  fixture.check_pcm(1, true);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_assignment_admission_timeout_keeps_commit_without_a_new_bank() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  const auto source_playback = inspect_assignment_playback(
+      fixture.temp.path(), 6, 0, 0, kAssetId,
+      fixture.storage_platform);
+  const auto destination_playback = inspect_assignment_playback(
+      fixture.temp.path(), 6, 0, 1, uuid(96'103),
+      fixture.storage_platform);
+  LMDJ_CHECK(source_playback == playback_payload(0, std::nullopt));
+  LMDJ_CHECK(destination_playback == playback_payload(0, 256, "gate", -600));
+  fixture.activate();
+  const auto bank = fixture.runtime->engine().bank_telemetry();
+  const auto polls = fixture.coordinator.acknowledgement_calls;
+  FakeRuntimeClock clock;
+  LMDJ_CHECK(ControlRuntimeClockAccess::install(*fixture.runtime, clock.seam())
+                 .has_value());
+  // No callback drains the two committed mutation controls. The original
+  // 30 s budget expires before Bank admission, independently of new-Bank ACK.
+  clock.advance_per_read = std::chrono::seconds(1);
+  fixture.coordinator.render_on_acknowledgement_poll = false;
+  const auto result = check_locked_success_result(fixture.runtime->dispatch(
+      "pad.assign", assign_payload(96'183, 6, kAssetId, 1), {}, clock.current));
+  LMDJ_CHECK(result.at("committed_revision") == 7);
+  LMDJ_CHECK(result.at("project_revision") == 7);
+  LMDJ_CHECK(result.at("runtime_revision") == 6);
+  LMDJ_CHECK(result.at("runtime_published") == false);
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "HOST_TIMEOUT");
+  LMDJ_CHECK(fixture.runtime->failed());
+  const auto unchanged_bank = fixture.runtime->engine().bank_telemetry();
+  LMDJ_CHECK(unchanged_bank.accepted_publications == bank.accepted_publications);
+  LMDJ_CHECK(unchanged_bank.applied_publications == bank.applied_publications);
+  LMDJ_CHECK(unchanged_bank.current_generation == bank.current_generation);
+  LMDJ_CHECK(unchanged_bank.pending_publications == 0);
+  LMDJ_CHECK(fixture.coordinator.acknowledgement_calls == polls);
+  auto expected = before;
+  expected["revision"] = 7;
+  expected["banks"][0]["pads"][1]["asset_id"] = kAssetId;
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), kProjectId).at("result").at("project") == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  fixture.check_artifacts();
+  check_error(fixture.runtime->dispatch("trigger", {{"slot", 1}, {"velocity", 127}},
+      {}, clock.current), "HOST_STATE_INVALID");
+  fixture.runtime.reset();
+  fixture.runtime = fixture.make_owned_runtime();
+  check_success(fixture.runtime->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(fixture.truth() == expected);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 0, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(inspect_assignment_playback(
+      fixture.temp.path(), 7, 0, 1, kAssetId,
+      fixture.storage_platform) == source_playback);
+  LMDJ_CHECK(fixture.history().at("undo_count") == 0);
+  fixture.check_artifacts();
+  fixture.activate();
+  fixture.check_pcm(1, true);
+  check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+}
+
+void test_assignment_cannot_acknowledge_with_an_unrelated_later_generation() {
+  RetainedAssignmentFixture fixture;
+  fixture.activate();
+  const auto generation = fixture.runtime->engine().bank_telemetry().current_generation;
+  fixture.coordinator.observe_engine_generation = false;
+  fixture.coordinator.render_on_acknowledgement_poll = false;
+  fixture.coordinator.acknowledged = generation + 2;
+  const auto accepted =
+      fixture.runtime->engine().bank_telemetry().accepted_publications;
+  Json result;
+  {
+    OneShotAudioDriver audio(fixture.runtime->engine());
+    audio.schedule_sample_mutation_controls();
+    fixture.coordinator.before_acknowledgement = [&] {
+      audio.wait_for_sample_mutation_controls();
+      const auto bank = fixture.runtime->engine().bank_telemetry();
+      LMDJ_CHECK(bank.accepted_publications == accepted + 1);
+      LMDJ_CHECK(bank.pending_publications == 1);
+      LMDJ_CHECK(bank.current_generation == generation);
+    };
+    result = check_locked_success_result(fixture.runtime->dispatch(
+        "pad.assign", assign_payload(96'182, 6, kAssetId, 1), {}));
+    fixture.coordinator.before_acknowledgement = {};
+  }
+  LMDJ_CHECK(result.at("committed_revision") == 7);
+  LMDJ_CHECK(result.at("runtime_published") == false);
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "INTERNAL_ERROR");
+  LMDJ_CHECK(fixture.runtime->failed());
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == accepted + 1);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().pending_publications == 1);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().current_generation == generation);
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), kProjectId).at("project_revision") == 7);
+}
+
+void test_assignment_refuses_a_live_sequence_owner_without_mutation() {
+  RetainedAssignmentFixture fixture;
+  fixture.activate();
+  check_success(fixture.runtime->dispatch("sequence.record.begin",
+      {{"session_id", kSequenceSessionId}, {"pattern_id", kPatternId},
+       {"expected_revision", 6}}, {}));
+  const auto before = fixture.truth();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  check_error(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'190, 6, kAssetId, 1), {}), "INVALID_ARGUMENT");
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == generation);
+  const auto status = check_locked_success_result(fixture.runtime->dispatch(
+      "sequence.record.status", Json::object(), {}));
+  LMDJ_CHECK(status.at("state") == "active");
+  {
+    ContinuousAudioDriver audio(fixture.runtime->engine());
+    fixture.coordinator.driver = &audio;
+    fixture.coordinator.render_on_acknowledgement_poll = false;
+    check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+  }
+  fixture.coordinator.driver = nullptr;
+}
+
+void test_assignment_refuses_a_live_performance_owner_without_mutation() {
+  RetainedAssignmentFixture fixture;
+  fixture.activate();
+  check_success(fixture.runtime->dispatch("performance.record.begin",
+      {{"command_id", uuid(96'200)}, {"expected_revision", 6},
+       {"session_id", uuid(96'201)}, {"performance_id", uuid(96'202)}}, {}));
+  const auto before = fixture.truth();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  check_error(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'203, 6, kAssetId, 1), {}), "INVALID_ARGUMENT");
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == generation);
+  const auto status = check_locked_success_result(fixture.runtime->dispatch(
+      "performance.record.status", Json::object(), {}));
+  LMDJ_CHECK(status.at("state") == "active");
+  {
+    ContinuousAudioDriver audio(fixture.runtime->engine());
+    fixture.coordinator.driver = &audio;
+    fixture.coordinator.render_on_acknowledgement_poll = false;
+    check_success(fixture.runtime->dispatch("audio.suspend", Json::object(), {}));
+  }
+  fixture.coordinator.driver = nullptr;
+}
+
+void test_assignment_refuses_a_recording_pattern_transport_without_mutation() {
+  RetainedAssignmentFixture fixture(true);
+  fixture.activate();
+  check_success(fixture.runtime->dispatch("pattern.transport.request",
+      {{"session_id", kSequenceSessionId}, {"project_id", kProjectId},
+       {"command_id", uuid(96'220)}, {"expected_epoch", 1},
+       {"intent", "record"}, {"expected_revision", nullptr}}, {}));
+  bool recording = false;
+  for (unsigned step = 0; step < 8 && !recording; ++step) {
+    // Preserve the eight render legs while real asynchronous recording
+    // preparation settles within the existing fixture deadline.
+    wait_until([&] {
+      static_cast<void>(check_locked_success_result(fixture.runtime->dispatch(
+          "pattern.transport.inspect", {{"session_id", kSequenceSessionId}}, {})));
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(
+          *fixture.runtime);
+    });
+    fixture.runtime->engine().render(fixture.left.data(), fixture.right.data(), 128);
+    const auto status = check_locked_success_result(fixture.runtime->dispatch(
+        "pattern.transport.inspect", {{"session_id", kSequenceSessionId}}, {}));
+    recording = status.at("recording") == true && status.at("phase") == "idle";
+  }
+  LMDJ_CHECK(recording);
+  const auto before = fixture.truth();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  check_error(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'221, 6, kAssetId, 1), {}), "INVALID_ARGUMENT");
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == generation);
+  const auto status = check_locked_success_result(fixture.runtime->dispatch(
+      "pattern.transport.inspect", {{"session_id", kSequenceSessionId}}, {}));
+  LMDJ_CHECK(status.at("recording") == true);
+  // The same original shutdown barrier gets real callback receipts.
+  {
+    ContinuousAudioDriver audio(fixture.runtime->engine());
+    fixture.coordinator.driver = &audio;
+    fixture.coordinator.render_on_acknowledgement_poll = false;
+    check_success(dispatch_retained_for_test(*fixture.runtime,
+        "audio.suspend", Json::object(), {},
+        ControlRuntime::AbsoluteRequestDeadline{
+            std::chrono::steady_clock::now() + std::chrono::seconds(1)}));
+    LMDJ_CHECK(fixture.runtime->pattern_transport_shutdown_complete());
+    LMDJ_CHECK(!fixture.runtime->failed());
+    LMDJ_CHECK(audio.stopped() && fixture.coordinator.quiescence_established);
+  }
+  fixture.coordinator.driver = nullptr;
 }
 
 void test_facade_error_details_follow_an_explicit_safe_schema() {
@@ -1724,12 +2576,14 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   const auto& assigned = check_exact_success(
       runtime->dispatch("pad.assign", assign_payload(302, 1, kAssetId), {}),
       {"slot", "asset_id", "committed_revision", "replayed",
-       "project_revision"});
+       "project_revision", "runtime_revision", "runtime_published"});
   LMDJ_CHECK(assigned.at("slot") == slot(0, 0));
   LMDJ_CHECK(assigned.at("asset_id") == kAssetId);
   LMDJ_CHECK(assigned.at("committed_revision") == 2);
   LMDJ_CHECK(assigned.at("replayed") == false);
   LMDJ_CHECK(assigned.at("project_revision") == 2);
+  LMDJ_CHECK(assigned.at("runtime_revision") == 2);
+  LMDJ_CHECK(assigned.at("runtime_published") == true);
 
   const auto& opened = check_exact_success(
       runtime->dispatch(
@@ -1742,7 +2596,7 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   LMDJ_CHECK(opened.at("project_revision") == 2);
   LMDJ_CHECK(opened.at("pattern_id") == kPatternId);
   LMDJ_CHECK(opened.at("runtime_ready") == true);
-  LMDJ_CHECK(opened.at("generation") == 1);
+  LMDJ_CHECK(opened.at("generation") == 2);
   LMDJ_CHECK(opened.at("snapshot_error").is_null());
   const auto& inspected_result = check_exact_success(
       runtime->dispatch("project.inspect", Json::object(), {}),
@@ -1751,6 +2605,8 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   LMDJ_CHECK(inspected_result.at("project").at("project_id") == kProjectId);
 
   FakeCoordinator activation_coordinator;
+  activation_coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(
           *runtime, activation_coordinator.seam())
@@ -1760,7 +2616,7 @@ void test_exact_payloads_and_facade_owned_project_journey() {
       {"state", "changed", "generation"});
   LMDJ_CHECK((
       activated ==
-      Json{{"state", "running"}, {"changed", true}, {"generation", 1}}));
+      Json{{"state", "running"}, {"changed", true}, {"generation", 2}}));
   const auto& begun = check_exact_success(
       runtime->dispatch(
           "sequence.record.begin",
@@ -1895,6 +2751,8 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
     check_success(owner->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
+    coordinator.begin_acknowledgement =
+        owner->engine().bank_telemetry().accepted_publications;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*owner, coordinator.seam())
             .has_value());
@@ -1979,6 +2837,8 @@ void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   coordinator.engine = &runtime->engine();
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
@@ -2041,10 +2901,20 @@ void test_pending_sequence_overlay_repeats_and_commits_without_duplicate() {
   auto runtime = make_runtime(temp.path());
   check_success(runtime->dispatch("project.create", create_payload(), {}));
   const auto wav = mono_pcm16_wav(2'400);
+  const auto fixture_pattern_before = runtime->engine().pattern_telemetry();
   import_and_assign(*runtime, wav, kAssetId, 731, 732, 0);
+  const auto fixture_pattern_after = runtime->engine().pattern_telemetry();
+  // Stopped ASSIGN applies exactly one fixture publication. The journey
+  // below still owns its reload, replacement overlay and clean Stop.
+  LMDJ_CHECK(fixture_pattern_after.accepted_publications ==
+             fixture_pattern_before.accepted_publications + 1);
+  LMDJ_CHECK(fixture_pattern_after.applied_publications ==
+             fixture_pattern_before.applied_publications + 1);
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -2122,7 +2992,8 @@ void test_pending_sequence_overlay_repeats_and_commits_without_duplicate() {
   LMDJ_CHECK(runtime->engine().telemetry().started_voices == 3);
   LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == false);
   const auto final_pattern = runtime->engine().pattern_telemetry();
-  LMDJ_CHECK(final_pattern.applied_publications == 3);
+  LMDJ_CHECK(final_pattern.applied_publications ==
+             fixture_pattern_after.applied_publications + 3);
   LMDJ_CHECK(final_pattern.superseded_publications == 1);
 }
 
@@ -2135,6 +3006,8 @@ void test_stop_replay_recovers_a_committed_clean_publication_failure() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -2210,6 +3083,8 @@ void test_authoritative_switch_supersedes_overlay_and_stop_cancels_target() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -2435,6 +3310,8 @@ void test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -2605,6 +3482,8 @@ void test_sequence_switch_supersedes_a_near_boundary_recording_overlay() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -3827,6 +4706,8 @@ void test_trigger_queue_full_is_admission_failure() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -3886,6 +4767,8 @@ void test_voice_capacity_is_sequence_addressed_execution_outcome() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -3944,6 +4827,8 @@ void test_audio_activation_requires_ready_and_reports_explicit_ack() {
       !ControlRuntimeAudioAccess::install(*runtime, missing_ready).has_value());
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   coordinator.is_ready = false;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
@@ -3966,14 +4851,14 @@ void test_audio_activation_requires_ready_and_reports_explicit_ack() {
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
   LMDJ_CHECK(coordinator.begin_calls == 1);
   LMDJ_CHECK(coordinator.acknowledged_before_begin == 77);
-  LMDJ_CHECK(coordinator.acknowledged == 1);
+  LMDJ_CHECK(coordinator.acknowledged == coordinator.begin_acknowledgement);
   LMDJ_CHECK(coordinator.acknowledgement_polls >= 3);
   const auto& after = check_exact_success(
       runtime->dispatch("host.status", Json::object(), {}),
       {"state", "project_id", "project_revision", "pattern_id",
        "runtime_ready", "control_generation", "acknowledged_generation",
        "limits", "audio_state", "capture_state", "pattern_transport"});
-  LMDJ_CHECK(after.at("acknowledged_generation") == 1);
+  LMDJ_CHECK(after.at("acknowledged_generation") == coordinator.begin_acknowledgement);
 }
 
 void test_live_bank_publication_waits_for_the_exact_acknowledgement() {
@@ -3986,14 +4871,17 @@ void test_live_bank_publication_waits_for_the_exact_acknowledgement() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  LMDJ_CHECK(coordinator.acknowledged == 1);
+  LMDJ_CHECK(coordinator.acknowledged == coordinator.begin_acknowledgement);
 
   const auto calls_before_publication = coordinator.acknowledgement_calls;
-  coordinator.begin_acknowledgement = 2;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications + 1;
   coordinator.acknowledgement_delay_polls = 3;
   coordinator.acknowledgement_polls = 0;
   const auto& reloaded = check_exact_success(
@@ -4001,8 +4889,8 @@ void test_live_bank_publication_waits_for_the_exact_acknowledgement() {
           "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
       {"project_id", "project_revision", "pattern_id", "runtime_ready",
        "generation", "snapshot_error"});
-  LMDJ_CHECK(reloaded.at("generation") == 2);
-  LMDJ_CHECK(coordinator.acknowledged == 2);
+  LMDJ_CHECK(reloaded.at("generation") == coordinator.begin_acknowledgement);
+  LMDJ_CHECK(coordinator.acknowledged == coordinator.begin_acknowledgement);
   LMDJ_CHECK(
       coordinator.acknowledgement_calls >= calls_before_publication + 3);
 }
@@ -4017,11 +4905,13 @@ void test_live_bank_publication_ack_timeout_fails_closed() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  LMDJ_CHECK(coordinator.acknowledged == 1);
+  LMDJ_CHECK(coordinator.acknowledged == coordinator.begin_acknowledgement);
 
   coordinator.acknowledgement_delay_polls =
       std::numeric_limits<std::uint32_t>::max();
@@ -4051,6 +4941,8 @@ void test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
 
+  const auto initial_generation =
+      runtime->engine().bank_telemetry().accepted_publications;
   FakeCoordinator coordinator;
   coordinator.engine = &runtime->engine();
   coordinator.observe_engine_generation = true;
@@ -4058,7 +4950,7 @@ void test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement() {
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  LMDJ_CHECK(coordinator.acknowledged == 1);
+  LMDJ_CHECK(coordinator.acknowledged == initial_generation);
   ContinuousAudioDriver audio(runtime->engine());
 
   const auto imported_asset = uuid(7919);
@@ -4077,7 +4969,7 @@ void test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement() {
           "sample.import.commit", {{"import_token", uuid(7920)}}, {}),
       {"committed_revision", "runtime_revision", "runtime_published"});
   LMDJ_CHECK(committed.at("runtime_published") == true);
-  LMDJ_CHECK(coordinator.acknowledged == 2);
+  LMDJ_CHECK(coordinator.acknowledged == initial_generation + 1);
 
   const auto& updated = check_exact_success(
       runtime->dispatch(
@@ -4089,7 +4981,7 @@ void test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement() {
           {}),
       {"committed_revision", "runtime_revision", "runtime_published"});
   LMDJ_CHECK(updated.at("runtime_published") == true);
-  LMDJ_CHECK(coordinator.acknowledged == 3);
+  LMDJ_CHECK(coordinator.acknowledged == initial_generation + 2);
 
   const auto& reset = check_exact_success(
       runtime->dispatch(
@@ -4100,7 +4992,7 @@ void test_live_sample_mutations_wait_for_the_exact_bank_acknowledgement() {
           {}),
       {"committed_revision", "runtime_revision", "runtime_published"});
   LMDJ_CHECK(reset.at("runtime_published") == true);
-  LMDJ_CHECK(coordinator.acknowledged == 4);
+  LMDJ_CHECK(coordinator.acknowledged == initial_generation + 3);
   audio.stop();
 }
 
@@ -4121,12 +5013,14 @@ void check_running_sample_mutation_post_commit_deadline_fails_closed(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}, clock.current));
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch(
       "audio.activate", Json::object(), {}, clock.current));
-  LMDJ_CHECK(coordinator.acknowledged == 1);
+  LMDJ_CHECK(coordinator.acknowledged == coordinator.begin_acknowledgement);
   const auto generation =
       runtime->engine().bank_telemetry().accepted_publications;
 
@@ -4245,7 +5139,8 @@ void test_audio_reactivation_waits_past_a_stale_bank_acknowledgement() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
 
   FakeCoordinator coordinator;
-  coordinator.begin_acknowledgement = 2;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -4253,12 +5148,12 @@ void test_audio_reactivation_waits_past_a_stale_bank_acknowledgement() {
   check_success(runtime->dispatch("audio.suspend", Json::object(), {}));
 
   const auto calls_before_reactivation = coordinator.acknowledgement_calls;
-  coordinator.begin_stale_acknowledgement = 1;
+  coordinator.begin_stale_acknowledgement = coordinator.begin_acknowledgement - 1;
   coordinator.acknowledgement_delay_polls = 3;
   coordinator.acknowledgement_polls = 0;
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  LMDJ_CHECK(coordinator.acknowledged_before_begin == 2);
-  LMDJ_CHECK(coordinator.acknowledged == 2);
+  LMDJ_CHECK(coordinator.acknowledged_before_begin == coordinator.begin_acknowledgement);
+  LMDJ_CHECK(coordinator.acknowledged == coordinator.begin_acknowledgement);
   LMDJ_CHECK(
       coordinator.acknowledgement_calls >= calls_before_reactivation + 3);
 }
@@ -4273,6 +5168,8 @@ void test_audio_activation_rolls_back_begin_and_ack_failures() {
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
+    coordinator.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     coordinator.begin_succeed = false;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
@@ -4298,7 +5195,8 @@ void test_audio_activation_rolls_back_begin_and_ack_failures() {
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
-    coordinator.begin_acknowledgement = 2;
+    coordinator.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications + 1;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
@@ -4368,6 +5266,8 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator failure;
+    failure.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     failure.succeed = false;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, failure.seam())
@@ -4408,6 +5308,8 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator success;
+    success.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, success.seam())
             .has_value());
@@ -4467,6 +5369,8 @@ void test_audio_activation_rechecks_deadline_after_generation_ack() {
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
+    coordinator.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     coordinator.begin_delay_ms = 100;
     coordinator.begin_succeed = begin_succeeds;
     LMDJ_CHECK(
@@ -4539,6 +5443,8 @@ void test_audio_activation_rollback_rechecks_the_original_deadline() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   coordinator.begin_succeed = false;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
@@ -4578,6 +5484,8 @@ void test_suspend_and_close_pass_only_the_original_remaining_budget() {
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
+    coordinator.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
@@ -4616,7 +5524,7 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
           "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
       {"project_id", "project_revision", "pattern_id", "runtime_ready",
        "generation", "snapshot_error"});
-  LMDJ_CHECK(first.at("generation") == 1);
+  LMDJ_CHECK(first.at("generation") == 2);
   FakeCoordinator coordinator;
   coordinator.engine = &runtime->engine();
   coordinator.observe_engine_generation = true;
@@ -4625,34 +5533,46 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(runtime->engine());
+  auto preview = playback_payload(0, 512);
+  preview["pitch_cents"] = 1'200;
+  check_success(runtime->dispatch("sample.preview.set",
+      {{"slot", slot(0, 0)}, {"playback", preview}}, {}));
   check_success(runtime->dispatch(
       "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
   audio.render_one();
   LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
 
+  // Assign now publishes and stops its destination. An exact ACK after one
+  // real frame retains the old pitched kernel voice in its 96-frame declick
+  // tail. A second stop preserves this existing kernel tail; neutral voices
+  // would be hard-stopped instead. Assign clears the preview for later voices.
   const auto newer_small = mono_pcm16_wav(1);
-  import_and_assign(*runtime, newer_small, uuid(402), 413, 414, 2);
-  audio.schedule_bank_transition();
-  const auto& second = check_exact_success(
-      runtime->dispatch(
-          "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
-      {"project_id", "project_revision", "pattern_id", "runtime_ready",
-       "generation", "snapshot_error"});
-  LMDJ_CHECK(second.at("generation") == 2);
+  audio.schedule_bank_transition(1, true);
+  const auto second = import_and_assign(
+      *runtime, newer_small, uuid(402), 413, 414, 2);
+  LMDJ_CHECK(second.at("runtime_published") == true);
+  audio.wait_for_sample_mutation_controls();
+  audio.wait_for_bank_transition();
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 3);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
 
   const auto current = mono_pcm16_wav(2);
-  import_and_assign(*runtime, current, uuid(403), 415, 416, 4);
-  audio.schedule_bank_transition();
-  const auto& third = check_exact_success(
-      runtime->dispatch(
-          "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
-      {"project_id", "project_revision", "pattern_id", "runtime_ready",
-       "generation", "snapshot_error"});
-  LMDJ_CHECK(third.at("generation") == 3);
+  audio.schedule_bank_transition(1, true);
+  const auto third = import_and_assign(
+      *runtime, current, uuid(403), 415, 416, 4);
+  LMDJ_CHECK(third.at("runtime_published") == true);
+  audio.wait_for_sample_mutation_controls();
+  audio.wait_for_bank_transition();
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 4);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
 
   const auto rejected_candidate = mono_pcm16_wav(3);
-  import_and_assign(
+  const auto assigned_candidate = import_and_assign(
       *runtime, rejected_candidate, uuid(404), 417, 418, 6);
+  LMDJ_CHECK(assigned_candidate.at("committed_revision") == 8);
+  LMDJ_CHECK(assigned_candidate.at("runtime_published") == false);
+  LMDJ_CHECK(assigned_candidate.at("snapshot_error").at("code") ==
+             "WEB_RUNTIME_RESOURCE_LIMIT");
   const auto& rejected = check_error(
       runtime->dispatch(
           "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
@@ -4672,7 +5592,7 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
     throw std::runtime_error(
         "unexpected residency details: " + rejected.at("details").dump());
   }
-  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 3);
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 4);
 
   check_success(runtime->dispatch(
       "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
@@ -4684,7 +5604,7 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
           "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
       {"project_id", "project_revision", "pattern_id", "runtime_ready",
        "generation", "snapshot_error"});
-  LMDJ_CHECK(after_reclaim.at("generation") == 4);
+  LMDJ_CHECK(after_reclaim.at("generation") == 5);
 }
 
 void test_host_close_releases_current_and_retired_runtime_banks() {
@@ -4692,11 +5612,24 @@ void test_host_close_releases_current_and_retired_runtime_banks() {
   auto runtime = make_runtime(temp.path());
   check_success(runtime->dispatch("project.create", create_payload(), {}));
   const auto wav = mono_pcm16_wav(512);
+  const auto fixture_bank_before = runtime->engine().bank_telemetry();
   import_and_assign(*runtime, wav, kAssetId, 491, 492, 0);
+  const auto fixture_bank_after = runtime->engine().bank_telemetry();
+  LMDJ_CHECK(fixture_bank_after.accepted_publications ==
+             fixture_bank_before.accepted_publications + 1);
+  LMDJ_CHECK(fixture_bank_after.applied_publications ==
+             fixture_bank_before.applied_publications + 1);
+  LMDJ_CHECK(fixture_bank_after.reclaimed_banks ==
+             fixture_bank_before.reclaimed_banks);
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   const auto before = runtime->engine().bank_telemetry();
-  LMDJ_CHECK(before.current_generation == 1);
+  LMDJ_CHECK(before.current_generation == 2);
+  LMDJ_CHECK(before.accepted_publications ==
+             fixture_bank_after.accepted_publications + 1);
+  LMDJ_CHECK(before.applied_publications ==
+             fixture_bank_after.applied_publications + 1);
+  LMDJ_CHECK(before.reclaimed_banks == fixture_bank_after.reclaimed_banks);
 
   const auto& closed = check_exact_success(
       runtime->dispatch("host.close", Json::object(), {}),
@@ -4707,7 +5640,13 @@ void test_host_close_releases_current_and_retired_runtime_banks() {
   LMDJ_CHECK(after.current_generation == 0);
   LMDJ_CHECK(after.accepted_publications == before.accepted_publications);
   LMDJ_CHECK(after.applied_publications == before.applied_publications);
-  LMDJ_CHECK(after.reclaimed_banks == before.reclaimed_banks + 1);
+  // Close reclaims the retired ASSIGN fixture Bank and the current reload
+  // Bank. Keep the original current-Bank +1 and account for the exact
+  // observed fixture publication; neither Bank may remain after Close.
+  LMDJ_CHECK(after.reclaimed_banks ==
+             before.reclaimed_banks +
+                 (fixture_bank_after.accepted_publications -
+                  fixture_bank_before.accepted_publications) + 1);
   const auto reclaimed =
       runtime->engine().reclaim_retired_bank_telemetry();
   LMDJ_CHECK(reclaimed.count == 0);
@@ -4757,7 +5696,7 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
     import_and_assign(*builder, large, large_asset, 503, 504, 0);
     check_success(builder->dispatch("host.close", Json::object(), {}));
   }
-  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 1);
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 2);
   const auto& opened = check_exact_success(
       runtime->dispatch(
           "project.open",
@@ -4805,7 +5744,7 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
       runtime->dispatch(
           "trigger", {{"slot", 0}, {"velocity", 127}}, {}),
       "HOST_STATE_INVALID");
-  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 1);
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 2);
 }
 
 struct FakeProxy final {
@@ -4965,6 +5904,168 @@ void check_snapshot_published_notification(
       notification.at("payload") ==
       Json{{"generation", generation},
            {"project_revision", project_revision}}));
+}
+
+void test_bridge_assignment_response_precedes_real_publication_notification() {
+  RetainedAssignmentFixture fixture;
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  FakeProxy proxy;
+  auto bridge = make_bridge(*fixture.runtime, proxy);
+  const auto request_id = uuid(96'300);
+  const auto bytes = encode(request(request_id, "pad.assign",
+      assign_payload(96'301, 6, kAssetId, 1)));
+  LMDJ_CHECK(bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("committed_revision") == 7);
+  LMDJ_CHECK(response.at("result").at("runtime_published") == true);
+  check_snapshot_published_notification(poll_message(*bridge), generation + 1, 7);
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(fixture.truth().at("banks").at(0).at("pads").at(1).at("asset_id") == kAssetId);
+}
+
+void test_bridge_assignment_replay_notifies_current_revision() {
+  RetainedAssignmentFixture fixture;
+  const auto assignment = assign_payload(96'310, 6, kAssetId, 1);
+  check_success(fixture.runtime->dispatch("pad.assign", assignment, {}));
+  check_success(fixture.runtime->dispatch("pad.assign",
+      assign_payload(96'311, 7, uuid(96'103), 1), {}));
+  const auto before = fixture.truth();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  FakeProxy proxy;
+  auto bridge = make_bridge(*fixture.runtime, proxy);
+  const auto bytes = encode(request(uuid(96'312), "pad.assign", assignment));
+  LMDJ_CHECK(bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("replayed") == true);
+  LMDJ_CHECK(response.at("result").at("committed_revision") == 7);
+  LMDJ_CHECK(response.at("result").at("runtime_revision") == 8);
+  check_snapshot_published_notification(poll_message(*bridge), generation + 1, 8);
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(fixture.truth() == before);
+}
+
+void test_bridge_assignment_preparation_rejection_follows_committed_response() {
+  TempDirectory temp;
+  constexpr RuntimePreparationLimits limits{1'048'576, 4, 8, 16};
+  auto runtime = make_runtime(temp.path(), limits);
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2);
+  check_success(runtime->dispatch("asset.import",
+      import_payload(96'320, 0, kAssetId, wav), wav));
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(96'321);
+  const auto bytes = encode(request(request_id, "pad.assign",
+      assign_payload(96'322, 1, kAssetId)));
+  LMDJ_CHECK(bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == true);
+  const auto& result = response.at("result");
+  check_exact_keys(result, {"slot", "asset_id", "committed_revision", "replayed",
+      "project_revision", "runtime_revision", "runtime_published", "snapshot_error"});
+  LMDJ_CHECK(result.at("committed_revision") == 2);
+  LMDJ_CHECK(result.at("project_revision") == 2);
+  LMDJ_CHECK(result.at("runtime_published") == false);
+  LMDJ_CHECK(result.at("runtime_revision").is_null());
+  LMDJ_CHECK(result.at("snapshot_error").at("code") == "BANK_QUOTA_EXHAUSTED");
+  const auto notification = poll_message(*bridge);
+  check_exact_keys(notification, {"protocol_version", "event", "payload"});
+  LMDJ_CHECK(notification.at("event") == "snapshot.rejected");
+  LMDJ_CHECK(notification.at("payload") == Json({
+      {"project_revision", 2}, {"runtime_revision", nullptr},
+      {"error", result.at("snapshot_error")}}));
+  check_no_bridge_message(*bridge);
+  const auto truth = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(truth.at("project_revision") == 2);
+  LMDJ_CHECK(truth.at("result").at("project").at("assets").size() == 1);
+  LMDJ_CHECK(truth.at("result").at("project").at("banks").at(0).at("pads").at(0).at("asset_id") == kAssetId);
+}
+
+void test_bridge_refused_assignment_emits_no_snapshot_notification() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  const auto history = fixture.history();
+  const auto generation = fixture.runtime->engine().bank_telemetry().accepted_publications;
+  FakeProxy proxy;
+  auto bridge = make_bridge(*fixture.runtime, proxy);
+  const auto bytes = encode(request(uuid(96'330), "pad.assign",
+      assign_payload(96'331, 5, kAssetId, 1)));
+  LMDJ_CHECK(bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == uuid(96'330));
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "REVISION_CONFLICT");
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(fixture.truth() == before);
+  LMDJ_CHECK(fixture.history() == history);
+  LMDJ_CHECK(fixture.runtime->engine().bank_telemetry().accepted_publications == generation);
+}
+
+void test_bridge_expired_preclaim_assignment_changes_no_truth() {
+  RetainedAssignmentFixture fixture;
+  const auto before = fixture.truth();
+  FakeProxy proxy;
+  auto bridge = make_bridge(*fixture.runtime, proxy);
+  const auto request_id = uuid(96'340);
+  const auto bytes = encode(request(request_id, "pad.assign",
+      assign_payload(96'341, 6, kAssetId, 1)));
+  LMDJ_CHECK(bridge->submit(bytes, {}, std::chrono::steady_clock::now()) ==
+             BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  LMDJ_CHECK(inspect_project(fixture.temp.path(), kProjectId).at("result").at("project") == before);
+  proxy.pump_one();
+  // A timeout terminal may make Bridge poll return failed; no event may be
+  // delivered alongside the refusal.
+  std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+  std::size_t required = 1;
+  const auto status = bridge->poll(output, required);
+  LMDJ_CHECK(status == BridgePollStatus::failed);
+  LMDJ_CHECK(required == 0);
+}
+
+void test_bridge_assignment_claim_preserves_known_commit_past_deadline() {
+  RetainedAssignmentFixture fixture;
+  FakeProxy proxy;
+  auto bridge = make_bridge(*fixture.runtime, proxy);
+  const auto request_id = uuid(96'350);
+  const auto bytes = encode(request(request_id, "pad.assign",
+      assign_payload(96'351, 6, kAssetId, 1)));
+  LMDJ_CHECK(bridge->configure_deadline_proof(request_id, 2, false));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  LMDJ_CHECK(bridge->submit(bytes, {}, deadline) == BridgeSubmitStatus::accepted);
+  std::jthread control([&] { proxy.pump_one(); });
+  wait_until([&] {
+    const auto state = bridge->deadline_proof_state(request_id);
+    return (state & 0xff) == 2 && (state & (1 << 9)) != 0 && (state & (1 << 10)) != 0;
+  });
+  std::this_thread::sleep_until(deadline + std::chrono::milliseconds(50));
+  LMDJ_CHECK(bridge->release_deadline_proof());
+  control.join();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("committed_revision") == 7);
+  LMDJ_CHECK(response.at("result").at("runtime_published") == false);
+  LMDJ_CHECK(response.at("result").at("snapshot_error").at("code") == "HOST_TIMEOUT");
+  const auto notification = poll_message(*bridge);
+  LMDJ_CHECK(notification.at("event") == "snapshot.rejected");
+  LMDJ_CHECK(notification.at("payload").at("project_revision") == 7);
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(!bridge->failed());
+  LMDJ_CHECK(!fixture.runtime->failed());
+  LMDJ_CHECK(fixture.truth().at("banks").at(0).at("pads").at(1).at("asset_id") == kAssetId);
 }
 
 // Stage 11's Sound Set operations reach the Facade through the Web Host with
@@ -5628,6 +6729,8 @@ void test_soundset_audition_reports_whether_a_voice_started() {
   // `played == true` is a statement about the audio thread and not about how
   // far down `play_audition` got.
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -5846,6 +6949,8 @@ test_bridge_reserves_response_capacity_under_realtime_notification_pressure() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -6607,6 +7712,8 @@ void test_bridge_parks_the_realtime_service_during_a_dispatch() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -6802,6 +7909,8 @@ void test_bridge_passes_the_absolute_caller_deadline_into_audio_activation() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   coordinator.begin_stale_acknowledgement = 0;
   coordinator.acknowledgement_delay_polls =
       std::numeric_limits<std::uint32_t>::max();
@@ -7010,6 +8119,8 @@ void test_internal_audio_activation_timeout_is_terminal_after_response() {
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   coordinator.acknowledgement_delay_polls =
       std::numeric_limits<std::uint32_t>::max();
   LMDJ_CHECK(
@@ -7368,6 +8479,8 @@ void test_retained_audio_activation_keeps_default_one_second_budget() {
     import_and_assign(*runtime, wav, kAssetId, 885, 886, 0);
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    coordinator.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     LMDJ_CHECK(ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
     coordinator.after_begin = [&] {
       clock.current += std::chrono::milliseconds(elapsed_ms);
@@ -8022,8 +9135,16 @@ void test_a_pad_delete_during_a_replay_stops_only_the_live_voice() {
   // as long as the delete takes, which under ASan outlasts the replay's hit,
   // so each acknowledgement poll renders one callback instead.
   coordinator.render_on_acknowledgement_poll = true;
-  check_success(runtime->dispatch("pad.delete", {{"command_id", uuid(9685)},
-      {"expected_revision", revision}, {"slot", slot(0, 0)}}, {}));
+  {
+    OneShotAudioDriver audio(engine);
+    audio.schedule_sample_mutation_controls();
+    coordinator.before_acknowledgement = [&] {
+      audio.wait_for_sample_mutation_controls();
+    };
+    check_success(runtime->dispatch("pad.delete", {{"command_id", uuid(9685)},
+        {"expected_revision", revision}, {"slot", slot(0, 0)}}, {}));
+    coordinator.before_acknowledgement = {};
+  }
   coordinator.render_on_acknowledgement_poll = false;
   static_cast<void>(render_grid_frames(engine, 256));
   // The live voice declicked out; the replay's held hit keeps sounding.
@@ -8902,6 +10023,8 @@ void test_pattern_transport_requires_opt_in_and_preserves_legacy() {
   check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -8934,6 +10057,8 @@ void test_pattern_transport_records_live_input_and_rejects_legacy_writes() {
   check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -9168,6 +10293,8 @@ void test_pattern_transport_suspend_barrier_settles_recording() {
   check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -9264,6 +10391,8 @@ void test_pattern_transport_unknown_closure_blocks_clean_suspend() {
   check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -9508,6 +10637,8 @@ void test_transport_record_after_applied_switch_retargets() {
   check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -10978,6 +12109,8 @@ void test_transport_recording_rejects_sample_commit_and_keeps_journal() {
   check_success(dispatch_retained_for_test(*runtime,
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      runtime->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -11083,6 +12216,8 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
     check_success(dispatch_retained_for_test(*runtime,
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
     FakeCoordinator coordinator;
+    coordinator.begin_acknowledgement =
+        runtime->engine().bank_telemetry().accepted_publications;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
@@ -11180,6 +12315,8 @@ void test_pattern_transport_owner_loss_lists_recovery_on_reopen() {
   LMDJ_CHECK(cleared.at("candidates").empty());
 
   FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement =
+      reopened->engine().bank_telemetry().accepted_publications;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*reopened, coordinator.seam())
           .has_value());
@@ -13005,6 +14142,22 @@ int main() {
     test_normal_count_in_close_consumption_precedes_retirement();
     test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable();
     test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(true);
+    test_retained_asset_assignment_replaces_the_destination_pcm();
+    test_assignment_history_restores_whole_truth_pcm_and_reopens();
+    test_same_asset_assignment_retains_destination_playback();
+    test_assignment_d16_and_native_null_preserve_materials();
+    test_assignment_replay_after_later_edit_publishes_current_truth();
+    test_missing_asset_assignment_keeps_truth_history_and_live_voice();
+    test_stale_assignment_keeps_truth_history_and_live_voice();
+    test_foreign_asset_assignment_cannot_import_another_project_material();
+    test_assignment_post_commit_deadline_retains_identity_and_truth();
+    test_assignment_waits_for_its_real_bank_acknowledgement();
+    test_assignment_ack_timeout_keeps_commit_and_fails_closed();
+    test_assignment_admission_timeout_keeps_commit_without_a_new_bank();
+    test_assignment_cannot_acknowledge_with_an_unrelated_later_generation();
+    test_assignment_refuses_a_live_sequence_owner_without_mutation();
+    test_assignment_refuses_a_live_performance_owner_without_mutation();
+    test_assignment_refuses_a_recording_pattern_transport_without_mutation();
     test_stopped_snapshot_selection_applies_before_the_next_play();
     test_retained_transport_replay_survives_pending_stopped_publication();
     test_candidate_host_owns_paths_pcm_stop_and_atomic_adoption();
@@ -13124,6 +14277,12 @@ int main() {
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
     test_bridge_emits_sample_publication_notifications_after_response();
+    test_bridge_assignment_response_precedes_real_publication_notification();
+    test_bridge_assignment_replay_notifies_current_revision();
+    test_bridge_assignment_preparation_rejection_follows_committed_response();
+    test_bridge_refused_assignment_emits_no_snapshot_notification();
+    test_bridge_expired_preclaim_assignment_changes_no_truth();
+    test_bridge_assignment_claim_preserves_known_commit_past_deadline();
     test_bridge_emits_commit_quota_rejection_without_snapshot_notification();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_cancelled_before_dispatch_skips_facade_work();

@@ -278,7 +278,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 | 交互 | 当前交付 | 已批准的剩余行为 |
 | --- | --- | --- |
-| Pattern 切换与取消 | 播放中 ←/→、GROOVE、未录 Performance 的 Launch 已使用 1 BEAT／1 BAR／SEQ END，默认 1 BAR。 | 全局 Pattern 录音中无缝切换；OFF 匹配当前音乐位置；GROOVE 点当前项也取消排队。当前 GROOVE 只关弹窗，取消例外见 [5.1](#sequence-edit)。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)。 |
+| Pattern 切换与取消 | 播放中 ←/→、GROOVE、未录 Performance 的 Launch 已使用 1 BEAT／1 BAR／SEQ END，默认 1 BAR。GROOVE 有排队时点当前项也请求取消；结果由 transport 回读确认，见 [5.1](#sequence-edit)。 | 全局 Pattern 录音中无缝切换；OFF 匹配当前音乐位置。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)。 |
 | Record count-in | ● 始终控制 Pattern 事件录音，当前停止时按下立即开始。 | 停止时按 ● 可选 Off／1／2 小节预备拍，默认 Off；录音过程中不重新 count-in。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
 | Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
@@ -474,7 +474,8 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | --- | --- | --- |
 | 停止 | GROOVE 标题 → Pattern 列表 | 直接选择任一 Pattern，网格换内容，原音符选区清空。 |
 | 播放且未录音 | GROOVE 标题 → Pattern 列表 | 按 SEQ SNAP 预约在下一拍／下一小节／Pattern 结束边界切到所选 Pattern；标题显示排队目标（如 `GROOVE / 01 → 02`），上屏继续命名真正在播的 Pattern，生效后选择跟随。录音或命令处理中不可用。 |
-| Pattern 列表 | Cancel／Escape／点当前正在播的 Pattern | 关闭列表，焦点回到标题，不切换，也不影响已排队的切换。当前可用 ←/→ 从排队目标步进回正在播的 Pattern，或在未录 Performance 时点该 Pattern 的 Launch 槽来取消；请求尚未被音频线程认领时取消生效。GROOVE 当前项的统一取消行为待补齐。 |
+| Pattern 列表 | Cancel／Escape | 只关闭列表，焦点回到标题，不切换，也不影响已排队的切换。 |
+| Pattern 列表 | 点当前正在播的 Pattern | 有排队时请求取消，并关闭列表、把焦点还给标题；标题等待 transport 回读再更新。若前一切换已生效，按真实结果显示新的当前 Pattern 和返回原 Pattern 的排队。没有排队或停止时点当前项只关闭列表，不发请求。 |
 | 任意 | EDIT／SETUP | 切换网格和设置卡片。只改视图；离开再回来默认 EDIT。 |
 | 没有进行中的音符手势 | Grid tools | 打开 Snap／NOTE／VEL 弹窗，显示当前设置。 |
 | Grid tools | Snap 1/4／1/8／1/16／1/32／off | 改网格吸附。不改已有音符；不是录音的 Quantize。 |

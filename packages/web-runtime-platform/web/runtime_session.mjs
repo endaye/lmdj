@@ -739,6 +739,43 @@ function normalizeSampleCommit(value) {
   });
 }
 
+function normalizePadAssignment(value, request) {
+  const keys = ["slot", "asset_id", "committed_revision", "replayed",
+    "project_revision", "runtime_revision", "runtime_published"];
+  const hasSnapshotError = Object.hasOwn(value ?? {}, "snapshot_error");
+  if (!exactKeys(value, hasSnapshotError ? [...keys, "snapshot_error"] : keys) ||
+      !exactKeys(value.slot, ["bank", "pad"]) ||
+      value.slot.bank !== request.slot.bank ||
+      value.slot.pad !== request.slot.pad ||
+      value.asset_id !== request.asset_id ||
+      !isUnsignedInteger(value.committed_revision) ||
+      value.committed_revision !== request.expected_revision + 1 ||
+      !isUnsignedInteger(value.project_revision) ||
+      value.project_revision < value.committed_revision ||
+      typeof value.replayed !== "boolean" ||
+      typeof value.runtime_published !== "boolean" ||
+      (!value.runtime_published && !hasSnapshotError) ||
+      !(value.runtime_revision === null ||
+        isUnsignedInteger(value.runtime_revision)) ||
+      (value.runtime_revision !== null &&
+        value.runtime_revision > value.project_revision) ||
+      (value.runtime_published &&
+        (hasSnapshotError || value.runtime_revision !== value.project_revision))) {
+    throw protocolMismatch("Pad assignment result is invalid");
+  }
+  return Object.freeze({
+    slot: value.slot.bank * 16 + value.slot.pad,
+    assetId: value.asset_id,
+    committedRevision: value.committed_revision,
+    replayed: value.replayed,
+    projectRevision: value.project_revision,
+    runtimeRevision: value.runtime_revision,
+    runtimePublished: value.runtime_published,
+    snapshotError: hasSnapshotError
+      ? normalizeSnapshotError(value.snapshot_error) : null,
+  });
+}
+
 function normalizeSampleQuota(value, expectedSlot) {
   const keys = [
     "project_revision",
@@ -2400,6 +2437,7 @@ function createRuntimeSessionController(options = {}) {
     const interruptible = SAFETY_INTERRUPTIBLE_HOST_OPERATIONS.has(operation);
     const queryGeneration = hostQueryGeneration;
     const action = async () => {
+      if (operation === "pad.assign") requireAssignmentOwner();
       if (interruptible && queryGeneration !== hostQueryGeneration) {
         throw abortError("Host query was cancelled for Runtime safety");
       }
@@ -6878,6 +6916,47 @@ function createRuntimeSessionController(options = {}) {
     return normalizeWaveform(result, request);
   }
 
+  /** @param {import("./runtime_types.d.ts").PadAssignmentRequest} request */
+  function assignPad(request) {
+    if (!exactKeys(request, ["commandId", "expectedRevision", "slot", "assetId"]) ||
+        typeof request.commandId !== "string" ||
+        !UUID_PATTERN.test(request.commandId) ||
+        typeof request.assetId !== "string" ||
+        !UUID_PATTERN.test(request.assetId) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Pad assignment request is invalid"));
+    }
+    let slot;
+    try {
+      requireAssignmentOwner();
+      slot = Object.freeze(flatSlotAddress(request.slot));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    // Capture the complete durable identity before either existing queue can
+    // delay dispatch. A lost receipt is never automatically retried.
+    const payload = Object.freeze({
+      command_id: request.commandId,
+      expected_revision: request.expectedRevision,
+      slot,
+      asset_id: request.assetId,
+    });
+    return serializeProjectAction(async () => normalizePadAssignment(
+      await boundedRequest("pad.assign", payload), payload,
+    ));
+  }
+
+  function requireAssignmentOwner() {
+    if (fatalReservation !== null ||
+        ["failed", "restart-required"].includes(machine.state)) {
+      throw typedError(lastErrorCode ?? "HOST_STATE_INVALID",
+        "Pad assignment owner is unavailable", lastErrorDetails);
+    }
+    if (!started || closing || machine.state === "closed") {
+      throw typedError("HOST_STATE_INVALID", "Pad assignment owner is closed");
+    }
+  }
+
   function updatePad(request) {
     if (
       !exactKeys(request, ["slot", "expectedRevision", "playback"]) ||
@@ -8274,6 +8353,7 @@ function createRuntimeSessionController(options = {}) {
     querySampleQuota,
     sampleIngestLimits,
     queryWaveform,
+    assignPad,
     updatePad,
     resetPad,
     deletePad,

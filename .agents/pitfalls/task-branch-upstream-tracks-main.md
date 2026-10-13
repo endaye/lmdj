@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-12
     occurrence: https://github.com/endaye/lmdj/issues/1996
     observed_by: Codex
+  - date: 2026-10-13
+    occurrence: https://github.com/endaye/lmdj/issues/2112
+    observed_by: Codex (agent /root)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 

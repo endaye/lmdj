@@ -315,6 +315,53 @@ before Undo/Redo; controls never implicitly stop recording or playback.
 Native control-runtime tests cover import identity, exact retry, reopen isolation,
 parameters, Pattern restoration, recording refusal and grouped recorded events.
 
+## Retained Asset assignment
+
+`RuntimeSession.assignPad({commandId, expectedRevision, slot, assetId})` assigns
+an Asset already retained by the open Project to an explicit flat Pad slot
+`0..63` (A01–D16). It captures the complete caller-supplied identity before
+waiting on the existing Project action and Host request queues. The Host wire
+remains `pad.assign` with `{command_id, expected_revision, slot: {bank, pad},
+asset_id}`, no sidecar and no caller path. The native route retains its existing
+nullable Asset compatibility; the SDK's retained-Asset method requires a UUID.
+
+Facade owns membership, revision, recording-owner admission and durable command
+deduplication. Assignment keeps the source Pad and immutable materials. A different
+Asset resets the destination's playback; the same Asset retains it. Destination
+colour follows the existing Domain rule. A refused command stops no voice or
+preview and publishes no snapshot. Confirmation before replacing an occupied Pad
+and cancellation of an unsubmitted selection belong to the Creator consumer.
+
+After a known commit, Control stops the destination's live voice and clears its
+preview, prepares current Project Truth and publishes its Bank through exact
+generation acknowledgement. If queued Host controls temporarily prevent Bank
+admission, the existing publication boundary waits within the original absolute
+request deadline and retries only that same unconsumed prepared Bank. It does not
+cook again or resend the authoring command. Other publication refusals return their
+existing typed failure. Bank admission and the exact new-generation acknowledgement
+remain separate; admission timeout cannot stand in for a missing acknowledgement.
+During replay the destination control preserves replay
+and Pattern voices. The response retains `slot`, `asset_id`, `committed_revision`,
+`replayed` and `project_revision`, and adds `runtime_revision`, `runtime_published`
+and an optional typed `snapshot_error`. A publication failure after persistence
+therefore remains a known commit; it cannot be presented as a cancelled assignment
+with unchanged Truth. The original request deadline and running timeout safety
+rules remain in force.
+
+For Assign, successful publication has no `snapshot_error`; failed publication
+requires a valid typed error. The SDK rejects a failed receipt with a missing or
+malformed error. Existing Sample operations retain their separate no-prepare rules.
+
+Bridge returns the real response before `snapshot.published` or
+`snapshot.rejected`. An exact command replay after a later edit publishes the
+current revision, preserving the old committed identity without undoing that edit.
+The typed SDK validates target, Asset and publication authority, including after
+queue delays, and rejects a closed or failed owner. A lost receipt is not retried:
+inspection reveals current Truth, while an explicit caller retry must retain every
+field of the original identity. The source Task plan
+`docs/plans/2026-10-11-d03-assign-producer.md` tracks producer verification and
+the separate Creator picker, browser and listening obligations.
+
 
 ## 分 Pad Sound Set 获取
 

@@ -64,6 +64,7 @@ interface PatternSelectorProps {
 export function PatternSelector({index, patternIds, patternId, disabled, queuedIndex, onSelect}: PatternSelectorProps) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement | null>(null);
+  const hasQueuedSwitch = queuedIndex !== undefined && queuedIndex !== null && queuedIndex > 0;
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   return (
     <div className="pattern-selector" data-testid="sequence-pattern"
@@ -72,7 +73,7 @@ export function PatternSelector({index, patternIds, patternId, disabled, queuedI
         aria-label="Choose Pattern" aria-haspopup="dialog" disabled={disabled}
         onClick={() => setOpen(true)}>
         <span>GROOVE / {String(Math.max(index, 1)).padStart(2, "0")}{
-          queuedIndex !== undefined && queuedIndex !== null && queuedIndex > 0
+          hasQueuedSwitch
             ? ` → ${String(queuedIndex).padStart(2, "0")}` : ""
         }</span>
         <span className="pattern-selector-count">{Math.max(index, 1)}/{Math.max(patternIds.length, 1)}</span>
@@ -87,7 +88,10 @@ export function PatternSelector({index, patternIds, patternId, disabled, queuedI
             aria-pressed={id === patternId} disabled={disabled}
             onClick={() => {
               setOpen(false);
-              if (id !== patternId) onSelect(id);
+              // Re-selecting current asks the transport owner to cancel its
+              // queue. Only its projection can settle cancellation or an
+              // already-applied switch; closing this picker changes neither.
+              if (id !== patternId || hasQueuedSwitch) onSelect(id);
             }}>GROOVE / {String(position + 1).padStart(2, "0")}</button>)}
         </div>
         <button type="button" className="touch-control" onClick={() => setOpen(false)}>Cancel</button>

@@ -1118,6 +1118,36 @@ export interface InspectedPadColour {
   readonly colour: number | null;
 }
 
+export interface PadAssignmentRequest {
+  /** Caller-retained durable identity; an explicit retry keeps every field. */
+  readonly commandId: string;
+  readonly expectedRevision: number;
+  /** Explicit flat destination, 0..63 (A01..D16). */
+  readonly slot: number;
+  /** Non-null Asset already retained by the current Project. */
+  readonly assetId: string;
+}
+
+export interface PadAssignmentResult {
+  readonly slot: number;
+  readonly assetId: string;
+  readonly committedRevision: number;
+  readonly replayed: boolean;
+  readonly projectRevision: number;
+  readonly runtimeRevision: number | null;
+  readonly runtimePublished: boolean;
+  readonly snapshotError: Readonly<{
+    code: string;
+    message: string;
+    details: Readonly<Record<string, unknown>>;
+  }> | null;
+}
+
+export interface PadAssignmentRuntimeSession {
+  /** Known commit and Runtime publication are distinct; no automatic retry. */
+  assignPad(request: PadAssignmentRequest): Promise<PadAssignmentResult>;
+}
+
 export interface PadColourRuntimeSession {
   /**
    * Sets the Pad's palette index override, or with null restores its
