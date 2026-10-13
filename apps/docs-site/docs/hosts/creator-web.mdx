@@ -172,6 +172,10 @@ Pad，直到下一次击打或 ↑/↓。Record Sample 武装期间仍保持固�
 继续区别于 Pattern Record 和 Record Performance。顶屏全局波形与 Trim 的局部
 编辑视窗各自保留。
 
+Playback 的四个开关按两列分组：Loop／One Shot 在第一行，Mute／Reverse 在
+第二行；每个开关显示当前 On／Off，Loop 打开时第二个开关仍按真实模式叫
+Hold。可访问名称、`aria-pressed`、原生键盘操作和忙碌禁用规则沿用既有行为。
+
 Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放与音色参数的缺省值。
 
 点击 Volume、Pitch、Pan、Attack、Release 或 Tone 的数值可打开精确输入。编辑从已保存的 playback 开始，不采用尚未提交的旋钮草稿；合法且符合步长的输入立即通过已有 Sample preview 路径试听。Apply 或 Enter 只提交一次完整 playback，形成一次作者操作／Undo；回到原值不保存，输入停顿（包括超过 400 ms）和失焦也不保存。空值、非有限数、越界或不符合步长的值不能试听或提交；非法替换会清除前一个合法试听，仍可继续修正。音频未启动时可以编辑画面，但没有试听声音。Escape／Cancel、切 Pad／Project／Asset／revision／Runtime session、离开页面／子页／System 或卸载取消尚未发出的草稿，并清除它拥有的试听；已发出的保存保留真实提交、publication failure、冲突或未知结果，不自动重发。弹窗背景不可点击；输入保留原生文本 Undo，既有 App Project history 路由如被调用，会先取消未提交草稿再恢复历史，不增加弹窗内的 Project Undo 快捷键。数值按钮、输入与操作使用至少 44 px 命中区，沿用已有单位与边界；one-shot 的 Release 仍不可用，Start／End 保留 frame 精度输入，原 range release／键盘完成／blur 与旋钮 400 ms／SHIFT 规则不变。

@@ -61,6 +61,25 @@ test("Sample controls stay an editor, not an overview projection", () => {
   expect(screen.getByRole("slider", {name: "Pad A01 Volume"})).toBeTruthy();
 });
 
+test.each([
+  {mode: "gate", muted: false, reverse: true,
+    labels: ["Loop: Off", "One Shot: Off", "Mute: Off", "Reverse: On"]},
+  {mode: "one_shot", muted: true, reverse: false,
+    labels: ["Loop: Off", "One Shot: On", "Mute: On", "Reverse: Off"]},
+  {mode: "loop_gate", muted: true, reverse: true,
+    labels: ["Loop: On", "Hold: Off", "Mute: On", "Reverse: On"]},
+  {mode: "loop_toggle", muted: false, reverse: false,
+    labels: ["Loop: On", "Hold: On", "Mute: Off", "Reverse: Off"]},
+] as const)("Playback displays the actual $mode toggle readbacks", ({mode, muted, reverse, labels}) => {
+  renderControls({playback: {...playback, triggerMode: mode, muted, reverse}});
+  for (const label of labels) {
+    const name = label.slice(0, label.indexOf(":"));
+    const button = screen.getByRole("button", {name});
+    expect(button.textContent).toBe(label);
+    expect(button.getAttribute("aria-pressed")).toBe(label.endsWith(": On") ? "true" : "false");
+  }
+});
+
 test("Loop switches the trigger label from One Shot to Hold without overlapping state", async () => {
   const user = userEvent.setup();
   const first = renderControls();
