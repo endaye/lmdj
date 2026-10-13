@@ -211,3 +211,53 @@ are unchanged. Current-head independent review and integration remain Root's
 responsibility. Device, listening/PCM, complete Creator proof and the
 35-screen acceptance ledger remain unverified; this Task does not close U03b,
 F04 or F05–F08.
+
+
+## Review repair — assigned Sample inspect pending
+
+Current PR head `123f111bb940fd6565231b381badd1d436d00e17` received an eligible
+automated review. Finding 3 is confirmed: an assigned Pad waiting for inspect
+has a LOADING title but the new overlay says “Sample details unavailable”.
+The overlay remains required for loading/empty/error feedback; only its actual
+LOADING subtitle changes to “Loading Sample details…”. No error attribution,
+controller, state Contract or unavailable/no-Project/no-Pad policy changes.
+Latest inspected main is `45c8f479aa350cd490a100044a4723428976e2be`; the rail
+merge does not deliver this subtitle repair.
+
+Root authorized a separate review-repair commit over exactly four files:
+
+- `apps/creator-web/src/components/sample_overview.tsx` — the subtitle branch.
+- `apps/creator-web/test/overview_display.test.tsx` — assigned/loading text,
+  followed by inspect resolution and overlay removal/format readback.
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs` — extend
+  the existing real hold-inspect leg with subtitle assertions and the far-side
+  removal/format check. This is the one additional owning path; no other
+  browser case, selection, timeout, failure/retry, Undo or reopen leg changes.
+- This plan — scope and repair evidence.
+
+First add the component and browser assertions while source still has the
+defect, then run the whole owning overview-display component file for RED.
+Fix the subtitle and rerun the same eight complete component files plus whole
+Creator typecheck. Heavy build/package and both complete original browser
+files wait for Root's resource window. Original empty/error cases remain.
+The tested defect is pending loading being represented as unavailable, not
+whether all metadata-null states should be called loading.
+
+Documentation impact: none for this repair — the two frozen current Portal
+pages already describe loading versus empty/error feedback and remain correct;
+the repair aligns source text with that contract. Version impact: none — no
+manifest, API or Product Build allocation. No qualifying pitfall: the owning
+regression assertions express this product defect. Repair verification is
+UNRUN at this scope declaration; the earlier U03a receipts remain historical.
+
+
+Repair source verification: before the source fix, the complete
+`overview_display.test.tsx` file returned 15 passed/1 failed, exit 1, at the
+new “Loading Sample details…” assertion on line 118
+(`/tmp/lmdj-u03a-review-repair-red.log`). After the narrow subtitle fix, the
+same eight complete component files returned 254/254 passed, exit 0, 75.08 s
+(`/tmp/lmdj-u03a-review-repair-components.log`); whole Creator typecheck also
+exited 0 (`/tmp/lmdj-u03a-review-repair-tsc.log`). No Portal page changed.
+The subsequent clean-source repair commit is the normal product packager's
+input; its browser result will be recorded in PR Verification after the
+authorized heavy window, without amending an already pushed head.

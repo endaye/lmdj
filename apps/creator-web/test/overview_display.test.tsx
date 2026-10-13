@@ -5,6 +5,7 @@ import {OverviewDisplay} from "../src/components/overview_display";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import {initialSequenceState} from "../src/state/sequence_state";
 import {initialPatternTransportState} from "../src/state/pattern_transport_state";
+import {projectSamplePlayback} from "../src/state/sample_state";
 
 const state: CreatorState = {...initialCreatorState,
   audio: {phase: "suspended"},
@@ -103,6 +104,29 @@ test("an empty Pad is explicit and does not draw example audio", () => {
   expect(screen.getByText("No audio assigned")).toBeDefined();
   expect(screen.getByRole("img", {name: "No Sample waveform"}).querySelectorAll("rect"))
     .toHaveLength(0);
+});
+
+test("an assigned Pad shows loading until inspect replaces the overlay with real format", () => {
+  const loading: CreatorState = {...state,
+    sample: {...state.sample, selectedSlot: 2},
+    project: {...state.project, current: {...state.project.current!, pads: [
+      {slot: 2, assetId: "asset-id", category: "melodic", colour: null, colourOverride: null},
+    ]}},
+  };
+  const view = render(<OverviewDisplay {...common} state={loading} activeMode="sample" />);
+  expect(screen.getByText("LOADING")).toBeDefined();
+  expect(screen.getByText("Loading Sample details…")).toBeDefined();
+  expect(screen.queryByText("Sample details unavailable")).toBeNull();
+  expect(screen.queryByText("EMPTY PAD")).toBeNull();
+  view.rerender(<OverviewDisplay {...common} activeMode="sample" state={{...loading,
+    sample: {...loading.sample, inspect: {
+      projectRevision: 7, slot: 2, assetId: "asset-id", playback: projectSamplePlayback(undefined),
+      metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 48_000},
+      waveformCacheIdentity: "waveform",
+    }},
+  }} />);
+  expect(view.container.querySelector(".sample-overview-empty")).toBeNull();
+  expect(screen.getByText("mono 48000 Hz · 1.000 s")).toBeDefined();
 });
 
 test("Sample loading failure remains qualified and does not claim an empty Pad", () => {

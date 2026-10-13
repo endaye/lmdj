@@ -585,10 +585,16 @@ test("mode-specific overview identity, read-only feedback and details survive na
   await page.getByRole("button", {name: /^Pad B03 /}).click();
   await expect(page.locator(".overview-context")).toHaveText("SAMPLE / PAD B03");
   await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE · LOADING");
+  const loadingOverlay = page.locator(".sample-overview-empty");
+  await expect(loadingOverlay.locator("strong")).toHaveText("LOADING");
+  await expect(loadingOverlay.locator("span")).toHaveText("Loading Sample details…");
+  await expect(loadingOverlay).not.toContainText("unavailable");
   await expectOverviewFits(page.getByTestId("overview-display"), "Sample loading");
   await expect.poll(() => page.evaluate(() => typeof window.__releaseOverviewInspect)).toBe("function");
   await page.evaluate(() => window.__releaseOverviewInspect());
   await expect(page.locator(".sample-overview-pad")).toHaveText("SAMPLE");
+  await expect(loadingOverlay).toHaveCount(0);
+  await expect(page.locator(".sample-overview-facts")).toContainText(/(?:mono|stereo) [1-9]\d* Hz/);
   await showSamplePage(page, "Playback");
   const reverse = page.getByRole("button", {name: "Reverse", exact: true});
   await expect(reverse).toBeEnabled();
