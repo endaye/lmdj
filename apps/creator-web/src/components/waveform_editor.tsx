@@ -1,5 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 
+import "./waveform_editor.css";
+
 import type {
   PadPlayback,
   SampleMetadata,
@@ -682,56 +684,60 @@ export function WaveformEditor({
         ) : null}
       </div>
       <div className="waveform-viewport-actions" aria-label="Waveform viewport">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => applyViewport(zoomSampleViewport(
-            viewport,
-            2,
-            Math.round((viewport.startFrame + viewport.endFrame) / 2),
-          ))}
-        >
-          Zoom In
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => applyViewport(zoomSampleViewport(
-            viewport,
-            .5,
-            Math.round((viewport.startFrame + viewport.endFrame) / 2),
-          ))}
-        >
-          Zoom Out
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          aria-label="Fit waveform"
-          onClick={() => applyViewport(fitSampleViewport(sourceFrames))}
-        >
-          Fit
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => applyViewport(panSampleViewport(
-            viewport,
-            -Math.max(1, Math.round((viewport.endFrame - viewport.startFrame) / 4)),
-          ))}
-        >
-          Pan Left
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => applyViewport(panSampleViewport(
-            viewport,
-            Math.max(1, Math.round((viewport.endFrame - viewport.startFrame) / 4)),
-          ))}
-        >
-          Pan Right
-        </button>
+        <div className="waveform-zoom-actions" role="group" aria-label="Waveform zoom">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => applyViewport(zoomSampleViewport(
+              viewport,
+              .5,
+              Math.round((viewport.startFrame + viewport.endFrame) / 2),
+            ))}
+          >
+            Zoom Out
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => applyViewport(zoomSampleViewport(
+              viewport,
+              2,
+              Math.round((viewport.startFrame + viewport.endFrame) / 2),
+            ))}
+          >
+            Zoom In
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label="Fit waveform"
+            onClick={() => applyViewport(fitSampleViewport(sourceFrames))}
+          >
+            Fit
+          </button>
+        </div>
+        <div className="waveform-pan-actions" role="group" aria-label="Waveform pan">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => applyViewport(panSampleViewport(
+              viewport,
+              -Math.max(1, Math.round((viewport.endFrame - viewport.startFrame) / 4)),
+            ))}
+          >
+            Pan Left
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => applyViewport(panSampleViewport(
+              viewport,
+              Math.max(1, Math.round((viewport.endFrame - viewport.startFrame) / 4)),
+            ))}
+          >
+            Pan Right
+          </button>
+        </div>
       </div>
     </section>
   );

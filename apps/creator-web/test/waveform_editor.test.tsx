@@ -1,6 +1,6 @@
 import {readFileSync} from "node:fs";
 
-import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
@@ -411,6 +411,23 @@ test("ignores non-finite numeric input instead of creating a NaN draft", () => {
 
   expect(onPreview).not.toHaveBeenCalled();
   expect(onCommit).not.toHaveBeenCalled();
+});
+
+test("viewport actions expose zoom then pan groups in their keyboard order", async () => {
+  const user = userEvent.setup();
+  renderEditor();
+  const zoom = screen.getByRole("group", {name: "Waveform zoom"});
+  const pan = screen.getByRole("group", {name: "Waveform pan"});
+  expect(within(zoom).getAllByRole("button").map((button) => button.textContent))
+    .toEqual(["Zoom Out", "Zoom In", "Fit"]);
+  expect(within(pan).getAllByRole("button").map((button) => button.textContent))
+    .toEqual(["Pan Left", "Pan Right"]);
+
+  screen.getByRole("button", {name: "Zoom Out"}).focus();
+  for (const name of ["Zoom In", "Fit waveform", "Pan Left", "Pan Right"]) {
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", {name}));
+  }
 });
 
 test("Zoom In, Zoom Out, Fit, and pan remain local and bounded", async () => {
