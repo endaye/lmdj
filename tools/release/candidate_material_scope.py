@@ -1,12 +1,13 @@
 """Closed passive material scope; never infer authority from receipt paths."""
 from copy import deepcopy
 
-from scripts.version import P1_BUILD_MATERIAL_FILES
+from scripts.version import CARDPUTER_IDENTITY_FILES, P1_BUILD_MATERIAL_FILES
 
 P1_MATERIAL_SCOPE = {"schema": "lmdj.candidate-material-scope.v1",
                      "profile": "creator-p1"}
 LEGACY_FILES = frozenset({"products/lmdj/version.json", "products/lmdj/assembly.json",
     "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+    *CARDPUTER_IDENTITY_FILES,
     "products/lmdj/generated/web-runtime-identity.json",
     "products/lmdj/generated/web-runtime-identity.mjs"})
 HEADER_INPUTS = frozenset({"apps/docs-site/docs/operations/creator-changelog.mdx",

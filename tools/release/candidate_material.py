@@ -31,6 +31,10 @@ RUNTIME_IDENTITY_GENERATOR = "tools/web-runtime/generate_runtime_identity.py"
 RUNTIME_IDENTITY_INPUTS = ("tools/web-runtime/emscripten.lock.json",
                            "tools/web-runtime/runtime-identity.json",
                            RUNTIME_IDENTITY_GENERATOR)
+# The Cardputer CMake project version is hand-copied beside the product
+# assembly source; _cardputer_identity_material rewrites it from the manifest
+# graph's cardputer-host/module.json and the reserved Assembly digest.
+CARDPUTER_IDENTITY_INPUTS = ("apps/cardputer-host/CMakeLists.txt",)
 
 
 def material_input(name):
@@ -39,6 +43,7 @@ def material_input(name):
     # still frozen by CandidateInputs even though this generator does not read them.
     return (name.startswith(("products/lmdj/", "providers/", "contracts/"))
             or name in RUNTIME_IDENTITY_INPUTS
+            or name in CARDPUTER_IDENTITY_INPUTS
             or re.fullmatch(r"(?:packages|apps)/[^/]+/module\.json", name) is not None)
 
 
@@ -137,7 +142,7 @@ class CandidateBuildMaterial:
                 raise JournalError("why: canonical candidate material generation refused; remedy: retain the reservation and repair the original input or reconcile a new candidate, never bypass Assembly validation") from None
             # render_build_material returns bytes without writing them; the
             # identity generator reads the reserved build from the tree, so
-            # materialize the four files in this throwaway export first.
+            # materialize the generated files in this throwaway export first.
             for name, raw in files.items():
                 destination = root / name
                 destination.parent.mkdir(parents=True, exist_ok=True)

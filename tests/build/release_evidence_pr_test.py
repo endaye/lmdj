@@ -452,7 +452,8 @@ class PrTest(unittest.TestCase):
 
     def test_body_declares_required_task_checks_without_closing_issues(self):
         self.assertEqual(check_pr_body(self.document["body"]), [])
-        for command in ("scripts/docs-site.sh check", "python3 tests/build/ci_change_scope_test.py", "git diff --cached --check"):
+        for command in ("scripts/docs-site.sh check", "python3 tests/build/ci_change_scope_test.py",
+                        "python3 tests/build/version_test.py", "git diff --cached --check"):
             self.assertIn(command, self.document["body"])
         self.assertIn("/releases/1.0.42.0/", self.document["body"])
 

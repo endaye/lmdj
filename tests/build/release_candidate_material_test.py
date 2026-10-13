@@ -79,6 +79,7 @@ class MaterialTest(unittest.TestCase):
         self.assertEqual(result["binding"]["product_build"], str(expected))
         names = {"products/lmdj/version.json", "products/lmdj/assembly.json",
                  "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+                 "products/lmdj/src/cardputer_assembly.cpp", "apps/cardputer-host/CMakeLists.txt",
                  "products/lmdj/generated/web-runtime-identity.json",
                  "products/lmdj/generated/web-runtime-identity.mjs"}
         self.assertEqual(set(result["files"]), names)
@@ -122,6 +123,32 @@ class MaterialTest(unittest.TestCase):
         self.assertEqual(check.returncode, 0,
                          "why: exported Runtime identity pair is stale; "
                          "remedy: regenerate both files from the reserved candidate: " + check.stderr)
+
+    def test_legacy_material_regenerates_cardputer_literals_from_sources(self):
+        import re as _re
+        profile = self.root / "products/lmdj/src/cardputer_assembly.cpp"
+        profile.write_text(_re.sub(r'(return \{\s*")[^"]+(",\s*")[^"]+(",\s*")[0-9a-f]{64}(")',
+            lambda match: match.group(1) + "9.9.9.9" + match.group(2) + "0.0.0" + match.group(3) + "0" * 64 + match.group(4),
+            profile.read_text(encoding="utf-8"), count=1), encoding="utf-8")
+        cmake = self.root / "apps/cardputer-host/CMakeLists.txt"
+        cmake.write_text(_re.sub(r'set\(PROJECT_VER "[^"]+"\)', 'set(PROJECT_VER "9.9.9.9")',
+            cmake.read_text(encoding="utf-8"), count=1), encoding="utf-8")
+        self.base = self.commit()
+        self.frozen = self.inputs.freeze(self.base)
+        self.request["base_revision"] = self.base
+        result = self.prepare()
+        expected = version.ProductVersion(self.current.milestone, self.current.minor, self.current.build + 1, 0)
+        self.assertLessEqual({"products/lmdj/src/cardputer_assembly.cpp", "apps/cardputer-host/CMakeLists.txt"},
+                             set(result["files"]))
+        for name, raw in result["files"].items():
+            (self.root / name).write_bytes(raw)
+        host_version = json.loads((self.root / "apps/cardputer-host/module.json").read_bytes())["version"]
+        assembly_digest = sha256((self.root / "products/lmdj/assembly.json").read_bytes()).hexdigest()
+        cardputer_profile = _re.search(r'return \{\s*"([^"]+)",\s*"([^"]+)",\s*"([0-9a-f]{64})",',
+            profile.read_text(encoding="utf-8"))
+        self.assertEqual(cardputer_profile.groups(), (str(expected), host_version, assembly_digest))
+        self.assertEqual(_re.search(r'set\(PROJECT_VER "([^"]+)"\)',
+            cmake.read_text(encoding="utf-8")).group(1), str(expected))
 
     def test_existing_default_root_verification_remains_unchanged(self):
         current = version.load_version(ROOT / "products/lmdj/version.json")
@@ -169,6 +196,7 @@ class MaterialTest(unittest.TestCase):
         self.assertEqual(set(result["files"]), {
             "products/lmdj/version.json", "products/lmdj/assembly.json",
             "products/lmdj/assembly.lock.json", "products/lmdj/src/compiled_assembly.cpp",
+            "products/lmdj/src/cardputer_assembly.cpp", "apps/cardputer-host/CMakeLists.txt",
             "products/lmdj/generated/web-runtime-identity.json",
             "products/lmdj/generated/web-runtime-identity.mjs",
         })
