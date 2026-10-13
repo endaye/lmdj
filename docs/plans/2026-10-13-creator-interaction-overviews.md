@@ -82,6 +82,9 @@ policy and does not weaken the approved 44 minimum actual hit area.
   assertion; Root assigned this exact edit after the first whole-file run)
 - `apps/docs-site/docs/hosts/creator-web.mdx` (upper-display sections)
 - `apps/docs-site/docs/hosts/creator-interactions.mdx` (upper-display sections)
+- `tests/platform/web/creator/creator_web_hardware_layout.spec.mjs` (six
+  previously admitted loading/inspect assertions; all other main journeys
+  and budgets are retained).
 - This plan.
 
 ## Verification
@@ -398,3 +401,148 @@ changes afterward; all product, CSS, tests and both Portal pages retain the
 tested bytes. Whole Portal, normal fresh build/package and both full browser
 journeys remain UNRUN for this integrated candidate, awaiting Root's heavy
 admission. The merge is still uncommitted and no PR action has been taken.
+
+
+## Integrated verification completion — 2026-10-13
+
+Root transferred the sole heavy window to Codex `/root/control_kit` at
+10:04:42 UTC after the preceding owner's actual release. The frozen 15-file
+packet remained SHA-256
+`059e6014f21a6a04f7e2eb4197caa3ffb803738cbc9894dda10a150555a7541e`.
+The earlier 258 whole-component cases, full Creator typecheck, two browser
+syntax checks and 77 scope cases remain bound to the same non-plan bytes.
+No product, stylesheet, test, Portal or deadline changed during this window.
+
+Whole `bash scripts/docs-site.sh check` ran 10:06:18–10:06:58 UTC, exit 0:
+179 tests, 52 pages, 10 diagram sources/20 outputs, all 50 routes and links.
+The clean two-parent checkpoint
+`7dbe2e26cbd37912e31131ff96619dcd98aa6683` preserves published parent
+`12f3ec5834274ce9fc5aacd901e056d2627953af` and integrated main parent
+`35455f7576fc96ad253f2d5a523ba457e1df9321`; its tree is
+`9210026d32c0d56e5ea56935d5dc35ce2b3d6ee1`. No published history was rewritten.
+
+The retained official all-64-Pad fixture was independently verified again:
+767554 bytes, SHA-256
+`66262c9187cb264a006e29d077751186acdeb02a30fc4bc497482049297e938f`.
+No fixture regeneration or foreign product binary was used. Normal
+`bash scripts/creator-web.sh build` at 10:08:44–10:09:15 UTC and
+`bash scripts/creator-web.sh package` at 10:09:47–10:09:48 UTC both exited 0,
+using pinned Emscripten 6.0.5, Node 26.7.0 and two build workers. The build
+recompiled the Runtime Bridge and built this worktree's Creator assets.
+Existing dynamic-import/chunk-size warnings remain in the raw log.
+
+The original complete command then ran 10:09:52–10:11:10 UTC:
+
+```sh
+npm --prefix tests/platform/web test -- --project=chromium \
+  creator/creator_web_hardware_layout.spec.mjs \
+  creator/creator_web_accessibility.spec.mjs
+```
+
+It naturally exited 0: **15 passed, one existing WebKit-only skip**, one
+worker, all 16 selections and original budgets. The original Project
+selection/Open/keyboard/reopen, all-Bank traversal, actual scaled targets,
+local font/CSP, Tempo release/reload, Sample held inspect/failure/retry/empty/
+Undo/System/reopen, and Perform silent Pad/SHIFT/HOLD/MASTER legs remain.
+The C1 owning case waits for the typed Cutoff binding and its applied value
+before turning it; its request and unchanged-Truth assertions passed.
+`LMDJ_CREATOR_WEB_OVERVIEW_BUNDLE` was unset, retaining the documented
+all-Pad fallback. No grep, retry, test edit or budget override occurred.
+
+### Supplementary geometry and the retained diagnostic
+
+A separate ignored Playwright script inspected the actual package at
+768×600, 1280×600 and 1440×900 in all seven modes: Project, Sample, Sequence,
+Perform, System, Sound Sets and Slice. All 21 records and 28 PNGs were written
+10:15:35–10:15:44 UTC. This supplements geometry only, and does not establish
+catalog, Slice-job or audio success or replace an original behavior journey.
+
+The supplementary command's original **exit 1 remains retained**. Its strict
+pairwise Range predicate found seven fragment-pair intersections between
+Perform's BAR and BEAT lines at each viewport: one logical pixel (1.256
+screen pixels at the wide scale). Root and the executor viewed all three
+exact PNGs: painted glyphs are visibly separated. The 13-pixel font rectangle
+exceeds the 12-pixel line spacing; this is a font-box diagnostic, not
+demonstrated painted overlap. Root accepted that evidence with this explicit
+disposition. The threshold, source and raw result were not changed; the
+command was not rerun or relabelled PASS. The helper's `painted` field names
+a clipping-adjusted Range rectangle, not measured glyph-ink bounds.
+
+Across these 21 states, all 723 text rectangles remain within the outer
+display, with no clipping (raw and clipping-adjusted edges match even below
+the predicate tolerance), text/encoder or text/grid overlap, grid/header/
+encoder overlap, or horizontal/vertical overflow. The only pairwise
+intersections are the font rectangles above. The executor inspected all seven
+768px mode PNGs and wide Perform; Root independently inspected all 21 JSONs
+and three Perform PNGs. This is not every error/long-label state or a physical
+device check.
+
+The first 768px Perform screenshot shows Filter/Delay/Reverb at 50%; later
+1280px/wide screenshots show Cutoff 20.0 kHz and Delay/Reverb 0%. The geometry
+helper waits for the mode and two animation frames, not authoritative live
+readback. Existing `initialPerformState` starts its legacy FX mirror at 500
+with `liveControl.available=false`; `PerformSurface` publishes those
+contextual encoder bindings while `connect()` asynchronously starts
+`refreshLiveStatus()`. The applied live-status reducer later supplies typed
+Cutoff and other FX values. The first screenshot proves layout of the early
+state, not that Core applied 50%. File-write times and source support this
+explanation; no transport trace identifies the exact response timing. The
+helper sends no FX gesture. App, PerformSurface and the controller are
+unchanged from integrated main; the original C1 browser leg independently
+provides applied-readback behavior evidence.
+
+### Receipts, current-main scope and remaining boundaries
+
+Commands, timestamps, natural exits, raw log hashes, own-server records,
+fixture/source/distribution identities and results are retained under
+`build/verification/u03a-corrected-main-final/`.
+`retained-artifact-manifest.json` binds 98 files, SHA-256
+`e359687e5da60fe67e00077fa4fd24e86f5ee559d089383a5d8f8c34fb6ce531`.
+`final-release-and-retention.json` records explicit release at 10:17:26 UTC:
+all 200 observed owned PIDs were absent; both browser commands ended naturally
+and both own servers were terminated and waited only afterward. All 15 source
+and distribution hashes matched their pre-run values; the worktree was clean.
+Root independently verified all 98 hashes, both source manifests and the
+absent process inventory at 10:23:02 UTC. The readback/clipping analysis is
+retained at `/tmp/lmdj-u03a-readback-clipping-audit.json`.
+
+The final read-only refresh is main
+`28ff18c5c1f3790157193e900b5c7980cc595026`. The pre-edit guard caught the
+concurrent advancement beyond `0c873e67` and stopped before tracked writes;
+the new committed inputs were then read. Since integrated `35455f75`, main
+adds Build 2.0.96.0/snapshot evidence, U02b Pad palette/category presentation,
+the headered FX TypeScript correction, U12b Capture and U05b1 Trim. The only
+Task-path intersections are the two Portal files, whose new hunks concern
+Pad, Capture and Trim paragraphs. Shared palette tokens affect Sequence
+colors, but the latest Capture/Modal and Trim/Waveform changes do not change
+an overview component, controller, App wiring or either owning browser spec.
+No rebase or integration of those later changes is claimed. The verified
+package remains Build 2.0.95.0 with the earlier palette, Capture and Trim.
+There is no full-current-main, new-palette, complete Creator, final 35-screen,
+physical-device, audible/PCM, release or deployment acceptance claim.
+
+Only this plan changes after `7dbe2e26`; all 14 non-plan Task files retain
+their verified bytes. The final record is a separate atomic commit, not an
+amendment of a published head. Root retains final source review, push,
+current-head authenticated review, conversation/protection checks and merge.
+Older dependency failures, the Sample loading RED, review collection failures
+and previous proof remain history. #2118's merged preparation fix is separate
+from authentic review eligibility for the next U03 head; no owner attestation
+or review bypass is inferred. U03b source/catalog/job projections, F04 meters
+and the broader full-candidate/device acceptance remain separate.
+
+Documentation impact for this final record: none — both current Host pages
+are byte-identical to the completed Portal input. Version impact: none.
+No Portal/build/browser repetition is claimed for this plan-only record.
+The transient legacy readback and CSS font-box metrics are derivable from
+source; this supplemental diagnosis introduces no new pitfall recurrence or
+control-plane gate.
+
+Final source-only checks ran after the one-file plan staging: the full scope
+suite passed 77 tests at 10:32:10–10:32:19 UTC, and PR-body closing-directive
+lint exited 0. `local-ci.sh --list --pr-body` selected exactly Creator,
+docs_static and Portal without running lanes; its declaration state was
+planned. The separate `--declaration-only --pr-body` then actually validated
+the declaration, exit 0 at 10:33:09 UTC. Exact staged-path, non-plan hash and
+whitespace checks passed. These light receipts are under
+`build/verification/u03a-finalization/`; no heavy suite was repeated.
