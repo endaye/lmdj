@@ -9846,7 +9846,11 @@ struct Application::Impl {
           runtime.session_id, runtime.performance_id,
           runtime.expected_revision, runtime.next_flush_seq,
           runtime.pending_events.size(), runtime.open_pads.size(),
-          runtime.open_fx.size(), runtime.hold, runtime.pending_launch,
+          runtime.headered
+              ? runtime.recording_fx.size() +
+                    (runtime.recording_filter_binding.has_value() ? 1U : 0U)
+              : runtime.open_fx.size(),
+          runtime.hold, runtime.pending_launch,
           runtime.last_launch_ack);
       if (runtime.headered) {
         result["profile"] = "header_input_sequence";
@@ -9877,7 +9881,10 @@ struct Application::Impl {
               journal.value().expected_revision, journal.value().next_flush_seq,
               journal.value().pending_events.size(),
               checkpoint.has_value() ? checkpoint->open_pads.size() : 0,
-              checkpoint.has_value() ? checkpoint->open_fx.size() : 0,
+              checkpoint.has_value()
+                  ? checkpoint->open_fx.size() +
+                        (checkpoint->open_filter.has_value() ? 1U : 0U)
+                  : 0,
               checkpoint.has_value() && checkpoint->hold, std::nullopt,
               launch_ack_outcome(journal.value().session_id,
                                  journal.value().last_launch_ack)),

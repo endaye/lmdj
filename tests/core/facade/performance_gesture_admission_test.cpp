@@ -1753,6 +1753,92 @@ struct HeaderedFixture {  explicit HeaderedFixture(
   std::optional<lmdj::facade::Application> application;
 };
 
+// Status counts open recording gestures in both profiles, not merely sounding
+// effects. Frozen-only Reverb is deliberately audible without an open binding.
+void test_headered_status_counts_fx_and_filter_across_reopen_and_stop() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  auto initial = lmdj::facade::PerformanceLiveControlState{};
+  initial.state.hold = true;
+  initial.state.other_fx.at(0) = {true, false, 500};
+  initial.state.other_fx.at(1) = {false, true, 700};
+  initial.state.filter = lmdj::domain::IndependentFilterLiveState{
+      true, false, lmdj::domain::PerformanceFilterType::lp, 1'000, 100};
+  initial.runtime_generations.at(0) =
+      "20000000-0000-4000-8000-000000000001";
+  initial.runtime_generations.at(1) =
+      "20000000-0000-4000-8000-000000000002";
+  fixture.live->set_accepted(initial);
+  const auto begun = fixture.begin_headered();
+  check_ok(begun);
+  fixture.mark_ready();
+  const auto count = [&] {
+    const auto status = fixture.record_status();
+    check_ok(status);
+    return status.at("result").at("open_fx_gestures").get<std::size_t>();
+  };
+  const auto durable_count = [&] {
+    // This Application has no in-memory Performance session: query must use
+    // the durable checkpoint, without attaching or replaying any gesture.
+    lmdj::facade::Application reader{
+        lmdj::facade::ApplicationConfig{
+            fixture.temp.path(), nullptr, {}, {}, std::nullopt, nullptr,
+            nullptr, nullptr, nullptr,
+            lmdj::facade::make_unavailable_performance_replay_controller()}};
+    const auto status = reader.query({
+        {"operation", "performance.record.status"},
+        {"project_path", fixture.bundle().generic_string()}});
+    check_ok(status);
+    return status.at("result").at("open_fx_gestures").get<std::size_t>();
+  };
+  LMDJ_CHECK(count() == 2U); // Delay + independent Filter; excludes frozen Reverb.
+  LMDJ_CHECK(durable_count() == 2U);
+  LMDJ_CHECK(fixture.live->publish_calls() == 0U); // queries are read-only
+
+  nlohmann::json delay_binding;
+  nlohmann::json filter_binding;
+  for (const auto& binding : begun.at("result").at("fx_bindings")) {
+    if (binding.at("fx") == "delay") delay_binding = binding;
+    if (binding.at("fx") == "filter") filter_binding = binding;
+  }
+  check_ok(fixture.record_event(
+      "10000000-0000-4000-8000-000000000601",
+      {{"kind", "fx_release"}, {"fx", "delay"},
+       {"gesture_id", delay_binding.at("recording_gesture_id")},
+       {"gesture_generation", delay_binding.at("gesture_generation")}}, "0"));
+  LMDJ_CHECK(count() == 1U);
+  LMDJ_CHECK(durable_count() == 1U);
+  LMDJ_CHECK(fixture.live->accepted().state.other_fx.at(0).frozen);
+  check_ok(fixture.record_event(
+      "10000000-0000-4000-8000-000000000602",
+      {{"kind", "filter_release"},
+       {"gesture_id", filter_binding.at("recording_gesture_id")},
+       {"gesture_generation", filter_binding.at("gesture_generation")}}, "1"));
+  LMDJ_CHECK(count() == 0U);
+  LMDJ_CHECK(durable_count() == 0U);
+
+  const auto engaged = fixture.record_event(
+      "10000000-0000-4000-8000-000000000603",
+      {{"kind", "fx_engage"}, {"fx", "delay"}, {"value", 620}}, "2");
+  check_ok(engaged);
+  LMDJ_CHECK(count() == 1U);
+  LMDJ_CHECK(durable_count() == 1U);
+  const auto& binding = engaged.at("result");
+  check_ok(fixture.record_event(
+      "10000000-0000-4000-8000-000000000604",
+      {{"kind", "fx_move"}, {"fx", "delay"}, {"value", 650},
+       {"gesture_id", binding.at("recording_gesture_id")},
+       {"gesture_generation", binding.at("gesture_generation")}}, "3"));
+  LMDJ_CHECK(count() == 1U);
+  check_ok(fixture.application->command({
+      {"operation", "performance.record.stop"},
+      {"project_path", fixture.bundle().generic_string()},
+      {"session_id", std::string(kSession)},
+      {"request_id", "10000000-0000-4000-8000-000000000605"}}));
+  LMDJ_CHECK(count() == 0U);
+  LMDJ_CHECK(durable_count() == 0U);
+}
+
 // P1 oracle: begin fence mapping — pre-begin engaged Delay 500 + HOLD frozen
 // Reverb 700. The mapping contains only Delay; the begin publishes nothing
 // (no fake engage, no DSP reset); the first Pad waits for the applied proof.
@@ -2704,6 +2790,7 @@ int main() {
     test_refused_live_gesture_leaves_no_journalled_event();
     test_session_free_fx_gesture_reaches_the_master_bus();
     test_session_free_fx_gesture_refusals_fail_closed();
+    test_headered_status_counts_fx_and_filter_across_reopen_and_stop();
     test_headered_begin_fence_mapping_and_first_pad_gate();
     test_headered_profile_preserves_every_move_and_same_tick_order();
     test_headered_exact_retry_collision_expired_and_stale_epoch();
