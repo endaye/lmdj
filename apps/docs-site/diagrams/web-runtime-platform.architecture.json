@@ -210,7 +210,7 @@
     },
     {
       "title": "同一 Session owner",
-      "body": "frozen runtime.session；live Pad 前协商。uint64/60 whole decimal；短 tickets 释放两条 tails。"
+      "body": "frozen runtime.session；Pad 同步 reserve，Pad/FX/HOLD 单 tail 顺序 submit。共享64，原1s/Release；短 tickets 释放两条 tails。"
     },
     {
       "title": "双输出与严格 tap ACK",

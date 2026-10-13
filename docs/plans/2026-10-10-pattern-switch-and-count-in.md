@@ -1890,3 +1890,78 @@ Product Build, Assembly, release or snapshot change.
 
 Documentation impact: required on `/hosts/creator-interactions/` to distinguish
 local unsubmitted Press expiry from matching Release and actual Runtime failure.
+
+
+## S6 followup — reserve Performance Pads before ordered raw submission
+
+Base `4dac96ee7693c5982ab15f364c687e05fe8c2225`. Refreshed integration main
+`97897f880a218233b7ae58e4d4c3986271d221f8` delivers Grid Tools layout via
+PR #2123, including a separate Creator documentation sentence; its seven-file
+scope contains no Perform raw-tail or SDK input repair. This candidate's F2
+remains outstanding. Preserve the original `7e85ecff` full Creator result
+(128 PASS, 2 FAIL, 11 SKIP, exit 1); its exact failed FX request remains unknown.
+
+The actual SDK + Perform-controller regression held a move receipt, interleaved
+an original Pad Press/Release and another move, then sent the matching FX
+Release. The pre-fix test reached its final six-event assertion with five
+actual transport events, `HOST_STATE_INVALID` / live window full, and the last
+FX Release missing. The corrected focused case keeps all six original events
+and their order. It models the transport result and capture/Store setup; it
+proves the admission seam, not Native/durable/audio completion.
+
+Declare exactly: SDK `web/runtime_session.mjs`, `web/runtime_types.d.ts`,
+`test/runtime_session.test.mjs`; Creator `src/state/perform_state.ts`,
+`test/perform_surface.test.tsx`; this plan; Portal
+`docs/hosts/creator-interactions.mdx`, `docs/core/modules/web-runtime-platform.mdx`;
+`diagrams/web-runtime-platform.architecture.json` and its two official generated
+`static/diagrams/web-runtime-platform.html` / `.svg` outputs. Creator's runtime
+interface already inherits the SDK interface and needs no independent edit.
+
+Synchronous Pad preparation reserves only existing shared/domain positions.
+Every real raw submission, including FX/HOLD, uses the same existing Host tail.
+Keep original identities/deadlines, combined64, matching Release positions,
+known-unsubmitted cancellation and submitted-unknown ownership. The new local
+companion permits only a fresh Press or its matching Release; existing direct
+foreign/replay requests retain the bounded ordinary API. Stop/close/fatal
+cleanup cancels dormant descriptors explicitly. Headered requests retain the
+original recording object and read its sequence at execution. No new ordinary
+or FX capacity policy is introduced.
+
+Lowest-tier checks: complete SDK tests (including prepared-owner retention after
+actual Pattern consume, snapshot/idempotence, wrong/duplicate/early Release,
+paired cancellation, Stop/close, original Press/Release deadline and unknown
+ownership); complete Creator input and Perform owning files, TypeScript,
+full Creator units, official diagram generation and original complete Portal
+check; independent final declared-diff review. Existing eager-call fixtures now
+assert synchronous preparation plus actual far-side ordered submission; their
+Stop/Flush/identity/error assertions remain. The original full eight groups and
+all final-candidate S6 verification remain required before shipping.
+
+Independent review found two additional SDK boundaries before commit. A
+definitely expired prepared Press could leave an already-queued Release to run;
+its new RED observed an orphan `pad_release`, then passed after cancelling only
+that never-started matching descriptor with the original refusal. A held
+headered reply followed by close could update a cleared global recording and
+throw, incorrectly treating the original submitted claim as a known failure;
+its RED observed that exact null update, then passed with payload/sequence
+updates bound to the captured original recording object. Close still does not
+prove Performance journal retirement. Preserve both REDs, first-repair green
+checks and final corrected receipts separately.
+
+A further mixed-API RED confirmed that direct exact replay could bypass a
+still-prepared Press token and send a wire request without transferring its
+claim. Refuse only that pre-handoff replay; normal submitted exact replay keeps
+the original ordinary rules. The token remains the sole original submission
+authority until handoff. Preserve this RED with the other review findings.
+
+### Version Management
+
+Compatible local preparation API adds to existing Web Runtime Platform MINOR
+and Creator Host debt at coordinated settlement. No Product Build, identity,
+Assembly, immutable snapshot or release allocation in this repair Task.
+
+### Documentation Impact
+
+Documentation impact: required on `/core/modules/web-runtime-platform/` and
+`/hosts/creator-interactions/`, with the current Module source diagram and its
+official generated outputs updated in the same Task.

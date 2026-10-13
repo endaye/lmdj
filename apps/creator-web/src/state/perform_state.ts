@@ -504,27 +504,33 @@ export function createPerformController(options: PerformControllerOptions): Perf
   ): Promise<void> => {
     const owner = recordingOwner;
     const request = {sessionId, eventId: createId(), event};
-    // Admit now, before our completion/refresh tail retains the Press. The
-    // SDK owns queue bounds and original Release positions; this tail only
-    // sequences projection after actual receipts. Attach a rejection observer
-    // immediately even when an earlier completion is still held.
-    let admission: Promise<unknown>;
+    // Reserve Pad ownership synchronously so Pattern consumption/physical up
+    // cannot retire its shared key while earlier FX is pending. All actual
+    // submissions still use this single ordered tail, including FX/HOLD.
+    let submit: () => Promise<unknown>;
     try {
-      admission = physicalKey === undefined
-        ? session.recordPerformanceEvent(request)
-        : session.recordPerformanceEvent(request, physicalKey);
-    } catch (error) { admission = Promise.reject(error); }
-    const outcome = Promise.resolve(admission).then(
-      value => ({ok: true as const, value}),
-      error => {
-        rememberShutdownFailure(owner, "raw-event", error);
-        return {ok: false as const, error};
-      },
-    );
+      if ((event.kind === "pad_press" || event.kind === "pad_release") &&
+          session.preparePerformancePadEvent !== undefined) {
+        const prepared = session.preparePerformancePadEvent({...request, event}, physicalKey);
+        submit = () => prepared.submit();
+      } else {
+        submit = () => physicalKey === undefined
+          ? session.recordPerformanceEvent(request)
+          : session.recordPerformanceEvent(request, physicalKey);
+      }
+    } catch (error) {
+      // A reservation refusal is known now, even if earlier work is held.
+      rememberShutdownFailure(owner, "raw-event", error);
+      submit = () => Promise.reject(error);
+    }
     const operation = rawEventTail.then(async () => {
-      const result = await outcome;
-      if (!result.ok) throw result.error;
-      await controller.refreshAuthority();
+      try {
+        await submit();
+        await controller.refreshAuthority();
+      } catch (error) {
+        rememberShutdownFailure(owner, "raw-event", error);
+        throw error;
+      }
     });
     rawEventTail = operation.catch(fail);
     return operation;

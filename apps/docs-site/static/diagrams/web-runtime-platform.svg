@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="ebe20a24bfecfdf34cb6615c835c62ba5a522d1df780bf4e4ea398ecd5a02620">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="300955a84a5d71bcac50ff3902fa3c528a00aef8cbe0b6e8ff029b2482bf97ae">
   <title id="title">Web Runtime Platform Module</title><desc id="description">S6 源码草稿：同一 frozen Session、strict companion 与 product/cue 双输出；执行 UNVERIFIED</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -99,7 +99,7 @@
       <text class="node-detail" x="1326" y="438">speaker / headphones</text>
     </g>
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">身份与兼容</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">清单投影身份；envelope1/ordinary/单输出保留。完整 startup tuple，恢复不加路由；未分配 Build。</div></foreignObject></g>
-<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">同一 Session owner</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">frozen runtime.session；live Pad 前协商。uint64/60 whole decimal；短 tickets 释放两条 tails。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">同一 Session owner</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">frozen runtime.session；Pad 同步 reserve，Pad/FX/HOLD 单 tail 顺序 submit。共享64，原1s/Release；短 tickets 释放两条 tails。</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">双输出与严格 tap ACK</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">验收仍待执行</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">1s Pad/5s opening/16 RPC。held I/O、真 release/Truth/reopen、raw PCM 未验收；S7/听感另行交付。</div></foreignObject></g>
 </svg>

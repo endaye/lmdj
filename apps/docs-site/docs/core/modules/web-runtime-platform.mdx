@@ -554,6 +554,30 @@ Release 只在 lifecycle 实际 handoff 后使用真实本地 retained press 续
 短 admission 串行性与实际 handoff 一秒 deadline 不变；新输入与无关请求仍排原队列。
 
 
+### S6 Performance Pad 准备与顺序提交（修复源码，执行验收未完成）
+
+`preparePerformancePadEvent(request, physicalKey?)` 只同步保留新的 Pad Press
+或其匹配 Release 的本地位置，返回冻结的 `submit()`／`cancelBeforeSubmit()`
+闭包；它不发送 wire 请求，不返回 Native admission。原 physical key、原 Press
+开始时间和第一次真实 Release 时间随这个位置保留，Host 排队消耗原一秒预算。
+同一位置重复 submit 返回同一 Promise，不创建新事件；submit 后的取消返回
+false，未知提交结果继续保留原 Performance claim。
+
+Creator 在输入时准备 Pad 位置，再把 Pad、FX、HOLD 的真实提交放回同一条
+`rawEventTail`。因此较早的 FX 不被后来的 Pad 越过，FX 松键也不挤入已有
+ordinary 1 running + 1 waiting 窗口；共享 64 个物理手势的规则不变。
+原 `recordPerformanceEvent` 仍兼容直接调用，foreign Release／exact replay
+继续走原 ordinary 有界规则，不能通过准备接口借用新位置；原 Press 尚未
+submit 时，直接重放也不能绕过其 token 发送 wire。
+
+Release 先于原 Press submit 时明确拒绝并退还未提交的 Release 位置；取消未
+提交 Press 同时拒绝其未提交 Release，但不取消 Pattern claim。Stop、close
+和 terminal cleanup 显式取消未提交位置，已提交未知债务仍需真实 Release／
+Stop 回执。Press 明确未提交时，尚未执行的配对 Release 同样收到原拒绝，
+不制造孤立 wire 松键。Headered 输入绑定原 recording 对象，执行时读取该对象的最新
+sequence，不借用新会话。当前 SDK／Creator 回归证明这些边界，完整 Creator、
+Native、OPFS 和听感验收仍未完成；此兼容 API 加入现有 MINOR 版本债务。
+
 ### S6 协商 profile 的恢复探针期限（修复源码，执行验收未完成）
 
 恢复探针只绑定真实 Press。SDK 在等待 admission 前保留原 recovery epoch、

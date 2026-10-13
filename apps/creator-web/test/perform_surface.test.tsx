@@ -1,6 +1,7 @@
 import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
+import {createRuntimeSession} from "@lmdj/web-runtime-platform/runtime_session.mjs";
 import {useEffect} from "react";
 import {RuntimeProvider, useRuntime} from "../src/runtime/runtime_context";
 import type {RuntimeDiagnostics, RuntimeHostState} from "../src/runtime/runtime_types";
@@ -8,7 +9,7 @@ import {PerformanceRecordingStore} from "../src/record/performance_recording_sto
 import {openWavStreamWriter} from "../src/record/wav_stream_writer";
 
 import type {ContextualEncoders} from "../src/components/physical_controls";
-import type {PatternTransportStatus, PerformanceMasterCapture} from
+import type {PatternTransportStatus, PerformanceMasterCapture, PerformanceEventResult} from
   "@lmdj/web-runtime-platform/runtime_types";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
@@ -95,6 +96,13 @@ function sessionFixture(initialStatus = status("ready")) {
   let captureStatus = initialStatus;
   const listeners = new Set<(value: typeof initialStatus) => void>();
   const calls = {
+    prepare: vi.fn((request: {eventId: string; event: Record<string, unknown>;
+      sessionId: string}, physicalKey?: object): {
+        submit(): Promise<PerformanceEventResult>; cancelBeforeSubmit(): boolean;
+      } => ({
+      submit: () => physicalKey === undefined ? calls.raw(request) : calls.raw(request, physicalKey),
+      cancelBeforeSubmit: () => true,
+    })),
     raw: vi.fn(async ({eventId}: {eventId: string; event: Record<string, unknown>;
       sessionId: string}, _physicalKey?: object) => ({eventId,
       acceptedTick: 1, inputSequence: 1, coalesced: false,
@@ -124,6 +132,7 @@ function sessionFixture(initialStatus = status("ready")) {
     startPerformanceMasterCapture: calls.capture,
     beginPerformanceRecording: calls.begin,
     recordPerformanceEvent: calls.raw,
+    preparePerformancePadEvent: calls.prepare,
     applyFxGesture: calls.fx,
     requestPerformancePatternLaunch: calls.launch,
     flushPerformanceRecording: calls.flush,
@@ -223,6 +232,7 @@ test("the replay poll default stays neutral and never settles", async () => {
 });
 
 function controllerFixture(options: {
+  createId?: () => string;
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;
   opfsAvailable?: boolean;
@@ -253,7 +263,7 @@ function controllerFixture(options: {
     order.push("capture-stop");
   });
   const dependencies: PerformControllerDependencies = {
-    createId: (() => {
+    createId: options.createId ?? (() => {
       let index = 0;
       return () => [ids.session, ids.performance, `event-${index - 1}`][index++] ?? `id-${index}`;
     })(),
@@ -958,15 +968,18 @@ test("closes raw admission before Stop drains its synthetic releases", async () 
   expect(fixture.controller.getState().recording.phase).toBe("stopping");
   await fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "too-late",
     slot: 1, velocity: 100});
-  // Both original Press and its synthetic matching Release enter the SDK
-  // now; its reserved queue orders the Release behind the held receipt. The
+  // Both original Press and its synthetic matching Release reserve SDK
+  // ownership now; the Host submits Release after the held receipt. The
   // later external Press remains refused by the Host stopping phase.
-  expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event))
+  expect(fixture.runtime.calls.prepare.mock.calls.map(([request]) => request.event))
     .toEqual([{kind: "pad_press", gestureId: "open", slot: 0, velocity: 100},
       {kind: "pad_release", gestureId: "open", slot: 0}]);
   firstEvent.resolve({eventId: "event", acceptedTick: 1, inputSequence: 1,
     coalesced: false, replayed: false, projectRevision: null});
   await Promise.all([first, stopping]);
+  expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event))
+    .toEqual([{kind: "pad_press", gestureId: "open", slot: 0, velocity: 100},
+      {kind: "pad_release", gestureId: "open", slot: 0}]);
   expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event.gestureId))
     .toEqual(["open", "open"]);
 });
@@ -2449,7 +2462,7 @@ for (const operation of ["raw-event", "flush"] as const) {
 }
 
 
-test("admits Perform presses and physical release to the SDK before the first receipt settles", async () => {
+test("reserves Perform presses and physical release before the first receipt and submits in order", async () => {
   const fixture = controllerFixture();
   const firstReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
   fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise);
@@ -2470,16 +2483,20 @@ test("admits Perform presses and physical release to the SDK before the first re
     ];
     // These are real Perform-controller calls into the Session double, not
     // proof of the SDK's aggregate ledger or Native/durable completion.
-    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(3);
-    expect(fixture.runtime.calls.raw.mock.calls.map(([, key]) => key))
+    expect(fixture.runtime.calls.prepare).toHaveBeenCalledTimes(3);
+    expect(fixture.runtime.calls.prepare.mock.calls.map(([, key]) => key))
       .toEqual([firstKey, secondKey, firstKey]);
-    expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.sessionId))
+    expect(fixture.runtime.calls.prepare.mock.calls.map(([request]) => request.sessionId))
       .toEqual([ids.session, ids.session, ids.session]);
-    expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event.kind))
+    expect(fixture.runtime.calls.prepare.mock.calls.map(([request]) => request.event.kind))
       .toEqual(["pad_press", "pad_press", "pad_release"]);
+    await act(async () => {});
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(1);
     firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
       coalesced: false, replayed: false, projectRevision: null});
     await Promise.all(pending);
+    expect(fixture.runtime.calls.raw.mock.calls.map(([, key]) => key))
+      .toEqual([firstKey, secondKey, firstKey]);
     await fixture.controller.stop();
     expect(fixture.controller.getState().recording.phase).toBe("stopped");
   } finally {
@@ -2506,8 +2523,8 @@ test("Stop retains the original journal owner and waits for its matching release
     press = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "original-owner",
       slot: 3, velocity: 100}, physicalKey);
     stopping = fixture.controller.stop();
-    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
-    const [submittedPress, submittedRelease] = fixture.runtime.calls.raw.mock.calls;
+    expect(fixture.runtime.calls.prepare).toHaveBeenCalledTimes(2);
+    const [submittedPress, submittedRelease] = fixture.runtime.calls.prepare.mock.calls;
     expect(submittedPress?.[1]).toBe(physicalKey);
     // Synthetic Stop may join the SDK's original (Session, gestureId) owner
     // mapping without a second physical-key argument; never invent an owner.
@@ -2519,6 +2536,8 @@ test("Stop retains the original journal owner and waits for its matching release
     pressReceipt.resolve({eventId: "press", acceptedTick: 1, inputSequence: 1,
       coalesced: false, replayed: false, projectRevision: null});
     await press;
+    await act(async () => {});
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
     expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
     releaseReceipt.resolve({eventId: "release", acceptedTick: 2, inputSequence: 2,
       coalesced: false, replayed: false, projectRevision: null});
@@ -2541,12 +2560,14 @@ test("Stop retains the original journal owner and waits for its matching release
   }
 });
 
-test("observes a later SDK rejection while an earlier Perform receipt is still held", async () => {
+test("observes a later SDK reservation refusal while an earlier Perform receipt is still held", async () => {
   const fixture = controllerFixture();
   const firstReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
   const original = new Error("second SDK admission rejected before first receipt");
-  fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise)
-    .mockRejectedValueOnce(original);
+  fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise);
+  const prepare = fixture.runtime.calls.prepare.getMockImplementation()!;
+  fixture.runtime.calls.prepare.mockImplementationOnce(prepare)
+    .mockImplementationOnce(() => { throw original; });
   const view = renderSurface(fixture);
   let first: Promise<void> | undefined;
   let rejected: Promise<unknown> | undefined;
@@ -2557,10 +2578,10 @@ test("observes a later SDK rejection while an earlier Perform receipt is still h
       slot: 0, velocity: 100}, Object.freeze({}));
     rejected = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "rejected-second",
       slot: 1, velocity: 100}, Object.freeze({})).then(() => null, error => error);
-    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
+    expect(fixture.runtime.calls.prepare).toHaveBeenCalledTimes(2);
     // Leave one ordinary event-loop turn with the first receipt still held.
     // Vitest's unhandled-rejection check must remain clean: observing this
-    // SDK rejection cannot wait for the projection/completion tail to drain.
+    // SDK reservation refusal cannot wait for the ordered tail to drain.
     await new Promise(resolve => setTimeout(resolve, 0));
     firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
       coalesced: false, replayed: false, projectRevision: null});
@@ -2577,5 +2598,147 @@ test("observes a later SDK rejection while an earlier Perform receipt is still h
     await first?.catch(() => {});
     await rejected;
     view.unmount();
+  }
+});
+
+
+test("real SDK admission preserves the interleaved Perform FX release after a held move", async () => {
+  // Integration boundary: Creator's existing recording/Store/capture fixture
+  // stays modeled. Only raw input admission and status reads use the REAL SDK;
+  // no input queue or shared-gesture algorithm is reproduced by this test.
+  // The SDK is not bootstrapped: no Runtime/Core/audio lifecycle is claimed.
+  type WireEvent = {
+    kind: string; gesture_id?: string; fx?: string; value?: number;
+    slot?: number; velocity?: number;
+  };
+  type Envelope = {
+    request_id: string; operation: string;
+    payload: {session_id?: string; event_id?: string; event?: WireEvent};
+  };
+  const inputWire: Array<{sessionId: string; eventId: string; event: WireEvent}> = [];
+  const openFx = new Set<string>();
+  const openPads = new Set<string>();
+  const enteredMove = deferred<void>();
+  const heldMove = deferred<void>();
+  const reports = vi.fn();
+  let requestSerial = 0;
+  const eventUuid = (serial: number) =>
+    `60000000-0000-4000-8000-${String(serial).padStart(12, "0")}`;
+  const sdk = createRuntimeSession({
+    document: {}, window: {}, navigator: {},
+    crypto: {randomUUID: () => eventUuid(++requestSerial)},
+    manifestSource: {}, inputOwnership: "host",
+    // Explicit synthetic identity reused from runtime_session.test.mjs's
+    // fixture, not a claim about the current Product or a shipped manifest.
+    assemblyIdentity: {
+      distributionContract: "lmdj.web-runtime-host.distribution.v1",
+      hostId: "web-runtime-host", hostVersion: "1.2.15",
+      platformVersion: "0.3.6", productBuild: "9.8.7.6", protocolVersion: 1,
+    },
+    seams: {transport: {
+      async send(envelope: Envelope) {
+        const reply = (result: Record<string, unknown>) => ({
+          protocol_version: 1, request_id: envelope.request_id, ok: true, result,
+        });
+        if (envelope.operation === "performance.record.event") {
+          const {session_id, event_id, event} = envelope.payload;
+          if (typeof session_id !== "string" || typeof event_id !== "string" || !event) {
+            throw new Error("Test transport received an incomplete raw event");
+          }
+          inputWire.push({sessionId: session_id, eventId: event_id, event: {...event}});
+          if (event.kind === "fx_move" && event.value === 630) {
+            enteredMove.resolve();
+            await heldMove.promise;
+          }
+          // These counts model only requests that reached this transport;
+          // the wire order below is the proof, not a manufactured Core ACK.
+          if (event.kind === "fx_engage") openFx.add(event.gesture_id!);
+          if (event.kind === "fx_release") openFx.delete(event.gesture_id!);
+          if (event.kind === "pad_press") openPads.add(event.gesture_id!);
+          if (event.kind === "pad_release") openPads.delete(event.gesture_id!);
+          return reply({event_id, accepted_tick: 0, input_sequence: inputWire.length,
+            coalesced: false, replayed: false, project_revision: null});
+        }
+        if (envelope.operation === "performance.record.status") {
+          return reply({state: "active", session_id: ids.session,
+            performance_id: ids.performance, journal_revision: 1,
+            next_flush_seq: 1, pending_event_count: 0,
+            open_pad_gestures: openPads.size, open_fx_gestures: openFx.size,
+            hold: false, pending_launch: null, last_launch_ack: null,
+            project_revision: null});
+        }
+        throw new Error(`Unexpected test transport operation: ${envelope.operation}`);
+      },
+    }},
+  });
+  let idIndex = 0;
+  const fixture = controllerFixture({reportFailure: reports,
+    createId: () => [ids.session, ids.performance][idIndex++] ?? eventUuid(100 + idIndex)});
+  fixture.runtime.session.recordPerformanceEvent = sdk.recordPerformanceEvent;
+  fixture.runtime.session.preparePerformancePadEvent = sdk.preparePerformancePadEvent!;
+  fixture.runtime.session.queryPerformanceRecordingStatus = sdk.queryPerformanceRecordingStatus;
+  const disconnect = fixture.controller.connect();
+  const physicalKey = {};
+  let lease: ReturnType<typeof sdk.reserveInputGesture> = null;
+  try {
+    await fixture.controller.refreshRecovery();
+    await fixture.controller.record();
+    expect(fixture.controller.getState().recording.phase).toBe("recording");
+    const fxGesture = fixture.controller.engageFx("filter", 500);
+    await waitFor(() => expect(fixture.controller.getState().authority?.openFxGestures).toBe(1));
+    expect(reports).not.toHaveBeenCalled();
+
+    fixture.controller.moveFx(fxGesture, "filter", 630);
+    await enteredMove.promise;
+    lease = sdk.reserveInputGesture(physicalKey, 0, "pointer");
+    expect(lease).not.toBeNull();
+    const padGesture = eventUuid(900);
+    const padPress = fixture.controller.recordRawEvent({
+      kind: "pad_press", gestureId: padGesture, slot: 0, velocity: 100,
+    }, physicalKey);
+    // This integration case has no Pattern consumer. Cancel ONLY its unused
+    // preparation; the real SDK Performance claim remains until release.
+    lease!.cancelUnsubmittedPattern();
+    const padRelease = fixture.controller.recordRawEvent({
+      kind: "pad_release", gestureId: padGesture, slot: 0,
+    }, physicalKey);
+    const padsSettled = Promise.allSettled([padPress, padRelease]);
+    fixture.controller.moveFx(fxGesture, "filter", 631);
+    fixture.controller.releaseFx(fxGesture, "filter");
+    // No fake clock, delayed extra up, enlarged queue or per-event await is
+    // inserted in the above reproducing sequence.
+    heldMove.resolve();
+    const padResults = await padsSettled;
+    // Existing Stop awaits rawEventTail. Its modeled lifecycle receipt does
+    // not add any FX release to inputWire, so it cannot repair the RED.
+    await fixture.controller.stop();
+    const failures = reports.mock.calls.map(([, error]) => ({
+      code: (error as {code?: string}).code,
+      message: (error as Error).message,
+    }));
+    expect(inputWire.map(({event}) => event),
+      `Actual SDK/controller failures: ${JSON.stringify(failures)}`).toEqual([
+      {kind: "fx_engage", gesture_id: fxGesture, fx: "filter", value: 500},
+      {kind: "fx_move", gesture_id: fxGesture, fx: "filter", value: 630},
+      {kind: "pad_press", gesture_id: padGesture, slot: 0, velocity: 100},
+      {kind: "pad_release", gesture_id: padGesture, slot: 0},
+      {kind: "fx_move", gesture_id: fxGesture, fx: "filter", value: 631},
+      {kind: "fx_release", gesture_id: fxGesture, fx: "filter"},
+    ]);
+    expect(padResults).toEqual([
+      {status: "fulfilled", value: undefined}, {status: "fulfilled", value: undefined},
+    ]);
+    expect(failures).toEqual([]);
+    expect(inputWire.every(({sessionId}) => sessionId === ids.session)).toBe(true);
+    expect(new Set(inputWire.map(({eventId}) => eventId)).size).toBe(6);
+    expect(await sdk.queryPerformanceRecordingStatus()).toMatchObject({
+      openPadGestures: 0, openFxGestures: 0,
+    });
+  } finally {
+    heldMove.resolve();
+    lease?.cancelUnsubmittedPattern();
+    lease?.releasePhysical();
+    await fixture.controller.stop();
+    disconnect();
   }
 });

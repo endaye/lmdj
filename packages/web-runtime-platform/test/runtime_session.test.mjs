@@ -83,6 +83,7 @@ const API = [
   "querySequenceStatus",
   "recordSequenceEvent",
   "recordPerformanceEvent",
+  "preparePerformancePadEvent",
   "reserveInputGesture",
   "renamePerformance",
   "release",
@@ -12684,3 +12685,275 @@ for (const profile of [true, false]) {
     await f.session.close();
   });
 }
+
+
+test("prepared Performance Pad keeps its shared place after Pattern retirement and submits its snapshot once", async () => {
+  const f = inputProfileFixture({now: () => 0, extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const request = sharedPad(0);
+  const prepared = f.session.preparePerformancePadEvent(request, key);
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  await f.session.trigger(0, 100, "pointer", key);
+  lease.releasePhysical();
+  await f.session.release(0, "pointer", key);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "actual Pattern consumption and keyup cannot retire a prepared Performance claim");
+  request.event.slot = 1;
+  const first = prepared.submit();
+  assert.equal(prepared.submit(), first);
+  await first;
+  assert.equal(prepared.cancelBeforeSubmit(), false);
+  assert.deepEqual(f.sent.filter(e => e.operation === "performance.record.event").map(e => e.payload.event),
+    [{kind: "pad_press", gesture_id: sharedId("8200", 0), slot: 0, velocity: 100}]);
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  await release.submit();
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+test("prepared matching Release cannot run ahead of its Press or borrow a foreign physical owner", async () => {
+  const f = fixture({now: () => 0, send: e => sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation))});
+  await f.session.start();
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  assert.throws(() => f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), {}),
+    /different physical owner/);
+  assert.throws(() => f.session.preparePerformancePadEvent(sharedPad(1, "pad_release"), key),
+    /different physical owner/);
+  const premature = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  await assert.rejects(premature.submit(), /Submit the original Pad Press/);
+  assert.equal(premature.cancelBeforeSubmit(), false);
+  await press.submit();
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  assert.throws(() => f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key), /already reserved/);
+  await release.submit();
+  lease.cancelUnsubmittedPattern();
+  assert.notEqual(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.close();
+});
+
+test("cancelling a prepared Press settles its unsubmitted Release pair without cancelling Pattern ownership", async () => {
+  const f = inputProfileFixture({now: () => 0, extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.trigger(0, 100, "pointer", key);
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  assert.equal(press.cancelBeforeSubmit(), true);
+  assert.equal(press.cancelBeforeSubmit(), false);
+  await assert.rejects(press.submit(), /cancelled before submission/);
+  await assert.rejects(release.submit(), /cancelled before submission/);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 0);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "cancelled Performance preparation is not a Pattern retirement receipt");
+  lease.releasePhysical();
+  await f.session.release(0, "pointer", key);
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+for (const boundary of ["stop", "close"]) {
+  test(`prepared Pad descriptors are invalidated by actual ${boundary} without reaching the wire`, async () => {
+    const wire = [];
+    const f = fixture({now: () => 0, send: e => {
+      if (e.operation === "performance.record.event") wire.push(e.payload);
+      return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+    }});
+    await f.session.start();
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "pointer");
+    const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+    const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+    lease.cancelUnsubmittedPattern();
+    lease.releasePhysical();
+    if (boundary === "stop") await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 9)});
+    else assert.equal(await f.session.close(), true);
+    await assert.rejects(press.submit(), /cancelled before Core admission/);
+    await assert.rejects(release.submit(), /cancelled before Core admission/);
+    assert.deepEqual(wire, []);
+    if (boundary === "stop") {
+      const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+      assert.notEqual(fresh, null);
+      fresh.cancelUnsubmittedPattern();
+      await f.session.close();
+    }
+  });
+}
+
+for (const kind of ["pad_press", "pad_release"]) {
+  test(`prepared ${kind} retains its original deadline across the Host wait`, async () => {
+    let clock = 0;
+    const wire = [];
+    const f = fixture({now: () => clock, send: e => {
+      if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
+      return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+    }});
+    await f.session.start();
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "pointer");
+    const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+    let operation = press;
+    if (kind === "pad_release") {
+      await press.submit();
+      clock = 100;
+      lease.releasePhysical();
+      operation = f.session.preparePerformancePadEvent(sharedPad(0, kind), key);
+      clock = 1101;
+    } else clock = 1001;
+    await assert.rejects(operation.submit(), error => error.code === "HOST_TIMEOUT" && error.details.pending === false);
+    assert.deepEqual(wire, kind === "pad_release" ? ["pad_press"] : []);
+    lease.cancelUnsubmittedPattern();
+    lease.releasePhysical();
+    await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 10)});
+    await f.session.close();
+  });
+}
+
+test("prepared submitted-unknown Performance ownership cannot be cancelled by its observer", async () => {
+  let lose = true;
+  const f = inputProfileFixture({now: () => 0, extraSend: e => {
+    if (e.operation === "performance.record.event" && lose) {
+      lose = false;
+      throw Object.assign(new Error("original prepared Press receipt lost"), {code: "HOST_TIMEOUT", details: {pending: true}});
+    }
+    return sharedPerformanceReply(e);
+  }});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  await assert.rejects(press.submit(), /original prepared Press receipt lost/);
+  assert.equal(press.cancelBeforeSubmit(), false);
+  lease.cancelUnsubmittedPattern();
+  lease.releasePhysical();
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 11)});
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+test("a definitely expired prepared Press cancels its queued Release without an orphan wire event", async () => {
+  let clock = 0;
+  const wire = [];
+  const f = fixture({now: () => clock, send: e => {
+    if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
+    return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  clock = 500;
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  clock = 1001;
+  // Both tokens are enqueued before the Press action runs. Only the Press
+  // budget is expired; Release still has its original 500 ms remaining.
+  const results = await Promise.allSettled([press.submit(), release.submit()]);
+  assert.deepEqual(wire, [], "a definitely never-submitted Press owns no wire Release");
+  assert.ok(results.every(result => result.status === "rejected" &&
+    result.reason.code === "HOST_TIMEOUT" && result.reason.details.pending === false));
+  lease.cancelUnsubmittedPattern();
+  lease.releasePhysical();
+  assert.notEqual(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.close();
+});
+
+
+test("a held headered Pad reply remains bound to its original recording after close", async () => {
+  let enter, finish;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const gate = new Promise(resolve => { finish = resolve; });
+  const f = fixture({now: () => 0, send: async e => {
+    if (e.operation === "performance.record.begin") return success(e, {
+      performance_id: sharedId("8800", 0), committed_revision: 1, replayed: false,
+      profile: "header_input_sequence", control_epoch: LIVE_EPOCH, core_control_ready: true,
+      next_recording_sequence: "0", fx_bindings: [], project_revision: 1});
+    if (e.operation === "performance.record.event") {
+      assert.equal(e.payload.control_epoch, LIVE_EPOCH);
+      assert.equal(e.payload.expected_recording_sequence, "0");
+      enter();
+      await gate;
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0,
+        input_sequence: "1", next_recording_sequence: "1", result: "no_audio",
+        coalesced: false, gesture_generation: null, recording_gesture_id: null,
+        replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  await f.session.beginPerformanceRecording({sessionId: SHARED_SESSION,
+    performanceId: sharedId("8800", 0), expectedRevision: 0, controlEpoch: LIVE_EPOCH});
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const prepared = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  const press = prepared.submit();
+  // Attach before close so the real rejected receipt is observed in RED.
+  const result = press.then(value => ({ok: true, value}), error => ({ok: false, error}));
+  await entered;
+  lease.cancelUnsubmittedPattern();
+  lease.releasePhysical();
+  const closing = f.session.close();
+  finish();
+  const actual = await result;
+  assert.equal(actual.ok, true, `original headered response lost: ${actual.error?.message}`);
+  assert.equal(actual.value.eventId, sharedPad(0).eventId);
+  assert.equal(actual.value.nextRecordingSequence, "1");
+  assert.equal(prepared.cancelBeforeSubmit(), false);
+  await closing;
+  assert.equal(await f.session.waitForTerminalCleanup(), false,
+    "Host closure does not prove this original Performance journal Press retired");
+});
+
+
+test("direct exact replay cannot submit a still-prepared Press outside its token", async () => {
+  const wire = [];
+  const f = fixture({now: () => 0, send: e => {
+    if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
+    return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const request = sharedPad(0);
+  const prepared = f.session.preparePerformancePadEvent(request);
+  const direct = await f.session.recordPerformanceEvent(request).then(() => null, error => error);
+  assert.deepEqual(wire, [], "the exact replay cannot bypass a never-submitted token's ownership");
+  assert.equal(direct.code, "HOST_STATE_INVALID");
+  assert.equal(prepared.cancelBeforeSubmit(), true);
+  await assert.rejects(prepared.submit(), /cancelled before submission/);
+  const nextRequest = sharedPad(1);
+  const next = f.session.preparePerformancePadEvent(nextRequest);
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await next.submit();
+  assert.equal(next.cancelBeforeSubmit(), false);
+  // Once the original token handed off, exact replay keeps the old bounded
+  // ordinary API and cannot allocate a second shared position.
+  await f.session.recordPerformanceEvent(nextRequest);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.recordPerformanceEvent(sharedPad(1, "pad_release"));
+  assert.deepEqual(wire, ["pad_press", "pad_press", "pad_release"]);
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});

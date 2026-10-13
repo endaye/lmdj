@@ -813,6 +813,21 @@ export type PerformanceEventResult =
     }>;
 
 export interface PerformanceRuntimeSession {
+  // Synchronous local ownership only: no wire admission/ACK. The current SDK
+  // supplies this optional companion for Hosts with an ordered event tail.
+  // A fresh Press/matching Release is single-use; submit is idempotent and
+  // cancelBeforeSubmit succeeds only before that handoff. Original deadlines
+  // and physical keys survive the Host wait. Foreign/replay events use the
+  // ordinary recordPerformanceEvent API instead, after the original token's
+  // handoff; an exact replay cannot bypass a still-prepared Press.
+  preparePerformancePadEvent?(request: Readonly<{
+    sessionId: string;
+    eventId: string;
+    event: Extract<PerformanceRawEvent, {kind: "pad_press" | "pad_release"}>;
+  }>, physicalKey?: object): Readonly<{
+    submit(): Promise<PerformanceEventResult>;
+    cancelBeforeSubmit(): boolean;
+  }>;
   assignPatternSlot(request: Readonly<{
     expectedRevision: number;
     patternSlot: number;

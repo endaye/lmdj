@@ -2166,6 +2166,7 @@ function createRuntimeSessionController(options = {}) {
       return terminalCleanupPromise;
     }
     terminalCleanupStarted = true;
+    cancelPreparedLiveInputs();
     // Bind before any timer, pressed-state or diagnostic callback can
     // reenter this already initiated cleanup. A seal never means completion.
     let resolveCleanup;
@@ -2603,6 +2604,8 @@ function createRuntimeSessionController(options = {}) {
           // A definitely unsubmitted refusal frees local capacity. A lost
           // admission response keeps it; an observer rejection is no receipt.
           if (!unknownSubmittedOutcome(error, entry.submitted)) {
+            const preparedRelease = liveLaneReleaseReservations.get(entry);
+            if (preparedRelease !== undefined) cancelPreparedLiveInput(preparedRelease, error, true);
             liveLanePendingPresses.delete(entry);
             settleSharedGesture(entry.sharedClaim);
             for (const owner of entry.releaseOwners) liveLaneReleaseReservations.delete(owner);
@@ -2624,23 +2627,24 @@ function createRuntimeSessionController(options = {}) {
    * @param {string|object|null} gestureKey
    * @returns {Promise<Awaited<T>>}
    */
-  function submitLiveInput(
+  function reserveLiveInput(
     action,
     classification = "ordinary",
     gestureKey = null,
     identity = {},
+    padOnly = false,
   ) {
     if (closing || machine.state === "closed") {
-      return Promise.reject(typedError(
+      throw typedError(
         "HOST_STATE_INVALID",
         "Runtime session is closed",
-      ));
+      );
     }
     const releaseOwners = classification === "pad_release"
       ? liveLaneOwners(gestureKey, identity) : [];
     if (releaseOwners.some(owner => liveLaneReleaseReservations.has(owner))) {
-      return Promise.reject(typedError("HOST_STATE_INVALID",
-        "Matching Pad Release is already reserved", {pending: true}));
+      throw typedError("HOST_STATE_INVALID",
+        "Matching Pad Release is already reserved", {pending: true});
     }
     // A foreign/replayed Release has no reserved owner position. Preserve its
     // public wire API through the bounded ordinary window, not an exception.
@@ -2653,20 +2657,25 @@ function createRuntimeSessionController(options = {}) {
       if (prior.length !== 0) {
         if (identity.eventId === undefined || prior.some(owner =>
             owner.identity.eventId !== identity.eventId || owner.identity.slot !== identity.slot))
-          return Promise.reject(typedError("HOST_STATE_INVALID",
-            "Pad gesture already owns a Press position", {pending: true}));
+          throw typedError("HOST_STATE_INVALID",
+            "Pad gesture already owns a Press position", {pending: true});
+        if (prior.some(owner => owner.prepared))
+          throw typedError("HOST_STATE_INVALID",
+            "The original prepared Pad Press must submit through its token", {pending: false});
         classification = "ordinary";
       }
     }
+    if (padOnly && classification === "ordinary")
+      throw typedError("HOST_STATE_INVALID", "Only a fresh Pad Press or its matching Release can be prepared");
     if (classification === "cleanup" && liveLaneCleanupReservation !== null)
-      return Promise.reject(typedError("HOST_STATE_INVALID",
-        "Performance cleanup token is already reserved", {pending: true}));
+      throw typedError("HOST_STATE_INVALID",
+        "Performance cleanup token is already reserved", {pending: true});
     if (classification === "pad_press" &&
         liveLaneOpenPads.size + liveLanePendingPresses.size >= LIVE_INPUT_OPEN_PAD_LIMIT) {
-      return Promise.reject(typedError(
+      throw typedError(
         "HOST_STATE_INVALID",
         "Too many open Pad gestures; the 65th press is not admitted",
-      ));
+      );
     }
     // Pad presses and their matching releases occupy the per-gesture slots,
     // never the ordinary 1+1 window; only ordinary inputs face that limit.
@@ -2675,7 +2684,7 @@ function createRuntimeSessionController(options = {}) {
         (entry) => !entry.started && entry.classification === "ordinary",
       ).length;
       if ((liveLaneRunning ? 1 : 0) + ordinaryWaiting >= 2) {
-        return Promise.reject(liveInputOverflow());
+        throw liveInputOverflow();
       }
     }
     if (classification === "cleanup") {
@@ -2699,19 +2708,74 @@ function createRuntimeSessionController(options = {}) {
     const sharedClaim = classification === "pad_press"
       ? claimSharedGesture(identity.physicalKey, identity.legacy ? "pattern" : "performance", identity.slot, identity.source) : null;
     if (classification === "pad_press" && sharedClaim === null)
-      return Promise.reject(typedError("HOST_STATE_INVALID",
-        "Combined Pad gesture window is full or this domain already owns the Press", {pending: false}));
-    return new Promise((resolve, reject) => {
-      const entry = {action, resolve, reject, classification, gestureKey, identity, releaseOwners, sharedClaim,
-        startedAt: sharedClaim?.owner.startedAt ?? monotonicNow(),
-        started: false, submitted: false, cancelled: false};
-      if (classification === "pad_press") liveLanePendingPresses.add(entry);
-      if (classification === "pad_release")
-        for (const owner of releaseOwners) liveLaneReleaseReservations.set(owner, entry);
-      if (classification === "cleanup") liveLaneCleanupReservation = entry;
-      liveLaneQueue.push(entry);
-      pumpLiveLane();
-    });
+      throw typedError("HOST_STATE_INVALID",
+        "Combined Pad gesture window is full or this domain already owns the Press", {pending: false});
+    let resolve, reject;
+    const promise = new Promise((done, failed) => { resolve = done; reject = failed; });
+    // Prepared entries may be cancelled before their caller invokes submit.
+    // Observe that rejection without changing the original public Promise.
+    void promise.catch(() => {});
+    const entry = {action, resolve, reject, promise, classification, gestureKey, identity, releaseOwners, sharedClaim,
+      startedAt: sharedClaim?.owner.startedAt ?? identity.releaseStartedAt ?? monotonicNow(),
+      prepared: true, started: false, submitted: false, cancelled: false};
+    if (classification === "pad_press") liveLanePendingPresses.add(entry);
+    if (classification === "pad_release")
+      for (const owner of releaseOwners) liveLaneReleaseReservations.set(owner, entry);
+    if (classification === "cleanup") liveLaneCleanupReservation = entry;
+    return entry;
+  }
+
+  function cancelPreparedLiveInput(entry, error, allowQueued = false) {
+    if (entry.cancelled || (!entry.prepared && !(allowQueued && !entry.started &&
+        !entry.submitted && liveLaneQueue.includes(entry)))) return false;
+    const queued = liveLaneQueue.indexOf(entry);
+    if (queued !== -1) liveLaneQueue.splice(queued, 1);
+    entry.cancelled = true;
+    entry.prepared = false;
+    liveLanePendingPresses.delete(entry);
+    // A cancelled never-submitted Press cannot own a wire Release. Cancel
+    // only a still-prepared matching descriptor; submitted debts stay intact.
+    const release = liveLaneReleaseReservations.get(entry);
+    if (release !== undefined) cancelPreparedLiveInput(release, error);
+    for (const owner of entry.releaseOwners)
+      if (liveLaneReleaseReservations.get(owner) === entry)
+        liveLaneReleaseReservations.delete(owner);
+    settleSharedGesture(entry.sharedClaim);
+    entry.reject(error);
+    return true;
+  }
+
+  function cancelPreparedLiveInputs(sessionId) {
+    const error = typedError("HOST_STATE_INVALID", "Live input was cancelled before Core admission", {pending: false});
+    const entries = new Set([...liveLanePendingPresses, ...liveLaneReleaseReservations.values()]);
+    for (const entry of entries)
+      if (sessionId === undefined || entry.identity.sessionId === sessionId)
+        cancelPreparedLiveInput(entry, error);
+  }
+
+  function submitReservedLiveInput(entry) {
+    if (!entry.prepared) return entry.promise;
+    if (entry.releaseOwners.some(owner => owner.prepared)) {
+      cancelPreparedLiveInput(entry, typedError("HOST_STATE_INVALID",
+        "Submit the original Pad Press before its matching Release", {pending: false}));
+      return entry.promise;
+    }
+    if (closing || terminalCleanupStarted || machine.state === "closed") {
+      cancelPreparedLiveInput(entry, typedError("HOST_STATE_INVALID", "Runtime session is closed", {pending: false}));
+      return entry.promise;
+    }
+    entry.prepared = false;
+    liveLaneQueue.push(entry);
+    pumpLiveLane();
+    return entry.promise;
+  }
+
+  function submitLiveInput(action, classification = "ordinary", gestureKey = null, identity = {}) {
+    try {
+      return submitReservedLiveInput(reserveLiveInput(action, classification, gestureKey, identity));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   // The dual-ready gate of a headered recording begin: recorded inputs stay
@@ -6242,11 +6306,11 @@ function createRuntimeSessionController(options = {}) {
     throw new TypeError("Performance raw event is invalid");
   }
 
-  function recordPerformanceEvent(request, physicalKey) {
+  function reservePerformanceEvent(request, physicalKey, padOnly = false) {
     validateGestureKey(physicalKey);
     if (request === null || typeof request !== "object" ||
         !exactKeys(request, ["sessionId", "eventId", "event"])) {
-      return Promise.reject(new TypeError("Performance event request is invalid"));
+      throw new TypeError("Performance event request is invalid");
     }
     const sessionId = performanceIdentity(request.sessionId, "sessionId");
     const eventId = performanceIdentity(request.eventId, "eventId");
@@ -6254,36 +6318,50 @@ function createRuntimeSessionController(options = {}) {
     // window's expected sequence; the legacy wire is unchanged.
     const headered = headeredRecording !== null &&
       headeredRecording.sessionId === sessionId;
-    let event;
-    try {
-      event = headered
-        ? wireHeaderedPerformanceEvent(request.event)
-        : wirePerformanceEvent(request.event);
-    } catch (error) {
-      return Promise.reject(error);
-    }
+    const recording = headered ? headeredRecording : null;
+    const event = headered
+      ? wireHeaderedPerformanceEvent(request.event)
+      : wirePerformanceEvent(request.event);
     const classification = event.kind === "pad_press"
       ? "pad_press"
       : event.kind === "pad_release" ? "pad_release" : "ordinary";
     const gestureKey = Object.hasOwn(event, "gesture_id")
       ? `gesture:${sessionId}:${event.gesture_id}`
       : null;
+    if (padOnly && classification === "ordinary")
+      throw new TypeError("Only Performance Pad events can be prepared");
+    if (padOnly) {
+      flatSlotAddress(event.slot);
+      if (event.kind === "pad_press" && (!Number.isInteger(event.velocity) ||
+          event.velocity < 1 || event.velocity > 127))
+        throw new TypeError("Performance Pad velocity is invalid");
+    }
+    if (padOnly && event.kind === "pad_release" && physicalKey !== undefined &&
+        !liveLaneOwners(gestureKey, {sessionId, slot: event.slot}).some(owner =>
+          owner.sharedClaim?.owner.gestureKey === physicalKey))
+      throw typedError("HOST_STATE_INVALID", "Performance Pad Release has a different physical owner", {pending: false});
     if (event.kind === "pad_release" && physicalKey !== undefined &&
         liveLaneOwners(gestureKey, {sessionId, slot: event.slot}).some(owner =>
           owner.sharedClaim?.owner.gestureKey === physicalKey)) endPhysicalGesture(physicalKey);
-    return submitLiveInput(async entry => {
+    const releaseStartedAt = classification === "pad_release" && physicalKey !== undefined
+      ? physicalGestureOwners.get(physicalKey)?.releaseStartedAt : undefined;
+    return reserveLiveInput(async entry => {
+      if (headered && headeredRecording !== recording)
+        throw typedError("HOST_STATE_INVALID", "Performance recording owner changed before input submission", {pending: false});
       const value = await boundedRequest("performance.record.event", {
         session_id: sessionId,
         event_id: eventId,
         event,
         ...(headered
           ? {
-              control_epoch: headeredRecording.controlEpoch,
+              control_epoch: recording.controlEpoch,
               expected_recording_sequence:
-                headeredRecording.nextRecordingSequence,
+                recording.nextRecordingSequence,
             }
           : {}),
       }, {originalStartedAt: entry.startedAt, beforeDispatch() {
+        if (headered && headeredRecording !== recording)
+          throw typedError("HOST_STATE_INVALID", "Performance recording owner changed before input submission", {pending: false});
         entry.submitted = true;
         submitSharedGesture(entry.sharedClaim);
       }});
@@ -6292,7 +6370,7 @@ function createRuntimeSessionController(options = {}) {
         // reuses the retained receipt.
         if (value.replayed === false &&
             typeof value.next_recording_sequence === "string") {
-          headeredRecording.nextRecordingSequence =
+          recording.nextRecordingSequence =
             value.next_recording_sequence;
         }
         if (value.replayed === false) {
@@ -6323,7 +6401,23 @@ function createRuntimeSessionController(options = {}) {
         replayed: value.replayed,
         projectRevision: value.project_revision,
       });
-    }, classification, gestureKey, {sessionId, eventId, slot: event.slot, physicalKey});
+    }, classification, gestureKey, {sessionId, eventId, slot: event.slot, physicalKey, releaseStartedAt}, padOnly);
+  }
+
+  function preparePerformancePadEvent(request, physicalKey) {
+    const entry = reservePerformanceEvent(request, physicalKey, true);
+    return Object.freeze({
+      submit() { return submitReservedLiveInput(entry); },
+      cancelBeforeSubmit() {
+        return cancelPreparedLiveInput(entry, typedError("HOST_STATE_INVALID",
+          "Performance Pad input was cancelled before submission", {pending: false}));
+      },
+    });
+  }
+
+  function recordPerformanceEvent(request, physicalKey) {
+    try { return submitReservedLiveInput(reservePerformanceEvent(request, physicalKey)); }
+    catch (error) { return Promise.reject(error); }
   }
 
   function wireFxGesture(event) {
@@ -6619,6 +6713,7 @@ function createRuntimeSessionController(options = {}) {
     }
     const sessionId = performanceIdentity(request.sessionId, "sessionId");
     const requestId = performanceIdentity(request.requestId, "requestId");
+    cancelPreparedLiveInputs(sessionId);
     // The cleanup token: never-Core-received waiting inputs are rejected
     // explicitly; admitted work finishes first.
     return submitLiveInput(async entry => {
@@ -7414,6 +7509,7 @@ function createRuntimeSessionController(options = {}) {
       return false;
     }
     closing = true;
+    cancelPreparedLiveInputs();
     invalidateProbe();
     const reservation = {invokingTerminator: false, expectedTerminationError: null, failure: null};
     normalCloseReservation = reservation;
@@ -8306,6 +8402,7 @@ function createRuntimeSessionController(options = {}) {
     inspectPerformance,
     beginPerformanceRecording,
     recordPerformanceEvent,
+    preparePerformancePadEvent,
     reserveInputGesture,
     applyFxGesture,
     applyPerformanceLiveControl,
