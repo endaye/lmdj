@@ -7,6 +7,7 @@ import {
 } from "./fixtures/creator_navigation.mjs";
 import {wakeAudioWithPad} from "./fixtures/creator_audio.mjs";
 import {createHash, randomUUID} from "node:crypto";
+import {writeFileSync} from "node:fs";
 import {expect, test} from "@playwright/test";
 import {openProjectPageAfterBoot, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
 
@@ -187,7 +188,72 @@ async function reopen(page) {
   await expect(page.getByRole("heading", {name: "Project 00000000"})).toBeVisible();
 }
 
-test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens saved lineage and Pattern truth", async ({page}) => {
+async function assertSliceLayout(page, testInfo, state, candidateCount, targetCount) {
+  const hits = [];
+  const surface = page.getByRole("region", {name: "Slice", exact: true});
+  await expect(surface.locator(".candidate-job")).toHaveAttribute("aria-busy", "false");
+  await expect(surface.locator(".candidate-result-count")).toHaveText(`${candidateCount} CANDIDATES`);
+  await expect(surface.locator(".candidate-recipes > li")).toHaveCount(candidateCount);
+  await expect(surface.locator(".candidate-target")).toHaveCount(targetCount);
+  for (const viewport of [{width:1440,height:900}, {width:1280,height:600}, {width:768,height:600}]) {
+    await page.setViewportSize(viewport);
+    const touch = page.getByTestId("touch-workspace");
+    const geometry = await touch.evaluate(root => {
+      const bounds = root.getBoundingClientRect();
+      const visible = [...root.querySelectorAll(".candidate-surface *")]
+        .filter(el => el.getClientRects().length && !el.classList.contains("visually-hidden"));
+      const rows = [".candidate-header", ".candidate-settings", ".candidate-source", ".candidate-permissions"]
+        .map(selector => root.querySelector(selector).getBoundingClientRect());
+      return {width:root.clientWidth, scrollWidth:root.scrollWidth,
+        setupGaps:rows.slice(1).map((rect,index) => rect.top-rows[index].bottom),
+        outside:visible.filter(el => {const rect = el.getBoundingClientRect();
+          return rect.left < bounds.left-1 || rect.right > bounds.right+1;
+        }).map(el => el.className || el.tagName),
+        nested:visible.filter(el => /auto|scroll/.test(getComputedStyle(el).overflowY) &&
+          el.scrollHeight > el.clientHeight+1).map(el => el.className || el.tagName)};
+    });
+    expect(geometry.scrollWidth, `${state}: outer horizontal fit`).toBe(geometry.width);
+    expect(geometry.outside, `${state}: descendant bounds`).toEqual([]);
+    expect(geometry.nested, `${state}: only the outer vertical scroller`).toEqual([]);
+    expect(geometry.setupGaps.every(gap => gap > 0), `${state}: header, Provider, Source and permission rows have space`).toBe(true);
+    const cards = await surface.locator(".candidate-recipes > li, .candidate-target")
+      .evaluateAll(elements => elements.map(el => {
+        const rect = el.getBoundingClientRect();
+        return {top:rect.top,bottom:rect.bottom};
+      }));
+    for (let index = 1; index < cards.length; index += 1) {
+      expect(cards[index-1].bottom, `${state}: cards do not overlap`).toBeLessThanOrEqual(cards[index].top);
+    }
+    // Inspect rendered CSS pixels and five hit points without firing analysis,
+    // preview or authoring actions. U01 owns the final >=44 CSS px gate.
+    const controls = surface.locator("button:not(:disabled), select:not(:disabled), .candidate-classification:has(input:not(:disabled))");
+    for (let index = 0; index < await controls.count(); index += 1) {
+      const control = controls.nth(index);
+      await control.evaluate(el => el.scrollIntoView({block:"center",inline:"nearest"}));
+      const hit = await control.evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        const points = [[rect.left+rect.width/2,rect.top+rect.height/2],
+          [rect.left+1,rect.top+rect.height/2], [rect.right-1,rect.top+rect.height/2],
+          [rect.left+rect.width/2,rect.top+1], [rect.left+rect.width/2,rect.bottom-1]];
+        return {name:el.getAttribute("aria-label") ?? el.textContent.trim(),
+          width:rect.width,height:rect.height,
+          hits:points.map(([x,y]) => el.contains(document.elementFromPoint(x,y)))};
+      });
+      expect(hit.hits, `${state} ${viewport.width}×${viewport.height}: ${hit.name} centre/edges`)
+        .toEqual(Array(5).fill(true));
+      hits.push({viewport,...hit});
+    }
+    await page.screenshot({path:testInfo.outputPath(`slice-${state}-footer-${viewport.width}x${viewport.height}.png`)});
+    await touch.evaluate(el => {el.scrollTop=0;});
+    await page.screenshot({path:testInfo.outputPath(`slice-${state}-${viewport.width}x${viewport.height}.png`)});
+  }
+  const path = testInfo.outputPath(`slice-${state}-rendered-hits.json`);
+  writeFileSync(path, JSON.stringify(hits,null,2));
+  await testInfo.attach(`slice-${state}-rendered-hits`, {path,contentType:"application/json"});
+  await page.setViewportSize({width:1440,height:900});
+}
+
+test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens saved lineage and Pattern truth", async ({page}, testInfo) => {
   const {baseline, bytes, set, job} = await start(page);
   expect(set.recipes.map(recipe => [recipe.start_frame, recipe.end_frame])).toEqual([[0, 4800], [4800, 24000], [24000, 48000]]);
   const projectId = baseline.project.project_id;
@@ -206,6 +272,38 @@ test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens
   expect(success((await last(page, "candidate.audition.stop")).response).accepted).toBe(true);
   expect(await truth(page)).toEqual(baseline);
   expect(await files(page, projectId)).toEqual(savedBefore);
+
+  // The footer delegates real navigation and teardown. Read both sides through
+  // project.inspect and OPFS; no cached UI projection can satisfy this leg.
+  const beforeBack = await truth(page);
+  const filesBeforeBack = await files(page, projectId);
+  const adoptsBeforeBack = (await evidence(page, "candidate.adopt")).length;
+  const analysesBeforeBack = (await evidence(page, "candidate.job.run")).length;
+  const previewsBeforeBack = (await evidence(page, "candidate.audition")).length;
+  await page.getByRole("button", {name:"Preview slice 2",exact:true}).click();
+  await expect.poll(async () => (await evidence(page, "candidate.audition")).length).toBe(previewsBeforeBack+1);
+  const repeatedPreview = success((await last(page, "candidate.audition")).response);
+  // A running Host can honestly refuse a repeated preview while its two
+  // audition slots drain. Reflect this real outcome; the original first
+  // not-played and wake/played assertions above remain exact and unchanged.
+  expect(typeof repeatedPreview.played).toBe("boolean");
+  await expect(page.getByText(repeatedPreview.played ? "Preview started." :
+    "Preview was not played. Tap a Pad to wake audio and try again.")).toBeVisible();
+  const stopsBeforeBack = (await evidence(page, "candidate.audition.stop")).length;
+  await page.getByRole("button", {name:"Back to Sample",exact:true}).click();
+  await expect(page.getByRole("button", {name:"Sample",exact:true})).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("region", {name:"Slice",exact:true})).toHaveCount(0);
+  await expect.poll(async () => (await evidence(page, "candidate.audition.stop")).length).toBeGreaterThan(stopsBeforeBack);
+  expect(success((await last(page, "candidate.audition.stop")).response).accepted).toBe(true);
+  expect(await truth(page)).toEqual(beforeBack);
+  expect(await files(page, projectId)).toEqual(filesBeforeBack);
+  expect(await evidence(page, "candidate.adopt")).toHaveLength(adoptsBeforeBack);
+  expect(await evidence(page, "candidate.job.run")).toHaveLength(analysesBeforeBack);
+  await openCreatorSlice(page);
+  await page.getByRole("combobox", {name:"Slice source"}).selectOption(sourceId);
+  await expect(page.getByRole("button", {name:"Preview slice 2",exact:true})).toBeEnabled();
+  expect(success((await last(page, "candidate.job.inspect")).response).active_set_id).toBe(job.active_set_id);
+  expect(await evidence(page, "candidate.job.run")).toHaveLength(analysesBeforeBack);
 
   // Mode teardown sends stop; a real reload starts with suspended audio and
   // finds the durable Job again without re-analysis or hidden UI persistence.
@@ -230,6 +328,8 @@ test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens
   expect(await evidence(page, "candidate.adopt")).toHaveLength(0);
   await page.getByRole("combobox", {name: "Target 2 Pad"}).selectOption({value: "1"});
   await expect(page.getByRole("combobox", {name: "Target 2 Pad"})).toHaveValue("1");
+  await expect(page.getByRole("button", {name: "Adopt selected slices"})).toBeEnabled();
+  await assertSliceLayout(page, testInfo, "candidates-and-targets", 3, 2);
   await page.getByRole("button", {name: "Adopt selected slices"}).click();
   await expect(page.getByText(/Adopted 2 slices\./)).toBeVisible();
   expect(await evidence(page, "candidate.adopt")).toHaveLength(1);
@@ -268,11 +368,36 @@ test("Creator Slice UI previews, explicitly adopts repeated recipes, and reopens
   expect(await files(page, projectId)).toEqual(saved);
 });
 
-test("Creator Slice UI shows successful zero-onset without a whole-source fallback", async ({page}) => {
+test("Creator Slice Back accepts preview stop after a first played audition without adopting", async ({page}) => {
+  const {baseline} = await start(page);
+  const projectId = baseline.project.project_id;
+  const savedBefore = await files(page, projectId);
+  const analysesBeforeBack = (await evidence(page, "candidate.job.run")).length;
+  expect(await evidence(page, "candidate.adopt")).toHaveLength(0);
+  await wakeAudioWithPad(page);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  // This fresh session has no earlier audition to occupy the two-slot pool.
+  await page.getByRole("button", {name:"Preview slice 2",exact:true}).click();
+  await expect(page.getByText("Preview started.")).toBeVisible();
+  expect(success((await last(page, "candidate.audition")).response).played).toBe(true);
+  const stopsBeforeBack = (await evidence(page, "candidate.audition.stop")).length;
+  await page.getByRole("button", {name:"Back to Sample",exact:true}).click();
+  await expect(page.getByRole("button", {name:"Sample",exact:true})).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("region", {name:"Slice",exact:true})).toHaveCount(0);
+  await expect.poll(async () => (await evidence(page, "candidate.audition.stop")).length).toBeGreaterThan(stopsBeforeBack);
+  expect(success((await last(page, "candidate.audition.stop")).response).accepted).toBe(true);
+  expect(await truth(page)).toEqual(baseline);
+  expect(await files(page, projectId)).toEqual(savedBefore);
+  expect(await evidence(page, "candidate.adopt")).toHaveLength(0);
+  expect(await evidence(page, "candidate.job.run")).toHaveLength(analysesBeforeBack);
+});
+
+test("Creator Slice UI shows successful zero-onset without a whole-source fallback", async ({page}, testInfo) => {
   const {baseline, set} = await start(page, true);
   expect(set.recipes).toEqual([]);
   await expect(page.getByText("Analysis complete. No slices detected.")).toBeVisible();
   await expect(page.getByRole("button", {name: "Add target"})).toHaveCount(0);
+  await assertSliceLayout(page, testInfo, "empty-result", 0, 0);
   expect(await truth(page)).toEqual(baseline);
   await reopen(page);
   expect(await truth(page)).toEqual(baseline);
