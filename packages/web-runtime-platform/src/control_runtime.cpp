@@ -3015,7 +3015,8 @@ struct ControlRuntime::Impl {
   SnapshotResult prepare_and_publish(
       std::string_view selected_pattern,
       bool preserve_saved_truth = false, bool force_pattern = false,
-      bool immediate_pattern = false) {
+      bool immediate_pattern = false,
+      bool wait_for_control_drain = false) {
     const auto reclaimed = engine.reclaim_retired_bank_telemetry();
     if (reclaimed.decoded_pcm_bytes > reserved_live_bytes) {
       throw std::logic_error("runtime Bank reservation underflow");
@@ -3161,7 +3162,39 @@ struct ControlRuntime::Impl {
       }
       static_cast<void>(engine.reclaim_retired_patterns());
     }
-    const auto publication = engine.publish_sample_bank(std::move(bank.value()));
+    auto publication = engine.publish_sample_bank(std::move(bank.value()));
+    // This refusal precedes consuming the Bank or reserving its generation.
+    // ASSIGN opts in to waiting for its stop/preview controls to drain; other
+    // callers keep their original single publication attempt. Retain this one
+    // prepared Bank rather than recooking or resending Truth.
+    while (wait_for_control_drain &&
+           publication == audio::PublishResult::events_pending) {
+      if (request_cancelled()) {
+        if (!preserve_saved_truth) {
+          static_cast<void>(cancel_if_expired());
+        }
+        auto error = timeout_error();
+        return SnapshotResult{false, false, std::nullopt, error.at("error")};
+      }
+      // Bound repeated control observation while no callback drains the queue.
+      auto retry_delay = std::chrono::steady_clock::duration{
+          std::chrono::milliseconds(1)};
+      if (request_deadline.has_value()) {
+        retry_delay = std::min(
+            retry_delay,
+            std::max(std::chrono::steady_clock::duration::zero(),
+                     *request_deadline - clock_now()));
+      }
+      std::this_thread::sleep_for(retry_delay);
+      if (request_cancelled()) {
+        if (!preserve_saved_truth) {
+          static_cast<void>(cancel_if_expired());
+        }
+        auto error = timeout_error();
+        return SnapshotResult{false, false, std::nullopt, error.at("error")};
+      }
+      publication = engine.publish_sample_bank(std::move(bank.value()));
+    }
     if (publication != audio::PublishResult::accepted) {
       auto error = state_error("runtime Bank publication is unavailable");
       return SnapshotResult{false, false, std::nullopt, error.at("error")};
@@ -3222,7 +3255,8 @@ struct ControlRuntime::Impl {
 
   Json sample_mutation_result(
       const facade::SampleMutationResult& mutation,
-      domain::PadSlotId slot) {
+      domain::PadSlotId slot,
+      bool wait_for_control_drain = false) {
     const auto inspected = application.inspect_sample(
         facade::SampleInspectRequest{*retained_project_path, slot});
     if (inspected.has_value()) {
@@ -3241,7 +3275,8 @@ struct ControlRuntime::Impl {
           state = State::failed;
         }
       } else {
-        snapshot = prepare_and_publish(*pattern_id, true);
+        snapshot = prepare_and_publish(
+            *pattern_id, true, false, false, wait_for_control_drain);
         if (!snapshot.published && state == State::running &&
             snapshot.error.is_object() &&
             snapshot.error.value("code", std::string{}) == "HOST_TIMEOUT") {
@@ -5084,7 +5119,7 @@ Json ControlRuntime::dispatch(
       }
       uuid_field(payload, "command_id");
       unsigned_field(payload, "expected_revision");
-      slot_value(payload.at("slot"));
+      const auto selected_slot = slot_value(payload.at("slot"));
       if (!payload.at("asset_id").is_null()) {
         uuid_field(payload, "asset_id");
       }
@@ -5096,14 +5131,35 @@ Json ControlRuntime::dispatch(
         return timeout_error();
       }
       auto response = impl_->facade_command(std::move(request));
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
+      if (!response.value("ok", false)) {
+        return impl_->cancel_if_expired() ? timeout_error() : response;
       }
-      if (response.value("ok", false)) {
-        impl_->project_revision =
-            response.at("result").at("project_revision")
-                .get<std::uint64_t>();
+      auto& result = response.at("result");
+      impl_->project_revision =
+          result.at("project_revision").get<std::uint64_t>();
+      // Admission and the durable identity precede stopping the destination:
+      // a stale, missing-Asset or owner refusal must leave live sound alone.
+      if (!impl_->request_cancelled()) {
+        if (const auto control =
+                impl_->prepare_sample_mutation_controls(selected_slot, true);
+            control.has_value()) {
+          result["runtime_revision"] =
+              impl_->runtime_revision.has_value()
+                  ? Json(*impl_->runtime_revision) : Json(nullptr);
+          result["runtime_published"] = false;
+          result["snapshot_error"] = control->at("error");
+          return response;
+        }
       }
+      // A known commit is never converted to a generic cancellation. Publish
+      // current Truth, including an identity replay after a later authoring
+      // command, and preserve the existing Sample deadline/ACK outcome.
+      const auto publication = impl_->sample_mutation_result(
+          facade::SampleMutationResult{
+              result.at("committed_revision").get<std::uint64_t>(), true},
+          selected_slot, true);
+      result.update(publication.at("result"));
+      result["project_revision"] = *impl_->project_revision;
       return response;
     }
     if (operation == "snapshot.reload") {
