@@ -1587,7 +1587,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   );
   // The Pad recording source is a System setting (brand mark entry).
   await page.getByRole("button", {name: "System", exact: true}).click();
-  await page.getByRole("combobox", {name: "Pad recording source"}).selectOption("master");
+  await page.getByRole("group", {name: "Pad recording source"}).getByRole("button", {name: "Internal playback", exact: true}).click();
   await page.getByRole("button", {name: "Back to music", exact: true}).click();
   await page.getByRole("button", {name: "Stop Replay"}).click();
   await expect(replayStatus).toContainText("stopped", {timeout: 30_000});

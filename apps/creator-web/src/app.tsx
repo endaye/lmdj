@@ -1,5 +1,5 @@
 import {DefaultSoundsStatus} from "./components/default_sounds_status";
-import {SystemSurface, ProviderSettings} from "./components/system_surface";
+import {SystemSurface, SystemStatus, PadRecordingSource, ProviderSettings} from "./components/system_surface";
 import {CREATOR_DEFAULT_SOUND_SET} from "../../../products/lmdj/creator-defaults.mjs";
 import {claimDefaultSeed, readDefaultSeed, type DefaultSeed} from "./state/default_seed";
 import {createDefaultSeedController} from "./runtime/default_seed_controller";
@@ -3139,12 +3139,14 @@ function Workspace({
                     Back to Sample
                   </button>}
               </nav>}
-              {systemOpen && <SystemSurface onBack={() => {
+              <SystemSurface active={systemOpen} onBack={() => {
                 setSystemOpen(false);
                 // The entry stays mounted. Restore focus in this gesture so
                 // a later frame cannot blur the user's next parameter edit.
                 systemEntry.current?.focus();
               }}>
+              {systemOpen && <>
+              <SystemStatus audio={state.audio.phase} midi={midi} />
               <section className="touch-system" aria-label="Audio and MIDI settings">
                 <button
                   type="button"
@@ -3164,38 +3166,28 @@ function Workspace({
                 >
                   Enable MIDI
                 </button>
-                <button
-                  type="button"
+              </section>
+              {padCaptureState !== null && <PadRecordingSource
+                source={padCaptureState.source} disabled={padCaptureState.phase !== "idle"}
+                onChange={source => {
+                  padCapture.current?.setSource(source);
+                  try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
+                }} />}
+              </>}
+              <CreatorDetails state={state} midi={midi}
+                {...(buildIdentity ? {buildIdentity} : {})} />
+              {systemOpen && <>
+                <button type="button"
                   disabled={state.runtime.phase !== "ready" ||
                     runtimeActions.onExportReport === undefined}
-                  onClick={runtimeActions.onExportReport}
-                >
-                  Export report
-                </button>
-              </section>
-              {padCaptureState !== null && (
-                <section className="touch-system" aria-label="Pad recording settings">
-                  <label>Pad recording source
-                    <select aria-label="Pad recording source" value={padCaptureState.source}
-                      disabled={padCaptureState.phase !== "idle"}
-                      onChange={event => {
-                        const source = event.currentTarget.value as PadCaptureSource;
-                        padCapture.current?.setSource(source);
-                        try {localStorage.setItem("lmdj.creator.pad-capture-source.v1", source);} catch {}
-                      }}>
-                      <option value="microphone">Microphone</option>
-                      <option value="master">Internal playback</option>
-                    </select>
-                  </label>
-                </section>
-              )}
-                {isCandidateSession(session) && <ProviderSettings session={session} />}
+                  onClick={runtimeActions.onExportReport}>Export report</button>
+                {isCandidateSession(session) && <details className="system-providers">
+                  <summary>Provider settings</summary>
+                  <ProviderSettings session={session} />
+                </details>}
                 <DiagnosticsLog records={diagnostics} />
-              </SystemSurface>}
-              <div hidden={!systemOpen}>
-                <CreatorDetails state={state} midi={midi}
-                  {...(buildIdentity ? {buildIdentity} : {})} />
-              </div>
+              </>}
+              </SystemSurface>
               <div hidden={systemOpen}>
               {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
