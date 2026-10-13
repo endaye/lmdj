@@ -590,7 +590,7 @@ export function CapturePanel({
         return (
           <>
             <p className="capture-recording-target">Recording into {padLabel}</p>
-            <output className="capture-recorded-time" aria-label={`${padLabel} recorded time`}>
+            <output className="capture-recorded-time" aria-label={`${padLabel} recorded time`} aria-live="off">
               {recordedTimeLabel(state.frameCount)}
             </output>
             <meter

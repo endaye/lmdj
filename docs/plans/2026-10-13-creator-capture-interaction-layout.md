@@ -459,5 +459,34 @@ The source nine and all delivered files stayed unchanged during the run. The
 hash-checked unchanged. The server stopped only after browser completion.
 All 58 observed owned process IDs were absent at 09:40:22 UTC, when the heavy
 window was explicitly released. No second heavy run or new Portal pass is
-claimed. The following final plan-only amendment records these actual results;
-its executable, test and Portal inputs remain identical to the verified checkpoint.
+claimed. The plan-only amendment `bb5177e2` recorded these actual results;
+its executable, test and Portal inputs remained identical to the verified checkpoint.
+
+## Published-head review: recorded-time announcement
+
+Review of published `bb5177e2af3a034dd9d099a9358403467a368294` identified one P3:
+the new recorded-time `<output>` has an implicit status role with polite/atomic
+live-region semantics, while its frame-derived display can update at the
+nominal ten frame-batch notifications per second. Actual assistive-technology
+speech was not measured. The independent source review confirmed the semantic
+cause; it did not claim an observed screen-reader failure.
+
+Root admitted an explicit `aria-live="off"` on that existing output, preserving
+its element, accessible label, frame-derived text and update behavior. Only
+`capture_panel.tsx` and this plan change. The published commit stays immutable;
+this review correction is a new atomic commit, not an amendment or force push.
+No implementation-mirroring test or artificial RED was added. The admitted
+checks are the existing complete Capture/Modal suites, locked TypeScript and
+whitespace. The complete two suites passed all **63 tests** at 10:00:21–25 UTC,
+exit 0. The pre-existing jsdom stylesheet warning also appears in the retained
+07:48 component log; no CSS changed here. Locked `tsc --noEmit` passed at
+10:00:35–36 UTC, exit 0. Both commands ended with no remaining observed child.
+Raw receipts are retained under `build/verification/u12b/aria-live-review-fix/`.
+The exact two files are staged and whitespace-checked before the new commit.
+
+The real browser evidence remains bound to `8225079d`: full nine passes/nine
+existing project skips, 125 retained artifacts and six-viewport geometry. The
+current source adds this explicit aria-only delta plus plan records; it no
+longer claims that all eight non-plan files equal that browser checkpoint.
+Both Portal pages retain the original whole179/50 evidence. No new browser,
+Portal or physical assistive-technology acceptance is claimed for this change.
