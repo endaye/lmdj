@@ -884,30 +884,38 @@ class ChangeScopeTest(unittest.TestCase):
             "tests/quality/ routed to ci_contract in scripts/ci/scope_policy.json.\n"
             + "\n".join(self.quality_test_gaps(suites)),
         )
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        gaps = self.quality_workflow_gaps(self.quality_test_invocations(suites), workflow)
+        workflows = {name: (ROOT / name).read_text(encoding="utf-8") for name in self.QUALITY_WORKFLOWS}
+        self.assertTrue(all(re.search(r"(?m)^  ci-contract:\n", text) for text in workflows.values()),
+                        "both workflows must still define the ci-contract job this gate reads")
+        gaps = self.quality_workflow_gaps(self.quality_test_invocations(suites), workflows)
         self.assertEqual(
             gaps, [],
             "a lane command that runs a tests/quality suite is not run by that lane's CI job.\n"
             "why: scripts/ci/local_lanes.json describes the lane; only the workflow "
             "job executes it in CI.\n"
-            "remedy: run the same command in that lane's job in .github/workflows/ci.yml.\n"
+            "remedy: run the same command in that lane's job in the named workflow.\n"
             + "\n".join(gaps),
         )
 
-    def quality_workflow_gaps(self, invocations, workflow):
+    # The Pull Request runs pr-contract.yml and main batches run ci.yml; each
+    # workflow that defines one of the lane's jobs must run the command.
+    QUALITY_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/pr-contract.yml")
+
+    def quality_workflow_gaps(self, invocations, workflows):
         gaps = []
         for path, runners in sorted(invocations.items()):
             for lane, command in sorted(runners.items()):
                 jobs = self.policy["lane_jobs"][lane]
-                blocks = [re.search(rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow)
-                          for job in jobs]
-                # Directives only: a comment naming the command is not a step running it.
-                directives = ["\n".join(line for line in block.group(1).splitlines()
-                                        if not line.lstrip().startswith("#"))
-                              for block in blocks if block]
-                if not any(command in text for text in directives):
-                    gaps.append(f"{path}: lane {lane} runs `{command}`, which none of its jobs {jobs} runs")
+                for name, workflow in sorted(workflows.items()):
+                    blocks = [re.search(rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow)
+                              for job in jobs]
+                    # Directives only: a comment naming the command is not a step running it.
+                    directives = ["\n".join(line for line in block.group(1).splitlines()
+                                            if not line.lstrip().startswith("#"))
+                                  for block in blocks if block]
+                    if directives and not any(command in text for text in directives):
+                        gaps.append(f"{path}: lane {lane} runs `{command}`, which none of its "
+                                    f"jobs {jobs} in {name} runs")
         return gaps
 
     def test_quality_test_gate_has_red_cases(self):
@@ -924,22 +932,16 @@ class ChangeScopeTest(unittest.TestCase):
         )
         command = "python3 -m unittest discover -s tests/quality -p '*_test.py'"
         invocations = {"tests/quality/coverage_gate_test.py": {"ci_contract": command}}
-        self.assertEqual(
-            self.quality_workflow_gaps(
-                invocations, f"jobs:\n  ci-contract:\n    steps:\n      - run: {command}\n"), [])
-        self.assertEqual(
-            self.quality_workflow_gaps(
-                invocations,
-                f"jobs:\n  ci-contract:\n    steps: []\n  core-coverage:\n      - run: {command}\n"),
-            ["tests/quality/coverage_gate_test.py: lane ci_contract runs "
-             f"`{command}`, which none of its jobs ['ci-contract'] runs"],
-        )
-        self.assertEqual(
-            self.quality_workflow_gaps(
-                invocations, f"jobs:\n  ci-contract:\n    steps:\n      # {command}\n"),
-            ["tests/quality/coverage_gate_test.py: lane ci_contract runs "
-             f"`{command}`, which none of its jobs ['ci-contract'] runs"],
-        )
+        runs = f"jobs:\n  ci-contract:\n    steps:\n      - run: {command}\n"
+        lacks = f"jobs:\n  ci-contract:\n    steps: []\n  core-coverage:\n      - run: {command}\n"
+        commented = f"jobs:\n  ci-contract:\n    steps:\n      # {command}\n"
+        gap = ("tests/quality/coverage_gate_test.py: lane ci_contract runs "
+               f"`{command}`, which none of its jobs ['ci-contract'] in pr.yml runs")
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": runs}), [])
+        # A workflow that does not define the lane's job owes nothing.
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": "jobs: {}\n"}), [])
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": lacks}), [gap])
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": commented}), [gap])
         original = self.lanes_for_path
         self.lanes_for_path = lambda path: original(path) - {"ci_contract"}
         try:

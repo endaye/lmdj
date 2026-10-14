@@ -170,13 +170,15 @@ whose runner invokes the coverage tools but none of their four suites
 (`core_coverage_runner_test.py`, `coverage_gate_test.py`,
 `coverage_union_test.py`, `test_budget_report_test.py`). They are pure Python
 and take about three seconds, so the `ci-contract` job runs
-`python3 -m unittest discover -s tests/quality -p '*_test.py'` at Pull Request
-time; `scripts/ci/local_lanes.json` lists the same command and
+`python3 -m unittest discover -s tests/quality -p '*_test.py'` in both
+`pr-contract.yml` (Pull Request time) and `ci.yml` (main batches);
+`scripts/ci/local_lanes.json` lists the same command and
 `scripts/ci/scope_policy.json` routes `tests/quality/` and
 `scripts/core-coverage.sh` to `ci_contract` as well.
 `test_every_quality_test_is_run_by_a_lane_that_owns_it` in
 `tests/build/ci_change_scope_test.py` requires every `tests/quality` suite to
-be run by a lane command, in that lane's CI job, on a lane its route selects.
+be run by a lane command, in that lane's job in each workflow defining it, on
+a lane its route selects.
 
 Delivered: F11 by the Pull Request on `fix/quality-tests-ownership`.
 
