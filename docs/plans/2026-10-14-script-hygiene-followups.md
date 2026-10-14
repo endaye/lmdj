@@ -209,7 +209,7 @@ and take about three seconds, so the `ci-contract` job runs
 be run by a lane command, in that lane's job in each workflow defining it, on
 a lane its route selects.
 
-Delivered: F11 by the Pull Request on `fix/quality-tests-ownership`.
+Delivered: F11 by #2221 (`3545b745c`).
 
 ## Order
 
