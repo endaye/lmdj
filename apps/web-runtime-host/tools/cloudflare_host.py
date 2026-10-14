@@ -52,15 +52,33 @@ def write_diagnostic(path, *outputs):
         secret = os.environ.get(name)
         if secret:
             diagnostic = diagnostic.replace(secret, '[REDACTED]')
-    path.write_text(diagnostic[-1024 * 1024:])
+    diagnostic = diagnostic[-1024 * 1024:]
+    path.write_text(diagnostic)
+    return diagnostic
 
 
-def stage(tag, host, workspace):
+# Staging fetches, signature-verifies and extracts one signed release. The
+# workflows' standalone `verify` of the same release took 2-11 s in the 39
+# deploy runs before 2026-10-14 and is bounded at 300 s; the whole deploy step,
+# which stages in both its candidate and promote calls, took at most 134 s when
+# it succeeded. Staging gets the same 300 s, well inside the step's 1080 s
+# budget, so a hung fetch fails here with its output retained instead of at
+# the step deadline with nothing.
+STAGE_TIMEOUT = 300
+
+
+def stage(tag, host, workspace, *, timeout=STAGE_TIMEOUT):
     out = workspace / host
-    result = subprocess.run(['bash', str(ROOT/'scripts'/SCRIPTS[host]), 'stage', tag, str(out)],
-                            cwd=ROOT, env=child_environment(github=True),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     log = workspace/'stage-verification.log'
+    try:
+        result = run_process_group(['bash', str(ROOT/'scripts'/SCRIPTS[host]), 'stage', tag, str(out)],
+                                   cwd=ROOT, env=child_environment(github=True), timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        # Only the adapter's stderr reaches the uploaded diagnostics; the
+        # workspace log does not, so the redacted output is printed as well.
+        print(write_diagnostic(log, error.stdout, error.stderr), file=sys.stderr)
+        raise CommandError(f'signed release staging exceeded {timeout}s and its process group '
+                           'was stopped; inspect ' + str(log)) from None
     write_diagnostic(log, result.stdout, result.stderr)
     if result.returncode:
         raise CommandError('fresh signed release staging failed; inspect ' + str(log))
@@ -88,9 +106,10 @@ def upload_receipt(path, worker, *, initialize=False):
     return value
 
 
-def run_upload_process(command, *, cwd, env, timeout=180):
-    # Wrangler's launcher spawns the uploader. Killing only the launcher lets
-    # that child mutate the target after the journal lock has been released.
+def run_process_group(command, *, cwd, env, timeout):
+    # Wrangler's launcher spawns the uploader, and the staging script spawns
+    # git, gh and gpg. Killing only the launcher lets such a child keep
+    # mutating the target or the workspace after the journal lock is released.
     process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
@@ -143,8 +162,8 @@ def upload(args, dist, workspace, worker):
     env['WRANGLER_OUTPUT_FILE_PATH'] = str(output)
     try:
         command = ['deploy'] if args.initialize else ['versions', 'upload']
-        result = run_upload_process([str(node), str(wrangler), *command, '--config', str(config)],
-                                    cwd=workspace, env=env)
+        result = run_process_group([str(node), str(wrangler), *command, '--config', str(config)],
+                                   cwd=workspace, env=env, timeout=180)
     except subprocess.TimeoutExpired as error:
         write_diagnostic(workspace/'wrangler.log', error.stdout, error.stderr)
         raise CommandError('upload outcome unknown; inspect retained wrangler.log') from None
