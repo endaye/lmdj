@@ -151,6 +151,7 @@ if(EMSCRIPTEN)
     _lmdj_web_host_authorize_terminal_release
     _lmdj_web_host_complete_terminal_release
     _lmdj_web_host_consume_terminal_release
+    _lmdj_web_host_terminal_release_completed
     _lmdj_web_host_failed
     _lmdj_web_host_initialize_manifest
     _lmdj_web_audio_start

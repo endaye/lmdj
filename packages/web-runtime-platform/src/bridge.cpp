@@ -2759,6 +2759,18 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_complete_terminal_release(
              : 0;
 }
 
+// Read-only: whether the terminal release has completed and awaits its one
+// consume. Polling asks this first so it never spends a rejected consume.
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_terminal_release_completed() {
+  if (!emscripten_is_main_browser_thread()) return 0;
+  const auto state =
+      web_terminal_release_state.load(std::memory_order_acquire);
+  return state == TerminalReleaseState::completed_not_released ||
+                 state == TerminalReleaseState::completed_released
+             ? 1
+             : 0;
+}
+
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_consume_terminal_release(
     const char* token,
     std::size_t token_size) {

@@ -487,7 +487,8 @@ test("actual Host publisher preserves standalone behavior without an invocation 
 // Actual pre-JS transport, controlled monotonic time, modeled Bridge replies.
 // This observes local Error provenance; it supplies no Native retirement ACK.
 function deadlineTransportFixture({cancel = () => 1, queryCancel = () => 1,
-  onSubmit = () => {}, diagnosticConsole} = {}) {
+  onSubmit = () => {}, diagnosticConsole, terminalCompleted = () => 0,
+  consumeTerminal = () => 0} = {}) {
   let now = 100;
   let timerId = 0;
   let pointer = 8;
@@ -516,10 +517,11 @@ function deadlineTransportFixture({cancel = () => 1, queryCancel = () => 1,
     }
     if (name === "lmdj_web_host_cancel_request" || name === "lmdj_web_host_cancel_query") {
       cancellations.push({name, requestId: args[0]});
-      return name === "lmdj_web_host_cancel_query" ? queryCancel() : cancel();
+      return name === "lmdj_web_host_cancel_query" ? queryCancel() : cancel(args[0]);
     }
+    if (name === "lmdj_web_host_terminal_release_completed") return terminalCompleted();
     assert.equal(name, "lmdj_web_host_consume_terminal_release");
-    return 0;
+    return consumeTerminal();
   }};
   actualBrowserRuntimePublication({Module, window,
     crypto: {randomUUID: () => "00000000-0000-4000-8000-000000000099"},
@@ -588,6 +590,77 @@ test("actual transport keeps the originating deadline Error for pending and late
   assert.equal(f.submissions[0].envelope.operation, "project.inspect");
   assert.equal(f.submissions[0].deadlineAt, 11_100);
   assert.equal(f.transport.terminalOwnerReleased, false);
+});
+
+test("an owner that never confirms its release is ended by force after the grace period", async () => {
+  const f = deadlineTransportFixture();
+  let cleaned = false;
+  void f.transport.terminate().then(() => { cleaned = true; });
+  const retained = f.transport.sendRetained({...deadlineRequest("pattern.transport.input.inspect",
+    "00000000-0000-4000-8000-000000000003"), payload: {
+    command_id: "00000000-0000-4000-8000-000000000004", runtime_generation: "1",
+    frame_epoch: "1", ticket: "1", consume: false,
+  }}, {deadlineMs: 30_000}).catch((error) => error);
+  f.advance(5099);
+  await Promise.resolve();
+  assert.equal(cleaned, false, "the real release keeps its full grace period");
+  f.advance(5100);
+  await Promise.resolve();
+  assert.equal(cleaned, true, "a blocked owner must not hold its storage forever");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  const error = await retained;
+  assert.equal(error.code, "HOST_RESTART_REQUIRED");
+  assert.deepEqual([error.details.operation, error.details.terminal_state,
+    error.details.mutation_outcome, error.details.pending],
+  ["pattern.transport.input.inspect", "restart-required", "unknown", true],
+  "a forced end reports the documented restart-required shape");
+});
+
+test("an unsettled claimed publication ends its blocked owner without the grace wait", async () => {
+  let calls = 0;
+  const f = deadlineTransportFixture({cancel: () => ++calls === 1 ? 0 : -1});
+  const pending = f.transport.send(deadlineRequest(), {deadlineMs: 1000}).catch((error) => error);
+  f.advance(1100);
+  f.advance(2100);
+  assert.equal((await pending).code, "HOST_RESTART_REQUIRED");
+  let cleaned = false;
+  void f.transport.terminate().then(() => { cleaned = true; });
+  f.advance(2116);
+  await Promise.resolve();
+  assert.equal(cleaned, true, "a receipt that can never arrive must not hold storage for 5 s");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+});
+
+test("a retained request stuck in a claimed publication also ends the blocked owner promptly", async () => {
+  // The normal request is cancelled; the retained one's publication is claimed.
+  const f = deadlineTransportFixture({cancel: (requestId) =>
+    requestId === "00000000-0000-4000-8000-000000000003" ? 0 : 1});
+  let cleaned = false;
+  const first = f.transport.send(deadlineRequest(), {deadlineMs: 1000}).catch((error) => error);
+  f.advance(1100);
+  assert.equal((await first).code, "HOST_TIMEOUT");
+  void f.transport.terminate().then(() => { cleaned = true; });
+  const retained = f.transport.sendRetained({...deadlineRequest("pattern.transport.input.inspect",
+    "00000000-0000-4000-8000-000000000003"), payload: {
+    command_id: "00000000-0000-4000-8000-000000000004", runtime_generation: "1",
+    frame_epoch: "1", ticket: "1", consume: false,
+  }}, {deadlineMs: 1000}).catch((error) => error);
+  f.advance(2100);
+  f.advance(3100);
+  assert.equal((await retained).code, "HOST_RESTART_REQUIRED");
+  f.advance(3116);
+  await Promise.resolve();
+  assert.equal(cleaned, true, "the 5 s grace scheduled at 1100 must not hold a blocked owner");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+});
+
+test("an owner that confirms its release completes cleanup without force", async () => {
+  const f = deadlineTransportFixture({terminalCompleted: () => 1, consumeTerminal: () => 1});
+  let cleaned = false;
+  void f.transport.terminate().then(() => { cleaned = true; });
+  await Promise.resolve();
+  assert.equal(cleaned, true);
+  assert.equal(f.transport.terminalOwnerReleased, true);
 });
 
 test("actual settlement watchdog retains the first cancel result without another deadline cancellation", async () => {
