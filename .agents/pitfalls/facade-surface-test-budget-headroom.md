@@ -83,9 +83,11 @@ Do not read a quiet `tests/quality/test_budget_report.py` as headroom. On
 2026-10-14 a Linux coverage run of unmodified `main` timed out
 `facade.pattern_transport_controller` (normally 14 s of 30 s) while
 `facade.pattern_count_in` sat at 90% of its budget on every run, and the report
-named neither: its registration pattern misses single-line `lmdj_add_test`
-calls (#2238). Read the CTest transcript's own durations against the tier
-budget until that report sees every registration.
+named neither: its registration pattern missed single-line `lmdj_add_test`
+calls (#2238). The report now reads each call to its balancing parenthesis
+and prints every test it found no budget for; a test in that list can never
+reach the warning share, so read its CTest duration against its budget by
+hand.
 
 Prefer a
 budget that is generous to one that is tight: an over-long budget only delays a

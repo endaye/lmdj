@@ -38,12 +38,12 @@ TEST_LINE = re.compile(
 )
 TOTAL_LINE = re.compile(r"Total Test time \(real\)\s*=\s*(?P<seconds>[\d.]+)\s*sec")
 TIER_LINE = re.compile(r"set\(lmdj_test_timeout_(?P<tier>\w+)\s+(?P<seconds>\d+)\)")
-ADD_TEST = re.compile(r"lmdj_add_test\((?P<body>.*?)\n\s*\)", re.S)
-FIELD = {
-    "name": re.compile(r"NAME\s+(\S+)"),
-    "tier": re.compile(r"TIER\s+(\S+)"),
-    "timeout": re.compile(r"TIMEOUT\s+(\d+)"),
-}
+# lmdj_add_test's cmake_parse_arguments keywords (cmake/LmdjTesting.cmake).
+ONE_VALUE = frozenset({"NAME", "TIER", "TIMEOUT", "WORKING_DIRECTORY"})
+MULTI_VALUE = frozenset({"COMMAND", "LABELS"})
+BRACKET_OPEN = re.compile(r"\[(=*)\[")
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+VARIABLE = re.compile(r"\$\{[^}]*\}")
 # The multipliers LmdjTesting.cmake applies. Coverage gets none, which is why
 # a coverage run is the tightest budget in the repository.
 SANITIZER_MULTIPLIER = {"none": 1, "coverage": 1, "address": 3, "thread": 4}
@@ -68,6 +68,154 @@ def tier_budgets(repo_root: Path) -> dict[str, int]:
     return {m.group("tier"): int(m.group("seconds")) for m in TIER_LINE.finditer(text)}
 
 
+def _skip_bracket(text: str, index: int) -> int | None:
+    """Return the index after a bracket argument/comment opening at index."""
+    opening = BRACKET_OPEN.match(text, index)
+    if opening is None:
+        return None
+    close = text.find("]" + opening.group(1) + "]", opening.end())
+    return len(text) if close < 0 else close + len(opening.group(1)) + 2
+
+
+def _skip_comment(text: str, index: int) -> int:
+    """Return the index after the comment whose '#' sits at index."""
+    end = _skip_bracket(text, index + 1)
+    if end is not None:
+        return end
+    newline = text.find("\n", index)
+    return len(text) if newline < 0 else newline
+
+
+def _skip_quoted(text: str, index: int) -> int:
+    """Return the index after the quoted argument whose '"' sits at index."""
+    cursor = index + 1
+    while cursor < len(text):
+        if text[cursor] == "\\":
+            cursor += 2
+        elif text[cursor] == '"':
+            return cursor + 1
+        else:
+            cursor += 1
+    return len(text)
+
+
+def _arguments(text: str, index: int) -> tuple[list[str], int]:
+    """Split the arguments of the call whose '(' sits at index.
+
+    Scans to the balancing ')' so the layout of the call -- closing parenthesis
+    on its own line, on the last argument's line, or the whole call on one line
+    -- cannot change what is read. Nested parentheses, quoted and bracket
+    arguments and comments are consumed whole, so a ')' inside them never ends
+    the call early.
+    """
+    tokens: list[str] = []
+    depth = 1
+    cursor = index + 1
+    while cursor < len(text):
+        char = text[cursor]
+        if char.isspace():
+            cursor += 1
+        elif char == "#":
+            cursor = _skip_comment(text, cursor)
+        elif char == '"':
+            end = _skip_quoted(text, cursor)
+            tokens.append(text[cursor + 1:end - 1])
+            cursor = end
+        elif char == "(":
+            depth += 1
+            tokens.append(char)
+            cursor += 1
+        elif char == ")":
+            depth -= 1
+            cursor += 1
+            if depth == 0:
+                return tokens, cursor
+            tokens.append(char)
+        else:
+            bracket = _skip_bracket(text, cursor)
+            if bracket is not None:
+                tokens.append(text[cursor:bracket])
+                cursor = bracket
+                continue
+            start = cursor
+            while (cursor < len(text) and not text[cursor].isspace()
+                   and text[cursor] not in '()#"'):
+                cursor += 1 + (text[cursor] == "\\")
+            tokens.append(text[start:cursor])
+    return tokens, len(text)
+
+
+def cmake_calls(text: str, command: str) -> list[list[str]]:
+    """Every invocation of command in CMake source, as its argument tokens.
+
+    Text inside comments and quoted or bracket arguments is never read as a
+    call, so `message("lmdj_add_test(...)")` registers nothing.
+    """
+    calls: list[list[str]] = []
+    wanted = command.lower()
+    cursor = 0
+    while cursor < len(text):
+        char = text[cursor]
+        if char == "#":
+            cursor = _skip_comment(text, cursor)
+        elif char == '"':
+            cursor = _skip_quoted(text, cursor)
+        elif char == "[" and (bracket := _skip_bracket(text, cursor)) is not None:
+            cursor = bracket
+        elif (identifier := IDENTIFIER.match(text, cursor)) is not None and (
+                cursor == 0 or not (text[cursor - 1].isalnum()
+                                    or text[cursor - 1] in "_$")):
+            cursor = identifier.end()
+            while cursor < len(text) and text[cursor] in " \t":
+                cursor += 1
+            if cursor < len(text) and text[cursor] == "(":
+                if identifier.group(0).lower() == wanted:
+                    arguments, cursor = _arguments(text, cursor)
+                    calls.append(arguments)
+                else:
+                    cursor += 1
+        else:
+            cursor += 1
+    return calls
+
+
+def registration_fields(arguments: list[str]) -> dict[str, list[str]]:
+    """Group lmdj_add_test arguments by keyword, as cmake_parse_arguments does."""
+    fields: dict[str, list[str]] = {}
+    keyword: str | None = None
+    for token in arguments:
+        if token in ONE_VALUE or token in MULTI_VALUE:
+            keyword = token
+            fields.setdefault(keyword, [])
+        elif keyword is not None:
+            if keyword in MULTI_VALUE or not fields[keyword]:
+                fields[keyword].append(token)
+    return fields
+
+
+def budget_for(name: str, budgets: dict[str, float]) -> float | None:
+    """Budget of a CTest name, matching names registered inside foreach loops.
+
+    A registration such as `platform.cardputer.lcd.${scenario}` declares the
+    budget of every name its loop expands to, so a variable matches any
+    non-empty text. An exact registration wins; otherwise the declaration with
+    the most literal text does.
+    """
+    if name in budgets:
+        return budgets[name]
+    best: tuple[int, float] | None = None
+    for declared, budget in budgets.items():
+        if "${" not in declared:
+            continue
+        parts = VARIABLE.split(declared)
+        pattern = ".+".join(re.escape(part) for part in parts)
+        if re.fullmatch(pattern, name):
+            literal = sum(len(part) for part in parts)
+            if best is None or literal > best[0]:
+                best = (literal, budget)
+    return None if best is None else best[1]
+
+
 def declared_budgets(repo_root: Path, multiplier: int) -> dict[str, float]:
     tiers = tier_budgets(repo_root)
     budgets: dict[str, float] = {}
@@ -84,16 +232,21 @@ def declared_budgets(repo_root: Path, multiplier: int) -> dict[str, float]:
             continue
         if "lmdj_add_test" not in text:
             continue
-        for match in ADD_TEST.finditer(text):
-            body = match.group("body")
-            name = FIELD["name"].search(body)
-            tier = FIELD["tier"].search(body)
-            if name is None or tier is None:
+        for arguments in cmake_calls(text, "lmdj_add_test"):
+            fields = registration_fields(arguments)
+            name = fields.get("NAME")
+            tier = fields.get("TIER")
+            if not name or not tier:
                 continue
-            explicit = FIELD["timeout"].search(body)
-            base = int(explicit.group(1)) if explicit else tiers.get(tier.group(1))
+            explicit = fields.get("TIMEOUT")
+            if explicit:
+                # A TIMEOUT this scan cannot evaluate has no known budget;
+                # falling back to the tier default would report a wrong one.
+                base = int(explicit[0]) if explicit[0].isdigit() else None
+            else:
+                base = tiers.get(tier[0])
             if base:
-                budgets[name.group(1)] = base * multiplier
+                budgets[name[0]] = base * multiplier
     return budgets
 
 
@@ -103,7 +256,7 @@ def parse_run(text: str, budgets: dict[str, float]) -> tuple[list[Observation], 
             name=m.group("name"),
             status=m.group("status").lstrip("*"),
             seconds=float(m.group("seconds")),
-            budget=budgets.get(m.group("name")),
+            budget=budget_for(m.group("name"), budgets),
         )
         for m in TEST_LINE.finditer(text)
     ]
@@ -153,6 +306,13 @@ def main() -> int:
     )
     print(f"test budget report: {len(observations)} tests, {total:.1f}s total, "
           f"{args.sanitizer} multiplier ×{SANITIZER_MULTIPLIER[args.sanitizer]}")
+
+    unbudgeted = sorted(o.name for o in observations if o.budget is None)
+    if unbudgeted:
+        # Name them: a test with no readable budget can never reach the
+        # warning list, so silence here would read as headroom.
+        print(f"no declared budget found for {len(unbudgeted)} tests: "
+              + ", ".join(unbudgeted))
 
     hot = [o for o in ranked if (o.used or 0.0) >= args.warn_percent]
     if hot:
