@@ -5146,6 +5146,11 @@ function createRuntimeSessionController(options = {}) {
   }
   async function dispatchProfileInput(slot, velocity, source, kind, hold, startedAt, gestureKey, probe, pressReservation) {
     if (patternInputSerial > BigInt(UNSIGNED_64_MAXIMUM)) throw typedError("HOST_STATE_INVALID", "Pattern input serial exhausted");
+    // An ordinary Press or Release budget measures Runtime response from its
+    // own admission turn. Time queued before this turn, in the Host or in
+    // these runtime tails, is not charged. A recovery probe keeps its
+    // original epoch start.
+    if (probe === null) startedAt = monotonicNow();
     const capacity = patternInputProfile.inputCapacity;
     if (kind === "press" && ([...patternInputOperations.values()].filter((i) => i.kind === "press").length >= capacity ||
         patternInputHolds.size >= capacity)) return false;

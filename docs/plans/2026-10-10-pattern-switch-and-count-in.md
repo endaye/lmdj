@@ -2224,3 +2224,46 @@ and its source diagram; preserve incoming facts on
 `/hosts/creator-interactions/` and other automatic imports. Document actual
 combined scheduling/tempo/input behavior after source disposition. The whole
 Portal check is required before commit; versioned snapshots remain immutable.
+
+## S6 followup — start the Pattern input budget at the admission turn (2026-10-14)
+
+The synthetic MIDI journey sends sixteen note-on events at once, and each
+Export report enters System, which releases the held notes. Each Runtime
+request takes about 70–130 ms in the browser proof (`sample.inspect`,
+`pattern.transport.input.request`, `pattern.transport.input.inspect`). The SDK
+started each Press budget at the physical reservation and each Release budget
+at the physical keyup. Time spent queued behind earlier input was charged, so
+from the eighth Pad on, Presses and Releases expired before submission with
+`HOST_TIMEOUT` (`pending: false`). Creator then became restart-required and
+disabled Export report, while the Runtime itself stayed running.
+
+By owner decision on 2026-10-14, the one-second budget for an ordinary Press
+or Release measures Runtime response from its own admission turn in
+`dispatchProfileInput`, as `main` measures it from the request handoff. Time
+queued before that turn, in Creator, the runtime action tail or the profile
+admission tail, is not charged. Host-queue residence after the turn and the
+completion observation still spend the budget. A recovery probe keeps its
+original epoch start. The deadline value, shared 64-gesture capacity and
+pre-submission refusal semantics stay unchanged.
+
+Files: `packages/web-runtime-platform/web/runtime_session.mjs`, its
+`test/runtime_session.test.mjs`, `apps/docs-site/docs/platform/web-runtime.mdx`
+and this plan. Three tests that charged queue time are inverted, and a
+sixteen-Pad burst test covers queued Presses and Releases. Verified with the
+Web Runtime Platform session tests and the rebuilt Creator
+`creator_web_lifecycle.spec.mjs` MIDI journey.
+
+Each Pad press also runs a serialized `sample.inspect` before its trigger, as
+on `main`. It adds about 80 ms to every press and is tracked as a separate
+Creator latency Task, outside S6.
+
+### Version Management
+
+Version impact: none for this followup. It is a behavior correction inside
+the unshipped S6 Web Runtime Platform MINOR debt, with no wire, Contract or
+Product identity change.
+
+### Documentation Impact
+
+Documentation impact: required on `/core/modules/web-runtime-platform/`,
+which states when the Pattern input budget starts.

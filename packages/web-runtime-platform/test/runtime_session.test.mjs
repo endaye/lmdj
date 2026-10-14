@@ -8431,7 +8431,7 @@ test("original Pad deadline expiry keeps reconciliation and held release alive w
   await f.session.close();
 });
 
-test("a Pad that expires before submission creates no Native ticket or physical release owner", async () => {
+test("a Pad queued behind a runtime action spends its budget only from its admission turn", async () => {
   let clock = 0;
   let resolveStop;
   let stopStarted;
@@ -8452,9 +8452,9 @@ test("a Pad that expires before submission creates no Native ticket or physical 
   clock = 1001;
   resolveStop();
   await stop;
-  await assert.rejects(press, (error) => error.code === "HOST_TIMEOUT" && error.details.pending === false);
-  assert.equal(f.sent.filter((e) => e.operation.startsWith("pattern.transport.input.")).length, 0);
-  assert.equal(await f.session.release(0, "pointer"), false);
+  assert.equal((await press).sequence, 1);
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(await f.session.release(0, "pointer"), true);
   await f.session.close();
 });
 
@@ -8493,7 +8493,7 @@ test("an independent host queue cannot dispatch an expired Pad or spend its inpu
   await f.session.close();
 });
 
-test("runtime and independent host queue residence share the original one-second Pad budget", async () => {
+test("host queue residence after the admission turn spends the Pad budget; runtime queue residence does not", async () => {
   let clock = 0;
   let releaseStop;
   let stopStarted;
@@ -8537,9 +8537,10 @@ test("runtime and independent host queue residence share the original one-second
   releaseQuery();
   assert.equal((await query).project_revision, 7);
   assert.equal((await press).sequence, 1);
-  assert.deepEqual(deadlines, [{submittedAt: 750, deadlineMs: 250}]);
-  assert.equal(deadlines[0].submittedAt + deadlines[0].deadlineMs, 1000,
-    "the Native handoff retained the original absolute Pad deadline");
+  // The admission turn began at 400 when the runtime action released it.
+  assert.deepEqual(deadlines, [{submittedAt: 750, deadlineMs: 650}]);
+  assert.equal(deadlines[0].submittedAt + deadlines[0].deadlineMs, 1400,
+    "the Native handoff kept one second from the admission turn");
   assert.equal(await f.session.release(0, "pointer"), true);
   assert.deepEqual(f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
     .map((e) => e.payload.ticket), ["1", "2"]);
@@ -12678,23 +12679,32 @@ test("synthetic journal Release and Stop reuse the exact UUID owner without endi
   await f.session.close();
 });
 
-test("Creator preparation time spends the original one-second Pattern input budget before any admission", async () => {
+test("Creator preparation time before the SDK trigger does not spend the Pattern input budget", async () => {
   let now = 0;
   const f = inputProfileFixture({now: () => now});
   await activateInputProfile(f);
   const key = {};
-  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  assert.notEqual(f.session.reserveInputGesture(key, 0, "pointer"), null);
   now = 1001;
-  await assert.rejects(f.session.trigger(0, 100, "pointer", key),
-    error => error.code === "HOST_TIMEOUT" && error.details.pending === false);
-  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0);
-  // No Native handoff occurred; local capacity can return without a fake ACK.
-  lease.cancelUnsubmittedPattern();
-  const keys = Array.from({length: 64}, () => ({}));
-  const leases = keys.map(x => f.session.reserveInputGesture(x, 0, "pointer"));
-  assert.ok(leases.every(x => x !== null));
-  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
-  for (const item of leases) item.cancelUnsubmittedPattern();
+  assert.equal((await f.session.trigger(0, 100, "pointer", key)).sequence, 1);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(await f.session.release(0, "pointer", key), true);
+  await f.session.close();
+});
+
+test("a sixteen-Pad burst queued in the SDK charges each Press and Release only from its own admission turn", async () => {
+  let now = 0;
+  // Each Native admission costs 125 ms, so the ninth queued Press would be
+  // dispatched after one second if queue time were charged.
+  const f = inputProfileFixture({now: () => now, onRequest: () => { now += 125; }});
+  await activateInputProfile(f);
+  const keys = Array.from({length: 16}, () => ({}));
+  const admissions = await Promise.all(keys.map((key, slot) => f.session.trigger(slot, 100, "pointer", key)));
+  assert.deepEqual(admissions.map(a => a.sequence), Array.from({length: 16}, (_, i) => i + 1));
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 16);
+  // Sixteen queued Releases follow the same rule.
+  assert.deepEqual(await Promise.all(keys.map((key, slot) => f.session.release(slot, "pointer", key))),
+    Array(16).fill(true));
   await f.session.close();
 });
 
