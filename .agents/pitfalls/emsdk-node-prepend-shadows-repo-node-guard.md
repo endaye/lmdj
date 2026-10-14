@@ -1,12 +1,15 @@
 ---
 id: emsdk-node-prepend-shadows-repo-node-guard
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-15
     occurrence: https://github.com/endaye/lmdj/pull/1306
     observed_by: Kimi Code
-exit: none
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/pull/1349
+    observed_by: Claude Code (Opus 5.5)
+exit: gate:tests/platform/web/toolchain/toolchain_identity_test.py
 ---
 
 # The emsdk-bundled Node prepend in Web proof scripts shadows the repository Node guard, and a Node major bump must sweep every `activate_toolchain`
@@ -50,10 +53,19 @@ Changing one of the three scripts selects its owning lane via
 `web_toolchain`, `web_runtime_host` and `creator` — that run is the gate
 that catches this class; a green run of anything else says nothing.
 
-## Why there is no exit yet
+## Second occurrence and exit
 
-The conditional prepend makes the shadowing impossible, but nothing fails
-when a *fourth* script grows an unconditional prepend or a stale guard.
-A mechanical lint (forbid `PATH="$(dirname "$EMSDK_NODE"):$PATH"` without
-the `command -v node` precondition) would close it; until someone adds that
-gate, the entry stays open as the checklist for the next bump.
+The Node 26 bump also missed `"node"` in `tools/web-runtime/emscripten.lock.json`,
+which the Runtime identity generator projects into
+`products/lmdj/generated/web-runtime-identity.*`. #1349 then left it at `22` on
+the claim that it recorded the emsdk-bundled Node; the plan that introduced it
+(`docs/plans/2026-08-03-lmdj-formal-web-runtime-host.md`, Task 0) defines it
+beside Playwright as the Web lane's Node, and nothing compared it. The field
+is the lane Node major, never `EMSDK_NODE`.
+
+`tools/web-runtime/verify_emscripten.py`, which every Web lane runs, now fails
+when the lock major differs from `.node-version`.
+`tests/platform/web/toolchain/toolchain_identity_test.py` binds every
+`scripts/*.sh` Node guard to that lock major and rejects any `EMSDK_NODE` use
+outside an `if ! command -v node` block, so a stale guard or an unconditional
+prepend in a further script fails with `why` and `remedy`.
