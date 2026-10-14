@@ -808,6 +808,151 @@ class ChangeScopeTest(unittest.TestCase):
         finally:
             self.lanes_for_path = original
 
+    # tests/quality/ held four suites for the coverage tooling that no lane
+    # ever ran: the directory was routed to core_coverage, whose runner
+    # invokes the tools but none of their tests, so a broken runner test sat
+    # on main until #2219 happened to notice it. A suite counts as run only
+    # when a lane command names it or discovers it, that lane's CI job runs
+    # the same command, and the file's route selects that lane.
+    QUALITY_TEST_DIRECTORY = "tests/quality/"
+
+    def quality_test_inventory(self, tracked):
+        """Every tracked tests/quality suite: `*_test.py`, plus any
+        `test_*.py` that is a unittest module rather than a tool."""
+        suites = []
+        for path in tracked:
+            if not path.startswith(self.QUALITY_TEST_DIRECTORY) or not path.endswith(".py"):
+                continue
+            name = path[len(self.QUALITY_TEST_DIRECTORY):]
+            if "/" in name:
+                continue
+            if name.endswith("_test.py") or (
+                    name.startswith("test_")
+                    and "unittest" in (ROOT / path).read_text(encoding="utf-8")):
+                suites.append(path)
+        return suites
+
+    def quality_test_invocations(self, suites):
+        """Map each suite to the lanes whose local_lanes.json commands run it."""
+        lanes = json.loads((ROOT / "scripts/ci/local_lanes.json").read_text(encoding="utf-8"))["lanes"]
+        invoked = {}
+        for lane, entry in lanes.items():
+            for variant in (entry, *(entry[key] for key in ("quick", "journey") if key in entry)):
+                for command in variant["commands"]:
+                    words = shlex.split(command)
+                    if words[:4] == ["python3", "-m", "unittest", "discover"]:
+                        options = dict(zip(words[4::2], words[5::2]))
+                        start = options.get("-s", ".").rstrip("/") + "/"
+                        pattern = options.get("-p", "test*.py")
+                        matched = [path for path in suites if path.startswith(start)
+                                   and "/" not in path[len(start):]
+                                   and fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], pattern)]
+                    else:
+                        matched = [path for path in suites if path in words]
+                    for path in matched:
+                        invoked.setdefault(path, {})[lane] = command
+        return invoked
+
+    def quality_test_gaps(self, suites):
+        invoked = self.quality_test_invocations(suites)
+        gaps = []
+        for path in sorted(suites):
+            runners = invoked.get(path, {})
+            if not runners:
+                gaps.append(f"{path}: no lane command runs it")
+            elif not set(runners) & self.lanes_for_path(path):
+                gaps.append(f"{path}: run only by lane(s) {sorted(runners)}, "
+                            f"which its route {sorted(self.lanes_for_path(path))} never selects")
+        return gaps
+
+    def test_every_quality_test_is_run_by_a_lane_that_owns_it(self):
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", self.QUALITY_TEST_DIRECTORY], cwd=ROOT, check=True,
+            capture_output=True,
+        ).stdout.decode("utf-8").split("\0")
+        suites = self.quality_test_inventory(tracked)
+        self.assertIn("tests/quality/core_coverage_runner_test.py", suites)
+        self.assertEqual(
+            self.quality_test_gaps(suites), [],
+            "a tests/quality suite is not run by any lane that owns it.\n"
+            "why: the coverage lane invokes the tools in tests/quality, not their "
+            "tests, so an unrun suite reads as coverage while its regressions "
+            "reach main unnoticed (#2219).\n"
+            "remedy: keep it matched by the ci_contract command "
+            "`python3 -m unittest discover -s tests/quality -p '*_test.py'` in "
+            "scripts/ci/local_lanes.json and the ci-contract job, and keep "
+            "tests/quality/ routed to ci_contract in scripts/ci/scope_policy.json.\n"
+            + "\n".join(self.quality_test_gaps(suites)),
+        )
+        workflows = {name: (ROOT / name).read_text(encoding="utf-8") for name in self.QUALITY_WORKFLOWS}
+        self.assertTrue(all(re.search(r"(?m)^  ci-contract:\n", text) for text in workflows.values()),
+                        "both workflows must still define the ci-contract job this gate reads")
+        gaps = self.quality_workflow_gaps(self.quality_test_invocations(suites), workflows)
+        self.assertEqual(
+            gaps, [],
+            "a lane command that runs a tests/quality suite is not run by that lane's CI job.\n"
+            "why: scripts/ci/local_lanes.json describes the lane; only the workflow "
+            "job executes it in CI.\n"
+            "remedy: run the same command in that lane's job in the named workflow.\n"
+            + "\n".join(gaps),
+        )
+
+    # The Pull Request runs pr-contract.yml and main batches run ci.yml; each
+    # workflow that defines one of the lane's jobs must run the command.
+    QUALITY_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/pr-contract.yml")
+
+    def quality_workflow_gaps(self, invocations, workflows):
+        gaps = []
+        for path, runners in sorted(invocations.items()):
+            for lane, command in sorted(runners.items()):
+                jobs = self.policy["lane_jobs"][lane]
+                for name, workflow in sorted(workflows.items()):
+                    blocks = [re.search(rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow)
+                              for job in jobs]
+                    # Directives only: a comment naming the command is not a step running it.
+                    directives = ["\n".join(line for line in block.group(1).splitlines()
+                                            if not line.lstrip().startswith("#"))
+                                  for block in blocks if block]
+                    if directives and not any(command in text for text in directives):
+                        gaps.append(f"{path}: lane {lane} runs `{command}`, which none of its "
+                                    f"jobs {jobs} in {name} runs")
+        return gaps
+
+    def test_quality_test_gate_has_red_cases(self):
+        self.assertEqual(
+            self.quality_test_gaps(["tests/quality/test_orphan.py"]),
+            ["tests/quality/test_orphan.py: no lane command runs it"],
+        )
+        self.assertEqual(
+            self.quality_test_inventory(["tests/quality/coverage_gate.py",
+                                         "tests/quality/test_budget_report.py",
+                                         "tests/quality/nested/deep_test.py",
+                                         "tests/quality/coverage_gate_test.py"]),
+            ["tests/quality/coverage_gate_test.py"],
+        )
+        command = "python3 -m unittest discover -s tests/quality -p '*_test.py'"
+        invocations = {"tests/quality/coverage_gate_test.py": {"ci_contract": command}}
+        runs = f"jobs:\n  ci-contract:\n    steps:\n      - run: {command}\n"
+        lacks = f"jobs:\n  ci-contract:\n    steps: []\n  core-coverage:\n      - run: {command}\n"
+        commented = f"jobs:\n  ci-contract:\n    steps:\n      # {command}\n"
+        gap = ("tests/quality/coverage_gate_test.py: lane ci_contract runs "
+               f"`{command}`, which none of its jobs ['ci-contract'] in pr.yml runs")
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": runs}), [])
+        # A workflow that does not define the lane's job owes nothing.
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": "jobs: {}\n"}), [])
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": lacks}), [gap])
+        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": commented}), [gap])
+        original = self.lanes_for_path
+        self.lanes_for_path = lambda path: original(path) - {"ci_contract"}
+        try:
+            self.assertEqual(
+                self.quality_test_gaps(["tests/quality/coverage_gate_test.py"]),
+                ["tests/quality/coverage_gate_test.py: run only by lane(s) ['ci_contract'], "
+                 "which its route ['core_coverage'] never selects"],
+            )
+        finally:
+            self.lanes_for_path = original
+
     def test_every_tracked_top_level_is_admitted_by_the_policy(self):
         # `_evaluate_ready_paths` checks the top-level segment against
         # `known_top_levels` independently of, and before, any routing rule

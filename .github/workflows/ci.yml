@@ -324,6 +324,12 @@ jobs:
       - name: Run every CI-control contract
         if: ${{ fromJSON(needs.change-scope.outputs.manifest).verification.ci_contract != 'quick' }}
         run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
+      # The coverage tooling's own suites (runner lifecycle, union, gate,
+      # budget report) take seconds and need no Core build, so they run here
+      # at Pull Request time rather than only inside the batch-only
+      # core-coverage lane, where none of them was ever invoked (#2219).
+      - name: Run the coverage tooling contracts
+        run: python3 -m unittest discover -s tests/quality -p '*_test.py'
       - uses: actions/setup-python@v6
         if: ${{ steps.quick-contracts.outputs.seam != 'false' }}
         with:

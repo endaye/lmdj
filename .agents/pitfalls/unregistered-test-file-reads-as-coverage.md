@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/pull/1800
     observed_by: claude-code/opus-5.5
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/pull/2219
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_change_scope_test.py
 ---
 
@@ -134,3 +137,13 @@ named them. `test_every_web_host_python_test_is_run_by_a_lane_that_owns_it`
 in the same gate file now requires every `apps/creator-web/test/*_test.py` and
 `apps/web-runtime-host/test/*_test.py` to be named by a runner whose lane the
 file's route selects.
+
+The fifth occurrence is a directory routed to a lane whose runner uses the
+directory's tools but none of its tests. `tests/quality/` went only to
+`core_coverage`; `scripts/core-coverage.sh` calls `coverage_union.py`,
+`coverage_gate.py` and `test_budget_report.py`, and nothing ran their four
+suites, so a broken `core_coverage_runner_test.py` sat on `main` until #2219
+noticed it. The `ci-contract` job now discovers them, and
+`test_every_quality_test_is_run_by_a_lane_that_owns_it` requires every
+`tests/quality` suite to be run by a lane command that the lane's CI job also
+runs, on a lane the file's route selects.

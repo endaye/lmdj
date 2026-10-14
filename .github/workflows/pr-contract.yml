@@ -137,6 +137,10 @@ jobs:
           python3 scripts/ci/contract_selection.py
           --base "$BASE_SHA" --head "$HEAD_SHA" --execute tests
           --github-output "$GITHUB_OUTPUT"
+      # The coverage tooling's own suites take seconds and need no Core
+      # build; ci.yml's ci-contract job runs the same step (#2219).
+      - name: Run the coverage tooling contracts
+        run: python3 -m unittest discover -s tests/quality -p '*_test.py'
       - uses: actions/setup-python@v6
         if: ${{ steps.contracts.outputs.seam != 'false' }}
         with:
