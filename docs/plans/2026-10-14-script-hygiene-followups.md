@@ -120,6 +120,8 @@ and make the topology check meaningful or remove it with its claim. Update
 `tests/quality/core_coverage_runner_test.py`. Verify that the lcov union is
 byte-identical before and after on the same build.
 
+Delivered: F6 by #2219 (`f96ef1e08`).
+
 ## F7 — Small dead-code residues
 
 Decision: approved.
@@ -157,6 +159,26 @@ Delivered: F5 by #2211, F7 by #2213, F9 by #2215. F3: PR1 #2212 merged; PR2
 Decision: approved. Open one Issue recording the blocked review-discovery
 backlog (pending/unresolved counts, per-tick progress, owner of recovery), so
 the red report run has a tracked cause.
+
+## F11 — Run tests/quality in CI
+
+Decision: approved (owner, 2026-10-14).
+
+Premise: #2219 found `tests/quality/core_coverage_runner_test.py` broken on
+`main`. No lane ran it: `tests/quality/` was routed only to `core_coverage`,
+whose runner invokes the coverage tools but none of their four suites
+(`core_coverage_runner_test.py`, `coverage_gate_test.py`,
+`coverage_union_test.py`, `test_budget_report_test.py`). They are pure Python
+and take about three seconds, so the `ci-contract` job runs
+`python3 -m unittest discover -s tests/quality -p '*_test.py'` at Pull Request
+time; `scripts/ci/local_lanes.json` lists the same command and
+`scripts/ci/scope_policy.json` routes `tests/quality/` and
+`scripts/core-coverage.sh` to `ci_contract` as well.
+`test_every_quality_test_is_run_by_a_lane_that_owns_it` in
+`tests/build/ci_change_scope_test.py` requires every `tests/quality` suite to
+be run by a lane command, in that lane's CI job, on a lane its route selects.
+
+Delivered: F11 by the Pull Request on `fix/quality-tests-ownership`.
 
 ## Order
 
