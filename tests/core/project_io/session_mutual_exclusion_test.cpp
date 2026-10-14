@@ -77,7 +77,8 @@ class TempDirectory {
   std::filesystem::path path_;
 };
 
-// Yield to a competing begin after the real native writer lease is released.
+// Yield to a competing begin after the real native writer lease is released,
+// or just before an immutable file is published under that lease.
 class ReleaseCallbackPlatform final : public lmdj::project_io::ProjectStoragePlatform {
  public:
   explicit ReleaseCallbackPlatform(
@@ -129,6 +130,9 @@ class ReleaseCallbackPlatform final : public lmdj::project_io::ProjectStoragePla
   lmdj::foundation::Result<void> create_immutable(
       const std::filesystem::path& path,
       std::span<const std::byte> bytes) override {
+    if (before_create_immutable) {
+      before_create_immutable(path);
+    }
     return delegate_->create_immutable(path, bytes);
   }
   lmdj::foundation::Result<void> replace_complete(
@@ -169,6 +173,7 @@ class ReleaseCallbackPlatform final : public lmdj::project_io::ProjectStoragePla
   }
 
   std::function<void()> after_release;
+  std::function<void(const std::filesystem::path&)> before_create_immutable;
 
  private:
   std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> delegate_;
@@ -535,6 +540,73 @@ void test_concurrent_sequence_and_performance_begins_admit_only_one_kind() {
       std::filesystem::exists(bundle / "recovery/active/performance.jsonl"));
 }
 
+// The interleaving the writer-lease stress hit on the M1 runner (#2267): a
+// contending begin walked the managed tree before taking the writer lease and
+// caught the owner publishing its Journal, whose bytes are briefly linked
+// under both a temporary and the final name. A contender must observe only
+// the lease and report project_busy, never a corrupt Project.
+void expect_contender_busy_while_owner_publishes(SessionKind owner_kind) {
+  TempDirectory temp;
+  ProjectStore store;
+  const auto bundle = temp.path() / "project.lmdj";
+  LMDJ_CHECK(store.create(bundle, project()).has_value());
+  const lmdj::domain::Pattern pattern{
+      PatternId{std::string{kPatternId}}, 1, {}};
+  const auto live = performance();
+  const auto begin = [&](SequenceJournal& journal, SessionKind kind) {
+    return kind == SessionKind::sequence
+               ? journal.begin(
+                     bundle,
+                     SequenceSessionId{std::string{kSequenceSessionId}},
+                     pattern.id,
+                     pattern.bars,
+                     lmdj::project_io::sequence_pattern_fingerprint(pattern),
+                     0)
+               : journal.begin_performance(
+                     bundle,
+                     SequenceSessionId{std::string{kPerformanceSessionId}},
+                     live.id,
+                     lmdj::project_io::performance_fingerprint(live),
+                     0);
+  };
+  const auto contender_kind = owner_kind == SessionKind::sequence
+                                  ? SessionKind::performance
+                                  : SessionKind::sequence;
+  auto platform = std::make_shared<ReleaseCallbackPlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  std::optional<lmdj::foundation::Result<void>> contended;
+  platform->before_create_immutable = [&](const std::filesystem::path& path) {
+    if (contended.has_value()) {
+      return;
+    }
+    const auto temporary = path.parent_path() / "publishing.tmp";
+    std::ofstream{temporary} << "{}\n";
+    std::filesystem::create_hard_link(
+        temporary, path.parent_path() / "published.jsonl");
+    SequenceJournal contender;
+    contended = begin(contender, contender_kind);
+    std::filesystem::remove(path.parent_path() / "published.jsonl");
+    std::filesystem::remove(temporary);
+  };
+  SequenceJournal owner{platform};
+  LMDJ_CHECK(begin(owner, owner_kind).has_value());
+  LMDJ_CHECK(contended.has_value());
+  LMDJ_CHECK(!contended->has_value());
+  if (contended->error().code != ErrorCode::io_error) {
+    std::cerr << "contending begin saw the publication: "
+              << contended->error().message << ' '
+              << contended->error().details.dump() << '\n';
+  }
+  LMDJ_CHECK(contended->error().code == ErrorCode::io_error);
+  LMDJ_CHECK(contended->error().details.at("storage_condition") ==
+             "project_busy");
+}
+
+void test_contending_begins_see_the_lease_not_the_publication() {
+  expect_contender_busy_while_owner_publishes(SessionKind::sequence);
+  expect_contender_busy_while_owner_publishes(SessionKind::performance);
+}
+
 void test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile() {
   TempDirectory temp;
   ProjectStore store;
@@ -807,6 +879,7 @@ int main(int argc, char** argv) {
     test_same_kind_second_begin_prioritizes_active_session();
     test_concurrent_sequence_begins_admit_only_one_session();
     test_concurrent_sequence_and_performance_begins_admit_only_one_kind();
+    test_contending_begins_see_the_lease_not_the_publication();
     test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile();
     test_performance_begin_keeps_owner_across_writer_release();
     test_stale_begin_after_owner_loss_publishes_no_active_journal();
