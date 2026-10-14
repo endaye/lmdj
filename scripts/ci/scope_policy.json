@@ -145,7 +145,7 @@
     {"match": {"kind": "prefix", "value": "output/playwright/"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "netlify.toml"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": "wrangler.json"}, "lanes": ["portal", "ci_contract"]},
-    {"match": {"kind": "exact", "value": ".node-version"}, "lanes": ["portal", "ci_contract"]},
+    {"match": {"kind": "exact", "value": ".node-version"}, "lanes": ["portal", "ci_contract", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": ".gitattributes"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_runtime_host", "creator", "package", "ci_contract"]},
     {"match": {"kind": "exact", "value": "AGENTS.md"}, "lanes": ["docs_static", "portal"]},
     {"match": {"kind": "exact", "value": "CLAUDE.md"}, "lanes": ["docs_static", "portal"]},
