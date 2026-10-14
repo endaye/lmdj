@@ -461,7 +461,7 @@ if (typeof globalThis.window !== "undefined") {
   function releaseTerminalOwner() {
     if (terminalCleanupCompleted) return;
     window.clearTimeout(terminalAckTimeout);
-    if (consumeTerminalOwnerRelease()) {
+    if (terminalReleaseCompleted() && consumeTerminalOwnerRelease()) {
       completeTerminalCleanup();
       if (terminalCleanupCompleted) return;
     }
@@ -483,7 +483,9 @@ if (typeof globalThis.window !== "undefined") {
     terminalAckTimeout = window.setTimeout(() => {
       if (terminalOwnerReleased ||
           (terminalReleaseCompleted() && consumeTerminalOwnerRelease())) {
-        releaseTerminalOwner();
+        // The control worker has already closed. Polling finishes cleanup once
+        // retained requests drain; asking it to release again does nothing.
+        completeTerminalCleanup();
       } else {
         forceTerminalCleanup();
       }
