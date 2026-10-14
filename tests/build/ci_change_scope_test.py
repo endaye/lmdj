@@ -846,7 +846,7 @@ class ChangeScopeTest(unittest.TestCase):
                         pattern = options.get("-p", "test*.py")
                         matched = [path for path in suites if path.startswith(start)
                                    and "/" not in path[len(start):]
-                                   and fnmatch.fnmatchcase(path[len(start):], pattern)]
+                                   and fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], pattern)]
                     else:
                         matched = [path for path in suites if path in words]
                     for path in matched:
@@ -902,7 +902,11 @@ class ChangeScopeTest(unittest.TestCase):
                 jobs = self.policy["lane_jobs"][lane]
                 blocks = [re.search(rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow)
                           for job in jobs]
-                if not any(block and command in block.group(1) for block in blocks):
+                # Directives only: a comment naming the command is not a step running it.
+                directives = ["\n".join(line for line in block.group(1).splitlines()
+                                        if not line.lstrip().startswith("#"))
+                              for block in blocks if block]
+                if not any(command in text for text in directives):
                     gaps.append(f"{path}: lane {lane} runs `{command}`, which none of its jobs {jobs} runs")
         return gaps
 
@@ -927,6 +931,12 @@ class ChangeScopeTest(unittest.TestCase):
             self.quality_workflow_gaps(
                 invocations,
                 f"jobs:\n  ci-contract:\n    steps: []\n  core-coverage:\n      - run: {command}\n"),
+            ["tests/quality/coverage_gate_test.py: lane ci_contract runs "
+             f"`{command}`, which none of its jobs ['ci-contract'] runs"],
+        )
+        self.assertEqual(
+            self.quality_workflow_gaps(
+                invocations, f"jobs:\n  ci-contract:\n    steps:\n      # {command}\n"),
             ["tests/quality/coverage_gate_test.py: lane ci_contract runs "
              f"`{command}`, which none of its jobs ['ci-contract'] runs"],
         )
