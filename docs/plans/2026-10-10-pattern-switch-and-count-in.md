@@ -2257,6 +2257,16 @@ Each Pad press also runs a serialized `sample.inspect` before its trigger, as
 on `main`. It adds about 80 ms to every press and is tracked as a separate
 Creator latency Task, outside S6 (#2190).
 
+The same rule covers the legacy live-input path. Its `trigger` Press, legacy
+Release and prepared Performance Pad events took their budget start from the
+live-input entry's physical time. The packaged Web Runtime Host journey fires
+sixteen keydown/keyup pairs and expired at the twelfth admission. Each of
+these now starts its budget when its own live-input turn runs; a legacy
+recovery probe keeps its original start. Three tests that charged preparation
+or queue time are inverted or re-anchored to Host-queue expiry, and a
+sixteen-Pad legacy burst test is added. Verified with the session tests and
+`scripts/web-runtime-host.sh proof`.
+
 ### Version Management
 
 Version impact: none for this followup. It is a behavior correction inside
@@ -2265,5 +2275,5 @@ Product identity change.
 
 ### Documentation Impact
 
-Documentation impact: required on `/core/modules/web-runtime-platform/`,
-which states when the Pattern input budget starts.
+Documentation impact: required on `/platform/web-runtime/`, which states
+when the Pattern input budget starts.

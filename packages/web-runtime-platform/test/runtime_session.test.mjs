@@ -12708,6 +12708,27 @@ test("a sixteen-Pad burst queued in the SDK charges each Press and Release only 
   await f.session.close();
 });
 
+test("a sixteen-Pad legacy burst charges each trigger and Release only from its own turn", async () => {
+  let now = 0;
+  let sequence = 0;
+  // Each legacy trigger round trip costs 125 ms, so the ninth queued input
+  // would expire before dispatch if queue time were charged.
+  const f = fixture({now: () => now, send: async (e) => {
+    if (e.operation !== "trigger") return success(e, defaultResult(e.operation));
+    now += 125;
+    return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+  }});
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const keys = Array.from({length: 16}, () => ({}));
+  const presses = keys.map((key, slot) => f.session.trigger(slot, 100, "keyboard", key));
+  const releases = keys.map((key, slot) => f.session.release(slot, "keyboard", key));
+  assert.deepEqual((await Promise.all(presses)).map(value => value.sequence),
+    Array.from({length: 16}, (_, i) => i + 1));
+  assert.deepEqual(await Promise.all(releases), Array(16).fill(true));
+  await f.session.close();
+});
+
 
 for (const elapsed of [650, 1001]) {
   test(`legacy queued Release spends its original one-second budget at the real Host handoff (${elapsed}ms)`, async () => {
@@ -13050,7 +13071,7 @@ for (const boundary of ["stop", "close"]) {
 }
 
 for (const kind of ["pad_press", "pad_release"]) {
-  test(`prepared ${kind} retains its original deadline across the Host wait`, async () => {
+  test(`prepared ${kind} spends its budget only from its own turn, not across the Host wait`, async () => {
     let clock = 0;
     const wire = [];
     const f = fixture({now: () => clock, send: e => {
@@ -13069,8 +13090,8 @@ for (const kind of ["pad_press", "pad_release"]) {
       operation = f.session.preparePerformancePadEvent(sharedPad(0, kind), key);
       clock = 1101;
     } else clock = 1001;
-    await assert.rejects(operation.submit(), error => error.code === "HOST_TIMEOUT" && error.details.pending === false);
-    assert.deepEqual(wire, kind === "pad_release" ? ["pad_press"] : []);
+    await operation.submit();
+    assert.deepEqual(wire, kind === "pad_release" ? ["pad_press", "pad_release"] : ["pad_press"]);
     lease.cancelUnsubmittedPattern();
     lease.releasePhysical();
     await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 10)});
@@ -13107,10 +13128,18 @@ test("prepared submitted-unknown Performance ownership cannot be cancelled by it
 });
 
 
-test("a definitely expired prepared Press cancels its queued Release without an orphan wire event", async () => {
+test("a prepared Press that expires in the Host queue cancels its queued Release without an orphan wire event", async () => {
   let clock = 0;
   const wire = [];
+  let queryStarted;
+  let releaseQuery;
+  const started = new Promise(resolve => { queryStarted = resolve; });
+  const gate = new Promise(resolve => { releaseQuery = resolve; });
   const f = fixture({now: () => clock, send: e => {
+    if (e.operation === "project.inspect") {
+      queryStarted();
+      return gate.then(() => success(e, {project_revision: 7}));
+    }
     if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
     return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
   }});
@@ -13118,14 +13147,18 @@ test("a definitely expired prepared Press cancels its queued Release without an 
   const key = {};
   const lease = f.session.reserveInputGesture(key, 0, "pointer");
   const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
-  clock = 500;
   const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  const query = f.session.inspectProject();
+  await started;
+  // The Press takes its turn, then waits behind the independent Host query
+  // until its own one-second budget is spent.
+  const results = Promise.allSettled([press.submit(), release.submit()]);
+  await drainTasks();
   clock = 1001;
-  // Both tokens are enqueued before the Press action runs. Only the Press
-  // budget is expired; Release still has its original 500 ms remaining.
-  const results = await Promise.allSettled([press.submit(), release.submit()]);
+  releaseQuery();
+  assert.equal((await query).project_revision, 7);
   assert.deepEqual(wire, [], "a definitely never-submitted Press owns no wire Release");
-  assert.ok(results.every(result => result.status === "rejected" &&
+  assert.ok((await results).every(result => result.status === "rejected" &&
     result.reason.code === "HOST_TIMEOUT" && result.reason.details.pending === false));
   lease.cancelUnsubmittedPattern();
   lease.releasePhysical();

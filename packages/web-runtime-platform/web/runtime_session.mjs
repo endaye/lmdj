@@ -2857,6 +2857,9 @@ function createRuntimeSessionController(options = {}) {
    * }>>}
    */
   async function dispatchTrigger(flatSlot, velocity, source, liveEntry = null) {
+    // An ordinary live input's budget starts at its own turn, not when it
+    // joined the queue behind earlier input. A recovery probe keeps its start.
+    const turnStartedAt = monotonicNow();
     if (
       !Number.isInteger(flatSlot) ||
       flatSlot < 0 ||
@@ -2900,7 +2903,7 @@ function createRuntimeSessionController(options = {}) {
       }, {
         // The Wasm transport may resolve this response and synchronously drain
         // its following notification before this async continuation can run.
-        originalStartedAt: liveEntry?.startedAt,
+        originalStartedAt: recoveryProbe ? liveEntry?.startedAt : turnStartedAt,
         beforeDispatch(requestId) {
           if (triggerResponseReservations.size >= TRIGGER_LEDGER_LIMIT) {
             throw typedError("HOST_STATE_INVALID", "Trigger response ledger is full");
@@ -6371,6 +6374,7 @@ function createRuntimeSessionController(options = {}) {
     const releaseStartedAt = classification === "pad_release" && physicalKey !== undefined
       ? physicalGestureOwners.get(physicalKey)?.releaseStartedAt : undefined;
     return reserveLiveInput(async entry => {
+      const turnStartedAt = monotonicNow();
       if (headered && headeredRecording !== recording)
         throw typedError("HOST_STATE_INVALID", "Performance recording owner changed before input submission", {pending: false});
       const value = await boundedRequest("performance.record.event", {
@@ -6384,7 +6388,7 @@ function createRuntimeSessionController(options = {}) {
                 recording.nextRecordingSequence,
             }
           : {}),
-      }, {originalStartedAt: entry.startedAt, beforeDispatch() {
+      }, {originalStartedAt: turnStartedAt, beforeDispatch() {
         if (headered && headeredRecording !== recording)
           throw typedError("HOST_STATE_INVALID", "Performance recording owner changed before input submission", {pending: false});
         entry.submitted = true;
@@ -7443,11 +7447,12 @@ function createRuntimeSessionController(options = {}) {
     const key = owners.length === 1 ? owners[0].gestureKey : owners.length > 1
       ? `slot:${flatSlot}` : {slot: flatSlot, source, gestureKey};
     return submitLiveInput(async entry => {
+      const turnStartedAt = monotonicNow();
       // A queued Press can be definitely refused locally (e.g. not activated).
       // That is not a Native owner and owes no fabricated wire Release.
       if (owners.length !== 0 && owners.every(owner => !owner.submitted)) return false;
       return normalizeAccepted(await boundedRequest("trigger", {slot: flatSlot, kind: "release"},
-        {originalStartedAt: entry.startedAt, beforeDispatch() { entry.submitted = true; }}));
+        {originalStartedAt: turnStartedAt, beforeDispatch() { entry.submitted = true; }}));
     }, "pad_release", key, {slot: flatSlot, legacy: true});
   }
 

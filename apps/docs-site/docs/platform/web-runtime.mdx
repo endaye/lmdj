@@ -91,7 +91,7 @@ SDK Session；它不进入 wire 或 Project Truth。无 key 的直接调用独�
 已提交、结果未知或未松开的 owner 仍保留责任；观察者超时不能释放容量，
 满额时已有手势的 matching Release 仍保留入口。没有原 physical key 的域内
 Release 可以结算对应录音责任，但不能代替真实松键结束仍被按住的显式 physical lease owner；
-Stop 回执也必须匹配原会话和请求，不能以外来回执回收名额。普通 Pattern Press 或 Release 的 1 秒预算从它自己的接纳轮次开始计时；
+Stop 回执也必须匹配原会话和请求，不能以外来回执回收名额。普通 Pattern Press 或 Release、旧 `trigger` 输入及 Performance Pad 事件的 1 秒预算都从它自己的轮次开始计时；
 在此之前排在其他输入之后的等待时间不计入，恢复探测仍按原 epoch 起点计时。共享容量的组件
 验证不等于整个 S6 已验收；原完整浏览器、持久化和音频验证仍需独立完成。
 
