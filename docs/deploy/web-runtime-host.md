@@ -2,10 +2,11 @@
 
 > 2026-09-17 切换更新：Runtime 的部署 workflow 已重新启用，并改走共享受管 Cloudflare
 > adapter（`scripts/cloudflare-host-deploy.sh TAG --target web-runtime-host`），目标
-> `https://lab.lmdj.workers.dev/`（#1490）。下述 Netlify `deploy` 路径已退役：它现在明确拒绝，
-> 除非显式设置 `LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY=1`，该开关只为历史审计与其
-> 自身测试而存在，不是部署入口。`stage` 与 `verify` 不变，Cloudflare adapter 仍
-> 依赖它们取已验证的签名输入。
+> `https://lab.lmdj.workers.dev/`（#1490）。Netlify 路径的
+> `deploy` 与 `smoke` 子命令、Netlify API 客户端及其测试已于 2026-10-14 按维护者
+> “Netlify 彻底退役”决定（#873、#927）从源码删除；`scripts/web-runtime-deploy.sh` 只保留
+> `verify` 与 `stage`，Cloudflare adapter 依赖它们取已验证的签名输入。下文的
+> Netlify 事务、字段与命令只记录当时的事实，仓库中已没有对应实现。
 >
 > 2026-09-08 退役更新：旧 Netlify 站点已按用户授权删除，对应 GitHub 手动部署
 > workflow 已停用。下述 Netlify 路径仅供历史审计，不再是可用的生产或回滚入口。
@@ -314,13 +315,9 @@ artifact 字段仍须与不可变 GitHub run metadata 和 workflow log 相互一
 canonical run URL、same-ID response 与两阶段 smoke 全部一致，才可填充验收记录。失败 draft
 不是发布证据。
 
-生产 alias 切换后，在干净环境执行：
-
-```bash
-scripts/web-runtime-deploy.sh smoke https://lmdj-runtime.netlify.app 1.0.15.2 1.1.2
-```
-
-该 smoke 检查 HTTPS、index、manifest、全部声明资产、缓存/header 边界和 packaged
+历史上生产 alias 切换后还会在干净环境运行该脚本的 `smoke` 子命令；它已随 Netlify
+路径删除，当前固定地址检查见上文 `cloudflare_smoke.py` 与部署 workflow 的浏览器 smoke。
+该 smoke 当时检查 HTTPS、index、manifest、全部声明资产、缓存/header 边界和 packaged
 Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecycle 等五项
 物理门；这些门仍需独立 dossier。
 

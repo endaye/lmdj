@@ -2,10 +2,11 @@
 
 > 2026-09-17 切换更新：Creator 的部署 workflow 已重新启用，并改走共享受管 Cloudflare
 > adapter（`scripts/cloudflare-host-deploy.sh TAG --target creator-web`），目标
-> `https://creator.lmdj.workers.dev/`（#1492）。下述 Netlify `deploy` 路径已退役：它现在明确拒绝，
-> 除非显式设置 `LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY=1`，该开关只为历史审计与其
-> 自身测试而存在，不是部署入口。`stage` 与 `verify` 不变，Cloudflare adapter 仍
-> 依赖它们取已验证的签名输入。
+> `https://creator.lmdj.workers.dev/`（#1492）。Netlify 路径的
+> `deploy` 与 `smoke` 子命令、Netlify API 客户端及其测试已于 2026-10-14 按维护者
+> “Netlify 彻底退役”决定（#873、#927）从源码删除；`scripts/creator-web-deploy.sh` 只保留
+> `verify` 与 `stage`，Cloudflare adapter 依赖它们取已验证的签名输入。下文的
+> Netlify 事务、字段与命令只记录当时的事实，仓库中已没有对应实现。
 >
 > 2026-09-08 退役更新：旧 Netlify 站点已按用户授权删除，对应 GitHub 手动部署
 > workflow 已停用。下述 Netlify 路径仅供历史审计，不再是可用的生产或回滚入口。
@@ -36,7 +37,7 @@ Netlify deployment evidence Contract。浏览器测试仍使用原有 Creator de
 本次固定入口的 HTTP、浏览器和签名包身份观察记录在
 [`2026-09-08-cloudflare-creator-observation.json`](2026-09-08-cloudflare-creator-observation.json)。
 禁止用源码重建产物冒充同一个 Release。只有候选验证通过后才启用固定访问地址；
-首次上线验证失败时关闭该路由。下述 Netlify 事务源码保留供历史审计，旧站点已删除。
+首次上线验证失败时关闭该路由。下述 Netlify 事务的源码已删除，旧站点亦已删除。
 
 本手册定义 Creator Web Host 的受控生产部署路径。它是操作契约，不是执行记录；文档、
 workflow 或本地 Proof 的存在都不表示 Netlify Site 已创建，也不授权 Release publication、

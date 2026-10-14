@@ -91,7 +91,9 @@ pagehide 才进入 close。
 
 ## 公共静态托管边界
 
-Runtime Host 发布 workflow 先运行读不到 Netlify credential 的 preflight job：它从 canonical
+以下描述已退役的 Netlify 发布路径，其部署工具源码已于 2026-10-14 删除；当前 Host 部署走
+Cloudflare adapter，签名 tag/Release 的 `verify`/`stage` 预检仍按下述规则执行。
+当时的 Runtime Host 发布 workflow 先运行读不到 Netlify credential 的 preflight job：它从 canonical
 origin 获取 remote signed tag 与受保护 `main`，要求 tag commit 是该 `main` 的 ancestor；
 Release inventory 精确为 ZIP、checksum、受信且专用的 Release checksum key 的 detached
 armored checksum signature，并在解析 checksum 前验证角色专属 signature；Product tag key 与
