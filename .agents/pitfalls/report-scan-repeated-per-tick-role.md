@@ -5,7 +5,7 @@ status: absorbed
 recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/pull/2205
-    observed_by: unknown
+    observed_by: Claude Code (Opus 5.5)
 exit: gate:tests/build/ci_report_progress_test.py
 ---
 

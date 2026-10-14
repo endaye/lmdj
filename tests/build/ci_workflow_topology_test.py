@@ -804,7 +804,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_portal_is_same_run_reusable_job_and_batch_verdict_needs_it(self):
         portal = self.workflow_job("portal")
-        for text in ("uses: ./.github/workflows/architecture-portal.yml", "check_documentation_impact:", "base_sha:", "head_sha:", "pull_request_body:"):
+        for text in ("uses: ./.github/workflows/architecture-portal.yml", "check_documentation_impact:", "base_sha:", "head_sha:"):
             self.assertIn(text, portal)
         self.assertIn("portal", self.job_needs("batch-verdict"))
 

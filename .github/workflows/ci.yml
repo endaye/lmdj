@@ -42,7 +42,6 @@ jobs:
       batch-execution: ${{ steps.batch.outputs.execution }}
       manifest: ${{ steps.batch.outputs.execution }}
       trusted-head: ${{ steps.batch.outputs.trusted-head }}
-      pull-request-body: ''
       resolved-base-sha: ${{ steps.batch.outputs.base }}
       resolved-head-sha: ${{ steps.batch.outputs.target }}
       # Keep the fixed-target checkout interface for every product job.
@@ -258,7 +257,6 @@ jobs:
       head_sha: ${{ needs.change-scope.outputs.resolved-head-sha }}
       checkout_ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
       snapshot_mode: ${{ needs.change-scope.outputs.self-test == 'true' && 'main-interval' || 'own-tree' }}
-      pull_request_body: ${{ needs.change-scope.outputs.pull-request-body }}
 
   ci-contract:
     # On the dual-node trusted role with the rest of the general group.
