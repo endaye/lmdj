@@ -1,5 +1,7 @@
+import "./long_source_editor.css";
+
 import {NO_ROOM_MESSAGE} from "../state/error_messages";
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useState, type CSSProperties} from "react";
 
 import type {DecodedLongSource} from "../ingest/long_source_ingest";
 import type {SampleQuota} from "../runtime/runtime_types";
@@ -43,7 +45,6 @@ export function LongSourceEditor({
   const [selectionStart, setSelectionStart] = useState(0);
   const [selectionFrames, setSelectionFrames] = useState(maximumFrames);
   const [committing, setCommitting] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const waveform = useMemo(
     () => source.envelope(WAVEFORM_BINS, 0, source.frameCount),
@@ -65,15 +66,9 @@ export function LongSourceEditor({
     setError(null);
   };
 
-  const togglePreview = async () => {
-    if (previewing) {
-      source.stopPreview();
-      setPreviewing(false);
-      return;
-    }
+  const preview = async () => {
     try {
       await source.preview({startFrame: selectionStart, frameCount: selectionFrames});
-      setPreviewing(true);
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Preview failed");
@@ -83,7 +78,6 @@ export function LongSourceEditor({
   const commit = async () => {
     if (committing || selectionFrames < 1) return;
     source.stopPreview();
-    setPreviewing(false);
     setCommitting(true);
     setError(null);
     const result = await onCommit({startFrame: selectionStart, frameCount: selectionFrames});
@@ -97,57 +91,49 @@ export function LongSourceEditor({
   const padUsage = quota.consumed.map((entry) =>
     `${padAddress({slot: entry.slot, assetId: null})}: ${seconds(entry.preparedFrames)}`);
 
+  const target = padAddress({slot: quota.slot, assetId: null});
+  const selectionEnd = selectionStart + selectionFrames;
+
   return (
     <ModalDialog
-      label={`Pad ${padAddress({slot: quota.slot, assetId: null})} Long Source`}
+      label={`Pad ${target} Long Source`}
       returnFocus={returnFocus}
       onCancel={onCancel}
-      dialogClassName="long-source-dialog"
+      dialogClassName="long-source-dialog long-source-import-dialog"
+      placement="touch-workspace"
     >
-      <div className="capture-panel-header">
-        <div>
-          <p className="eyebrow">Long-source ingest</p>
-          <h2>{sourceLabel(source.sourceName)}</h2>
-        </div>
-        <div>
-          {onDelete === undefined ? null : (
-            <button type="button" aria-label={`Delete Pad ${padAddress({slot: quota.slot, assetId: null})}`}
-              onClick={onDelete}>Delete Pad</button>
-          )}
-          <button type="button" disabled={committing} onClick={onCancel}>Cancel</button>
-        </div>
-      </div>
+      <header className="long-source-heading">
+        <h2>IMPORT AUDIO</h2>
+        <span>TARGET {target}</span>
+      </header>
       <div className="long-source-content">
-        <p>
-          {source.container.toUpperCase()} · {source.channelCount === 1 ? "Mono" : "Stereo"}
-          {" · "}{seconds(source.frameCount)} · 48 kHz
-        </p>
         <svg
           className="long-source-waveform"
           viewBox={`0 0 ${WAVEFORM_BINS} 100`}
+          preserveAspectRatio="none"
           role="img"
           aria-label={`${sourceLabel(source.sourceName)} decoded waveform`}
         >
           {Array.from(waveform, (magnitude, index) => {
             const height = Math.max(1, Math.min(100, magnitude * 100));
-            return <rect key={index} x={index} y={(100 - height) / 2} width={1} height={height} />;
+            // A bin is selected when any of its frames is: both edges of the
+            // selection then round the same way, outward to the whole bin.
+            const binStart = index * source.frameCount / WAVEFORM_BINS;
+            const binEnd = (index + 1) * source.frameCount / WAVEFORM_BINS;
+            return <rect key={index} x={index} y={(100 - height) / 2} width={1} height={height}
+              data-selected={binStart < selectionEnd && binEnd > selectionStart} />;
           })}
+          <line x1={selectionStart / source.frameCount * WAVEFORM_BINS} y1={0}
+            x2={selectionStart / source.frameCount * WAVEFORM_BINS} y2={100} />
+          <line x1={selectionEnd / source.frameCount * WAVEFORM_BINS} y1={0}
+            x2={selectionEnd / source.frameCount * WAVEFORM_BINS} y2={100} />
         </svg>
-        <p className="quota-summary">
-          Bank {String.fromCharCode(65 + bank)}: {seconds(quota.bankRemainingBytes / 4)} remaining;
-          Project: {seconds(quota.projectRemainingBytes / 4)} remaining.
-        </p>
-        <p className="quota-usage">
-          Pad usage: {padUsage.length === 0 ? "none" : padUsage.join(" · ")}
-        </p>
         {maximumFrames < 1 ? (
-          <p role="alert">
-            {NO_ROOM_MESSAGE}
-          </p>
+          <p role="alert">{NO_ROOM_MESSAGE}</p>
         ) : (
           <>
-            <label>
-              <span>Selection start ({seconds(selectionStart)})</span>
+            <label className="long-source-selection">
+              <span><span>Selection start</span><span>{(selectionStart / 48_000).toFixed(3)} s</span></span>
               <input
                 type="range"
                 min={0}
@@ -155,12 +141,13 @@ export function LongSourceEditor({
                 step={1}
                 value={selectionStart}
                 aria-label="Long source selection start"
+                style={{"--selection-fill": `${selectionStart / Math.max(1, source.frameCount - selectionFrames) * 100}%`} as CSSProperties}
                 disabled={committing}
                 onChange={(event) => selectStart(event.currentTarget.valueAsNumber)}
               />
             </label>
-            <label>
-              <span>Selection length ({seconds(selectionFrames)})</span>
+            <label className="long-source-selection">
+              <span><span>Selection length</span><span>{(selectionFrames / 48_000).toFixed(3)} s</span></span>
               <input
                 type="range"
                 min={1}
@@ -168,29 +155,46 @@ export function LongSourceEditor({
                 step={1}
                 value={selectionFrames}
                 aria-label="Long source selection length"
+                style={{"--selection-fill": `${(selectionFrames - 1) / Math.max(1, Math.min(maximumFrames, source.frameCount - selectionStart) - 1) * 100}%`,
+                  "--selection-colour": "var(--creator-sky)"} as CSSProperties}
                 disabled={committing}
                 onChange={(event) => selectFrames(event.currentTarget.valueAsNumber)}
               />
             </label>
           </>
         )}
+        <div className="long-source-details">
+          <p className="long-source-name">{sourceLabel(source.sourceName)}</p>
+          <p>{source.container.toUpperCase()} · {source.channelCount === 1 ? "Mono" : "Stereo"}
+            {" · "}{seconds(source.frameCount)} · 48 kHz</p>
+          <p className="quota-summary">
+            Bank {String.fromCharCode(65 + bank)}: {seconds(quota.bankRemainingBytes / 4)} remaining;
+            Project: {seconds(quota.projectRemainingBytes / 4)} remaining.
+          </p>
+          <p className="quota-usage">Pad usage: {padUsage.length === 0 ? "none" : padUsage.join(" · ")}</p>
+        </div>
         {error === null ? null : <p role="alert">{error}</p>}
       </div>
-      <div className="capture-panel-actions">
-        <button
-          type="button"
+      <div className="long-source-actions">
+        <button className="touch-control" type="button"
           disabled={committing || selectionFrames < 1}
-          onClick={() => { void togglePreview(); }}
-        >
-          {previewing ? "Stop preview" : "Preview selection"}
+          onClick={() => { void preview(); }}>
+          Preview selection
         </button>
-        <button
-          type="button"
+        <button className="touch-control" type="button" disabled={committing}
+          onClick={() => source.stopPreview()}>
+          Stop preview
+        </button>
+        <button className="touch-control is-primary" type="button"
           disabled={committing || maximumFrames < 1 || selectionFrames < 1}
-          onClick={() => { void commit(); }}
-        >
+          onClick={() => { void commit(); }}>
           {committing ? "Committing…" : "Commit selection"}
         </button>
+        <button className="touch-control" type="button" disabled={committing} onClick={onCancel}>Cancel</button>
+        {onDelete === undefined ? null : (
+          <button className="touch-control is-danger long-source-delete" type="button"
+            aria-label={`Delete Pad ${target}`} onClick={onDelete}>Delete Pad</button>
+        )}
       </div>
     </ModalDialog>
   );

@@ -1973,3 +1973,306 @@ for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 720},
     await noErrors();
   });
 }
+
+// Import-only observation calls the original AudioContext/AudioBufferSource
+// methods. It neither supplies audio nor manufactures Runtime responses. The
+// complete original twenty cases and their History helpers above stay intact.
+async function observeLongSourcePreview(page) {
+  await page.addInitScript(() => {
+    const create = AudioContext.prototype.createBufferSource;
+    const close = AudioContext.prototype.close;
+    const owners = new WeakMap();
+    window.__importAudio = [];
+    AudioContext.prototype.createBufferSource = function (...args) {
+      const node = create.apply(this, args);
+      if (!document.querySelector('.long-source-dialog[open]')) return node;
+      const record = {starts: [], stops: 0, disconnects: 0, ended: 0, closes: 0};
+      window.__importAudio.push(record);
+      owners.set(this, record);
+      const start = node.start, stop = node.stop, disconnect = node.disconnect;
+      node.start = function (...startArgs) {
+        const result = start.apply(this, startArgs);
+        record.starts.push(startArgs);
+        return result;
+      };
+      node.stop = function (...stopArgs) {
+        const result = stop.apply(this, stopArgs);
+        record.stops += 1;
+        return result;
+      };
+      node.disconnect = function (...disconnectArgs) {
+        const result = disconnect.apply(this, disconnectArgs);
+        record.disconnects += 1;
+        return result;
+      };
+      node.addEventListener('ended', () => { record.ended += 1; });
+      return node;
+    };
+    AudioContext.prototype.close = function (...args) {
+      const result = close.apply(this, args);
+      const record = owners.get(this);
+      if (record) record.closes += 1;
+      return result;
+    };
+  });
+}
+
+async function recordImportGeometry(page, dialog, state, testInfo) {
+  const expectedNames = ["Long source selection start", "Long source selection length",
+    "Preview selection", "Stop preview", "Commit selection", "Cancel", "Delete Pad A01"];
+  const controls = dialog.locator('input[type="range"], button');
+  const evidence = {state, controls: []};
+  // Persist inventory before any assertion, including failures, rather than
+  // letting a missing or clipped control disappear from the evidence.
+  evidence.inventory = await controls.evaluateAll(elements => elements.map(element =>
+    element.getAttribute('aria-label') ?? element.textContent.trim()));
+  const path = testInfo.outputPath(`import-${state}-geometry.json`);
+  await writeFile(path, JSON.stringify(evidence, null, 2));
+  expect(evidence.inventory).toEqual(expectedNames);
+  for (let index = 0; index < expectedNames.length; index += 1) {
+    const control = controls.nth(index);
+    await control.scrollIntoViewIfNeeded();
+    const sample = await control.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      const content = element.closest('.long-source-content');
+      const panel = element.closest('dialog');
+      const region = (content ?? panel).getBoundingClientRect();
+      const points = [[box.x + box.width / 2, box.y + box.height / 2],
+        [box.left + 2, box.y + box.height / 2], [box.right - 2, box.y + box.height / 2],
+        [box.x + box.width / 2, box.top + 2], [box.x + box.width / 2, box.bottom - 2]];
+      const range = document.createRange(); range.selectNodeContents(element);
+      const text = [...range.getClientRects()].filter(rect => rect.width && rect.height);
+      return {name: element.getAttribute('aria-label') ?? element.textContent.trim(),
+        box: box.toJSON(), region: region.toJSON(), disabled: element.disabled,
+        hits: points.map(([x, y]) => { const hit = document.elementFromPoint(x, y);
+          return hit === element || element.contains(hit); }),
+        textInside: text.every(rect => rect.left >= box.left - .5 && rect.right <= box.right + .5 &&
+          rect.top >= box.top - .5 && rect.bottom <= box.bottom + .5),
+        inView: box.left >= region.left - .5 && box.right <= region.right + .5 &&
+          box.top >= region.top - .5 && box.bottom <= region.bottom + .5 &&
+          box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight};
+    });
+    evidence.controls.push(sample);
+    await writeFile(path, JSON.stringify(evidence, null, 2));
+    expect(sample.box.width, sample.name).toBeGreaterThanOrEqual(44);
+    expect(sample.box.height, sample.name).toBeGreaterThanOrEqual(44);
+    expect(sample.inView, sample.name).toBe(true);
+    expect(sample.textInside, sample.name).toBe(true);
+    expect(sample.disabled, sample.name).toBe(false);
+    expect(sample.hits, sample.name).toEqual([true, true, true, true, true]);
+  }
+  evidence.layout = await dialog.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    const content = element.querySelector('.long-source-content');
+    const controls = [...element.querySelectorAll('input[type="range"], button')].map(control => control.getBoundingClientRect());
+    const overlaps = controls.flatMap((a, i) => controls.slice(i + 1).filter(b =>
+      a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top));
+    const anchor = document.querySelector('[data-testid="touch-workspace"]');
+    const style = getComputedStyle(element);
+    const transform = new DOMMatrix(style.transform);
+    const labels = [...element.querySelectorAll('.long-source-heading, .long-source-selection > span, .long-source-details p, [role="alert"]')]
+      .map(label => ({text: label.textContent, overflow: label.scrollWidth - label.clientWidth}));
+    return {dialog: box.toJSON(), anchor: anchor.getBoundingClientRect().toJSON(),
+      insideViewport: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+      upright: transform.b === 0 && transform.c === 0, scale: transform.a,
+      contentHeight: content.clientHeight, contentScrollHeight: content.scrollHeight,
+      contentOverflowX: content.scrollWidth - content.clientWidth,
+      pageOverflowX: document.documentElement.scrollWidth - innerWidth,
+      overlapCount: overlaps.length, labels};
+  });
+  await writeFile(path, JSON.stringify(evidence, null, 2));
+  expect(evidence.layout.insideViewport).toBe(true);
+  expect(evidence.layout.upright).toBe(true);
+  expect(evidence.layout.scale).toBeGreaterThanOrEqual(1);
+  expect(evidence.layout.contentOverflowX).toBe(0);
+  expect(evidence.layout.pageOverflowX).toBe(0);
+  expect(evidence.layout.overlapCount).toBe(0);
+  expect(evidence.layout.labels.every(label => label.overflow === 0)).toBe(true);
+  for (const edge of ['top', 'bottom']) {
+    await dialog.locator('.long-source-content').evaluate((element, edge) => {
+      element.scrollTop = edge === 'top' ? 0 : element.scrollHeight;
+    }, edge);
+    const shot = testInfo.outputPath(`import-${state}-${edge}.png`);
+    await page.screenshot({path: shot});
+    await testInfo.attach(`import-${state}-${edge}`, {path: shot, contentType: 'image/png'});
+  }
+  await testInfo.attach(`import-${state}-geometry`, {path, contentType: 'application/json'});
+}
+
+for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 720},
+  {width: 1280, height: 600}, {width: 1024, height: 768},
+  {width: 768, height: 600}, {width: 768, height: 1024}]) {
+  test(`Import keeps exact selection and preview ownership at ${viewport.width}x${viewport.height}`, async ({page, browserName}, testInfo) => {
+    test.skip(browserName !== 'chromium');
+    test.setTimeout(180_000);
+    const noErrors = recordPageErrors(page);
+    await installHostProofRecorder(page);
+    await observeLongSourcePreview(page);
+    await page.setViewportSize(viewport);
+    await page.goto('/index.html');
+    // The official Sample fixture supplies an empty A01 plus real assigned
+    // Pads for the stale-quota mutation; default seeding is not a prerequisite.
+    await importV1SampleProject(page);
+    await activateAudio(page);
+    await enterSampleEditor(page);
+    const truth = async () => {
+      const response = await rawRequest(page, 'project.inspect', {});
+      expect(response.ok).toBe(true);
+      return response.result;
+    };
+    const initial = await truth();
+    expect(initial.project.banks[0].pads[0].asset_id).toBeNull();
+    const operationsFrom = await page.evaluate(() => window.__sampleProofOperations.length);
+    const sourceName = 'import-<long-name>-'.repeat(10) + '.wav';
+    const wav = pcm16Wav({frames: 480_000});
+    const open = async () => {
+      await chooseSampleFile(page, 'Add Sample to Pad A01', sourceName, wav);
+      await expect(page.getByRole('dialog', {name: 'Pad A01 Long Source', exact: true})).toBeVisible({timeout: 30_000});
+    };
+    const dialog = page.getByRole('dialog', {name: 'Pad A01 Long Source', exact: true});
+    const start = dialog.getByRole('slider', {name: 'Long source selection start', exact: true});
+    const length = dialog.getByRole('slider', {name: 'Long source selection length', exact: true});
+    const button = name => dialog.getByRole('button', {name, exact: true});
+    const audio = () => page.evaluate(() => window.__importAudio);
+    const unchanged = async (expected = initial) => { expect(await truth()).toEqual(expected); };
+    const preview = async (startFrame, frameCount) => {
+      const index = (await audio()).length;
+      await button('Preview selection').click();
+      await expect.poll(async () => (await audio())[index]?.starts).toEqual([[0, startFrame / 48_000, frameCount / 48_000]]);
+      await unchanged();
+      return index;
+    };
+    await open();
+    await expect(dialog.getByRole('heading', {name: 'IMPORT AUDIO'})).toBeVisible();
+    await expect(dialog.getByText('TARGET A01', {exact: true})).toBeVisible();
+    await expect(start).toBeFocused();
+    await recordImportGeometry(page, dialog, 'ready', testInfo);
+    await start.focus();
+    const focusOrder = [length, button('Preview selection'), button('Stop preview'), button('Commit selection'), button('Cancel'), button('Delete Pad A01'), start];
+    for (const control of focusOrder) { await page.keyboard.press('Tab'); await expect(control).toBeFocused(); }
+    await page.keyboard.press('Shift+Tab'); await expect(button('Delete Pad A01')).toBeFocused();
+    await start.focus();
+    const padBox = await page.locator('.pad-grid button').first().boundingBox();
+    expect(padBox).not.toBeNull();
+    await page.mouse.click(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
+    await expect(dialog).toBeVisible();
+    await start.focus(); await page.keyboard.press('z');
+    await unchanged();
+    expect(await page.evaluate(from => window.__sampleProofOperations.slice(from).filter(op => op === 'trigger'), operationsFrom)).toEqual([]);
+
+    const first = await preview(0, 480_000);
+    await length.focus(); await page.keyboard.press('PageDown');
+    const selectedFrames = Number(await length.inputValue());
+    expect(selectedFrames).toBeGreaterThan(1); expect(selectedFrames).toBeLessThan(480_000);
+    await unchanged();
+    await start.focus(); await page.keyboard.press('End');
+    const selectedStart = Number(await start.inputValue());
+    expect(selectedStart).toBeGreaterThan(0); expect(selectedStart + selectedFrames).toBe(480_000);
+    await unchanged();
+    // Independent Figma colour oracle: unresolved custom properties can leave
+    // all geometry and selection-state assertions green while painting black.
+    const colours = await dialog.evaluate(element => ({
+      selected: [...element.querySelectorAll('.long-source-waveform rect[data-selected="true"]')]
+        .map(bin => getComputedStyle(bin).fill),
+      unselected: [...element.querySelectorAll('.long-source-waveform rect[data-selected="false"]')]
+        .map(bin => getComputedStyle(bin).fill),
+      lengthTrack: getComputedStyle(element.querySelector('input[aria-label="Long source selection length"]')).backgroundImage,
+    }));
+    const colourPath = testInfo.outputPath('import-selection-colours.json');
+    await writeFile(colourPath, JSON.stringify(colours, null, 2));
+    await testInfo.attach('import-selection-colours', {path: colourPath, contentType: 'application/json'});
+    expect(colours.selected.length).toBeGreaterThan(0);
+    expect(colours.unselected.length).toBeGreaterThan(0);
+    expect([...new Set(colours.selected)]).toEqual(['rgb(149, 212, 223)']);
+    expect([...new Set(colours.unselected)]).toEqual(['rgb(124, 135, 123)']);
+    expect(colours.lengthTrack.match(/rgba?\([^)]+\)/g)?.[0]).toBe('rgb(149, 212, 223)');
+    const second = await preview(selectedStart, selectedFrames);
+    expect((await audio())[first]).toMatchObject({stops: 1, disconnects: 1, closes: 1});
+    await button('Stop preview').click();
+    await expect.poll(async () => (await audio())[second]).toMatchObject({stops: 1, disconnects: 1, closes: 1});
+    await unchanged();
+    await button('Stop preview').click();
+    await unchanged();
+    expect((await audio())[second]).toMatchObject({stops: 1, disconnects: 1, closes: 1});
+    await length.focus(); await page.keyboard.press('Home'); await page.keyboard.press('PageUp');
+    const shortFrames = Number(await length.inputValue());
+    expect(shortFrames).toBeGreaterThan(1); expect(shortFrames).toBeLessThanOrEqual(48_001);
+    await unchanged();
+    const third = await preview(selectedStart, shortFrames);
+    await expect.poll(async () => (await audio())[third]).toMatchObject({ended: 1, closes: 1, stops: 0});
+    await unchanged();
+    await length.focus(); await page.keyboard.press('End');
+    await unchanged();
+    const fourth = await preview(selectedStart, Number(await length.inputValue()));
+    await button('Cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await audio())[fourth]).toMatchObject({stops: 1, disconnects: 1, closes: 1});
+    await unchanged();
+    await expect(page.getByRole('button', {name: 'Add Sample to Pad A01', exact: true})).toBeFocused();
+
+    await open();
+    const escapePreview = await preview(0, 480_000);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await audio())[escapePreview]).toMatchObject({stops: 1, disconnects: 1, closes: 1});
+    await unchanged();
+    await expect(page.getByRole('button', {name: 'Add Sample to Pad A01', exact: true})).toBeFocused();
+
+    // Induce a real stale quota using another assigned Pad's public mutation,
+    // not a substituted failed response. D03's controller/writer is untouched.
+    await open();
+    await length.focus(); await page.keyboard.press('Home'); await page.keyboard.press('PageUp');
+    const commitFrames = Number(await length.inputValue());
+    await start.focus(); await page.keyboard.press('End');
+    const commitStart = Number(await start.inputValue());
+    expect(commitStart).toBeGreaterThan(0); expect(commitStart + commitFrames).toBe(480_000);
+    const assigned = initial.project.banks.flatMap((bank, bankIndex) => bank.pads.map((pad, padIndex) =>
+      ({pad, slot: {bank: bankIndex, pad: padIndex}}))).find(entry => entry.pad.asset_id !== null);
+    expect(assigned).toBeDefined();
+    const other = await rawRequest(page, 'sample.inspect', {slot: assigned.slot});
+    expect(other.ok).toBe(true);
+    const changed = await rawRequest(page, 'sample.update_pad', {
+      command_id: crypto.randomUUID(), expected_revision: initial.project.revision,
+      slot: assigned.slot, playback: {...other.result.playback, gain_millidb: other.result.playback.gain_millidb === 0 ? -1 : 0},
+    });
+    expect(changed.ok).toBe(true);
+    const changedTruth = await truth();
+    expect(changedTruth.project.revision).toBe(initial.project.revision + 1);
+    await button('Commit selection').click();
+    await expect(dialog.getByRole('alert')).toBeVisible({timeout: 120_000});
+    await expect(start).toHaveValue(String(commitStart)); await expect(length).toHaveValue(String(commitFrames));
+    await expect(button('Commit selection')).toBeEnabled();
+    expect(await truth()).toEqual(changedTruth);
+    await recordImportGeometry(page, dialog, 'refused', testInfo);
+    await button('Cancel').click(); await expect(dialog).toHaveCount(0);
+    expect(await truth()).toEqual(changedTruth);
+
+    await open();
+    await length.focus(); await page.keyboard.press('Home'); await page.keyboard.press('PageUp');
+    await expect(length).toHaveValue(String(commitFrames));
+    await start.focus(); await page.keyboard.press('End'); await expect(start).toHaveValue(String(commitStart));
+    await button('Commit selection').click();
+    await expect(dialog).toHaveCount(0, {timeout: 120_000});
+    await expect.poll(async () => (await truth()).project.revision, {timeout: REPORT_REVISION_TIMEOUT_MS}).toBe(changedTruth.project.revision + 1);
+    const saved = await truth();
+    const assetId = saved.project.banks[0].pads[0].asset_id;
+    expect(assetId).not.toBeNull();
+    const artifact = saved.project.assets[assetId].artifact;
+    expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(artifact.byte_length).toBe(44 + commitFrames * 2);
+    const inspected = await page.evaluate(() => window.lmdjWebRuntimeHost.inspection.inspectSample(0));
+    expect(inspected).toMatchObject({assetId, projectRevision: saved.project.revision,
+      metadata: {sourceFrames: commitFrames, sampleRate: 48_000, channels: 1}});
+    expect(await page.evaluate(from => window.__sampleProofOperations.slice(from).filter(op => op === 'trigger'), operationsFrom)).toEqual([]);
+    await page.reload();
+    await waitForProjectReopen(page, saved.project.project_id.slice(0, 8));
+    expect(await truth()).toEqual(saved);
+    await page.getByRole('button', {name: 'Sample', exact: true}).click();
+    await showSamplePage(page, 'Trim');
+    await expect(page.getByRole('img', {name: 'Pad A01 mirrored waveform'})).toBeVisible({timeout: 120_000});
+    const reopened = await page.evaluate(() => window.lmdjWebRuntimeHost.inspection.inspectSample(0));
+    expect(reopened).toEqual(inspected);
+    expect((await truth()).project.assets[assetId].artifact).toEqual(artifact);
+    await noErrors();
+  });
+}
