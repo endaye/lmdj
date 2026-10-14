@@ -1,0 +1,175 @@
+# Test, CI and release script hygiene: follow-up plan
+
+Status: in execution. Owner decisions are recorded under each Task.
+
+## Outcome and authority
+
+The 2026-10-14 audit of test, CI and release/deploy scripts shipped eleven
+Pull Requests: #2182, #2183, #2184, #2185, #2186, #2187, #2188, #2189, #2200,
+#2204 and #2205. This plan carries the findings those Tasks surfaced but did
+not settle, so each one is either delivered, explicitly declined, or tracked.
+
+Goal: every remaining finding has an evidence-backed disposition, the coverage
+lane's real state is known, and no follow-up is left only in chat history.
+
+Authority: the owner asked on 2026-10-14 to turn the remaining decisions into an
+executable plan. Each Task below is one reviewable Conventional Commit shipped
+through `issue-done`; the owner's standing Task authorization applies.
+Issue closure, workflow disabling and GitHub Environment creation are external
+mutations and need the per-item decision recorded below.
+
+## Facts this plan relies on
+
+Recorded at `origin/main` `c73336028fc033b5549c4952aba60a8cb223c0f6`.
+Every Task re-runs `issue-done` §0 at its own base before editing.
+
+- #2188's local run on macOS (Apple LLVM 21) measured the Application Facade
+  line ratio at 84.76% against the 85% floor on unmodified main. No recent
+  Self-test Report run in the last 60 non-cancelled runs contained a coverage
+  job, so the authoritative Linux (llvm-22, netcup) result is unknown.
+- `incremental-completion.yml` ↔ `self-test-report.yml` relay is bounded:
+  2026-10-13/14 showed one relay and one callback per starting run, about
+  135 requests per hour after #2205 (#2185 and #2205 analyses).
+- `deploy-default-assets.yml` deploys with `environment: creator-canary`, calls
+  Wrangler inline instead of `scripts/asset-server.sh deploy`, has no
+  `WRANGLER_SEND_METRICS=false`, no workflow test, and no preview or rollback.
+- `deploy-web-runtime-host.yml` and `deploy-creator-web.yml` differ only in
+  Host names, paths, Environment and contract identifiers (#2187 analysis).
+- `apps/web-runtime-host/tools/cloudflare_host.py` `stage()` runs its
+  subprocess without a timeout; only the workflow `timeout 1080s` bounds it.
+- `scripts/core-coverage.sh` exports each object twice with identical
+  `llvm-cov export` inputs (fragment loop and topology loop at ~366-377), so
+  the "fragments missing topology regions" check in `coverage_union.py` cannot
+  fail. LLVM 22 supports `--empty-profile`.
+- `scripts/ci/report_runtime.py` `drain` computes
+  `planned = plan_batch_reports(...)` (~462) and does not use the result; the
+  call validates evidence and can raise.
+- `ci.yml:46` hard-codes `queue-mode: 'false'`, consumed at `ci.yml:255` for
+  `check_documentation_impact`; the merge queue is retired (#2200).
+- Workflow "Runner Network Diagnostic" (id 332958195) is registered `active`
+  with no file on main; it last ran on 2026-08-12.
+- O1 storage Issues #824, #825, #826, #840 and #857 have no writer since #2204.
+- Review discovery reports `status: blocked` with about 2,615 pending and 167
+  unresolved attempts; no open Issue tracks that backlog. #1048 is closed.
+- Pitfall `netlify-new-site-null-disabled` was deleted by #2186; a pitfall for
+  "one expensive scan attached to every tick role" was not written (#2205).
+
+## F1 — Establish and repair the coverage lane state
+
+Decision: approved (never lower a floor).
+
+1. Obtain the authoritative Linux result: run the `core_coverage` lane on
+   netcup (`scripts/local-ci.sh --lanes core_coverage`, llvm-22) at current main.
+2. If every floor passes, record the result here and close F1.
+3. If the Application Facade (or any) floor fails, identify the uncovered
+   lines from the lcov union and add focused component tests that exercise
+   real behavior. Do not lower a floor, widen a filter or exclude sources.
+
+Declared files: tests under `tests/core/` owning the uncovered facade paths
+(named after step 1). Tests: `scripts/core.sh coverage check` on Linux.
+
+## F2 — Relay ping-pong disposition
+
+Decision: keep as is (owner, 2026-10-14). Both filters cost more than the
+~135 requests/hour they save: a run-name marker is display-only and untrusted
+(pitfall `actions-run-name-is-display-only`), and success-only relaying moves
+the visible red to Incremental Completion and drops the deliberate recovery
+wakeup (pitfall `coalesced-main-wakeup-lost`).
+If kept: record the bounded-chain evidence in the existing
+`coalesced-main-wakeup-lost` entry. No workflow change.
+
+## F3 — Bring `deploy-default-assets.yml` to the deploy-workflow standard
+
+Decision: dedicated `default-assets` Environment with the same protection as
+`creator-canary` (owner, 2026-10-14), so approvals for asset publication are not
+shared with the Creator canary. The Environment is created in repository
+settings before step 4.
+
+1. Deploy through `scripts/asset-server.sh deploy` instead of inline Wrangler.
+2. Set `WRANGLER_SEND_METRICS=false` and per-step `timeout-minutes`.
+3. Add `tests/build/default_assets_deploy_workflow_test.py` pinning the
+   locked Wrangler install, SHA pins, `persist-credentials: false`, the
+   Environment and the script entry point.
+4. Switch the Environment only after the owner has created it.
+
+## F4 — One reusable Web Host deploy workflow
+
+Decision: approved in principle by the owner's de-duplication request; confirm
+during execution that protected Environments keep their names.
+
+Move the shared body into a `workflow_call` workflow parameterized by Host;
+keep `deploy-web-runtime-host.yml` and `deploy-creator-web.yml` as thin callers
+with their own triggers, Environments and concurrency groups. Merge the two
+workflow tests into one parameterized test without dropping any assertion.
+
+## F5 — Bound `cloudflare_host.stage()`
+
+Decision: approved. Give `stage()` its own timeout below the workflow's
+`1080s`, killing the process group as `run_upload_process` does, and print
+captured output on timeout. Test: `cloudflare_host_test.py`.
+
+## F6 — Remove the duplicate coverage export
+
+Decision: approved for reuse; `--empty-profile` is out of scope because it
+changes what coverage measures.
+
+Reuse each fragment export as its topology input instead of exporting twice,
+and make the topology check meaningful or remove it with its claim. Update
+`tests/quality/core_coverage_runner_test.py`. Verify that the lcov union is
+byte-identical before and after on the same build.
+
+## F7 — Small dead-code residues
+
+Decision: approved.
+
+- `ci.yml` `queue-mode: 'false'`: remove the output and make
+  `check_documentation_impact` follow the post-#2200 rule; update
+  `ci_workflow_topology_test.py`.
+- `report_runtime.py` `drain` `planned`: establish from history whether the
+  call is an intended evidence validation. If so, name it explicitly; if not,
+  remove it. Test: `ci_report_runtime_test.py`.
+
+## F8 — External housekeeping
+
+Decision: approved (owner, 2026-10-14). Done 2026-10-14: "Runner Network
+Diagnostic" (id 332958195) is `disabled_manually`; #824, #825, #826, #840 and
+#857 are closed as not planned with a comment pointing to #2204.
+
+## F9 — Pitfall ledger
+
+Decision: approved.
+
+- Do not restore `netlify-new-site-null-disabled`; Netlify cannot recur.
+- Add `report-scan-repeated-per-tick-role` with gate
+  `tests/build/ci_report_progress_test.py` (UTC dates; run
+  `ci_pitfall_ledger_test`).
+
+## F10 — Track the review-discovery backlog
+
+Decision: approved. Open one Issue recording the blocked review-discovery
+backlog (pending/unresolved counts, per-tick progress, owner of recovery), so
+the red report run has a tracked cause.
+
+## Order
+
+F1 first (it may show a red lane). F5, F6, F7, F9 and F10 are independent and
+can run in parallel. F4 after F5 (both touch the Host deploy path). F3 switches
+its Environment only after the Environment exists. F2 and F8 are settled.
+
+## Version Management
+
+Version impact: none. These Tasks change CI, deploy and test tooling, tests and
+process documents only; no Module, Host, Provider, Contract or Product Build
+identity changes. A Task that discovers a version effect records it in its own
+Pull Request.
+
+## Documentation Impact
+
+This plan document has no portal consumer. Documentation impact: none.
+Reason: `docs/plans` is not projected by the portal. Tasks F3, F4 and F6 check
+`/operations/testing-and-proof` and `/operations/version-and-release` and
+declare their own impact.
+
+## Pitfall Impact
+
+F9 adds one entry. Each Task searches the ledger by its area labels at start.
