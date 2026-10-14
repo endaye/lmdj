@@ -212,22 +212,33 @@ for object_path in {native_probe!s} {ordinary_probe!s}; do
             probe_block,
         )
 
-    def test_each_topology_export_uses_its_matching_module_profile(
+    def test_each_object_is_exported_once_with_its_module_profile(
         self,
     ) -> None:
+        # A second export of the same object and profile reproduces the first
+        # byte for byte, doubling export time and feeding a comparison that
+        # cannot fail. Comments may explain the rule, so scan directives only.
         runner = runner_path.read_text(encoding="utf-8")
-        topology_start = runner.index('topologies_root="$run_root/topologies"')
-        topology_end = runner.index(
-            'for fragment_path in "$fragments_root"/*.lcov',
-            topology_start,
+        directives = "\n".join(
+            line
+            for line in runner.splitlines()
+            if not line.lstrip().startswith("#")
         )
-        topology_block = runner[topology_start:topology_end]
 
-        self.assertNotIn("--empty-profile", topology_block)
+        export_calls = [
+            line
+            for line in directives.splitlines()
+            if line.strip() == "run_cov_export \\"
+        ]
+        self.assertEqual(len(export_calls), 1)
+        export_start = directives.index("  run_cov_export \\\n")
+        export_end = directives.index("done", export_start)
         self.assertIn(
-            '-instr-profile="$module_profiles_root/$object_number.profdata"',
-            topology_block,
+            '-instr-profile="$module_profile"',
+            directives[export_start:export_end],
         )
+        self.assertNotIn("--empty-profile", directives)
+        self.assertNotIn("--topology", directives)
 
     def test_missing_llvm_tools_cannot_leave_documented_stale_artifacts(
         self,
@@ -330,7 +341,8 @@ exit 9
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("ctest sentinel failure", result.stderr)
+            # The runner tees the CTest transcript, stderr included, to stdout.
+            self.assertIn("ctest sentinel failure", result.stdout)
             for artifact_path in artifact_paths:
                 self.assertFalse(
                     artifact_path.exists(),
