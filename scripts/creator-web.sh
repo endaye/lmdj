@@ -91,10 +91,6 @@ activate_toolchain() {
   export EMSDK_QUIET=1
   # shellcheck disable=SC1090
   source "$EMSDK/emsdk_env.sh" >/dev/null
-  if ! command -v node >/dev/null 2>&1 && [[ -n "${EMSDK_NODE:-}" ]]; then
-    PATH="$(dirname "$EMSDK_NODE"):$PATH"
-    export PATH
-  fi
   for command in cmake emcc emcmake node npm python3; do
     command -v "$command" >/dev/null 2>&1 || {
       echo "Creator Web error: missing command: $command" >&2

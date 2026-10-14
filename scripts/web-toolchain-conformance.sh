@@ -45,11 +45,6 @@ activate_toolchain() {
   export EMSDK_QUIET=1
   # shellcheck disable=SC1090
   source "$EMSDK/emsdk_env.sh" >/dev/null
-  if ! command -v node >/dev/null 2>&1 && [[ -n "${EMSDK_NODE:-}" ]]; then
-    emsdk_node_dir="$(dirname "$EMSDK_NODE")"
-    PATH="$emsdk_node_dir:$PATH"
-    export PATH
-  fi
   for required_command in emcc emcmake cmake python3 node npm; do
     if ! command -v "$required_command" >/dev/null 2>&1; then
       echo "web toolchain error: missing command: $required_command" >&2

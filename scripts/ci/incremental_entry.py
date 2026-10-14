@@ -31,8 +31,6 @@ STORAGE_PATH = "scripts/ci/incremental_storage.json"
 REPORT_SCHEMA = "lmdj.ci-incremental-entry-report.v1"
 WORKFLOWS = {
     batch_runtime.WORKFLOW: "batch",
-    ".github/workflows/ci.yml": "legacy",
-    ".github/workflows/pr-review.yml": "review",
 }
 EVENTS = {"push", "schedule", "workflow_run"}
 SCHEDULER_HEALTH = "7,22,37,52 * * * *"
@@ -199,8 +197,6 @@ class Entry:
             require(observed == run and self.runtime.run_state({"run_id": run["id"], "attempt": run["run_attempt"]}) == "terminal",
                     "batch source changed while authenticating")
             self.runtime.inputs.verify_target(run["head_sha"])
-        # Legacy/review source, producer, target and artifact proof are owned
-        # by their existing planners. In particular PR heads need not be main.
         return source, run
 
     def state(self):
@@ -268,7 +264,7 @@ class Entry:
                 settled = any(row["run"] == identity for row in state["results"].values())
                 if not (active or settled):
                     return {"schema": REPORT_SCHEMA, "status": "ignored", "source": source, "outcomes": []}
-            operations = [source] if source in {"legacy", "review"} else ["batches"]
+            operations = ["batches"]
         except Exception as error:
             emit_diagnostic("reports", self.diagnostic_stage, error)
             # Current writer/config were authenticated above. Unknown source
@@ -289,9 +285,7 @@ class Entry:
                 # their own authenticated writes, but manufactures no anchor
                 # verified-prefix write; that upgrade waits for an
                 # authenticated tick.
-                result = reporter.execute(operation, limit=1, persist_verified=source != "unverified",
-                    **({"run_id": run["id"], "attempt": run["run_attempt"]}
-                       if operation in {"legacy", "review"} else {}))
+                result = reporter.execute(operation, limit=1, persist_verified=source != "unverified")
             except Exception as error:
                 emit_diagnostic("reports", self.diagnostic_stage, error)
                 result = {"status": "error", "why": "authenticated report source or outbox state is unresolved",

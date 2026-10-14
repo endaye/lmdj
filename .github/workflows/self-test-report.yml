@@ -9,7 +9,7 @@ on:
     # Review records are discovered by coalesced main/health observations.
     # PR-only activity must not allocate another scheduler + relay chain.
     # Keep actual batch completion immediate; the health tick recovers gaps.
-    workflows: ["Incremental Completion", "Core CI"]
+    workflows: ["Incremental Completion"]
     types: [completed]
   schedule:
     - cron: "7,22,37,52 * * * *"
@@ -190,7 +190,7 @@ jobs:
           exit "$status"
       - name: Recover missed review observations independently
         id: automatic-discovery
-        if: ${{ always() && github.event_name != 'workflow_dispatch' && (github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/pr-review.yml') && ((github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') || (steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
+        if: ${{ always() && github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_run' && ((github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') || (steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

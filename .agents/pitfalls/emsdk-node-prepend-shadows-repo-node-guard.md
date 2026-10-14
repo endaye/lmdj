@@ -42,11 +42,13 @@ under the old major while every sibling lane demanded 26.
 After any repository Node major bump, or any emsdk bump (its bundled Node
 major moves independently), grep for every `activate_toolchain` and every
 `Node .. is required` guard under `scripts/` — there is more than one, and
-they are not colocated. The prepend must stay conditional (only when no
-`node` is already on `PATH`); the lane's real Node comes from the
-environment (`.node-version`, setup-node), and `EMSDK_NODE` remains for
-Emscripten's own use (`CMAKE_CROSSCOMPILING_EMULATOR`), not for shadowing
-the lane.
+they are not colocated. The scripts no longer prepend `EMSDK_NODE` at all:
+`emsdk_env.sh` itself adds its bundled Node only when no `node` is on
+`PATH`, and that bundled Node cannot satisfy the Node 26 guard, so even a
+conditional fallback prepend could only reach the guard's failure. The
+lane's real Node comes from the environment (`.node-version`, setup-node),
+and `EMSDK_NODE` remains for Emscripten's own use
+(`CMAKE_CROSSCOMPILING_EMULATOR`), not for the lane's `node`.
 
 Changing one of the three scripts selects its owning lane via
 `scripts/ci/scope_policy.json` exact rules, so a PR touching all three runs
@@ -67,5 +69,5 @@ is the lane Node major, never `EMSDK_NODE`.
 when the lock major differs from `.node-version`.
 `tests/platform/web/toolchain/toolchain_identity_test.py` binds every
 `scripts/*.sh` Node guard to that lock major and rejects any `EMSDK_NODE` use
-outside an `if ! command -v node` block, so a stale guard or an unconditional
-prepend in a further script fails with `why` and `remedy`.
+in those scripts, so a stale guard or a prepend in a further script fails with
+`why` and `remedy`.

@@ -24,53 +24,12 @@ class ChangedFile:
     paths: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class QueueInputs:
-    ticket: str
-    pr_number: int
-    base_sha: str
-    head_sha: str
-
-
-@dataclass(frozen=True)
-class QueueEvaluation:
-    classification: str
-    observed_base_sha: str
-    observed_head_sha: str
-    pull_request_body: str
-    reason: str
-
-
 ALLOWED_MANIFEST_KEYS = {
     "schema", "base_sha", "head_sha", "mode", "reasons",
     "changed_files", "lanes", "required_jobs", "trusted_head",
 }
-QUEUE_MANIFEST_KEYS = ALLOWED_MANIFEST_KEYS | {"queue"}
-QUEUE_VALIDATION_KEYS = {
-    "schema", "classification", "queue_ticket", "queue_pr_number",
-    "queue_base_sha", "queue_head_sha", "observed_base_sha",
-    "observed_head_sha", "manifest_mode", "trusted_head",
-}
-QUEUE_CLASSIFICATIONS = {
-    "valid", "queue-base-drift", "queue-head-drift", "invalid",
-}
 ALLOWED_MODES = {"draft", "focused", "full", "requested"}
-# Breadth that constitutes merge evidence. `requested` is an operator's lane
-# selection rather than a classification of the change, and `draft` never
-# establishes merge evidence at all, so neither may authorize a squash merge.
-MERGE_EVIDENCE_MODES = frozenset({"focused", "full"})
 ALLOWED_RESULTS = {"added", "copied", "deleted", "modified", "renamed", "type_changed"}
-
-
-def is_merge_evidence_mode(mode: object) -> bool:
-    """Return whether *mode* is classified merge evidence.
-
-    ``requested`` is an operator lane selection and ``draft`` never
-    establishes merge evidence, so neither may authorize a squash merge.
-    A missing mode is not evidence: it proves nothing about which lanes
-    were owed.
-    """
-    return mode in MERGE_EVIDENCE_MODES
 
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -141,113 +100,6 @@ def _validate_sha(sha: str) -> str:
     if not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):
         raise ValueError("SHA must be exactly 40 hexadecimal characters")
     return sha.lower()
-
-
-def parse_queue_inputs(
-    ticket: str, pr_number: str, base_sha: str, head_sha: str
-) -> QueueInputs | None:
-    values = (ticket, pr_number, base_sha, head_sha)
-    if not any(values):
-        return None
-    if not all(values):
-        raise ValueError("queue inputs must all be provided or all be empty")
-    if not re.fullmatch(r"mq:[1-9][0-9]*:[1-3]", ticket):
-        raise ValueError("invalid queue ticket")
-    if not pr_number.isdigit() or int(pr_number) <= 0:
-        raise ValueError("invalid queue PR number")
-    return QueueInputs(
-        ticket=ticket,
-        pr_number=int(pr_number),
-        base_sha=_validate_sha(base_sha),
-        head_sha=_validate_sha(head_sha),
-    )
-
-
-def evaluate_queue_context(
-    queue: QueueInputs,
-    repository: str,
-    main_ref_sha: str,
-    pull: Mapping[str, object],
-) -> QueueEvaluation:
-    observed_base = _validate_sha(main_ref_sha)
-    base = pull.get("base")
-    head = pull.get("head")
-    labels = pull.get("labels")
-    if not isinstance(base, Mapping) or not isinstance(head, Mapping):
-        raise ValueError("queue Pull Request base/head is invalid")
-    observed_head = _validate_sha(head.get("sha"))
-    body = pull.get("body")
-    if body is None:
-        body = ""
-    if not isinstance(body, str):
-        raise ValueError("queue Pull Request body is invalid")
-    if observed_base != queue.base_sha:
-        return QueueEvaluation(
-            "queue-base-drift", observed_base, observed_head, body,
-            "canonical main ref advanced before Change Scope",
-        )
-    if observed_head != queue.head_sha:
-        return QueueEvaluation(
-            "queue-head-drift", observed_base, observed_head, body,
-            "Pull Request head advanced before Change Scope",
-        )
-    label_names = set()
-    if isinstance(labels, list):
-        for label in labels:
-            if isinstance(label, Mapping) and isinstance(label.get("name"), str):
-                label_names.add(label["name"])
-            else:
-                raise ValueError("queue Pull Request label is invalid")
-    else:
-        raise ValueError("queue Pull Request labels are invalid")
-    head_repo = head.get("repo")
-    invalid = (
-        pull.get("number") != queue.pr_number
-        or pull.get("state") != "open"
-        or pull.get("merged") is not False
-        or pull.get("draft") is not False
-        or base.get("ref") != "main"
-        or base.get("sha") != queue.base_sha
-        or not isinstance(head_repo, Mapping)
-        or head_repo.get("full_name") != repository
-        or "merge:queue" not in label_names
-    )
-    if invalid:
-        return QueueEvaluation(
-            "invalid", observed_base, observed_head, body,
-            "queue Pull Request eligibility changed",
-        )
-    return QueueEvaluation(
-        "valid", observed_base, observed_head, body, "queue context is valid"
-    )
-
-
-def queue_validation_document(
-    queue: QueueInputs,
-    evaluation: QueueEvaluation,
-    *,
-    manifest_mode: str | None,
-    trusted_head: bool,
-) -> dict[str, object]:
-    if evaluation.classification not in QUEUE_CLASSIFICATIONS:
-        raise ValueError("unknown queue validation classification")
-    if manifest_mode is not None and not is_merge_evidence_mode(manifest_mode):
-        raise ValueError("queue manifest mode is not merge evidence")
-    document = {
-        "schema": "lmdj.queue-validation.v1",
-        "classification": evaluation.classification,
-        "queue_ticket": queue.ticket,
-        "queue_pr_number": queue.pr_number,
-        "queue_base_sha": queue.base_sha,
-        "queue_head_sha": queue.head_sha,
-        "observed_base_sha": evaluation.observed_base_sha,
-        "observed_head_sha": evaluation.observed_head_sha,
-        "manifest_mode": manifest_mode,
-        "trusted_head": trusted_head,
-    }
-    if set(document) != QUEUE_VALIDATION_KEYS:
-        raise ValueError("queue validation schema is not closed")
-    return document
 
 
 def _validate_path(path: str) -> None:
@@ -612,7 +464,7 @@ def classify(
     head_sha: str, event_name: str, draft: bool, labels: Collection[str],
     force_full: bool = False, requested_lanes: Collection[str] | None = None,
     trusted_head: bool = True, unverifiable_base: str | None = None,
-    queue: QueueInputs | None = None, policy_edit_preserving: bool = False,
+    policy_edit_preserving: bool = False,
     self_test_skip: str | None = None,
 ) -> dict[str, object]:
     """Return a deterministic closed v2 scope manifest as a dictionary.
@@ -640,15 +492,6 @@ def classify(
     _validate_policy(policy)
     if not isinstance(trusted_head, bool):
         raise ValueError("trusted head must be a boolean")
-    if queue is not None:
-        if event_name != "workflow_dispatch" or draft or requested_lanes:
-            raise ValueError(
-                "queue validation must be a workflow_dispatch without lane selection"
-            )
-        if base_sha.lower() != queue.base_sha or head_sha.lower() != queue.head_sha:
-            raise ValueError("queue manifest SHA inputs do not match")
-        if not trusted_head:
-            raise ValueError("queue validation head must be trusted")
     if unverifiable_base is not None:
         if not isinstance(unverifiable_base, str) or not unverifiable_base:
             raise ValueError("unverifiable push base reason must be a nonempty string")
@@ -696,11 +539,8 @@ def classify(
     # already upgrade every unsafe main change to full on their own.
     # An empty operator `workflow_dispatch` stays unconditionally full: it is
     # the authorized way to produce release evidence for an exact main SHA, and
-    # `release.sh` still rejects anything narrower. A queue dispatch is not an
-    # operator request -- the controller sends it to validate one exact
-    # PR/base/head -- so it classifies like the synchronized path instead of
-    # inheriting the operator's meaning. `queue` is what tells them apart.
-    if event_name == "workflow_dispatch" and not requested and queue is None:
+    # `release.sh` still rejects anything narrower.
+    if event_name == "workflow_dispatch" and not requested:
         full_reasons.add(f"full event: {event_name}")
     # A scheduled run is the daily sweep of `main` (#543). Focused `main`
     # classification is a recorded cost decision, and its known blind spot is
@@ -717,7 +557,7 @@ def classify(
     if self_test_skip is not None:
         if not isinstance(self_test_skip, str) or not self_test_skip:
             raise ValueError("a self-test skip reason must be a nonempty string")
-        if event_name not in ("schedule", "workflow_dispatch") or queue is not None or requested or draft:
+        if event_name not in ("schedule", "workflow_dispatch") or requested or draft:
             raise ValueError(
                 "a self-test skip is only defined for a schedule run or an operator "
                 "workflow_dispatch without lane selection"
@@ -764,13 +604,6 @@ def classify(
         "required_jobs": required_jobs,
         "trusted_head": trusted_head,
     }
-    if queue is not None:
-        manifest["queue"] = {
-            "ticket": queue.ticket,
-            "pr_number": queue.pr_number,
-            "base_sha": queue.base_sha,
-            "head_sha": queue.head_sha,
-        }
     _validate_manifest(manifest, policy, policy_edit_preserving=policy_edit_preserving)
     return manifest
 
@@ -779,7 +612,7 @@ def _validate_manifest(
     manifest: Mapping[str, object], policy: Mapping[str, object],
     *, policy_edit_preserving: bool = False,
 ) -> None:
-    if frozenset(manifest) not in {frozenset(ALLOWED_MANIFEST_KEYS), frozenset(QUEUE_MANIFEST_KEYS)}:
+    if frozenset(manifest) != frozenset(ALLOWED_MANIFEST_KEYS):
         raise ValueError("manifest schema is not closed")
     if manifest["schema"] != policy["manifest_schema"]:
         raise ValueError("unknown manifest schema")
@@ -789,27 +622,6 @@ def _validate_manifest(
         raise ValueError("unknown manifest mode")
     if not isinstance(manifest["trusted_head"], bool):
         raise ValueError("manifest trusted head must be a boolean")
-    if "queue" in manifest:
-        queue = manifest["queue"]
-        if not isinstance(queue, Mapping) or set(queue) != {
-            "ticket", "pr_number", "base_sha", "head_sha"
-        }:
-            raise ValueError("manifest queue metadata is not closed")
-        parsed = parse_queue_inputs(
-            queue["ticket"], str(queue["pr_number"]),
-            queue["base_sha"], queue["head_sha"],
-        )
-        # Historical queue compatibility evidence is the classification, not a
-        # fixed breadth or an active merge authority: the aggregate verdict
-        # proves every selected lane succeeded and every unselected one was
-        # skipped. Trust is still absolute -- an untrusted head may never
-        # produce queue evidence at any breadth.
-        if parsed is None or not manifest["trusted_head"]:
-            raise ValueError("queue manifest must be trusted evidence")
-        if not is_merge_evidence_mode(manifest["mode"]):
-            raise ValueError("queue manifest mode is not merge evidence")
-        if parsed.base_sha != manifest["base_sha"] or parsed.head_sha != manifest["head_sha"]:
-            raise ValueError("queue manifest metadata SHA mismatch")
     lanes = policy["lanes"]
     if not isinstance(manifest["lanes"], dict) or set(manifest["lanes"]) != set(lanes) or not all(isinstance(value, bool) for value in manifest["lanes"].values()):
         raise ValueError("manifest lanes are not closed")
@@ -884,7 +696,7 @@ def _validate_manifest(
 
 def encode_manifest(manifest: Mapping[str, object]) -> str:
     # The standalone encoder intentionally validates schema closure too.
-    if frozenset(manifest) not in {frozenset(ALLOWED_MANIFEST_KEYS), frozenset(QUEUE_MANIFEST_KEYS)}:
+    if frozenset(manifest) != frozenset(ALLOWED_MANIFEST_KEYS):
         raise ValueError("manifest schema is not closed")
     return json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -999,11 +811,6 @@ def validate_manifest(
     _validate_policy(policy)
     if not isinstance(manifest, Mapping):
         raise ValueError("manifest must be an object")
-    # Keep the public queue-evidence boundary visibly routed through the one
-    # shared predicate even though the private structural validator repeats
-    # the closed queue-shape check below.
-    if "queue" in manifest and not is_merge_evidence_mode(manifest.get("mode")):
-        raise ValueError("queue manifest mode is not merge evidence")
     preserving = False
     if manifest.get("mode") == "focused" and _manifest_touches_scope_policy(manifest):
         # Prove schema, SHA and ordinary path closure before any Git process is
@@ -1130,37 +937,6 @@ def fetch_pr_metadata(repository: str, pr_number: str) -> tuple[bool, set[str], 
             raise ValueError("invalid PR label")
         labels.add(label["name"])
     return metadata["draft"], labels, metadata.get("body") or ""
-
-
-def fetch_queue_evaluation(
-    repository: str, queue: QueueInputs
-) -> QueueEvaluation:
-    if not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
-        raise ValueError("repository is required for queue validation")
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2026-03-10",
-    }
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    documents = []
-    for url in (
-        f"https://api.github.com/repos/{repository}/git/ref/heads/main",
-        f"https://api.github.com/repos/{repository}/pulls/{queue.pr_number}",
-    ):
-        with urlopen(Request(url, headers=headers), timeout=15) as response:
-            documents.append(json.load(response, object_pairs_hook=reject_duplicates))
-    ref, pull = documents
-    if (
-        not isinstance(ref, Mapping)
-        or ref.get("ref") != "refs/heads/main"
-        or not isinstance(ref.get("object"), Mapping)
-    ):
-        raise ValueError("invalid canonical main ref response")
-    if not isinstance(pull, Mapping):
-        raise ValueError("invalid queue Pull Request response")
-    return evaluate_queue_context(queue, repository, ref["object"].get("sha"), pull)
 
 
 def _write(path: str | Path, contents: str) -> None:
@@ -1301,11 +1077,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest-out", required=True)
     parser.add_argument("--github-output", required=True)
     parser.add_argument("--summary", required=True)
-    parser.add_argument("--queue-ticket", default="")
-    parser.add_argument("--queue-pr-number", default="")
-    parser.add_argument("--queue-base-sha", default="")
-    parser.add_argument("--queue-head-sha", default="")
-    parser.add_argument("--queue-validation-out", default="")
     parser.add_argument(
         "--lanes", default="",
         help="comma-separated lanes for a focused workflow_dispatch",
@@ -1315,43 +1086,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="reason a self-test batch selects no lane: its target already has a complete conclusion",
     )
     args = parser.parse_args(argv)
-    queue: QueueInputs | None = None
-    queue_evaluation: QueueEvaluation | None = None
     try:
         policy = load_policy(args.policy)
-        queue = parse_queue_inputs(
-            args.queue_ticket,
-            args.queue_pr_number,
-            args.queue_base_sha,
-            args.queue_head_sha,
-        )
         pull_request_body = ""
-        if queue is not None:
-            if not args.queue_validation_out:
-                raise ValueError("queue validation output path is required")
-            if args.event != "workflow_dispatch" or args.lanes:
-                raise ValueError(
-                    "queue validation must be a workflow_dispatch without lane selection"
-                )
-            if args.base_sha.lower() != queue.base_sha or args.head_sha.lower() != queue.head_sha:
-                raise ValueError("queue CLI SHA inputs do not match")
-            queue_evaluation = fetch_queue_evaluation(args.repository, queue)
-            pull_request_body = queue_evaluation.pull_request_body
-            if queue_evaluation.classification != "valid":
-                _write(
-                    args.queue_validation_out,
-                    json.dumps(
-                        queue_validation_document(
-                            queue,
-                            queue_evaluation,
-                            manifest_mode=None,
-                            trusted_head=False,
-                        ),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                )
-                raise ValueError(queue_evaluation.reason)
         unverifiable_base: str | None = None
         if args.event == "push":
             inventory, unverifiable_base = resolve_push_inventory(
@@ -1368,8 +1105,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         trusted_head = derive_trusted_head(
             args.event, args.head_repository, args.repository
         )
-        if queue is not None:
-            trusted_head = queue_evaluation is not None and queue_evaluation.classification == "valid"
         policy_edit_preserving = False
         policy_edit_note = ""
         touches_policy = any(
@@ -1392,7 +1127,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             ],
             trusted_head=trusted_head,
             unverifiable_base=unverifiable_base,
-            queue=queue,
             self_test_skip=args.self_test_skip or None,
         )
         compact = encode_manifest(manifest)
@@ -1402,49 +1136,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write_output_value(
                 output_file, "trusted-head", "true" if trusted_head else "false"
             )
-            _write_output_value(
-                output_file, "queue-mode", "true" if queue is not None else "false"
-            )
             _write_output_value(output_file, "pull-request-body", pull_request_body)
             _write_output_value(output_file, "resolved-base-sha", manifest["base_sha"])
             _write_output_value(output_file, "resolved-head-sha", manifest["head_sha"])
-        if queue is not None and queue_evaluation is not None:
-            _write(
-                args.queue_validation_out,
-                json.dumps(
-                    queue_validation_document(
-                        queue,
-                        queue_evaluation,
-                        manifest_mode=manifest["mode"],
-                        trusted_head=trusted_head,
-                    ),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-            )
         _write(
             args.summary,
             _summary(manifest, policy, repository=Path.cwd()),
         )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-        if queue is not None and args.queue_validation_out and not Path(args.queue_validation_out).is_file():
-            fallback = QueueEvaluation(
-                "invalid",
-                queue_evaluation.observed_base_sha if queue_evaluation else queue.base_sha,
-                queue_evaluation.observed_head_sha if queue_evaluation else queue.head_sha,
-                queue_evaluation.pull_request_body if queue_evaluation else "",
-                str(error),
-            )
-            _write(
-                args.queue_validation_out,
-                json.dumps(
-                    queue_validation_document(
-                        queue, fallback, manifest_mode=None, trusted_head=False
-                    ),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-            )
         print(f"change scope failed closed: {error}", file=sys.stderr)
         return 1
     return 0

@@ -147,23 +147,19 @@ def assert_web_script_node_guards() -> None:
     guarded = set()
     for script in sorted(SCRIPTS_ROOT.glob("*.sh")):
         text = script.read_text(encoding="utf-8")
-        # The emsdk-bundled Node may only fill an absent node; an unconditional
-        # prepend shadows the repository Node and makes the guard fail or lie.
-        unguarded = re.sub(
-            r"^[ \t]*if ! command -v node\b[^\n]*EMSDK_NODE[^\n]*; then\n.*?^[ \t]*fi$",
-            "",
-            text,
-            flags=re.MULTILINE | re.DOTALL,
-        )
+        # emsdk_env.sh already adds its bundled Node only when no node is on
+        # PATH, and that Node cannot satisfy the guard, so a script-level
+        # EMSDK_NODE prepend can only shadow the repository Node or reach
+        # the guard's failure.
         stray = [
             line.strip()
-            for line in unguarded.splitlines()
+            for line in text.splitlines()
             if "EMSDK_NODE" in line and not line.lstrip().startswith("#")
         ]
         assert not stray, (
-            f"why: {script.name} uses EMSDK_NODE outside an "
-            "'if ! command -v node' block, so the emsdk Node can shadow the "
-            f"repository Node: {stray}; remedy: prepend it only when no node is on PATH"
+            f"why: {script.name} uses EMSDK_NODE, so the emsdk-bundled Node can "
+            f"shadow or stand in for the repository Node: {stray}; remedy: take "
+            "node from the environment (.node-version) and leave EMSDK_NODE to Emscripten"
         )
         if "process.versions.node" not in text:
             continue

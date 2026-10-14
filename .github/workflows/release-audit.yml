@@ -74,11 +74,12 @@ jobs:
         with:
           node-version: "26"
 
-      # The repository is private and the checkout deliberately persists no
-      # credential, so the steps whose git commands must reach the canonical
-      # https://github.com/ remote (the remote audit's authority fetch and
-      # the intent hydration below) scope this job's read-level token through
-      # environment-only git config; nothing is written to disk.
+      # The checkout deliberately persists no credential, so the steps whose
+      # git commands must reach the canonical https://github.com/ remote (the
+      # remote audit's authority fetch and the intent hydration below) scope
+      # this job's read-level token through environment-only git config,
+      # keeping that fetch authenticated independent of repository visibility
+      # (now public; private when this was written); nothing is written to disk.
       # Allocated release intents may target pre-squash commits that no
       # branch or tag reaches, so a fresh full clone lacks their objects and
       # the audit reports the intents unverifiable. `hydrate` is the stable
