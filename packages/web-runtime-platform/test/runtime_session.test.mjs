@@ -8787,6 +8787,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
   let failureListener = null;
   let sealed = false;
   let terminalOwnerReleased = false;
+  let terminalOwnerEnded = false;
   let resolveTerminalOwnerRelease;
   const terminalOwnerRelease = new Promise((resolve) => { resolveTerminalOwnerRelease = resolve; });
   const pendingTimers = new Map();
@@ -8967,6 +8968,7 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     },
     get terminated() { return sealed; },
     get terminalOwnerReleased() { return terminalOwnerReleased; },
+    get terminalOwnerEnded() { return terminalOwnerEnded; },
     subscribe() { return () => {}; },
     subscribeFailure(listener) { failureListener = listener; return () => { failureListener = null; }; },
   };
@@ -9025,6 +9027,8 @@ function retainedConsumerFixture({countMode = "accepted", retainedAvailable = tr
     advanceClock(ms) { clock += ms; }, // Do not dispatch timers: models a delayed timer task.
     seal(error = originalError) { sealed = true; failureListener?.(error); },
     releaseTerminal: releaseTerminalOwner,
+    // Models the Host ending an owner by force: no release receipt exists.
+    endTerminalOwnerByForce() { terminalOwnerEnded = true; },
     cancelTimers() {
       // Test-resource disposal only. Do not resolve a retained RPC, invoke
       // its callback, consume a caller ticket or retire a physical owner.
@@ -9276,6 +9280,22 @@ for (const operation of ["host.close", "audio.suspend"]) {
     assert.equal(f.state.backendCloses, 1);
   });
 }
+
+test("a forced terminal end stops retained consumer polling without claiming release", async (t) => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.state.countInspects > 0 && f.state.terminalStarts === 1);
+  f.endTerminalOwnerByForce();
+  await f.tick();
+  await f.tick();
+  const settled = f.retained.length;
+  for (let step = 0; step < 20; ++step) await f.tick();
+  assert.equal(f.retained.length, settled, "an ended owner cannot be polled again");
+  assert.equal(f.transport.terminalOwnerReleased, false, "a forced end is not a release receipt");
+  assert.equal(f.state.countConsumed, false, "a forced end consumes no caller ticket");
+});
 
 test("accepted count-in response loss keeps original failure and exact final caller consumption", async () => {
   const f = retainedConsumerFixture({countMode: "accepted-response-loss"});

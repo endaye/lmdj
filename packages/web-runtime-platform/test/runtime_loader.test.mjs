@@ -604,10 +604,12 @@ test("an owner that never confirms its release is ended by force after the grace
   f.advance(5099);
   await Promise.resolve();
   assert.equal(cleaned, false, "the real release keeps its full grace period");
+  assert.equal(f.transport.terminalOwnerEnded, false);
   f.advance(5100);
   await Promise.resolve();
   assert.equal(cleaned, true, "a blocked owner must not hold its storage forever");
   assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.transport.terminalOwnerEnded, true, "a forced end is reported without a release receipt");
   const error = await retained;
   assert.equal(error.code, "HOST_RESTART_REQUIRED");
   assert.deepEqual([error.details.operation, error.details.terminal_state,

@@ -971,6 +971,11 @@ if (typeof globalThis.window !== "undefined") {
     get terminalOwnerReleased() {
       return terminalOwnerReleased;
     },
+    get terminalOwnerEnded() {
+      // True once terminal cleanup finished, whether the owner released or was
+      // ended by force; terminalOwnerReleased alone reports a release receipt.
+      return terminalCleanupCompleted;
+    },
   });
 
   const deadlineProof = deadlineProofConfig === undefined

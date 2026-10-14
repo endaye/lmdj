@@ -4562,6 +4562,13 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  // A Host may end an owner by force after its release grace period. That is
+  // not a release receipt, so nothing is retired here, but retained consumers
+  // can no longer be served and must stop polling.
+  function terminalOwnerEnded() {
+    return retireTerminalOwners() || transport.terminalOwnerEnded === true;
+  }
+
   function retireTerminalOwners() {
     if (transport.terminalOwnerReleased !== true) return false;
     // This positive full Host receipt proves there are no remaining owned
@@ -4651,7 +4658,7 @@ function createRuntimeSessionController(options = {}) {
     if (entry.consumer !== null || entry.consumed || entry.retired) return;
     entry.consumer = (async () => {
       while (!entry.consumed && !entry.retired) {
-        if (retireTerminalOwners()) return;
+        if (terminalOwnerEnded()) return;
         try {
           const status = await inspectCountInEntry(entry, false, true);
           if (finalCountInCandidate(status, entry)) await inspectCountInEntry(entry, true, true);
@@ -4683,7 +4690,7 @@ function createRuntimeSessionController(options = {}) {
       if (entry.observerError !== null && !entry.profileConsumer) continueDirectPatternInputConsumer(entry);
     }
     for (const entry of patternCountInTickets.values()) continueCountInConsumer(entry);
-    while (!retireTerminalOwners()) await retainedPollPause();
+    while (!terminalOwnerEnded()) await retainedPollPause();
   }
 
   async function readCountInCapabilities(negotiate) {
@@ -4944,7 +4951,7 @@ function createRuntimeSessionController(options = {}) {
     if (entry.consumer !== null || entry.consumed) return;
     entry.consumer = (async () => {
       while (!entry.consumed && patternInputTickets.get(patternInputTicketKey(entry.ticket)) === entry) {
-        if (retireTerminalOwners()) return;
+        if (terminalOwnerEnded()) return;
         try {
           const status = await inspectPatternInputTicket(entry.ticket, false, true);
           if (status.complete) await inspectPatternInputTicket(entry.ticket, true, true);
@@ -5055,7 +5062,7 @@ function createRuntimeSessionController(options = {}) {
   async function awaitPatternInput(entry) {
     let status = entry.status;
     for (;;) {
-      if (retireTerminalOwners()) throw entry.observerError ??
+      if (terminalOwnerEnded()) throw entry.observerError ??
         typedError("HOST_STATE_INVALID", "Original Pattern input owner was retired without a caller result");
       try {
         if (status === null) status = await inspectPatternInput(entry.ticket);
@@ -5288,7 +5295,7 @@ function createRuntimeSessionController(options = {}) {
     if (hold.sequence === null) {
       const completion = (async () => {
         while (hold.sequence === null) {
-          if (retireTerminalOwners()) throw hold.observerError ??
+          if (terminalOwnerEnded()) throw hold.observerError ??
             typedError("HOST_STATE_INVALID", "Original held input owner was retired");
           await retainedPollPause();
         }
