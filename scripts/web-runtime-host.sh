@@ -316,6 +316,7 @@ run_nonbrowser_tests() {
   python3 "$repo_root/apps/web-runtime-host/test/manifest_asset_role_parity_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/deploy_orchestrator_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/server_test.py"
+  python3 "$web_test_root/audio/count_in_observer_server_test.py"
   node --test "$repo_root"/apps/web-runtime-host/test/*.test.mjs
   "$repo_root/scripts/core.sh" configure dev
   cmake --build --preset dev --target \
