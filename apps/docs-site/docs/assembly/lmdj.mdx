@@ -31,6 +31,21 @@ Assembly 摘要，并让候选 cut 的身份级联自始再生成这两份字面
 
 以下描述各次分配当时的变化，不声明当前组件版本或发布状态。
 
+Product Build `2.0.101.0` 在 `2.0.100.0` 之上结算自 `2.0.87.0` 发布以来欠下的 Module 与 Host 身份
+（`2.0.88.0`–`2.0.100.0` 期间无结算提交，#1816 是上一次结算）：
+
+- Audio Runtime 升到 `6.0.0`（MAJOR，用户 2026-10-14 批准）：#2155 的跨 tempo 变化保持音乐位置改变了
+  transport/voice 的公开 ABI，同时清偿该 PR 声明的 MAJOR ABI 债；#2014 的独立实时 Filter 分支、#2037 的
+  live Mute/Solo 门控、#1984/#2015/#2202 的切换与 count-in 等随后合入。
+- Application Facade `6.8.0`（MINOR：#2044 单次准入 Performance live-control 内核、#2021 的 live-control
+  档案接入与 replay 修复 #2066/#2068/#2104）；Web Runtime Platform `5.9.0`（MINOR，并入其 PATCH 债：
+  #2083 类型化 live-control producer、#2107 保留 Pad 分配发布、#2223 终端属主释放等）；Project I/O
+  `7.2.0`（MINOR：#2021 的 Performance live-control profile 与准入账本、#1895 的 Pad 色彩与类别持久化）。
+- 审计补结算：Authoring Domain `4.5.0`（#1894 的 Pad 色彩解析与 #1888 的 Pattern 缩放/复制）、Foundation
+  `0.5.1`（#1956 的 JSON 解析深度上限）；Creator Web 升到 `6.0.1`（PATCH，host）。
+- Provider SDK、Project Cooker 与其余 Host 不变：自上次结算以来无未结算的公开行为变化
+  （web-runtime-host `4.3.9` 的 src 亦无直接变更）。各模块依赖边同步钉到结算值。
+
 Product Build `2.0.89.0` 曾在 `2.0.88.0` 之上只推进 Contract 身份：`lmdj.project.v5` 由 `5.3.0` 升到 `5.4.0`，
 Contract ID 不变，Performance 新增可选的 `initial_live_state` 起始状态头（HOLD、严格 oneOf 的 legacy/independent Filter、
 固定七键的其他 FX 与两组 0..63 的 live Mute/Solo slot 集合），事件封闭并集末尾追加 `filter_change` 与 `pad_gates_set`
