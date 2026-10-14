@@ -28,6 +28,8 @@ EXPECTED_ACTION_PINS = {
     "actions/upload-artifact": ("b7c566a772e6b6bfb58ed0dc250532a479d7789f", "v6.0.0"),
 }
 DEPLOY_STEP = "Deploy independent asset Worker"
+CHECKOUT_STEP = "Checkout exact protected integration revision"
+INSTALL_STEP = "Install pinned Wrangler"
 
 
 def directives(source: str) -> str:
@@ -36,8 +38,14 @@ def directives(source: str) -> str:
 
 
 def steps(source: str) -> dict[str, str]:
-    """Map each step name to its whole block."""
-    blocks = re.split(r"(?m)^      - ", source.split("\n    steps:\n", 1)[1])[1:]
+    """Map each step name to its whole block.
+
+    The scan reads the one job's step list at its current indentation; a
+    reshaped workflow fails `test_the_step_scan_sees_the_named_steps` with
+    that cause instead of a KeyError in an unrelated contract test.
+    """
+    _, found, listing = source.partition("\n    steps:\n")
+    blocks = re.split(r"(?m)^      - ", listing)[1:] if found else []
     named = {}
     for item in blocks:
         name = re.search(r"(?m)^(?:        )?name: (.+)$", item)
@@ -50,13 +58,23 @@ class DefaultAssetsDeployWorkflowTest(unittest.TestCase):
         self.source = directives(WORKFLOW.read_text(encoding="utf-8"))
         self.steps = steps(self.source)
 
+    def step(self, name: str) -> str:
+        self.assertIn(name, self.steps, f"why: the step scan cannot find {name!r}; remedy: keep the deploy job's "
+                                        "steps at six-space indentation under `    steps:` or update the scan")
+        return self.steps[name]
+
+    def test_the_step_scan_sees_the_named_steps(self) -> None:
+        self.assertLessEqual({CHECKOUT_STEP, INSTALL_STEP, DEPLOY_STEP}, set(self.steps),
+                             "why: the step scan no longer matches the workflow's shape; remedy: keep the deploy "
+                             "job's steps at six-space indentation under `    steps:` or update the scan")
+
     def test_job_runs_in_its_protected_environment(self) -> None:
         self.assertRegex(self.source, rf"(?m)^    environment: {re.escape(ENVIRONMENT)}$",
                          "why: the deploy token is scoped to a protected Environment; remedy: keep "
                          f"environment: {ENVIRONMENT} on the deploy job")
 
     def test_wrangler_is_installed_once_from_the_locked_manifest(self) -> None:
-        install = self.steps["Install pinned Wrangler"]
+        install = self.step(INSTALL_STEP)
         self.assertIn(f'cp tools/wrangler/package.json tools/wrangler/package-lock.json "{WRANGLER_PREFIX}/"',
                       install)
         self.assertIn(f'npm ci --prefix "{WRANGLER_PREFIX}" --ignore-scripts --no-audit --no-fund', install,
@@ -67,7 +85,7 @@ class DefaultAssetsDeployWorkflowTest(unittest.TestCase):
                             "npm ci install")
 
     def test_deploy_runs_the_locked_wrangler_through_the_asset_server_script(self) -> None:
-        deploy = self.steps[DEPLOY_STEP]
+        deploy = self.step(DEPLOY_STEP)
         self.assertRegex(deploy, r"(?m)^ +scripts/asset-server\.sh deploy 2>&1 \| tee build/default-assets/"
                                  r"deployment\.log$",
                          "why: the script runs the corpus check and owns the Wrangler invocation; remedy: deploy "
@@ -92,7 +110,7 @@ class DefaultAssetsDeployWorkflowTest(unittest.TestCase):
                             "executable the caller installed from tools/wrangler")
 
     def test_wrangler_metrics_are_disabled_beside_the_token(self) -> None:
-        self.assertIn("WRANGLER_SEND_METRICS: 'false'", self.steps[DEPLOY_STEP],
+        self.assertIn("WRANGLER_SEND_METRICS: 'false'", self.step(DEPLOY_STEP),
                       "why: Wrangler otherwise sends telemetry from the deploy runner; remedy: set "
                       "WRANGLER_SEND_METRICS: 'false' on the deploy step")
 
@@ -110,14 +128,14 @@ class DefaultAssetsDeployWorkflowTest(unittest.TestCase):
                 self.assertEqual(EXPECTED_ACTION_PINS[match.group(1)], match.group(2, 3))
 
     def test_checkout_does_not_persist_credentials(self) -> None:
-        checkout = self.steps["Checkout exact protected integration revision"]
+        checkout = self.step(CHECKOUT_STEP)
         self.assertRegex(checkout, r"(?m)^ +persist-credentials: false$",
                          "why: a persisted job token sits in .git/config beside the deploy token; remedy: set "
                          "persist-credentials: false")
 
     def test_job_and_every_step_have_a_budget(self) -> None:
         self.assertRegex(self.source, r"(?m)^    timeout-minutes: 20$")
-        self.assertEqual(len(self.steps), 8, "the step scan no longer sees every deploy step")
+        self.assertTrue(self.steps, "why: the step scan found no steps; remedy: see the step scan test")
         for name, item in self.steps.items():
             with self.subTest(step=name):
                 budget = re.search(r"(?m)^        timeout-minutes: (\d+)$", item)
