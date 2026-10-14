@@ -5,7 +5,9 @@
 > `https://creator.lmdj.workers.dev/`（#1492）。Netlify 路径的
 > `deploy` 与 `smoke` 子命令、Netlify API 客户端及其测试已于 2026-10-14 按维护者
 > “Netlify 彻底退役”决定（#873、#927）从源码删除；`scripts/creator-web-deploy.sh` 只保留
-> `verify` 与 `stage`，Cloudflare adapter 依赖它们取已验证的签名输入。下文的
+> `verify` 与 `stage`，Cloudflare adapter 依赖它们取已验证的签名输入。两个 Host 的入口脚本
+> 都 exec 同一份实现 `scripts/web-host-deploy.sh`，每次运行把远端 ref 取到独立命名空间，
+> 同一 checkout 中并发的 Creator 与 Runtime 暂存互不删除对方的 ref。下文的
 > Netlify 事务、字段与命令只记录当时的事实，仓库中已没有对应实现。
 >
 > 2026-09-08 退役更新：旧 Netlify 站点已按用户授权删除，对应 GitHub 手动部署
