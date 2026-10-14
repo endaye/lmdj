@@ -182,6 +182,13 @@ authenticated terminal channel 的 native authorization 是一次性的。Worker
 实际正回执，才发布 terminal release receipt 并关闭。重复同 token 不启动第二个循环。
 这不把 caller timeout、空 Control map 或 retained C++ lease 改写成物理释放。
 
+Main 页面在传输终止后，每个已放弃请求只取消一次，只有提交结果未知的请求会补发到
+首个回执为止；Native 只读报告释放已完成后才消费一次，不在每次轮询时重试。与 main
+一致，宽限期（5 秒）内仍未确认释放的 owner 会被强制结束：仍保留的请求以结果未知
+失败，Worker 被终止以交还存储锁；已释放、只是保留请求仍在收尾的 owner 继续等待。
+结算看门狗判定已认领的发布没有结算时，释放回执不可能到达，只等一个轮询周期就强制
+结束。
+
 原完整 Web 失败证据保留；这份修复源码和 Node VM 检查不证明 Wasm／OPFS、完整
 Creator、真实 PCM 或物理／听感验收已通过。普通 storage close 的既有异常传播边界
 也保留为真实失败，不在析构中吞错后声称 Host 已关闭。

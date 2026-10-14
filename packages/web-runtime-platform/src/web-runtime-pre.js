@@ -300,6 +300,7 @@ if (typeof globalThis.window !== "undefined") {
   let pollScheduled = false;
   let transportTerminated = false;
   let terminalTransportError = null;
+  let terminalOwnerBlocked = false;
   let terminalOwnerReleased = false;
   let terminalFailureDelivered = false;
   let terminalAckTimeout = 0;
@@ -417,6 +418,32 @@ if (typeof globalThis.window !== "undefined") {
   function completeTerminalCleanup() {
     if (terminalCleanupCompleted || !terminalOwnerReleased ||
         pendingRequests.size !== 0) return;
+    finishTerminalCleanup();
+  }
+
+  // As on main, a Native owner that has not confirmed its release within the
+  // grace period is ended by force: a worker blocked inside a claimed
+  // publication can never authorize it, and only terminating the workers
+  // frees their storage locks for the next owner. A released owner whose
+  // retained requests are still draining has a live control thread, so it
+  // keeps waiting instead. A forced end resolves terminate() without a
+  // release receipt; callers keep checking terminalOwnerReleased.
+  function forceTerminalCleanup() {
+    if (terminalCleanupCompleted || terminalOwnerReleased) return;
+    for (const [requestId, pending] of [...pendingRequests.entries()]) {
+      rejectRetainedRequest(requestId, pending, transportFailure(
+        "HOST_RESTART_REQUIRED",
+        "retained Web Host owner was ended before its release",
+        {
+          ...requestDeadlineDetails(pending),
+          terminal_state: "restart-required",
+          mutation_outcome: "unknown",
+        }));
+    }
+    finishTerminalCleanup();
+  }
+
+  function finishTerminalCleanup() {
     terminalCleanupCompleted = true;
     window.clearTimeout(terminalAckTimeout);
     abandonedRequestIds.clear();
@@ -447,10 +474,30 @@ if (typeof globalThis.window !== "undefined") {
       // A lost channel is not a physical/caller/IO release receipt. Keep the
       // actual owner and retry its existing authenticated retirement request.
     }
+    if (terminalOwnerBlocked) {
+      terminalAckTimeout = window.setTimeout(
+        forceTerminalCleanup, TRANSPORT_POLL_INTERVAL_MS);
+      scheduleTransportPoll();
+      return;
+    }
     terminalAckTimeout = window.setTimeout(() => {
-      releaseTerminalOwner();
+      if (terminalOwnerReleased ||
+          (terminalReleaseCompleted() && consumeTerminalOwnerRelease())) {
+        releaseTerminalOwner();
+      } else {
+        forceTerminalCleanup();
+      }
     }, TERMINAL_OWNER_RELEASE_GRACE_MS);
     scheduleTransportPoll();
+  }
+
+  function terminalReleaseCompleted() {
+    try {
+      return Module.ccall(
+        "lmdj_web_host_terminal_release_completed", "number", [], []) === 1;
+    } catch {
+      return false;
+    }
   }
 
   function consumeTerminalOwnerRelease() {
@@ -595,8 +642,17 @@ if (typeof globalThis.window !== "undefined") {
       const settlementRemaining =
         pending.settlementDeadlineAt - performance.now();
       if (settlementRemaining <= 0) {
+        // A claimed publication that never settled keeps the control thread,
+        // so the owner can never authorize its release. Do not wait out the
+        // grace period for a receipt that cannot arrive.
+        terminalOwnerBlocked = true;
         if (pending.retained) {
           rejectRetainedRequest(requestId, pending, restartRequiredFailure(pending));
+          if (transportTerminated && !terminalCleanupCompleted) {
+            window.clearTimeout(terminalAckTimeout);
+            terminalAckTimeout = window.setTimeout(
+              forceTerminalCleanup, TRANSPORT_POLL_INTERVAL_MS);
+          }
         } else {
           failClosed(restartRequiredFailure(pending));
         }
@@ -700,8 +756,11 @@ if (typeof globalThis.window !== "undefined") {
       _free(output);
     }
     if (transportTerminated) reapAbandonedControlRequests();
-    // Polling only finishes cleanup after retained requests drain. Release is
-    // consumed on the worker acknowledgement or the grace retry, never per tick.
+    // Native completes the terminal release asynchronously, possibly after the
+    // worker acknowledgement. Consume it once it is observably complete, so a
+    // poll never spends a rejected consume, then finish once requests drain.
+    if (transportTerminated && !terminalOwnerReleased &&
+        terminalReleaseCompleted()) consumeTerminalOwnerRelease();
     if (transportTerminated && terminalOwnerReleased) completeTerminalCleanup();
     scheduleTransportPoll();
   }
