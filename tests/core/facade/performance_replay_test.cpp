@@ -219,6 +219,11 @@ class RecordingSink final : public PerformanceReplayRuntimeSink {
 
   Result<NeutralResetProgress> initial_live_state_applied() override {
     header_progress_calls.push_back("header_applied");
+    if (header_progress_failures > 0) {
+      --header_progress_failures;
+      return Result<NeutralResetProgress>::failure(
+          Error{ErrorCode::internal_error, "runtime header apply failed"});
+    }
     if (header_pending > 0) {
       --header_pending;
       return Result<NeutralResetProgress>::success(
@@ -247,6 +252,7 @@ class RecordingSink final : public PerformanceReplayRuntimeSink {
   std::uint32_t reset_pending{};
   std::uint32_t reset_attempts{};
   std::uint32_t header_pending{};
+  std::uint32_t header_progress_failures{};
 };
 
 std::shared_ptr<const PerformanceReplayProjection> projection() {
@@ -963,6 +969,51 @@ void test_headered_events_reach_the_typed_sinks() {
   LMDJ_CHECK(sink->last_solo_mask == 0x1);
 }
 
+// A header restoration the runtime cannot apply stops the replay through the
+// ordinary reset path during begin; no event is ever scheduled over an
+// unproven header.
+void test_header_apply_failure_stops_through_reset() {
+  auto sink = std::make_shared<RecordingSink>();
+  sink->apply_failures = 1;
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const lmdj::facade::ReplayId replay_id{"70000000-0000-4000-8000-000000000014"};
+  const auto begun = controller.begin(
+      replay_id,
+      headered_projection(
+          {PerformanceReplayBoundary{
+              0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}, 1}}},
+          1));
+  LMDJ_CHECK(!begun.has_value());
+  LMDJ_CHECK((sink->calls == std::vector<std::string>{"header", "reset"}));
+  const auto observed = controller.status(replay_id);
+  LMDJ_CHECK(observed.has_value());
+  LMDJ_CHECK(observed.value().state == ReplayState::stopped);
+  LMDJ_CHECK(sink->header_progress_calls.empty());
+}
+
+// A header whose applied proof fails during the settle gate stops the replay
+// and propagates the failure out of the advance call.
+void test_header_settle_failure_stops_the_replay() {
+  auto sink = std::make_shared<RecordingSink>();
+  sink->header_progress_failures = 1;
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  const lmdj::facade::ReplayId replay_id{"70000000-0000-4000-8000-000000000015"};
+  const auto begun = controller.begin(
+      replay_id,
+      headered_projection(
+          {PerformanceReplayBoundary{
+              0, PerformanceEvent{PadHitPerformanceEvent{0, 10, 40, 99}, 1}}},
+          1));
+  LMDJ_CHECK(begun.has_value());
+  const auto failed = controller.advance_to(10);
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK((sink->calls == std::vector<std::string>{"header", "reset"}));
+  const auto observed = controller.status(replay_id);
+  LMDJ_CHECK(observed.has_value());
+  LMDJ_CHECK(observed.value().state == ReplayState::stopped);
+  LMDJ_CHECK(observed.value().event_cursor == 0);
+}
+
 void check_profile_rejected_without_effects(PerformanceReplayProjection value) {
   auto sink = std::make_shared<RecordingSink>();
   lmdj::facade::ReferencePerformanceReplayController controller(sink);
@@ -1194,6 +1245,8 @@ int main() {  try {
     test_header_pending_blocks_the_first_event_until_applied();
     test_zero_event_headered_replay_restores_then_resets();
     test_headered_events_reach_the_typed_sinks();
+    test_header_apply_failure_stops_through_reset();
+    test_header_settle_failure_stops_the_replay();
     std::cout << "performance replay controller tests passed\n";
     return 0;
   } catch (const std::exception& error) {

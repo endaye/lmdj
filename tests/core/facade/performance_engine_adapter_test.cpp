@@ -1465,6 +1465,93 @@ void test_mask_clear_under_hold_keeps_frozen_filter() {
   engine.stop();
 }
 
+// The recorded live-control header replays onto the real engine before any
+// event: HOLD first, the engaged Delay, the frozen-only Reverb as an
+// engage-then-release pair, the typed Filter engage, and the gate masks — all
+// through the same live-core admission surfaces, and the first event waits for
+// the header's applied proof.
+void test_headered_replay_restores_the_recorded_header_on_real_engine() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  auto value = *pad_only_replay_projection(120);
+  value.boundaries = {PerformanceReplayBoundary{
+      0, PerformanceEvent{PadHitPerformanceEvent{0, 240, 240, 100}, 1}}};
+  lmdj::domain::PerformanceInitialLiveState header;
+  header.hold = true;
+  header.filter = lmdj::domain::IndependentFilterLiveState{
+      true, false, lmdj::domain::PerformanceFilterType::hp, 800, 250};
+  header.other_fx.at(0) = {true, false, 500};  // delay engaged
+  header.other_fx.at(1) = {false, true, 700};  // reverb frozen-only
+  header.muted_mask = 0x5;
+  header.solo_mask = 0x2;
+  value.initial_live_state = header;
+
+  const auto begun = adapter.replay_controller->begin(
+      ReplayId{kReplay},
+      std::make_shared<const PerformanceReplayProjection>(std::move(value)));
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(begun.value().state == ReplayState::playing);
+  LMDJ_CHECK(begun.value().event_cursor == 0);
+
+  // The accepted side carries the whole restored header through the real
+  // admission surfaces.
+  const auto snapshot = adapter.live_control->live_control_snapshot();
+  LMDJ_CHECK(snapshot.accepted.state.hold);
+  LMDJ_CHECK(snapshot.accepted.state.other_fx.at(0).engaged);
+  LMDJ_CHECK(snapshot.accepted.state.other_fx.at(0).value == 500);
+  LMDJ_CHECK(snapshot.accepted.state.other_fx.at(1).frozen);
+  LMDJ_CHECK(!snapshot.accepted.state.other_fx.at(1).engaged);
+  const auto& independent =
+      std::get<lmdj::domain::IndependentFilterLiveState>(
+          snapshot.accepted.state.filter);
+  LMDJ_CHECK(independent.engaged);
+  LMDJ_CHECK(independent.type == lmdj::domain::PerformanceFilterType::hp);
+  LMDJ_CHECK(independent.cutoff_hz == 800);
+  LMDJ_CHECK(independent.resonance_milli == 250);
+  LMDJ_CHECK(snapshot.accepted.state.muted_mask == 0x5);
+  LMDJ_CHECK(snapshot.accepted.state.solo_mask == 0x2);
+  LMDJ_CHECK(engine.filter_control_status().accepted.engaged);
+  LMDJ_CHECK(
+      engine.filter_control_status().accepted.parameters.cutoff_hz == 800);
+  LMDJ_CHECK(engine.pad_gates_status().accepted.muted_mask == 0x5);
+  LMDJ_CHECK(engine.pad_gates_status().accepted.solo_mask == 0x2);
+
+  // The first event stays gated until the audio thread drains the header.
+  LMDJ_CHECK(engine.telemetry().started_voices == 0);
+  adapter.service();
+  LMDJ_CHECK(adapter.replay_controller->status(ReplayId{kReplay})
+                 .value()
+                 .event_cursor == 0);
+  LMDJ_CHECK(engine.telemetry().started_voices == 0);
+
+  render(engine, 512);
+  const auto applied = adapter.live_control->live_control_snapshot();
+  LMDJ_CHECK(applied.applied.state.hold);
+  LMDJ_CHECK(applied.applied.state.other_fx.at(0).engaged);
+  LMDJ_CHECK(applied.applied.state.other_fx.at(0).value == 500);
+  LMDJ_CHECK(applied.applied.state.other_fx.at(1).frozen);
+  const auto& applied_filter =
+      std::get<lmdj::domain::IndependentFilterLiveState>(
+          applied.applied.state.filter);
+  LMDJ_CHECK(applied_filter.engaged);
+  LMDJ_CHECK(applied.applied.state.muted_mask == 0x5);
+  LMDJ_CHECK(applied.applied.state.solo_mask == 0x2);
+  LMDJ_CHECK(engine.filter_control_status().applied.state.engaged);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.muted_mask == 0x5);
+  LMDJ_CHECK(engine.pad_gates_status().applied.state.solo_mask == 0x2);
+
+  // With the header proven, the Pad event applies on the next service pass.
+  adapter.service();
+  LMDJ_CHECK(adapter.replay_controller->status(ReplayId{kReplay})
+                 .value()
+                 .event_cursor == 1);
+  render(engine, 128);
+  LMDJ_CHECK(engine.telemetry().started_voices == 1);
+  engine.stop();
+}
+
 void test_direct_profile_refusal_keeps_native_effects_and_identity_empty() {
   std::vector<PerformanceEvent> unsupported{
       PerformanceEvent{PadHitPerformanceEvent{0, 240, 240, 100}, 0},
@@ -1543,6 +1630,7 @@ int main() {
     test_begin_fence_adopts_engaged_bindings_without_touching_dsp();
     test_reset_neutral_clears_masks_and_filter_through_real_drains();
     test_mask_clear_under_hold_keeps_frozen_filter();
+    test_headered_replay_restores_the_recorded_header_on_real_engine();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

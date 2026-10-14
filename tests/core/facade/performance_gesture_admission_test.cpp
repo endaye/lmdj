@@ -2776,6 +2776,537 @@ void test_live_control_exact_retry_observes_real_render_application() {
   engine.stop();
 }
 
+// An exact in-process begin retry replays the original deterministic mapping
+// without rewriting the bundle; a begin under another identity on the same
+// bundle refuses while the session owns it.
+void test_headered_begin_retry_replays_and_conflicting_identity_refuses() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  auto initial = lmdj::facade::PerformanceLiveControlState{};
+  initial.state.other_fx.at(0) = {true, false, 500};
+  initial.runtime_generations.at(1) =
+      "20000000-0000-4000-8000-000000000001";
+  fixture.live->set_accepted(initial);
+  const auto begun = fixture.begin_headered();
+  check_ok(begun);
+  const auto before = bundle_bytes(fixture.bundle());
+
+  const auto retry = fixture.begin_headered();
+  check_ok(retry);
+  LMDJ_CHECK(retry.at("result").at("replayed") == true);
+  LMDJ_CHECK(retry.at("result").at("profile") == "header_input_sequence");
+  LMDJ_CHECK(retry.at("result").at("control_epoch") ==
+             std::string(FakeLiveControl::kEpoch));
+  LMDJ_CHECK(retry.at("result").at("next_recording_sequence") == "0");
+  LMDJ_CHECK(retry.at("result").at("fx_bindings") ==
+             begun.at("result").at("fx_bindings"));
+  LMDJ_CHECK(bundle_bytes(fixture.bundle()) == before);
+
+  const auto conflicting = fixture.application->command(
+      {{"operation", "performance.record.begin"},
+       {"project_path", fixture.bundle().generic_string()},
+       {"command_id", "10000000-0000-4000-8000-000000000099"},
+       {"expected_revision", 0},
+       {"session_id", "10000000-0000-4000-8000-000000000098"},
+       {"performance_id", std::string(kPerformance)},
+       {"control_epoch", std::string(FakeLiveControl::kEpoch)}});
+  LMDJ_CHECK(!conflicting.at("ok").get<bool>());
+  LMDJ_CHECK(conflicting.at("error").at("details").at("reason") ==
+             "performance_session_active");
+  LMDJ_CHECK(bundle_bytes(fixture.bundle()) == before);
+}
+
+// Cross-process begin retry: while the original owner lives the identical
+// begin is refused; after the owner exits, the retry replays the durable
+// admission and rebuilds the session from the journal — never recapturing
+// from the current DSP state. The owner-loss closure neutralized the open
+// bindings, and the dead control epoch is not adopted.
+void test_headered_begin_replay_restores_durable_mapping_across_restart() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  auto initial = lmdj::facade::PerformanceLiveControlState{};
+  initial.state.other_fx.at(0) = {true, false, 500};
+  initial.runtime_generations.at(1) =
+      "20000000-0000-4000-8000-000000000001";
+  fixture.live->set_accepted(initial);
+  const auto begun = fixture.begin_headered();
+  check_ok(begun);
+  fixture.mark_ready();
+  lmdj::project_io::SequenceJournal journal;
+  auto durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(durable.value().transient_checkpoint->open_fx.size() == 1U);
+
+  lmdj::facade::ApplicationConfig restart_config{
+      fixture.temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      fixture.clock,
+      fixture.sequencer,
+      fixture.acknowledger,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
+  restart_config.performance_live_control = fixture.live;
+  lmdj::facade::Application restart(std::move(restart_config));
+
+  const auto begin_request = nlohmann::json{
+      {"operation", "performance.record.begin"},
+      {"project_path", fixture.bundle().generic_string()},
+      {"command_id", std::string(kBegin)},
+      {"expected_revision", 0},
+      {"session_id", std::string(kSession)},
+      {"performance_id", std::string(kPerformance)},
+      {"control_epoch", std::string(FakeLiveControl::kEpoch)}};
+  const auto refused = restart.command(begin_request);
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  LMDJ_CHECK(refused.at("error").at("details").at("reason") ==
+             "recording_session_active");
+
+  fixture.application.reset();
+  const auto replayed = restart.command(begin_request);
+  check_ok(replayed);
+  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
+  LMDJ_CHECK(replayed.at("result").at("committed_revision") ==
+             begun.at("result").at("committed_revision"));
+  LMDJ_CHECK(replayed.at("result").at("profile") ==
+             "header_input_sequence");
+  LMDJ_CHECK(replayed.at("result").at("control_epoch").is_null());
+  LMDJ_CHECK(replayed.at("result").at("core_control_ready") == false);
+  LMDJ_CHECK(replayed.at("result").at("next_recording_sequence") == "0");
+  LMDJ_CHECK(replayed.at("result").at("fx_bindings").empty());
+
+  durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(durable.value().transient_checkpoint->open_fx.empty());
+  const auto status = restart.query({
+      {"operation", "performance.record.status"},
+      {"project_path", fixture.bundle().generic_string()}});
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("open_fx_gestures") == 0U);
+}
+
+// filter_parameter events journal a FilterChange engage with its open binding,
+// a move keeps its own event (no coalescing), and a foreign gesture id on the
+// binding refuses before any reservation.
+void test_headered_filter_parameter_journals_engage_move_and_refuses() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  check_ok(fixture.begin_headered());
+  fixture.mark_ready();
+
+  const auto engage = fixture.record_event(
+      "10000000-0000-4000-8000-000000000821",
+      {{"kind", "filter_parameter"},
+       {"phase", "engage"},
+       {"parameter", "cutoff_hz"},
+       {"value", 900}},
+      "0");
+  check_ok(engage);
+  const auto &binding = engage.at("result");
+  LMDJ_CHECK(binding.at("recording_gesture_id").is_string());
+  LMDJ_CHECK(binding.at("gesture_generation").is_string());
+  const auto status = fixture.record_status();
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("open_fx_gestures") == 1U);
+
+  lmdj::project_io::SequenceJournal journal;
+  auto durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().pending_events.size() == 1U);
+  const auto *engage_change = std::get_if<
+      lmdj::domain::FilterChangePerformanceEvent>(
+      &durable.value().pending_events.at(0).payload);
+  LMDJ_CHECK(engage_change != nullptr);
+  LMDJ_CHECK(engage_change->phase ==
+             lmdj::domain::PerformanceFilterPhase::engage);
+  LMDJ_CHECK(engage_change->cutoff_hz == 900);
+
+  const auto move = fixture.record_event(
+      "10000000-0000-4000-8000-000000000822",
+      {{"kind", "filter_parameter"},
+       {"phase", "move"},
+       {"parameter", "resonance_milli"},
+       {"value", 250},
+       {"gesture_id", binding.at("recording_gesture_id")},
+       {"gesture_generation", binding.at("gesture_generation")}},
+      "1");
+  check_ok(move);
+  durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().pending_events.size() == 2U);
+  const auto *move_change = std::get_if<
+      lmdj::domain::FilterChangePerformanceEvent>(
+      &durable.value().pending_events.at(1).payload);
+  LMDJ_CHECK(move_change != nullptr);
+  LMDJ_CHECK(move_change->phase ==
+             lmdj::domain::PerformanceFilterPhase::move);
+  LMDJ_CHECK(move_change->resonance_milli == 250);
+
+  const auto before = bundle_bytes(fixture.bundle());
+  const auto mismatch = fixture.record_event(
+      "10000000-0000-4000-8000-000000000823",
+      {{"kind", "filter_parameter"},
+       {"phase", "move"},
+       {"parameter", "cutoff_hz"},
+       {"value", 800},
+       {"gesture_id", "10000000-0000-4000-8000-000000000999"},
+       {"gesture_generation", binding.at("gesture_generation")}},
+      "2");
+  LMDJ_CHECK(!mismatch.at("ok").get<bool>());
+  LMDJ_CHECK(mismatch.at("error").at("details").at("reason") ==
+             "performance_binding_mismatch");
+  LMDJ_CHECK(bundle_bytes(fixture.bundle()) == before);
+}
+
+// Pad gate events journal PadGatesSet transitions; a gate intent that leaves
+// the accepted masks unchanged completes as an admission without an event.
+void test_headered_pad_gate_events_journal_and_noop_cancels() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  check_ok(fixture.begin_headered());
+  fixture.mark_ready();
+
+  const auto muted = fixture.record_event(
+      "10000000-0000-4000-8000-000000000841",
+      {{"kind", "pad_mute"}, {"slot", 2}, {"enabled", true}}, "0");
+  check_ok(muted);
+  LMDJ_CHECK(muted.at("result").at("result") == "published");
+  lmdj::project_io::SequenceJournal journal;
+  auto durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().pending_events.size() == 1U);
+  const auto *gates = std::get_if<lmdj::domain::PadGatesSetPerformanceEvent>(
+      &durable.value().pending_events.at(0).payload);
+  LMDJ_CHECK(gates != nullptr);
+  LMDJ_CHECK(gates->muted_mask == (std::uint64_t{1} << 2));
+  LMDJ_CHECK(gates->solo_mask == 0);
+
+  // Unmuting a slot that was never muted leaves the accepted masks unchanged:
+  // the admission completes, but no Project event is written.
+  const auto noop = fixture.record_event(
+      "10000000-0000-4000-8000-000000000842",
+      {{"kind", "pad_mute"}, {"slot", 5}, {"enabled", false}}, "1");
+  check_ok(noop);
+  LMDJ_CHECK(noop.at("result").at("result") == "no_audio");
+  durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().pending_events.size() == 1U);
+
+  const auto soloed = fixture.record_event(
+      "10000000-0000-4000-8000-000000000843",
+      {{"kind", "pad_solo"}, {"slot", 1}, {"enabled", true}}, "2");
+  check_ok(soloed);
+  const auto cleared = fixture.record_event(
+      "10000000-0000-4000-8000-000000000844",
+      {{"kind", "clear_pad_gates"}}, "3");
+  check_ok(cleared);
+  durable = journal.read_active_performance(fixture.bundle());
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().pending_events.size() == 3U);
+  const auto &events = durable.value().pending_events;
+  const auto *solo_gates =
+      std::get_if<lmdj::domain::PadGatesSetPerformanceEvent>(
+          &events.at(1).payload);
+  const auto *clear_gates =
+      std::get_if<lmdj::domain::PadGatesSetPerformanceEvent>(
+          &events.at(2).payload);
+  LMDJ_CHECK(solo_gates != nullptr);
+  LMDJ_CHECK(solo_gates->muted_mask == (std::uint64_t{1} << 2));
+  LMDJ_CHECK(solo_gates->solo_mask == (std::uint64_t{1} << 1));
+  LMDJ_CHECK(clear_gates != nullptr);
+  LMDJ_CHECK(clear_gates->muted_mask == 0);
+  LMDJ_CHECK(clear_gates->solo_mask == 0);
+}
+
+// A foreign recording gesture id on an engaged FX binding refuses before any
+// reservation, for both moves and releases.
+void test_headered_fx_binding_mismatch_refuses_before_reservation() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  auto initial = lmdj::facade::PerformanceLiveControlState{};
+  initial.state.other_fx.at(0) = {true, false, 500};
+  initial.runtime_generations.at(1) =
+      "20000000-0000-4000-8000-000000000001";
+  fixture.live->set_accepted(initial);
+  const auto begun = fixture.begin_headered();
+  check_ok(begun);
+  fixture.mark_ready();
+  const auto binding = begun.at("result").at("fx_bindings").at(0);
+  const auto reserves_before = fixture.live->reserve_calls();
+  const auto before = bundle_bytes(fixture.bundle());
+
+  const auto move = fixture.record_event(
+      "10000000-0000-4000-8000-000000000861",
+      {{"kind", "fx_move"},
+       {"fx", "delay"},
+       {"value", 600},
+       {"gesture_id", "10000000-0000-4000-8000-000000000999"},
+       {"gesture_generation", binding.at("gesture_generation")}},
+      "0");
+  LMDJ_CHECK(!move.at("ok").get<bool>());
+  LMDJ_CHECK(move.at("error").at("details").at("reason") ==
+             "performance_binding_mismatch");
+  const auto release = fixture.record_event(
+      "10000000-0000-4000-8000-000000000862",
+      {{"kind", "fx_release"},
+       {"fx", "delay"},
+       {"gesture_id", "10000000-0000-4000-8000-000000000998"},
+       {"gesture_generation", binding.at("gesture_generation")}},
+      "0");
+  LMDJ_CHECK(!release.at("ok").get<bool>());
+  LMDJ_CHECK(release.at("error").at("details").at("reason") ==
+             "performance_binding_mismatch");
+  LMDJ_CHECK(fixture.live->reserve_calls() == reserves_before);
+  LMDJ_CHECK(bundle_bytes(fixture.bundle()) == before);
+}
+
+// Resume-time journal faults: a known-absent failure during the identical
+// retry rolls the runtime back but keeps the frozen tuple retryable; an
+// unknown tail outcome keeps the held cell and requires recovery; an unknown
+// admission-complete after a durable publish freezes as published.
+void test_headered_resume_faults_keep_freeze_rollback_or_recovery() {
+  auto storage = std::make_shared<PostWriteFailingStorage>();
+  HeaderedFixture fixture(storage);
+  fixture.create_project();
+  check_ok(fixture.begin_headered());
+  fixture.mark_ready();
+  const auto engage = fixture.record_event(
+      "10000000-0000-4000-8000-0000000000a1",
+      {{"kind", "fx_engage"}, {"fx", "delay"}, {"value", 100}}, "0");
+  check_ok(engage);
+  const auto gesture_id =
+      engage.at("result").at("recording_gesture_id").get<std::string>();
+  const auto generation =
+      engage.at("result").at("gesture_generation").get<std::string>();
+  const auto move = [&](std::string_view event_id, int value,
+                        std::string_view expected) {
+    return fixture.record_event(
+        event_id,
+        {{"kind", "fx_move"},
+         {"fx", "delay"},
+         {"value", value},
+         {"gesture_id", gesture_id},
+         {"gesture_generation", generation}},
+        expected);
+  };
+  lmdj::project_io::SequenceJournal journal;
+
+  // Freeze the first move with a known pre-write failure.
+  storage->fail_next_tail_pre_write_pair();
+  LMDJ_CHECK(!move("10000000-0000-4000-8000-0000000000a2", 500, "1")
+                  .at("ok")
+                  .get<bool>());
+  LMDJ_CHECK(fixture.live->republish_calls() == 0);
+
+  // The retry's own append fails known-absent: the runtime rolls back and the
+  // identical tuple stays retryable.
+  storage->fail_next_tail_pre_write_pair();
+  const auto rollback = move("10000000-0000-4000-8000-0000000000a2", 500, "1");
+  LMDJ_CHECK(!rollback.at("ok").get<bool>());
+  LMDJ_CHECK(rollback.at("error").at("code") == "IO_ERROR");
+  LMDJ_CHECK(fixture.live->republish_calls() == 1);
+  LMDJ_CHECK(fixture.live->publish_calls() == 1);  // only the engage
+  LMDJ_CHECK(journal.read_active_performance(fixture.bundle())
+                 .value()
+                 .last_input_sequence == 1);
+  const auto clean = move("10000000-0000-4000-8000-0000000000a2", 500, "1");
+  check_ok(clean);
+  LMDJ_CHECK(clean.at("result").at("replayed") == true);
+  LMDJ_CHECK(fixture.live->republish_calls() == 2);
+  LMDJ_CHECK(fixture.live->publish_calls() == 2);
+  LMDJ_CHECK(journal.read_active_performance(fixture.bundle())
+                 .value()
+                 .last_input_sequence == 2);
+
+  // An unknown tail outcome during the resume keeps the held cell and locks
+  // the session behind recovery.
+  storage->fail_next_tail_pre_write_pair();
+  LMDJ_CHECK(!move("10000000-0000-4000-8000-0000000000a3", 600, "2")
+                  .at("ok")
+                  .get<bool>());
+  storage->fail_next_tail_retry_pair();
+  const auto unknown = move("10000000-0000-4000-8000-0000000000a3", 600, "2");
+  LMDJ_CHECK(!unknown.at("ok").get<bool>());
+  LMDJ_CHECK(unknown.at("error").at("code") == "IO_ERROR");
+  const auto frozen_status = fixture.record_status();
+  check_ok(frozen_status);
+  LMDJ_CHECK(frozen_status.at("result").at("state") == "recovery_required");
+  LMDJ_CHECK(fixture.live->publish_calls() == 2);
+  // The identical retry completes through the held cell: no third enqueue,
+  // no second durable append — only the outstanding publish fires.
+  const auto recovered =
+      move("10000000-0000-4000-8000-0000000000a3", 600, "2");
+  check_ok(recovered);
+  LMDJ_CHECK(recovered.at("result").at("replayed") == true);
+  LMDJ_CHECK(fixture.live->republish_calls() == 3);
+  LMDJ_CHECK(fixture.live->publish_calls() == 3);
+}
+
+// A resume whose prepared append is already durable publishes and then hits
+// an unknown admission-complete: the session freezes as published and the
+// metadata-only retry path owns the outcome.
+void test_headered_resume_complete_unknown_freezes_published() {
+  auto storage = std::make_shared<PostWriteFailingStorage>();
+  HeaderedFixture fixture(storage);
+  fixture.create_project();
+  check_ok(fixture.begin_headered());
+  fixture.mark_ready();
+  const auto engage = fixture.record_event(
+      "10000000-0000-4000-8000-0000000000b1",
+      {{"kind", "fx_engage"}, {"fx", "delay"}, {"value", 100}}, "0");
+  check_ok(engage);
+  const auto gesture_id =
+      engage.at("result").at("recording_gesture_id").get<std::string>();
+  const auto generation =
+      engage.at("result").at("gesture_generation").get<std::string>();
+
+  storage->fail_next_tail_pre_write_pair();
+  const auto frozen = fixture.record_event(
+      "10000000-0000-4000-8000-0000000000b2",
+      {{"kind", "fx_move"},
+       {"fx", "delay"},
+       {"value", 500},
+       {"gesture_id", gesture_id},
+       {"gesture_generation", generation}},
+      "1");
+  LMDJ_CHECK(!frozen.at("ok").get<bool>());
+
+  // The retry's tail is durable and the audio published, but the complete
+  // metadata append fails before writing with an unreadable journal
+  // read-back: the outcome is genuinely unknown.
+  storage->fail_next_complete_pair();
+  const auto unknown = fixture.record_event(
+      "10000000-0000-4000-8000-0000000000b2",
+      {{"kind", "fx_move"},
+       {"fx", "delay"},
+       {"value", 500},
+       {"gesture_id", gesture_id},
+       {"gesture_generation", generation}},
+      "1");
+  LMDJ_CHECK(!unknown.at("ok").get<bool>());
+  LMDJ_CHECK(unknown.at("error").at("details").at("reason") ==
+             "performance_admission_complete_outcome_unknown");
+  LMDJ_CHECK(fixture.live->republish_calls() == 1);
+  LMDJ_CHECK(fixture.live->publish_calls() == 2);  // engage + republished move
+  const auto status = fixture.record_status();
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("state") == "recovery_required");
+}
+
+// Without a live-control producer, live status reports the neutral unavailable
+// envelope — never a fake neutral state.
+void test_live_status_without_control_producer_reports_unavailable() {
+  TempDirectory temp;
+  lmdj::facade::Application application({
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  });
+  const auto bundle = temp.path() / "live-status-unavailable.lmdj";
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", std::string(kProject)},
+                                {"bpm", 120}}));
+  const auto status = application.query({
+      {"operation", "performance.live.status"},
+      {"project_path", bundle.generic_string()}});
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("available") == false);
+  LMDJ_CHECK(status.at("result").at("control_epoch").is_null());
+  LMDJ_CHECK(status.at("result").at("accepted").is_null());
+  LMDJ_CHECK(status.at("result").at("applied").is_null());
+  LMDJ_CHECK(status.at("result").at("accepted_control_sequence").is_null());
+  LMDJ_CHECK(status.at("result").at("applied_control_sequence").is_null());
+  LMDJ_CHECK(status.at("result").at("reset_pending") == false);
+  LMDJ_CHECK(status.at("result").at("begin_pending") == false);
+}
+
+// Without a live-control producer, the sessionless live-control route refuses
+// with the producer-unavailable reason.
+void test_live_control_without_producer_refuses() {
+  TempDirectory temp;
+  lmdj::facade::Application application({
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  });
+  const auto bundle = temp.path() / "live-control-unavailable.lmdj";
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", std::string(kProject)},
+                                {"bpm", 120}}));
+  const auto refused = application.command({
+      {"operation", "performance.live.control"},
+      {"project_path", bundle.generic_string()},
+      {"control_epoch", std::string(FakeLiveControl::kEpoch)},
+      {"command_id", "10000000-0000-4000-8000-000000000871"},
+      {"expected_control_sequence", "0"},
+      {"intent", {{"kind", "hold_on"}}}});
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  LMDJ_CHECK(refused.at("error").at("details").at("reason") ==
+             "performance_live_control_unavailable");
+}
+
+// Sessionless live-control admissions fail closed on producer refusals: a
+// refused reserve or publish advances no ledger, so the identical command
+// retries fresh and succeeds.
+void test_live_control_reserve_and_publish_failures_advance_nothing() {
+  HeaderedFixture fixture;
+  fixture.create_project();
+  const auto control = [&](std::string_view command_id,
+                           std::string_view expected, nlohmann::json intent) {
+    return fixture.application->command(
+        {{"operation", "performance.live.control"},
+         {"project_path", fixture.bundle().generic_string()},
+         {"control_epoch", std::string(FakeLiveControl::kEpoch)},
+         {"command_id", std::string(command_id)},
+         {"expected_control_sequence", std::string(expected)},
+         {"intent", std::move(intent)}});
+  };
+
+  fixture.live->fail_reserves(1);
+  const auto refused_reserve =
+      control("10000000-0000-4000-8000-000000000881", "0",
+              {{"kind", "hold_on"}});
+  LMDJ_CHECK(!refused_reserve.at("ok").get<bool>());
+  LMDJ_CHECK(fixture.live->publish_calls() == 0);
+
+  fixture.live->fail_publishes(1);
+  const auto refused_publish =
+      control("10000000-0000-4000-8000-000000000882", "0",
+              {{"kind", "pad_mute"}, {"slot", 3}, {"enabled", true}});
+  LMDJ_CHECK(!refused_publish.at("ok").get<bool>());
+  LMDJ_CHECK(fixture.live->publish_calls() == 0);
+
+  const auto accepted =
+      control("10000000-0000-4000-8000-000000000882", "0",
+              {{"kind", "pad_mute"}, {"slot", 3}, {"enabled", true}});
+  check_ok(accepted);
+  LMDJ_CHECK(accepted.at("result").at("control_sequence") == "1");
+  LMDJ_CHECK(fixture.live->publish_calls() == 1);
+  LMDJ_CHECK(fixture.live->accepted().state.muted_mask ==
+             (std::uint64_t{1} << 3));
+}
+
 } // namespace
 
 int main() {
@@ -2803,6 +3334,16 @@ int main() {
     test_headered_launch_freezes_sequence_at_reservation_and_ack_reuses();
     test_live_control_sessionless_window_and_recording_route_exclusion();
     test_live_control_exact_retry_observes_real_render_application();
+    test_headered_begin_retry_replays_and_conflicting_identity_refuses();
+    test_headered_begin_replay_restores_durable_mapping_across_restart();
+    test_headered_filter_parameter_journals_engage_move_and_refuses();
+    test_headered_pad_gate_events_journal_and_noop_cancels();
+    test_headered_fx_binding_mismatch_refuses_before_reservation();
+    test_live_status_without_control_producer_reports_unavailable();
+    test_live_control_without_producer_refuses();
+    test_live_control_reserve_and_publish_failures_advance_nothing();
+    test_headered_resume_faults_keep_freeze_rollback_or_recovery();
+    test_headered_resume_complete_unknown_freezes_published();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;
