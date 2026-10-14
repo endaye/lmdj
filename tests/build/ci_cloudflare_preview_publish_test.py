@@ -184,12 +184,34 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual([s[1] for s in self.statuses], ['failure'])
 
+    def test_failed_requirement_reason_is_retained_as_evidence(self):
+        # The 'from None' re-raise hides the reason from logs; the evidence
+        # file must still say which fixed requirement failed.
+        self.github.run['conclusion'] = 'failure'
+        with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
+            self.invoke()
+        evidence = self.evidence()
+        self.assertEqual(evidence['error_class'], 'PreviewRequirement')
+        self.assertEqual(evidence['error'], 'why: build did not succeed; remedy: rebuild the exact '
+                                            'PR head with the trusted Preview workflow')
+
+    def test_foreign_value_error_stays_class_only(self):
+        # A library ValueError can quote the untrusted input it rejected.
+        self.extract = lambda archive, destination: int('untrusted-archive-text')
+        with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
+            self.invoke()
+        evidence = self.evidence()
+        self.assertEqual(evidence['error_class'], 'ValueError')
+        self.assertNotIn('error', evidence)
+        self.assertNotIn('untrusted-archive-text', json.dumps(evidence))
+
     def test_unknown_success_status_receipt_is_not_retried(self):
         self.unknown_status_receipt = True
         with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
             self.invoke()
         self.assertEqual(len(self.statuses), 1)
         self.assertEqual(self.evidence()['status'], 'status-receipt-unknown')
+        self.assertNotIn('error', self.evidence())
 
     def test_initial_target_deploy_keeps_stable_route_disabled(self):
         self.new_target = True
