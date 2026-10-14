@@ -46,6 +46,28 @@ class FacadeSurfaceShardingTest(unittest.TestCase):
         self.assertIn("facade.sequence_switch_rebase", errors[0])
         self.assertIn("unexpected", errors[0])
 
+    def test_declared_whole_suite_registration_is_accepted_exactly(self) -> None:
+        executable = Path("/tmp/lmdj_pattern_count_in_tests")
+        expected = {"facade.pattern_count_in": "journeys"}
+        whole_suite = {"facade.pattern_count_in_stress": ["--stress"]}
+        registrations = {
+            "facade.pattern_count_in": [str(executable.resolve()), "--shard=journeys"],
+            "facade.pattern_count_in_stress": [str(executable.resolve()), "--stress"],
+        }
+
+        self.assertEqual(
+            SHARDING.validate_registrations(
+                executable, expected, registrations, whole_suite),
+            [],
+        )
+
+        registrations["facade.pattern_count_in_stress"] = [
+            str(executable.resolve()), "--stress", "--shard=journeys"]
+        errors = SHARDING.validate_registrations(
+            executable, expected, registrations, whole_suite)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("facade.pattern_count_in_stress", errors[0])
+
     def test_unconfigured_build_directory_returns_actionable_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             errors = SHARDING.validate(Path(directory))
