@@ -17,6 +17,9 @@ PACKAGE_PATH = REPO_ROOT / "tests/platform/web/package.json"
 PACKAGE_LOCK_PATH = REPO_ROOT / "tests/platform/web/package-lock.json"
 CMAKE_PATH = REPO_ROOT / "tests/platform/web/toolchain/CMakeLists.txt"
 PROBE_PATH = REPO_ROOT / "tests/platform/web/toolchain/probe.cpp"
+CONFORMANCE_SPEC_PATH = (
+    REPO_ROOT / "tests/platform/web/toolchain/toolchain_conformance.spec.mjs"
+)
 IDENTITY_PATH = REPO_ROOT / "build/web/toolchain/toolchain-identity.json"
 NODE_VERSION_PATH = REPO_ROOT / ".node-version"
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
@@ -184,6 +187,24 @@ def assert_web_script_node_guards() -> None:
     assert not missing, f"Web scripts lost their Node guard: {sorted(missing)}"
 
 
+def assert_conformance_spec_node_pin() -> None:
+    # The browser spec restates the lock's Node major as a literal. #2184
+    # moved the lock from 22 to 26 and left the spec at 22, which only failed
+    # after the lane's full Emscripten build. Bind it here, before the build.
+    lock_node = json.loads(LOCK_PATH.read_text(encoding="utf-8"))["node"]
+    text = CONFORMANCE_SPEC_PATH.read_text(encoding="utf-8")
+    pinned = re.findall(r'identity\.node\)\.toBe\("([0-9]+)"\)', text)
+    assert len(pinned) == 1, (
+        f"{CONFORMANCE_SPEC_PATH.name}: expected one identity.node assertion, "
+        f"found {pinned}"
+    )
+    assert pinned == [lock_node], (
+        f"why: {CONFORMANCE_SPEC_PATH.name} expects Node {pinned[0]} but "
+        f"tools/web-runtime/emscripten.lock.json records {lock_node}; "
+        "remedy: move the spec's identity.node expectation with the lock"
+    )
+
+
 def assert_browser_package() -> None:
     package = json.loads(PACKAGE_PATH.read_text(encoding="utf-8"))
     expected_package = {
@@ -338,6 +359,7 @@ def main() -> int:
         assert_lock_contract(verifier)
         assert_node_pin(verifier)
         assert_web_script_node_guards()
+        assert_conformance_spec_node_pin()
         assert_browser_package()
         assert_verifier_fails_closed()
         assert_audio_callback_is_not_asyncify_reachable()

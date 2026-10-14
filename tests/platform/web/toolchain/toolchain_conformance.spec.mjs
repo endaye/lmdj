@@ -130,7 +130,7 @@ function assertIdentity(identity) {
   );
   expect(identity.initial_memory).toBe(536_870_912);
   expect(identity.allow_memory_growth).toBe(false);
-  expect(identity.node).toBe("22");
+  expect(identity.node).toBe("26");
   expect(identity.playwright).toBe("1.62.1");
   expect(identity.linker_flags).toEqual(REQUIRED_LINKER_FLAGS);
   expect(identity.emcc_version).toContain("6.0.5");
