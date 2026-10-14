@@ -11,7 +11,9 @@ import subprocess
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
+from argparse import Namespace
 from cloudflare_host import candidate, upload_receipt, child_environment, command_store, main, stage, write_diagnostic, CommandError
+from cloudflare_host import locked_wrangler_version, upload
 from cloudflare_run_store import RunStore, StoreError
 from cloudflare_api import CloudflareError
 
@@ -383,6 +385,35 @@ class HostCommandTest(unittest.TestCase):
         self.assertNotIn('GITHUB_TOKEN', cloud)
         self.assertNotIn('GH_TOKEN', cloud)
         self.assertNotIn('NETLIFY_AUTH_TOKEN', cloud)
+
+
+
+class LockedWranglerTest(unittest.TestCase):
+    """The upload accepts only the Wrangler that tools/wrangler locks."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_locked_version_is_the_committed_manifest_pin(self):
+        manifest = Path(__file__).resolve().parents[3]/'tools/wrangler/package.json'
+        self.assertEqual(locked_wrangler_version(), json.loads(manifest.read_text())['dependencies']['wrangler'])
+
+    def test_a_manifest_without_one_exact_version_is_refused(self):
+        manifest = self.root/'package.json'
+        manifest.write_text(json.dumps({'dependencies': {'wrangler': '^4.0.0'}}))
+        with self.assertRaisesRegex(CommandError, 'does not lock one exact Wrangler version'):
+            locked_wrangler_version(manifest)
+
+    def test_upload_refuses_a_wrangler_other_than_the_locked_one(self):
+        package = self.root/'node_modules/wrangler'
+        (package/'bin').mkdir(parents=True)
+        (package/'bin/wrangler.js').write_text('')
+        (package/'package.json').write_text(json.dumps({'name': 'wrangler', 'version': '0.0.1'}))
+        args = Namespace(node=sys.executable, wrangler=str(package/'bin/wrangler.js'))
+        with patch('cloudflare_host.subprocess.check_output', side_effect=AssertionError('checked Node after refusal')):
+            with self.assertRaisesRegex(CommandError, 'locked Wrangler .* installed from tools/wrangler'):
+                upload(args, self.root/'dist', self.root/'workspace', 'creator-recovery')
+        self.assertFalse((self.root/'workspace').exists())
 
 
 if __name__ == '__main__': unittest.main()

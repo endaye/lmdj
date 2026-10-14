@@ -1,0 +1,8 @@
+{
+  "name": "@lmdj/wrangler-cli",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "wrangler": "4.129.1"
+  }
+}
