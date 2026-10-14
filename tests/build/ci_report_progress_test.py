@@ -83,6 +83,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(expression(execute, **{'needs.controller.outputs.action': 'execute'}),
             'why: reporting disabled an earlier admitted DAG; remedy: preserve the original execution output')
 
+    def test_report_tick_is_hourly(self):
+        self.assertRegex(entry.REPORT_HEALTH, r'^[0-5]?[0-9] \* \* \* \*$',
+            'why: each report tick pays a full report scan and review discovery (~900 Actions API requests); '
+            'remedy: keep the report-only cron at one tick per hour')
+
+    def test_only_report_tick_and_completion_relays_pay_for_reporting(self):
+        report, discovery = (condition('Report durable observations independently'),
+                             condition('Recover missed review observations independently'))
+        for event, schedule, action, reports, discovers in (
+            ('schedule', entry.REPORT_HEALTH, '', True, True),
+            ('workflow_run', '', 'idle', True, False),
+            ('workflow_run', '', 'execute', False, False),
+            ('push', '', 'idle', False, False),
+            ('schedule', entry.SCHEDULER_HEALTH, 'idle', False, False),
+            ('schedule', entry.SCHEDULER_HEALTH, 'waiting', False, False),
+            ('workflow_dispatch', '', 'idle', False, False),
+        ):
+            with self.subTest(event=event, schedule=schedule, action=action):
+                context = {'github.event_name': event, 'github.event.schedule': schedule,
+                           'steps.control.outcome': 'skipped' if schedule == entry.REPORT_HEALTH else 'success',
+                           'steps.control.outputs.action': action}
+                self.assertIs(expression(report, **context), reports,
+                    'why: a scheduler tick repeats the hourly full report scan, or a completion relay lost its '
+                    'prompt settled-batch report; remedy: report only on the report tick and non-execute relays')
+                self.assertIs(expression(discovery, **context), discovers,
+                    'why: review discovery runs outside the hourly report tick; remedy: restrict it to that tick')
+
     def test_report_failure_does_not_suppress_independent_discovery(self):
         context = {'github.event_name': 'schedule', 'github.event.schedule': entry.REPORT_HEALTH,
                    'steps.automatic-report.outcome': 'failure', 'steps.automatic-discovery.outcome': 'success'}

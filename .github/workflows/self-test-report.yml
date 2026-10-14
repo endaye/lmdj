@@ -13,8 +13,9 @@ on:
     types: [completed]
   schedule:
     - cron: "7,22,37,52 * * * *"
-    # Independent report opportunities even when every scheduler run executes.
-    - cron: "9,24,39,54 * * * *"
+    # One hourly report-only tick owns the full report scan and review
+    # discovery (~900 API requests); scheduler ticks no longer repeat it.
+    - cron: "24 * * * *"
   workflow_dispatch:
     inputs:
       run_id:
@@ -63,7 +64,7 @@ permissions: {}
 # These are NOT journal locks. Every manual command keeps its own admission
 # group; no running controller, report or product DAG is cancelled.
 concurrency:
-  group: self-test-report-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *' && 'reports' || 'automatic' }}
+  group: self-test-report-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'schedule' && github.event.schedule == '24 * * * *' && 'reports' || 'automatic' }}
   cancel-in-progress: false
   queue: single
 
@@ -107,7 +108,7 @@ jobs:
           python-version: "3.11"
       - name: Reconcile the isolated journal under the short writer lock
         id: control
-        if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}
+        if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '24 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
@@ -170,7 +171,10 @@ jobs:
           PY
       - name: Report durable observations independently
         id: automatic-report
-        if: ${{ always() && github.event_name != 'workflow_dispatch' && ((github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') || (steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
+        # Besides the report tick, only completion relays report: they report a
+        # just-settled batch and cheaply ignore any other parent. Push and
+        # scheduler health ticks leave the full scan to the hourly report tick.
+        if: ${{ always() && ((github.event_name == 'schedule' && github.event.schedule == '24 * * * *') || (github.event_name == 'workflow_run' && steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -184,7 +188,7 @@ jobs:
           exit "$status"
       - name: Recover missed review observations independently
         id: automatic-discovery
-        if: ${{ always() && github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_run' && ((github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') || (steps.control.outcome == 'success' && steps.control.outputs.action != 'execute')) }}
+        if: ${{ always() && github.event_name == 'schedule' && github.event.schedule == '24 * * * *' }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -277,7 +281,7 @@ jobs:
           # result, GITHUB_OUTPUT action, or executor request from this step.
           PY
       - uses: actions/upload-artifact@v6
-        if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}
+        if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '24 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/incremental-controller/result.json

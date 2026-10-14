@@ -34,7 +34,7 @@ WORKFLOWS = {
 }
 EVENTS = {"push", "schedule", "workflow_run"}
 SCHEDULER_HEALTH = "7,22,37,52 * * * *"
-REPORT_HEALTH = "9,24,39,54 * * * *"
+REPORT_HEALTH = "24 * * * *"
 DIAGNOSTIC_STAGES = frozenset({
     "output-preflight", "entry-construction", "event-read", "output-write",
     "authenticate", "auth-lock", "auth-checkout", "auth-main-refresh",
