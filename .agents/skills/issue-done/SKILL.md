@@ -579,11 +579,17 @@ Issues. Retain the postmerge live Issue-state audit below.
 
    A Dependabot Pull Request's automatic review run reads the empty Dependabot
    secret store, not the Actions secrets, so every backend reports
-   `missing_credential`. That failure is not a reason to waive review. Have the
-   owner dispatch the review for the unchanged head, then poll the helper again:
-   ```bash
-   gh workflow run pr-review.yml --ref main -f pr_number=<number>
-   ```
+   `missing_credential`. Do not dispatch a model review for it. The owner's
+   standing Dependabot review waiver is recorded in the `AGENTS.md` and
+   `CLAUDE.md` authorization rules. That record is the owner decision that
+   step 3 requires, and it delegates posting the waiver to the agent. Apply it
+   only to a Pull Request authored by `dependabot[bot]`, and only after its
+   selected CI lanes pass on the exact head with no conflicts or unresolved
+   conversations. Post the step 3 waiver for that head. Its reason must name
+   the Pull Request number, the head SHA and the passing CI run URL, and cite
+   the standing Dependabot waiver in `AGENTS.md`. Then rerun the helper and
+   merge under step 4. A failing lane still stops the merge. Any other Pull
+   Request still needs the owner to post the waiver in person.
    See [`dependabot-review-lacks-actions-secrets`](../../pitfalls/dependabot-review-lacks-actions-secrets.md).
 
    The helper verifies live open/non-draft main-target PR head before and after

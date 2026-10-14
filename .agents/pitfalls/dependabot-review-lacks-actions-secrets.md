@@ -30,9 +30,8 @@ though a real review could have run.
 
 ## How to apply
 
-Absorbed into `issue-done` §5 step 2: for a Dependabot Pull Request, have the
-repository owner dispatch the review for the unchanged head
-(`gh workflow run pr-review.yml -f pr_number=<N>`). A dispatch from `main`
-runs as the owner and reads Actions secrets. Then poll `review_wait`. Do not
-waive review on the strength of this failure. Do not copy the review keys into
-Dependabot secrets as a workaround without the owner's decision.
+Absorbed into `issue-done` §5 step 2. On 2026-10-14 the owner decided that
+Dependabot Pull Requests need no independent review, so this failure is
+expected. Do not chase it, dispatch a model review, or copy the review keys into
+Dependabot secrets. Merge under the owner's standing waiver once the selected CI
+lanes pass. For any other Pull Request, `missing_credential` is a real fault.
