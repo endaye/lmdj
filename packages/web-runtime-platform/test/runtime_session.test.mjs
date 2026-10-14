@@ -4483,8 +4483,8 @@ test("Sample preview, release, stop, and retry use exact Runtime-only envelopes"
   const projectId = "11111111-1111-4111-8111-111111111111";
   const patternId = "22222222-2222-4222-8222-222222222222";
   const {session} = fixture({
-    // This envelope-shape oracle models no elapsed time. A separate original
-    // clock witness below proves queue time is charged, with exact budgets.
+    // This envelope-shape oracle models no elapsed time. The input budget
+    // tests below cover timing, including that queue time is not charged.
     now: () => 0,
     send: async (envelope, transportOptions) => {
       calls.push({envelope, transportOptions});
@@ -8776,7 +8776,7 @@ test("total Native dispositions cannot relabel a press as release or a release a
   await f.session.close();
 });
 
-// SOURCE_ONLY witnesses for the independent sealed transport/owner lane. The
+// Witnesses for the independent sealed transport/owner lane. The
 // Host seam admits once, keeps exact identities, and refuses consumer ACKs
 // until its own input, physical-owner and original count evidence gates pass.
 function retainedConsumerFixture({countMode = "accepted", retainedAvailable = true, loseInputAdmission = false,
