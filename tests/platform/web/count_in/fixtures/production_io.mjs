@@ -41,7 +41,7 @@ async function installTrace(page) {
   await page.evaluate(() => {
     const host = window.lmdjWebRuntimeHost;
     const original = host.transport;
-    const proof = {session: host.session, trace: [], calls: {}, checkpoints: []};
+    const proof = {session: host.session, trace: [], calls: {}};
     const send = async (...args) => {
       const entry = {request: structuredClone(args[0]), began: performance.now()};
       proof.trace.push(entry);
@@ -195,9 +195,7 @@ export async function prepareProductionProject(page, {muted = false} = {}) {
 
 async function observeGate(page, action) {
   return page.evaluate(action => {
-    const result = Module._lmdj_web_audio_test_pattern_controller_io_gate(action);
-    window.__creatorIoProof.checkpoints.push({type: "gate", action, result, at: performance.now()});
-    return result;
+    return Module._lmdj_web_audio_test_pattern_controller_io_gate(action);
   }, action);
 }
 
@@ -241,7 +239,6 @@ export async function expectSameRuntimeOwner(page, ticket) {
   expect(result).toMatchObject({sameSession: true, frozen: true, sameNative: true, outputs: 2,
     capability: {runtimeGeneration: ticket.runtimeGeneration, frameEpoch: ticket.frameEpoch,
       outputReady: true, negotiated: true}});
-  await checkpoint(page, "same-real-frozen-Session-and-Native-epoch", result);
 }
 
 export async function requestCountIn(page, setup) {
@@ -439,13 +436,7 @@ export function checkedDeadlineOpeningJournal(inventory, writtenBeforeFlush, set
   return {records, expectedJournal};
 }
 
-export async function checkpoint(page, name, value) {
-  await page.evaluate(({name, value}) => window.__creatorIoProof.checkpoints.push({name, value, at: performance.now()}),
-    {name, value});
-}
-
 export async function reopenExact(page, setup, truth, inventory, report) {
-  await checkpoint(page, "complete-before-reopen", {truth, inventory});
   const before = await collectProof(page);
   if (report) report.proofBeforeReload = before;
   await restoreTrace(page);
@@ -479,10 +470,9 @@ export async function reopenDeadlineRecovery(page, setup, {truth, inventory, jou
     totalBytes: files.reduce((total, file) => total + file.bytes, 0)};
   const candidate = {sessionId: setup.sessionId, patternId: setup.patternId, bars: journal.bars,
     reason: "owner_lost", eventCount: 0};
-  await checkpoint(page, "complete-failed-owner-before-reopen", {truth, inventory, journal});
   const before = await collectProof(page);
   if (report) report.proofBeforeReload = before;
-  const reopen = async name => {
+  const reopen = async () => {
     await restoreTrace(page);
     await page.reload();
     await waitForProjectReopen(page, setup.projectId.slice(0, 8));
@@ -505,12 +495,11 @@ export async function reopenDeadlineRecovery(page, setup, {truth, inventory, jou
     expect(actualRecord.checksum).toBe(createHash("sha256").update(canonical(actualRecord.payload)).digest("hex"));
     expect(reopenedTruth, "owner loss creates no Truth event or revision").toEqual(truth);
     expect(reopenedInventory, "only the original active Journal becomes one exact sealed owner_lost artifact").toEqual(expectedInventory);
-    await checkpoint(page, name, {recovery, truth: reopenedTruth, inventory: reopenedInventory});
     return {recovery, reopenedTruth, reopenedInventory, proof: await collectProof(page)};
   };
-  const first = await reopen("first-reopen-exact-deadline-owner-loss-recovery");
+  const first = await reopen();
   if (report) report.firstRecoveryReopen = first;
-  const second = await reopen("second-reopen-stable-deadline-owner-loss-recovery");
+  const second = await reopen();
   expect(second.recovery, "second reopen offers the same single original candidate").toEqual(first.recovery);
   expect(second.reopenedTruth).toEqual(first.reopenedTruth);
   expect(second.reopenedInventory, "second reopen cannot add another seal or change any byte").toEqual(first.reopenedInventory);
@@ -520,8 +509,8 @@ export async function reopenDeadlineRecovery(page, setup, {truth, inventory, jou
 export async function collectProof(page) {
   return page.evaluate(() => {
     const proof = window.__creatorIoProof;
-    return proof ? {startup: proof.startup, trace: proof.trace, calls: proof.calls,
-      checkpoints: proof.checkpoints} : {scope: "startup did not reach proof owner"};
+    return proof ? {startup: proof.startup, trace: proof.trace, calls: proof.calls}
+      : {scope: "startup did not reach proof owner"};
   });
 }
 
