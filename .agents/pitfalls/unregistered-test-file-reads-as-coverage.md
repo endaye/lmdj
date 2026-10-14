@@ -18,6 +18,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/pull/2219
     observed_by: claude-code/opus-5.5
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/pull/2202
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_change_scope_test.py
 ---
 
@@ -147,3 +150,19 @@ noticed it. The `ci-contract` job now discovers them, and
 `test_every_quality_test_is_run_by_a_lane_that_owns_it` requires every
 `tests/quality` suite to be run by a lane command that the lane's CI job also
 runs, on a lane the file's route selects.
+
+The sixth occurrence showed that per-directory gates only move the gap to the
+next directory. #2202 added `tests/platform/web/audio/count_in_observer_server_test.py`
+and no runner named it, and a repository-wide sweep found three more files
+nothing ran (`tests/build/web_host_release_selection_test.py`,
+`tools/project-bundle/tests/ableton_baseline_test.py`) plus fourteen
+`tests/conformance/` and `tests/host/` suites whose route selected only the
+`proof` lanes that exclude `conformance.*` and `host.*` by name. The two
+directory gates are now one:
+`test_every_python_test_is_run_by_a_lane_that_owns_it` reads every tracked
+`*_test.py` (and every unittest or pytest `test_*.py`), follows each lane
+command through the scripts it calls, `unittest discover` and the CTest
+registrations its filter selects, and requires a lane the file's route selects
+to run it in that lane's CI job. A file that is not a test, or is outside the
+product, goes in its `UNOWNED_TESTS` allowlist with a reason; a stale entry
+fails.

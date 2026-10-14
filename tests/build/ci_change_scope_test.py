@@ -134,7 +134,7 @@ CASES = {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
     },
     "tests/build/web_runtime_public_deployment_docs_test.py": {"deploy_contract"},
-    "tests/conformance/version_lock_test.py": {"core_ubuntu", "package"},
+    "tests/conformance/version_lock_test.py": {"core_ubuntu", "core_asan", "core_coverage", "package"},
     "scripts/core.sh": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos", "package"
     },
@@ -721,234 +721,428 @@ class ChangeScopeTest(unittest.TestCase):
         finally:
             self.lanes_for_path = original
 
-    # Web Host Python suites are run by name from hand-written lists, so a new
-    # file is silently unrun until someone adds it to one (three Creator
-    # suites sat that way). Each runner is bound to the lane that executes it;
-    # the lane-to-runner link is asserted separately below.
-    WEB_HOST_TEST_DIRECTORIES = ("apps/creator-web/test/", "apps/web-runtime-host/test/")
-    WEB_HOST_SCRIPT_RUNNERS = {
-        "scripts/creator-web.sh": "creator",
-        "scripts/web-runtime-host.sh": "web_runtime_host",
+    # A Python test file runs only where something names it, and a directory of
+    # suites looks like coverage whether or not anything does: CTest left a
+    # conformance suite unregistered for six Stages (#784), runner lists missed
+    # three Creator suites (#1800), and no lane ran tests/quality (#2219). This
+    # gate reads every tracked `*_test.py`, plus every `test_*.py` that is a
+    # unittest or pytest module, and requires each to be run by a lane that its
+    # policy route selects. A lane runs a file when one of its CI commands in
+    # scripts/ci/local_lanes.json, a script that command reaches, or a CTest
+    # registration the command's CTest filter selects names the file, globs it,
+    # or discovers it with `unittest discover -s DIR -p PATTERN`.
+    #
+    # Blind spot: a runner is credited with every test its source names, so a
+    # file named only on a subcommand the lane never calls (for example only
+    # under `scripts/core.sh package`) still reads as run by every lane calling
+    # that runner. The CTest filters below are the exception: they are modelled
+    # per lane command and bound to the literal filter text in the runner.
+    UNOWNED_TESTS = {
+        "scripts/ci/self_test.py": (
+            "helper, not a test: the self-test evidence protocol module that "
+            "scripts/ci imports as `self_test`"),
+        "demos/lmdj-song-pipeline/tests/test_smoke.py": (
+            "demo, not product (CLAUDE.md `demos/`): pytest in the demo's own "
+            "virtualenv, run by hand per its docstring"),
+        "tools/needle-spike/tests/router_smoke_test.py": (
+            "spike, not product: needs a downloaded native engine and is run by "
+            "hand per tools/needle-spike/README.md"),
+        "tools/needle-spike/tests/tool_surface_test.py": (
+            "spike, not product: run by hand per tools/needle-spike/README.md"),
     }
-    WEB_HOST_TEST_FILE = re.compile(r"apps/(?:creator-web|web-runtime-host)/test/[\w-]+_test\.py")
+    TEST_OWNERSHIP_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/pr-contract.yml")
+    TEST_MODULE_CONTENT = re.compile(r"\bunittest\b|^\s*def test_|^\s*import pytest\b", re.MULTILINE)
+    SCRIPT_ROOT_VARIABLES = ("repo_root", "ROOT_DIR")
+    # Python runners that discover suites in-process rather than on a command
+    # line: (start directory, pattern) and the literal source binding each.
+    PYTHON_DISCOVERY_RUNNERS = {
+        "tests/build/release_suite_runner.py": (
+            "tests/build", "release_*_test.py",
+            ('START = ROOT / "tests" / "build"', 'PATTERN = "release_*_test.py"')),
+        # The Pull Request ci-contract job runs the change-selected subset.
+        "scripts/ci/contract_selection.py": (
+            "tests/build", "ci_*_test.py", ('root.joinpath("tests/build").glob("ci_*_test.py")',)),
+    }
+    # How each CTest-running lane command filters registrations, bound to the
+    # literal filter text in the runner that executes it.
+    CTEST_LANE_FILTERS = (
+        (r"scripts/core\.sh test \S+ full", "scripts/core.sh",
+         "-LE '^stress$' -E '^build\\.release_'",
+         lambda name, labels: "stress" not in labels and not name.startswith("build.release_")),
+        (r"scripts/core\.sh test \S+ fast", "scripts/core.sh",
+         "-L '^(unit|component)$' -E '^build\\.release_'",
+         lambda name, labels: bool({"unit", "component"} & labels)
+         and not name.startswith("build.release_")),
+        (r"scripts/core\.sh test \S+ stress", "scripts/core.sh", "-L '^stress$'",
+         lambda name, labels: "stress" in labels),
+        (r"scripts/core\.sh proof", "scripts/core.sh",
+         "-E '^(build\\.active_tree|build\\.version|build\\.release_|contract\\.schemas|"
+         "conformance\\.|host\\.|e2e\\.)' \\\n      -LE '^stress$'",
+         lambda name, labels: "stress" not in labels and not re.match(
+             r"(build\.active_tree|build\.version|build\.release_|contract\.schemas|"
+             r"conformance\.|host\.|e2e\.)", name)),
+        (r"scripts/core\.sh package", "scripts/core.sh",
+         "ctest --preset release -L '^(unit|component)$'",
+         lambda name, labels: bool({"unit", "component"} & labels)),
+        (r"scripts/core-coverage\.sh check", "CMakePresets.json",
+         '"name": "^build\\\\.release_.*$",\n          "label": "^stress$"',
+         lambda name, labels: "stress" not in labels and not name.startswith("build.release_")),
+    )
 
-    def web_host_test_invocations(self):
-        """Map each Web Host Python test a runner names to the lanes running it."""
-        invoked = {}
-        for runner, lane in self.WEB_HOST_SCRIPT_RUNNERS.items():
-            text = "\n".join(
-                line for line in (ROOT / runner).read_text(encoding="utf-8").splitlines()
-                if not line.lstrip().startswith("#")
-            )
-            text = (text.replace('"$creator_root"', "apps/creator-web")
-                    .replace("$creator_root", "apps/creator-web")
-                    .replace('"$repo_root"/', "").replace("$repo_root/", ""))
-            for path in self.WEB_HOST_TEST_FILE.findall(text):
-                invoked.setdefault(path, set()).add(lane)
-        lanes = json.loads((ROOT / "scripts/ci/local_lanes.json").read_text(encoding="utf-8"))["lanes"]
-        for lane, entry in lanes.items():
-            for variant in (entry, *(entry[key] for key in ("quick", "journey") if key in entry)):
-                for command in variant["commands"]:
-                    for path in self.WEB_HOST_TEST_FILE.findall(command):
-                        invoked.setdefault(path, set()).add(lane)
-        return invoked
-
-    def web_host_test_gaps(self, inventory):
-        invoked = self.web_host_test_invocations()
-        gaps = []
-        for path in sorted(inventory):
-            if not (path.startswith(self.WEB_HOST_TEST_DIRECTORIES)
-                    and path.endswith("_test.py") and "/" not in path.split("/test/", 1)[1]):
-                continue
-            runners = invoked.get(path, set())
-            if not runners:
-                gaps.append(f"{path}: no runner invokes it")
-            elif not runners & self.lanes_for_path(path):
-                gaps.append(f"{path}: run only by lane(s) {sorted(runners)}, "
-                            f"which its route {sorted(self.lanes_for_path(path))} never selects")
-        return gaps
-
-    def test_every_web_host_python_test_is_run_by_a_lane_that_owns_it(self):
-        inventory = subprocess.run(
+    def tracked_files(self):
+        return [path for path in subprocess.run(
             ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True,
-        ).stdout.decode("utf-8").split("\0")
-        for lane, runner in (("creator", "scripts/creator-web.sh"),
-                             ("web_runtime_host", "scripts/web-runtime-host.sh")):
-            self.assertRegex(
-                (ROOT / ".github/actions/web-ci-proof/action.yml").read_text(encoding="utf-8"),
-                rf"{lane}:full\) .*{re.escape(runner)} proof",
-                f"web-ci-proof no longer connects {lane} to {runner}")
-        self.assertEqual(
-            self.web_host_test_gaps(inventory), [],
-            "a Web Host Python test file is not run by any lane that owns it.\n"
-            "why: these suites run only where a runner names them, so an "
-            "unlisted file reads as coverage but never executes.\n"
-            "remedy: invoke it from the owning runner (creator: test_creator in "
-            "scripts/creator-web.sh; web_runtime_host: run_nonbrowser_tests in "
-            "scripts/web-runtime-host.sh; deploy_contract: scripts/ci/local_lanes.json "
-            "and the deploy-contract job), or route it to the lane that runs it.\n"
-            + "\n".join(self.web_host_test_gaps(inventory)),
-        )
+        ).stdout.decode("utf-8").split("\0") if path]
 
-    def test_web_host_test_gate_has_red_cases(self):
-        self.assertEqual(
-            self.web_host_test_gaps(["apps/creator-web/test/orphan_test.py"]),
-            ["apps/creator-web/test/orphan_test.py: no runner invokes it"],
-        )
-        self.assertEqual(self.web_host_test_gaps(["apps/creator-web/test/helpers/nested_test.py",
-                                                  "apps/creator-web/test/fixture.py"]), [])
-        original = self.lanes_for_path
-        self.lanes_for_path = lambda path: original(path) - {"creator"}
-        try:
-            self.assertEqual(
-                self.web_host_test_gaps(["apps/creator-web/test/package_test.py"]),
-                ["apps/creator-web/test/package_test.py: run only by lane(s) ['creator'], "
-                 "which its route ['portal'] never selects"],
-            )
-        finally:
-            self.lanes_for_path = original
-
-    # tests/quality/ held four suites for the coverage tooling that no lane
-    # ever ran: the directory was routed to core_coverage, whose runner
-    # invokes the tools but none of their tests, so a broken runner test sat
-    # on main until #2219 happened to notice it. A suite counts as run only
-    # when a lane command names it or discovers it, that lane's CI job runs
-    # the same command, and the file's route selects that lane.
-    QUALITY_TEST_DIRECTORY = "tests/quality/"
-
-    def quality_test_inventory(self, tracked):
-        """Every tracked tests/quality suite: `*_test.py`, plus any
-        `test_*.py` that is a unittest module rather than a tool."""
+    def python_test_inventory(self, tracked, read=None):
+        """Every tracked `*_test.py`, and every `test_*.py` whose content is a
+        unittest or pytest module rather than a tool or helper it names."""
+        read = read or (lambda path: (ROOT / path).read_text(encoding="utf-8"))
         suites = []
         for path in tracked:
-            if not path.startswith(self.QUALITY_TEST_DIRECTORY) or not path.endswith(".py"):
-                continue
-            name = path[len(self.QUALITY_TEST_DIRECTORY):]
-            if "/" in name:
-                continue
+            name = path.rsplit("/", 1)[-1]
             if name.endswith("_test.py") or (
-                    name.startswith("test_")
-                    and "unittest" in (ROOT / path).read_text(encoding="utf-8")):
+                    name.startswith("test_") and name.endswith(".py")
+                    and self.TEST_MODULE_CONTENT.search(read(path))):
                 suites.append(path)
         return suites
 
-    def quality_test_invocations(self, suites):
-        """Map each suite to the lanes whose local_lanes.json commands run it."""
+    @staticmethod
+    def executable_text(text):
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+    def resolve_script_paths(self, text, base=""):
+        """Rewrite a script's repository-rooted path variables to plain
+        repository-relative paths, so `"$creator_root/test/x_test.py"` reads as
+        `apps/creator-web/test/x_test.py`."""
+        roots = dict.fromkeys(self.SCRIPT_ROOT_VARIABLES, "")
+        assignment = re.compile(r'^\s*(?:readonly\s+|local\s+|export\s+)?(\w+)="?\$\{?(\w+)\}?/([\w./-]*)"?\s*$',
+                                re.MULTILINE)
+        for _ in range(3):
+            for name, root, rest in assignment.findall(text):
+                if root in roots and name not in roots:
+                    roots[name] = (roots[root] + "/" + rest).lstrip("/").rstrip("/")
+        for name, value in sorted(roots.items(), key=lambda item: -len(item[0])):
+            prefix = value + "/" if value else ""
+            text = re.sub(r'"?\$(?:\{' + name + r'\}|' + name + r'\b)"?/', prefix, text)
+        for variable, value in (("CMAKE_SOURCE_DIR", ""), ("PROJECT_SOURCE_DIR", ""),
+                                ("CMAKE_CURRENT_SOURCE_DIR", base)):
+            text = text.replace("${" + variable + "}/", value + "/" if value else "")
+        return text
+
+    def scan_runner_text(self, text, tracked, suites):
+        """Return (tests the text runs, tracked scripts it invokes)."""
+        tracked_set = set(tracked)
+        tests, scripts = set(), set()
+        for line in text.splitlines():
+            match = re.search(r"\bunittest discover\b(.*)", line)
+            if match:
+                try:
+                    words = shlex.split(match.group(1), comments=True)
+                except ValueError:
+                    words = match.group(1).split()
+                options = dict(zip(words[0::2], words[1::2]))
+                start = options.get("-s", ".").strip("/").removeprefix("./")
+                pattern = options.get("-p", "test*.py")
+                tests.update(self.discovered(suites, start, pattern))
+        for token in re.findall(r"(?<![\w./*-])((?:[\w.*-]+/)+[\w.*-]+\.(?:py|sh))\b", text):
+            if "*" in token:
+                directory, pattern = token.rsplit("/", 1)
+                tests.update(path for path in suites if path.rsplit("/", 1)[0] == directory
+                             and fnmatch.fnmatchcase(path.rsplit("/", 1)[1], pattern))
+            elif token in tracked_set:
+                (tests if token in suites else scripts).add(token)
+        return tests, scripts
+
+    @staticmethod
+    def discovered(suites, start, pattern):
+        prefix = start + "/" if start not in ("", ".") else ""
+        return {path for path in suites if path.startswith(prefix)
+                and "/" not in path[len(prefix):]
+                and fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], pattern)}
+
+    def runner_closure(self, text, tracked, suites, base=""):
+        """Tests reached from `text` and every tracked script it invokes."""
+        tests, pending, seen = set(), [(text, base)], set()
+        while pending:
+            source, directory = pending.pop()
+            found, scripts = self.scan_runner_text(
+                self.resolve_script_paths(self.executable_text(source), directory), tracked, suites)
+            tests |= found
+            for script in sorted(scripts - seen):
+                seen.add(script)
+                if script in self.PYTHON_DISCOVERY_RUNNERS:
+                    start, pattern, bindings = self.PYTHON_DISCOVERY_RUNNERS[script]
+                    runner = (ROOT / script).read_text(encoding="utf-8")
+                    for binding in bindings:
+                        self.assertIn(binding, runner, f"{script} no longer discovers {start}/{pattern}")
+                    tests |= self.discovered(suites, start, pattern)
+                elif script.endswith(".sh"):
+                    pending.append(((ROOT / script).read_text(encoding="utf-8"),
+                                    script.rsplit("/", 1)[0]))
+        return tests
+
+    def ctest_registrations(self, tracked, suites):
+        """Yield (name, labels, tests) for every lmdj_add_test registration."""
+        for cmake in tracked:
+            if not (cmake.endswith("CMakeLists.txt") or cmake.endswith(".cmake")):
+                continue
+            text = self.executable_text((ROOT / cmake).read_text(encoding="utf-8"))
+            directory = cmake.rsplit("/", 1)[0] if "/" in cmake else ""
+            for start in (m.end() for m in re.finditer(r"\blmdj_add_test\(", text)):
+                depth, end = 1, start
+                while depth and end < len(text):
+                    depth += {"(": 1, ")": -1}.get(text[end], 0)
+                    end += 1
+                block = text[start:end - 1]
+                name = re.search(r"\bNAME\s+\"?([^\s\"]+)", block)
+                tier = re.search(r"\bTIER\s+(\w+)", block)
+                labels = re.search(r"\bLABELS\s+([^\n]*)", block)
+                if not name or "function(" in text[max(0, start - 40):start]:
+                    continue
+                label_set = {tier.group(1)} if tier else set()
+                if labels:
+                    label_set |= set(re.findall(r"[\w-]+", labels.group(1)))
+                yield name.group(1), label_set, self.runner_closure(block, tracked, suites, directory)
+
+    def python_test_invocations(self, tracked, suites):
+        """Map each suite to {lane: {lane commands that reach it}}, over the
+        commands CI runs: a lane's main commands and its Pull Request
+        (`quick`) subset."""
         lanes = json.loads((ROOT / "scripts/ci/local_lanes.json").read_text(encoding="utf-8"))["lanes"]
+        registrations = list(self.ctest_registrations(tracked, suites))
+        self.assertTrue(registrations, "no lmdj_add_test registration was found to inspect")
+        filters = []
+        for command_pattern, runner, literal, selects in self.CTEST_LANE_FILTERS:
+            self.assertIn(literal, (ROOT / runner).read_text(encoding="utf-8"),
+                          f"{runner} no longer applies the CTest filter this gate models "
+                          f"for `{command_pattern}`")
+            filters.append((command_pattern, selects))
         invoked = {}
         for lane, entry in lanes.items():
-            for variant in (entry, *(entry[key] for key in ("quick", "journey") if key in entry)):
-                for command in variant["commands"]:
-                    words = shlex.split(command)
-                    if words[:4] == ["python3", "-m", "unittest", "discover"]:
-                        options = dict(zip(words[4::2], words[5::2]))
-                        start = options.get("-s", ".").rstrip("/") + "/"
-                        pattern = options.get("-p", "test*.py")
-                        matched = [path for path in suites if path.startswith(start)
-                                   and "/" not in path[len(start):]
-                                   and fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], pattern)]
-                    else:
-                        matched = [path for path in suites if path in words]
-                    for path in matched:
-                        invoked.setdefault(path, {})[lane] = command
+            for command in (*entry["commands"], *entry.get("quick", {}).get("commands", ())):
+                reached = self.runner_closure(command, tracked, suites)
+                for command_pattern, selects in filters:
+                    if re.search(command_pattern, command):
+                        for name, labels, tests in registrations:
+                            if selects(name, labels):
+                                reached |= tests
+                for path in reached:
+                    invoked.setdefault(path, {}).setdefault(lane, set()).add(command)
         return invoked
 
-    def quality_test_gaps(self, suites):
-        invoked = self.quality_test_invocations(suites)
+    def route_lanes(self, path):
+        if any(policy_match(rule["match"], path) for rule in self.policy["full_rules"]):
+            return set(self.policy["lanes"])
+        return self.lanes_for_path(path)
+
+    def python_test_gaps(self, suites, invocations, unowned=None):
+        unowned = self.UNOWNED_TESTS if unowned is None else unowned
         gaps = []
         for path in sorted(suites):
-            runners = invoked.get(path, {})
-            if not runners:
+            runners = set(invocations.get(path, {}))
+            if path in unowned:
+                if runners:
+                    gaps.append(f"{path}: allowlisted as unrun, but lane(s) {sorted(runners)} run it")
+            elif not runners:
                 gaps.append(f"{path}: no lane command runs it")
-            elif not set(runners) & self.lanes_for_path(path):
+            elif not runners & self.route_lanes(path):
                 gaps.append(f"{path}: run only by lane(s) {sorted(runners)}, "
-                            f"which its route {sorted(self.lanes_for_path(path))} never selects")
+                            f"which its route {sorted(self.route_lanes(path))} never selects")
+        for path in sorted(set(unowned) - set(suites)):
+            gaps.append(f"{path}: allowlisted as unrun, but it is not a tracked test file")
         return gaps
 
-    def test_every_quality_test_is_run_by_a_lane_that_owns_it(self):
-        tracked = subprocess.run(
-            ["git", "ls-files", "-z", self.QUALITY_TEST_DIRECTORY], cwd=ROOT, check=True,
-            capture_output=True,
-        ).stdout.decode("utf-8").split("\0")
-        suites = self.quality_test_inventory(tracked)
-        self.assertIn("tests/quality/core_coverage_runner_test.py", suites)
-        self.assertEqual(
-            self.quality_test_gaps(suites), [],
-            "a tests/quality suite is not run by any lane that owns it.\n"
-            "why: the coverage lane invokes the tools in tests/quality, not their "
-            "tests, so an unrun suite reads as coverage while its regressions "
-            "reach main unnoticed (#2219).\n"
-            "remedy: keep it matched by the ci_contract command "
-            "`python3 -m unittest discover -s tests/quality -p '*_test.py'` in "
-            "scripts/ci/local_lanes.json and the ci-contract job, and keep "
-            "tests/quality/ routed to ci_contract in scripts/ci/scope_policy.json.\n"
-            + "\n".join(self.quality_test_gaps(suites)),
-        )
-        workflows = {name: (ROOT / name).read_text(encoding="utf-8") for name in self.QUALITY_WORKFLOWS}
-        self.assertTrue(all(re.search(r"(?m)^  ci-contract:\n", text) for text in workflows.values()),
-                        "both workflows must still define the ci-contract job this gate reads")
-        gaps = self.quality_workflow_gaps(self.quality_test_invocations(suites), workflows)
-        self.assertEqual(
-            gaps, [],
-            "a lane command that runs a tests/quality suite is not run by that lane's CI job.\n"
-            "why: scripts/ci/local_lanes.json describes the lane; only the workflow "
-            "job executes it in CI.\n"
-            "remedy: run the same command in that lane's job in the named workflow.\n"
-            + "\n".join(gaps),
-        )
+    @staticmethod
+    def workflow_command_key(command):
+        """The part of a lane command a workflow step must repeat verbatim:
+        without a leading `env NAME=value` and before the first long option,
+        whose values (`{base}`, `--shards 4`) differ between local and CI."""
+        command = re.sub(r"^env(?:\s+[A-Z_]+=(?:\"[^\"]*\"|\S+))+\s+", "", command)
+        return command.split(" --", 1)[0]
 
-    # The Pull Request runs pr-contract.yml and main batches run ci.yml; each
-    # workflow that defines one of the lane's jobs must run the command.
-    QUALITY_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/pr-contract.yml")
-
-    def quality_workflow_gaps(self, invocations, workflows):
+    def python_test_workflow_gaps(self, invocations, workflows, actions):
+        """A routed lane must run a suite in CI, not only in local_lanes.json:
+        some lane that runs the file and that its route selects must have a
+        reaching command in that lane's job in every workflow defining it. A
+        lane reaching the file only through a local-only variant (core_macos's
+        `quick` fast tier) does not count."""
         gaps = []
         for path, runners in sorted(invocations.items()):
-            for lane, command in sorted(runners.items()):
+            failures = []
+            for lane in sorted(set(runners) & self.route_lanes(path)):
                 jobs = self.policy["lane_jobs"][lane]
+                keys = {self.workflow_command_key(command) for command in runners[lane]}
+                command = " or ".join(f"`{key}`" for key in sorted(keys))
+                missing = []
                 for name, workflow in sorted(workflows.items()):
                     blocks = [re.search(rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow)
                               for job in jobs]
                     # Directives only: a comment naming the command is not a step running it.
-                    directives = ["\n".join(line for line in block.group(1).splitlines()
-                                            if not line.lstrip().startswith("#"))
-                                  for block in blocks if block]
-                    if directives and not any(command in text for text in directives):
-                        gaps.append(f"{path}: lane {lane} runs `{command}`, which none of its "
-                                    f"jobs {jobs} in {name} runs")
+                    directives = [self.executable_text(block.group(1)) for block in blocks if block]
+                    directives += [actions.get(used, "") for text in list(directives)
+                                   for used in re.findall(r"uses: \./(\.github/actions/[\w-]+)", text)]
+                    # A folded `run: >-` step spans lines; compare on single spaces.
+                    directives = [" ".join(text.split()) for text in directives]
+                    if directives and not any(key in text for key in keys for text in directives):
+                        missing.append(name)
+                if not missing:
+                    break
+                failures.append(f"lane {lane} runs {command}, which none of its jobs {jobs} "
+                                f"in {', '.join(missing)} runs")
+            else:
+                if failures:
+                    gaps.append(f"{path}: " + "; ".join(failures))
         return gaps
 
-    def test_quality_test_gate_has_red_cases(self):
+    def test_every_python_test_is_run_by_a_lane_that_owns_it(self):
+        tracked = self.tracked_files()
+        suites = self.python_test_inventory(tracked)
+        invocations = self.python_test_invocations(tracked, suites)
+        # Independent oracle: one known runner per mechanism the model reads,
+        # so a parser change that loses a mechanism fails here by name even
+        # where the inventory and the invocation map would agree on nothing.
+        for path, lane in (
+                ("tests/quality/core_coverage_runner_test.py", "ci_contract"),  # discover
+                ("tests/build/ci_change_scope_test.py", "ci_contract"),  # discover
+                ("apps/creator-web/test/favicon_test.py", "creator"),  # script variable
+                ("apps/web-runtime-host/test/server_test.py", "web_runtime_host"),  # $repo_root
+                ("tools/asset-server/kit_test.py", "creator"),  # nested script
+                ("tests/build/release_cli_orchestration_test.py", "deploy_contract"),  # Python runner
+                ("tests/conformance/project_bundle_contract_test.py", "core_asan"),  # CTest
+                ("tests/core/support/no_bare_fork_test.py", "core_asan"),  # CTest -> script
+                ("tests/conformance/schema_contract_test.py", "core_ubuntu"),  # core.sh proof
+        ):
+            self.assertIn(path, suites)
+            self.assertIn(lane, invocations.get(path, {}), f"the gate no longer sees {lane} run {path}")
+        # CTest filters: release suites belong to deploy_contract, not to the
+        # Core lanes that exclude `build.release_` by name.
+        self.assertNotIn("core_asan", invocations["tests/build/release_cli_orchestration_test.py"])
+        self.assertTrue(all(reason.strip() for reason in self.UNOWNED_TESTS.values()))
+        gaps = self.python_test_gaps(suites, invocations)
         self.assertEqual(
-            self.quality_test_gaps(["tests/quality/test_orphan.py"]),
+            gaps, [],
+            "a tracked Python test file is not run by any lane that owns it.\n"
+            "why: a test file runs only where a lane command, a runner script or a "
+            "CTest registration names it, so an unlisted file reads as coverage "
+            "but never executes (#784, #1800, #2219).\n"
+            "remedy: run it from the lane that owns its code: name it in that "
+            "lane's runner (for example run_nonbrowser_tests in "
+            "scripts/web-runtime-host.sh or test_creator in scripts/creator-web.sh), "
+            "register it with lmdj_add_test, or add it to a lane command in "
+            "scripts/ci/local_lanes.json and that lane's job; keep its route in "
+            "scripts/ci/scope_policy.json selecting that lane. Only a file that is "
+            "not a test, or is outside the product, goes in UNOWNED_TESTS with a "
+            "reason; remove an entry once a lane runs the file.\n"
+            + "\n".join(gaps),
+        )
+        workflows = {name: (ROOT / name).read_text(encoding="utf-8")
+                     for name in self.TEST_OWNERSHIP_WORKFLOWS}
+        self.assertTrue(all(re.search(r"(?m)^  ci-contract:\n", text) for text in workflows.values()),
+                        "both workflows must still define the ci-contract job this gate reads")
+        actions = {path.rsplit("/", 1)[0]: self.executable_text((ROOT / path).read_text(encoding="utf-8"))
+                   for path in tracked
+                   if path.startswith(".github/actions/") and path.endswith("/action.yml")}
+        gaps = self.python_test_workflow_gaps(invocations, workflows, actions)
+        self.assertEqual(
+            gaps, [],
+            "a lane command that runs a Python test is not run by that lane's CI job.\n"
+            "why: scripts/ci/local_lanes.json describes the lane; only the workflow "
+            "job executes it in CI.\n"
+            "remedy: run the same command in that lane's job (or a local action it "
+            "uses) in the named workflow.\n"
+            + "\n".join(gaps),
+        )
+
+    def test_python_test_gate_has_red_cases(self):
+        self.assertEqual(
+            self.python_test_gaps(["tests/quality/test_orphan.py"], {}, unowned={}),
             ["tests/quality/test_orphan.py: no lane command runs it"],
         )
         self.assertEqual(
-            self.quality_test_inventory(["tests/quality/coverage_gate.py",
-                                         "tests/quality/test_budget_report.py",
-                                         "tests/quality/nested/deep_test.py",
-                                         "tests/quality/coverage_gate_test.py"]),
-            ["tests/quality/coverage_gate_test.py"],
+            self.python_test_gaps(["apps/creator-web/test/orphan_test.py"], {}, unowned={}),
+            ["apps/creator-web/test/orphan_test.py: no lane command runs it"],
         )
+        allowlisted = {"tools/spike/tests/probe_test.py": "spike, run by hand"}
+        self.assertEqual(self.python_test_gaps(["tools/spike/tests/probe_test.py"], {},
+                                               unowned=allowlisted), [])
+        self.assertEqual(
+            self.python_test_gaps([], {}, unowned=allowlisted),
+            ["tools/spike/tests/probe_test.py: allowlisted as unrun, "
+             "but it is not a tracked test file"],
+        )
+        self.assertEqual(
+            self.python_test_gaps(["tools/spike/tests/probe_test.py"],
+                                  {"tools/spike/tests/probe_test.py": {"creator": "x"}},
+                                  unowned=allowlisted),
+            ["tools/spike/tests/probe_test.py: allowlisted as unrun, but lane(s) "
+             "['creator'] run it"],
+        )
+        contents = {"tests/quality/test_budget_report.py": "import json\n",
+                    "tests/quality/test_orphan.py": "import unittest\n",
+                    "tests/quality/test_pytest.py": "def test_case():\n    pass\n"}
+        self.assertEqual(
+            self.python_test_inventory(["tests/quality/coverage_gate.py",
+                                        "tests/quality/test_budget_report.py",
+                                        "tests/quality/test_orphan.py",
+                                        "tests/quality/test_pytest.py",
+                                        "apps/creator-web/test/helpers/nested_test.py"],
+                                       read=contents.__getitem__),
+            ["tests/quality/test_orphan.py", "tests/quality/test_pytest.py",
+             "apps/creator-web/test/helpers/nested_test.py"],
+        )
+        suites = ["apps/creator-web/test/x_test.py", "tests/quality/a_test.py",
+                  "tests/quality/nested/b_test.py", "packages/p/test/c_test.py"]
+        runner = ('creator_root="$repo_root/apps/creator-web"\n'
+                  'python3 "$creator_root/test/x_test.py"\n'
+                  '# python3 "$repo_root/packages/p/test/c_test.py"\n'
+                  "python3 -m unittest discover -s tests/quality -p '*_test.py'\n")
+        tests, _ = self.scan_runner_text(
+            self.resolve_script_paths(self.executable_text(runner)), suites, suites)
+        self.assertEqual(sorted(tests), ["apps/creator-web/test/x_test.py", "tests/quality/a_test.py"])
+        tests, _ = self.scan_runner_text('python3 "$repo_root"/packages/p/test/*_test.py'
+                                         .replace('"$repo_root"/', ""), suites, suites)
+        self.assertEqual(tests, {"packages/p/test/c_test.py"})
         command = "python3 -m unittest discover -s tests/quality -p '*_test.py'"
-        invocations = {"tests/quality/coverage_gate_test.py": {"ci_contract": command}}
+        invocations = {"tests/quality/coverage_gate_test.py": {"ci_contract": {command}}}
         runs = f"jobs:\n  ci-contract:\n    steps:\n      - run: {command}\n"
         lacks = f"jobs:\n  ci-contract:\n    steps: []\n  core-coverage:\n      - run: {command}\n"
         commented = f"jobs:\n  ci-contract:\n    steps:\n      # {command}\n"
+        via_action = "jobs:\n  ci-contract:\n    steps:\n      - uses: ./.github/actions/x\n"
         gap = ("tests/quality/coverage_gate_test.py: lane ci_contract runs "
                f"`{command}`, which none of its jobs ['ci-contract'] in pr.yml runs")
-        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": runs}), [])
+        self.assertEqual(self.workflow_command_key(
+            'env PATH="/x:$PATH" CC=clang scripts/core-coverage.sh check'), "scripts/core-coverage.sh check")
+        self.assertEqual(self.workflow_command_key(
+            "python3 scripts/ci/contract_selection.py --base {base} --execute all"),
+            "python3 scripts/ci/contract_selection.py")
+        folded = ("jobs:\n  ci-contract:\n    steps:\n      - run: >-\n"
+                  "          python3 -m unittest discover\n          -s tests/quality -p '*_test.py'\n")
+        gaps = lambda pr, actions={}: self.python_test_workflow_gaps(
+            invocations, {"ci.yml": runs, "pr.yml": pr}, actions)
+        self.assertEqual(gaps(runs), [])
+        self.assertEqual(gaps(folded), [])
         # A workflow that does not define the lane's job owes nothing.
-        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": "jobs: {}\n"}), [])
-        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": lacks}), [gap])
-        self.assertEqual(self.quality_workflow_gaps(invocations, {"ci.yml": runs, "pr.yml": commented}), [gap])
+        self.assertEqual(gaps("jobs: {}\n"), [])
+        self.assertEqual(gaps(lacks), [gap])
+        self.assertEqual(gaps(commented), [gap])
+        self.assertEqual(gaps(via_action, {".github/actions/x": f"run: {command}\n"}), [])
+        self.assertEqual(gaps(via_action, {".github/actions/x": "run: true\n"}), [gap])
         original = self.lanes_for_path
-        self.lanes_for_path = lambda path: original(path) - {"ci_contract"}
+        self.lanes_for_path = lambda path: original(path) - {"ci_contract", "creator"}
         try:
             self.assertEqual(
-                self.quality_test_gaps(["tests/quality/coverage_gate_test.py"]),
+                self.python_test_gaps(["tests/quality/coverage_gate_test.py"],
+                                      invocations, unowned={}),
                 ["tests/quality/coverage_gate_test.py: run only by lane(s) ['ci_contract'], "
                  "which its route ['core_coverage'] never selects"],
+            )
+            self.assertEqual(
+                self.python_test_gaps(["apps/creator-web/test/package_test.py"],
+                                      {"apps/creator-web/test/package_test.py": {"creator": "x"}},
+                                      unowned={}),
+                ["apps/creator-web/test/package_test.py: run only by lane(s) ['creator'], "
+                 "which its route ['portal'] never selects"],
             )
         finally:
             self.lanes_for_path = original

@@ -319,6 +319,7 @@
         "python3 tests/build/creator_web_deploy_workflow_test.py",
         "python3 tests/build/web_host_deploy_workflow_parity_test.py",
         "python3 tests/build/default_assets_deploy_workflow_test.py",
+        "python3 tests/build/web_host_release_selection_test.py",
         "python3 tests/build/web_runtime_public_deployment_docs_test.py",
         "python3 tests/build/creator_web_public_deployment_docs_test.py",
         "python3 apps/web-runtime-host/test/deploy_command_test.py",
