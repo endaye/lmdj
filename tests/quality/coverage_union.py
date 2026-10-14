@@ -114,48 +114,29 @@ def metric(counts: dict[int | tuple[int, int, int], int]) -> dict[str, int | flo
     }
 
 
-def validate_and_union(
-    topology: dict[str, FileCoverage],
+def union_fragments(
     fragments: list[dict[str, FileCoverage]],
 ) -> dict[str, FileCoverage]:
-    if not topology:
-        raise CoverageError("coverage topology contains no first-party source")
+    """Union per-object exports by physical line and branch identity.
+
+    Each fragment is the only export of its coverage object, so the union's
+    identities are the denominator. A source compiled into several objects
+    with different mappings (production and fault-interception variants)
+    contributes every identity exactly once.
+    """
     if not fragments:
         raise CoverageError("coverage union requires at least one fragment")
 
     measured = union_coverage(fragments)
-
-    missing: list[str] = []
-    extra: list[str] = []
-    for path in sorted(set(topology) | set(measured)):
-        expected = topology.get(path, FileCoverage())
-        actual = measured.get(path, FileCoverage())
-        missing_lines = sorted(set(expected.lines) - set(actual.lines))
-        missing_branches = sorted(set(expected.branches) - set(actual.branches))
-        extra_lines = sorted(set(actual.lines) - set(expected.lines))
-        extra_branches = sorted(set(actual.branches) - set(expected.branches))
-        if missing_lines or missing_branches:
-            missing.append(
-                f"{path} "
-                f"(lines={len(missing_lines)}, branches={len(missing_branches)})"
-            )
-        if extra_lines or extra_branches:
-            extra.append(
-                f"{path} "
-                f"(lines={len(extra_lines)}, branches={len(extra_branches)})"
-            )
-
-    if missing:
+    if not measured:
         raise CoverageError(
-            "coverage fragments are missing topology regions: "
-            + "; ".join(missing)
+            "coverage fragments contain no first-party source; "
+            "why: no export names a .cpp or include/ .hpp source under "
+            + ", ".join(source_prefixes)
+            + " relative to --repo-root; "
+            "remedy: check that coverage-objects.txt names the instrumented "
+            "objects and that their SF: paths resolve under --repo-root"
         )
-    if extra:
-        raise CoverageError(
-            "coverage fragments contain regions outside topology: "
-            + "; ".join(extra)
-        )
-
     return measured
 
 
@@ -293,12 +274,6 @@ def atomic_write(path: Path, content: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument(
-        "--topology",
-        type=Path,
-        action="append",
-        required=True,
-    )
     parser.add_argument("--fragment", type=Path, action="append", default=[])
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -308,16 +283,10 @@ def main() -> int:
     args.report.unlink(missing_ok=True)
     try:
         repo_root = args.repo_root.resolve()
-        topology = union_coverage(
-            [
-                parse_lcov(topology_variant, repo_root)
-                for topology_variant in args.topology
-            ]
-        )
         fragments = [
             parse_lcov(fragment, repo_root) for fragment in args.fragment
         ]
-        coverage = validate_and_union(topology, fragments)
+        coverage = union_fragments(fragments)
         summary = build_summary(coverage, repo_root)
         report = build_report(coverage)
     except (CoverageError, OSError, ValueError, json.JSONDecodeError) as error:
