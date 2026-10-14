@@ -330,6 +330,10 @@ jobs:
       # core-coverage lane, where none of them was ever invoked (#2219).
       - name: Run the coverage tooling contracts
         run: python3 -m unittest discover -s tests/quality -p '*_test.py'
+      # The Needle spike's MCP tool surface check needs no engine or weights;
+      # it reads apps/core-mcp's tool table, so both routes select this lane.
+      - name: Run the Needle spike tool surface check
+        run: python3 tools/needle-spike/tests/tool_surface_test.py
       - uses: actions/setup-python@v6
         if: ${{ steps.quick-contracts.outputs.seam != 'false' }}
         with:
