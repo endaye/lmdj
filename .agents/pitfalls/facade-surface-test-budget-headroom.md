@@ -53,7 +53,10 @@ CTest registration must execute exactly one shard, while bare binary execution
 must still traverse the union of every shard. The absorbed build gate compares
 the binaries' declared shard counts with the registered CTest commands; add a
 new scenario to one named shard and split again before any shard approaches its
-component budget.
+component budget. `lmdj_pattern_count_in_tests` follows the same rule (#2238):
+its deadline cases sleep past the real 1 s input and 5 s opening deadlines,
+so each deadline family is its own registration rather than one more scenario
+in a shard that is already near its budget.
 
 `tests/build/facade_surface_sharding_test.py` still enforces that partitioning,
 but it can only read C++ CTest registrations; it cannot see a wall-clock

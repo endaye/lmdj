@@ -368,12 +368,16 @@ lmdj::foundation::Result<void> drain_io(
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
   const bool reconciling = await_recovery && controller.inspect().error.has_value();
   for (;;) {
+    // The executor becomes ready on its own thread. An idle cell counts only
+    // when it was already ready before this continuation ran; otherwise the
+    // continuation could not submit the work it owes yet (#2238).
+    const bool ready_before = controller.inspect_io().ready;
     const auto result = controller.continue_operation();
     const auto io = controller.inspect_io();
     const auto status = controller.inspect();
     if (!reconciling && (!result.has_value() || status.error))
       return !result.has_value() ? result : lmdj::foundation::Result<void>::failure(*status.error);
-    if (status.phase == PatternTransportPhase::error || (io.ready && !io.ticket)) return result;
+    if (status.phase == PatternTransportPhase::error || (ready_before && !io.ticket)) return result;
     LMDJ_CHECK(std::chrono::steady_clock::now() < deadline);
     std::this_thread::yield();
   }

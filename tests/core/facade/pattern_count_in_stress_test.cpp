@@ -9,6 +9,8 @@
 #include <iostream>
 #include <mutex>
 #include <source_location>
+#include <span>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unistd.h>
@@ -2256,111 +2258,126 @@ void readable_overlay_generation_requires_real_durable_reconciliation() {
 
 #endif
 }  // namespace
-int main(int argc, char** argv) {
-  const auto emit_boundary = [](const char* phase, const char* label,
-                                const char* group, unsigned round, unsigned slot) {
-    std::cerr << "S6_CASE phase=" << phase << " label=" << label << " group=" << group
-              << " round=" << round << " slot=" << slot << '\n' << std::flush;
-  };
-  const auto repetitions = argc == 2 && std::string_view{argv[1]} == "--stress" ? 64U : 1U;
-  for (unsigned repeat = 0; repeat != repetitions; ++repeat) {
-  emit_boundary("BEGIN", "winning_cancel_has_no_storage_or_truth_effect", "repeat", repeat + 1, 1);
-  winning_cancel_has_no_storage_or_truth_effect();
-  emit_boundary("END", "winning_cancel_has_no_storage_or_truth_effect", "repeat", repeat + 1, 1);
-  emit_boundary("BEGIN", "refused_before_start_settles_native_without_storage_work", "repeat", repeat + 1, 2);
-  refused_before_start_settles_native_without_storage_work();
-  emit_boundary("END", "refused_before_start_settles_native_without_storage_work", "repeat", repeat + 1, 2);
-  emit_boundary("BEGIN", "completed_opening_retains_the_count_in_lineage_until_a_later_real_cutoff", "repeat", repeat + 1, 3);
-  completed_opening_retains_the_count_in_lineage_until_a_later_real_cutoff();
-  emit_boundary("END", "completed_opening_retains_the_count_in_lineage_until_a_later_real_cutoff", "repeat", repeat + 1, 3);
-  emit_boundary("BEGIN", "held_begin_retains_actual_start_and_stop", "repeat", repeat + 1, 4);
-  held_begin_retains_actual_start_and_stop();
-  emit_boundary("END", "held_begin_retains_actual_start_and_stop", "repeat", repeat + 1, 4);
-  emit_boundary("BEGIN", "silent_press_ticket_consumption_preserves_release_and_actual_duration", "repeat", repeat + 1, 5);
-  silent_press_ticket_consumption_preserves_release_and_actual_duration();
-  emit_boundary("END", "silent_press_ticket_consumption_preserves_release_and_actual_duration", "repeat", repeat + 1, 5);
-  emit_boundary("BEGIN", "independent_metadata_partitions_keep_reserved_release_available", "repeat", repeat + 1, 6);
-  independent_metadata_partitions_keep_reserved_release_available();
-  emit_boundary("END", "independent_metadata_partitions_keep_reserved_release_available", "repeat", repeat + 1, 6);
-  emit_boundary("BEGIN", "toggle_stopped_press_consumption_preserves_both_real_releases", "repeat", repeat + 1, 7);
-  toggle_stopped_press_consumption_preserves_both_real_releases();
-  emit_boundary("END", "toggle_stopped_press_consumption_preserves_both_real_releases", "repeat", repeat + 1, 7);
-  emit_boundary("BEGIN", "post_open_owner_invalidation_preserves_prefix_until_real_recovery", "repeat", repeat + 1, 8);
-  post_open_owner_invalidation_preserves_prefix_until_real_recovery();
-  emit_boundary("END", "post_open_owner_invalidation_preserves_prefix_until_real_recovery", "repeat", repeat + 1, 8);
-  emit_boundary("BEGIN", "shutdown_preserves_only_owned_live_releases_until_acknowledged", "repeat", repeat + 1, 9);
-  shutdown_preserves_only_owned_live_releases_until_acknowledged();
-  emit_boundary("END", "shutdown_preserves_only_owned_live_releases_until_acknowledged", "repeat", repeat + 1, 9);
-  emit_boundary("BEGIN", "pre_start_press_and_post_start_release_stay_live_only", "repeat", repeat + 1, 10);
-  pre_start_press_and_post_start_release_stay_live_only();
-  emit_boundary("END", "pre_start_press_and_post_start_release_stay_live_only", "repeat", repeat + 1, 10);
-  emit_boundary("BEGIN", "two_bars_at_40_bpm_do_not_spend_the_opening_budget_before_s", "repeat", repeat + 1, 11);
-  two_bars_at_40_bpm_do_not_spend_the_opening_budget_before_s();
-  emit_boundary("END", "two_bars_at_40_bpm_do_not_spend_the_opening_budget_before_s", "repeat", repeat + 1, 11);
-  emit_boundary("BEGIN", "exceptional_direct_stop_preserves_failure_and_owner_loss_recovery", "repeat", repeat + 1, 12);
-  exceptional_direct_stop_preserves_failure_and_owner_loss_recovery();
-  emit_boundary("END", "exceptional_direct_stop_preserves_failure_and_owner_loss_recovery", "repeat", repeat + 1, 12);
-  emit_boundary("BEGIN", "exceptional_owner_ack_requires_real_disposition_and_each_consumer", "repeat", repeat + 1, 13);
-  exceptional_owner_ack_requires_real_disposition_and_each_consumer();
-  emit_boundary("END", "exceptional_owner_ack_requires_real_disposition_and_each_consumer", "repeat", repeat + 1, 13);
-  emit_boundary("BEGIN", "exceptional_owner_ack_preserves_queued_invalidated_release", "repeat", repeat + 1, 14);
-  exceptional_owner_ack_preserves_queued_invalidated_release();
-  emit_boundary("END", "exceptional_owner_ack_preserves_queued_invalidated_release", "repeat", repeat + 1, 14);
-  emit_boundary("BEGIN", "never_recorded_owner_disposition_uses_actual_input_and_no_journal", "repeat", repeat + 1, 15);
-  never_recorded_owner_disposition_uses_actual_input_and_no_journal();
-  emit_boundary("END", "never_recorded_owner_disposition_uses_actual_input_and_no_journal", "repeat", repeat + 1, 15);
-  emit_boundary("BEGIN", "real_record_off_close_keeps_physical_owner_until_exceptional_disposition", "repeat", repeat + 1, 16);
-  real_record_off_close_keeps_physical_owner_until_exceptional_disposition();
-  emit_boundary("END", "real_record_off_close_keeps_physical_owner_until_exceptional_disposition", "repeat", repeat + 1, 16);
-  }
-  emit_boundary("BEGIN", "expired_press_keeps_its_exact_work_and_future_release", "tail", 0, 1);
-  expired_press_keeps_its_exact_work_and_future_release();
-  emit_boundary("END", "expired_press_keeps_its_exact_work_and_future_release", "tail", 0, 1);
-  emit_boundary("BEGIN", "opening_expiry_retains_e1_and_uses_a_real_stop", "tail", 0, 2);
-  opening_expiry_retains_e1_and_uses_a_real_stop();
-  emit_boundary("END", "opening_expiry_retains_e1_and_uses_a_real_stop", "tail", 0, 2);
-  emit_boundary("BEGIN", "known_durable_opening_survives_held_delivery_and_late_exact_reconciliation_default", "tail", 0, 3);
-  known_durable_opening_survives_held_delivery_and_late_exact_reconciliation();
-  emit_boundary("END", "known_durable_opening_survives_held_delivery_and_late_exact_reconciliation_default", "tail", 0, 3);
+namespace {
+struct Case {
+  const char* label;
+  void (*run)();
+};
+struct Shard {
+  std::string_view name;
+  std::string_view group;
+  std::span<const Case> cases;
+};
+// Each shard is one CTest registration with its own component budget. The
+// deadline shards spend most of their time in real sleeps past the production
+// steady-clock deadlines (1 s input, 5 s opening), which the controller reads
+// directly, so no shard may grow to hold two of those families (#2238).
+constexpr std::array kJourneyCases{
+    Case{"winning_cancel_has_no_storage_or_truth_effect", winning_cancel_has_no_storage_or_truth_effect},
+    Case{"refused_before_start_settles_native_without_storage_work", refused_before_start_settles_native_without_storage_work},
+    Case{"completed_opening_retains_the_count_in_lineage_until_a_later_real_cutoff", completed_opening_retains_the_count_in_lineage_until_a_later_real_cutoff},
+    Case{"held_begin_retains_actual_start_and_stop", held_begin_retains_actual_start_and_stop},
+    Case{"silent_press_ticket_consumption_preserves_release_and_actual_duration", silent_press_ticket_consumption_preserves_release_and_actual_duration},
+    Case{"independent_metadata_partitions_keep_reserved_release_available", independent_metadata_partitions_keep_reserved_release_available},
+    Case{"toggle_stopped_press_consumption_preserves_both_real_releases", toggle_stopped_press_consumption_preserves_both_real_releases},
+    Case{"post_open_owner_invalidation_preserves_prefix_until_real_recovery", post_open_owner_invalidation_preserves_prefix_until_real_recovery},
+    Case{"shutdown_preserves_only_owned_live_releases_until_acknowledged", shutdown_preserves_only_owned_live_releases_until_acknowledged},
+    Case{"pre_start_press_and_post_start_release_stay_live_only", pre_start_press_and_post_start_release_stay_live_only},
+    Case{"two_bars_at_40_bpm_do_not_spend_the_opening_budget_before_s", two_bars_at_40_bpm_do_not_spend_the_opening_budget_before_s},
+    Case{"exceptional_direct_stop_preserves_failure_and_owner_loss_recovery", exceptional_direct_stop_preserves_failure_and_owner_loss_recovery},
+    Case{"exceptional_owner_ack_requires_real_disposition_and_each_consumer", exceptional_owner_ack_requires_real_disposition_and_each_consumer},
+    Case{"exceptional_owner_ack_preserves_queued_invalidated_release", exceptional_owner_ack_preserves_queued_invalidated_release},
+    Case{"never_recorded_owner_disposition_uses_actual_input_and_no_journal", never_recorded_owner_disposition_uses_actual_input_and_no_journal},
+    Case{"real_record_off_close_keeps_physical_owner_until_exceptional_disposition", real_record_off_close_keeps_physical_owner_until_exceptional_disposition},
+};
+constexpr std::array kInputExpiryCases{
+    Case{"expired_press_keeps_its_exact_work_and_future_release", expired_press_keeps_its_exact_work_and_future_release},
+    Case{"mixed_age_expiry_survives_real_durable_completion_and_fresh_cell_reuse", mixed_age_expiry_survives_real_durable_completion_and_fresh_cell_reuse},
+};
+constexpr std::array kOpeningExpiryCases{
+    Case{"opening_expiry_retains_e1_and_uses_a_real_stop", opening_expiry_retains_e1_and_uses_a_real_stop},
+};
+constexpr std::array kOpeningReconciliationCases{
+    Case{"known_durable_opening_survives_held_delivery_and_late_exact_reconciliation_default",
+         [] { known_durable_opening_survives_held_delivery_and_late_exact_reconciliation(); }},
 #if defined(LMDJ_PATTERN_OPENING_TESTING) && LMDJ_PATTERN_OPENING_TESTING
-  emit_boundary("BEGIN", "known_durable_opening_survives_held_delivery_and_late_exact_reconciliation_true", "tail", 0, 4);
-  known_durable_opening_survives_held_delivery_and_late_exact_reconciliation(true);
-  emit_boundary("END", "known_durable_opening_survives_held_delivery_and_late_exact_reconciliation_true", "tail", 0, 4);
-  constexpr unsigned opening_guard_cases = 1;
-#else
-  constexpr unsigned opening_guard_cases = 0;
+    Case{"known_durable_opening_survives_held_delivery_and_late_exact_reconciliation_true",
+         [] { known_durable_opening_survives_held_delivery_and_late_exact_reconciliation(true); }},
 #endif
-  emit_boundary("BEGIN", "mixed_age_expiry_survives_real_durable_completion_and_fresh_cell_reuse", "tail", 0, 5);
-  mixed_age_expiry_survives_real_durable_completion_and_fresh_cell_reuse();
-  emit_boundary("END", "mixed_age_expiry_survives_real_durable_completion_and_fresh_cell_reuse", "tail", 0, 5);
-  emit_boundary("BEGIN", "public_input_ticket_identity_survives_real_consumption_and_occupied_reuse", "tail", 0, 6);
-  public_input_ticket_identity_survives_real_consumption_and_occupied_reuse();
-  emit_boundary("END", "public_input_ticket_identity_survives_real_consumption_and_occupied_reuse", "tail", 0, 6);
-  emit_boundary("BEGIN", "live_pad_gating_preserves_recorded_press_and_release", "tail", 0, 7);
-  live_pad_gating_preserves_recorded_press_and_release();
-  emit_boundary("END", "live_pad_gating_preserves_recorded_press_and_release", "tail", 0, 7);
+};
+constexpr std::array kIngressCases{
+    Case{"public_input_ticket_identity_survives_real_consumption_and_occupied_reuse", public_input_ticket_identity_survives_real_consumption_and_occupied_reuse},
+    Case{"live_pad_gating_preserves_recorded_press_and_release", live_pad_gating_preserves_recorded_press_and_release},
+};
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  emit_boundary("BEGIN", "readable_admission_after_failed_sync_is_not_durable_completion", "tail", 0, 8);
-  readable_admission_after_failed_sync_is_not_durable_completion();
-  emit_boundary("END", "readable_admission_after_failed_sync_is_not_durable_completion", "tail", 0, 8);
-  emit_boundary("BEGIN", "readable_cutoff_after_failed_sync_keeps_its_original_work", "tail", 0, 9);
-  readable_cutoff_after_failed_sync_keeps_its_original_work();
-  emit_boundary("END", "readable_cutoff_after_failed_sync_keeps_its_original_work", "tail", 0, 9);
-  emit_boundary("BEGIN", "readable_owner_loss_after_failed_sync_keeps_resource_debt", "tail", 0, 10);
-  readable_owner_loss_after_failed_sync_keeps_resource_debt();
-  emit_boundary("END", "readable_owner_loss_after_failed_sync_keeps_resource_debt", "tail", 0, 10);
-  emit_boundary("BEGIN", "transferred_candidate_replay_requires_real_durable_reconciliation", "tail", 0, 11);
-  transferred_candidate_replay_requires_real_durable_reconciliation();
-  emit_boundary("END", "transferred_candidate_replay_requires_real_durable_reconciliation", "tail", 0, 11);
-  emit_boundary("BEGIN", "absent_candidate_refusal_requires_its_real_failure_closure_sync", "tail", 0, 12);
-  absent_candidate_refusal_requires_its_real_failure_closure_sync();
-  emit_boundary("END", "absent_candidate_refusal_requires_its_real_failure_closure_sync", "tail", 0, 12);
-  emit_boundary("BEGIN", "readable_overlay_generation_requires_real_durable_reconciliation", "tail", 0, 13);
-  readable_overlay_generation_requires_real_durable_reconciliation();
-  emit_boundary("END", "readable_overlay_generation_requires_real_durable_reconciliation", "tail", 0, 13);
-  constexpr unsigned durability_guard_cases = 6;
-#else
-  constexpr unsigned durability_guard_cases = 0;
+constexpr std::array kDurabilityCases{
+    Case{"readable_admission_after_failed_sync_is_not_durable_completion", readable_admission_after_failed_sync_is_not_durable_completion},
+    Case{"readable_cutoff_after_failed_sync_keeps_its_original_work", readable_cutoff_after_failed_sync_keeps_its_original_work},
+    Case{"readable_owner_loss_after_failed_sync_keeps_resource_debt", readable_owner_loss_after_failed_sync_keeps_resource_debt},
+    Case{"transferred_candidate_replay_requires_real_durable_reconciliation", transferred_candidate_replay_requires_real_durable_reconciliation},
+    Case{"absent_candidate_refusal_requires_its_real_failure_closure_sync", absent_candidate_refusal_requires_its_real_failure_closure_sync},
+    Case{"readable_overlay_generation_requires_real_durable_reconciliation", readable_overlay_generation_requires_real_durable_reconciliation},
+};
 #endif
-  std::cout << "Facade scheduled transport held-IO journeys: " << repetitions * 16 + 6 + opening_guard_cases + durability_guard_cases << " cases passed\n";
+// The first shard is the journey family --stress repeats; the rest run once.
+constexpr std::array kShards{
+    Shard{"journeys", "repeat", kJourneyCases},
+    Shard{"input-expiry", "tail", kInputExpiryCases},
+    Shard{"opening-expiry", "tail", kOpeningExpiryCases},
+    Shard{"opening-reconciliation", "tail", kOpeningReconciliationCases},
+    Shard{"ingress", "tail", kIngressCases},
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    Shard{"durability", "tail", kDurabilityCases},
+#endif
+};
+void emit_boundary(const char* phase, const char* label, std::string_view group,
+                   unsigned round, std::size_t slot) {
+  std::cerr << "S6_CASE phase=" << phase << " label=" << label << " group=" << group
+            << " round=" << round << " slot=" << slot << '\n' << std::flush;
+}
+std::size_t run(const Shard& shard, unsigned round) {
+  std::size_t slot{};
+  for (const auto& entry : shard.cases) {
+    ++slot;
+    emit_boundary("BEGIN", entry.label, shard.group, round, slot);
+    entry.run();
+    emit_boundary("END", entry.label, shard.group, round, slot);
+  }
+  return shard.cases.size();
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+  const auto selected = argc == 2 ? std::string_view{argv[1]} : std::string_view{};
+  if (selected == "--list-shards") {
+    std::size_t total{};
+    for (const auto& shard : kShards) {
+      std::cout << shard.name << ' ' << shard.cases.size() << '\n';
+      total += shard.cases.size();
+    }
+    std::cout << "all " << total << '\n';
+    return 0;
+  }
+  const std::string_view prefix{"--shard="};
+  const bool stress = selected == "--stress";
+  if (argc > 2 || (argc == 2 && !stress && !selected.starts_with(prefix))) {
+    std::cerr << "usage: lmdj_pattern_count_in_tests [--list-shards|--shard=<name>|--stress]\n";
+    return 2;
+  }
+  // --stress repeats the journey family 64 times, then runs every other shard
+  // once; a bare run is the union of every shard.
+  const auto repetitions = stress ? 64U : 1U;
+  const auto shard_name = selected.starts_with(prefix) ? selected.substr(prefix.size()) : std::string_view{};
+  std::size_t executed{};
+  for (const auto& shard : kShards) {
+    if (!shard_name.empty() && shard.name != shard_name) continue;
+    const bool repeated = shard.group == "repeat";
+    for (unsigned round = 1; round <= (repeated ? repetitions : 1U); ++round)
+      executed += run(shard, repeated ? round : 0U);
+  }
+  if (executed == 0) {
+    std::cerr << "unknown pattern count-in shard\n";
+    return 2;
+  }
+  std::cout << "Facade scheduled transport held-IO journeys: " << executed << " cases passed\n";
 }

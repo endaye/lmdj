@@ -167,8 +167,25 @@ if(BUILD_TESTING)
   endif()
   lmdj_target_warnings(lmdj_pattern_count_in_tests)
   lmdj_target_sanitizers(lmdj_pattern_count_in_tests)
+  # One registration per named shard: the deadline shards wait out the real
+  # 1 s input and 5 s opening deadlines, so together they would spend most of
+  # one component budget (#2238). tests/build/facade_surface_sharding_test.py
+  # keeps this list and the binary's --list-shards table in step.
   lmdj_add_test(NAME facade.pattern_count_in TIER component
-    COMMAND lmdj_pattern_count_in_tests LABELS concurrency)
+    COMMAND lmdj_pattern_count_in_tests --shard=journeys LABELS concurrency)
+  lmdj_add_test(NAME facade.pattern_count_in.input_expiry TIER component
+    COMMAND lmdj_pattern_count_in_tests --shard=input-expiry LABELS concurrency)
+  lmdj_add_test(NAME facade.pattern_count_in.opening_expiry TIER component
+    COMMAND lmdj_pattern_count_in_tests --shard=opening-expiry LABELS concurrency)
+  lmdj_add_test(NAME facade.pattern_count_in.opening_reconciliation TIER component
+    COMMAND lmdj_pattern_count_in_tests --shard=opening-reconciliation LABELS concurrency)
+  lmdj_add_test(NAME facade.pattern_count_in.ingress TIER component
+    COMMAND lmdj_pattern_count_in_tests --shard=ingress LABELS concurrency)
+  if(NOT EMSCRIPTEN)
+    # Only the native testable library compiles the durability fault cases.
+    lmdj_add_test(NAME facade.pattern_count_in.durability TIER component
+      COMMAND lmdj_pattern_count_in_tests --shard=durability LABELS concurrency)
+  endif()
   lmdj_add_test(NAME facade.pattern_count_in_stress TIER stress
     COMMAND lmdj_pattern_count_in_tests --stress LABELS concurrency)
 

@@ -32,6 +32,25 @@ EXPECTED = {
         "facade.c_api_stress.stale_handles": "stale-handles",
         "facade.c_api_stress.lifetime_isolation": "lifetime-isolation",
     },
+    "lmdj_pattern_count_in_tests": {
+        "facade.pattern_count_in": "journeys",
+        "facade.pattern_count_in.input_expiry": "input-expiry",
+        "facade.pattern_count_in.opening_expiry": "opening-expiry",
+        "facade.pattern_count_in.opening_reconciliation": (
+            "opening-reconciliation"
+        ),
+        "facade.pattern_count_in.ingress": "ingress",
+        "facade.pattern_count_in.durability": "durability",
+    },
+}
+
+# Registrations of a sharded binary that deliberately run more than one shard.
+# Each is named with its exact arguments; any other unsharded registration is
+# still rejected.
+WHOLE_SUITE = {
+    "lmdj_pattern_count_in_tests": {
+        "facade.pattern_count_in_stress": ["--stress"],
+    },
 }
 
 
@@ -76,14 +95,16 @@ def validate_registrations(
     executable: Path,
     expected: dict[str, str],
     registrations: dict[str, list[str]],
+    whole_suite: dict[str, list[str]] | None = None,
 ) -> list[str]:
     errors: list[str] = []
+    whole_suite = whole_suite or {}
     owned = {
         name: command
         for name, command in registrations.items()
         if command and Path(command[0]).resolve() == executable.resolve()
     }
-    unexpected = sorted(set(owned) - set(expected))
+    unexpected = sorted(set(owned) - set(expected) - set(whole_suite))
     if unexpected:
         errors.append(
             f"{executable.name}: unexpected CTest registrations {unexpected}"
@@ -91,6 +112,13 @@ def validate_registrations(
     for test_name, shard in expected.items():
         command = owned.get(test_name)
         wanted = [str(executable.resolve()), f"--shard={shard}"]
+        if command != wanted:
+            errors.append(
+                f"{test_name}: expected command {wanted}, found {command}"
+            )
+    for test_name, arguments in whole_suite.items():
+        command = owned.get(test_name)
+        wanted = [str(executable.resolve()), *arguments]
         if command != wanted:
             errors.append(
                 f"{test_name}: expected command {wanted}, found {command}"
@@ -126,7 +154,8 @@ def validate(build_dir: Path) -> list[str]:
                 f"total {sum(declared.values())}"
             )
 
-        errors.extend(validate_registrations(executable, expected, registrations))
+        errors.extend(validate_registrations(
+            executable, expected, registrations, WHOLE_SUITE.get(binary)))
     return errors
 
 
