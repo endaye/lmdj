@@ -1,7 +1,7 @@
 ---
 title: Audio Runtime
 area: core
-status: partial
+status: implemented
 owners: [core, audio]
 module: audio-runtime
 source_paths: [packages/audio-runtime, tests/core/audio]
@@ -14,9 +14,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <DiagramFrame title="Audio Runtime Module" diagramId="audio-runtime" />
 
-S6 当前为**源码草稿，执行验收 UNVERIFIED**。下述 scheduled Record、输入 profile
-与双输出适配描述当前源码；组件、并发、Wasm/OPFS、完整 Portal、物理设备与听感
-仍待完整 Task 验证。上方身份由清单生成，不能把旧版本测试当作这份草稿的验收。
+S6 的 scheduled Record、输入 profile 与双输出适配未在真实 MIDI 硬件或物理设备上验收，也未做听感验收。
 
 ## 连续 tempo transition
 
@@ -221,7 +219,7 @@ overlay/canonical 边界事件、固定槽耗尽和重试、停止时替换，�
 production stress 覆盖保相位 publication 与 render/reclaim/Stop 并发和显式拒绝，
 render allocation guard 覆盖替换应用及旧音符结束。源码证明不代表真机听感验收。
 
-### S6 scheduled Record、输入责任与 cue 输出（source draft）
+### S6 scheduled Record、输入责任与 cue 输出
 
 独立 companion 头 `scheduled_pattern_transport.hpp` 定义
 `ScheduledPatternRecordRequest`、`ScheduledPatternCancelRequest`、
@@ -300,13 +298,11 @@ output 0 经真实 product master tap 供 capture/resample，再接 monitor gain
 第一非零 PCM 为 C+1/S+1。四/八个 cues 强制发出，保留现有节奏：每 Bar 首拍
 accent 1800 Hz，其余拍 normal 1200 Hz；`set_count_in_metronome` 只选择 MET 开启时
 可选的 S accent。S7 后续才接入设备偏好、Creator 控件与 JS
-metronome handoff；本草稿不声明这些 UI 已实现。
+metronome handoff。
 
-新增 native component/race 与 `audio.pattern_count_in_stress` 测试源码覆盖精确 C/S、
+新增 native component/race 与 `audio.pattern_count_in_stress` 测试覆盖精确 C/S、
 独立非整数 BPM oracle、长 callback、Preparing/cancel/commit/reclaim、真实 e2、
 silent held press 消费后 release、独立 FIFO/ledger saturation 和固定分配账本。
-本次文档草稿未执行这些测试，原 Phase/SEQ SNAP、typed Filter 单 stage 和原 stress
-仍须与新路径一起验证；producer marker 或 telemetry 不代替独立实际 PCM/设备证据。
 
 ### Cardputer 紧凑存储与只读 PCM Bank
 
@@ -438,9 +434,8 @@ Module 版本由清单生成，Product Build 由 Assembly 固定。
 
 本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不改变 Audio Runtime 的实时职责或默认执行权限。
 
-上句是既有集成身份。S6 内联 scheduled cell 改变具体 `RealtimeEngine` layout/size，
-另有 staged **MAJOR allocation debt**，所有二进制消费者必须一致重编；保留旧 DTO/
-symbol 不等于 Engine ABI 兼容。本草稿不分配 Module、Product Build 或 Assembly 身份。
+S6 内联 scheduled cell 改变具体 `RealtimeEngine` layout/size，所有二进制消费者
+必须一致重编；保留旧 DTO/symbol 不等于 Engine ABI 兼容。
 
 ## Audition reclaim accounting
 

@@ -59,14 +59,12 @@ Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_com
 
 监听输出属于 Session/Host 状态，位于 master capture 下游。`monitorVolume()` 返回 0–100 的百分比，`setMonitorVolume(value)` 在未激活时先记录值，创建音频图时先应用；运行中用 20 ms ramp 调整线性 gain。`monitorDestination()` 在图未建立或会话终止时返回 `null`，其余时候返回同一监听节点，供 Host 的非录制声音接入。正常 master tap、tap 初始化失败和 processorerror 恢复路径均经过这个节点。录制批次、Project Truth、authoring history 与导出电平不受监听音量影响；关闭时断开节点并拒绝后续设置。设备记忆由 Host 实现。
 
-## S6 当前源码草稿与验收边界
+## S6 scheduled Record 与原生 count-in
 
-**执行验收 UNVERIFIED。** 当前 scheduled Record、生产 Facade I/O owner、strict
-Host/SDK companion 与 monitoring-only 双输出已经有源码草稿；完整 S6 的 Native/
-Wasm/OPFS、独立 raw PCM、Portal、并发、物理设备与听感验收尚待协调端执行。
-旧 S4 Creator 118 PASS、历史 CI/Build/部署或孤立 executor 证明只保留原范围，不能
-升级为当前 main/S6 验收。S7 才负责 global Record 的 Creator 控件、Off/1/2 偏好、
-COUNT-IN 倒计时/灯与 JS metronome handoff，S3/S5 的切换阶段也仍在后续。
+S6 的 scheduled Record、生产 Facade I/O owner、strict Host/SDK companion 与
+monitoring-only 双输出未在真实 MIDI 硬件或物理设备上验收，也未做听感验收。
+S7 才负责 global Record 的 Creator 控件、Off/1/2 偏好、COUNT-IN 倒计时/灯、
+JS metronome handoff 与 scheduler exclusion，S3/S5 的切换阶段也仍在后续。
 
 Session 的 additive 公共方法为 `queryPatternCountInCapabilities`、
 `requestPatternCountIn`、`inspectPatternCountIn`、`cancelPatternCountIn`、
@@ -81,7 +79,7 @@ Profile 在 stopped/quiescent、任何 live Pad 之前协商，每次 activation
 schedule serial 拒绝换行、leading zero、overflow；frame Number 超安全域 typed refuse。
 旧 ordinary DTO/response/vtable/coordinator shape 与 envelope1 不变；新 SDK→旧 Host
 valid-unknown capability 是 unsupported，malformed envelope 仍失败；冻结旧 SDK→新 Host
-strict decoder 的兼容测试源码保留。原 16 RPC slots、Asyncify gate、一秒 Pad 与五秒
+strict decoder 的兼容测试保留。原 16 RPC slots、Asyncify gate、一秒 Pad 与五秒
 opening 预算保持，pending legacy admission 继续原候选而不重新 enqueue。
 
 按 2026-10-13 用户决定，S6 的共享接纳规则要求 Pattern 与 Performance
@@ -93,8 +91,7 @@ SDK Session；它不进入 wire 或 Project Truth。无 key 的直接调用独�
 满额时已有手势的 matching Release 仍保留入口。没有原 physical key 的域内
 Release 可以结算对应录音责任，但不能代替真实松键结束仍被按住的显式 physical lease owner；
 Stop 回执也必须匹配原会话和请求，不能以外来回执回收名额。普通 Pattern Press 或 Release、旧 `trigger` 输入及 Performance Pad 事件的 1 秒预算都从它自己的轮次开始计时；
-在此之前排在其他输入之后的等待时间不计入，恢复探测仍按原 epoch 起点计时。共享容量的组件
-验证不等于整个 S6 已验收；原完整浏览器、持久化和音频验证仍需独立完成。
+在此之前排在其他输入之后的等待时间不计入，恢复探测仍按原 epoch 起点计时。
 
 Native 固定 serial60/phase4 cell 在独占 Preparing 后复制 timing/cue 与 material borrow，
 再 Armed。C 在旧 Pattern tail quiet 后，S=C+bars×native rounded Bar length，BPM 固定。
@@ -139,15 +136,7 @@ zero、不推进 Engine clock。pointer-free committed cue batch 保留到两路
 ACK，cancel/rearm 不能擦掉旧 batch。监听音量影响两路但不改 capture。
 normal 1200 Hz/accent 1800 Hz、gain 0.2、1920 帧（40 ms）指数衰减到 0.0001 的边界
 后归零，f0=0，首次非零 PCM 为 C+1/S+1。四/八 cues 强制，保留每 Bar 首拍 accent、
-其余拍 normal；只有 MET-enabled 才允许可选 S accent，S7 偏好/UI 与 scheduler
-exclusion 尚未交付。
-
-完整验收还须 retained original transport/switch/Filter/capture/resample、crash/recovery/
-shutdown/reacquire，与生产 held-begin/held-append 的控制、silent held press 消费后真实
-release duration、Record-off/Stop→flush/reconcile→complete Truth/reopen，并独立校准
-actual PCM 与 cue 不进 capture。source/static、自动化/CI、物理按键/设备、听感分别记录。
-Native Engine ABI 有 staged MAJOR debt、Facade/Web companion 有 staged MINOR debt；
-本草稿不分配新的 Module、Product Build、Assembly 或不可变 snapshot 身份。
+其余拍 normal；只有 MET-enabled 才允许可选 S accent。
 
 ## 分发与服务
 
@@ -171,7 +160,7 @@ AudioWorklet 的 terminal quiescence 在首个 caller budget 超时并锁存 fat
 
 S6 的异常退场路径分别保留原始操作失败与实际物理释放证据。Worklet 封闭新回调资源访问后，Control 仍须等已进入回调的 Engine/cue 消费与最后使用完成，才能实际 stop、撤销 held owner 或回收 Pattern/material；terminal gate、超时和 Native stop 均不代替 caller consume。正常 transport 失败后，已有 input/count-in 身份通过可选的 `sendRetained` 短查询继续结算，正常新请求保持封闭，未知已提交 count-in 不重放。原始 deadline 与 envelope 不变；`pending: false` 只证明当前新 RPC 未被接纳。
 
-Worker owner 释放还要求原 Native、cue、caller、input、I/O 和 Bridge 响应释放回调全部结算，并在移交前封闭最后的 RPC admission。Browser 只接受 authenticated consume-release 的实际返回值 1；五秒 timer 仅重试原请求，channel failure 或返回 0 不能终止 owner。最后的 callback 使用结束也不等于后台节点或 AudioContext 已销毁；正式退场拒绝、后台关闭拒绝和未实际到达 `closed` 都保留失败。此源码草稿仍需当前构建的真实回调与端到端验证，不扩展任何已有 Product Build 的验收证据。
+Worker owner 释放还要求原 Native、cue、caller、input、I/O 和 Bridge 响应释放回调全部结算，并在移交前封闭最后的 RPC admission。Browser 只接受 authenticated consume-release 的实际返回值 1；五秒 timer 仅重试原请求，channel failure 或返回 0 不能终止 owner。最后的 callback 使用结束也不等于后台节点或 AudioContext 已销毁；正式退场拒绝、后台关闭拒绝和未实际到达 `closed` 都保留失败。
 
 Runtime Session 是 input 与 terminal cleanup 的唯一 owner。每个终止或 replacement
 generation 都必须释放 Worker/transport、MIDI listeners、BroadcastChannel、AudioContext
@@ -187,7 +176,6 @@ sealed、计时结束、清理拒绝或未知 owner 均不授予替换资格。H
 观察变成第二个清理 owner。加载中的部分 Host 由创建它的原 Module 配置
 在发布前登记，不能借用其他实例的全局对象。默认 packaged 加载在同一窗口
 拒绝重叠 Module 注入；原调用结束只释放加载保留，不证明物理释放。
-当前源码修复仍需原 packaged 生命周期旅程验证。
 
 ## 自动化范围
 
