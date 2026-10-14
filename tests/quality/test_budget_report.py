@@ -199,11 +199,14 @@ def budget_for(name: str, budgets: dict[str, float]) -> float | None:
     A registration such as `platform.cardputer.lcd.${scenario}` declares the
     budget of every name its loop expands to, so a variable matches any
     non-empty text. An exact registration wins; otherwise the declaration with
-    the most literal text does.
+    the most literal text does. The scan cannot evaluate loop values, so when
+    equally specific declarations disagree the budget is unknown rather than
+    whichever one happens to be read first.
     """
     if name in budgets:
         return budgets[name]
-    best: tuple[int, float] | None = None
+    best_literal = -1
+    candidates: set[float] = set()
     for declared, budget in budgets.items():
         if "${" not in declared:
             continue
@@ -211,9 +214,11 @@ def budget_for(name: str, budgets: dict[str, float]) -> float | None:
         pattern = ".+".join(re.escape(part) for part in parts)
         if re.fullmatch(pattern, name):
             literal = sum(len(part) for part in parts)
-            if best is None or literal > best[0]:
-                best = (literal, budget)
-    return None if best is None else best[1]
+            if literal > best_literal:
+                best_literal, candidates = literal, {budget}
+            elif literal == best_literal:
+                candidates.add(budget)
+    return candidates.pop() if len(candidates) == 1 else None
 
 
 def declared_budgets(repo_root: Path, multiplier: int) -> dict[str, float]:

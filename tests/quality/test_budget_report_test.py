@@ -120,6 +120,19 @@ class RegistrationParserTest(unittest.TestCase):
         self.assertIsNone(report.budget_for("platform.lcd.", budgets))
         self.assertIsNone(report.budget_for("other.lcd.flush", budgets))
 
+    def test_the_more_specific_loop_registration_wins(self) -> None:
+        budgets = {"a.witness_${group}": 120.0, "a.witness_task_${task}": 300.0}
+        self.assertEqual(report.budget_for("a.witness_task_crash", budgets), 300.0)
+        self.assertEqual(report.budget_for("a.witness_schema", budgets), 120.0)
+
+    def test_equally_specific_loop_registrations_that_disagree_are_unknown(self) -> None:
+        # Both loops can produce this name and the scan cannot tell which did,
+        # so naming either budget could be wrong.
+        budgets = {"a.prep_${case}": 180.0, "a.prep_${group}": 120.0}
+        self.assertIsNone(report.budget_for("a.prep_JourneyTest", budgets))
+        agreeing = {"a.prep_${case}": 120.0, "a.prep_${group}": 120.0}
+        self.assertEqual(report.budget_for("a.prep_JourneyTest", agreeing), 120.0)
+
     def test_every_call_in_the_repository_is_read(self) -> None:
         # Independent oracle: a line-anchored count of call sites, which shares
         # no code with the balanced scan. Every call site must yield exactly
