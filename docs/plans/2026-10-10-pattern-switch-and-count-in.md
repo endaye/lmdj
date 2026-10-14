@@ -2255,7 +2255,7 @@ Web Runtime Platform session tests and the rebuilt Creator
 
 Each Pad press also runs a serialized `sample.inspect` before its trigger, as
 on `main`. It adds about 80 ms to every press and is tracked as a separate
-Creator latency Task, outside S6.
+Creator latency Task, outside S6 (#2190).
 
 ### Version Management
 
