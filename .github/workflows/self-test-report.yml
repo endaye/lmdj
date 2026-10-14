@@ -27,7 +27,7 @@ on:
       batch_operation:
         description: Durable manual controls; exact full uses reconcile with an explicit node/candidate request.
         type: choice
-        options: [report-legacy, init, reconcile, settle, resume, reconcile-pending, report-init-outbox, report-review, report-batches, report-drain, report-discovery, report-reconcile-claim, recovery-probe, claim-probe, cancel-probe]
+        options: [report-legacy, init, reconcile, settle, resume, reconcile-pending, report-init-outbox, report-review, report-batches, report-drain, report-discovery, report-reconcile-claim]
         default: reconcile
       journal_config:
         description: Optional isolated journal JSON; empty uses the committed production scheduler. Init requires explicit config.
@@ -53,10 +53,6 @@ on:
         description: Maximum newly queued observations for report-batches (1..32).
         type: number
         default: 8
-      probe_request:
-        description: Isolated manual recovery probe closed intent JSON; omitted fault stays disabled.
-        type: string
-        required: false
 
 # Everything not listed is `none`. The reporter reads runs and artifacts and
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
@@ -100,7 +96,6 @@ jobs:
       action: ${{ steps.control.outputs.action }}
       request: ${{ steps.control.outputs.request }}
       executor: ${{ steps.control.outputs.executor }}
-      diagnostic_ready: ${{ steps.cancel-diagnostic.outputs.diagnostic_ready }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -112,7 +107,7 @@ jobs:
           python-version: "3.11"
       - name: Reconcile the isolated journal under the short writer lock
         id: control
-        if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
+        if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
@@ -120,7 +115,6 @@ jobs:
           JOURNAL_CONFIG: ${{ inputs.journal_config }}
           BATCH_REQUEST: ${{ inputs.batch_request }}
           REPORT_CONFIG: ${{ inputs.report_config }}
-          PROBE_REQUEST: ${{ inputs.probe_request }}
           LEGACY_RUN_ID: ${{ inputs.run_id }}
           LEGACY_RECONCILE: ${{ inputs.reconcile }}
           REVIEW_RUN_ID: ${{ inputs.review_run_id }}
@@ -143,7 +137,7 @@ jobs:
           else:
               if not operation:
                   raise SystemExit('why: missing manual operation; remedy: select reconcile or a recovery command')
-              if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
+              if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
                   or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
                   or os.environ.get('REPORT_LIMIT', '8') != '8'):
                   raise SystemExit('why: scheduler command mixed with another operation; remedy: use only journal_config and batch_request')
@@ -208,7 +202,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
           REPORT_OPERATION: ${{ inputs.batch_operation }}
-          PROBE_REQUEST: ${{ inputs.probe_request }}
           LEGACY_RUN_ID: ${{ inputs.run_id }}
           LEGACY_RECONCILE: ${{ inputs.reconcile }}
           REPORT_CONFIG: ${{ inputs.report_config }}
@@ -228,7 +221,7 @@ jobs:
                         'report-reconcile-claim': 'reconcile-claim'}
           if os.environ['REPORT_OPERATION'] == 'report-discovery':
               import re
-              if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'JOURNAL_CONFIG', 'BATCH_REQUEST', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
+              if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'JOURNAL_CONFIG', 'BATCH_REQUEST', 'LEGACY_RUN_ID'))
                   or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')):
                   raise SystemExit('why: discovery mixed with another operation; remedy: use only report_limit and optional paired review identity')
               limit = os.environ.get('REPORT_LIMIT', '8')
@@ -244,7 +237,7 @@ jobs:
               # Incomplete discovery remains red; never run the old mapping too.
               raise SystemExit(subprocess.run(command, check=False).returncode)
           operation = operations.get(os.environ['REPORT_OPERATION'])
-          if (operation is None or any(os.environ.get(key) for key in ('JOURNAL_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
+          if (operation is None or any(os.environ.get(key) for key in ('JOURNAL_CONFIG', 'LEGACY_RUN_ID'))
               or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
               or (os.environ.get('BATCH_REQUEST') and operation != 'reconcile-claim')):
               raise SystemExit('why: report command is unknown or mixed with scheduler inputs; remedy: use only report_config and the selected report arguments')
@@ -283,182 +276,13 @@ jobs:
           # Report CLI writes its own summary; there is deliberately no control
           # result, GITHUB_OUTPUT action, or executor request from this step.
           PY
-      - name: Prepare the isolated cancellation diagnostic
-        id: cancel-diagnostic
-        if: ${{ inputs.batch_operation == 'cancel-probe' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BATCH_WRITER_LOCK: self-test-report
-          BATCH_OPERATION: ${{ inputs.batch_operation }}
-          JOURNAL_CONFIG: ${{ inputs.journal_config }}
-          PROBE_REQUEST: ${{ inputs.probe_request }}
-          REPORT_CONFIG: ${{ inputs.report_config }}
-          BATCH_REQUEST: ${{ inputs.batch_request }}
-          LEGACY_RUN_ID: ${{ inputs.run_id }}
-          LEGACY_RECONCILE: ${{ inputs.reconcile }}
-          REVIEW_RUN_ID: ${{ inputs.review_run_id }}
-          REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
-          REPORT_LIMIT: ${{ inputs.report_limit }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os, re, subprocess, sys
-          from pathlib import Path
-          sys.path.insert(0, str(Path.cwd() / 'scripts/ci'))
-          from batch_runtime import strict_json
-          def require(ok, why):
-              if not ok:
-                  raise ValueError('why: ' + why + '; remedy: stop C2 and inspect the exact isolated claim without retrying admission')
-          try:
-              require(os.environ['BATCH_OPERATION'] == 'cancel-probe'
-                      and not any(os.environ.get(key) for key in ('REPORT_CONFIG', 'BATCH_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
-                      and os.environ.get('LEGACY_RECONCILE', '') in ('', 'false')
-                      and os.environ.get('REPORT_LIMIT', '8') == '8', 'cancel probe mixed with another operation')
-              require(bool(os.environ.get('JOURNAL_CONFIG')) and bool(os.environ.get('PROBE_REQUEST')), 'cancel probe lacks config or intent')
-              require(os.environ['GITHUB_REF'] == 'refs/heads/main' and os.environ['GITHUB_RUN_ATTEMPT'] == '1', 'cancel probe has wrong main or attempt')
-              directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-cancel-probe'
-              directory.mkdir(exist_ok=True)
-              config, request, diagnostic = [directory / name for name in ('config.json', 'request.json', 'diagnostic.json')]
-              config.write_text(os.environ['JOURNAL_CONFIG'])
-              request.write_text(os.environ['PROBE_REQUEST'])
-              command = ['python3', 'scripts/ci/o1_execution_cancel_probe.py', '--config', str(config),
-                         '--request', str(request), '--root', str(Path.cwd()), '--diagnostic', str(diagnostic),
-                         '--summary', os.environ['GITHUB_STEP_SUMMARY']]
-              result = subprocess.run(command, check=False)
-              if result.returncode != 0:
-                  raise SystemExit(result.returncode)
-              value = strict_json(diagnostic.read_bytes())
-              require(isinstance(value, dict) and set(value) == {'schema', 'status', 'diagnostic_ready', 'identity'}
-                      and value['schema'] == 'lmdj.o1-cancel-diagnostic.v1'
-                      and type(value['diagnostic_ready']) is bool, 'cancel diagnostic schema is not closed')
-              if value['status'] == 'disabled':
-                  require(value['diagnostic_ready'] is False and value['identity'] is None, 'disabled diagnostic contains readiness')
-                  raise SystemExit(0)
-              require(value['status'] == 'ready' and value['diagnostic_ready'] is True, 'cancel diagnostic is not ready')
-              identity = value['identity']
-              expected = {'run_id', 'attempt', 'control_sha', 'request_id', 'journal_head', 'issue_number', 'epoch'}
-              require(isinstance(identity, dict) and set(identity) == expected, 'cancel identity is not closed')
-              frozen = strict_json((Path.cwd() / 'scripts/ci/o1_recovery_storage.json').read_bytes())['claim']
-              require(strict_json(config.read_bytes()) == frozen, 'cancel config differs from fixed claim role')
-              require(type(identity['run_id']) is int and identity['run_id'] == int(os.environ['GITHUB_RUN_ID'])
-                      and type(identity['attempt']) is int and identity['attempt'] == 1
-                      and identity['control_sha'] == os.environ['GITHUB_SHA']
-                      and type(identity['issue_number']) is int and identity['issue_number'] == frozen['issue_number']
-                      and identity['epoch'] == frozen['epoch']
-                      and isinstance(identity['epoch'], str) and re.fullmatch(r'o1-claim-cancel-[a-z0-9-]{1,80}', identity['epoch'])
-                      and isinstance(identity['request_id'], str)
-                      and re.fullmatch('batch:' + re.escape(identity['epoch']) + r':[1-9][0-9]*', identity['request_id'])
-                      and isinstance(identity['journal_head'], str) and re.fullmatch(r'[0-9a-f]{64}', identity['journal_head']),
-                      'cancel identity differs from actual controller or fixed storage')
-              # This sole literal is diagnostic readiness, never an execution request.
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-                  output.write('diagnostic_ready=true\n')
-          except Exception:
-              raise SystemExit('why: cancellation diagnostic validation failed; remedy: inspect the exact run and journal, never retry an uncertain claim')
-          raise SystemExit(0)
-          PY
-      - name: Run the isolated claim-before-output probe
-        if: ${{ inputs.batch_operation == 'claim-probe' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BATCH_WRITER_LOCK: self-test-report
-          BATCH_OPERATION: ${{ inputs.batch_operation }}
-          JOURNAL_CONFIG: ${{ inputs.journal_config }}
-          PROBE_REQUEST: ${{ inputs.probe_request }}
-          REPORT_CONFIG: ${{ inputs.report_config }}
-          BATCH_REQUEST: ${{ inputs.batch_request }}
-          LEGACY_RUN_ID: ${{ inputs.run_id }}
-          LEGACY_RECONCILE: ${{ inputs.reconcile }}
-          REVIEW_RUN_ID: ${{ inputs.review_run_id }}
-          REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
-          REPORT_LIMIT: ${{ inputs.report_limit }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os, subprocess
-          from pathlib import Path
-          if (os.environ['BATCH_OPERATION'] != 'claim-probe'
-              or any(os.environ.get(key) for key in ('REPORT_CONFIG', 'BATCH_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
-              or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
-              or os.environ.get('REPORT_LIMIT', '8') != '8'):
-              raise SystemExit('why: claim probe mixed with another operation; remedy: use only journal_config and probe_request')
-          if not os.environ.get('JOURNAL_CONFIG') or not os.environ.get('PROBE_REQUEST'):
-              raise SystemExit('why: claim probe lacks its fixed role config or intent; remedy: supply journal_config matching reviewed claim role and probe_request')
-          directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-claim-probe'
-          directory.mkdir(exist_ok=True)
-          config, request = directory / 'config.json', directory / 'request.json'
-          config.write_text(os.environ['JOURNAL_CONFIG'])
-          request.write_text(os.environ['PROBE_REQUEST'])
-          command = ['python3', 'scripts/ci/o1_execution_claim_probe.py', '--config', str(config),
-                     '--request', str(request), '--root', str(Path.cwd()),
-                     '--summary', os.environ['GITHUB_STEP_SUMMARY']]
-          raise SystemExit(subprocess.run(command, check=False).returncode)
-          PY
-      - name: Run the isolated recovery response probe
-        if: ${{ inputs.batch_operation == 'recovery-probe' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BATCH_WRITER_LOCK: self-test-report
-          BATCH_OPERATION: ${{ inputs.batch_operation }}
-          REPORT_CONFIG: ${{ inputs.report_config }}
-          PROBE_REQUEST: ${{ inputs.probe_request }}
-          JOURNAL_CONFIG: ${{ inputs.journal_config }}
-          BATCH_REQUEST: ${{ inputs.batch_request }}
-          LEGACY_RUN_ID: ${{ inputs.run_id }}
-          LEGACY_RECONCILE: ${{ inputs.reconcile }}
-          REVIEW_RUN_ID: ${{ inputs.review_run_id }}
-          REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
-          REPORT_LIMIT: ${{ inputs.report_limit }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os, subprocess
-          from pathlib import Path
-          if (os.environ['BATCH_OPERATION'] != 'recovery-probe'
-              or any(os.environ.get(key) for key in ('JOURNAL_CONFIG', 'BATCH_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
-              or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
-              or os.environ.get('REPORT_LIMIT', '8') != '8'):
-              raise SystemExit('why: probe mixed with another operation; remedy: use only report_config and probe_request')
-          if not os.environ.get('REPORT_CONFIG') or not os.environ.get('PROBE_REQUEST'):
-              raise SystemExit('why: probe lacks explicit isolated config or intent; remedy: supply report_config and probe_request')
-          directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-recovery-probe'
-          directory.mkdir(exist_ok=True)
-          config, request = directory / 'config.json', directory / 'request.json'
-          config.write_text(os.environ['REPORT_CONFIG'])
-          request.write_text(os.environ['PROBE_REQUEST'])
-          command = ['python3', 'scripts/ci/o1_recovery_probe.py', '--config', str(config),
-                     '--request', str(request), '--root', str(Path.cwd()),
-                     '--summary', os.environ['GITHUB_STEP_SUMMARY']]
-          raise SystemExit(subprocess.run(command, check=False).returncode)
-          PY
       - uses: actions/upload-artifact@v6
-        if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}
+        if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/incremental-controller/result.json
           if-no-files-found: warn
           retention-days: 30
-
-  cancel-probe-waiter:
-    name: Isolated cancellation window
-    needs: [controller]
-    if: >-
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
-      inputs.batch_operation == 'cancel-probe' && needs.controller.result == 'success' &&
-      needs.controller.outputs.diagnostic_ready == 'true'
-    permissions: {}
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
-    timeout-minutes: 5
-    steps:
-      - name: Wait for separately authorized exact-run cancellation
-        shell: bash
-        run: |
-          sleep 285
-          echo 'why: cancellation window expired without verified cancellation; remedy: inspect the actual parent run and settle missing evidence separately'
-          exit 1
 
   execute-batch:
     name: Execute incremental batch

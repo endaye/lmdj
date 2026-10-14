@@ -163,7 +163,7 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
         self.assertEqual(scalars(block(self.job, "concurrency", 4), 6),
                          {"group": "self-test-report", "cancel-in-progress": "false", "queue": "max"})
         self.assertEqual([job.job_id for job in jobs_in(WORKFLOW)],
-                         ["controller", "cancel-probe-waiter", "execute-batch"])
+                         ["controller", "execute-batch"])
         policy = json.loads(HOSTED_POLICY.read_text())
         self.assertFalse(any(e["workflow"] == "self-test-report.yml" for e in policy["allowed"]))
         self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]", self.job)

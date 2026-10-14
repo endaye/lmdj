@@ -81,8 +81,8 @@ class CutoverTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'why:.*remedy:'):
             self.invoke('workflow_dispatch', 'init')
 
-    def test_mixed_legacy_probe_and_review_arguments_reject_before_runtime(self):
-        for key in ('REPORT_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'):
+    def test_mixed_legacy_and_review_arguments_reject_before_runtime(self):
+        for key in ('REPORT_CONFIG', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'):
             with self.subTest(key=key), self.assertRaisesRegex(SystemExit, 'why:.*remedy:'):
                 self.invoke('workflow_dispatch', 'reconcile', {key: 'unexpected'})
 

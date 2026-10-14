@@ -75,7 +75,7 @@ class DiscoveryWorkflowTests(unittest.TestCase):
 
     def test_mixed_or_invalid_inputs_reject_before_subprocess(self):
         pairs = [('REPORT_CONFIG', '{}'), ('JOURNAL_CONFIG', '{}'), ('BATCH_REQUEST', '{}'),
-                 ('PROBE_REQUEST', '{}'), ('LEGACY_RUN_ID', '17'), ('LEGACY_RECONCILE', 'true'),
+                 ('LEGACY_RUN_ID', '17'), ('LEGACY_RECONCILE', 'true'),
                  ('REVIEW_RUN_ID', '51'), ('REVIEW_ATTEMPT', '1'), ('REPORT_LIMIT', '0'),
                  ('REPORT_LIMIT', '33'), ('REPORT_LIMIT', '8; touch /bad')]
         for key, value in pairs:
@@ -104,7 +104,7 @@ class DiscoveryWorkflowTests(unittest.TestCase):
                       "github.run_attempt == '1'"):
             self.assertIn(value, condition)
         self.assertIn('group: self-test-report', self.controller)
-        self.assertEqual(self.controller.count('BATCH_WRITER_LOCK: self-test-report'), 7)
+        self.assertEqual(self.controller.count('BATCH_WRITER_LOCK: self-test-report'), 4)
         self.assertNotIn('${{', self.code)
 
 
