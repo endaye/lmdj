@@ -1,0 +1,54 @@
+---
+title: LMDJ 1.0.66.0 release changelog
+area: history
+status: implemented
+owners: [release, docs]
+source_paths: [docs/release-evidence/release-intents.json, docs/release-evidence/changelog-publications.json, tools/release/changelog_site.py]
+---
+
+{/* Generated release projection; do not hand-edit frozen version pages. */}
+
+Published: 2026-10-01T09:51:18Z. Release ID: 400604364.
+
+[GitHub Release](https://github.com/endaye/lmdj/releases/tag/lmdj-v1.0.66.0) · [全部版本](./index.mdx)
+
+本页记录经审查的 Release 公开事实，不表示两个 Host 已部署或已晋级。
+
+# LMDJ 1.0.66.0
+
+Tag: `lmdj-v1.0.66.0`
+Target: `603af8f9e429d06a8a8d560ecddd7f4c4d14dc0d`
+
+Changes since `lmdj-v1.0.61.0` (`07044d2950c3ee6ff382468a536d6be87e5cd5d8`).
+
+## Features
+
+- creator: The Creator has a collapsible developer diagnostics panel, reachable in every mode, that keeps the last 100 errors of the current workspace with their operation, UTC time, code, message, and details; switching modes keeps the list, reloading the page clears it, and nothing is stored or uploaded. ([91d7637b2a02](https://github.com/endaye/lmdj/commit/91d7637b2a0236a63acb8dfa9b97458d8fa335f2))
+
+## Fixes
+
+- core: Recording over a looping Pattern on the global Pattern transport is now audible while you record: what you play into one pass comes back on the next pass instead of only after Record is switched off, and Record-off and live Pad input keep responding while that pass is queued. ([fd8c0761b634](https://github.com/endaye/lmdj/commit/fd8c0761b634002cefa1f55e1ec2f9d40b432456), [1d4603ef5a6f](https://github.com/endaye/lmdj/commit/1d4603ef5a6f09964de8b08cc14615c0c2048ea8))
+
+- core: A take interrupted mid-recording, for example by reloading the page, can now be recovered: applying an owner-lost Pattern transport recording restores the take you heard, with any still-held Pad press ending at its default length, instead of refusing it. ([18de88506844](https://github.com/endaye/lmdj/commit/18de88506844c1a481fc581800015a1d3d04b76a))
+
+- core: Starting two Performance recordings on the same project at once is reliably serialized: a contender can no longer mistake a recording that has just started for an abandoned one, and a refused start no longer leaves an active recording journal behind for a Performance that was never saved. ([2e24cacff4e4](https://github.com/endaye/lmdj/commit/2e24cacff4e4470d1f08510b987570762ea77dd8), [b80545533dff](https://github.com/endaye/lmdj/commit/b80545533dfffde94cc4540d8c3edef15c54211c))
+
+- creator: The Sample workspace no longer shows its own duplicate Bank row and Pad grid: Bank selection and the playable Pads live only on the left hardware rail, which now also handles Pad selection, empty-slot sample picking, and drag-and-drop replacement, and Sound Set installation uses a separate Install target Bank that does not change the Bank you are playing. ([ad343a6b05e6](https://github.com/endaye/lmdj/commit/ad343a6b05e6a2578dd1c7e2e40a032a73db9542))
+
+## Compatibility / migration
+
+No entries recorded in this category.
+
+## Known issues
+
+No entries recorded in this category.
+
+Content SHA-256: `5f9cf61c7a75e80aaaa5209f6ca21ae460fc6db187b77a85651a7dcf890d623f`
+
+Notes SHA-256: `92fdc9b6c930e82c96924bbf4f15050c178cdbdf3d46dbb73f7c26062a652d68`
+
+Plan SHA-256 (reviewed publication record): `c7fe54a80cbb9db7ad00514ba1dd929403a5fabe36464c22d859bb2c8b1ca616`
+
+本投影重算 Content / Notes 摘要；Plan 摘要、Release ID 与公开时间来自经审查的公开记录，不在此处重新认证远端 Release。
+
+[Creator Host 日志](../operations/creator-changelog.mdx) · [Runtime Host 日志](../operations/runtime-changelog.mdx)
