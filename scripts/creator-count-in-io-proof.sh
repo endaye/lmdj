@@ -118,7 +118,8 @@ import pathlib, sys
 if "LMDJ_WEB_AUDIO_CONFORMANCE:BOOL=OFF" not in pathlib.Path(sys.argv[1]).read_text():
     raise SystemExit("ordinary Creator build did not retain conformance OFF")
 PY
-emcmake cmake -C "$repo_root/tools/web-runtime/emscripten-threads-cache-init.cmake" \
+emcmake cmake \
+  -C "$repo_root/tools/web-runtime/emscripten-threads-cache-init.cmake" \
   -S "$repo_root" -B "$io_root/cmake" -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=OFF -DLMDJ_WEB_AUDIO_CONFORMANCE=ON \
   -DLMDJ_WEB_AUDIO_OUTPUT_DIR="$io_root/runtime" >"$run_root/conformance-configure.log" 2>&1
