@@ -1,7 +1,7 @@
 ---
 id: hand-copied-identity-pin-drifts
 area: core
-status: absorbed
+status: open
 recurrences:
   - date: 2026-09-16
     occurrence: https://github.com/endaye/lmdj/issues/1073
@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-10-13
     occurrence: https://github.com/endaye/lmdj/pull/2102
     observed_by: opencode (GLM 5.3)
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/actions/runs/38588990296
+    observed_by: Claude Code (Opus 5.5)
 exit: gate:tests/build/version_test.py
 ---
 
@@ -50,6 +53,16 @@ shipped a Cardputer profile reporting a stale Assembly digest. The
 copy disagrees with `products/lmdj/version.json`,
 `apps/cardputer-host/module.json` or the Assembly's sha256.
 
+The fourth occurrence escaped that gate. `apps/creator-web/package.json` and
+both `version` fields of its `package-lock.json` repeat the Creator Host
+version from `apps/creator-web/module.json`. The #2247 settle bumped the
+manifest to `6.0.1` and left the npm copy at `6.0.0`. `version.py verify` and
+`version_test.py` read neither file and stayed green. The drift surfaced only
+in the main batch Deploy contract lane, where the P1 candidate renderer
+(`_p1_identity_material` in `scripts/version.py`) refused the baseline. The
+exit is reopened until https://github.com/endaye/lmdj/issues/2260 extends
+`version_test.py` to cover this copy.
+
 ## How to apply
 
 - Never restate a module manifest's identity, version or dependency pins as a
@@ -60,6 +73,9 @@ copy disagrees with `products/lmdj/version.json`,
   owns the fact. Identity pins belong to the `contract` tier, which
   `scripts/core.sh test dev full` and `core_ubuntu` run -- not to `package`,
   which deliberately runs only unit and component.
+- When a settle bumps `apps/creator-web/module.json`, set the same version in
+  `apps/creator-web/package.json` and in both `version` fields of
+  `apps/creator-web/package-lock.json` (top level and `packages[""]`).
 - When a bump forgets a copy, prefer deleting the duplicate over re-binding it:
   a literal that must be hand-edited in lockstep with a generated identity is
   forgotten again. See
