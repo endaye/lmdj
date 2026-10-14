@@ -64,6 +64,21 @@ struct Fixture {
     return engine.enqueue_pattern_input({19, 1, 0, 127, false, 0, held});
   }
 };
+// Submission races the free-running audio thread. Control reads the Pattern
+// observation in a bounded number of attempts and does not wait while audio
+// holds Pattern admission closed in claim_queued_pattern(); submit then
+// returns the retryable `busy` before touching any state. TSan widens that
+// claim window enough to cover every attempt, even on the first callback
+// (#2261). Retry only `busy`: any other verdict fails at once, and the retry
+// reusing this serial and epoch proves the refused attempt consumed neither.
+void submit_until_admitted(Fixture& f, const ScheduledPatternRecordRequest& request) {
+  wait_for([&] {
+    const auto verdict = f.engine.submit_scheduled_pattern_record(request);
+    LMDJ_CHECK(verdict == ScheduledPatternSubmit::accepted ||
+        verdict == ScheduledPatternSubmit::busy);
+    return verdict == ScheduledPatternSubmit::accepted;
+  });
+}
 
 void exact_receipts_and_silent_release_escrow_under_concurrent_audio() {
   Fixture f;
@@ -94,8 +109,7 @@ void exact_receipts_and_silent_release_escrow_under_concurrent_audio() {
   std::uint64_t cancelled = 0, applied = 0;
   for (unsigned cycle = 0; cycle < 1000; ++cycle) {
     const auto e1 = ++epoch;
-    LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(++serial, e1)) ==
-        ScheduledPatternSubmit::accepted);
+    submit_until_admitted(f, f.request(++serial, e1));
     const auto press = f.press();
     LMDJ_CHECK(press.result == PatternInputSubmit::accepted);
     LMDJ_CHECK(press.sequence > last_sequence && press.acceptance_ordinal > last_ordinal);
