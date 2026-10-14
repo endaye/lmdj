@@ -108,6 +108,24 @@ class DeploySecretActionPinTest(unittest.TestCase):
                          'deploy-web-runtime-host.yml', 'deploy-creator-web.yml',
                          'deploy-default-assets.yml'} <= names, names)
 
+    def test_step_items_capture_the_whole_step_in_any_key_order(self):
+        source = """jobs:
+  deploy:
+    steps:
+      - name: Settings first
+        with:
+          persist-credentials: false
+        uses: actions/checkout@abc
+      - uses: actions/checkout@def
+      - name: Next
+        run: true
+"""
+        items = step_items(source, 'uses')
+        self.assertEqual(len(items), 2)
+        self.assertIn('persist-credentials: false', items[0])
+        self.assertNotIn('persist-credentials', items[1])
+        self.assertNotIn('Next', items[1])
+
     def test_actions_beside_the_deploy_token_use_the_verified_sha_pins(self):
         for path in deploy_secret_workflows():
             uses = re.findall(r'(?m)^\s*(?:- )?uses: (.+)$', directives(path.read_text()))

@@ -270,6 +270,32 @@ class WranglerProcessTest(unittest.TestCase):
                       "mutating the Worker; remedy: start Wrangler in its own session and kill its process group")
 
 
+    def test_a_descendant_outside_the_group_cannot_hang_the_timeout(self):
+        # The escaped child keeps the captured pipes open; draining them must
+        # stay bounded. It records its pid so the test can stop it afterwards.
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "escaped.pid"
+            launcher = ("import os, subprocess, sys, time; "
+                        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+                        "start_new_session=True); "
+                        f"open({str(marker)!r}, 'w').write(str(child.pid)); time.sleep(60)")
+            started = time.monotonic()
+            try:
+                with patch.object(MODULE, "PIPE_DRAIN_SECONDS", 1), \
+                        self.assertRaises(subprocess.TimeoutExpired) as raised:
+                    MODULE.run_wrangler([sys.executable, "-c", launcher], cwd=directory, timeout=2)
+            finally:
+                if marker.exists():
+                    try:
+                        os.kill(int(marker.read_text()), 9)
+                    except (ProcessLookupError, ValueError):
+                        pass
+            self.assertLess(time.monotonic() - started, 30,
+                            "why: a descendant holding the pipes turned the bounded timeout into a hang; "
+                            "remedy: bound the post-kill pipe drain")
+            self.assertIn("output unavailable", raised.exception.output)
+
+
 class EvidenceDurabilityTest(unittest.TestCase):
     """The evidence describes a promotion that already happened remotely."""
 

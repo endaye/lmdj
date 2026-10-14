@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 ACCOUNT = "0b62b8881c07f48f7935f5380a1f55db"
 WORKER = "docs"
 ROOT = Path(__file__).resolve().parents[1]
+PIPE_DRAIN_SECONDS = 10
 
 
 def publish_document(path, text):
@@ -81,7 +82,14 @@ def run_wrangler(command, *, cwd, timeout=300):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        stdout, stderr = process.communicate()
+        try:
+            stdout, stderr = process.communicate(timeout=PIPE_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            # A descendant that left the group still holds the pipes; do not
+            # let it turn a bounded timeout into a hung job.
+            process.wait()
+            stdout = stderr = ("output unavailable: a process outside Wrangler's "
+                               "process group still holds its pipes\n")
         if isinstance(error, subprocess.TimeoutExpired):
             error.output, error.stderr = stdout, stderr
         raise
