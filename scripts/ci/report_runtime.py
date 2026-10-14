@@ -319,7 +319,7 @@ def plan_bucket_recoveries(state, inputs):
     return tuple(recoveries)
 
 
-def causal_floor(state, inputs):
+def causal_floor(state):
     """Latest authenticated debt ordinal for every managed suite namespace."""
     ordered = state.get("_result_order")
     require(isinstance(ordered, list) and len(ordered) == len(state["results"])
@@ -330,7 +330,6 @@ def causal_floor(state, inputs):
         request = state["requests"][request_id]
         if request["kind"] not in {"auto", "bootstrap"}:
             continue
-        policy = inputs.policy_at(request["control"], historical=True)
         for suite, outcome in state["results"][request_id]["outcomes"].items():
             if outcome == "passed":
                 continue
@@ -428,7 +427,7 @@ class ReportRuntime:
     def _authenticated_causal_floor(self):
         self.scheduler.inputs.refresh()
         state = report_scheduler_state(self.scheduler)
-        return causal_floor(state, self.scheduler.inputs)
+        return causal_floor(state)
 
     def execute(self, operation, *, run_id=None, attempt=None, limit=8, command=None, persist_verified=True):
         require(operation in {"init-outbox", "review", "legacy", "batches", "drain", "reconcile-claim"},
@@ -461,7 +460,7 @@ class ReportRuntime:
             self.scheduler.inputs.refresh()
             state = report_scheduler_state(self.scheduler)
             planned = plan_batch_reports(self.repository, state, self.scheduler.inputs)
-            floor = causal_floor(state, self.scheduler.inputs)
+            floor = causal_floor(state)
             return outbox.drain_once(self.api, causal_floor=floor)
         if operation == "review":
             planned = review_failure_report.collect(self.api, self.repository, run_id, attempt)
@@ -481,7 +480,7 @@ class ReportRuntime:
         state = report_scheduler_state(self.scheduler)
         return self.deliver(plan_batch_reports(self.repository, state, self.scheduler.inputs), limit,
                             recoveries=plan_bucket_recoveries(state, self.scheduler.inputs),
-                            causal_floor=causal_floor(state, self.scheduler.inputs))
+                            causal_floor=causal_floor(state))
 
 
 @observe('report')

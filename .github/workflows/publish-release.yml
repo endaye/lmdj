@@ -65,12 +65,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # The repository is private and the checkout deliberately persists no
-      # credential, so every step whose git commands must reach the canonical
-      # https://github.com/ remote (the release tooling's authority fetch and
-      # the intent hydration below) scopes this job's own read-level token
-      # through environment-only git config. Nothing is written to disk and
-      # no write token enters preflight.
+      # The checkout deliberately persists no credential, so every step whose
+      # git commands must reach the canonical https://github.com/ remote (the
+      # release tooling's authority fetch and the intent hydration below)
+      # scopes this job's own read-level token through environment-only git
+      # config. That keeps the authority fetch authenticated independent of
+      # repository visibility (now public; private when this was written).
+      # Nothing is written to disk and no write token enters preflight.
       # Allocated release intents may target pre-squash commits that no
       # branch or tag reaches, so a fresh full clone lacks their objects and
       # the release audit reports the intents unverifiable. `hydrate` is the

@@ -197,7 +197,9 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
     def test_explicit_requests_have_run_scoped_concurrency(self) -> None:
         self.assertIn("format('core-ci-self-test-{0}', github.run_id)", self.ci.split("\njobs:\n")[0])
 
-    def test_history_lookup_is_bounded_and_only_runs_for_schedule(self):
+    def test_retired_daily_history_lookup_stays_absent(self):
+        # There is no daily product test left to deduplicate.
+        self.assertFalse((ROOT / "scripts/ci/self_test_history.py").exists())
         self.assertNotIn("self_test_history.py", self.ci)
         self.assertNotIn("self_test.py resolve", self.ci)
 

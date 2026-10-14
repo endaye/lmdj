@@ -263,7 +263,6 @@ class EntryTests(unittest.TestCase):
         self.scheduler = self.http["scheduler"]
         self.api = FakeGitHubApi()
         self.calls, self.source_runs = [], {}
-        self.review = None
         self.add_run(17, event="push")
         self.workflow_ids = {batch_runtime.WORKFLOW: 352307416, ".github/workflows/ci.yml": 9,
                              ".github/workflows/pr-review.yml": 8}
@@ -287,10 +286,6 @@ class EntryTests(unittest.TestCase):
                     return {"id": self.workflow_ids[selected], "path": selected}
             if method == "GET" and path in self.source_runs:
                 return deepcopy(self.source_runs[path])
-            if self.review is not None and any(piece in path for piece in ("/contents/scripts/ci/", "/contents/.github/workflows/pr-review.yml", "/actions/runs/51/artifacts", "/branches/main")):
-                self.assertIsNone(body)
-                self.assertFalse(raw)
-                return self.review.get(method, path)
             return self.scheduler._request(method, path, body=body, raw=raw)
         self.api._request = request
         # Explicit fixture initialization is separate from Entry, which has no
@@ -398,7 +393,7 @@ class EntryTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 self.make().control(self.push())
             self.scheduler.runs[17]["event"] = "workflow_run"
-            source = self.source(".github/workflows/ci.yml", 100)
+            source = self.source(batch_runtime.WORKFLOW, 100)
             payload = self.callback(source)
             payload["workflow_run"]["head_sha"] = "f" * 40
             with self.assertRaises(Exception):
@@ -733,49 +728,22 @@ class EntryTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertFalse(self.writes())
 
-    def test_legacy_full_event_only_reports_through_outbox_and_replay_is_idempotent(self):
+    def test_retired_legacy_and_review_callbacks_are_not_owned_sources(self):
+        # Core CI is workflow_call-only and PR Review is not subscribed, so
+        # neither completion can arrive; a forged one must not plan a report.
         self.scheduler.runs[17]["event"] = "workflow_run"
-        source = full_legacy_api()
-        for name in ("get_run", "get_workflow", "compare", "list_artifacts", "download_artifact", "get_policy"):
-            setattr(self.api, name, getattr(source, name))
-        observed = source.get_run(100)
-        self.workflow_ids[".github/workflows/ci.yml"] = observed["workflow_id"]
-        payload = self.callback(self.source(".github/workflows/ci.yml", 100, head=observed["head_sha"]))
-        adapter = self.make(kind="workflow_run")
-        self.assertEqual(adapter.control(payload)["action"], "idle")
+        for path, event in ((".github/workflows/ci.yml", "workflow_dispatch"),
+                            (".github/workflows/pr-review.yml", "pull_request")):
+            with self.subTest(path=path):
+                self.assertNotIn(path, entry.WORKFLOWS)
+                payload = self.callback(self.source(path, 100, event=event))
+                with self.assertRaisesRegex(Exception, "not an owned source"):
+                    self.make(kind="workflow_run").control(payload)
+                result = self.make(kind="workflow_run").reports(payload)
+                self.assertEqual(result["source"], "unverified")
+                self.assertEqual([row["operation"] for row in result["outcomes"]], ["source", "drain"])
+                self.assertFalse(self.api.issues)
         self.assertFalse(self.writes())
-        answer = adapter.reports(payload)
-        self.assertEqual(answer["status"], "ready", answer)
-        self.assertEqual(answer["outcomes"][0]["result"]["verdict_status"], "failed")
-        self.assertEqual(len(self.api.issues), 1)
-        box = report_runtime.ReportRuntime(self.config, root=self.f.root, environment=self.env, api=self.api).outbox().load()
-        delivered = next(iter(box["deliveries"].values()))
-        self.assertEqual(delivered["status"], "delivered")
-        self.assertEqual(self.api.issues[0]["body"], delivered["payload"]["issue_body"])
-        self.assertEqual(adapter.reports(payload)["status"], "ready")
-        self.assertEqual(len(self.api.issues), 1)
-        self.assertFalse(self.scheduler.comments)
-
-    def test_pr_branch_review_completion_keeps_exact_receipts_without_main_filter(self):
-        self.scheduler.runs[17]["event"] = "workflow_run"
-        import ci_review_failure_report_test as review_fixture
-        self.review = review_fixture.ConsumerTests()
-        self.review.setUp()
-        self.workflow_ids[".github/workflows/pr-review.yml"] = 42
-        document = self.source(".github/workflows/pr-review.yml", 51, branch="feat/fixture", event="pull_request")
-        document["pull_requests"] = []
-        self.review.run = document
-        for name in ("compare", "list_jobs", "download_artifact"):
-            setattr(self.api, name, getattr(self.review.api, name))
-        payload = self.callback(document)
-        adapter = self.make(kind="workflow_run")
-        self.assertEqual(adapter.control(payload)["action"], "idle")
-        self.assertFalse(self.writes())
-        result = adapter.reports(payload)
-        self.assertEqual(result["status"], "ready", result)
-        self.assertEqual(len(self.api.issues), 1)
-        self.assertIn("PR Review backends unavailable", self.api.issues[0]["body"])
-        self.assertFalse(self.scheduler.comments)
 
     def test_reports_can_use_settled_source_after_control_cleared_active(self):
         original = self.make().control(self.push())
@@ -800,7 +768,7 @@ class EntryTests(unittest.TestCase):
         second = self.source(batch_runtime.WORKFLOW, 17, head=self.sha, attempt=2)
         with self.assertRaises(Exception):
             self.make(18, "workflow_run").control(self.callback(second))
-        foreign = self.source(".github/workflows/ci.yml", 100)
+        foreign = self.source(batch_runtime.WORKFLOW, 100)
         foreign["repository"]["id"] = 7
         with self.assertRaises(Exception):
             self.make(18, "workflow_run").control(self.callback(foreign))
@@ -820,7 +788,7 @@ class EntryTests(unittest.TestCase):
         key = batch.digest({"key": planned[0].key, "observation": planned[0].observation})
         box._persist("queue", {"delivery": key, "payload": report_outbox.freeze(planned[0], "endaye")})
         self.scheduler.runs[17]["event"] = "workflow_run"
-        payload = self.callback(self.source(".github/workflows/ci.yml", 100))
+        payload = self.callback(self.source(batch_runtime.WORKFLOW, 100))
         payload["workflow_run"]["head_sha"] = "f" * 40
         before = deepcopy(self.scheduler.comments)
         result = self.make(kind="workflow_run").reports(payload)
