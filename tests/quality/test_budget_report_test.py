@@ -59,6 +59,109 @@ class BudgetSourceTest(unittest.TestCase):
         self.assertEqual(report.declared_budgets(root, 3)["facade.application"], 90)
 
 
+class RegistrationParserTest(unittest.TestCase):
+    """Every lmdj_add_test call is read whole, whatever its layout (#2238)."""
+
+    def _budgets(self, cmake: str) -> dict[str, float]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cmake").mkdir()
+            (root / "cmake/LmdjTesting.cmake").write_text(
+                "set(lmdj_test_timeout_unit 10)\n"
+                "set(lmdj_test_timeout_component 30)\n", encoding="utf-8")
+            (root / "CMakeLists.txt").write_text(cmake, encoding="utf-8")
+            return report.declared_budgets(root, 1)
+
+    def test_closing_parenthesis_on_its_own_line(self) -> None:
+        budgets = self._budgets(
+            "lmdj_add_test(\n  NAME a.own_line\n  TIER unit\n"
+            "  COMMAND a\n  TIMEOUT 7\n)\n")
+        self.assertEqual(budgets, {"a.own_line": 7})
+
+    def test_closing_parenthesis_on_the_last_argument_line(self) -> None:
+        # The layout the former pattern missed: it needed ')' on its own line,
+        # so it ran on into the next call, lost this TIMEOUT to that call's
+        # and never saw the next registration at all.
+        budgets = self._budgets(
+            "lmdj_add_test(NAME a.inline TIER component\n"
+            "  COMMAND a TIMEOUT 12)\n"
+            "lmdj_add_test(NAME b.single TIER unit COMMAND b)\n"
+            "lmdj_add_test(\n  NAME c.own_line\n  TIER component\n"
+            "  COMMAND c\n  TIMEOUT 99\n)\n")
+        self.assertEqual(budgets, {"a.inline": 12, "b.single": 10, "c.own_line": 99})
+
+    def test_parentheses_inside_arguments_do_not_end_the_call(self) -> None:
+        budgets = self._budgets(
+            'lmdj_add_test(NAME a.nested TIER unit\n'
+            '  COMMAND a "$<IF:$<CONFIG:Debug>,x)y,(z>" [[bracket ) text]]\n'
+            '  # a comment with ) in it\n'
+            '  LABELS (grouped) TIMEOUT 5)\n')
+        self.assertEqual(budgets, {"a.nested": 5})
+
+    def test_call_text_inside_strings_and_comments_registers_nothing(self) -> None:
+        budgets = self._budgets(
+            '# lmdj_add_test(NAME commented.out TIER unit COMMAND x)\n'
+            'message(STATUS "lmdj_add_test(NAME quoted.out TIER unit COMMAND x)")\n'
+            '#[[ lmdj_add_test(NAME bracket.out TIER unit COMMAND x) ]]\n'
+            'function(lmdj_add_test)\nendfunction()\n'
+            'LMDJ_ADD_TEST (NAME real.one TIER unit COMMAND x)\n')
+        self.assertEqual(budgets, {"real.one": 10})
+
+    def test_a_timeout_the_scan_cannot_evaluate_has_no_budget(self) -> None:
+        # Reporting the tier default instead would state a wrong budget.
+        budgets = self._budgets(
+            "lmdj_add_test(NAME a.var TIER unit COMMAND a TIMEOUT ${budget})\n")
+        self.assertEqual(budgets, {})
+
+    def test_a_loop_registration_budgets_every_name_it_expands_to(self) -> None:
+        budgets = {"platform.lcd.${scenario}": 30.0, "platform.lcd.exact": 5.0}
+        self.assertEqual(report.budget_for("platform.lcd.flush", budgets), 30.0)
+        self.assertEqual(report.budget_for("platform.lcd.exact", budgets), 5.0)
+        self.assertIsNone(report.budget_for("platform.lcd.", budgets))
+        self.assertIsNone(report.budget_for("other.lcd.flush", budgets))
+
+    def test_the_more_specific_loop_registration_wins(self) -> None:
+        budgets = {"a.witness_${group}": 120.0, "a.witness_task_${task}": 300.0}
+        self.assertEqual(report.budget_for("a.witness_task_crash", budgets), 300.0)
+        self.assertEqual(report.budget_for("a.witness_schema", budgets), 120.0)
+
+    def test_equally_specific_loop_registrations_that_disagree_are_unknown(self) -> None:
+        # Both loops can produce this name and the scan cannot tell which did,
+        # so naming either budget could be wrong.
+        budgets = {"a.prep_${case}": 180.0, "a.prep_${group}": 120.0}
+        self.assertIsNone(report.budget_for("a.prep_JourneyTest", budgets))
+        agreeing = {"a.prep_${case}": 120.0, "a.prep_${group}": 120.0}
+        self.assertEqual(report.budget_for("a.prep_JourneyTest", agreeing), 120.0)
+
+    def test_every_call_in_the_repository_is_read(self) -> None:
+        # Independent oracle: a line-anchored count of call sites, which shares
+        # no code with the balanced scan. Every call site must yield exactly
+        # one registration with a NAME and a TIER.
+        root = Path(__file__).resolve().parents[2]
+        sites = 0
+        parsed = 0
+        for path in root.rglob("CMakeLists.txt"):
+            relative = path.relative_to(root).as_posix()
+            if relative.startswith(("build/", ".worktrees/")):
+                continue
+            text = path.read_text(encoding="utf-8")
+            sites += sum(1 for line in text.splitlines()
+                         if line.lstrip().startswith("lmdj_add_test("))
+            for arguments in report.cmake_calls(text, "lmdj_add_test"):
+                fields = report.registration_fields(arguments)
+                if fields.get("NAME") and fields.get("TIER"):
+                    parsed += 1
+        self.assertGreater(sites, 0)
+        self.assertEqual(parsed, sites)
+
+    def test_single_line_facade_registrations_have_budgets(self) -> None:
+        # The two registrations #2238 found invisible to the report.
+        root = Path(__file__).resolve().parents[2]
+        budgets = report.declared_budgets(root, 1)
+        self.assertEqual(budgets["facade.pattern_count_in"], 30)
+        self.assertEqual(budgets["facade.pattern_transport_controller"], 30)
+
+
 class NormalisationTest(unittest.TestCase):
     """The distinction the tool exists to make: slower test or slower machine."""
 
