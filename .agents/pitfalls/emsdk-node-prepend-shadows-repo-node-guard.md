@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/pull/1349
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/commit/c560b163cd1bc7cbb38d03642147027f27a143fb
+    observed_by: Claude Code (Opus 5.5)
 exit: gate:tests/platform/web/toolchain/toolchain_identity_test.py
 ---
 
@@ -71,3 +74,13 @@ when the lock major differs from `.node-version`.
 `scripts/*.sh` Node guard to that lock major and rejects any `EMSDK_NODE` use
 in those scripts, so a stale guard or a prepend in a further script fails with
 `why` and `remedy`.
+
+## Third occurrence
+
+#2184, the fix above, still missed a copy: `toolchain_conformance.spec.mjs`
+asserted the built identity's `node` as the literal `"22"`. `web_toolchain`
+is not run on ordinary Pull Requests, so the miss surfaced only in later
+main batches, after the lane's full Emscripten build. The same
+`toolchain_identity_test.py` now also binds that spec literal to the lock
+major, before the build. When the lock's Node moves, grep the Web test
+specs as well as `scripts/`.
