@@ -43,6 +43,16 @@ the user explicitly limits the Task to local, draft, review-only, or other
 narrower work. Task-specific verification, live branch protection, conflict
 checks, and resolution of review findings and conversations remain required.
 
+Dependabot Pull Requests carry a standing owner review waiver, recorded by
+the repository owner on 2026-10-14. For a Pull Request authored by
+`dependabot[bot]`, the owner delegates to coding agents the posting of the
+`issue-done` step 3 owner waiver and the squash merge, without asking. The
+delegation applies once the selected CI lanes pass on the exact head and there
+are no conflicts or unresolved conversations. Each waiver names that Pull
+Request, its head SHA and the passing CI run, and cites this paragraph. It
+waives independent review only; a failing lane or an unresolved finding still
+stops the merge.
+
 This standing Task authorization does not itself initiate a release. A single
 user authorization to perform a release covers the complete release sequence
 described below; individual release transitions do not need renewed approval.
