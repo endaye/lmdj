@@ -286,6 +286,9 @@ if (typeof globalThis.window !== "undefined") {
   // Accepted RPCs whose public observer failed still have a real Bridge
   // response consumer. Draining that response never consumes a Native ticket.
   const abandonedRequestIds = new Set();
+  // Abandoned RPCs whose Native cancel already returned a receipt (0 or 1).
+  // Reaping retries only an unreceipted cancel; it never re-cancels.
+  const receiptedAbandonedIds = new Set();
   // Same finite request owner budget as ControlBridge's existing 16 slots.
   const RETAINED_RPC_OWNER_LIMIT = 16;
   const notificationSubscribers = new Set();
@@ -417,6 +420,7 @@ if (typeof globalThis.window !== "undefined") {
     terminalCleanupCompleted = true;
     window.clearTimeout(terminalAckTimeout);
     abandonedRequestIds.clear();
+    receiptedAbandonedIds.clear();
     terminateRuntimeWorkers();
     try {
       terminalChannel.close();
@@ -510,7 +514,7 @@ if (typeof globalThis.window !== "undefined") {
     pendingRequests.clear();
     for (const [requestId, pending] of entries) {
       abandonedRequestIds.add(requestId);
-      cancelControlRequest(requestId);
+      noteAbandonedCancel(requestId, cancelControlRequest(requestId));
       window.clearTimeout(pending.timeout);
       detachPendingAbort(pending);
       pending.reject(error);
@@ -537,7 +541,7 @@ if (typeof globalThis.window !== "undefined") {
     if (pendingRequests.get(requestId) !== pending) return;
     pendingRequests.delete(requestId);
     abandonedRequestIds.add(requestId);
-    cancelControlRequest(requestId);
+    noteAbandonedCancel(requestId, cancelControlRequest(requestId));
     window.clearTimeout(pending.timeout);
     detachPendingAbort(pending);
     // This RPC was submitted. Neither its deadline nor cancellation proves
@@ -547,14 +551,22 @@ if (typeof globalThis.window !== "undefined") {
     scheduleTransportPoll();
   }
 
+  function noteAbandonedCancel(requestId, status) {
+    if (status === 0 || status === 1) receiptedAbandonedIds.add(requestId);
+  }
+
   function reapAbandonedControlRequests() {
     if (!host.runtimeInitialized) return;
+    for (const requestId of receiptedAbandonedIds)
+      if (!abandonedRequestIds.has(requestId)) receiptedAbandonedIds.delete(requestId);
     for (const requestId of abandonedRequestIds) {
+      if (receiptedAbandonedIds.has(requestId)) continue;
       try {
         const status = Module.ccall(
           "lmdj_web_host_cancel_request", "number", ["string", "number"],
           [requestId, requestId.length]);
         if (status === -1) abandonedRequestIds.delete(requestId);
+        else noteAbandonedCancel(requestId, status);
         // A real not-found receipt retires only this RPC lookup. Native and
         // SDK consumer identities remain retained independently. An exception
         // is not a receipt and cannot free any budget.
@@ -688,9 +700,9 @@ if (typeof globalThis.window !== "undefined") {
       _free(output);
     }
     if (transportTerminated) reapAbandonedControlRequests();
-    if (transportTerminated && consumeTerminalOwnerRelease()) {
-      completeTerminalCleanup();
-    }
+    // Polling only finishes cleanup after retained requests drain. Release is
+    // consumed on the worker acknowledgement or the grace retry, never per tick.
+    if (transportTerminated && terminalOwnerReleased) completeTerminalCleanup();
     scheduleTransportPoll();
   }
 
