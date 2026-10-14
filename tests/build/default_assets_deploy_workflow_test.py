@@ -19,7 +19,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/deploy-default-assets.yml"
 SCRIPT = ROOT / "scripts/asset-server.sh"
-ENVIRONMENT = "creator-canary"
+ENVIRONMENT = "default-assets"
 WRANGLER_PREFIX = "$RUNNER_TEMP/default-assets-wrangler"
 EXPECTED_ACTION_PINS = {
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6.0.2"),
