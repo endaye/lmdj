@@ -194,6 +194,14 @@ class ReadRetryTest(unittest.TestCase):
                              http_error(403, X_RateLimit_Remaining='0'))
         self.assertEqual(waits, [20, 60, 30])
 
+    def test_long_retry_after_stops_at_the_per_read_wait_budget(self):
+        # Four Retry-After: 600 answers would otherwise sleep 4 x 60 s.
+        waits = []
+        github = FakeGitHub(failures=[http_error(429, Retry_After='600')] * budget.READ_ATTEMPTS)
+        with self.assertRaises(HTTPError):
+            budget.read(github, budget.window_query('2026-10-05', '2026-10-05') + '1', sleep=waits.append)
+        self.assertEqual(waits, [60, 50])
+
     def test_permission_403_fails_at_once(self):
         with self.assertRaises(HTTPError):
             self.read(http_error(403, X_RateLimit_Remaining='4000'))

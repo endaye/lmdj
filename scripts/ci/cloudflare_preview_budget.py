@@ -28,12 +28,17 @@ STOP_PERCENT = 90
 # GitHub returns at most 1,000 runs for a listing filtered by `created`; later
 # pages come back empty, so a capped window would silently undercount.
 SEARCH_CAP = 1000
+# A window under the cap needs at most 10 pages; kept explicit so editing
+# SEARCH_CAP cannot silently move the reconciliation bound.
+MAX_PAGES = 10
 # Bounded retry for transient read failures (5xx, 429, rate-limit 403; real
-# runs failed on HTTP 502 and 403). At most 110 s of waiting per read, inside
-# both jobs' unchanged timeouts; a read still failing then fails closed.
+# runs failed on HTTP 502 and 403). The total wait per read never exceeds
+# READ_WAIT_BUDGET_SECONDS, even when Retry-After asks for longer; a read still
+# failing then fails closed.
 READ_ATTEMPTS = 5
 BACKOFF_SECONDS = (5, 15, 30, 60)
 MAX_WAIT_SECONDS = 60
+READ_WAIT_BUDGET_SECONDS = 110
 
 
 def budget_minutes(value):
@@ -114,7 +119,7 @@ def window_runs(github, first, last):
         if len(batch) < 100:
             return collected
         page += 1
-        require(page <= SEARCH_CAP // 100, 'run inventory exceeds reconciliation bound')
+        require(page <= MAX_PAGES, 'run inventory exceeds reconciliation bound')
         data = read(github, query + str(page))
 
 
@@ -130,17 +135,21 @@ def transient(error):
 
 def read(github, path, sleep=time.sleep):
     """GET with bounded retry; a permission 403 or 4xx fails at once."""
+    waited = 0
     for attempt in range(READ_ATTEMPTS):
         try:
             return github.metadata(path)
         except Exception as error:
-            if attempt + 1 == READ_ATTEMPTS or not transient(error):
+            remaining = READ_WAIT_BUDGET_SECONDS - waited
+            if attempt + 1 == READ_ATTEMPTS or remaining <= 0 or not transient(error):
                 raise
             wait = BACKOFF_SECONDS[attempt]
             retry_after = getattr(error, 'headers', None) and error.headers.get('Retry-After')
             if retry_after and retry_after.isdigit():
                 wait = max(wait, int(retry_after))
-            sleep(min(wait, MAX_WAIT_SECONDS))
+            wait = min(wait, MAX_WAIT_SECONDS, remaining)
+            sleep(wait)
+            waited += wait
 
 
 def post_comment(github, issue, body):
