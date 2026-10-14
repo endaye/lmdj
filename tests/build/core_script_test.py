@@ -178,5 +178,88 @@ class CoreScriptTest(unittest.TestCase):
                     self.assertEqual(completed.returncode, 64)
 
 
+class CorePackageCleanTreeTest(unittest.TestCase):
+    """`package` refuses a modified tree before spending a Release build.
+
+    The script runs from a throwaway repository with recording stand-ins for
+    cmake, ctest and python3, so the order of what it would have executed is
+    observable without building anything.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-core-package-")
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.repository = root / "repository"
+        (self.repository / "scripts").mkdir(parents=True)
+        script = self.repository / "scripts/core.sh"
+        script.write_bytes(CORE_SCRIPT.read_bytes())
+        script.chmod(0o755)
+        tools = root / "tools"
+        tools.mkdir()
+        self.calls = root / "calls.log"
+        for tool in ("cmake", "ctest", "python3"):
+            stand_in = tools / tool
+            stand_in.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf '%s\\n' \"{tool} $*\" >>\"$LMDJ_CORE_CALLS\"\n",
+                encoding="utf-8",
+            )
+            stand_in.chmod(0o755)
+        self.environment = os.environ.copy()
+        self.environment["PATH"] = f"{tools}{os.pathsep}{self.environment['PATH']}"
+        self.environment["LMDJ_CORE_CALLS"] = str(self.calls)
+        for key, value in {
+            "GIT_AUTHOR_NAME": "Core Script Test",
+            "GIT_AUTHOR_EMAIL": "core-script@example.invalid",
+            "GIT_COMMITTER_NAME": "Core Script Test",
+            "GIT_COMMITTER_EMAIL": "core-script@example.invalid",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+        }.items():
+            self.environment[key] = value
+        for arguments in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", "base")):
+            subprocess.run(
+                ["git", *arguments], cwd=self.repository, env=self.environment,
+                check=True, capture_output=True,
+            )
+
+    def package(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.repository / "scripts/core.sh"), "package"],
+            cwd=self.repository, env=self.environment, check=False,
+            capture_output=True, text=True, timeout=10,
+        )
+
+    def recorded(self) -> list[str]:
+        if not self.calls.exists():
+            return []
+        return self.calls.read_text(encoding="utf-8").splitlines()
+
+    def test_modified_tree_is_refused_before_configure_build_or_test(self) -> None:
+        (self.repository / "untracked.txt").write_text("edit\n", encoding="utf-8")
+        completed = self.package()
+        self.assertEqual(completed.returncode, 2, (completed.stdout, completed.stderr))
+        self.assertIn("refusing to package a modified working tree", completed.stderr)
+        self.assertIn("untracked.txt", completed.stderr)
+        self.assertEqual(self.recorded(), [])
+
+    def test_clean_tree_still_builds_tests_then_packages(self) -> None:
+        completed = self.package()
+        self.assertEqual(completed.returncode, 0, (completed.stdout, completed.stderr))
+        calls = self.recorded()
+        self.assertEqual(
+            [call.split(" ", 2)[:2] for call in calls],
+            [["cmake", "--preset"], ["cmake", "--build"], ["ctest", "--preset"],
+             ["python3", "scripts/package-core.py"]],
+        )
+
+    def test_packager_keeps_its_own_clean_tree_refusal(self) -> None:
+        # The early check saves the build; the packager's check still guards
+        # the tree as it stands when the archive is written.
+        source = (REPO_ROOT / "scripts/package-core.py").read_text(encoding="utf-8")
+        self.assertRegex(source, r"if require_clean:\n\s+require_clean_worktree\(\)")
+
+
 if __name__ == "__main__":
     unittest.main()

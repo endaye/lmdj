@@ -57,15 +57,26 @@ FAIL = "fail"
 NOT_RUNNABLE = "not-runnable-here"
 NOT_APPLICABLE = "not-applicable"
 
+# The daily policy requests native quick feedback on the Linux lane only, and
+# that lane's quick commands are host-neutral (Dev build, unit/component
+# tiers). On a host that cannot run it, a Core change would execute no native
+# test at all. The host's own lane entry carries the same quick commands, so
+# run it in that lane's place. This is a local execution choice, never a
+# selection: CI's lanes and workloads are unchanged, the original lane still
+# reports not-runnable-here, and the substitute's result names what it stood
+# in for, so it cannot read as that lane's evidence.
+LOCAL_QUICK_SUBSTITUTES = {"core_ubuntu": "core_macos"}
+
 # The lane whose CI job owns the documentation-impact step. The declaration is
 # checked locally only when this lane is selected, because that is the only
 # condition under which CI checks it.
 DECLARATION_LANE = "portal"
 
-# A Pull Request whose change selects lanes no Pull Request runs carries their
-# evidence under this heading, and the merge procedure checks it on the exact
-# head with --batch-evidence-only (#1619). The evidence binds to each lane's
-# input-bound cache key, so a later edit to a lane's inputs makes it stale.
+# A Pull Request body may carry full evidence for lanes no Pull Request runs
+# under this heading. Since #1996 it is an optional strict audit
+# (--batch-evidence-only), not an ordinary merge prerequisite; #1619 introduced
+# it as one. The evidence binds to each lane's input-bound cache key, so a
+# later edit to a lane's inputs makes it stale.
 BATCH_EVIDENCE_HEADING = "## Batch-only Lanes"
 _BATCH_DECLARATION = re.compile(r"^Batch-only lanes: (.+)$")
 _BATCH_ENTRY = re.compile(r"^- ([a-z_]+): (.*)$")
@@ -564,6 +575,8 @@ class LaneResult:
     detail: str = ""
     duration_seconds: float = 0.0
     commands: tuple[dict[str, object], ...] = ()
+    # Set only on a local quick substitute: the selected lane it ran for.
+    substitute_for: str = ""
 
 
 @dataclass
@@ -890,6 +903,25 @@ def build_plan(
         )
         for lane in sorted(set(selected) | set(ci_lanes))
     }
+    quick_entries = load_lane_commands(policy=policy, profile="quick")
+    local_substitutes = {}
+    for lane, substitute in LOCAL_QUICK_SUBSTITUTES.items():
+        if lane not in selected or workloads.get(lane) != "quick":
+            continue
+        entry = quick_entries[substitute]
+        if entry["commands"] != lane_commands[lane]["commands"]:
+            raise ValueError(
+                f"why: local quick substitute {substitute} no longer runs {lane}'s quick "
+                f"commands, so its result would not stand for that workload; remedy: keep "
+                f"{substitute}.quick commands identical to {lane}.quick in local_lanes.json")
+        inputs = sorted(set(grouped[lane]) | set(grouped[substitute]))
+        local_substitutes[lane] = {
+            "lane": substitute,
+            "entry": entry,
+            "cache_key": execution_cache_key(
+                lane_cache_key(substitute, entry["commands"], inputs, blobs),
+                profile, toolchain_identity(substitute, entry, root=root)),
+        }
     # Evidence obligations follow what CI selects, never a local `--lanes`.
     ci_batch_only = [lane for lane in ci_lanes if lane not in verified_by_pull_request]
     return {
@@ -910,6 +942,7 @@ def build_plan(
         "ci_batch_only": ci_batch_only,
         "batch_only_keys": {lane: keys[lane] for lane in ci_batch_only},
         "lane_commands": lane_commands,
+        "local_substitutes": local_substitutes,
         "cache_keys": {
             lane: execution_cache_key(
                 lane_cache_key(lane, lane_commands[lane]["commands"], grouped[lane], blobs),
@@ -1011,33 +1044,54 @@ def execute(
         entry = plan["lane_commands"][lane]
         runnable, why_not = check_requirements(root, entry["requires"])
         if not runnable:
+            substitute = plan.get("local_substitutes", {}).get(lane) if quick else None
+            if substitute and not check_requirements(root, substitute["entry"]["requires"])[0]:
+                substitute = None
+            if substitute:
+                why_not += f"; ran {substitute['lane']} quick in its place"
             results.append(LaneResult(lane, NOT_RUNNABLE, why_not))
             if echo:
                 print(f"  {lane}: {NOT_RUNNABLE} ({why_not})", flush=True)
+            if substitute:
+                results.append(_run_entry(
+                    root, substitute["lane"], substitute["entry"], substitute["cache_key"],
+                    substitutions, cache_dir=cache_dir, use_cache=use_cache,
+                    quick=quick, echo=echo, substitute_for=lane))
             continue
-        key = plan["cache_keys"][lane]
-        if use_cache and has_cached_pass(cache_dir, lane, key):
-            verdict = CACHED_QUICK_PASS if quick else CACHED_PASS
-            results.append(LaneResult(lane, verdict, "inputs and toolchain unchanged"))
-            if echo:
-                print(f"  {lane}: {verdict} (inputs and toolchain unchanged)", flush=True)
-            continue
-        if echo:
-            print(f"  {lane}: running", flush=True)
-        result = run_lane(root, lane, entry["commands"], substitutions, echo=echo)
-        if result.verdict == PASS:
-            write_cached_pass(cache_dir, lane, key)
-            if quick:
-                result.verdict = QUICK_PASS
-        results.append(result)
-        if echo:
-            suffix = f" ({result.detail})" if result.detail else ""
-            print(
-                f"  {lane}: {result.verdict}{suffix} "
-                f"[{result.duration_seconds:.1f}s]",
-                flush=True,
-            )
+        results.append(_run_entry(
+            root, lane, entry, plan["cache_keys"][lane], substitutions,
+            cache_dir=cache_dir, use_cache=use_cache, quick=quick, echo=echo))
     return results
+
+
+def _run_entry(
+    root: Path, lane: str, entry: Mapping[str, object], key: str,
+    substitutions: Mapping[str, str], *, cache_dir: Path, use_cache: bool,
+    quick: bool, echo: bool, substitute_for: str = "",
+) -> LaneResult:
+    label = f"{lane} (local substitute for {substitute_for})" if substitute_for else lane
+    if use_cache and has_cached_pass(cache_dir, lane, key):
+        verdict = CACHED_QUICK_PASS if quick else CACHED_PASS
+        if echo:
+            print(f"  {label}: {verdict} (inputs and toolchain unchanged)", flush=True)
+        return LaneResult(lane, verdict, "inputs and toolchain unchanged",
+                          substitute_for=substitute_for)
+    if echo:
+        print(f"  {label}: running", flush=True)
+    result = run_lane(root, lane, entry["commands"], substitutions, echo=echo)
+    result.substitute_for = substitute_for
+    if result.verdict == PASS:
+        write_cached_pass(cache_dir, lane, key)
+        if quick:
+            result.verdict = QUICK_PASS
+    if echo:
+        suffix = f" ({result.detail})" if result.detail else ""
+        print(
+            f"  {label}: {result.verdict}{suffix} "
+            f"[{result.duration_seconds:.1f}s]",
+            flush=True,
+        )
+    return result
 
 
 LEGACY_HOOK_TEMPLATE = """#!/usr/bin/env bash
@@ -1135,6 +1189,11 @@ def _render(
         lines.append(f"  FAIL {result.lane}: {result.detail}")
     for result in unrunnable:
         lines.append(f"  not verified here: {result.lane} ({result.detail})")
+    for result in results:
+        if result.substitute_for:
+            lines.append(
+                f"  local substitute: {result.lane} quick ran for {result.substitute_for} "
+                f"({result.verdict}); it is not {result.substitute_for} evidence")
     if declaration is not None:
         if declaration.verdict == FAIL:
             lines.append(f"  FAIL declaration: {declaration.detail}")
@@ -1233,6 +1292,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "batch_only": plan["batch_only"],
             "input_counts": plan["input_counts"],
             "verification": plan.get("verification", {}),
+            "local_substitutes": {lane: substitute["lane"] for lane, substitute
+                                  in plan.get("local_substitutes", {}).items()},
             "commands": {lane: ([] if plan.get("verification", {}).get(lane) == "deferred"
                                 else plan["lane_commands"][lane]["commands"])
                          for lane in plan["selected"]},
@@ -1284,6 +1345,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "detail": result.detail,
                     "duration_seconds": round(result.duration_seconds, 3),
                     "commands": list(result.commands),
+                    **({"substitute_for": result.substitute_for}
+                       if result.substitute_for else {}),
                 }
                 for result in results
             ],
