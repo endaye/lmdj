@@ -1872,16 +1872,20 @@ foundation::Result<void> SequenceJournal::begin(
   }
   auto mutex = append_mutex(platform_);
   std::lock_guard append_operation(*mutex);
-  auto tree = validate_journal_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return tree;
-  }
+  // Validate the tree only under the writer lease: a contender that walked it
+  // first could observe the owner's in-flight publication (a journal briefly
+  // linked under both its temporary and final names) and report a corrupt
+  // Project instead of project_busy.
   auto lease = platform_->acquire_writer(bundle);
   if (!lease.has_value()) {
     return foundation::Result<void>::failure(lease.error());
   }
   auto operation = std::move(lease.value());
   (void)operation;
+  auto tree = validate_journal_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return tree;
+  }
   auto active_kind = active_recording_session(
       *platform_, bundle, SessionKind::sequence);
   if (!active_kind.has_value()) {
@@ -5007,16 +5011,17 @@ foundation::Result<void> SequenceJournal::begin_performance(
   }
   auto mutex = append_mutex(platform_);
   std::lock_guard append_operation(*mutex);
-  auto tree = validate_journal_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return tree;
-  }
+  // As in begin(), validate the tree only under the writer lease.
   auto lease = platform_->acquire_writer(bundle);
   if (!lease.has_value()) {
     return foundation::Result<void>::failure(lease.error());
   }
   auto operation = std::move(lease.value());
   (void)operation;
+  auto tree = validate_journal_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return tree;
+  }
   auto active_kind = active_recording_session(
       *platform_, bundle, SessionKind::performance);
   if (!active_kind.has_value()) {
