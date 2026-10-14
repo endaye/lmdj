@@ -18,6 +18,9 @@ recurrences:
   - date: 2026-10-10
     occurrence: https://github.com/endaye/lmdj/issues/1965
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/issues/2238
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -75,6 +78,14 @@ over one day and was then cancelled on every batch (#1965). Before
 touching the budget, read the job's phase timings and remove work the
 proof never consumes: that job compiled the whole native dev tree for one
 fixture binary.
+
+Do not read a quiet `tests/quality/test_budget_report.py` as headroom. On
+2026-10-14 a Linux coverage run of unmodified `main` timed out
+`facade.pattern_transport_controller` (normally 14 s of 30 s) while
+`facade.pattern_count_in` sat at 90% of its budget on every run, and the report
+named neither: its registration pattern misses single-line `lmdj_add_test`
+calls (#2238). Read the CTest transcript's own durations against the tier
+budget until that report sees every registration.
 
 Prefer a
 budget that is generous to one that is tight: an over-long budget only delays a

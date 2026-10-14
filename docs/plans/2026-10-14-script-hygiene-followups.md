@@ -68,6 +68,35 @@ Decision: approved (never lower a floor).
 Declared files: tests under `tests/core/` owning the uncovered facade paths
 (named after step 1). Tests: `scripts/core.sh coverage check` on Linux.
 
+Result (2026-10-14): every floor passes on Linux, so step 3 is not needed and
+F1 is closed. Measured at `origin/main`
+`10f30c0d95b4d395446de317bb191a35860d722f` on netcup (Ubuntu 24.04.5,
+x86_64, 16 vCPU) with clang and llvm-cov 22.1.8, running the `core_coverage`
+lane's four commands from `scripts/ci/local_lanes.json` in a fresh clone with
+every LFS object present. The clean run passed 257 of 257 tests and the gate:
+
+| Path | Lines | Floor | Branches | Floor |
+| --- | --- | --- | --- | --- |
+| overall | 86.83% (64447/74225) | 76 | 72.28% (22485/31108) | 64 |
+| `packages/application-facade/` | 85.77% (15505/18077) | 85 | 71.02% (6214/8750) | 64 |
+| `packages/audio-runtime/` | 92.74% (5750/6200) | 80 | 82.05% (2757/3360) | 67 |
+| `packages/authoring-domain/` | 93.55% (2523/2697) | 88 | 88.26% (1361/1542) | 85 |
+| `packages/foundation/` | 95.07% (578/608) | 87 | 95.49% (254/266) | 92 |
+| `packages/project-cooker/` | 93.32% (1412/1513) | 89 | 88.27% (542/614) | 71 |
+| `packages/project-io/` | 75.95% (13976/18402) | 65 | 66.95% (5685/8492) | 61 |
+| `packages/provider-sdk/` | 85.44% (2160/2528) | 77 | 70.78% (821/1160) | 61 |
+
+The Application Facade line ratio is 139 lines above its floor on Linux; the
+84.76% macOS reading in #2188 came from Apple LLVM 21 and is not the lane's
+instrument. Of three runs, the second was invalidated by a stray profile this
+investigation left in the tree, and the first was red before the gate:
+`facade.pattern_transport_controller` timed out at its 30 s component budget
+while it normally takes 14-15 s, and `facade.pattern_count_in` used 89-91% of
+the same budget on every run. `tests/quality/test_budget_report.py` lists
+neither, because its registration pattern misses 45 single-line
+`lmdj_add_test` calls. #2238 tracks both; no floor, filter, budget or test
+changed here.
+
 ## F2 — Relay ping-pong disposition
 
 Decision: keep as is (owner, 2026-10-14). Both filters cost more than the
