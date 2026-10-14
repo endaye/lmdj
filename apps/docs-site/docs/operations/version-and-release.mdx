@@ -411,8 +411,8 @@ origin / admission / verdict 三份 artifact 的期限；任一途中到期均�
 partial clone 缺少对象也不会 lazy fetch，而是拒绝该次证据读取，等待可信本地对象完整。
 完整 CI 证据 ZIP 仅接受 stored / deflated 成员，逐成员限额读取并限制解压输出；
 不能只信任 ZIP 声明大小。解析后仍验证完整候选语义与摘要，这不是完整压缩尾部认证。
-Runtime / Creator 的 `deploy_orchestrator.py evidence-validate-document CONTRACT`
-提供只读证据 schema 校验：从 stdin 读取，验证成功后输出与原 writer 相同的规范 JSON，
+Runtime / Creator 的 `cloudflare_deployment_evidence.py validate CONTRACT`
+提供只读证据 schema 校验：从 stdin 读取，验证成功后输出规范 JSON，
 不写证据文件、不访问 Site。该入口只证明文档内部一致；原 run / artifact 来源、固定
 candidate / Site、线上 HTTP / browser 状态仍需由后续 effect verifier 独立认证。
 生产候选绑定、可信 context / 授权组合及两个部署 effect 的总控接入仍待完成。
@@ -830,13 +830,13 @@ preview 与 stable 两侧校验 → 浏览器校验生产 URL → 写出 Runtime
 无需改动）。每条 HTTP 与浏览器结果都由该命令自己观测
 并绑定到所部署的身份，任一腿未通过就不写证据。被替换部署的身份取自**变更前**对生产的一次
 观测，promote 所需的 prior signed tag 由同一观测的 Product Build 派生，再由 adapter 对着
-真实字节校验。upload 要求钉住的 Node 22.16.0 与 Wrangler 4.129.1，与浏览器腿的 Node 26
+真实字节校验。upload 要求钉住的 Node 22.16.0 与 `tools/wrangler` 锁定的 Wrangler（`npm ci --ignore-scripts` 安装），与浏览器腿的 Node 26
 并存。
 
 Creator Host 的部署 job 同构切换，目标 `https://creator.lmdj.workers.dev/`，写出 Creator
 Host 部署证据文档的第 2 版；两个 Host 共用同一个受管 adapter 与同一条序列，只在 target、
 Worker 与浏览器 spec 上不同。生产路径上不再有任何 Netlify API 调用或 `*.netlify.app` URL，
-两个 workflow 的契约测试各自钉住这一点；Netlify 源码作为历史工具的退役见 #1473。
+两个 workflow 的契约测试各自钉住这一点；Netlify 部署源码已于 2026-10-14 删除（#927）。
 
 浏览器腿运行的是**被部署 tag 自己的**部署 spec：部署 job 把签名 tag 指向的精确 commit
 检出到 `$RUNNER_TEMP/release-source`，在那里安装浏览器依赖，并以 `--browser-root` 交给

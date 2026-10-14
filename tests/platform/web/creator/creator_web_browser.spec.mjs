@@ -23,7 +23,15 @@ async function importProject(page) {
   await chooser.setFiles(bundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByTestId("project-overview").getByText(/^64 Pads · \d+ Patterns$/)).toBeVisible();
+  await expect(page.getByTestId("project-overview")
+    .getByText("64 Pads · 1 Patterns", {exact: true})).toBeVisible();
+  // The current overview has no capacity denominator. Retain that exact
+  // 4×16/64 assigned fact independently through the real Project inspection.
+  const truth = (await inspectProject(page)).project;
+  expect(truth.banks).toHaveLength(4);
+  for (const bank of truth.banks) expect(bank.pads).toHaveLength(16);
+  expect(truth.banks.flatMap(bank => bank.pads)
+    .filter(pad => typeof pad.asset_id === "string")).toHaveLength(64);
 }
 
 async function inspectProject(page) {

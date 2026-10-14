@@ -57,6 +57,100 @@ def directives(source):
     return '\n'.join(line for line in source.splitlines() if not line.lstrip().startswith('#'))
 
 
+# One verified full-SHA pin per action for every workflow that receives the
+# Cloudflare deploy token. A movable tag lets whoever controls the action's
+# repository run code beside that token on a shared runner. Each SHA was
+# checked against `gh api repos/<action>/git/refs/tags/<tag>`.
+DEPLOY_ACTION_PINS = {
+    'actions/checkout': ('de0fac2e4500dabe0009e67214ff5f5447ce83dd', 'v6.0.2'),
+    'actions/setup-node': ('249970729cb0ef3589644e2896645e5dc5ba9c38', 'v6.5.0'),
+    'actions/setup-python': ('a309ff8b426b58ec0e2a45f0f869d46889d02405', 'v6.2.0'),
+    'actions/upload-artifact': ('b7c566a772e6b6bfb58ed0dc250532a479d7789f', 'v6.0.0'),
+}
+
+
+def deploy_secret_workflows():
+    return sorted(path for path in (ROOT / '.github/workflows').glob('*.yml')
+                  if 'secrets.CLOUDFLARE_API_TOKEN' in directives(path.read_text()))
+
+
+def step_items(source, key):
+    """Each step whose `key:` line opens it or belongs to it, as text.
+
+    A step runs from its `- ` item line to the next item at the same dash
+    indentation or a line that leaves the step's key indentation.
+    """
+    lines = source.splitlines()
+    items = []
+    for index, line in enumerate(lines):
+        match = re.match(r'^( *)(- )?' + re.escape(key) + r':', line)
+        if match is None:
+            continue
+        key_indent = len(match.group(1)) + (2 if match.group(2) else 0)
+        start = index
+        if not match.group(2):
+            while start > 0 and not re.match(r'^ {%d}- ' % (key_indent - 2), lines[start]):
+                start -= 1
+        end = start + 1
+        while end < len(lines):
+            depth = len(lines[end]) - len(lines[end].lstrip(' '))
+            if lines[end].strip() and (depth < key_indent or lines[end].lstrip().startswith('- ') and depth <= key_indent - 2):
+                break
+            end += 1
+        items.append('\n'.join(lines[start:end]))
+    return items
+
+
+class DeploySecretActionPinTest(unittest.TestCase):
+    def test_the_scan_finds_every_known_deploy_workflow(self):
+        names = {path.name for path in deploy_secret_workflows()}
+        self.assertTrue({'deploy-cloudflare-portal.yml', 'cloudflare-preview-publish.yml',
+                         'deploy-web-runtime-host.yml', 'deploy-creator-web.yml',
+                         'deploy-default-assets.yml'} <= names, names)
+
+    def test_step_items_capture_the_whole_step_in_any_key_order(self):
+        source = """jobs:
+  deploy:
+    steps:
+      - name: Settings first
+        with:
+          persist-credentials: false
+        uses: actions/checkout@abc
+      - uses: actions/checkout@def
+      - name: Next
+        run: true
+"""
+        items = step_items(source, 'uses')
+        self.assertEqual(len(items), 2)
+        self.assertIn('persist-credentials: false', items[0])
+        self.assertNotIn('persist-credentials', items[1])
+        self.assertNotIn('Next', items[1])
+
+    def test_actions_beside_the_deploy_token_use_the_verified_sha_pins(self):
+        for path in deploy_secret_workflows():
+            uses = re.findall(r'(?m)^\s*(?:- )?uses: (.+)$', directives(path.read_text()))
+            self.assertTrue(uses, path.name)
+            for value in uses:
+                with self.subTest(workflow=path.name, uses=value):
+                    match = re.fullmatch(r'([\w.-]+/[\w.-]+)@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)', value.strip())
+                    self.assertIsNotNone(match, f'why: {value} beside the Cloudflare deploy token is not a full '
+                                                f'SHA pin; remedy: pin it as <sha> # <tag> from DEPLOY_ACTION_PINS')
+                    self.assertEqual(DEPLOY_ACTION_PINS.get(match.group(1)), match.group(2, 3),
+                                     f'why: {match.group(1)} is pinned to an unverified or divergent SHA; remedy: use '
+                                     f'the shared verified pin or update DEPLOY_ACTION_PINS after verifying the tag')
+
+    def test_checkouts_beside_the_deploy_token_do_not_persist_credentials(self):
+        for path in deploy_secret_workflows():
+            source = directives(path.read_text())
+            checkouts = [item for item in step_items(source, 'uses') if re.search(r'uses: actions/checkout@', item)]
+            self.assertTrue(checkouts, path.name)
+            for checkout in checkouts:
+                with self.subTest(workflow=path.name):
+                    self.assertRegex(checkout, r'(?m)^ +persist-credentials: false$',
+                                     'why: a checkout beside the Cloudflare deploy token leaves the job token in '
+                                     '.git/config for repository scripts to read; remedy: set persist-credentials: false')
+
+
 class BuildBoundaryTest(unittest.TestCase):
     def setUp(self):
         self.raw = read_workflow('cloudflare-preview-build.yml')

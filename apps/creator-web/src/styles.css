@@ -2290,3 +2290,23 @@ html[data-creator-layout="compact"] {
 }
 .sample-encoder-groups { display: flex; gap: 8px; }
 .sample-encoder-groups button[aria-pressed="true"] { border-color: var(--creator-lime); color: var(--creator-lime); }
+
+/* Runtime Pad gates remain separate from the Project colour and current Pad. */
+.perform-pad-gates { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.perform-pad-gates output { font-size: .8rem; opacity: .8; }
+.perform-pad-gates button[aria-pressed="true"] { background: var(--accent, #c8ff46); color: #111; }
+.pad[data-live-silenced="true"][data-live-provenance="core"] { opacity: .55; }
+.pad-live-gate {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: .6rem;
+  line-height: 13px;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+/* A gated 59px compact Pad needs one caption line beside its existing dot. */
+.hardware-console .pad:has(.pad-live-gate) span { left: 5px; right: 5px; }

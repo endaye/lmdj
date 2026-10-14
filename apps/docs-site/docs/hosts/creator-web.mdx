@@ -208,7 +208,7 @@ RECORD SAMPLE、RECORDED SAMPLE，目标始终为原 Pad；计时器来自实际
 
 Sample 控件在 Volume 之外新增 Pitch（±24 半音，0.1 半音步进，读数如 `+3.5 st`）与 Pan（`L100`–`C`–`R100`），三者共用一个 `ParameterSlider` 手势：拖动经 `sample.preview.set` 试听，松手（pointer up、方向键抬起或窗口级 pointerup）且值变化时只提交一次，Escape 或 pointercancel 取消并清除试听。Reverse 是 `aria-pressed` 开关；Loop 打开时出现 Forward / Ping-pong 分段，选 Ping-pong 会同时清除 crossfade，因为它没有可叠化的接缝。波形编辑器在 Loop 下画出循环点手柄与 crossfade 区，并提供 Loop start（秒）与 Crossfade（毫秒，仅 Forward）读数卡；读数卡聚焦即开始手势、失焦提交、Escape 取消。Reverse 时整个 trim 区间连同循环点一起镜像，循环点手柄、Loop start 读数与 crossfade 区都画在镜像位置，也就是之后各遍回卷处；未设循环点时手柄落在 End。播放头模型与内核一致：按 pitch 速率推进，forward 循环每遍从循环点之后 crossfade 帧继续，ping-pong 在两端反射，reverse 镜像源帧。Reset 恢复全部回放与音色参数的缺省值。
 
-点击 Volume、Pitch、Pan、Attack、Release 或 Tone 的数值可打开精确输入。编辑从已保存的 playback 开始，不采用尚未提交的旋钮草稿；合法且符合步长的输入立即通过已有 Sample preview 路径试听。Apply 或 Enter 只提交一次完整 playback，形成一次作者操作／Undo；回到原值不保存，输入停顿（包括超过 400 ms）和失焦也不保存。空值、非有限数、越界或不符合步长的值不能试听或提交；非法替换会清除前一个合法试听，仍可继续修正。音频未启动时可以编辑画面，但没有试听声音。Escape／Cancel、切 Pad／Project／Asset／revision／Runtime session、离开页面／子页／System 或卸载取消尚未发出的草稿，并清除它拥有的试听；已发出的保存保留真实提交、publication failure、冲突或未知结果，不自动重发。弹窗背景不可点击；输入保留原生文本 Undo，既有 App Project history 路由如被调用，会先取消未提交草稿再恢复历史，不增加弹窗内的 Project Undo 快捷键。数值按钮、输入与操作使用至少 44 px 命中区，沿用已有单位与边界；one-shot 的 Release 仍不可用，Start／End 保留 frame 精度输入，原 range release／键盘完成／blur 与旋钮 400 ms／SHIFT 规则不变。
+点击 Volume、Pitch、Pan、Attack、Release 或 Tone 的数值可打开精确输入。编辑从已保存的 playback 开始，不采用尚未提交的旋钮草稿；合法且符合步长的输入立即通过已有 Sample preview 路径试听。面板锚定实际右侧触控区，竖屏旋转时内容保持正向；标题保留打开时的 Pad，PREVIEW 草稿与 Saved value 分开显示。面板内的滑块与精确输入共用同一草稿，松手、键盘步进结束和失焦都只保留预览。Apply 或 Enter 只提交一次完整 playback，形成一次作者操作／Undo；回到原值不保存，输入停顿（包括超过 400 ms）和失焦也不保存。空值、非有限数、越界或不符合步长的值不能试听或提交；非法替换会清除前一个合法试听，仍可继续修正。音频未启动时可以编辑画面，但没有试听声音。Escape／Cancel、切 Pad／Project／Asset／revision／Runtime session、离开页面／子页／System 或卸载取消尚未发出的草稿，并清除它拥有的试听；已发出的保存保留真实提交、publication failure、冲突或未知结果，不自动重发。弹窗背景不可点击；输入保留原生文本 Undo，既有 App Project history 路由如被调用，会先取消未提交草稿再恢复历史，不增加弹窗内的 Project Undo 快捷键。数值按钮、输入与操作使用至少 44 px 命中区，沿用已有单位与边界；one-shot 的 Release 仍不可用，Start／End 保留 frame 精度输入，原面板外 range release／键盘完成／blur 与旋钮 400 ms／SHIFT 规则不变。
 
 Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页的 Tone（−100…+100）同样用 `ParameterSlider`：不超过 2 ms 的斜坡显示为 `2 ms`，即实际渲染的 declick；Tone 在中点以下显示 `LP n`、以上显示 `HP n`，±2 死区内显示 `Off`；one-shot 从不播放 release，所以此时 Release 不可用。其下的 EQ 编辑器（`eq_editor.tsx`）把三段 EQ 画成一张图上的三个极点：横轴是 20 Hz–20 kHz 的对数频率，纵轴是 −18…+18 dB 增益。
 
@@ -300,7 +300,7 @@ MAJOR3/4 的六项也保持各自的清单形状。这项版本条件本身不�
 Release publication 不 fan-out deployment。
 
 2026-09-08 用户授权删除两个旧 Host Netlify 站点，旧手动 workflow 已停用。
-历史 Netlify 工具源码与证据保留供审计，旧站点不再是回滚或数据迁移入口。
+历史 Netlify 部署工具源码已于 2026-10-14 删除，证据保留供审计；旧站点不再是回滚或数据迁移入口。
 删除远端托管内容未清除用户浏览器本地 Project；正式导出/导入另由 #961 设计。
 Cloudflare 自动化部署验证通过，Safari、真实听感及稳定观察仍由 #925 追踪。
 
@@ -609,6 +609,28 @@ Each of these failures is recorded in Developer diagnostics.
 
 ## Sequence Pattern grid editing
 
+### Live Pad Mute and Solo
+
+Perform's Live page names the current Pad (A01–D16) beside separate Mute and
+Solo buttons. Both buttons can be on. Multiple Pads may be soloed; Mute takes
+priority, and any non-soloed Pad is silenced while a Solo exists. The Pad matrix
+shows MUTE, SOLO and SILENCED separately from Project colour and current selection.
+The displayed masks come from Core's applied 64-slot state. Pending controls stay
+pending until readback; unavailable controls are disabled without claiming neutral.
+
+Bank and Pattern changes retain the masks. Pad strikes and the existing ↑/↓ keys
+choose the current Pad; these controls add no keyboard/MIDI mapping. Leaving
+Perform or replacing the Project clears the gates and waits for applied readback,
+even with HOLD on. If the owner epoch changes before that acknowledgement,
+the exit fails without clearing or claiming neutral state for the replacement.
+HOLD only retains FX. The controls use the shared bounded
+Performance input queue; old-epoch replies cannot mutate a replacement owner.
+
+Performance recording captures existing masks in its initial state and journals
+later changes through the typed producer. Stop/Save/reopen/Replay retain that
+history. Live masks never write Pad `playback.muted`, authoring Undo or localStorage.
+They do not change the listening MASTER or recording/output level.
+
 ### Pad colour
 
 <StatusBadge status="implemented" /> Desktop Final T7 implements the owner's [Pad colour rule](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-07-pad-colour-source.md) (#1821) and its [defaults and retention](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-08-pad-colour-defaults-and-retention.md) on top of the Project 5.3.0 Pad colour fields.
@@ -757,7 +779,7 @@ Session 拒绝更新时，保留最后已接受的读数和偏好。MASTER 保�
 输入命中宽度，不参与 FX engage/move/release、HOLD 或 Performance 事件录制；
 切 FX / MORE 或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
 Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍器，但录音、
-重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 与作品电平表仍各有自己的实施边界。
+重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费；作品电平表另有自己的实施边界。
 
 Ordinary Sequence touch buttons share the common 44 px target, 32 px
 painted face and 6 px face radius. Grid cells, note gestures and continuous

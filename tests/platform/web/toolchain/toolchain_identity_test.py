@@ -18,6 +18,13 @@ PACKAGE_LOCK_PATH = REPO_ROOT / "tests/platform/web/package-lock.json"
 CMAKE_PATH = REPO_ROOT / "tests/platform/web/toolchain/CMakeLists.txt"
 PROBE_PATH = REPO_ROOT / "tests/platform/web/toolchain/probe.cpp"
 IDENTITY_PATH = REPO_ROOT / "build/web/toolchain/toolchain-identity.json"
+NODE_VERSION_PATH = REPO_ROOT / ".node-version"
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+WEB_NODE_GUARDED_SCRIPTS = (
+    "creator-web.sh",
+    "web-runtime-host.sh",
+    "web-toolchain-conformance.sh",
+)
 
 REQUIRED_LINKER_FLAGS = [
     "-pthread",
@@ -40,7 +47,7 @@ EXPECTED_LOCK = {
     ),
     "initial_memory": 536870912,
     "allow_memory_growth": False,
-    "node": "22",
+    "node": "26",
     "playwright": "1.62.1",
     "linker_flags": REQUIRED_LINKER_FLAGS,
 }
@@ -95,6 +102,7 @@ def assert_lock_contract(verifier) -> None:
         ("initial_memory", 0),
         ("allow_memory_growth", "false"),
         ("node", ""),
+        ("node", "26.8.1"),
         ("playwright", None),
         ("linker_flags", []),
     )
@@ -107,6 +115,77 @@ def assert_lock_contract(verifier) -> None:
     mutated["unexpected"] = True
     must_reject("unexpected key", mutated)
     assert len(rejected) == len(EXPECTED_LOCK) + len(invalid_values) + 1
+
+
+def assert_node_pin(verifier) -> None:
+    lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+    try:
+        verifier.verify_node_pin(lock, NODE_VERSION_PATH.read_text(encoding="utf-8"))
+    except verifier.VerificationError as error:
+        raise AssertionError(str(error)) from error
+    stale = dict(lock, node="22")
+    try:
+        verifier.verify_node_pin(stale, "26.8.1\n")
+    except verifier.VerificationError as error:
+        assert "why:" in str(error) and "remedy:" in str(error), str(error)
+    else:
+        raise AssertionError("lock node 22 was accepted against .node-version 26.8.1")
+    try:
+        verifier.verify_node_pin(lock, "26\n")
+    except verifier.VerificationError:
+        pass
+    else:
+        raise AssertionError("a bare-major .node-version was accepted")
+
+
+def assert_web_script_node_guards() -> None:
+    # Independent oracle for the lock's Node major: every Web script's own
+    # "Node N is required" guard, which is what the lanes actually enforce.
+    # #1306 bumped those guards to 26 and left the lock at 22, and nothing
+    # compared them (pitfall emsdk-node-prepend-shadows-repo-node-guard).
+    lock_node = json.loads(LOCK_PATH.read_text(encoding="utf-8"))["node"]
+    guarded = set()
+    for script in sorted(SCRIPTS_ROOT.glob("*.sh")):
+        text = script.read_text(encoding="utf-8")
+        # The emsdk-bundled Node may only fill an absent node; an unconditional
+        # prepend shadows the repository Node and makes the guard fail or lie.
+        unguarded = re.sub(
+            r"^[ \t]*if ! command -v node\b[^\n]*EMSDK_NODE[^\n]*; then\n.*?^[ \t]*fi$",
+            "",
+            text,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        stray = [
+            line.strip()
+            for line in unguarded.splitlines()
+            if "EMSDK_NODE" in line and not line.lstrip().startswith("#")
+        ]
+        assert not stray, (
+            f"why: {script.name} uses EMSDK_NODE outside an "
+            "'if ! command -v node' block, so the emsdk Node can shadow the "
+            f"repository Node: {stray}; remedy: prepend it only when no node is on PATH"
+        )
+        if "process.versions.node" not in text:
+            continue
+        guarded.add(script.name)
+        compared = [
+            first or second
+            for first, second in re.findall(
+                r'process\.versions\.node[^\n]*?!=\s*"([0-9]+)"'
+                r'|"\$node_major"\s*!=\s*"([0-9]+)"',
+                text,
+            )
+        ]
+        required = re.findall(r"\bNode ([0-9]+) is required\b", text)
+        assert compared and required, f"{script.name}: Node guard not found"
+        majors = sorted(set(compared) | set(required))
+        assert majors == [lock_node], (
+            f"why: {script.name} requires Node {majors} but "
+            f"tools/web-runtime/emscripten.lock.json records {lock_node}; "
+            "remedy: move every Web Node guard, .node-version and the lock together"
+        )
+    missing = set(WEB_NODE_GUARDED_SCRIPTS) - guarded
+    assert not missing, f"Web scripts lost their Node guard: {sorted(missing)}"
 
 
 def assert_browser_package() -> None:
@@ -124,7 +203,6 @@ def assert_browser_package() -> None:
             "test": "playwright test",
         },
         "devDependencies": {
-            "@netlify/headers-parser": "10.1.0",
             "@playwright/test": "1.62.1",
         },
     }
@@ -139,11 +217,8 @@ def assert_browser_package() -> None:
     root = package_lock["packages"][""]
     assert root["engines"] == {"node": "26.x"}
     assert root["devDependencies"] == {
-        "@netlify/headers-parser": "10.1.0",
         "@playwright/test": "1.62.1",
     }
-    headers_parser = package_lock["packages"]["node_modules/@netlify/headers-parser"]
-    assert headers_parser["version"] == "10.1.0"
     playwright = package_lock["packages"]["node_modules/@playwright/test"]
     assert playwright["version"] == "1.62.1"
 
@@ -265,6 +340,8 @@ def main() -> int:
         require_files()
         verifier = load_verifier()
         assert_lock_contract(verifier)
+        assert_node_pin(verifier)
+        assert_web_script_node_guards()
         assert_browser_package()
         assert_verifier_fails_closed()
         assert_audio_callback_is_not_asyncify_reachable()

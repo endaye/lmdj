@@ -7158,3 +7158,164 @@ test.each(["running", "failed"] as const)(
     }
   },
 );
+
+test("Perform live Pad gates retain current identity across Bank and Pattern, then await leave reset without Truth writes", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const performance = performanceSessionStubs([]);
+  let mutedSlots: number[] = [];
+  let soloSlots: number[] = [];
+  let seq = 0;
+  let releaseReset!: () => void;
+  const resetAck = new Promise<void>((resolve) => { releaseReset = resolve; });
+  const captureStatus = {state: "configured", error: null};
+  const update = vi.spyOn(fixture.session, "updatePad");
+  const reload = vi.spyOn(fixture.session, "reloadSnapshot");
+  const queryPerformanceLiveStatus = vi.fn(async () => {
+    const applied = {hold: false,
+      filter: {mode: "independent", engaged: false, frozen: false, type: "lp", cutoffHz: 20000, resonanceMilli: 0},
+      otherFx: Object.fromEntries(["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"]
+        .map((fx) => [fx, {engaged: false, frozen: false, value: 0}])),
+      mutedSlots: [...mutedSlots], soloSlots: [...soloSlots]};
+    return {available: true, controlEpoch: "owner", accepted: applied, applied,
+      acceptedControlSequence: String(seq), appliedControlSequence: String(seq),
+      resetPending: false, beginPending: false};
+  });
+  const applyPerformanceLiveControl = vi.fn(async ({intent}: {intent: {kind: string; slot: number; enabled: boolean}}) => {
+    if (intent.kind === "clear_pad_gates") {
+      await resetAck;
+      mutedSlots = []; soloSlots = [];
+    } else {
+      const field = intent.kind === "pad_mute" ? mutedSlots : soloSlots;
+      if (intent.enabled) field.push(intent.slot);
+      else field.splice(field.indexOf(intent.slot), 1);
+    }
+    return {controlEpoch: "owner", controlSequence: String(++seq), gestureGeneration: null};
+  });
+  const inspectProject = async () => {
+    const value = fixture.inspectProject();
+    const project = value.project as typeof value.project & {pattern_slots: Array<string | null>};
+    project.contract = "lmdj.project.v4";
+    project.patterns[secondSwitchPattern] = {bars: 1, events: []};
+    project.pattern_slots = [secondSwitchPattern, ...Array<string | null>(15).fill(null)];
+    return value;
+  };
+  Object.assign(fixture.session, sequenceSessionStubs(), performance.stubs, {
+    performanceMasterCaptureStatus: () => captureStatus,
+    subscribePerformanceMasterCaptureStatus: (listener: (value: typeof captureStatus) => void) => {
+      listener(captureStatus); return () => {};
+    }, queryPerformanceLiveStatus, applyPerformanceLiveControl, inspectProject,
+    requestPatternTransport: vi.fn(),
+    inspectPatternTransport: async () => engagedTransportStatus({playing: false}),
+  });
+  setRunningAudioFixture(fixture.session);
+  const truth = await inspectProject();
+  const rendered = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+    fireEvent.click(screen.getByRole("button", {name: "Previous Pad — ↑"}));
+    fireEvent.click(screen.getByRole("button", {name: "Solo A01"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: /^Pad A01 —/}).getAttribute("data-live-solo")).toBe("true"));
+    fireEvent.click(screen.getByRole("button", {name: "Bank D"}));
+    expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", {name: /^Pad D16 —/}).getAttribute("data-live-silenced")).toBe("true");
+    for (let slot = 1; slot <= 63; slot += 1) fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
+    expect(screen.getByRole("button", {name: /^Pad D16 —/}).getAttribute("aria-current")).toBe("true");
+    fireEvent.click(screen.getByRole("button", {name: "Solo D16"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Solo D16"}).getAttribute("aria-pressed")).toBe("true"));
+    fireEvent.click(screen.getByRole("button", {name: "Mute D16"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Mute D16"}).getAttribute("aria-pressed")).toBe("true"));
+    expect(soloSlots).toEqual([0, 63]);
+    expect(screen.getByRole("button", {name: /^Pad D16 —/}).getAttribute("data-live-silenced")).toBe("true");
+    // A stopped Pattern selection changes the snapshot, not the Project owner.
+    const launch = screen.getByRole("button", {name: "Launch Pattern 1"});
+    await waitFor(() => expect(launch).toHaveProperty("disabled", false));
+    fireEvent.click(launch);
+    await waitFor(() => expect(reload).toHaveBeenCalledWith(secondSwitchPattern));
+    await flushAsyncTurns();
+    expect(applyPerformanceLiveControl.mock.calls.some(([request]) => request.intent.kind === "clear_pad_gates")).toBe(false);
+    expect(screen.getByRole("button", {name: "Mute D16"}).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", {name: "Project"}));
+    await waitFor(() => expect(applyPerformanceLiveControl.mock.calls.at(-1)?.[0].intent.kind).toBe("clear_pad_gates"));
+    expect(screen.getByRole("main", {name: "Perform"})).toBeTruthy();
+    releaseReset();
+    await waitFor(() => expect(screen.queryByRole("main", {name: "Perform"})).toBeNull());
+    expect(mutedSlots).toEqual([]); expect(soloSlots).toEqual([]);
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Mute D16"}).getAttribute("aria-pressed")).toBe("false"));
+    expect(update).not.toHaveBeenCalled();
+    expect(await inspectProject()).toEqual(truth);
+  } finally {releaseReset(); rendered.unmount();}
+});
+
+
+test("Project replacement isolates late live-mask ACK and cleanup from the new App owner", async () => {
+  const first = mutableSampleRuntimeFixture();
+  const second = mutableSampleRuntimeFixture();
+  const projectId = "44444444-4444-4444-8444-444444444444";
+  second.session.listLocalProjects = async () => [{...second.summary(), projectId}];
+  second.session.inspectProject = async () => {
+    const value = second.inspectProject();
+    return {...value, project: {...value.project, project_id: projectId}};
+  };
+  const late = deferred<void>();
+  const wire = (fixture: typeof first, epoch: string, delay: boolean) => {
+    let mutedSlots: number[] = [], soloSlots: number[] = [];
+    let sequence = 0;
+    const captureStatus = {state: "configured", error: null};
+    const apply = vi.fn(async ({controlEpoch, intent}: {controlEpoch: string; intent: {kind: string; slot: number}}) => {
+      expect(controlEpoch).toBe(epoch);
+      if (intent.kind === "pad_mute") {
+        if (delay) await late.promise;
+        mutedSlots = [intent.slot];
+      } else if (intent.kind === "pad_solo") soloSlots = [intent.slot];
+      else if (intent.kind === "clear_pad_gates") { mutedSlots = []; soloSlots = []; }
+      return {controlEpoch: epoch, controlSequence: String(++sequence), gestureGeneration: null};
+    });
+    Object.assign(fixture.session, sequenceSessionStubs(), performanceSessionStubs([]).stubs, {
+      performanceMasterCaptureStatus: () => captureStatus,
+      subscribePerformanceMasterCaptureStatus: (listener: (value: typeof captureStatus) => void) => {
+        listener(captureStatus); return () => {};
+      },
+      applyPerformanceLiveControl: apply,
+      queryPerformanceLiveStatus: async () => {
+        const applied = {hold: false,
+          filter: {mode: "independent", engaged: false, frozen: false, type: "lp", cutoffHz: 20000, resonanceMilli: 0},
+          otherFx: Object.fromEntries(["delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"]
+            .map((fx) => [fx, {engaged: false, frozen: false, value: 0}])),
+          mutedSlots: [...mutedSlots], soloSlots: [...soloSlots]};
+        return {available: true, controlEpoch: epoch, applied, accepted: applied,
+          acceptedControlSequence: String(sequence), appliedControlSequence: String(sequence), resetPending: false};
+      },
+    });
+    setRunningAudioFixture(fixture.session);
+    return apply;
+  };
+  const oldApply = wire(first, "old-owner", true);
+  const newApply = wire(second, "new-owner", false);
+  const view = render(<App key="old" initialState={ready} runtimeFactory={() => first.session} />);
+  try {
+    await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Mute A01"})).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("button", {name: "Mute A01"}));
+    await waitFor(() => expect(oldApply).toHaveBeenCalledTimes(1));
+    const replacement: CreatorState = {...ready, project: {phase: "ready",
+      projects: [{...second.summary(), projectId}],
+      current: {...ready.project.current!, ...second.summary(), projectId}}};
+    view.rerender(<App key="new" initialState={replacement} runtimeFactory={() => second.session} />);
+    await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("button", {name: "Solo A01"}));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true"));
+    await act(async () => late.resolve());
+    await waitFor(() => expect(oldApply.mock.calls.map(([request]) => request.intent.kind)).toEqual(["pad_mute", "clear_pad_gates"]));
+    await flushAsyncTurns();
+    expect(newApply.mock.calls.map(([request]) => request.intent.kind)).toEqual(["pad_solo"]);
+    expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", {name: "Mute A01"}).getAttribute("aria-pressed")).toBe("false");
+  } finally {late.resolve(); view.unmount();}
+});

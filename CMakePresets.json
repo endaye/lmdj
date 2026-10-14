@@ -27,13 +27,6 @@
       }
     },
     {
-      "name": "test",
-      "inherits": "base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
-      }
-    },
-    {
       "name": "asan",
       "inherits": "base",
       "cacheVariables": {
@@ -68,10 +61,6 @@
       "configurePreset": "release"
     },
     {
-      "name": "test",
-      "configurePreset": "test"
-    },
-    {
       "name": "asan",
       "configurePreset": "asan"
     },
@@ -100,13 +89,6 @@
       }
     },
     {
-      "name": "test",
-      "configurePreset": "test",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
       "name": "asan",
       "configurePreset": "asan",
       "output": {
@@ -130,7 +112,8 @@
       "configurePreset": "coverage",
       "filter": {
         "exclude": {
-          "name": "^(build\\.release_.*|audio\\.(realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress|pattern_count_in_stress|master_fx_stress)|facade\\.(runtime_facade_stress|candidate_store_stress|pattern_count_in_stress)|provider\\.callback_stress)$"
+          "name": "^build\\.release_.*$",
+          "label": "^stress$"
         }
       },
       "output": {

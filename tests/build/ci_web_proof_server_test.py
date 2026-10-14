@@ -37,9 +37,6 @@ PROOF_SCRIPTS = {
     "scripts/web-toolchain-conformance.sh": ("LMDJ_WEB_HOST_BASE_URL", None),
     "scripts/web-runtime-host.sh": ("LMDJ_WEB_HOST_BASE_URL", None),
     "scripts/creator-web.sh": ("LMDJ_CREATOR_WEB_BASE_URL", None),
-    # The deployment smoke builds its invocation into an array and runs it
-    # expanded, so ownership is asserted over the function that does both.
-    "scripts/web-runtime-deploy.sh": ("LMDJ_WEB_HOST_BASE_URL", "run_browser_smoke"),
 }
 
 

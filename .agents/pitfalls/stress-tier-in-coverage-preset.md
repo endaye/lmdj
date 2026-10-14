@@ -12,7 +12,7 @@ recurrences:
   - date: 2026-08-30
     occurrence: https://github.com/endaye/lmdj/pull/445
     observed_by: codex
-exit: skill:.agents/skills/issue-done/SKILL.md
+exit: gate:tests/build/core_script_test.py
 ---
 
 # A busy-spinning `stress` test left in the `coverage` preset starves unrelated tests near their tier budget, and the failure surfaces on a test you did not touch.
@@ -30,16 +30,21 @@ stays `unknown` rather than a plausible guess. The same decision had already bee
 `audio.realtime_spsc_stress` was added to the exclusion in #74; nothing recorded
 it, so it had to be rediscovered from a red lane.
 
-The exclusion list in `CMakePresets.json` is maintained by hand and a new test's
-spin behavior is not mechanically decidable, so this exits to guidance.
+The exclusion was a hand-maintained list of test names in `CMakePresets.json`,
+chosen by each test's spin behavior, and it drifted: by 2026-10-14 it named 7
+of the 15 stress-tier tests. The owner then settled the rule as the whole tier,
+which is mechanically decidable, so the preset now excludes it by label.
 
 ## How to apply
 
-When adding a `stress`-tier test, ask whether it saturates a core, not how long
-it runs. If it busy-spins, add it to the `coverage` test preset's exclusion list
-in `CMakePresets.json` alongside the existing entries in the same commit.
-Coverage measurement never needs a concurrency run: the stress tier has its own
-lanes, and `core-asan` runs `full` then `stress`. Never run
+Register a new stress test with `TIER stress`; the `coverage` test preset's
+`filter.exclude.label: ^stress$` keeps it out of every coverage run, and
+`tests/build/core_script_test.py` fails if that label exclusion is removed or a
+stress name reappears in the name list. Do not add stress names to
+`filter.exclude.name`; it holds only the `build.release_*` tooling entries.
+A target that only stress tests run is not a coverage object: the coverage
+configure gate reads both exclusions and names such a target in
+`lmdj_coverage_targets` as stale. Never run
 `ctest --preset coverage` by hand from the repository root — it drops
 `default.profraw` there and `build.active_tree` correctly fails on it; use
 `scripts/core.sh coverage report|check`, which points `LLVM_PROFILE_FILE` inside

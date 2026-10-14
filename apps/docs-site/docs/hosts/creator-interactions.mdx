@@ -285,8 +285,8 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
 | Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
 | 三页普通方向导航 | Project 单列 ↑/↓ 选相邻项、普通 ←/→ 未分配，卡片内 Open 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
-| Perform 独立滤波 | 底层音频能力已加入；Creator 仍是旧单值 Filter。 | 主组为 Cutoff／Delay／Reverb；FILTER 组为 LP／HP／BP、Cutoff、Resonance。初始 OFF，LP／20 kHz／0%；参数完整录制和回放。需要剩余接线与验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
-| Perform live Mute/Solo | 底层 64-Pad 门控已加入；Creator 尚无实时按钮及完整录放流程。 | 多 Solo、Mute 优先；切 Bank／Pattern 保持，离开 Perform／换工程清空；录制起点状态和后续变化。立即阻断对应 Pad 当前／后续输入，已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
+| Perform 独立滤波 | C1 已接线主组 Cutoff／Delay／Reverb 与 FILTER 的 LP／HP／BP、Cutoff、Resonance；OFF 与已应用状态来自 Core，录制／保存／重新打开／Replay 的 packaged proof 已通过。 | 物理设备与听感验收仍未完成。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
+| Perform live Mute/Solo | C2 当前 Pad 双开关消费 Core 64 槽 mask，多 Solo／Mute 优先，切 Bank／Pattern 保留；离页等待清空确认。初始 mask 与后续事件经录制／保存／重开／Replay 的双 Pad PCM 旅程验证。 | 物理设备与听感验收仍未完成；已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 
 关闭的产品问答、底层能力和已经合并的代码各自说明不同进度，不代表本表的完整交互已经验收。具体实施和证据层级见[本次复核](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-12-creator-interaction-audit.md)。
@@ -349,9 +349,9 @@ PROJECT／LOCAL 标题下常驻单列列表；顶部是 New Project／Import，�
 - 普通离开 Sample 再回来，回到 Trim。Record Sample 面板、Sequence 中的裁剪覆盖层，以及更新 consumer／结果读回／投影仍在结算的场合保留同一个 SampleSurface；结算完成后沿用普通挂载规则。
 - 触摸页签或左栏普通 ←/→ 切子页都先取消未提交旋钮／精确输入试听；↑/↓ 换 Pad 使用同一取消入口。range 已按失焦规则保存的数值保留，精确输入的失焦不保存；已发出的保存仍保留原结算结果。
 - 子页切换只改视图，不保存内容，也不演奏。
-- 拖动参数时预览，松手、键盘步进结束或失焦时保存一次。
+- 拖动页面上的参数滑块时预览，松手、键盘步进结束或失焦时保存一次。
 - 拖动中按 Escape 或手势被取消，放弃这次修改。
-- 点击 Volume／Pitch／Pan／Attack／Release／Tone 的数值打开精确输入，从已保存值开始；合法且符合步长的数值立即预览。Apply 或 Enter 确认一次保存／Undo；回到已保存值不提交，停顿超过 400 ms 或失焦也不保存。
+- 点击 Volume／Pitch／Pan／Attack／Release／Tone 的数值打开精确输入，从已保存值开始；合法且符合步长的数值立即预览。面板锚定右侧触控区，竖屏时保持正向，固定原 Pad 并分开显示草稿与已保存值。面板内滑块和数值输入共用草稿，松手、键盘步进结束或失焦不保存。Apply 或 Enter 确认一次保存／Undo；回到已保存值不提交，停顿超过 400 ms 也不保存。
 - 空值、非有限数、越界或不符合步长的输入不能试听或保存；非法替换清除前一个合法试听，仍可以修正。
 - Escape／Cancel、切 Pad／Project／Asset／revision／Runtime session、离开页面／子页／System 或卸载取消尚未提交的精确草稿，恢复已保存参数并清除它拥有的试听。已发出的保存保留真实结果，不自动重发。
 - 同 Project 的 Runtime Session 重开保留 update 原 pending 和已知提交／publication failure／冲突／未知结果，只恢复读回与投影；普通新建／导入／切换 Project 仍等更新结算完成。旧 Pad 的结果刷新 Project Truth，不覆盖当前所选 Pad 的 playback。App 的 consumer ownership 信号不是实际 wire-send 证据。
@@ -780,7 +780,7 @@ System 打开时仍可操作。标题、候选数量和阶段标签来自实际�
 
 **Sample**
 
-- range 参数：移动时预览，pointerup、键盘步进结束或 blur 时提交一次；Escape 或 pointercancel 取消。预览被拒绝会清草稿，晚到的 pointerup 不提交。精确输入使用 `sample_parameter_editor.tsx`，由 `sample_controls.tsx` 捕获保存值及上下文；render-time fence 拒绝 passive cleanup 前的过期 preview／submit。`SampleSurface` 将它注册到已有 contextual encoder pending／cancel，沿用 App cancellation／history hook 与 revision-fenced `sample.update_pad`；没有新计时保存或 App shortcut。
+- 页面上的 range 参数：移动时预览，pointerup、键盘步进结束或 blur 时提交一次；Escape 或 pointercancel 取消。预览被拒绝会清草稿，晚到的 pointerup 不提交。精确输入使用 `sample_parameter_editor.tsx`，其内部 range 仅更新草稿，Apply／Enter 才保存；由 `sample_controls.tsx` 捕获保存值及上下文，render-time fence 拒绝 passive cleanup 前的过期 preview／submit。`SampleSurface` 将它注册到已有 contextual encoder pending／cancel，沿用 App cancellation／history hook 与 revision-fenced `sample.update_pad`；没有新计时保存或 App shortcut。
 - Ping-pong 连带清 `loopCrossfadeFrames`。
 - 替换声音时恢复样本播放默认参数，Pad 颜色 override 保留；Delete 清除 Pad 播放与颜色信息；Pattern 引用 Pad Slot，不因 Delete 改为 Asset 引用。
 - 改色禁用条件（`padColourDisabledReason`）：录音中；传输结算中；Project 或 Runtime 未 ready；改色进行中、投影刷新中、Sample 有 pending action 或文件传输中；Sample 草稿未完成。相同 override 不提交。
@@ -836,7 +836,7 @@ System 打开时仍可操作。标题、候选数量和阶段标签来自实际�
 - “现有自动化证据”列是测试定位索引，不代表每次更新都运行了全部套件。具体执行项与通过数量记录在对应 Task 或 PR 中。
 - 源码、组件测试、打包浏览器旅程、真实设备和已部署构建之间的边界保持区分。
 - 本次核对基线、逐项处置、设计差距与验证命令见[2026-10-12 复核](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-12-creator-interaction-audit.md)；历史证据见[上次刷新](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interactions-refresh.md)和[初版 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-10-creator-interaction-map.md)。
-- 页面旋钮、MASTER、播放切换与 history 修复的具体交付在本次复核中对应到合并和测试。独立滤波（#2014）与 live Mute/Solo（#2037）的 DSP 已进入 main，Creator 仍缺完整参数／按钮、录制和回放接线；其余待交付项见[第 2 章](#planned)。本页不从批准、底层 API、合并或本次组件测试推导完整 Creator proof、设备听感与部署验收已经完成。
+- 页面旋钮、MASTER、播放切换与 history 修复的具体交付在本次复核中对应到合并和测试。独立滤波（C1）与 live Mute/Solo（C2）已消费对应 DSP／SDK，并有各自的参数、按钮和录放旅程；具体状态见[第 2 章](#planned)，物理设备与听感不由自动化证明。本页不从批准、底层 API、合并或本次组件测试推导完整 Creator proof、设备听感与部署验收已经完成。
 
 N13 本次实际整合基线为 `43f41d2f1cf0f8294568e9964c058d141421aa46`（原 a492 外部冲突方案的十四个基线文件保持相同），保留 main 已交付的四排键位、快捷键冲突说明和交互手册复核。Root 报告整合前原十四文件候选的六个完整 Vitest 文件（292/292）、完整 TypeScript（exit0）及完整 Portal check（176 tests、52 pages、10 diagrams／20 outputs、50 routes）实际通过；这些结果保留为旧输入的历史证据。本次整合后的相关组件／类型／Portal、完整八组 Creator proof 与新的 numeric native／browser 旅程尚未重新验证，不能复用旧通过结论。物理、听感、部署和 release 仍分别待验收。
 
@@ -857,3 +857,18 @@ revised14 review 又识别出普通 defaultSeed／capture 与自动 reopen 共�
 Project／Sample 普通方向接线与硬件三列列表在独立 K2a Task 准备；mounted App 回归和原 hardware-layout 的真实三列、缩放命中／无横向溢出旅程已补源码，原 history／failure／reopen 各腿保留并通过实际 SHIFT 层读取。component／type／Portal／browser 执行仍 UNRUN，等待独占验证窗口；这些源码事实不表示 Task 已交付、布局已验证、Perform/FILTER 已接线、K2/#1822 已完成或物理／听感通过。[Task 与验证边界](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-13-creator-project-sample-navigation.md)。
 
 上述 K2a 三列记录保留当时的源码与验证边界。Project 单列与 ↑/↓ 相邻导航由 [U04 Task](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-13-creator-project-single-list.md)取代；本页 Project 章节描述该迭代，未据此结算 Perform/FILTER、设备或听感验收。
+
+
+## Perform 当前 Pad 的实时 Mute / Solo
+
+Live 页显示明确的当前 Pad 地址，分别提供 Mute、Solo 两个独立开关。
+两者可同时亮起；Mute 优先。可同时 Solo 多个 Pad，此时其他 Pad 显示
+SILENCED。Pad 矩阵上的 MUTE / SOLO 状态不替代颜色与当前 Pad 高亮。
+控件等待 Core 已应用状态，Pending 时不重复切换，不可用时不会假装已清空。
+
+状态覆盖 A01–D16，切 Bank、切 Pattern 保留；沿用 Pad 演奏和 ↑/↓ 的当前
+Pad 选择，不新增键盘、SHIFT 或 MIDI 映射。离开 Perform 或换工程时清空，
+离页等待 Core 清空确认；确认前若 owner epoch 更换，离页失败，不接管或声明
+新 owner 的 mask 已清空。HOLD 不保留这些门控。录制包含原有起点 mask 与后续
+变化，保存、重新打开后 Replay 恢复。实时控制不改 Sample 的持久化 muted、
+工程 Undo、localStorage、监听 MASTER 或作品电平。

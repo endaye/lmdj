@@ -78,7 +78,9 @@ that explicit install. Workers Builds does not honor Wrangler custom builds in
 all contexts; the root config's custom command supports direct CLI usage and is
 not a replacement for the dashboard build command.
 
-Use pinned `npx --yes wrangler@4.129.1 versions upload` for the pilot upload,
+Use the Wrangler locked in `tools/wrangler` for the pilot upload
+(`npm ci --prefix tools/wrangler --ignore-scripts`, then
+`node tools/wrangler/node_modules/wrangler/bin/wrangler.js versions upload`),
 including when the dashboard labels the branch production. Do not use the default
 `wrangler deploy` to promote this pilot. Before activating broader branch builds,
 prove the build token is isolated from production mutation; a command choice alone

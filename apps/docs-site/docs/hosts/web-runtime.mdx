@@ -88,9 +88,10 @@ publication 不 fan-out。历史 `1.0.40.0` Release 与部署保持不可变，�
 
 2026-09-08 用户授权删除旧 Netlify 站点，两条旧手动 workflow 已停用。
 当前 Cloudflare 自动化验证通过，Safari、真实听感与稳定观察仍由 #926 追踪。
-以下是保留的历史 Netlify 工具与证据说明，已删除的站点不能用于部署或回滚。
+以下是历史 Netlify 部署流程与证据说明。其 Netlify 部署工具源码已于 2026-10-14 删除，
+只保留下述 `verify`/`stage` 签名预检，由 Cloudflare adapter 使用。
 
-两阶段 Netlify release/deploy 工具已进入仓库源码：部署 workflow 先运行不加入
+两阶段 Netlify release/deploy 工具曾在仓库源码中：部署 workflow 先运行不加入
 `runtime-canary` environment、因而读不到 Netlify credential 的 preflight job，它只用 Python
 和 scoped `github.token` 执行 `scripts/web-runtime-deploy.sh verify TAG`——从 canonical
 origin 获取受保护 `main` 和 remote annotated signed Product tag，验证 tag commit 是该

@@ -13,6 +13,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
@@ -179,6 +180,9 @@ import {
   type PerformanceRecoverySummary,
 } from "./state/perform_state";
 import type {CapturePhase} from "./state/capture_state";
+
+const subscribeNoPerform = () => () => {};
+const getNoPerform = () => null;
 
 function isMonitorSession(session: CreatorRuntimeSession | undefined):
   session is CreatorRuntimeSession & MonitorOutputSession {
@@ -520,6 +524,11 @@ function Workspace({
   const [sequenceGridVelocity, setSequenceGridVelocity] = useState(100);
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
+  const performLiveState = useSyncExternalStore(
+    performController?.subscribe ?? subscribeNoPerform,
+    performController?.getState ?? getNoPerform,
+    performController?.getState ?? getNoPerform,
+  );
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
   const [captureTransportOverlay, setCaptureTransportOverlay] = useState(false);
   // Per-device monitoring preference, never Project Truth; boot reads it back
@@ -1302,7 +1311,7 @@ function Workspace({
       setPerformController((current) => current === controller ? null : current);
     };
   }, [session, runtimePhase, state.project.current?.projectId,
-    state.project.current?.patternId, registerRuntimeShutdownBarrier]);
+    registerRuntimeShutdownBarrier]);
 
   useEffect(() => {
     if (performController === null) {
@@ -2895,6 +2904,7 @@ function Workspace({
     <PadSurface
       state={state}
       audioPreparing={monitorRestoring}
+      livePadGates={activeMode === "perform" ? performLiveState?.padGates : undefined}
       emptyPadCapture={padCaptureState !== null}
       {...(defaultSeed?.projectId === currentProjectId ? {seedSlots: defaultSeed.slots} : {})}
       armedCaptureSlot={armedCaptureSlot}
@@ -3344,6 +3354,7 @@ function Workspace({
                     monitorVolume={{value: monitorVolume, disabled: monitorVolumeDisabled,
                       onChange: changeMonitorVolume}}
                     controller={performController}
+                    currentPad={sequenceCurrentPad}
                     reviewRequested={performReviewRequested}
                     onReviewShown={() => setPerformReviewRequested(false)}
                     project={state.project.current}

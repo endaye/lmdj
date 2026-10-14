@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -740,6 +741,8 @@ class LaneCommandDriftTest(unittest.TestCase):
             "apps/web-runtime-host/tools/netlify_api.py",
             "apps/web-runtime-host/tools/release_bundle.py",
             "scripts/web-runtime-deploy.sh",
+            "scripts/web-host-deploy.sh",
+            "apps/web-runtime-host/test/deploy_command_harness.py",
         ):
             with self.subTest(path=path):
                 lanes, _ = self.classifier._evaluate_ready_paths(self.policy, [path])
@@ -2027,6 +2030,132 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         documentation = " ".join((self.preflight.__doc__ or "").split())
         self.assertIn("It is not evidence.", documentation)
         self.assertIn("authorizes no push", documentation)
+
+
+class LocalQuickSubstituteTest(unittest.TestCase):
+    """A Core change runs native quick tests on a host the Linux lane cannot use."""
+
+    def setUp(self) -> None:
+        self.preflight = load_module("local_preflight_substitute", PREFLIGHT_PATH)
+        self.repository = TemporaryRepository()
+        self.addCleanup(self.repository.close)
+
+    def test_substitute_runs_the_same_quick_commands_on_another_host(self) -> None:
+        quick = self.preflight.load_lane_commands(profile="quick")
+        self.assertEqual(self.preflight.LOCAL_QUICK_SUBSTITUTES, {"core_ubuntu": "core_macos"})
+        self.assertEqual(quick["core_macos"]["commands"], quick["core_ubuntu"]["commands"])
+        self.assertEqual(quick["core_ubuntu"]["requires"]["os"], ["linux"])
+        self.assertEqual(quick["core_macos"]["requires"]["os"], ["darwin"])
+
+    def test_native_change_plans_a_substitute_without_changing_ci_selection(self) -> None:
+        # Independent oracle: the daily policy names core_ubuntu quick for
+        # this path, and core_macos stays exactly what that policy says.
+        self.repository.write("tests/core/domain/example_test.cpp", "// changed\n")
+        full = self.preflight.build_plan(self.repository.path, self.repository.base_sha)
+        quick = self.preflight.build_plan(
+            self.repository.path, self.repository.base_sha, profile="quick")
+        self.assertEqual(quick["ci_lanes"], full["ci_lanes"])
+        self.assertEqual(quick["ci_lanes"], ["core_asan", "core_coverage", "core_ubuntu"])
+        self.assertEqual(quick["verification"],
+                         {"core_asan": "deferred", "core_coverage": "deferred",
+                          "core_ubuntu": "quick"})
+        self.assertEqual(list(quick["local_substitutes"]), ["core_ubuntu"])
+        self.assertEqual(quick["local_substitutes"]["core_ubuntu"]["lane"], "core_macos")
+        self.assertEqual(full["local_substitutes"], {})
+
+    def test_drifted_substitute_commands_fail_closed(self) -> None:
+        self.repository.write("tests/core/domain/example_test.cpp", "// changed\n")
+        original = self.preflight.load_lane_commands
+
+        def drifted(*args, **kwargs):
+            table = original(*args, **kwargs)
+            if kwargs.get("profile") == "quick":
+                table["core_macos"] = {**table["core_macos"], "commands": ["true"]}
+            return table
+
+        with mock.patch.object(self.preflight, "load_lane_commands", side_effect=drifted):
+            with self.assertRaisesRegex(ValueError, "why:.*remedy:"):
+                self.preflight.build_plan(
+                    self.repository.path, self.repository.base_sha, profile="quick")
+
+    def substitute_plan(self, profile: str, command: str = "true") -> dict:
+        impossible = "darwin" if sys.platform.startswith("linux") else "linux"
+        return {
+            "profile": profile,
+            "base_sha": self.repository.base_sha, "head_sha": self.repository.base_sha,
+            "selected": ["core_ubuntu"], "verification": {"core_ubuntu": "quick"},
+            "cache_keys": {"core_ubuntu": "lane-key"},
+            "lane_commands": {"core_ubuntu": {
+                "requires": {"os": [impossible]}, "commands": ["exit 1"], "ci_only": []}},
+            "local_substitutes": {"core_ubuntu": {
+                "lane": "core_macos", "cache_key": "substitute-key",
+                "entry": {"requires": {}, "commands": [command], "ci_only": []}}},
+        }
+
+    def test_unrunnable_lane_stays_unverified_and_substitute_names_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            results = self.preflight.execute(
+                self.repository.path, self.substitute_plan("quick"),
+                cache_dir=Path(directory), use_cache=True, echo=False)
+        self.assertEqual([(r.lane, r.verdict, r.substitute_for) for r in results],
+                         [("core_ubuntu", self.preflight.NOT_RUNNABLE, ""),
+                          ("core_macos", self.preflight.QUICK_PASS, "core_ubuntu")])
+        self.assertIn("ran core_macos quick in its place", results[0].detail)
+        rendered = self.preflight._render(
+            {"profile": "quick", "mode": "focused", "selected": ["core_ubuntu"],
+             "base_sha": "a", "head_sha": "b", "changed_paths": ["x"]}, results)
+        self.assertIn("not verified here: core_ubuntu", rendered)
+        self.assertIn("it is not core_ubuntu evidence", rendered)
+
+    def test_substitute_failure_is_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            results = self.preflight.execute(
+                self.repository.path, self.substitute_plan("quick", "exit 3"),
+                cache_dir=Path(directory), use_cache=True, echo=False)
+        self.assertEqual(results[1].verdict, self.preflight.FAIL)
+
+    def test_full_profile_never_substitutes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            results = self.preflight.execute(
+                self.repository.path, self.substitute_plan("full"),
+                cache_dir=Path(directory), use_cache=True, echo=False)
+        self.assertEqual([(r.lane, r.verdict) for r in results],
+                         [("core_ubuntu", self.preflight.NOT_RUNNABLE)])
+
+
+class LaneRequirementParityTest(unittest.TestCase):
+    """Local lane entries declare what their commands need, as CI does."""
+
+    def setUp(self) -> None:
+        self.preflight = load_module("local_preflight_requirements", PREFLIGHT_PATH)
+
+    def test_full_creator_proof_requires_a_clean_tree_it_refuses_otherwise(self) -> None:
+        # proof_creator exits 2 on a dirty tree; without the requirement that
+        # reads as a lane failure instead of not-runnable-here.
+        self.assertIn("Proof requires a clean Git source tree",
+                      (ROOT / "scripts/creator-web.sh").read_text(encoding="utf-8"))
+        full = self.preflight.load_lane_commands(profile="full")
+        self.assertTrue(full["creator"]["requires"]["clean_worktree"])
+
+    def test_full_core_ubuntu_requires_the_tools_its_quick_entry_does(self) -> None:
+        quick = self.preflight.load_lane_commands(profile="quick")["core_ubuntu"]
+        full = self.preflight.load_lane_commands(profile="full")["core_ubuntu"]
+        self.assertLessEqual(set(quick["requires"]["commands"]),
+                             set(full["requires"]["commands"]))
+
+    def test_core_coverage_runs_with_the_ci_compiler_environment(self) -> None:
+        # Without CI's CC/CXX/PATH, a Linux host builds coverage with its
+        # default compiler and measures something CI never measured.
+        block = workflow_job("core-coverage").replace("\\\n", " ")
+        ci_runs = [shlex.split(line.split("run:", 1)[1]) if "run:" in line else shlex.split(line)
+                   for line in block.splitlines() if "scripts/core-coverage.sh check" in line]
+        self.assertEqual(len(ci_runs), 1, block)
+        local = self.preflight.load_lane_commands(profile="full")["core_coverage"]
+        local_runs = [shlex.split(command) for command in local["commands"]
+                      if "scripts/core-coverage.sh check" in command]
+        self.assertEqual(local_runs, ci_runs)
+        verified = set(re.findall(r"command -v (\S+)", workflow_job("core-coverage")))
+        self.assertEqual(set(local["requires"]["commands"]), verified)
 
 
 if __name__ == "__main__":

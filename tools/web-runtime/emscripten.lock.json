@@ -5,7 +5,7 @@
   "emcc_version": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)",
   "initial_memory": 536870912,
   "allow_memory_growth": false,
-  "node": "22",
+  "node": "26",
   "playwright": "1.62.1",
   "linker_flags": [
     "-pthread",

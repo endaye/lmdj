@@ -1,3 +1,4 @@
+import {selectLivePadGate, type LivePadGates} from "../state/perform_state";
 import type {SeedSlot} from "../state/default_seed";
 import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
 
@@ -18,6 +19,7 @@ interface PadSurfaceProps {
   controller?: ReturnType<typeof createCreatorInputController>;
   armedCaptureSlot?: number | null;
   currentSlot?: number;
+  livePadGates?: LivePadGates | undefined;
   onSelectSample?: (slot: number) => void;
   onChooseSample?: (slot: number) => void;
   onDropSample?: (slot: number, file: File, target: HTMLElement) => void;
@@ -37,7 +39,7 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
 );
 
 export function PadSurface({
-  state, audioPreparing = false, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, currentSlot, onSelectSample, onChooseSample, onDropSample,
+  state, livePadGates, audioPreparing = false, seedSlots, emptyPadCapture = false, controller, armedCaptureSlot = null, currentSlot, onSelectSample, onChooseSample, onDropSample,
 }: PadSurfaceProps) {
   const canTrigger = selectCanStartGesture(state);
   const pads = selectVisiblePads(state);
@@ -54,6 +56,7 @@ export function PadSurface({
         const blocked = seedPhase !== undefined && !["ready", "retired"].includes(seedPhase);
         const status = blocked ? seedPhase === "processing" ? "Processing" :
           seedPhase === "failed" || seedPhase === "saved-unavailable" ? "Failed" : "Loading" : null;
+        const gate = livePadGates === undefined ? null : selectLivePadGate(livePadGates, pad.slot);
         const capturing = armedCaptureSlot === pad.slot;
         const outcome = state.pressed.get(pad.slot);
         const keyboardKey = KEYBOARD_KEY_BY_LOCAL_PAD.get(pad.slot % 16) ?? "—";
@@ -69,6 +72,13 @@ export function PadSurface({
             data-pad-colour={padColourAttribute(pad.colour)}
             data-assigned={assigned ? "true" : "false"}
             data-outcome={outcome ?? "idle"}
+            data-live-muted={gate?.muted ? "true" : undefined}
+            data-live-solo={gate?.solo ? "true" : undefined}
+            data-live-silenced={gate?.silenced ? "true" : undefined}
+            data-live-provenance={livePadGates?.provenance}
+            aria-description={gate === null ? undefined : livePadGates?.provenance !== "core"
+              ? `Live controls ${livePadGates?.provenance}`
+              : `${gate.muted ? "Muted. " : ""}${gate.solo ? "Solo. " : ""}${gate.silenced ? "Silenced" : "Active"}`}
             disabled={audioPreparing || blocked || (onSelectSample !== undefined
               ? state.project.phase !== "ready" || state.project.current === null
               : (!assigned && !capturing && !emptyPadCapture) || !canTrigger)}
@@ -124,6 +134,11 @@ export function PadSurface({
             <strong>{address}</strong>
             <span>{status ?? (capturing ? "Capturing" : assigned
               ? padCategoryLabel(pad.category) ?? "Assigned" : "Empty")}</span>
+            {gate !== null && (gate.muted || gate.solo || gate.silenced) ? (
+              <small className="pad-live-gate" aria-hidden="true">
+                {gate.muted ? "MUTE" : gate.silenced ? "SILENCED" : ""}{gate.solo ? " SOLO" : ""}
+              </small>
+            ) : null}
             <kbd aria-hidden="true">{keyboardKey}</kbd>
             {highlighted ? (
               <i className="pad-selected-dot" data-testid="pad-selected-dot" aria-hidden="true" />

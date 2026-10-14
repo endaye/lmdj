@@ -71,8 +71,7 @@ class CloudflareEffectShapeTest(unittest.TestCase):
     The effect suite drives these through a real `DeploymentEffect`; these pin
     them where a driven test cannot say which half failed: the trusted validator
     the effect runs, and the extraction that turns a Cloudflare document into
-    the one projection shape the comparison uses. The Netlify branch stays
-    covered here because no live workflow reaches it any more.
+    the one projection shape the comparison uses.
     """
 
     VALIDATOR = ROOT / "apps/web-runtime-host/tools/cloudflare_deployment_evidence.py"
@@ -146,9 +145,6 @@ class CloudflareEffectShapeTest(unittest.TestCase):
         document = self.document()
         site, _ = self.extractor(CLOUDFLARE_CONTRACTS["web-runtime-host"])
         self.assertEqual(site(document), document["worker"])
-        # The Netlify branch is untouched and still reads its own key.
-        netlify, _ = self.extractor("lmdj.web-runtime-host.deployment-evidence.v2")
-        self.assertEqual(netlify({"site_id": "a-netlify-site"}), "a-netlify-site")
 
     def test_the_prior_projects_into_the_one_comparison_shape(self):
         prior = {

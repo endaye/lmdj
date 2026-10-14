@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,15 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCK_PATH = REPO_ROOT / "tools/web-runtime/emscripten.lock.json"
 OUTPUT_PATH = REPO_ROOT / "build/web/toolchain/toolchain-identity.json"
+NODE_VERSION_PATH = REPO_ROOT / ".node-version"
+# The lock's "node" is the Node major the Web lanes run on (the repository
+# runtime pinned by .node-version, package.json engines "N.x" and the Web
+# scripts' "Node N is required" guards), not the Node bundled inside emsdk
+# (EMSDK_NODE), whose major moves with the emsdk tag. It is a bare major
+# because CI resolves setup-node "N" to the newest N.x, so an exact patch
+# would describe no real run.
+NODE_MAJOR = re.compile(r"^[1-9][0-9]*$")
+NODE_VERSION = re.compile(r"^v?([1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 LOCK_KEYS = {
     "allow_memory_growth",
     "emcc_version",
@@ -53,6 +63,12 @@ def validate_lock(value: object) -> dict:
     ):
         if not isinstance(value[key], str) or not value[key]:
             raise VerificationError(f"lock value is invalid for {key}")
+    if NODE_MAJOR.fullmatch(value["node"]) is None:
+        raise VerificationError(
+            f"why: lock node {value['node']!r} is not a bare Node major, the "
+            "precision every Web lane guard compares; remedy: record only the "
+            'major, for example "26"'
+        )
     if type(value["initial_memory"]) is not int or value["initial_memory"] < 1:
         raise VerificationError("lock initial_memory is invalid")
     if type(value["allow_memory_growth"]) is not bool:
@@ -62,6 +78,25 @@ def validate_lock(value: object) -> dict:
     ):
         raise VerificationError("lock linker_flags are invalid")
     return dict(value)
+
+
+def verify_node_pin(lock: dict, node_version: str) -> None:
+    match = NODE_VERSION.fullmatch(node_version.strip())
+    if match is None:
+        raise VerificationError(
+            f"why: .node-version {node_version.strip()!r} is not an exact Node "
+            "version, so the lock node major cannot be bound to it; remedy: "
+            "pin .node-version to MAJOR.MINOR.PATCH"
+        )
+    if lock["node"] != match.group(1):
+        raise VerificationError(
+            f"why: lock node {lock['node']} differs from the repository Node "
+            f"major {match.group(1)} pinned by .node-version, so the Runtime "
+            "identity would record a Node the Web lanes do not run; remedy: set "
+            f'"node" to "{match.group(1)}" in tools/web-runtime/emscripten.lock.json '
+            "and regenerate with python3 "
+            "tools/web-runtime/generate_runtime_identity.py --repo-root ."
+        )
 
 
 def run_checked(command: list[str], label: str) -> str:
@@ -143,6 +178,7 @@ def main() -> int:
     try:
         parsed = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
         lock = validate_lock(parsed)
+        verify_node_pin(lock, NODE_VERSION_PATH.read_text(encoding="utf-8"))
         identity = verify_active_sdk(lock)
         OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
         OUTPUT_PATH.write_text(

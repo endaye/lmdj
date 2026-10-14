@@ -128,7 +128,8 @@ an oversight.
 
 ## Candidate, verify, promote and recover
 
-Candidate upload requires Node 22.16.0 and Wrangler 4.129.1 installed beforehand.
+Candidate upload requires Node 22.16.0 and the Wrangler locked in `tools/wrangler`,
+installed beforehand with `npm ci --ignore-scripts` from that manifest and lockfile.
 Pass their absolute executable/module paths; the command validates the versions.
 It generates a private upload configuration, preserves signed assets and reads
 Wrangler's structured receipt. An existing target must already have Preview URLs
