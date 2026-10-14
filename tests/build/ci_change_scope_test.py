@@ -205,7 +205,9 @@ CASES = {
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
     "wrangler.json": {"portal", "ci_contract"},
-    ".node-version": {"portal", "ci_contract"},
+    # verify_emscripten.py binds the lock Node major to .node-version, so
+    # every lane that runs it reads this file.
+    ".node-version": {"portal", "ci_contract", "web_toolchain", "web_runtime_host", "creator"},
     "scripts/release.sh": {"deploy_contract", "ci_contract"},
     "docs/release-evidence/release-intents.json": {
         "docs_static", "deploy_contract", "ci_contract"
