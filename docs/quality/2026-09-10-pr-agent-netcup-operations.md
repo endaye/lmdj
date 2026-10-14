@@ -784,6 +784,12 @@ raw receipt paths, and remaining live acceptance gaps for this Task.
 
 ## S1 installed-attempt supervisor source boundary (2026-09-11)
 
+**Retired 2026-10-14.** The supervisor below was never installed or called
+by any workflow, installer or script. The 2026-09-12 production pilot cutover
+connected the installed engine directly and superseded the S2–S4 sequence; no
+plan or Issue scheduled S2 afterwards. `scripts/ci/pr_agent_attempt_supervisor.py`
+and its local suite were deleted; this section is retained as history only.
+
 The new `scripts/ci/pr_agent_attempt_supervisor.py` is the bounded source-side
 entrypoint for the future installed supervisor. Its public verbs are exactly
 `submit REQUEST_UUID`, `observe ATTEMPT_UUID`, `cancel ATTEMPT_UUID` and

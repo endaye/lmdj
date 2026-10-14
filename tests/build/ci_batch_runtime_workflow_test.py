@@ -189,11 +189,21 @@ class RehearsalWorkflowTests(unittest.TestCase):
             self.assertEqual(field(block(inputs, name, 6), 'type', 8), 'string')
         self.assertEqual(field(block(inputs, 'report_limit', 6), 'default', 8), '8')
 
+    def test_retired_o1_probes_are_unreachable_from_the_controller(self):
+        # The one-off O1 recovery/claim/cancel probes were retired with their
+        # code; the controller must keep no dispatch path or input for them.
+        directives = '\n'.join(line for line in self.source.splitlines() if not line.lstrip().startswith('#'))
+        for retired in ('recovery-probe', 'claim-probe', 'cancel-probe', 'probe_request', 'PROBE_REQUEST',
+                        'scripts/ci/o1_', 'diagnostic_ready'):
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, directives,
+                                 'why: a retired O1 probe path is still reachable; remedy: remove it from self-test-report.yml')
+
     def test_report_and_control_steps_are_mutually_exclusive(self):
-        self.assertIn("if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}", self.control)
+        self.assertIn("if: ${{ !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}", self.control)
         self.assertIn("if: ${{ startsWith(inputs.batch_operation, 'report-') }}", self.control)
-        self.assertIn("if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}", self.control)
-        self.assertEqual(self.control.count('BATCH_WRITER_LOCK: self-test-report'), 7)
+        self.assertIn("if: ${{ always() && !(github.event_name == 'schedule' && github.event.schedule == '9,24,39,54 * * * *') && !startsWith(inputs.batch_operation, 'report-') }}", self.control)
+        self.assertEqual(self.control.count('BATCH_WRITER_LOCK: self-test-report'), 4)
 
     def test_each_report_operation_routes_to_actual_cli_with_no_execution_output(self):
         for operation in ('init-outbox', 'review', 'batches', 'drain'):
