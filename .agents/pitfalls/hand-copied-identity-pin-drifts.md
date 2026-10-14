@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/actions/runs/38588990296
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/actions/runs/38588990296
+    observed_by: Claude Code (Opus 5.5)
 exit: gate:tests/build/version_test.py
 ---
 
@@ -63,6 +66,15 @@ in the main batch Deploy contract lane, where the P1 candidate renderer
 exit is reopened until https://github.com/endaye/lmdj/issues/2260 extends
 `version_test.py` to cover this copy.
 
+The fifth occurrence is the same settle in the same batch, back in test
+binaries. #2247 bumped `packages/foundation/module.json` to `0.5.1` and
+re-pinned every `foundation` dependency edge, but
+`test_module_manifests_are_exact` in `tests/core/provider/conformance_test.cpp`
+still pinned the provider-sdk edge to `0.5.0`, and
+`tests/conformance/schema_contract_test.py` still pinned the whole foundation
+manifest at `0.5.0`. The C++ copy took `provider.conformance` red in the macOS
+gates and `core_ubuntu`; neither copy was named by any bump step.
+
 ## How to apply
 
 - Never restate a module manifest's identity, version or dependency pins as a
@@ -73,6 +85,10 @@ exit is reopened until https://github.com/endaye/lmdj/issues/2260 extends
   owns the fact. Identity pins belong to the `contract` tier, which
   `scripts/core.sh test dev full` and `core_ubuntu` run -- not to `package`,
   which deliberately runs only unit and component.
+- When a settle changes a module version or dependency edge, `git grep` the
+  old version literal across `tests/` and `scripts/` and fix or delete every
+  remaining copy in the same settle; the manifest diff alone does not list
+  them.
 - When a settle bumps `apps/creator-web/module.json`, set the same version in
   `apps/creator-web/package.json` and in both `version` fields of
   `apps/creator-web/package-lock.json` (top level and `packages[""]`).
