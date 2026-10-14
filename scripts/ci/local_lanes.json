@@ -26,7 +26,6 @@
         "commands": [
           "python3 scripts/ci/contract_selection.py --base {base} --execute all",
           "python3 -m unittest discover -s tests/quality -p '*_test.py'",
-        "python3 tools/needle-spike/tests/tool_surface_test.py",
           "python3 tools/needle-spike/tests/tool_surface_test.py"
         ],
         "ci_only": [
@@ -39,6 +38,7 @@
       "commands": [
         "python3 -m unittest discover -s tests/build -p 'ci_*_test.py'",
         "python3 -m unittest discover -s tests/quality -p '*_test.py'",
+        "python3 tools/needle-spike/tests/tool_surface_test.py",
         "scripts/ci/pr-agent/integration-test.sh"
       ],
       "ci_only": [
