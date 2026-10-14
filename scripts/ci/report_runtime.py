@@ -459,7 +459,13 @@ class ReportRuntime:
             # cannot close a newer failure while draining old outbox work.
             self.scheduler.inputs.refresh()
             state = report_scheduler_state(self.scheduler)
-            planned = plan_batch_reports(self.repository, state, self.scheduler.inputs)
+            # Evidence validation, not planning: the reports are discarded, but
+            # the call checks every journal result against its durable scoped
+            # verdict and raises on a mismatch. causal_floor trusts the journal
+            # outcomes, so without this a journaled success that its verdict
+            # contradicts would lower the floor and let recovery close a
+            # newer failure.
+            plan_batch_reports(self.repository, state, self.scheduler.inputs)
             floor = causal_floor(state)
             return outbox.drain_once(self.api, causal_floor=floor)
         if operation == "review":

@@ -42,8 +42,6 @@ jobs:
       batch-execution: ${{ steps.batch.outputs.execution }}
       manifest: ${{ steps.batch.outputs.execution }}
       trusted-head: ${{ steps.batch.outputs.trusted-head }}
-      # Product documentation checks do not consume PR declarations or queue authority.
-      queue-mode: 'false'
       pull-request-body: ''
       resolved-base-sha: ${{ steps.batch.outputs.base }}
       resolved-head-sha: ${{ steps.batch.outputs.target }}
@@ -252,7 +250,10 @@ jobs:
       cancel-in-progress: false
     uses: ./.github/workflows/architecture-portal.yml
     with:
-      check_documentation_impact: ${{ needs.change-scope.outputs.queue-mode == 'true' }}
+      # Only self-test batches reach this job, and a batch carries no Pull
+      # Request declaration: PR documentation impact is checked by
+      # pr-contract.yml's documentation-impact job.
+      check_documentation_impact: false
       base_sha: ${{ needs.change-scope.outputs.resolved-base-sha }}
       head_sha: ${{ needs.change-scope.outputs.resolved-head-sha }}
       checkout_ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
