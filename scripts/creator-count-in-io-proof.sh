@@ -87,9 +87,10 @@ source "$EMSDK/emsdk_env.sh" >"$run_root/activate-toolchain.log" 2>&1
 for command in node python3 emcmake cmake; do
   command -v "$command" >/dev/null || { echo "missing command: $command" >&2; exit 2; }
 done
-[[ "$(node -p 'process.versions.node.split(".")[0]')" == 26 ]] || {
-  echo "Node 26 is required" >&2; exit 2;
-}
+if [[ "$(node -p 'process.versions.node.split(".")[0]')" != "26" ]]; then
+  echo "Node 26 is required" >&2
+  exit 2
+fi
 python3 "$repo_root/tools/web-runtime/verify_emscripten.py" >"$run_root/toolchain.log" 2>&1
 node --input-type=module - "$web_root" "$repo_root" >"$run_root/browser-identity.json" <<'JS'
 import {readFileSync, existsSync} from "node:fs";
