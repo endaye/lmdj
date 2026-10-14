@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/pull/1117
     observed_by: Codex
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/pull/1800
+    observed_by: claude-code/opus-5.5
 exit: gate:tests/build/ci_change_scope_test.py
 ---
 
@@ -121,3 +124,13 @@ that run it, and asserts every tracked file it matches is routed to one of them.
 #900 repaired the instance by routing twelve rules to `creator` and one to the
 core lanes; it added no gate. When #914 lands, record it here as
 `gate:tests/build/ci_change_scope_test.py` and set `status: absorbed`.
+
+The fourth occurrence is the hand-written list shape. `scripts/creator-web.sh`
+runs Creator's Python suites by name, not by glob, and three of them —
+`favicon_test.py` (#1800), `release_bundle_test.py` and
+`deploy_orchestrator_test.py` (#520) — were never added to it, while the Runtime
+Host's matching suites were. Their policy route (`creator`) was right; no runner
+named them. `test_every_web_host_python_test_is_run_by_a_lane_that_owns_it`
+in the same gate file now requires every `apps/creator-web/test/*_test.py` and
+`apps/web-runtime-host/test/*_test.py` to be named by a runner whose lane the
+file's route selects.

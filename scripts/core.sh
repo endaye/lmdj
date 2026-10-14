@@ -201,6 +201,19 @@ case "$command_name" in
       usage
       exit 64
     }
+    # Refuse a modified tree before the Release build and test run, not only
+    # after them: scripts/package-core.py would reject it anyway, but only
+    # once the whole build had been spent. Its own check stays authoritative
+    # for the tree as it stands when the archive is written.
+    if ! worktree_status="$(git status --porcelain)"; then
+      echo "git status failed, so package provenance cannot be established" >&2
+      exit 2
+    fi
+    if [[ -n "$worktree_status" ]]; then
+      echo "refusing to package a modified working tree; the recorded Git revision would not describe the packaged contents:" >&2
+      printf '%s\n' "$worktree_status" >&2
+      exit 2
+    fi
     cmake --preset release
     cmake --build --preset release
     # A package is stamped `canary`, and version-management.md requires basic

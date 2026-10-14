@@ -368,7 +368,11 @@ A deferred lane executes nothing and produces no pass or cache receipt. Quick
 passes have separate profile/source/toolchain-bound cache identities and cannot
 satisfy complete lane receipts. Per-command timings distinguish actual execution
 from cache hits. Unavailable platforms, tools or clean-tree prerequisites remain
-`not-runnable-here`. Local results are advisory, never release authorization.
+`not-runnable-here`. Daily native quick work is requested on `core_ubuntu`
+only; on a host that cannot run it, the pre-flight runs the identical
+`core_macos` quick commands as a labelled local substitute, while
+`core_ubuntu` still reports `not-runnable-here` and CI selection is unchanged.
+Local results are advisory, never release authorization.
 Automatic requests freeze workloads from every first-parent delta; authenticated
 review advice can add complete work, missing historical policies fall back to
 full, and executable verification debt requires full work. Quick success cannot

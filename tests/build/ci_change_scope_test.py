@@ -717,6 +717,93 @@ class ChangeScopeTest(unittest.TestCase):
         finally:
             self.lanes_for_path = original
 
+    # Web Host Python suites are run by name from hand-written lists, so a new
+    # file is silently unrun until someone adds it to one (three Creator
+    # suites sat that way). Each runner is bound to the lane that executes it;
+    # the lane-to-runner link is asserted separately below.
+    WEB_HOST_TEST_DIRECTORIES = ("apps/creator-web/test/", "apps/web-runtime-host/test/")
+    WEB_HOST_SCRIPT_RUNNERS = {
+        "scripts/creator-web.sh": "creator",
+        "scripts/web-runtime-host.sh": "web_runtime_host",
+    }
+    WEB_HOST_TEST_FILE = re.compile(r"apps/(?:creator-web|web-runtime-host)/test/[\w-]+_test\.py")
+
+    def web_host_test_invocations(self):
+        """Map each Web Host Python test a runner names to the lanes running it."""
+        invoked = {}
+        for runner, lane in self.WEB_HOST_SCRIPT_RUNNERS.items():
+            text = "\n".join(
+                line for line in (ROOT / runner).read_text(encoding="utf-8").splitlines()
+                if not line.lstrip().startswith("#")
+            )
+            text = (text.replace('"$creator_root"', "apps/creator-web")
+                    .replace("$creator_root", "apps/creator-web")
+                    .replace('"$repo_root"/', "").replace("$repo_root/", ""))
+            for path in self.WEB_HOST_TEST_FILE.findall(text):
+                invoked.setdefault(path, set()).add(lane)
+        lanes = json.loads((ROOT / "scripts/ci/local_lanes.json").read_text(encoding="utf-8"))["lanes"]
+        for lane, entry in lanes.items():
+            for variant in (entry, *(entry[key] for key in ("quick", "journey") if key in entry)):
+                for command in variant["commands"]:
+                    for path in self.WEB_HOST_TEST_FILE.findall(command):
+                        invoked.setdefault(path, set()).add(lane)
+        return invoked
+
+    def web_host_test_gaps(self, inventory):
+        invoked = self.web_host_test_invocations()
+        gaps = []
+        for path in sorted(inventory):
+            if not (path.startswith(self.WEB_HOST_TEST_DIRECTORIES)
+                    and path.endswith("_test.py") and "/" not in path.split("/test/", 1)[1]):
+                continue
+            runners = invoked.get(path, set())
+            if not runners:
+                gaps.append(f"{path}: no runner invokes it")
+            elif not runners & self.lanes_for_path(path):
+                gaps.append(f"{path}: run only by lane(s) {sorted(runners)}, "
+                            f"which its route {sorted(self.lanes_for_path(path))} never selects")
+        return gaps
+
+    def test_every_web_host_python_test_is_run_by_a_lane_that_owns_it(self):
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True,
+        ).stdout.decode("utf-8").split("\0")
+        for lane, runner in (("creator", "scripts/creator-web.sh"),
+                             ("web_runtime_host", "scripts/web-runtime-host.sh")):
+            self.assertRegex(
+                (ROOT / ".github/actions/web-ci-proof/action.yml").read_text(encoding="utf-8"),
+                rf"{lane}:full\) .*{re.escape(runner)} proof",
+                f"web-ci-proof no longer connects {lane} to {runner}")
+        self.assertEqual(
+            self.web_host_test_gaps(inventory), [],
+            "a Web Host Python test file is not run by any lane that owns it.\n"
+            "why: these suites run only where a runner names them, so an "
+            "unlisted file reads as coverage but never executes.\n"
+            "remedy: invoke it from the owning runner (creator: test_creator in "
+            "scripts/creator-web.sh; web_runtime_host: run_nonbrowser_tests in "
+            "scripts/web-runtime-host.sh; deploy_contract: scripts/ci/local_lanes.json "
+            "and the deploy-contract job), or route it to the lane that runs it.\n"
+            + "\n".join(self.web_host_test_gaps(inventory)),
+        )
+
+    def test_web_host_test_gate_has_red_cases(self):
+        self.assertEqual(
+            self.web_host_test_gaps(["apps/creator-web/test/orphan_test.py"]),
+            ["apps/creator-web/test/orphan_test.py: no runner invokes it"],
+        )
+        self.assertEqual(self.web_host_test_gaps(["apps/creator-web/test/helpers/nested_test.py",
+                                                  "apps/creator-web/test/fixture.py"]), [])
+        original = self.lanes_for_path
+        self.lanes_for_path = lambda path: original(path) - {"creator"}
+        try:
+            self.assertEqual(
+                self.web_host_test_gaps(["apps/creator-web/test/package_test.py"]),
+                ["apps/creator-web/test/package_test.py: run only by lane(s) ['creator'], "
+                 "which its route ['portal'] never selects"],
+            )
+        finally:
+            self.lanes_for_path = original
+
     def test_every_tracked_top_level_is_admitted_by_the_policy(self):
         # `_evaluate_ready_paths` checks the top-level segment against
         # `known_top_levels` independently of, and before, any routing rule

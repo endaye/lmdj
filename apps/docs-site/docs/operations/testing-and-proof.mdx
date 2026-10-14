@@ -822,6 +822,9 @@ Runtime Host 的 native seam 只编译它实际执行的三个测试目标。
 离线测试，以及编辑、播放、保存、重开的浏览器旅程。状态变更与恢复路径仍运行完整
 浏览器旅程；原生持久化保留完整原生集成及平台验证，并发 Runtime 改动保留 stress。
 Core 快速模式编译 Dev 并运行 unit/component；CI contract 按依赖选择，未知依赖回退全量。
+日常规则只为 `core_ubuntu` 请求 Core 快速模式；在无法运行该 Linux lane 的 macOS 上，
+本地预检改用命令完全相同的 `core_macos` quick 条目代为执行，并标注为本地替代：
+`core_ubuntu` 仍报告 `not-runnable-here`，CI 的 lane 选择与工作量不变。
 未知路径、基础模块、Contract 或共享构建改动保守回退完整验证。
 重复平台矩阵、coverage、打包和两次干净构建可复现性留在显式完整验证中。
 

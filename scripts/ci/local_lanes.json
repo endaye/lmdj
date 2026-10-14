@@ -68,6 +68,10 @@
       "requires": {
         "os": [
           "linux"
+        ],
+        "commands": [
+          "cmake",
+          "python3"
         ]
       },
       "commands": [
@@ -102,16 +106,15 @@
     "core_coverage": {
       "requires": {
         "os": ["linux"],
-        "commands": ["clang-22"]
+        "commands": ["clang-22", "clang++-22", "llvm-cov-22"]
       },
       "commands": [
         "python3 tests/fixtures/audio/make_fixtures.py",
         "python3 tests/fixtures/golden/reference_render.py",
         "bash scripts/verify-core-dependencies.sh",
-        "scripts/core-coverage.sh check"
+        "env PATH=\"/usr/lib/llvm-22/bin:$PATH\" CC=clang-22 CXX=clang++-22 scripts/core-coverage.sh check"
       ],
       "ci_only": [
-        "pins CC/CXX to clang-22 with /usr/lib/llvm-22/bin on PATH after verifying the preinstalled toolchain with command -v",
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
@@ -261,7 +264,8 @@
           {
             "env": "EMSDK"
           }
-        ]
+        ],
+        "clean_worktree": true
       },
       "commands": [
         "scripts/creator-web.sh proof"
