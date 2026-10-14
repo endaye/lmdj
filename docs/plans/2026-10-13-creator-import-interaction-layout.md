@@ -269,3 +269,20 @@ removed it. That run is retained as evidence, not reported as a pass.
 
 Not exercised here: real Safari/iPadOS, physical audio output and touch, and
 the complete Creator proof's other lanes. They stay with their own owners.
+
+## Current-head review dispositions — 2026-10-15
+
+The automated review of `452c98e5` raised two findings.
+
+- *Stop preview is enabled before any preview has started.* Kept by design.
+  Natural `ended` is private to `DecodedLongSource`, so the UI cannot know
+  whether a node is sounding; gating Stop would need the fabricated Playing
+  state this Task removes. Stop is idempotent and covered by "Preview
+  restarts the current exact selection and repeated Stop is harmless".
+- *Waveform bin highlight rounds inconsistently.* Fixed. A bin was selected
+  only when its first frame was inside the selection, so a bin straddling
+  the selection start stayed dim while one straddling the end lit. A bin is
+  now selected when any of its frames is. New component case "a selection
+  starting inside a waveform bin highlights that bin" fails on the old rule
+  (expected `true`, received `false`) and passes on the fix; the four
+  component files then pass 233/233 and `tsc` exits 0.

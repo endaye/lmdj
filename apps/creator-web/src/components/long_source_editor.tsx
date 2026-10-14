@@ -116,9 +116,12 @@ export function LongSourceEditor({
         >
           {Array.from(waveform, (magnitude, index) => {
             const height = Math.max(1, Math.min(100, magnitude * 100));
-            const frame = index * source.frameCount / WAVEFORM_BINS;
+            // A bin is selected when any of its frames is: both edges of the
+            // selection then round the same way, outward to the whole bin.
+            const binStart = index * source.frameCount / WAVEFORM_BINS;
+            const binEnd = (index + 1) * source.frameCount / WAVEFORM_BINS;
             return <rect key={index} x={index} y={(100 - height) / 2} width={1} height={height}
-              data-selected={frame >= selectionStart && frame < selectionEnd} />;
+              data-selected={binStart < selectionEnd && binEnd > selectionStart} />;
           })}
           <line x1={selectionStart / source.frameCount * WAVEFORM_BINS} y1={0}
             x2={selectionStart / source.frameCount * WAVEFORM_BINS} y2={100} />

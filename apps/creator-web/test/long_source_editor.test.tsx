@@ -233,6 +233,16 @@ test("Cancel unmounts the preview owner, restores focus and releases the backgro
   expect(document.activeElement).toBe(opener);
 });
 
+test("a selection starting inside a waveform bin highlights that bin", () => {
+  // 100 frames over 192 bins: bin 1 covers frames [0.52, 1.04), so frame 1
+  // starts inside it. Bin 0 lies wholly before the selection.
+  render(<LongSourceEditor source={source()} quota={quota} onCommit={vi.fn()} onCancel={vi.fn()} />);
+  fireEvent.change(screen.getByRole("slider", {name: "Long source selection start"}), {target: {value: "1"}});
+  const bins = document.querySelectorAll(".long-source-waveform rect");
+  expect(bins[0]?.getAttribute("data-selected")).toBe("false");
+  expect(bins[1]?.getAttribute("data-selected")).toBe("true");
+});
+
 test("Import opts into the existing touch anchor without replacing its native dialog", () => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
     x: 300, y: 200, left: 300, top: 200, width: 368, height: 368,
