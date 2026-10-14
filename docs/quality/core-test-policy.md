@@ -26,7 +26,8 @@ behavior.
 
 Risk labels describe a cross-cutting concern without creating another tier. The
 current labels are `persistence`, `audio`, `provider`, `assembly`, `abi`,
-`concurrency`, `domain`, and `generated`.
+`concurrency`, `domain`, `generated`, `conformance`, `fixtures`, and
+`benchmark`.
 
 The `native` execution label is assigned automatically when CTest launches a
 configured CMake target directly. It is not a risk label. The TSan preset uses
@@ -663,7 +664,10 @@ when forced onto efficiency cores.
 ## Sanitizer Selection
 
 ASan/UBSan `full` runs the complete non-stress suite and `stress` runs the
-bounded stress tier. TSan uses the `native` execution label: `full` runs every
+bounded stress tier. The `coverage` test preset excludes the `stress` tier by
+its label (`filter.exclude.label: ^stress$`), not by a list of test names, so a
+new stress test can neither join a coverage run nor be left out of a hand
+list; coverage measurement never needs a concurrency run. TSan uses the `native` execution label: `full` runs every
 direct native non-stress test, while `stress` runs every direct native stress
 test. Python and shell orchestration remain covered by Dev, ASan, Release, and
 Product Proof, but never host a TSan-instrumented library in their own process.

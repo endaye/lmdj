@@ -293,8 +293,8 @@ Read these before shipping; each is a real recurrence, not a hypothetical:
   coverage gate is an instrument reading; raise real coverage, never lower a
   floor to go green.
 - [`stress-tier-in-coverage-preset`](../../pitfalls/stress-tier-in-coverage-preset.md)
-  — a new busy-spinning `stress` test must be excluded from the `coverage`
-  preset in the same commit.
+  — the `coverage` preset excludes the `stress` tier by label; register a new
+  stress test with `TIER stress` and never add its name to the preset.
 - [`acceptance-journey-truncation`](../../pitfalls/acceptance-journey-truncation.md)
   — map every specified transition to a far-side observable; do not shorten a
   journey to the last state the current implementation already reaches.

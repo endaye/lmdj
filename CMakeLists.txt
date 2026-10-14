@@ -286,7 +286,6 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_soundset_local_adapter_tests
     lmdj_project_io_soundset_install_commit_tests
     lmdj_project_io_candidate_adoption_tests
-    lmdj_application_c_api_stress_tests
     lmdj_cardputer_usb_display_tests
     lmdj_cardputer_resource_observation_tests
     lmdj_cardputer_audio_diagnostics_tests
@@ -1299,6 +1298,19 @@ lmdj_add_test(
     "${CMAKE_BINARY_DIR}"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+if(LMDJ_ENABLE_COVERAGE)
+  # This test asks each sharded binary for its --list-shards table, including
+  # lmdj_application_c_api_stress_tests, which the coverage preset never runs
+  # because it is stress-tier only. That metadata query measures nothing, so
+  # its profiles stay out of the run's profile directory instead of adding a
+  # module signature no coverage object owns.
+  set_tests_properties(
+    build.facade_surface_sharding
+    PROPERTIES
+      ENVIRONMENT
+        "LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/shard-discovery-profiles/%m.profraw"
+  )
+endif()
 
 lmdj_add_test(
   NAME build.facade_surface_sharding_unit
@@ -1431,6 +1443,7 @@ if(LMDJ_ENABLE_COVERAGE)
   math(EXPR lmdj_last_test_preset_index "${lmdj_test_preset_count} - 1")
   set(lmdj_coverage_test_preset_found FALSE)
   set(lmdj_coverage_test_exclusion "")
+  set(lmdj_coverage_test_label_exclusion "")
   foreach(lmdj_test_preset_index RANGE 0 ${lmdj_last_test_preset_index})
     string(
       JSON
@@ -1481,6 +1494,19 @@ if(LMDJ_ENABLE_COVERAGE)
         "scripts/core.sh coverage check."
       )
     endif()
+    # The label exclusion is optional; CMake's own preset schema already
+    # refuses a value that is not one regex string, which CTest applies to
+    # every label of a test.
+    string(
+      JSON
+      lmdj_coverage_test_label_exclusion
+      ERROR_VARIABLE lmdj_coverage_test_label_exclusion_error
+      GET "${lmdj_preset_document}" testPresets ${lmdj_test_preset_index}
+      filter exclude label
+    )
+    if(NOT lmdj_coverage_test_label_exclusion_error STREQUAL "NOTFOUND")
+      set(lmdj_coverage_test_label_exclusion "")
+    endif()
   endforeach()
   if(NOT lmdj_coverage_test_preset_found)
     message(
@@ -1505,7 +1531,20 @@ if(LMDJ_ENABLE_COVERAGE)
     )
     list(GET lmdj_native_test_registration_parts 0 lmdj_native_test_name)
     list(GET lmdj_native_test_registration_parts 1 lmdj_native_test_target)
-    if(lmdj_native_test_name MATCHES "${lmdj_coverage_test_exclusion}")
+    list(GET lmdj_native_test_registration_parts 2 lmdj_native_test_label_field)
+    string(REPLACE "," ";" lmdj_native_test_labels
+      "${lmdj_native_test_label_field}"
+    )
+    set(lmdj_native_test_label_excluded FALSE)
+    if(NOT lmdj_coverage_test_label_exclusion STREQUAL "")
+      foreach(lmdj_native_test_label IN LISTS lmdj_native_test_labels)
+        if(lmdj_native_test_label MATCHES "${lmdj_coverage_test_label_exclusion}")
+          set(lmdj_native_test_label_excluded TRUE)
+        endif()
+      endforeach()
+    endif()
+    if(lmdj_native_test_label_excluded
+       OR lmdj_native_test_name MATCHES "${lmdj_coverage_test_exclusion}")
       list(APPEND lmdj_excluded_native_test_targets "${lmdj_native_test_target}")
     else()
       list(APPEND lmdj_selected_native_test_targets "${lmdj_native_test_target}")
@@ -1552,8 +1591,8 @@ if(LMDJ_ENABLE_COVERAGE)
       "never run and the coverage run's module signature count cannot equal "
       "its coverage object count: ${lmdj_stale_coverage_targets}. remedy: "
       "remove each target from lmdj_coverage_targets in the root CMakeLists.txt "
-      "when the coverage lane no longer runs it, or drop the exclusion in "
-      "CMakePresets.json, then rerun scripts/core.sh coverage check."
+      "when the coverage lane no longer runs it, or drop the name or label "
+      "exclusion in CMakePresets.json, then rerun scripts/core.sh coverage check."
     )
   endif()
 endif()
