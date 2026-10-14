@@ -577,6 +577,15 @@ Issues. Retain the postmerge live Issue-state audit below.
    takeover; elapsed time never becomes approval. Never add this as a required
    check or change protection under this Task's authority.
 
+   A Dependabot Pull Request's automatic review run reads the empty Dependabot
+   secret store, not the Actions secrets, so every backend reports
+   `missing_credential`. That failure is not a reason to waive review. Have the
+   owner dispatch the review for the unchanged head, then poll the helper again:
+   ```bash
+   gh workflow run pr-review.yml --ref main -f pr_number=<number>
+   ```
+   See [`dependabot-review-lacks-actions-secrets`](../../pitfalls/dependabot-review-lacks-actions-secrets.md).
+
    The helper verifies live open/non-draft main-target PR head before and after
    complete paginated collection, numeric bot identity, exact run/attempt,
    successful producer and publisher, trusted workflow/control source and actual
