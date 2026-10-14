@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from urllib.request import Request, build_opener
 
-from cloudflare_preview_artifact import REPOSITORY, WORKFLOW, extract_static, require
+from cloudflare_preview_artifact import REPOSITORY, WORKFLOW, PreviewRequirement, extract_static, require
 from cloudflare_preview_download import GitHub, NoRedirect, download_verified
 
 ACCOUNT = '0b62b8881c07f48f7935f5380a1f55db'
@@ -146,6 +146,10 @@ def publish():
     except BaseException as error:
         evidence['status'] = 'status-receipt-unknown' if status_attempted else 'failed'
         evidence['error_class'] = type(error).__name__
+        if isinstance(error, PreviewRequirement):
+            # Every require() reason is a fixed literal, never a signed URL,
+            # CLI output or credential; any other exception stays class-only.
+            evidence['error'] = str(error)
         if run is not None and number is not None and not status_attempted:
             try:
                 if current_pr(github, run, number, enabled) is not None:

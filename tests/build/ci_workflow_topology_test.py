@@ -753,11 +753,11 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         host. Rerouting it to the role is not an invitation to normalize it
         onto the heavy path, nor to inherit web-runtime-host's 75-minute hang
         detector, which exists for a lane that is two orders of magnitude
-        longer.
+        longer; its own short limit is pinned with the other lane limits.
         """
         job = self.workflow_job("web-runtime-lab")
         self.assertNotIn("uses: ./.github/actions/web-ci-proof", job)
-        self.assertNotIn("timeout-minutes", job)
+        self.assertNotIn("timeout-minutes: 75", job)
         self.assertNotIn("lfs: true", job)
         for step in (
             "uses: actions/checkout@v6",
@@ -960,7 +960,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             # exactly 45, against 16-19 min hosted).
             "web-runtime-host": 75,
             "creator-web": 35,
+            # Holds lmdj-native-heavy; at most 18 s over 214 runs.
+            "web-runtime-lab": 10,
             "macos-primary": 30,
+            # Thin selection/adjudication jobs; each observed under 30 s.
+            "select-macos-runner": 5,
+            "core-macos": 5,
+            "core-asan-macos": 5,
         }
         for job_name, minutes in expected.items():
             with self.subTest(job=job_name):

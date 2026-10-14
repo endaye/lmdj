@@ -21,9 +21,13 @@ MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_ZIP_BYTES = 256 * 1024 * 1024
 
 
+class PreviewRequirement(ValueError):
+    """A failed require(): its message is a fixed literal, safe to retain as evidence."""
+
+
 def require(condition, why):
     if not condition:
-        raise ValueError(f"why: {why}; remedy: rebuild the exact PR head with the trusted Preview workflow")
+        raise PreviewRequirement(f"why: {why}; remedy: rebuild the exact PR head with the trusted Preview workflow")
 
 
 def validate_identity(run, pr, artifact):

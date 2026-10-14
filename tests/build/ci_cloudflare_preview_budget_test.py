@@ -1,31 +1,54 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from email.message import Message
 from pathlib import Path
+import re
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/ci'))
 import cloudflare_preview_budget as budget
 
 NOW = datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc)
+# GitHub's documented and live-observed cap on a `created`-filtered run listing.
+GITHUB_LISTING_CAP = 1000
 
 
 class FakeGitHub:
-    def __init__(self, pages, comments=None):
-        self.pages = pages
+    """Runs listing with GitHub's filtered-result cap.
+
+    `days` maps a UTC creation date to that day's runs (newest first). A
+    listing whose window holds more than GITHUB_LISTING_CAP runs still reports the
+    full total_count but, like the real API, serves nothing past the cap.
+    """
+
+    def __init__(self, pages=None, comments=None, days=None, failures=()):
+        if days is None:
+            days = {'2026-10-05': [run for page in (pages or []) for run in page]}
+        self.days = days
         self.comments = comments if comments is not None else []
+        self.failures = list(failures)
         self.posted = []
         self.queries = []
 
     def metadata(self, path):
         self.queries.append(path)
+        if self.failures:
+            raise self.failures.pop(0)
         if '/comments' in path:
             return self.comments
+        # Also serves the open-ended `created>=` form, so a single capped
+        # listing is observable as an undercount rather than a query error.
+        first, last = re.search(r'created=(?:%3E%3D)?([0-9-]+)(?:\.\.([0-9-]+))?&', path).groups()
+        last = last or '9999-12-31'
+        runs = [run for day, rows in sorted(self.days.items(), reverse=True)
+                if first <= day <= last for run in rows]
         page = int(path.rsplit('&page=', 1)[1])
-        runs = self.pages[page - 1] if page <= len(self.pages) else []
-        return {'workflow_runs': runs}
+        served = runs[:GITHUB_LISTING_CAP][(page - 1) * 100:page * 100]
+        return {'total_count': len(runs), 'workflow_runs': served}
 
     def request(self, path):
         self.posted.append(path)
@@ -104,7 +127,21 @@ class ConsumptionTest(unittest.TestCase):
         # created on 09-29 can still be unfinished on 10-01.
         github = FakeGitHub([[]])
         budget.consumption(github, NOW)
-        self.assertIn('created=%3E%3D2026-09-29', github.queries[0])
+        self.assertIn('created=2026-09-29..2026-10-10&', github.queries[0])
+
+    def test_listing_cap_splits_windows_and_counts_every_run(self):
+        # About 35 builds a day pass the 1,000-result cap late in a month; the
+        # capped single listing returned only 1,000 of these 1,190 runs.
+        days = {(date(2026, 9, 29) + timedelta(days=offset)).isoformat():
+                [run_entry('completed', 60_000)] * 35 for offset in range(34)}
+        minutes, runs = budget.consumption(FakeGitHub(days=days), datetime(2026, 10, 31, 12, tzinfo=timezone.utc))
+        self.assertEqual(runs, 34 * 35)
+        self.assertEqual(minutes, 34 * 35)
+
+    def test_single_day_at_the_listing_cap_fails_closed(self):
+        github = FakeGitHub(days={'2026-10-05': [run_entry('completed', 60_000)] * GITHUB_LISTING_CAP})
+        with self.assertRaisesRegex(ValueError, 'created on 2026-10-05, at or above the 1000-result listing cap'):
+            budget.consumption(github, NOW)
 
     def test_run_completed_last_month_is_not_billed_this_month(self):
         github = FakeGitHub([[run_entry('completed', 600_000, updated_at='2026-09-30T23:59:59Z')]])
@@ -131,6 +168,48 @@ class ConsumptionTest(unittest.TestCase):
         github = FakeGitHub([[run_entry('in_progress')] * 4])
         with patch.dict(os.environ, {'GITHUB_TOKEN': 't', 'CLOUDFLARE_PREVIEW_BUDGET_MINUTES': '100'}, clear=True):
             budget.main(['prog', '--gate'], github=github, now=NOW)
+
+
+def http_error(code, **headers):
+    message = Message()
+    for key, value in headers.items():
+        message[key.replace('_', '-')] = value
+    return HTTPError('https://api.github.com/x', code, 'error', message, None)
+
+
+class ReadRetryTest(unittest.TestCase):
+    def read(self, *failures):
+        github = FakeGitHub([[run_entry('completed', 60_000)]], failures=failures)
+        waits = []
+        result = budget.read(github, budget.window_query('2026-10-05', '2026-10-05') + '1', sleep=waits.append)
+        return result, waits
+
+    def test_transient_server_errors_are_retried_with_backoff(self):
+        result, waits = self.read(http_error(502), http_error(503))
+        self.assertEqual(result['total_count'], 1)
+        self.assertEqual(waits, [5, 15])
+
+    def test_rate_limit_waits_for_retry_after_within_the_bound(self):
+        _, waits = self.read(http_error(429, Retry_After='20'), http_error(403, Retry_After='600'),
+                             http_error(403, X_RateLimit_Remaining='0'))
+        self.assertEqual(waits, [20, 60, 30])
+
+    def test_long_retry_after_stops_at_the_per_read_wait_budget(self):
+        # Four Retry-After: 600 answers would otherwise sleep 4 x 60 s.
+        waits = []
+        github = FakeGitHub(failures=[http_error(429, Retry_After='600')] * budget.READ_ATTEMPTS)
+        with self.assertRaises(HTTPError):
+            budget.read(github, budget.window_query('2026-10-05', '2026-10-05') + '1', sleep=waits.append)
+        self.assertEqual(waits, [60, 50])
+
+    def test_permission_403_fails_at_once(self):
+        with self.assertRaises(HTTPError):
+            self.read(http_error(403, X_RateLimit_Remaining='4000'))
+
+    def test_persistent_failure_stops_after_bounded_attempts(self):
+        failures = [http_error(502)] * budget.READ_ATTEMPTS
+        with self.assertRaises(HTTPError):
+            self.read(*failures)
 
 
 class GateTest(unittest.TestCase):
