@@ -18,11 +18,12 @@ jobs:
     timeout-minutes: 60
     environment: portal-cloudflare
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '26'
       - name: Build and verify the Git source
@@ -42,7 +43,7 @@ jobs:
         run: python3 scripts/cloudflare-portal-deploy.py
       - name: Retain deployment and recovery observations
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cloudflare-portal-${{ github.sha }}
           path: ${{ runner.temp }}/cloudflare-portal-${{ github.run_id }}.json

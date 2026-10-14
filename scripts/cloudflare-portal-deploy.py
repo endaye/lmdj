@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,32 @@ def publish_document(path, text):
               f"{path}: {error}", file=sys.stderr)
     finally:
         os.close(parent)
+
+
+def run_wrangler(command, *, cwd, timeout=300):
+    """Run Wrangler so a timeout stops every process that can still upload.
+
+    Wrangler's launcher spawns the uploader. `subprocess.run(timeout=...)`
+    kills only the launcher, leaving that child free to keep mutating the
+    Worker after this script has moved on to recovery. Its own session makes
+    the whole tree one process group to kill. The captured output rides on
+    the re-raised `TimeoutExpired` so the caller can still show it.
+    """
+    process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True,
+                               start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException as error:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        if isinstance(error, subprocess.TimeoutExpired):
+            error.output, error.stderr = stdout, stderr
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def smoke_receipt(output, revision, base_url):
@@ -136,6 +163,10 @@ def publish():
     evidence["prior_route"] = prior_route
     version = None
     promoted = False
+    # The Preview route write happens before promotion, so a failed Preview
+    # must undo it too; set before the request because a lost response can
+    # still have committed it.
+    route_written = None
     try:
         with tempfile.TemporaryDirectory(prefix="portal-upload-") as directory:
             config = json.loads((ROOT / "apps/docs-site/deploy/wrangler.json").read_text())
@@ -145,8 +176,11 @@ def publish():
             config_path.write_text(json.dumps(config))
             command = ["node", os.environ["WRANGLER_JS"]]
             command += ["versions", "upload"] if exists else ["deploy"]
-            result = subprocess.run(command + ["--config", str(config_path)], cwd=directory,
-                                    capture_output=True, text=True, timeout=300)
+            try:
+                result = run_wrangler(command + ["--config", str(config_path)], cwd=directory)
+            except subprocess.TimeoutExpired as error:
+                print(((error.output or "") + (error.stderr or "")).replace(token, "[REDACTED]"))
+                raise
             output = (result.stdout + result.stderr).replace(token, "[REDACTED]")
             print(output)
             result.check_returncode()
@@ -156,7 +190,8 @@ def publish():
             version = match[1]
         evidence["version_id"] = version
         route = api(f"scripts/{WORKER}/subdomain")
-        api(f"scripts/{WORKER}/subdomain", {"enabled": route["enabled"], "previews_enabled": True})
+        route_written = {"enabled": route["enabled"], "previews_enabled": True}
+        api(f"scripts/{WORKER}/subdomain", route_written)
         preview = f"https://{version[:8]}-{WORKER}.lmdj.workers.dev"
         receipt = smoke(preview)
         evidence["preview"] = {"url": preview, "status": "passed", "changelogs": receipt}
@@ -182,11 +217,28 @@ def publish():
         evidence["status"] = "passed"
     except BaseException:
         evidence["status"] = "failed"
-        if promoted and state()[0]["versions"] == [{"version_id": version, "percentage": 100}]:
-            if prior:
-                api(f"scripts/{WORKER}/deployments", {"strategy": "percentage", "versions": prior[0]["versions"]})
-            api(f"scripts/{WORKER}/subdomain", prior_route)
-            evidence["recovery"] = {"deployment": state()[0]["versions"], "route": api(f"scripts/{WORKER}/subdomain")}
+        try:
+            if promoted:
+                if state()[0]["versions"] == [{"version_id": version, "percentage": 100}]:
+                    if prior:
+                        api(f"scripts/{WORKER}/deployments", {"strategy": "percentage", "versions": prior[0]["versions"]})
+                    api(f"scripts/{WORKER}/subdomain", prior_route)
+                    evidence["recovery"] = {"deployment": state()[0]["versions"], "route": api(f"scripts/{WORKER}/subdomain")}
+            elif route_written is not None and {k: prior_route.get(k) for k in route_written} != route_written:
+                # Restore only the route this run left: a different value
+                # means another operator changed it, which is theirs to keep.
+                current = api(f"scripts/{WORKER}/subdomain")
+                if {k: current.get(k) for k in route_written} == route_written:
+                    api(f"scripts/{WORKER}/subdomain", prior_route)
+                    evidence["recovery"] = {"route": api(f"scripts/{WORKER}/subdomain")}
+        except Exception as recovery_error:
+            # Keep the error that caused the failure; a recovery failure is
+            # reported beside it, never in its place.
+            evidence["recovery_error"] = type(recovery_error).__name__
+            print(f"why: recovery after a failed Portal deployment also failed "
+                  f"({type(recovery_error).__name__}: {str(recovery_error).replace(token, '[REDACTED]')}); "
+                  f"remedy: reconcile the Worker deployment and workers.dev route "
+                  f"against the evidence's prior state by hand", file=sys.stderr)
         raise
     finally:
         publish_document(evidence_path, json.dumps(evidence, indent=2) + "\n")

@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -26,9 +28,10 @@ def receipt(url):
 
 class DeploymentTest(unittest.TestCase):
     def scenario(self, *, exists=False, preview_failure=False, production_failure=False, lost_receipt=False,
-                 upload_failure=False, concurrent_at=None, recovery_failure=False, invalid_receipt=False):
+                 upload_failure=False, concurrent_at=None, recovery_failure=False, invalid_receipt=False,
+                 prior_previews=True, route_recovery_failure=False, upload_timeout=False):
         prior = [{"id": "prior", "versions": [{"version_id": "previous", "percentage": 100}]}] if exists else []
-        state = {"deployments": prior, "route": {"enabled": exists, "previews_enabled": True}, "writes": []}
+        state = {"deployments": prior, "route": {"enabled": exists, "previews_enabled": prior_previews}, "writes": []}
         lost = False
 
         def request(req, **kwargs):
@@ -50,6 +53,8 @@ class DeploymentTest(unittest.TestCase):
                 result = {"deployments": state["deployments"]}
             elif path.endswith("/subdomain"):
                 if body:
+                    if route_recovery_failure and body["previews_enabled"] is False:
+                        raise OSError("route recovery rejected before commit")
                     state["route"] = body
                 result = state["route"]
             else:
@@ -58,6 +63,9 @@ class DeploymentTest(unittest.TestCase):
 
         def run(command, **kwargs):
             if command[1] == "fake-wrangler":
+                if upload_timeout:
+                    raise subprocess.TimeoutExpired(command, 300, output="partial upload by test-token\n",
+                                                    stderr="uploader still running\n")
                 if upload_failure:
                     return subprocess.CompletedProcess(command, 1, "", "upload rejected")
                 if not exists:
@@ -78,12 +86,19 @@ class DeploymentTest(unittest.TestCase):
                    "CLOUDFLARE_API_TOKEN": "test-token", "GITHUB_RUN_ID": "1234", "RUNNER_TEMP": directory, "WRANGLER_JS": "fake-wrangler"}
             with patch.dict(os.environ, env, clear=True), patch.object(MODULE, "urlopen", side_effect=request), \
                  patch.object(MODULE.subprocess, "check_output", return_value="source"), \
-                 patch.object(MODULE.subprocess, "run", side_effect=run), patch.object(MODULE.time, "sleep"):
-                if preview_failure or production_failure or lost_receipt or upload_failure or concurrent_at or invalid_receipt:
-                    with self.assertRaises((subprocess.CalledProcessError, OSError, RuntimeError)):
+                 patch.object(MODULE.subprocess, "run", side_effect=run), \
+                 patch.object(MODULE, "run_wrangler", side_effect=lambda command, **kwargs: run(command, **kwargs)), \
+                 patch.object(MODULE.time, "sleep"), \
+                 patch("sys.stdout", io.StringIO()) as stdout, patch("sys.stderr", io.StringIO()) as stderr:
+                if (preview_failure or production_failure or lost_receipt or upload_failure or concurrent_at
+                        or invalid_receipt or upload_timeout):
+                    with self.assertRaises((subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                                            OSError, RuntimeError)) as raised:
                         MODULE.publish()
+                    self.raised = raised.exception
                 else:
                     MODULE.publish()
+            self.stdout, self.stderr = stdout.getvalue(), stderr.getvalue()
             evidence = json.loads((Path(directory) / "cloudflare-portal-1234.json").read_text())
         return state, evidence
 
@@ -195,6 +210,64 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(state["deployments"][0]["versions"][0]["version_id"], VERSION)
         self.assertEqual(evidence["status"], "failed")
         self.assertNotIn("recovery", evidence)
+
+
+    def test_failed_preview_restores_the_route_it_changed(self):
+        state, evidence = self.scenario(exists=True, preview_failure=True, prior_previews=False)
+        self.assertEqual(state["route"], {"enabled": True, "previews_enabled": False},
+                         "why: a failed Preview left version Previews enabled on the live route; "
+                         "remedy: restore the prior route whenever this run wrote it")
+        self.assertEqual(evidence["recovery"], {"route": {"enabled": True, "previews_enabled": False}})
+        self.assertFalse(any(path.endswith("/deployments") for path, _ in state["writes"]))
+
+    def test_failed_route_recovery_keeps_the_original_error(self):
+        state, evidence = self.scenario(exists=True, preview_failure=True, prior_previews=False,
+                                        route_recovery_failure=True)
+        self.assertIsInstance(self.raised, subprocess.CalledProcessError,
+                              "why: a recovery failure replaced the error that caused the failure; "
+                              "remedy: report the recovery failure beside the original and re-raise the original")
+        self.assertEqual(evidence["recovery_error"], "OSError")
+        self.assertNotIn("recovery", evidence)
+        self.assertIn("route recovery rejected", self.stderr)
+
+    def test_upload_timeout_prints_redacted_captured_output(self):
+        state, evidence = self.scenario(exists=True, upload_timeout=True)
+        self.assertIsInstance(self.raised, subprocess.TimeoutExpired)
+        self.assertIn("partial upload by [REDACTED]", self.stdout)
+        self.assertIn("uploader still running", self.stdout)
+        self.assertNotIn("test-token", self.stdout)
+        self.assertEqual(state["writes"], [])
+        self.assertEqual(evidence["status"], "failed")
+
+
+class WranglerProcessTest(unittest.TestCase):
+    """A timed-out upload must not leave Wrangler's uploader child running."""
+
+    def test_timeout_kills_the_whole_process_group(self):
+        # The launcher prints its child's pid, then both outlive the timeout,
+        # as Wrangler's launcher and uploader do. The child holds none of the
+        # captured pipes, so killing only the launcher returns promptly and
+        # leaves the child running instead of hiding it behind a blocked read.
+        launcher = ("import subprocess, sys, time; "
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+                    "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                    "print(child.pid, flush=True); time.sleep(60)")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                MODULE.run_wrangler([sys.executable, "-c", launcher], cwd=directory, timeout=2)
+        child = int(raised.exception.output.strip())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            # An unreaped zombie still answers kill(0) but can no longer upload.
+            status = subprocess.run(["ps", "-o", "stat=", "-p", str(child)],
+                                    capture_output=True, text=True).stdout.strip()
+            if not status or status.startswith("Z"):
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(child, 9)
+            self.fail("why: the uploader child survived the launcher's timeout and can keep "
+                      "mutating the Worker; remedy: start Wrangler in its own session and kill its process group")
 
 
 class EvidenceDurabilityTest(unittest.TestCase):
