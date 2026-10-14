@@ -430,8 +430,9 @@ test("terminal worker waits for native completion after a positive physical drai
 function actualBrowserRuntimePublication({Module, window, crypto, globals = {}}) {
   const channels = [];
   class BroadcastChannel {
-    constructor(name) { this.name = name; channels.push(this); }
+    constructor(name) { this.name = name; this.posted = []; channels.push(this); }
     addEventListener() {}
+    postMessage(message) { this.posted.push(message); }
     close() {}
   }
   runInNewContext(readFileSync(new URL("../src/web-runtime-pre.js", import.meta.url), "utf8"), {
@@ -523,7 +524,7 @@ function deadlineTransportFixture({cancel = () => 1, queryCancel = () => 1,
     assert.equal(name, "lmdj_web_host_consume_terminal_release");
     return consumeTerminal();
   }};
-  actualBrowserRuntimePublication({Module, window,
+  const channels = actualBrowserRuntimePublication({Module, window,
     crypto: {randomUUID: () => "00000000-0000-4000-8000-000000000099"},
     globals: {
       performance: {now: () => now, timeOrigin: 10_000},
@@ -545,6 +546,8 @@ function deadlineTransportFixture({cancel = () => 1, queryCancel = () => 1,
   const host = window.lmdjWebRuntimeHost;
   host.runtimeInitialized = true;
   return {transport: host.transport, submissions, cancellations, responses, diagnosticLines,
+    releaseRequests: () => channels.flatMap((channel) => channel.posted)
+      .filter((message) => message.type === "release-and-close").length,
     advance(to) {
       // Simulate a delayed browser timer without changing any product budget.
       now = to;
@@ -654,6 +657,35 @@ test("a retained request stuck in a claimed publication also ends the blocked ow
   await Promise.resolve();
   assert.equal(cleaned, true, "the 5 s grace scheduled at 1100 must not hold a blocked owner");
   assert.equal(f.transport.terminalOwnerReleased, false);
+});
+
+test("terminate requests the release before any terminal consume", async () => {
+  let consumes = 0;
+  const f = deadlineTransportFixture({consumeTerminal: () => { consumes += 1; return -1; }});
+  void f.transport.terminate();
+  await Promise.resolve();
+  assert.equal(f.releaseRequests(), 1);
+  assert.equal(consumes, 0, "Native cannot have completed a release that was never requested");
+});
+
+test("a released owner draining retained requests is not asked to release again", async () => {
+  let completed = 0;
+  const f = deadlineTransportFixture({terminalCompleted: () => completed,
+    consumeTerminal: () => completed});
+  void f.transport.terminate();
+  const retained = f.transport.sendRetained({...deadlineRequest("pattern.transport.input.inspect",
+    "00000000-0000-4000-8000-000000000003"), payload: {
+    command_id: "00000000-0000-4000-8000-000000000004", runtime_generation: "1",
+    frame_epoch: "1", ticket: "1", consume: false,
+  }}, {deadlineMs: 30_000}).catch((error) => error);
+  completed = 1;
+  f.advance(200);
+  assert.equal(f.transport.terminalOwnerReleased, true);
+  f.advance(5100);
+  f.advance(10_100);
+  assert.equal(f.releaseRequests(), 1, "the closed control worker needs no repeated release request");
+  f.advance(31_000);
+  await retained;
 });
 
 test("an owner that confirms its release completes cleanup without force", async () => {
