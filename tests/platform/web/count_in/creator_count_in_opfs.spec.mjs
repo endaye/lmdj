@@ -1,6 +1,6 @@
 import {expect, test} from "@playwright/test";
 import {
-  JOURNAL_PATH, beginPublicInput, cancelCountIn, checkedDeadlineOpeningJournal, checkedWholeJournal, checkpoint, collectProof,
+  JOURNAL_PATH, beginPublicInput, cancelCountIn, checkedDeadlineOpeningJournal, checkedWholeJournal, collectProof,
   expectNativeOwner, expectRejectedCountInConsume, expectSameRuntimeOwner, failedOpeningGate, gate, inputEvidence, inspectCountIn, inspectOrdinary, inspectTruth,
   installNativeNodeWitness, prepareProductionProject, projectInventory, releaseGateFinally,
   reopenDeadlineRecovery, reopenExact, requestCountIn, restoreTrace,
@@ -37,7 +37,6 @@ async function acquireS(page, setup) {
     originFrame: armed.countIn.startFrame, patternId: setup.patternId,
     transportEpoch: "1", runtimeGeneration: admitted.ticket.runtimeGeneration,
     frameEpoch: admitted.ticket.frameEpoch, scheduleSerial: admitted.ticket.scheduleSerial, playing: true});
-  await checkpoint(page, "actual-e1-at-S-acquired", applied);
   return {admitted, armed, applied, beforeS};
 }
 
@@ -85,7 +84,6 @@ async function responsiveStop(page) {
   });
   expect(result.accepted).toBe(true);
   expect(result.elapsed, "sample Stop retains its ordinary one-second control budget").toBeLessThan(1_000);
-  await checkpoint(page, "actual-responsive-sample-Stop", result);
 }
 
 function bindWholeJournal(inventory, setup, start, press, release) {
@@ -154,7 +152,6 @@ async function finishAndReopen(page, setup, start, event, {alreadyCancelled = fa
   expected.revision += 1;
   expected.patterns[setup.patternId].events = [event];
   expect(truth, "whole Truth changes exactly one event and one revision").toEqual(expected);
-  await checkpoint(page, "genuine-e2-Record-off-and-exact-Truth", {closed, ordinary, truth});
   const consumed = await inspectCountIn(page, start.admitted.ticket, true);
   expect(consumed.startReceipt).toEqual(closed.startReceipt);
   expect(consumed.cancelReceipt).toEqual(closed.cancelReceipt);
@@ -210,7 +207,6 @@ test("actual production owner held-open preserves silent press/release through o
     report.completeJournal = await projectInventory(page, setup.projectId);
     const bound = report.journalBindings = bindWholeJournal(report.completeJournal, setup, start,
       report.durablePress, report.durableRelease);
-    await checkpoint(page, "complete-real-flushed-Journal", report.completeJournal);
     report.reopen = await finishAndReopen(page, setup, start, bound.event, {report});
   } finally {
     report.gateCleanup = await releaseGateFinally(page);
@@ -342,7 +338,6 @@ test("original five-second held opening expiry preserves e1 and real Stop F unti
       command_id: start.admitted.ticket.commandId, runtime_generation: start.admitted.ticket.runtimeGeneration,
       frame_epoch: start.admitted.ticket.frameEpoch, schedule_serial: start.admitted.ticket.scheduleSerial, consume: true});
     expect(successfulConsumers[0].response.result.error).toEqual(report.late.count.error);
-    await checkpoint(page, "late-actual-owner-final-refusal-and-caller-ACK", {late: report.late, consumed, truth, inventory});
     report.reopen = await reopenDeadlineRecovery(page, setup,
       {truth, inventory, journal: bound.expectedJournal}, report);
   } finally {
