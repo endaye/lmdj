@@ -16,51 +16,10 @@ while already playing retain the existing six-state behavior. Sample and
 Performance recording keep their own entry points. S3 recording switches and
 S5 phase-preserving switches remain later stages.
 
-This addendum selects the scheduling, cancellation, I/O ownership and cue
-route before implementation. Its preparation Task changes only this file and
-the parent plan. It is not a receipt that S6 or S7 is implemented.
-
-## Refreshed premises
-
-Integration and preparation-worktree base:
-`e220c98ca1b0f4a3c08646bfeb328ffa186a263d`.
-Precommit integration refresh:
-`bb9458976af8925dd93a2048d951ec7038bda98b` includes #2017's Build 89 snapshot
-squash witness and #2018's Project v5 5.4.1 full-string `input_sequence`
-validation fix/Build 90 cut (`bc76dc42…`), followed by #2020's Build 90 snapshot
-squash witness only. The Contract fix rejects trailing newlines in canonical
-decimal identity; it does not change the scheduled transport, Facade, SDK,
-worklet or policy inputs inspected here. Preserve that stricter current
-Contract on implementation's new base. Keep this preparation's older base
-explicit; neither a Build 89 nor a Build 90 proof is claimed.
-
-The implementation Task starts at actual `main`
-`96802c0f8764d04cbf3d3c913e82292a01284ac9`. The preparation is delivered by
-#2019; #2014's independent Filter is now merged at `a61ab819686ad896a3192e4a4bce1541ae55676d`.
-Its typed accepted/applied state, epoch channel, quiescent reset and single
-Filter stage must survive the Engine changes below. Current source still has
-only ordinary callback-bound transport, control-owned production Store/Journal,
-and one worklet product output: this refresh does not mark S6 implemented.
-
-| Premise | Disposition at that base |
-| --- | --- |
-| Playing switches and three SEQ SNAP choices | Delivered through S1/S2 and S4, including #2015 squash `e220c98c…`. Preserve exact reservations, claimed successors, Stop and original Creator journeys. |
-| Native scheduled Record | Outstanding. `PatternTransportCommand` still contains generation, epoch, Pattern binding, action and switch authorities, with no scheduled-start capability; `apply_pattern_transport` applies ordinary starts at a callback boundary. |
-| No Journal during count-in | Outstanding. `PatternTransportCoordinator::request` synchronously reads/begins/prepares the Journal before submitting an ordinary Record command. The production factory owns Store and Journal on that control path. |
-| Dedicated I/O executor | Already available. `PatternTransportExecutor` constructs, executes and destroys an owner on one thread and retains one exact work ticket. It is not wired into the production Pattern transport controller. Reuse it. |
-| Existing Web proof | Preserve the real-OPFS global transport journey and executor-held-write/live press/release/shutdown/reacquire journey in `realtime_audio_worklet.spec.mjs`. They do not exercise a scheduled start or a production controller whose Journal opening is held after `S`. |
-| Monitoring route | Already available. Runtime Session builds the product master tap before `monitorGain`; Creator clicks join downstream. Native worklet currently exposes one product output. A second monitoring-only output and its SDK consumer are outstanding. |
-| #1958 / #1959 | Closed decision Issues, not feature completion. Their live comments adopt SEQ SNAP and global Pattern-only Record with Off/1/2 count-in; the earlier page-specific Record proposal is superseded. |
-| F1 / #2014 | Merged at `a61ab819686ad896a3192e4a4bce1541ae55676d`, included in the implementation base above. Preserve its typed Filter accepted/applied channel, quiescent reset, single Filter stage and S4 behavior. |
-
-Two private feasibility observations inform this choice. A fresh test-only
-Wasm probe using the production executor and Web storage platform held the
-actual OPFS immutable-write import: control made 20 further inspect turns,
-then exact bytes were read back and the owner was destroyed on its original
-thread before shutdown. A separate raw-PCM observer calibrated native frames
-against AudioContext frames and retained samples through a main-JS stall.
-These establish useful test/ownership methods. Neither proves the proposed
-controller, count-in, cue routing, exact `S`, or a current product build.
+This addendum selected the scheduling, cancellation, I/O ownership and cue
+route before implementation. S6 is implemented by #2202; #2223 corrected its
+terminal cleanup. Section 8 records the rules added during implementation.
+The preparation history (base refreshes and premise checks) remains in Git.
 
 ## 1. Exact native timeline
 
@@ -512,102 +471,26 @@ telemetry descriptor or unused two-output startup symbol alone does not
 complete S6. S7 subsequently owns device hydration, controls, countdown,
 Record lamp and the Creator scheduler handoff.
 
-## 6. Declared implementation ownership
+## 6. Implementation boundaries
 
-Before code, refresh actual main/F1 integration and amend these declarations
-if the exact owning source or necessary test seam differs. No undeclared
-control-plane, product allocation or unrelated peer fix belongs to S6.
+The implementation shipped as one S6 Task: native producer, Facade ownership,
+Host/SDK routing and cue consumer together. Its owned files are listed in
+#2202.
 
-| Owner | Declared files |
-| --- | --- |
-| Native schedule / cue batch | `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`, `src/realtime_engine.cpp`, new `include/lmdj/audio/scheduled_pattern_transport.hpp`, `packages/audio-runtime/CMakeLists.txt`; `tests/core/audio/realtime_engine_test.cpp`, `realtime_engine_stress_test.cpp`, `snapshot_publication_stress_test.cpp`, `long_sample_publication_stress_test.cpp`, new `pattern_count_in_stress_test.cpp`. |
-| Worklet outputs / kernel | `packages/audio-runtime/include/lmdj/audio/web/realtime_audio_worklet.hpp`, `src/web/realtime_audio_worklet.cpp`; the bounded kernel stays private in that implementation. Web export/activation wiring in `packages/web-runtime-platform/src/bridge.cpp`, `src/web-runtime-pre.js`, and `CMakeLists.txt`. |
-| Facade I/O and admission | `packages/application-facade/include/lmdj/facade/application.hpp`, `include/lmdj/facade/pattern_transport_controller.hpp`, `include/lmdj/facade/pattern_transport_ports.hpp`, new `include/lmdj/facade/scheduled_pattern_transport.hpp`, `internal/lmdj/facade/pattern_transport_controller_factory.hpp`, `src/pattern_transport_controller.hpp`, `src/pattern_transport_controller.cpp`, `src/pattern_transport_controller_factory.cpp`, `src/pattern_transport_executor.cpp`, `src/pattern_admission_controller.hpp`, `src/pattern_admission_controller.cpp`, `src/application.cpp`, new `src/pattern_transport_io_owner.hpp` and `.cpp`, `packages/application-facade/CMakeLists.txt`; `tests/core/facade/pattern_transport_test.cpp`, `pattern_transport_controller_test.cpp`, `pattern_transport_executor_test.cpp`, `pattern_admission_test.cpp`, new `pattern_count_in_stress_test.cpp`. |
-| Saturated durable input reduction | `packages/project-io/src/sequence_admission_codec.cpp`, `src/sequence_journal.cpp`, `tests/core/project_io/sequence_journal_test.cpp`, and the already-declared admission owner/header/I/O owner and admission tests. Reduce redundant candidate re-encoding, historical receipt searches and byte-confirmed immutable parsing only; preserve both actual fresh reads, the under-writer-lease replay, exact retries and collisions, actual durable syncs, all capacity/deadline rules and the original 1024-input journey. The unchanged component/stress budgets are the defect witnesses; no throughput acceptance follows from a source-only draft. |
-| Fresh Native Journal layout | Additionally declare `packages/project-io/include/lmdj/project_io/storage_platform.hpp`, `src/native/storage_platform.cpp`, `src/testing_hooks.hpp` and `tests/core/project_io/storage_platform_contract_test.cpp`, plus the already-declared Sequence Journal, real Facade count-in fixture and Project I/O Portal page. Add independent optional `ProjectJournalLayoutValidator` without changing the existing storage vtable. Only Sequence checked reads discover it; absent capability retains the full original helper; Sequence begin retains its original entry layout check and Performance retains the original helper, while supported failure remains failure. An existing active-Sequence error-details lookup during begin still uses the Sequence checked-read path. Native repeats full secure tree validation, all eight typed directories, locked regular manifest/length checks and final named-root identity readback with per-call descriptors. No cached authority, durability receipt or atomic whole-tree view. A private test-only post-layout hook forces actual root replacement; a separate in-lock hook lets a genuine independent manifest descriptor prove shared coexistence, exclusive refusal and post-return release. Existing storage ownership and strict unsafe-layout/root-replacement/shared-lock/routing witnesses are the lowest-tier checks; original Journal/Facade owners and 30/300-second budgets remain. |
-| Host / Bridge / SDK | `packages/web-runtime-platform/include/lmdj/web_runtime/control_runtime.hpp`, `src/control_runtime.cpp`, `src/bridge.cpp`, `src/web-runtime-pre.js`, `CMakeLists.txt`, `web/protocol.mjs`, `web/runtime_session.mjs`, `web/runtime_types.d.ts`, `web/runtime_loader.mjs`, `test/control_runtime_test.cpp`, `test/runtime_session.test.mjs`, `test/runtime_loader.test.mjs`, `test/protocol.test.mjs`, new `test/fixtures/legacy_pattern_transport_status.mjs` containing the frozen strict legacy response decoder. The output and physical-retirement capabilities use separate companion accessors; the existing audio-coordinator struct stays unchanged. |
-| Packaged proof | `tests/platform/web/audio/realtime_audio_worklet.spec.mjs`, `realtime_audio_worklet.html`, `paired_energy_probe.mjs`; new `tests/platform/web/audio/count_in_pcm_probe.js` and `count_in_observer_server_test.py`; new `tests/platform/web/creator/creator_web_count_in.spec.mjs`, `creator/fixtures/count_in_helpers.mjs`, and existing `creator/fixtures/creator_audio.mjs`; `scripts/creator-web.sh` and `tools/web-runtime/serve_distribution.py` for one explicit proof-only observer endpoint while retaining ordinary asset verification. `packages/web-runtime-platform/test/pattern_transport_opfs_probe.cpp` and `.hpp` retain the isolated T0 witness and separately instrument the actual production controller, with conformance wiring in the already-declared Bridge/JS/CMake files. Keep observers and I/O latches test-only. |
-| Current documentation | This addendum and parent plan; `apps/docs-site/docs/core/modules/audio-runtime.mdx`, `application-facade.mdx`, `project-io.mdx`, `web-runtime-platform.mdx`, `apps/docs-site/docs/platform/web-runtime.mdx`; `apps/docs-site/diagrams/audio-runtime.architecture.json`, `application-facade.architecture.json`, `web-runtime-platform.architecture.json`, and their official `apps/docs-site/static/diagrams/` HTML/SVG outputs. |
-
-Abbreviated paths in each row are relative to that row's package or test
-directory. Entries marked new are future implementation files, not preparation
-Task additions. The implementation remains one complete S6 Task with native producer, Facade
-ownership, Host/SDK routing and cue consumer in its reviewable commit. Any
-necessary preparatory Task or documented split has its own declared boundary;
-it cannot be counted as completion of S6 while a consumer or journey is missing.
-
-The refreshed implementation also declares
-`packages/audio-runtime/src/testing_hooks.hpp` for deterministic scheduling,
-commit/consume and reclamation race witnesses, and root `CMakeLists.txt` for
-owning test-tier registration. The coordinator owns the root registration;
-native and Facade workers own separate package/test files. These seams do not
-permit reduced budgets, omitted original journeys or a new unrelated gate.
-`packages/web-runtime-platform/test/performance_bridge_test.cpp` also retains
-the original eight-callback Pattern transport cadence journey while awaiting
-real dedicated-I/O completion, with the original Performance launch coverage.
-The Native Host fixture uses a nonvirtual `ControlRuntimePatternIoAccess`
-companion in the already-declared Runtime header/source to observe real Facade
-worker readiness and consumed work before each original audio leg, within its
-existing two-second test wait. It does not add an RPC, mutate an owner, invent
-an I/O receipt, increase the eight legs or expand a production deadline.
-Legacy Native Hosts that do not install the physical capability keep their
-existing successful operational quiescence receipt after a real Native stop.
-Stopped telemetry alone cannot retire the deferred stop, and this compatibility
-path is unavailable whenever a physical producer is installed. Native fixtures
-bind the operational receipt to actual callback-thread join; it is separate
-from the production worklet's physical last-use proof.
-
-The guarded real callback witness also declares
-`packages/audio-runtime/src/realtime_engine_audio_access.hpp` for a read-only
-acquire load of the actual Native cue-pending batch identity. Its adapter,
-Bridge and JavaScript conformance accessors stay inside the existing guarded
-exports and are stripped from ordinary packages. The historical captured cue
-ID alone is not ownership proof. Stage one requires that actual pending ID;
-stage two requires cue retirement while the callback's final body borrow is
-still retained. Its operational wait runs on serialized control against the
-real held callback, without the older artificial in-flight probe.
-
-The proof consumer uses the same public frozen Creator Runtime Session and
-observes its actual Native product, cue and monitor signals through a separate
-silent AudioWorklet. Its opt-in local server endpoint snapshots only the named
-observer bytes; ordinary hashed assets, CSP and the default server remain under
-the original verifier. The original eight Creator proof groups, worker counts
-and deadlines remain. The observer routing unit catches accidental asset-gate
-bypass; the initial five Creator cases and a mixed Bank/cue case catch wrong
-PCM boundaries, cue leakage, speculative storage, or lost correlated silent-input duration. These source
-drafts have no executable acceptance yet.
-
-For the separate held-OPFS witness, the implementation additionally declares
-new `packages/application-facade/internal/lmdj/facade/pattern_transport_io_testing.hpp`
-and a conformance-only callback in the already-declared I/O owner source and
-Facade CMake. The callback instruments the actual production owner's next
-`open` or `admit` work on its own worker; it does not create a second executor,
-replace audio, invent a receipt, or alter ordinary production builds. The Web
-test probe separately holds the opening Journal's real immutable write and an
-admission append after write and before its actual flush, on that worker only.
-The ordinary OPFS implementation is unchanged. Its test-control exports must
-be absent from production links. A conformance
-artifact and ordinary packaged Creator proof are recorded separately; neither
-an unused hook nor the old isolated T0 probe settles the production-controller
-held-begin/held-append obligation.
-
-This witness additionally declares new `scripts/creator-count-in-io-proof.sh`,
-`tests/platform/web/count_in/creator_count_in_opfs.spec.mjs`, and any dedicated
-fixtures under `tests/platform/web/count_in/`. It packages a separate
-conformance Wasm artifact through the official Creator packaging and manifest
-verification path. The ordinary Creator proof keeps its original eight groups,
-worker counts and deadlines; the separate witness neither replaces those
-journeys nor proves production links exclude test hooks by itself.
-
-The implementation also declares `scripts/ci/scope_policy.json` to give the
-new frozen legacy decoder and separate count-in proof files explicit ownership.
-The existing staged `ci_change_scope_test.py` verifies that none bypasses path
-classification. This routing records consumers; it does not make the separate
-OPFS witness part of the ordinary eight-group Creator proof. Declare
-`CMakePresets.json` as well: exclude the two new busy-spinning count-in stress
-registrations from coverage, while retaining the Facade component and all
-original full/stress registrations and budgets. This follows the existing
-coverage/stress separation; no required stress proof is removed.
+- Test seams (scheduling and reclamation hooks, the opening pause, the held-I/O
+  callback and the guarded cue-pending accessor) exist only in explicit test
+  or conformance variants. Ordinary product links and packages exclude them.
+- Legacy Native Hosts without the physical retirement capability keep their
+  existing operational quiescence receipt after a real Native stop. That path
+  is unavailable whenever a physical producer is installed.
+- The packaged proof observes the public Creator Runtime Session through a
+  separate silent AudioWorklet and an opt-in observer endpoint; ordinary
+  hashed assets and CSP stay under the original verifier. The held-OPFS
+  witness uses a separate conformance artifact
+  (`scripts/creator-count-in-io-proof.sh`) and does not replace the ordinary
+  Creator proof.
+- The two busy-spinning count-in stress registrations are excluded from
+  coverage; the Facade component registration stays.
 
 Exceptional input-owner retirement is also explicit. Facade inspection and
 acknowledgment, and the Host's quiescent acknowledgment, are additive nonvirtual
@@ -845,226 +728,128 @@ the committed-head evidence for every selected `batch_only` lane (or explicit
 owner-accepted risk) and its exact-head premerge check. This documentation-only
 preparation selects no such lane and supplies no product acceptance evidence.
 
-## Version Management
+## 8. Rules added during implementation
 
-Preparation Task: **Version impact: none** — design/plan only, no source,
-manifest, public API, Contract or Product identity changes.
-
-Implementation debt: **Audio Runtime MAJOR**. Its selected inline scheduled
-cell changes the public concrete `RealtimeEngine` size/layout, even when all
-old symbols and DTOs remain. It cannot be called an additive MINOR ABI change.
-Facade and Web Runtime owe MINOR only while companion APIs/Pimpl additions
-preserve existing public layouts/vtables, exact legacy response schemas and
-unnegotiated event streams; the compatibility tests above are required evidence.
-Otherwise
-reassess the affected MAJOR debt before shipping. S7 owes Creator MINOR.
-Project I/O owes MINOR for the compatible optional Journal layout companion,
-including checked immutable admission-read reuse and historical receipt lookup
-reduction. The existing storage-platform vtable, persisted schemas and durable
-write contract remain unchanged; reassess debt if implementation breaks that
-boundary.
-Record debt through the canonical coordinated settlement; this Task allocates
-no version or Product Build.
-
-Count-in remains device state. Pattern/Project Truth and persisted Journal
-schemas are unchanged; no Contract SemVer debt is expected. If implementation
-requires a persisted semantic change, stop that extension and resolve it in
-this design before code rather than smuggling it into S6.
-
-## Documentation Impact
-
-Preparation Task: **Documentation impact: none** — only `docs/design/` and
-`docs/plans/` describe future work; no current Portal page claims it delivered.
-
-Implementation: **Documentation impact: required** on
-`/core/modules/audio-runtime/`, `/core/modules/application-facade/`,
-`/core/modules/web-runtime-platform/` and
-`/platform/web-runtime/`, with affected source diagrams regenerated by the
-official tool and `scripts/docs-site.sh check`. S7 updates the two Creator
-manual routes in its own Task. No immutable Product snapshot or release is
-created by either feature Task.
-
-
-## S6 exact physical gesture followup
+### Exact physical gestures
 
 Physical input lifetime is independent of audible voice lifetime and Creator
 visual/latch state. The optional SDK-local object-reference `gestureKey` binds
-trigger and release to the original profile hold; it is not a Native wire field
-or Project Truth. An active or response-lost key cannot be reused, and keyed
-release never selects a different same-slot/source hold. Existing unkeyed
-callers retain compatibility and do not acquire an exact-correlation guarantee
-from this argument on legacy, unnegotiated Hosts.
+trigger and release to the original profile hold; it is not a Native wire
+field or Project Truth. An active or response-lost key cannot be reused, and
+keyed release never selects a different same-slot/source hold. Unkeyed callers
+keep compatibility without an exact-correlation guarantee on legacy,
+unnegotiated Hosts.
 
-Reserve a private Release intent before asynchronously resolving an unknown
+A private Release intent is reserved before asynchronously resolving an unknown
 press sequence. Duplicate physical cleanup and SDK safety share that intent
-and original deadline without manufacturing Native acceptance or consumption.
-A genuine release does not erase a still-pending press caller; only the actual
-consume/retirement receipts discharge their respective debts.
+without manufacturing Native acceptance or consumption. A genuine release does
+not erase a still-pending press caller; only the actual consume/retirement
+receipts discharge their debts.
 
-Creator retains a separate physical gesture until keyup/cancel. Voice completion,
-loop latch cleanup and successful Sample stop do not discharge it. After actual
-trigger invocation, an already observed keyup submits matching Release without
-waiting for the trigger's durable completion. One-shot and loop-toggle sound
-behavior stays Native-owned; their matching physical Release still repays input
-ownership. No actual trigger means no Native release obligation.
+Creator retains a separate physical gesture until keyup/cancel. Voice
+completion, loop latch cleanup and successful Sample stop do not discharge it.
+After actual trigger invocation, an observed keyup submits the matching Release
+without waiting for the trigger's durable completion. No actual trigger means
+no Native release obligation.
 
-The original one-second input deadline, five-second opening limit, 300-second
-stress budget and all far-side assertions remain. SDK/Creator unit regressions
-are necessary but cannot replace the original rebuilt production journeys.
-Version impact is additive Web Runtime Platform MINOR debt already carried by
-unshipped S6; no wire, persisted Contract or Product identity changes.
-Documentation impact: required on `/core/modules/web-runtime-platform/`.
+An exact profile Release whose lost admission reconciles during a lifecycle
+wait continues independently of the Host request tail waiting for that owner.
+New input and ordinary requests keep their original queue.
 
-An exact profile Release whose original lost admission reconciles during a
-lifecycle wait must continue independently of the Host request tail waiting
-for that owner. Positive local held-press identity, generation/epoch/sequence
-and an actually dispatched close/suspend request authorize only that continuation. It retains short
-runtime admission serialization and its original handoff deadline; new input
-and ordinary requests retain their original queue.
+### Negotiated recovery probe
 
+A recovery probe belongs only to its original Press. Before awaiting
+admission, the SDK reserves the exact recovery and foreground epochs with the
+original caller start; a physical Release never inherits probe identity. Known
+pre-enqueue failure creates no owner; a lost submitted admission retains its
+ticket and physical hold. A late accepted Press after interruption stays owned
+and submits its genuine Release.
 
-## S6 negotiated recovery probe followup
+Only the same currently usable probe can fail or complete recovery. Its
+one-second deadline causes `HOST_TIMEOUT` / restart-required, and consumption
+checks that deadline before any success notification, even when the timer was
+delayed. Stale consumption settles its debt but never clears a newer probe. A
+current voice-capacity refusal keeps its real outcome. Ordinary running Pad
+expiry stays non-fatal.
 
-A recovery probe belongs only to its original Press. Before awaiting admission,
-the SDK reserves the exact local recovery epoch and foreground epoch, carrying
-the original caller start; a physical Release never inherits probe identity.
-Known pre-enqueue failure creates no owner. Lost submitted admission still
-retains the exact original ticket and physical hold before reporting its failure.
-A late accepted Press after interruption remains owned and submits its genuine
-correlated Release rather than being relabeled into a later recovery epoch.
+### Failed legacy Pattern engagement
 
-Only the same currently usable probe can fail or complete product recovery.
-Its unchanged original one-second deadline causes actual SDK HOST_TIMEOUT /
-restart-required. Real consumption checks that deadline before success
-notification or running transition, including when the deadline timer was
-delayed. Stale/expired consumption still settles the real original debt but
-never clears a new probe or emits old recovery success. A current actual
-voice-capacity refusal keeps its real failure code/outcome. Ordinary running
-Pad expiry retains its nonfatal caller/reconciliation behavior.
+Ordinary playback may engage a real I/O executor without negotiating the input
+profile. After failure, callback last-use retirement and Native stopped state
+let controller shutdown continue independently of the negotiated input-owner
+ACK, so generation zero or a disabled profile cannot strand the executor. Its
+worker destroys the I/O owner before publishing stopped; idle telemetry is not
+that receipt. Shutdown neither invents the ACK nor retires a candidate,
+opening ticket, Bridge response or physical hold.
 
-This is a separate PATCH correctness Task within the unshipped S6 settlement;
-no public API, Native wire, persisted Contract or Product identity changes.
-Documentation impact: required on `/core/modules/web-runtime-platform/`.
-Source and owning units do not grant rebuilt packaged recovery replacement,
-full Creator, Native/Bridge/browser/OPFS/physical or release acceptance.
+### Ordinary preparation failure
 
-## Failed legacy Pattern engagement shutdown
+Ordinary Record preparation can still be owned when Native audio stops. A
+shutdown intent keeps the pending I/O and creates no successful Stop. After the
+preparation completes and Native refuses its start/fence as `not_running`,
+shutdown uses the worker's `owner_lost` operation to establish Journal absence
+or durably dispose the matching prefix. Unknown work and refused owner
+disposition stay retained; readable bytes are not durable proof. This failure
+has no S/F and borrows no prior take, scheduled e2 or epoch-zero identity.
 
-Ordinary Pattern playback may engage a real I/O executor without negotiating
-the Native input profile. After failure, actual callback-last-use retirement
-and Native stopped state authorize continuation of controller shutdown for
-that engagement independently of the negotiated input-owner ACK. Generation
-zero or a disabled input profile must not strand the executor. Its real worker
-destroys its I/O owner before publishing stopped; idle transport telemetry is
-not that receipt.
+### Terminal cleanup and replacement
 
-The negotiated input-owner ACK retains its existing generation, completion,
-held-release and owner-disposition checks. Requesting shutdown neither invents
-that ACK nor retires a recorded candidate, opening ticket, original Bridge
-response or physical hold. Original response consumption and its actual
-release continuation still precede terminal owner release. Independent writer
-reacquisition and complete Truth/Artifact reopen remain separate far-side
-assertions; a Native conformance worker-stop observation does not prove OPFS
-or browser ownership release.
+A sealed Native transport can still have owner/backend cleanup pending. With
+no retained Pattern debt, a repeated fatal close waits for the same terminal
+cleanup Promise and keeps the original false/fatal result; unknown retained
+Pattern debt keeps its prompt false response.
 
-The correctness repair and additive internal read-only conformance observer
-remain within the unshipped S6 version settlement. Existing layouts, wire
-schemas, persisted Contracts and Product identity do not change. The owning
-regression retains the original budgets and rebuilds the old production flow
-and repaired flow with the same observer and complete original test suite.
-Documentation impact: required on `/core/modules/web-runtime-platform/`.
-Source describes the required behavior; current rebuilt runtime and physical
-acceptance must be recorded separately.
+`waitForTerminalCleanup(): Promise<boolean>` observes the same Session's
+initiated terminal cleanup. Before initiation it reports false; rejection or
+unproven closure is false. True requires the retained consumers, full Native
+owner retirement, backend closure and SDK teardown. A failed loader registers
+its local Host through the private Module configuration before publication, and
+default packaged loads reserve Module injection per window.
 
+Creator replacement first settles its application shutdown obligations, then
+requires strict true from this observer and a current generation. Legacy
+sessions without the observer need a genuine clean close. A rejected
+application barrier stays a rejection even when the SDK barrier is positive.
 
-## Ordinary preparation failure retains its real owner
+Perform capture/WAV and durable finalization are application obligations
+separate from the SDK receipt. Cached close rejects with the unresolved
+shutdown operation's original failure, and the registered `controller.close`
+barrier propagates it to Creator replacement.
 
-Ordinary Record preparation can still be owned when real Native audio stops.
-A shutdown intent must not forget the original pending I/O or create a new
-successful Stop. After that exact preparation is known complete and Native
-really refuses its unsent start/fence as `not_running`, private bookkeeping
-retains the original request and failure. Shutdown then uses the same worker's
-existing `owner_lost` operation to establish actual Journal absence or durably
-dispose the original matching prefix. Unknown work and refused/conflicting
-owner disposition stay retained; readable bytes alone are not durable proof.
+As on `main`, a terminal owner that has not confirmed its release within the
+5 s grace period is ended by force: retained requests fail with an unknown
+outcome and the workers are terminated. When a claimed publication never
+settles, the receipt cannot arrive, so the owner is ended after one poll
+interval (#2223).
 
-This no-start failure has no S/F or successful opening/cancellation receipt.
-It does not borrow a prior closed take, a scheduled e2, or an input-only epoch
-zero identity. Actual executor owner destruction, Native input/physical holds,
-original caller response release and independent storage reacquisition remain
-separate boundaries. The additive private request binding changes no public
-layout, wire or persisted Contract; identities remain in the existing unshipped
-S6 settlement. Native real-storage tests and Host callback/Bridge witnesses
-require rebuilt old/fixed discrimination; browser OPFS, complete current
-Creator and physical acceptance still need their own actual execution.
+### Input budgets and capacity (2026-10-13 and 2026-10-14)
 
+Pattern and Performance recording share at most 64 retained real Pad
+gestures; one physical press in both domains takes one place, and a matching
+Release stays admissible at capacity. The one-second budget of an ordinary
+Pattern Press or Release, a legacy `trigger` input or a prepared Performance
+Pad event starts at its own admission turn; earlier queue time is not
+charged, and a recovery probe keeps its epoch start. On the legacy `trigger`
+path, keyless Presses of one Pad hold one `slot:N` position, as on `main`.
 
-## Repeated close preserves real outstanding cleanup
+## Version Management
 
-A sealed Native transport can still have real owner/backend cleanup pending.
-When there is no retained Pattern debt, repeated fatal close waits for the same
-terminal cleanup Promise, including original Native full-owner retirement and
-actual AudioContext closure. It preserves the original false/fatal result;
-sealing alone cannot skip that wait. Unknown retained Pattern debt retains its
-existing prompt false response and independent continuation. This private fix
-adds no public API and cannot by itself certify replacement for that retained
-case. Strict intermediate and final owning assertions, rejected closure and the
-original packaged recovery remain required evidence.
+**Audio Runtime MAJOR.** The inline scheduled cell changes the public concrete
+`RealtimeEngine` size/layout, even when all old symbols and DTOs remain.
+Facade and Web Runtime owe MINOR while companion APIs/Pimpl additions preserve
+existing public layouts/vtables, exact legacy response schemas and
+unnegotiated event streams. Project I/O owes MINOR for the compatible optional
+Journal layout companion and the checked admission-read reuse. #2247 settled
+these debts: Audio Runtime 6.0.0, Application Facade 6.8.0, Web Runtime
+Platform 5.9.0, Project I/O 7.2.0 and Creator 6.0.1. S7 owes Creator MINOR.
 
+Count-in remains device state. Pattern/Project Truth and persisted Journal
+schemas are unchanged; no Contract SemVer debt is expected.
 
-## Positive cleanup and Creator replacement eligibility
+## Documentation Impact
 
-`waitForTerminalCleanup(): Promise<boolean>` observes the same exact Session's
-already initiated terminal cleanup. Bind its one completion Promise before
-calling a possibly reentrant terminator or pressed-state/diagnostic callback. Before initiation the observer reports
-false and performs no lifecycle action. Cleanup rejection returns false. Once
-initiated, genuine
-unknown owner/backend work remains pending; rejection or unproven closure is
-ineligible. True requires original retained consumers, actual full Native owner
-retirement, backend closure and SDK teardown. It does not change close's original
-false/fatal outcome, error priority, physical receipts or deadlines. Explicit
-never-loaded absence and legacy healthy normal close have separate contracts;
-missing capability is not a full-owner ACK.
-
-A failed loader cannot infer its partial owner from changed global publication.
-The creating invocation registers its local Host through the original private
-Module configuration before publication; the SDK validates that exact Module.
-Default packaged loads reserve shared Module injection per window before any
-await, refusing overlap until the original invocation settles. This reservation
-does not replace actual partial-owner retirement or extend initialization budgets.
-
-Creator replacement first settles its original application shutdown obligations,
-then invokes the one cached close and observes this exact-session positive
-barrier. Both automatic and manual factories require strict true and a current
-generation. Legacy sessions without the observer are eligible only after a
-genuine clean close true. A rejected application barrier remains rejection even
-if an SDK barrier is positive; neither catch nor unregister turns it into
-permission. Pending or failed eligibility retains the original fatal display
-and ownership, without extra factories or automatic attempts. Yield/pagehide
-retain their original close boolean and invalidate late factory callbacks.
-
-This additive API owes Web Runtime Platform MINOR and Creator PATCH at the next
-coordinated version settlement; current main's existing identity is not a new
-allocation. Complete SDK/controller/type/Portal verification, unchanged packaged
-recovery and original full Creator proof remain distinct from physical acceptance.
-
-
-## Perform application shutdown is an independent owner boundary
-
-A positive SDK terminal receipt covers SDK/Native/backend ownership, while
-Perform capture/WAV and durable finalization remain application obligations.
-Public UI Stop/Leave/Save may report an error without throwing; cached close
-must retain and reject the actual unresolved shutdown operation's original
-failure. Unknown begin or write responses keep their exact identity and debt.
-An absent revision/resource reference, stopped UI phase or fulfilled action
-Promise cannot prove cleanup. Genuine matching disposition/readback may settle
-only its corresponding obligation. An unrelated display/action failure with
-known no owner and actual successful cleanup does not block clean shutdown.
-
-The registered real controller.close barrier must propagate this failure to
-Creator replacement even if independently modeled SDK cleanup is positive.
-Original error, retained temporary/artifact identity and pre-settlement hold
-remain far-side assertions. Model/component coverage remains separate from
-actual OPFS/PCM/Native retirement and the original complete packaged journey.
-This private fix owes Creator PATCH at the next coordinated settlement, without
-new SDK/wire/persisted Contract or Product allocation.
+**Required** on `/core/modules/audio-runtime/`,
+`/core/modules/application-facade/`, `/core/modules/web-runtime-platform/`,
+`/core/modules/project-io/` and `/platform/web-runtime/`, with affected source
+diagrams regenerated by the official tool. S7 updates the two Creator manual
+routes in its own Task.
