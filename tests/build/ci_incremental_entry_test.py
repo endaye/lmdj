@@ -623,14 +623,15 @@ class EntryTests(unittest.TestCase):
 
     def test_report_health_cannot_claim_a_product_batch(self):
         self.scheduler.runs[17]["event"] = "schedule"
-        payload = {"repository": self.push()["repository"], "schedule": "9,24,39,54 * * * *"}
+        payload = {"repository": self.push()["repository"], "schedule": entry.REPORT_HEALTH}
         with self.assertRaisesRegex(entry.batch.BatchError, 'why:.*report.*remedy:'):
             self.make(kind="schedule").control(payload)
         self.assertFalse(self.writes(), 'why: report health wrote scheduler state; remedy: reject before reconcile')
 
     def test_unknown_health_schedule_cannot_admit(self):
         self.scheduler.runs[17]["event"] = "schedule"
-        for schedule in (None, '', '*/15 * * * *', '9,24,39,54 * * * * ', [], True):
+        # The retired quarter-hourly report cron is no longer an admitted role.
+        for schedule in (None, '', '*/15 * * * *', '24 * * * * ', '9,24,39,54 * * * *', [], True):
             with self.subTest(schedule=schedule), self.assertRaisesRegex(entry.batch.BatchError, 'why:.*schedule.*remedy:'):
                 self.make(kind="schedule").control({"repository": self.push()["repository"], "schedule": schedule})
         self.assertFalse(self.writes())

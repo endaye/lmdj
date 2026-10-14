@@ -395,9 +395,10 @@ rerun 也明确跳过，部署后的启动失败仍可见，未知祖先关系�
 这两个复用字段在该操作中表示 Core CI 来源。`report_config` 留空使用固定 pair。
 自动 PR Review discovery 保存冻结 inventory 和跨轮 cursor，未解决或过期证据明确保留。
 PR Review 完成不再直接唤醒自测控制器；已发布的 findings 与 scope 仍由审查发布器保存，
-main push、原 scheduler health tick 的非执行轮仍可恢复报告，实际批次完成 relay 保持及时通知。
-另外，UTC 每小时 `9,24,39,54` 分的 report-only health tick 使用独立的合并等待组，
-不再等待长时间运行的产品 workflow 结束；与原 `7,22,37,52` 分的测试恢复巡检分开。
+实际批次完成 relay 保持及时通知：relay 的非执行轮报告刚结算的批次，其他来源廉价忽略。
+完整报告扫描与 review discovery 只由 UTC 每小时 `24` 分的 report-only health tick 承担
+（每轮约 900 次 Actions API 请求）；main push 与 `7,22,37,52` 分的测试恢复巡检不再重复它。
+该 tick 使用独立的合并等待组，不再等待长时间运行的产品 workflow 结束。
 它沿用同一受信任 controller job 和短写锁，只收集已持久记录的失败及 review 观察，
 不执行 control、不输出测试请求，也不直接启动产品测试。Python 入口校验两种精确 cron，
 并拒绝把报告角色用于产品 control。报告错误只影响这次报告运行，不撤销其他运行已领取的测试。
@@ -409,10 +410,11 @@ main push、原 scheduler health tick 的非执行轮仍可恢复报告，实际
 日志诊断为 `pending`，步骤成功但完整报告仍为 `incomplete`；保留义务等待接续。
 日志只输出有限状态与计数，不输出来源正文。它不证明产品健康、完整覆盖或 Issue 已送达。
 手动发现仍严格：任何 incomplete 返回非零，精确 attempt 不允许 background 模式。
-这不是 15 分钟投递保证：inventory 缺口、不可读来源、metadata 错误、控制池不可用仍明确报错；
+这不是每小时投递保证：inventory 缺口、不可读来源、metadata 错误、控制池不可用仍明确报错；
 过期 evidence 不冒充成功。精确 `report-review`／`report-discovery` 手动恢复入口保持可用。
 旧终态 run 的未知 rerun 仍由与历史 ID 数量相关的完整轮扫发现，不承诺全局 artifact 保留期内送达。
-执行轮不做附带报告扫描；非执行轮及独立报告巡检做有界报告和发现，积压留待接续。
+执行轮不做附带报告扫描；独立报告巡检做有界报告和发现，积压留待下一小时接续，
+未解决的积压在该巡检上保持红色可见。
 `report-drain` 只恢复已入队意图；即使没有 pending，也不能证明 scheduler 中所有失败均已入队。
 业务 claim 结局不明（claim 已持久化、POST 结局未知）时，报告按设计 fail-closed 为
 `needs-reconciliation`，永不自动重复或重置该 claim。操作者完成只读审计后，用手动

@@ -87,16 +87,18 @@ class CutoverTests(unittest.TestCase):
                 self.invoke('workflow_dispatch', 'reconcile', {key: 'unexpected'})
 
     def test_execute_releases_writer_without_report_or_discovery(self):
+        report = field(step('Report durable observations independently'), 'if', 8)
+        self.assertIn("steps.control.outputs.action != 'execute'", report)
+        self.assertIn("steps.control.outcome == 'success'", report)
         for name in ('Report durable observations independently', 'Recover missed review observations independently'):
             body = step(name)
-            self.assertIn("steps.control.outputs.action != 'execute'", field(body, 'if', 8))
-            self.assertIn("steps.control.outcome == 'success'", field(body, 'if', 8))
             self.assertIn('always()', field(body, 'if', 8))
             self.assertEqual(field(body, 'continue-on-error', 8), 'true')
         self.assertIn('exit 1', step('Keep unresolved reporting visible'))
         self.assertNotIn('concurrency:', block(SOURCE, 'execute-batch', 2))
         discovery = field(step('Recover missed review observations independently'), 'if', 8)
-        self.assertIn("github.event_name != 'workflow_run'", discovery)
+        self.assertIn(f"github.event.schedule == '{incremental_entry.REPORT_HEALTH}'", discovery)
+        self.assertNotIn('steps.control', discovery)
         self.assertNotIn('pr-review.yml', discovery)
 
     def test_review_wakeups_are_coalesced_into_main_and_health_observations(self):
@@ -113,7 +115,7 @@ class CutoverTests(unittest.TestCase):
         discovery = step('Recover missed review observations independently')
         self.assertIn('scripts/ci/review_discovery_runtime.py', discovery)
         self.assertIn('--limit 1 --background', discovery)
-        self.assertIn("steps.control.outputs.action != 'execute'", field(discovery, 'if', 8))
+        self.assertIn(f"github.event.schedule == '{incremental_entry.REPORT_HEALTH}'", field(discovery, 'if', 8))
         manual = step('Report through the isolated outbox under the short writer lock')
         self.assertIn("'report-discovery'", manual)
         manual_directives = '\n'.join(line for line in manual.splitlines() if not line.lstrip().startswith('#'))
@@ -126,22 +128,26 @@ class CutoverTests(unittest.TestCase):
         self.assertIn("'report-review': 'review'", manual)
 
     def test_actual_discovery_condition_excludes_idle_completion_scans(self):
+        # Only the hourly report tick pays for review discovery; idle push and
+        # scheduler health ticks no longer repeat its ~400-request scan.
         condition = field(step('Recover missed review observations independently'), 'if', 8)[3:-2].strip()
-        for event, path, action, outcome, expected in (
-            ('push', '', 'idle', 'success', True),
-            ('schedule', '', 'idle', 'success', True),
-            ('push', '', 'execute', 'success', False),
-            ('workflow_run', '.github/workflows/self-test-report.yml', 'idle', 'success', False),
-            ('workflow_run', '.github/workflows/incremental-completion.yml', 'idle', 'success', False),
-            ('workflow_run', '.github/workflows/ci.yml', 'idle', 'success', False),
-            ('workflow_run', '.github/workflows/pr-review.yml', 'idle', 'success', False),
-            ('workflow_run', '.github/workflows/forged.yml', 'idle', 'success', False),
-            ('workflow_run', '.github/workflows/pr-review.yml', 'idle', 'failure', False),
-            ('workflow_dispatch', '', 'idle', 'success', False),
+        report = incremental_entry.REPORT_HEALTH
+        for event, path, action, outcome, expected, schedule in (
+            ('schedule', '', '', 'skipped', True, report),
+            ('push', '', 'idle', 'success', False, ''),
+            ('schedule', '', 'idle', 'success', False, incremental_entry.SCHEDULER_HEALTH),
+            ('push', '', 'execute', 'success', False, ''),
+            ('workflow_run', '.github/workflows/self-test-report.yml', 'idle', 'success', False, ''),
+            ('workflow_run', '.github/workflows/incremental-completion.yml', 'idle', 'success', False, ''),
+            ('workflow_run', '.github/workflows/ci.yml', 'idle', 'success', False, ''),
+            ('workflow_run', '.github/workflows/pr-review.yml', 'idle', 'success', False, ''),
+            ('workflow_run', '.github/workflows/forged.yml', 'idle', 'success', False, ''),
+            ('workflow_run', '.github/workflows/pr-review.yml', 'idle', 'failure', False, ''),
+            ('workflow_dispatch', '', 'idle', 'success', False, ''),
         ):
-            with self.subTest(event=event, path=path, action=action, outcome=outcome):
+            with self.subTest(event=event, path=path, action=action, outcome=outcome, schedule=schedule):
                 expression = condition
-                for key, value in {'github.event_name': event, 'github.event.workflow_run.path': path, 'github.event.schedule': '',
+                for key, value in {'github.event_name': event, 'github.event.workflow_run.path': path, 'github.event.schedule': schedule,
                                    'steps.control.outputs.action': action, 'steps.control.outcome': outcome}.items():
                     expression = expression.replace(key, repr(value))
                 expression = expression.replace('always()', 'True').replace('&&', ' and ').replace('||', ' or ')
