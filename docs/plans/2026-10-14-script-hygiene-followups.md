@@ -94,13 +94,15 @@ settings before step 4.
 
 ## F4 — One reusable Web Host deploy workflow
 
-Decision: approved in principle by the owner's de-duplication request; confirm
-during execution that protected Environments keep their names.
+Decision: keep two files with a parity test (owner, 2026-10-14). Release
+tooling binds each Host to its own caller file: `deployment_effect.py` (jobs
+`preflight`/`deploy` and the evidence upload step), `dispatch_evidence.py`
+(`preflight` correlation steps), `entry_composition.py` (producer revision is
+the last commit touching the caller file) and `hosted_runner_policy.json` (jobs
+listed per workflow file).
 
-Move the shared body into a `workflow_call` workflow parameterized by Host;
-keep `deploy-web-runtime-host.yml` and `deploy-creator-web.yml` as thin callers
-with their own triggers, Environments and concurrency groups. Merge the two
-workflow tests into one parameterized test without dropping any assertion.
+`tests/build/web_host_deploy_workflow_parity_test.py` replaces each file's
+Host-specific values with placeholders and requires identical normalized text.
 
 ## F5 — Bound `cloudflare_host.stage()`
 
@@ -143,6 +145,12 @@ Decision: approved.
 - Add `report-scan-repeated-per-tick-role` with gate
   `tests/build/ci_report_progress_test.py` (UTC dates; run
   `ci_pitfall_ledger_test`).
+- The F2 relay decision is recorded in `report-scan-repeated-per-tick-role`,
+  because the ledger contract has no place to annotate
+  `coalesced-main-wakeup-lost` (#2215).
+
+Delivered: F5 by #2211, F7 by #2213, F9 by #2215. F3: PR1 #2212 merged; PR2
+#2214 waits on the `default-assets` Environment secret.
 
 ## F10 — Track the review-discovery backlog
 
