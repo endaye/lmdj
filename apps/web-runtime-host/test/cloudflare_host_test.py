@@ -57,7 +57,7 @@ class HostCommandTest(unittest.TestCase):
         child = "import time,pathlib; time.sleep(2); pathlib.Path(" + repr(str(marker)) + ").touch()"
         launcher = "import subprocess,sys; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); print('ready',flush=True); import time; time.sleep(10)"
         with self.assertRaises(subprocess.TimeoutExpired):
-            cloudflare_host.run_upload_process([sys.executable, '-c', launcher],
+            cloudflare_host.run_process_group([sys.executable, '-c', launcher],
                                               cwd=self.root, env=os.environ.copy(), timeout=1)
         time.sleep(1.5)
         self.assertFalse(marker.exists(), 'timed-out upload descendant must not keep writing')
@@ -77,7 +77,7 @@ class HostCommandTest(unittest.TestCase):
             return original(process, *args, **kwargs)
         with patch.object(subprocess.Popen, 'communicate', cancelled):
             with self.assertRaises(KeyboardInterrupt):
-                cloudflare_host.run_upload_process([sys.executable, '-c', launcher],
+                cloudflare_host.run_process_group([sys.executable, '-c', launcher],
                                                   cwd=self.root, env=os.environ.copy(), timeout=10)
         time.sleep(2.5)
         self.assertFalse(marker.exists(), 'cancelled upload descendant must not keep writing')
@@ -347,13 +347,41 @@ class HostCommandTest(unittest.TestCase):
 
     def test_failed_stage_retains_diagnostics_with_both_credentials_redacted(self):
         result = subprocess.CompletedProcess([], 1, 'github-fixture', 'cf-fixture validation failed')
-        with patch.dict(os.environ, {'GITHUB_TOKEN':'github-fixture','CLOUDFLARE_API_TOKEN':'cf-fixture'}), patch('cloudflare_host.subprocess.run', return_value=result) as run:
+        with patch.dict(os.environ, {'GITHUB_TOKEN':'github-fixture','CLOUDFLARE_API_TOKEN':'cf-fixture'}), patch('cloudflare_host.run_process_group', return_value=result) as run:
             with self.assertRaises(CommandError): stage('lmdj-v1.0.42.0','creator-web',self.root)
         self.assertNotIn('CLOUDFLARE_API_TOKEN',run.call_args.kwargs['env'])
         log = (self.root/'stage-verification.log').read_text()
         self.assertIn('validation failed',log)
         self.assertNotIn('github-fixture',log)
         self.assertNotIn('cf-fixture',log)
+
+    def test_stage_is_bounded_by_its_own_timeout_by_default(self):
+        import cloudflare_host
+        result = subprocess.CompletedProcess([], 1, '', 'failed')
+        with patch('cloudflare_host.run_process_group', return_value=result) as run:
+            with self.assertRaises(CommandError): stage('lmdj-v1.0.42.0','creator-web',self.root)
+        self.assertEqual(run.call_args.kwargs['timeout'], cloudflare_host.STAGE_TIMEOUT)
+
+    def test_stage_timeout_stops_delayed_descendant_and_reports_redacted_output(self):
+        import cloudflare_host
+        marker = self.root/'late-write'
+        scripts = self.root/'scripts'; scripts.mkdir()
+        # The staging script backgrounds a child that writes after the
+        # deadline; stopping only the bash launcher would let it run on.
+        (scripts/'creator-web-deploy.sh').write_text(
+            'echo "staging fetched with $GITHUB_TOKEN"\n'
+            '(sleep 2; touch ' + repr(str(marker)) + ') &\n'
+            'sleep 10\n')
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {'GITHUB_TOKEN':'github-fixture'}), patch('cloudflare_host.ROOT', self.root), redirect_stderr(stderr):
+            with self.assertRaises(CommandError) as raised:
+                stage('lmdj-v1.0.42.0', 'creator-web', self.root, timeout=1)
+        self.assertIn('exceeded 1s', str(raised.exception))
+        time.sleep(2.5)
+        self.assertFalse(marker.exists(), 'timed-out staging descendant must not keep writing')
+        self.assertIn('staging fetched with [REDACTED]', stderr.getvalue())
+        self.assertNotIn('github-fixture', stderr.getvalue())
+        self.assertIn('staging fetched with [REDACTED]', (self.root/'stage-verification.log').read_text())
 
     def test_timeout_byte_diagnostics_are_retained_without_credentials(self):
         with patch.dict(os.environ, {'CLOUDFLARE_API_TOKEN':'cf-fixture'}):
