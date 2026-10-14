@@ -3,17 +3,22 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <span>
+#include <string>
 #include <string_view>
+#include <sys/wait.h>
 #include <thread>
 #include <tuple>
 #include <unistd.h>
+#include <vector>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/facade/application.hpp>
@@ -26,6 +31,7 @@
 #include "packages/application-facade/src/pattern_transport_io_owner.hpp"
 #include "packages/application-facade/src/pattern_opening_test_seam.hpp"
 #include "packages/project-io/src/testing_hooks.hpp"
+#include "tests/core/support/child_process.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -2345,9 +2351,71 @@ std::size_t run(const Shard& shard, unsigned round) {
   }
   return shard.cases.size();
 }
+// --stress repeats the journey family kStressRounds times, then runs every
+// other shard once. One round builds its own engine, controller and temporary
+// Project, so rounds share no state and run in parallel child processes. Run
+// in sequence they cost ~185 s Release and over 1200 s TSan, mostly in the
+// 1024-input metadata journey, and pushed both batch stress jobs past their
+// limits (#2261). The deadline shards still run here, one at a time, after
+// every round has passed, so their real 1 s / 5 s waits compete with no worker.
+constexpr unsigned kStressRounds = 64;
+struct Rounds { unsigned first; unsigned last; };
+constexpr std::string_view kRoundsFlag{"--stress-rounds="};
+std::optional<Rounds> parse_rounds(std::string_view text) {
+  const auto dash = text.find('-');
+  if (dash == std::string_view::npos) return std::nullopt;
+  try {
+    const auto first = std::stoul(std::string{text.substr(0, dash)});
+    const auto last = std::stoul(std::string{text.substr(dash + 1)});
+    if (first < 1 || first > last || last > kStressRounds) return std::nullopt;
+    return Rounds{static_cast<unsigned>(first), static_cast<unsigned>(last)};
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+std::size_t run_rounds(Rounds rounds) {
+  std::size_t executed{};
+  for (unsigned round = rounds.first; round <= rounds.last; ++round)
+    executed += run(kShards.front(), round);
+  return executed;
+}
+// Every round must run and pass in some worker: a worker that exits nonzero,
+// is signalled or cannot be started fails the whole registration.
+bool run_rounds_in_workers() {
+  const auto workers = std::clamp(std::thread::hardware_concurrency(), 1U, 8U);
+  std::vector<std::pair<Rounds, pid_t>> children;
+  bool passed = true;
+  for (unsigned worker = 0; worker != workers; ++worker) {
+    const Rounds rounds{worker * kStressRounds / workers + 1,
+                        (worker + 1) * kStressRounds / workers};
+    if (rounds.first > rounds.last) continue;
+    try {
+      children.emplace_back(rounds, lmdj::test::process::spawn(
+          {std::string{kRoundsFlag} + std::to_string(rounds.first) + "-" + std::to_string(rounds.last)}));
+    } catch (const std::exception& error) {
+      std::cerr << "stress rounds " << rounds.first << '-' << rounds.last
+                << " could not start: " << error.what() << '\n';
+      passed = false;
+    }
+  }
+  for (const auto& [rounds, child] : children) {
+    int status{};
+    pid_t reaped{};
+    do { reaped = ::waitpid(child, &status, 0); } while (reaped == -1 && errno == EINTR);
+    if (reaped != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      std::cerr << "stress rounds " << rounds.first << '-' << rounds.last << " failed: "
+                << (reaped != child ? "not reaped"
+                    : WIFSIGNALED(status) ? "signal " + std::to_string(WTERMSIG(status))
+                    : "exit " + std::to_string(WEXITSTATUS(status))) << '\n';
+      passed = false;
+    }
+  }
+  return passed;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
+  lmdj::test::process::initialize(argv[0]);
   const auto selected = argc == 2 ? std::string_view{argv[1]} : std::string_view{};
   if (selected == "--list-shards") {
     std::size_t total{};
@@ -2358,22 +2426,33 @@ int main(int argc, char** argv) {
     std::cout << "all " << total << '\n';
     return 0;
   }
+  if (selected.starts_with(kRoundsFlag)) {
+    const auto rounds = parse_rounds(selected.substr(kRoundsFlag.size()));
+    if (!rounds) {
+      std::cerr << "invalid --stress-rounds range\n";
+      return 2;
+    }
+    const auto executed = run_rounds(*rounds);
+    LMDJ_CHECK(executed == (rounds->last - rounds->first + 1) * kShards.front().cases.size());
+    return 0;
+  }
   const std::string_view prefix{"--shard="};
   const bool stress = selected == "--stress";
   if (argc > 2 || (argc == 2 && !stress && !selected.starts_with(prefix))) {
-    std::cerr << "usage: lmdj_pattern_count_in_tests [--list-shards|--shard=<name>|--stress]\n";
+    std::cerr << "usage: lmdj_pattern_count_in_tests [--list-shards|--shard=<name>|--stress|--stress-rounds=<first>-<last>]\n";
     return 2;
   }
-  // --stress repeats the journey family 64 times, then runs every other shard
-  // once; a bare run is the union of every shard.
-  const auto repetitions = stress ? 64U : 1U;
   const auto shard_name = selected.starts_with(prefix) ? selected.substr(prefix.size()) : std::string_view{};
   std::size_t executed{};
+  if (stress) {
+    if (!run_rounds_in_workers()) return 1;
+    executed += kStressRounds * kShards.front().cases.size();
+  }
   for (const auto& shard : kShards) {
     if (!shard_name.empty() && shard.name != shard_name) continue;
     const bool repeated = shard.group == "repeat";
-    for (unsigned round = 1; round <= (repeated ? repetitions : 1U); ++round)
-      executed += run(shard, repeated ? round : 0U);
+    if (stress && repeated) continue;
+    executed += run(shard, repeated ? 1U : 0U);
   }
   if (executed == 0) {
     std::cerr << "unknown pattern count-in shard\n";

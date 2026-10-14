@@ -21,6 +21,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/issues/2238
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-14
+    occurrence: https://github.com/endaye/lmdj/issues/2261
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -81,6 +84,19 @@ over one day and was then cancelled on every batch (#1965). Before
 touching the budget, read the job's phase timings and remove work the
 proof never consumes: that job compiled the whole native dev tree for one
 fixture binary.
+
+Splitting into more registrations only helps a runner that executes them
+concurrently, and the stress jobs do not: `scripts/core.sh test tsan stress`
+and the Release stress job's `ctest -L '^stress$' --repeat until-fail:20` run
+one test at a time, and the Release job multiplies each registration by up to
+twenty. `facade.pattern_count_in_stress` ran 64 independent journey rounds in
+sequence: about 185 s Release, so its twenty repetitions alone (3,700 s)
+outran the 60-minute job, and over its 1,200 s TSan timeout in a 30-minute job
+(#2261).
+When repetitions are independent, run them in parallel child processes inside
+the one registration, and keep real-deadline cases out of that contention.
+Before adding a stress registration, multiply its Release time by twenty and
+measure it under TSan.
 
 Do not read a quiet `tests/quality/test_budget_report.py` as headroom. On
 2026-10-14 a Linux coverage run of unmodified `main` timed out
