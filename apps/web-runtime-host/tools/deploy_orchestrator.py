@@ -23,6 +23,10 @@ from tools.web_deploy.release_selection import (  # noqa: E402
 )
 
 
+# The Host this orchestrator serves. apps/creator-web/tools/deploy_orchestrator.py
+# loads this same module and selects "creator-web" before calling it.
+HOST_ID = "web-runtime-host"
+HOST_LABELS = {"web-runtime-host": "Web Runtime", "creator-web": "Creator Web"}
 INITIAL_TAG = "lmdj-v1.0.15.2"
 INITIAL_HOST_DIGEST = (
     "d56a7c99a3c489db068b93fcef70a254"
@@ -85,7 +89,7 @@ def read_tag_identity(root: Path, expected_product: str) -> tuple[str, str]:
             (root / "products/lmdj/version.json").read_text(encoding="utf-8")
         )
         host = json.loads(
-            (root / "apps/web-runtime-host/module.json").read_text(encoding="utf-8")
+            (root / "apps" / HOST_ID / "module.json").read_text(encoding="utf-8")
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise DeployOrchestratorError("tag-target identity manifests are invalid") from error
@@ -112,7 +116,7 @@ def read_tag_identity(root: Path, expected_product: str) -> tuple[str, str]:
     if (
         not isinstance(host, dict)
         or host.get("contract") != "lmdj.module.v1"
-        or host.get("module") != "web-runtime-host"
+        or host.get("module") != HOST_ID
         or not isinstance(host.get("version"), str)
         or HOST_PATTERN.fullmatch(host["version"]) is None
     ):
@@ -135,7 +139,7 @@ def parse_release_metadata(
     try:
         selected = select_host_assets(
             release,
-            host_id="web-runtime-host",
+            host_id=HOST_ID,
             host_version=host_version,
             product_build=product_build,
         )
@@ -166,7 +170,7 @@ def release_asset_selection(
     try:
         selection = select_host_assets(
             release,
-            host_id="web-runtime-host",
+            host_id=HOST_ID,
             host_version=host_version,
             product_build=product_build,
         )
@@ -296,7 +300,9 @@ def render_deploy_headers(dist_root: Path, headers_path: Path) -> bytes:
 
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Web Runtime deployment orchestration")
+    parser = argparse.ArgumentParser(
+        description=f"{HOST_LABELS[HOST_ID]} deployment orchestration"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     identity = commands.add_parser("tag-identity")
@@ -390,7 +396,8 @@ def main(argv: list[str] | None = None) -> int:
         run(options)
     except (DeployOrchestratorError, OSError) as error:
         print(
-            f"Web Runtime deployment orchestration error: {redacted_message(error)}",
+            f"{HOST_LABELS[HOST_ID]} deployment orchestration error: "
+            f"{redacted_message(error)}",
             file=sys.stderr,
         )
         return 2

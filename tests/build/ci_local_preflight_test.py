@@ -741,6 +741,8 @@ class LaneCommandDriftTest(unittest.TestCase):
             "apps/web-runtime-host/tools/netlify_api.py",
             "apps/web-runtime-host/tools/release_bundle.py",
             "scripts/web-runtime-deploy.sh",
+            "scripts/web-host-deploy.sh",
+            "apps/web-runtime-host/test/deploy_command_harness.py",
         ):
             with self.subTest(path=path):
                 lanes, _ = self.classifier._evaluate_ready_paths(self.policy, [path])

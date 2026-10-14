@@ -13,7 +13,9 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/deploy-creator-web.yml"
-DEPLOY_SCRIPT = REPO_ROOT / "scripts/creator-web-deploy.sh"
+# The entry point execs the implementation both Web Hosts share.
+DEPLOY_SCRIPT = REPO_ROOT / "scripts/web-host-deploy.sh"
+TEMP_PREFIX = "lmdj-creator-web-deploy"
 PRODUCT_PUBLIC_KEY = REPO_ROOT / ".github/release-signing-keys/lmdj-product.asc"
 CHECKSUM_PUBLIC_KEY = REPO_ROOT / ".github/release-signing-keys/lmdj-release-checksum.asc"
 TRUSTED_TAG_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
@@ -664,7 +666,11 @@ class CreatorWebDeployOperatorEnvironmentTest(unittest.TestCase):
         return "\n".join(fragment)
 
     def _run(self, body: str, environment: dict, *arguments: str):
-        program = "set -euo pipefail\n" + self._shell_fragment() + "\n" + body
+        program = (
+            "set -euo pipefail\n"
+            f"temp_prefix={TEMP_PREFIX}\n"
+            + self._shell_fragment() + "\n" + body
+        )
         return subprocess.run(
             ["bash", "-c", program, "helper", *arguments],
             capture_output=True, text=True, env=environment,
@@ -674,8 +680,8 @@ class CreatorWebDeployOperatorEnvironmentTest(unittest.TestCase):
     def test_helper_survives_an_environment_with_no_gh_variables(self) -> None:
         # bash 3.2 expands an empty array's "${a[@]}" to an unbound variable
         # error under set -u, and an `&&` append whose test fails aborts under
-        # set -e. GitHub runners always export GITHUB_* names, which match GH*,
-        # so only operator machines reach the empty case.
+        # set -e. GITHUB_* names do not match GH*, so any environment without
+        # a GH* name -- a runner's included -- reaches the empty case.
         self.assertFalse([n for n in self.BARE_ENVIRONMENT if n.startswith("GH")])
         completed = self._run("without_deploy_secrets printf ok\n", self.BARE_ENVIRONMENT)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -699,7 +705,7 @@ class CreatorWebDeployOperatorEnvironmentTest(unittest.TestCase):
             "the deploy script must bound its GnuPG home path",
         )
         long_parent = "/private/var/folders/kf/0jqm4t_j2v16b7ms9st4ph980000gn/T"
-        projected = long_parent + "/lmdj-creator-web-deploy.XXXXXX/gnupg/S.gpg-agent"
+        projected = long_parent + f"/{TEMP_PREFIX}.XXXXXX/gnupg/S.gpg-agent"
         self.assertGreater(len(projected), self.SOCKET_BUDGET)
         body = (
             'if owned_temp_parent_fits_gnupg_socket "$1"; then printf fits;'
