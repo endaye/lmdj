@@ -18,9 +18,11 @@ Only those routes reach storage. Objects have immutable cache headers; the Catal
 has a short revalidation lifetime. Direct corpus files are not public routes.
 
 Dispatch `deploy-default-assets.yml` on protected `main` after review and Task
-verification. It uses the existing `creator-canary` protected environment and
-Cloudflare credential, deploys this independent Worker, then authenticates every
-live object against committed bytes. An environment approval remains external to
+verification. It runs in its own `default-assets` protected environment, which
+has the same protection as `creator-canary` and holds its own
+`CLOUDFLARE_API_TOKEN`, so asset publication shares no approval with the Creator
+canary. It deploys this independent Worker through `scripts/asset-server.sh
+deploy`, then authenticates every live object against committed bytes. An environment approval remains external to
 source verification. The retained artifact binds the actual workers.dev origin,
 source revision and live GET evidence. A green source test is not deployment.
 
