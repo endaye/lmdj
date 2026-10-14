@@ -2398,6 +2398,7 @@ bool run_rounds_in_workers() {
       std::cerr << "stress rounds " << rounds.first << '-' << rounds.last
                 << " could not start: " << error.what() << '\n';
       passed = false;
+      break;  // The verdict is already failed: start no more, reap the rest.
     }
   }
   for (const auto& [rounds, child] : children) {
