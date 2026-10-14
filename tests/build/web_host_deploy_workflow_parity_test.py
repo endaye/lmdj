@@ -109,23 +109,50 @@ class WebHostDeployWorkflowParityTest(unittest.TestCase):
             "identities; remedy: correct the workflow or the HOST_FIELDS table"
         ]))
 
+
+# The negative tests run on a synthetic pair rendered from the table, so a
+# later edit to the real workflows cannot break them for an unrelated reason.
+FIXTURE_TEMPLATE = """\
+name: {workflow_title}
+concurrency:
+  group: {host_id}-production
+jobs:
+  deploy:
+    timeout-minutes: 20
+    environment: {environment}
+    steps:
+      - name: Deploy signed {release_label} to Cloudflare
+        run: {deploy_script} deploy --target {host_id}
+      - with:
+          name: {artifact_prefix}evidence
+"""
+
+
+def fixture(values: dict[str, str]) -> str:
+    return FIXTURE_TEMPLATE.format(**values)
+
+
+class ParityFailureReportingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runtime = fixture(RUNTIME_VALUES)
+        self.creator = fixture(CREATOR_VALUES)
+
+    def test_fixture_pair_is_in_parity(self) -> None:
+        self.assertEqual(parity_differences(self.runtime, self.creator), [])
+
     def test_non_host_change_in_one_copy_is_reported_with_its_line(self) -> None:
-        old = "    timeout-minutes: 20\n"
-        self.assertEqual(self.creator.count(old), 1)
-        mutated = self.creator.replace(old, "    timeout-minutes: 25\n")
-        line = self.creator[: self.creator.index(old)].count("\n") + 1
-        differences = parity_differences(self.runtime, mutated)
-        self.assertEqual(len(differences), 1, differences)
-        self.assertIn(f"{CREATOR}:{line} '    timeout-minutes: 25'", differences[0])
+        mutated = self.creator.replace("timeout-minutes: 20", "timeout-minutes: 25")
+        self.assertEqual(parity_differences(self.runtime, mutated), [
+            f"{RUNTIME}:6 '    timeout-minutes: 20' != "
+            f"{CREATOR}:6 '    timeout-minutes: 25'",
+        ])
 
     def test_line_present_in_only_one_copy_is_reported(self) -> None:
-        mutated = self.runtime.replace(
-            "permissions:\n", "permissions:\n  actions: write\n", 1
-        )
-        differences = parity_differences(mutated, self.creator)
-        self.assertEqual(len(differences), 1, differences)
-        self.assertIn("'  actions: write' != " + CREATOR + ":- '<absent>'",
-                      differences[0])
+        mutated = self.runtime.replace("jobs:\n", "permissions:\n  actions: write\njobs:\n")
+        self.assertEqual(parity_differences(mutated, self.creator), [
+            f"{RUNTIME}:4 'permissions:' != {CREATOR}:- '<absent>'",
+            f"{RUNTIME}:5 '  actions: write' != {CREATOR}:- '<absent>'",
+        ])
 
     def test_copied_identity_of_the_other_host_is_reported(self) -> None:
         mutated = self.runtime.replace("runtime-canary", "creator-canary")
