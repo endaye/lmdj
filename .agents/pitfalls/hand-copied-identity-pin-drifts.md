@@ -16,7 +16,7 @@ recurrences:
     occurrence: https://github.com/endaye/lmdj/actions/runs/38588990296
     observed_by: Claude Code (Opus 5.5)
   - date: 2026-10-14
-    occurrence: https://github.com/endaye/lmdj/actions/runs/38588990296
+    occurrence: https://github.com/endaye/lmdj/pull/2269
     observed_by: Claude Code (Opus 5.5)
 exit: gate:tests/build/version_test.py
 ---
