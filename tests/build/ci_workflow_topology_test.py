@@ -808,6 +808,26 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             self.assertIn(text, portal)
         self.assertIn("portal", self.job_needs("batch-verdict"))
 
+    def test_batch_portal_does_not_check_pr_documentation_impact(self):
+        self.assertIn(
+            "      check_documentation_impact: false\n",
+            self.workflow_job("portal"),
+            "why: ci.yml's portal job runs only in self-test batches, which carry no "
+            "Pull Request declaration; remedy: keep check_documentation_impact a "
+            "literal false and check PR declarations in pr-contract.yml",
+        )
+
+    def test_main_workflow_has_no_retired_queue_mode_output(self):
+        directives = "\n".join(
+            line for line in self.main_source.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertFalse(
+            "queue-mode" in directives,
+            "why: the merge queue is retired (#2200) and nothing produces queue mode; "
+            "remedy: decide the behavior with an explicit constant, not a dead output",
+        )
+
     def test_batch_verdict_has_every_formal_lane_in_static_needs_and_runs_with_always(self):
         job = self.workflow_job("batch-verdict")
         self.assertEqual(self.job_needs("batch-verdict"), {"change-scope", "macos-fallback", "nightly-tsan", "nightly-stress", *FORMAL_RESULTS})

@@ -652,6 +652,27 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(self.adapter.outbox().load()["recoveries"][recovery.recovery_id]["status"], "stale")
         self.assertFalse(any(call[0] == "set_issue_state" for call in self.api.calls))
 
+    def test_execute_drain_rejects_journal_success_its_verdict_contradicts(self):
+        recovery = self.pending_stale_recovery()
+        self.adapter.storage = SimpleNamespace(authenticate_current=lambda: None)
+        self.adapter.repository = "endaye/lmdj"
+        replay = module.report_scheduler_state
+
+        def forged(runtime):
+            # The newest result is the failure keeping the recovery stale; a
+            # journaled pass that its durable verdict contradicts must not
+            # lower the causal floor.
+            state = replay(runtime)
+            newest = state["results"][state["_result_order"][-1]]
+            newest["outcomes"] = {suite: "passed" for suite in newest["outcomes"]}
+            return state
+
+        with mock.patch.object(module, "report_scheduler_state", side_effect=forged):
+            with self.assertRaisesRegex(ValueError, "outcomes differ"):
+                self.adapter.execute("drain")
+        self.assertNotEqual(self.adapter.outbox().load()["recoveries"][recovery.recovery_id]["status"], "closed")
+        self.assertFalse(any(call[0] == "set_issue_state" for call in self.api.calls))
+
     def test_lost_recovery_comment_with_newer_failure_and_handoff_stays_stale(self):
         recovery = self.pending_stale_recovery()
         issue = self.api.issues[0]
