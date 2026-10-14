@@ -203,7 +203,6 @@ def assert_browser_package() -> None:
             "test": "playwright test",
         },
         "devDependencies": {
-            "@netlify/headers-parser": "10.1.0",
             "@playwright/test": "1.62.1",
         },
     }
@@ -218,11 +217,8 @@ def assert_browser_package() -> None:
     root = package_lock["packages"][""]
     assert root["engines"] == {"node": "26.x"}
     assert root["devDependencies"] == {
-        "@netlify/headers-parser": "10.1.0",
         "@playwright/test": "1.62.1",
     }
-    headers_parser = package_lock["packages"]["node_modules/@netlify/headers-parser"]
-    assert headers_parser["version"] == "10.1.0"
     playwright = package_lock["packages"]["node_modules/@playwright/test"]
     assert playwright["version"] == "1.62.1"
 

@@ -33,7 +33,10 @@ jobs:
           npx --yes npm@10.9.3 --prefix apps/docs-site run check
       - name: Install pinned deploy CLI without deployment credentials
         timeout-minutes: 5
-        run: npm install --prefix "$RUNNER_TEMP/portal-wrangler-$GITHUB_RUN_ID" --no-audit --no-fund wrangler@4.129.1
+        run: |
+          mkdir -p "$RUNNER_TEMP/portal-wrangler-$GITHUB_RUN_ID"
+          cp tools/wrangler/package.json tools/wrangler/package-lock.json "$RUNNER_TEMP/portal-wrangler-$GITHUB_RUN_ID/"
+          npm ci --prefix "$RUNNER_TEMP/portal-wrangler-$GITHUB_RUN_ID" --ignore-scripts --no-audit --no-fund
       - name: Verify version Preview and publish the same version
         timeout-minutes: 30
         env:

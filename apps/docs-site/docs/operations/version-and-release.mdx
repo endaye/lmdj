@@ -830,7 +830,7 @@ preview 与 stable 两侧校验 → 浏览器校验生产 URL → 写出 Runtime
 无需改动）。每条 HTTP 与浏览器结果都由该命令自己观测
 并绑定到所部署的身份，任一腿未通过就不写证据。被替换部署的身份取自**变更前**对生产的一次
 观测，promote 所需的 prior signed tag 由同一观测的 Product Build 派生，再由 adapter 对着
-真实字节校验。upload 要求钉住的 Node 22.16.0 与 Wrangler 4.129.1，与浏览器腿的 Node 26
+真实字节校验。upload 要求钉住的 Node 22.16.0 与 `tools/wrangler` 锁定的 Wrangler（`npm ci --ignore-scripts` 安装），与浏览器腿的 Node 26
 并存。
 
 Creator Host 的部署 job 同构切换，目标 `https://creator.lmdj.workers.dev/`，写出 Creator

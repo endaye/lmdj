@@ -34,7 +34,9 @@ jobs:
       - name: Install trusted tools without deployment credentials
         run: |
           npx --yes npm@10.9.3 --prefix apps/docs-site ci
-          npm install --prefix "$RUNNER_TEMP/preview-cli-$GITHUB_RUN_ID" --no-audit --no-fund wrangler@4.129.1
+          mkdir -p "$RUNNER_TEMP/preview-cli-$GITHUB_RUN_ID"
+          cp tools/wrangler/package.json tools/wrangler/package-lock.json "$RUNNER_TEMP/preview-cli-$GITHUB_RUN_ID/"
+          npm ci --prefix "$RUNNER_TEMP/preview-cli-$GITHUB_RUN_ID" --ignore-scripts --no-audit --no-fund
       - name: Verify and publish only a version Preview
         env:
           GITHUB_TOKEN: ${{ github.token }}

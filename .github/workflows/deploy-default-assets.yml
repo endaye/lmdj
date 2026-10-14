@@ -30,7 +30,11 @@ jobs:
         run: scripts/asset-server.sh check
       - name: Install pinned Wrangler
         shell: bash
-        run: npm install --prefix "$RUNNER_TEMP/default-assets-wrangler" --no-audit --no-fund wrangler@4.129.1
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/default-assets-wrangler"
+          cp tools/wrangler/package.json tools/wrangler/package-lock.json "$RUNNER_TEMP/default-assets-wrangler/"
+          npm ci --prefix "$RUNNER_TEMP/default-assets-wrangler" --ignore-scripts --no-audit --no-fund
       - name: Deploy independent asset Worker
         shell: bash
         env:

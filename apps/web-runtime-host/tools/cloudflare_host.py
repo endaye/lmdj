@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -22,6 +23,8 @@ HOSTS = {'creator-web': 'creator-web', 'creator-recovery': 'creator-web',
          'web-runtime-host': 'web-runtime-host', 'runtime-recovery': 'web-runtime-host',
          'creator-initialization': 'creator-web', 'runtime-initialization': 'web-runtime-host'}
 SCRIPTS = {'creator-web': 'creator-web-deploy.sh', 'web-runtime-host': 'web-runtime-deploy.sh'}
+# The one locked Wrangler every Cloudflare deploy workflow installs with npm ci.
+WRANGLER_MANIFEST = ROOT/'tools/wrangler/package.json'
 
 
 class CommandError(RuntimeError):
@@ -104,12 +107,23 @@ def run_upload_process(command, *, cwd, env, timeout=180):
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
+def locked_wrangler_version(manifest=WRANGLER_MANIFEST):
+    """The exact Wrangler version tools/wrangler locks; the only place it is named."""
+    document = json.loads(manifest.read_text())
+    dependencies = document.get('dependencies') if isinstance(document, dict) else None
+    version = dependencies.get('wrangler') if isinstance(dependencies, dict) else None
+    if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise CommandError('tools/wrangler/package.json does not lock one exact Wrangler version')
+    return version
+
+
 def upload(args, dist, workspace, worker):
     node = Path(args.node).resolve(strict=True)
     wrangler = Path(args.wrangler).resolve(strict=True)
     package = json.loads((wrangler.parent.parent/'package.json').read_text())
-    if not isinstance(package, dict) or package.get('name') != 'wrangler' or package.get('version') != '4.129.1':
-        raise CommandError('upload requires pinned Wrangler 4.129.1')
+    locked = locked_wrangler_version()
+    if not isinstance(package, dict) or package.get('name') != 'wrangler' or package.get('version') != locked:
+        raise CommandError(f'upload requires the locked Wrangler {locked} installed from tools/wrangler')
     node_version = subprocess.check_output([str(node), '--version'], env=child_environment(), text=True).strip()
     if node_version != 'v22.16.0':
         raise CommandError('upload requires pinned Node 22.16.0')
@@ -204,7 +218,7 @@ def main(argv=None):
     parser.add_argument('--initialize', action='store_true', help='candidate only: explicitly create an absent Worker with stable route disabled')
     parser.add_argument('--prior-tag')
     parser.add_argument('--node', help='absolute path to Node 22.16.0 (candidate only)')
-    parser.add_argument('--wrangler', help='absolute path to Wrangler 4.129.1 bin/wrangler.js (candidate only)')
+    parser.add_argument('--wrangler', help='absolute path to bin/wrangler.js of the locked tools/wrangler install (candidate only)')
     parser.add_argument('--absent', action='store_true', help='reconcile only: require positive Worker absence')
     parser.add_argument('--expected-run')
     parser.add_argument('--expected-sequence', type=int)

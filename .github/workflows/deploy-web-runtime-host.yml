@@ -158,8 +158,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install --prefix "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID" \
-            --no-audit --no-fund wrangler@4.129.1
+          mkdir -p "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID"
+          cp tools/wrangler/package.json tools/wrangler/package-lock.json "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID/"
+          npm ci --prefix "$RUNNER_TEMP/host-wrangler-$GITHUB_RUN_ID" --ignore-scripts --no-audit --no-fund
 
       - name: Check out the release's own browser smoke tests
         timeout-minutes: 1
