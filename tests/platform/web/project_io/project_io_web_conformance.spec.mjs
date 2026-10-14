@@ -1137,6 +1137,95 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
   expect(result.postReleaseAcquisition).toBe("pass");
 });
 
+test("Web Project I/O retains a child writer after Control root reset and releases it without Control service", async ({context, browserName}, testInfo) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const owner = await trackedPage(context);
+  const inspector = await trackedPage(context);
+  const foreign = await trackedPage(context);
+  const bundle = `cross-realm-writer-${Date.now()}`;
+  const expected = "root\0worker\0append\n-parent-gone";
+  const expectedBytes = Array.from(Buffer.from(expected));
+  const expectedSha256 = createHash("sha256").update(Buffer.from(expected)).digest("hex");
+  const projectBusy = {status: "failed", errorCode: "IO_ERROR", storageCondition: "project_busy"};
+  const acquired = {status: "succeeded", errorCode: "", storageCondition: ""};
+  let reopened;
+  try {
+    await navigate(inspector, "/preflight.html");
+    await snapshotLeaseEntries(inspector);
+    await navigate(owner,
+        `/project_io/project_io_web_test.html?action=cross_realm_writer&bundle=${bundle}`);
+    await expect.poll(async () => {
+      const observation = await owner.evaluate(() => ({
+        stage: window.lmdjProjectIoWebProgress,
+        error: window.lmdjProjectIoWeb?.result?.error,
+      }));
+      if (observation.error) throw new Error(observation.error);
+      return observation.stage;
+    }, {timeout: FAULT_REACHED_OBSERVATION_TIMEOUT_MS}).toBe("cross-realm-child-held-parent-free");
+    expect(await captureNewLeaseEntry(inspector)).not.toBe("");
+    expect(owner.isClosed()).toBe(false);
+    // This page has its own Wasm memory, Control Worker and JS lease map.
+    // Its refusal therefore checks the actual physical OPFS exclusion.
+    await navigate(foreign,
+        `/project_io/project_io_web_test.html?action=cross_realm_writer_probe&bundle=${bundle}`);
+    const physicallyExcluded = await waitForResult(foreign);
+    expect(physicallyExcluded).toEqual({acquisition: projectBusy});
+    expect(owner.isClosed()).toBe(false);
+    await owner.evaluate(() => { window.lmdjProjectIoWriterWitnessRelease = true; });
+    const joined = await waitForResult(owner);
+    expect(joined).toEqual({
+      childThreadDistinct: true, childPlatformExact: true, parentRootReset: true,
+      samePlatformReacquire: "pass", sameRealmForeign: projectBusy,
+      childReleaseWithoutControlService: true, childExitReadyBeforeJoin: true,
+      joined: true, ownerFreshAcquire: "pass", childContent: expected,
+      content: expected, length: expectedBytes.length, sha256: expectedSha256,
+    });
+    // Keep the original owner realm alive: its page teardown must not be
+    // what frees the physical writer for this independent reacquisition.
+    expect(owner.isClosed()).toBe(false);
+    await foreign.reload();
+    const independentlyAcquired = await waitForResult(foreign);
+    expect(independentlyAcquired).toEqual({acquisition: acquired, lease: "held",
+      content: expected, length: expectedBytes.length, sha256: expectedSha256});
+    expect(await compareReacquiredLeaseEntry(inspector)).toBe(true);
+    const physicalReadback = await inspector.evaluate(async ({bundle}) => {
+      const root = await navigator.storage.getDirectory();
+      const project = await root.getDirectoryHandle(`${bundle}.lmdj`);
+      const file = await (await project.getFileHandle("cross-realm.bin")).getFile();
+      const data = new Uint8Array(await file.arrayBuffer());
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+      return {bytes: Array.from(data), length: file.size,
+        sha256: Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("")};
+    }, {bundle});
+    expect(physicalReadback).toEqual({bytes: expectedBytes, length: expectedBytes.length, sha256: expectedSha256});
+    await foreign.close();
+    expect(foreign.isClosed()).toBe(true);
+    reopened = await trackedPage(context);
+    await navigate(reopened,
+        `/project_io/project_io_web_test.html?action=cross_realm_writer_probe&bundle=${bundle}`);
+    const afterForeignClose = await waitForResult(reopened);
+    expect(afterForeignClose).toEqual(independentlyAcquired);
+    expect(await compareReacquiredLeaseEntry(inspector)).toBe(true);
+    expect(owner.isClosed()).toBe(false);
+    await retainAdmissionEvidence(testInfo, "cross-realm-writer-witness.json", {
+      bundle, physicallyExcluded, joined, independentlyAcquired, physicalReadback,
+      afterForeignClose, originalOwnerPageStillOpen: !owner.isClosed(),
+      foreignPageActuallyClosed: foreign.isClosed(),
+    });
+  } finally {
+    // A failed assertion must release the child's fixture wait before pages
+    // close; it cannot turn any missing far-side assertion into a pass.
+    if (!owner.isClosed()) await owner.evaluate(() => {
+      window.lmdjProjectIoWriterWitnessRelease = true;
+    }).catch(() => {});
+    if (reopened && !reopened.isClosed()) await reopened.close();
+    if (!foreign.isClosed()) await foreign.close();
+    if (!owner.isClosed()) await owner.close();
+    if (!inspector.isClosed()) await inspector.close();
+  }
+});
+
 test("Web Project I/O creates and opens an untouched v5 Project", async ({context, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);

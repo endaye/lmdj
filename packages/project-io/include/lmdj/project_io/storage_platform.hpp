@@ -36,6 +36,12 @@ class ProjectStoragePlatform {
  public:
   virtual ~ProjectStoragePlatform() = default;
 
+  // Leases on the same canonical path through one platform share its acquired
+  // physical writer. Each Web realm owns its own authorization token; destroy
+  // a Web lease in the realm that acquired it. Releasing one realm's last token
+  // removes its mutation authority without closing a physical writer still
+  // borrowed by another realm. The physical owner closes only after all genuine
+  // leases retire (or an authenticated terminal drain proves remote retirement).
   virtual foundation::Result<std::unique_ptr<ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& project_path) = 0;
   virtual foundation::Result<void> ensure_directory(
@@ -110,6 +116,31 @@ class ProjectStoragePlatform {
   }
   virtual foundation::Result<void> validate_managed_tree(
       const std::filesystem::path& root) const = 0;
+};
+
+// Optional byte-preserving string representation of read_complete. This has
+// the same fresh, complete-read and path-safety guarantees, including embedded
+// NUL/non-UTF-8 bytes; it performs no decoding or newline normalization. It
+// grants no writer lease or durability receipt. The separate companion keeps
+// the existing storage-platform vtable intact; callers retain the byte-vector
+// path when the capability is absent, and propagate a present reader's errors.
+class ProjectStorageTextReader {
+ public:
+  virtual ~ProjectStorageTextReader() = default;
+  virtual foundation::Result<std::string> read_complete_text(
+      const std::filesystem::path& path) const = 0;
+};
+
+// Optional companion for the canonical Project journal layout. Each call
+// freshly validates the complete managed tree, the eight required directories,
+// and manifest regular-file length. Success is neither a durable-write receipt
+// nor a writer lease, and does not promise an atomic view of the whole tree.
+// Platforms without this companion retain the ordinary complete layout checks.
+class ProjectJournalLayoutValidator {
+ public:
+  virtual ~ProjectJournalLayoutValidator() = default;
+  virtual foundation::Result<void> validate_journal_layout(
+      const std::filesystem::path& bundle) const = 0;
 };
 
 std::shared_ptr<ProjectStoragePlatform>

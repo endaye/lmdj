@@ -427,37 +427,50 @@ export interface PerformControllerOptions {
   readonly reportFailure?: (operation: string, error: unknown) => unknown;
 }
 
+interface PreparationFailureOutcome {
+  readonly error: unknown;
+  readonly knownNoOwner: boolean;
+  readonly retained: unknown;
+}
+
 async function defaultPrepareRecording(
   session: CreatorPerformanceRuntimeSession,
   request: Parameters<NonNullable<PerformControllerDependencies["prepareRecording"]>>[0],
+  observeFailure: (outcome: PreparationFailureOutcome) => void,
 ): Promise<PreparedPerformanceRecording> {
-  if (navigator.storage?.getDirectory === undefined) {
-    throw new Error("Origin-private storage is unavailable");
-  }
-  const root = await navigator.storage.getDirectory();
-  const temporaryDirectory = await root.getDirectoryHandle(
-    "lmdj-perform-temporary", {create: true},
-  );
-  const projectsDirectory = await root.getDirectoryHandle("projects");
-  const projectDirectory = await projectsDirectory.getDirectoryHandle(
-    `${request.projectId}.lmdj`,
-  );
-  const managedDirectory = await projectDirectory.getDirectoryHandle("assets");
-  const temporaryHandle = await temporaryDirectory.getFileHandle(
-    `${request.performanceId}.wav`, {create: true},
-  );
-  const storage = new OpfsPerformanceRecordingStorage(
-    temporaryDirectory,
-    managedDirectory,
-  );
-  const cleanupTemporary = () => storage.deleteTemporary(temporaryHandle);
+  let temporaryHandle: FileSystemFileHandle | null = null;
+  let cleanupTemporary: (() => Promise<void>) | null = null;
+  let temporaryCreationAttempted = false;
+  let writerAttempted = false;
+  let realWriter: WavStreamWriter | null = null;
   try {
+    if (navigator.storage?.getDirectory === undefined) {
+      throw new Error("Origin-private storage is unavailable");
+    }
+    const root = await navigator.storage.getDirectory();
+    const temporaryDirectory = await root.getDirectoryHandle(
+      "lmdj-perform-temporary", {create: true},
+    );
+    const projectsDirectory = await root.getDirectoryHandle("projects");
+    const projectDirectory = await projectsDirectory.getDirectoryHandle(
+      `${request.projectId}.lmdj`,
+    );
+    const managedDirectory = await projectDirectory.getDirectoryHandle("assets");
+    temporaryCreationAttempted = true;
+    temporaryHandle = await temporaryDirectory.getFileHandle(
+      `${request.performanceId}.wav`, {create: true},
+    );
+    const storage = new OpfsPerformanceRecordingStorage(temporaryDirectory, managedDirectory);
+    const handle = temporaryHandle;
+    cleanupTemporary = () => storage.deleteTemporary(handle);
     const config = request.captureStatus.config;
-    const realWriter = await openWavStreamWriter(temporaryHandle, {
+    const limits = {
       perform_recording_frames: config.performRecordingFrames,
       perform_recording_queue_batches: config.performRecordingQueueBatches,
-    });
-    const realStore = new PerformanceRecordingStore(temporaryHandle, storage, session);
+    };
+    writerAttempted = true;
+    realWriter = await openWavStreamWriter(handle, limits);
+    const realStore = new PerformanceRecordingStore(handle, storage, session);
     const seams = (window as Window & {__LMDJ_WEB_HOST_SEAMS__?: {
       createWavStreamWriter?: (real: WavStreamWriter) =>
         WavStreamWriter | Promise<WavStreamWriter>;
@@ -469,12 +482,50 @@ async function defaultPrepareRecording(
       ? realWriter : await seams.createWavStreamWriter(realWriter);
     const store = seams?.createPerformanceRecordingStore === undefined
       ? realStore : await seams.createPerformanceRecordingStore(realStore);
-    const readTemporary = () => temporaryHandle.getFile();
+    const readTemporary = () => handle.getFile();
     return Object.freeze({writer, store, cleanupTemporary, readTemporary});
   } catch (error) {
-    await cleanupTemporary().catch(() => {});
+    // openWavStreamWriter may have lost an abort result. Never delete an
+    // unknown writer's bytes or mistake a null returned reference for absence.
+    let knownNoOwner = !temporaryCreationAttempted;
+    let cleanupFailure: unknown;
+    if (!writerAttempted && cleanupTemporary !== null) {
+      try {
+        await cleanupTemporary();
+        knownNoOwner = true;
+      } catch (failure) {
+        cleanupFailure = failure;
+        knownNoOwner = false;
+      }
+    }
+    observeFailure({error, knownNoOwner,
+      retained: {temporaryHandle, cleanupTemporary, realWriter, writerAttempted, cleanupFailure}});
     throw error;
   }
+}
+
+interface RecordingShutdownOwner {
+  readonly sessionId: string;
+  readonly performanceId: string;
+  resources: PreparedPerformanceRecording | null;
+  queue: RecordingQueue | null;
+  capture: PerformanceMasterCapture | null;
+  preparationFailure: PreparationFailureOutcome | null;
+  queueAttempted: boolean;
+  captureAttempted: boolean;
+  captureStopObserved: boolean;
+  captureStopped: boolean;
+  wavSettled: boolean;
+  coreBeginAttempted: boolean;
+  coreBeginAcknowledged: boolean;
+  coreStopped: boolean;
+  readonly failures: Map<string, RecordingShutdownDebt>;
+}
+
+interface RecordingShutdownDebt {
+  readonly owner: RecordingShutdownOwner;
+  readonly operation: string;
+  readonly error: unknown;
 }
 
 // #1680: Host and internal messages stay in Developer diagnostics; the
@@ -506,7 +557,7 @@ export interface PerformController {
   retryWavBind(): Promise<void>;
   exportWav(): Promise<void>;
   discard(): Promise<void>;
-  recordRawEvent(event: PerformanceRawEvent): Promise<void>;
+  recordRawEvent(event: PerformanceRawEvent, physicalKey?: object): Promise<void>;
   engageFx(fx: PerformanceFx, value: number): string;
   moveFx(gestureId: string, fx: PerformanceFx, value: number): void;
   releaseFx(gestureId: string, fx: PerformanceFx): void;
@@ -542,8 +593,7 @@ export interface PerformController {
 export function createPerformController(options: PerformControllerOptions): PerformController {
   const {session} = options;
   const createId = options.dependencies?.createId ?? (() => crypto.randomUUID());
-  const prepareRecording = options.dependencies?.prepareRecording ??
-    ((request) => defaultPrepareRecording(session, request));
+  const prepareRecording = options.dependencies?.prepareRecording;
   const createQueue = options.dependencies?.createQueue ??
     ((writer, listener) => new MasterTapBatchQueue(writer, listener));
   const waitForStatusQuery = options.dependencies?.waitForStatusQuery ??
@@ -553,6 +603,22 @@ export function createPerformController(options: PerformControllerOptions): Perf
     options.getCreatorState().activeBank);
   let authoringRevision = options.getCreatorState().project.current?.revision ?? 0;
   let resources: PreparedPerformanceRecording | null = null;
+  let recordingOwner: RecordingShutdownOwner | null = null;
+  const shutdownDebts: RecordingShutdownDebt[] = [];
+  const rememberShutdownFailure = (owner: RecordingShutdownOwner | null,
+    operation: string, error: unknown) => {
+    if (owner === null || owner.failures.has(operation)) return;
+    const debt = {owner, operation, error};
+    owner.failures.set(operation, debt);
+    shutdownDebts.push(debt);
+  };
+  const settleShutdownFailure = (owner: RecordingShutdownOwner | null,
+    ...operations: string[]) => {
+    for (const operation of operations) owner?.failures.delete(operation);
+  };
+  const firstShutdownFailure = () => shutdownDebts.find(
+    (debt) => debt.owner.failures.get(debt.operation) === debt,
+  );
   let queue: RecordingQueue | null = null;
   let capture: PerformanceMasterCapture | null = null;
   let disconnectCapture: (() => void) | null = null;
@@ -681,15 +747,26 @@ export function createPerformController(options: PerformControllerOptions): Perf
     const entry = {reserved, started: false, cancelled: false};
     controlEntries.add(entry);
     const revision = ++controlRevision;
+    const owner = recordingOwner;
     const waitForBegin = waitForTransition && state.recording.phase === "starting";
     const waitForStop = waitForTransition && state.recording.phase === "stopping";
-    const result = controlTail.then(async () => {
+    // One Host submission order covers typed controls, legacy FX and Pads.
+    // controlTail remains the typed transition barrier and accounting receipt.
+    const result = rawEventTail.then(async () => {
       if (waitForBegin) await recordSetupPromise;
       if (waitForStop) await stopPromise;
       if (entry.cancelled) throw Object.assign(new Error(
         "Live input was cancelled before Core admission"), {code: "HOST_STATE_INVALID"});
       entry.started = true;
-      await action();
+      // Controls queued during Stop resume on the sessionless route. Bind
+      // debt only if this action still journals into its original recording.
+      const actionOwner = activeRecordingId() === owner?.sessionId ? owner : null;
+      try {
+        await action();
+      } catch (error) {
+        rememberShutdownFailure(actionOwner, "raw-event", error);
+        throw error;
+      }
     }).finally(() => {
       controlEntries.delete(entry);
       if (!reserved) ordinaryControls -= 1;
@@ -698,6 +775,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (revision === controlRevision) void readLiveStatus(revision).catch(fail);
     });
     controlTail = result.then(() => {}, () => {});
+    rawEventTail = controlTail;
     return result;
   };
   const activeRecordingId = () =>
@@ -706,29 +784,51 @@ export function createPerformController(options: PerformControllerOptions): Perf
   const appendRawEvent = (
     sessionId: string,
     event: PerformanceRawEvent,
+    physicalKey?: object,
   ): Promise<void> => {
+    const owner = recordingOwner;
     const headered = recordingProfile === "headered";
+    const request = {sessionId, eventId: createId(), event};
+    // Reserve Pad ownership synchronously so Pattern consumption/physical up
+    // cannot retire its shared key while earlier FX is pending. All actual
+    // submissions still use this single ordered tail, including FX/HOLD.
+    let submit: () => Promise<unknown>;
+    try {
+      if ((event.kind === "pad_press" || event.kind === "pad_release") &&
+          session.preparePerformancePadEvent !== undefined) {
+        const prepared = session.preparePerformancePadEvent({...request, event}, physicalKey);
+        submit = () => prepared.submit();
+      } else {
+        submit = () => physicalKey === undefined
+          ? session.recordPerformanceEvent(request)
+          : session.recordPerformanceEvent(request, physicalKey);
+      }
+    } catch (error) {
+      // A reservation refusal is known now, even if earlier work is held.
+      rememberShutdownFailure(owner, "raw-event", error);
+      submit = () => Promise.reject(error);
+    }
     const action = async () => {
-      if (headered && event.kind === "pad_release" &&
-          !pendingPadGestures.has(event.gestureId)) return;
       try {
-        await session.recordPerformanceEvent({sessionId, eventId: createId(), event});
+        await submit();
+        await controller.refreshAuthority();
       } catch (error) {
-        if (headered && event.kind === "pad_press") {
-          pendingPadGestures.delete(event.gestureId);
-          openPadGestures.delete(event.gestureId);
-        }
+        rememberShutdownFailure(owner, "raw-event", error);
         throw error;
       }
-      await controller.refreshAuthority();
     };
+    // Headered controls and prepared Pads use the same submission tail.
+    // Pad reservation above is synchronous; Core invocation stays ordered.
     const submitted = headered
       ? enqueueControl(action, event.kind === "pad_press" || event.kind === "pad_release", false)
       : rawEventTail.then(action);
-    const operation = submitted.finally(() => {
+    const operation = submitted.then(() => {
       if (headered && event.kind === "pad_release") pendingPadGestures.delete(event.gestureId);
     });
-    rawEventTail = operation.catch(fail);
+    const observed = operation.catch(fail);
+    // enqueueControl owns the admitted headered tail. A capacity refusal
+    // must report to this caller without replacing still-pending input.
+    if (!headered) rawEventTail = observed;
     return operation;
   };
   // Headered journal entries are built at dequeue time: a move/release whose
@@ -796,9 +896,12 @@ export function createPerformController(options: PerformControllerOptions): Perf
   const submitFxControl = (kind: "engage" | "move" | "release",
     fx: PerformanceFx, gestureId: string, value?: number,
     pinned = legacyPinnedFx.has(fx)) => {
+    const owner = recordingOwner;
+    let actionOwner: RecordingShutdownOwner | null = null;
     const epoch = liveControlEpoch();
     const action = async () => {
       const sessionId = activeRecordingId();
+      actionOwner = sessionId === owner?.sessionId ? owner : null;
       if (sessionId !== null && recordingProfile === "headered") {
         await applyHeaderedEvent(sessionId, () => {
           const binding = recordingFxBindings.get(fx);
@@ -852,7 +955,11 @@ export function createPerformController(options: PerformControllerOptions): Perf
       state.recording.phase === "starting";
     const result = typed ? enqueueControl(action, kind === "release")
       : activeRecordingId() === null ? action() : rawEventTail.then(action);
-    rawEventTail = result.catch(fail);
+    const observed = result.catch((error) => {
+      if (!typed) rememberShutdownFailure(actionOwner, "raw-event", error);
+      fail(error);
+    });
+    if (!typed) rawEventTail = observed;
   };
   const sendFilterControl = (
     parameter: FilterParameter,
@@ -995,10 +1102,22 @@ export function createPerformController(options: PerformControllerOptions): Perf
     return promise;
   };
 
+  const recordingOwnersStopped = (owner: RecordingShutdownOwner | null) =>
+    owner === null || (owner.coreBeginAcknowledged && owner.coreStopped &&
+      owner.captureStopped && owner.wavSettled && !owner.failures.has("wav"));
+  const refuseUnsettledFinalization = () => {
+    if (recordingOwnersStopped(recordingOwner)) return false;
+    const failure = firstShutdownFailure();
+    if (failure !== undefined) fail(failure.error);
+    return true;
+  };
+
   const bindSavedRecording = async () => {
     if (resources === null || state.recording.performanceId === null ||
         state.recording.expectedRevision === null) return;
+    if (refuseUnsettledFinalization()) return;
     const bindingResources = resources;
+    const owner = recordingOwner;
     const performanceId = state.recording.performanceId;
     dispatch({type: "binding-status", status: "binding"});
     if (!bindingCommitted) {
@@ -1009,9 +1128,11 @@ export function createPerformController(options: PerformControllerOptions): Perf
           });
           observeProjectRevision(receipt);
           bindingCommitted = true;
+          settleShutdownFailure(owner, "bind", "save-projection");
           return receipt;
         });
       } catch (error) {
+        rememberShutdownFailure(owner, "bind", error);
         dispatch({type: "binding-status", status: "retry"});
         setRecording("stopped");
         report(error);
@@ -1034,6 +1155,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
     if (resources === bindingResources) {
       resources = null;
       queue = null;
+      recordingOwner = null;
     }
     dispatch({type: "binding-status", status: "bound"});
     setRecording("idle", {sessionId: null, performanceId: null,
@@ -1127,7 +1249,18 @@ export function createPerformController(options: PerformControllerOptions): Perf
       launchPollGeneration += 1;
       disconnectCapture?.();
       disconnectCapture = null;
-      closePromise = controller.leave();
+      closePromise = Promise.resolve().then(async () => {
+        try {
+          await controller.leave();
+        } catch (error) {
+          const failure = firstShutdownFailure();
+          throw failure === undefined ? error : failure.error;
+        }
+        const failure = firstShutdownFailure();
+        if (failure !== undefined) throw failure.error;
+      });
+      // Observe without replacing the exact cached, possibly rejected Promise.
+      void closePromise.catch(() => {});
       return closePromise;
     },
     setBank(bank) { dispatch({type: "bank", bank}); },
@@ -1164,19 +1297,45 @@ export function createPerformController(options: PerformControllerOptions): Perf
         bindingCommitted = false;
         discardCommitted = false;
         setRecording("starting", {sessionId, performanceId});
+        const owner: RecordingShutdownOwner = {sessionId, performanceId,
+          resources: null, queue: null, capture: null, preparationFailure: null,
+          queueAttempted: false, captureAttempted: false, captureStopObserved: false,
+          captureStopped: false, wavSettled: false, coreBeginAttempted: false,
+          coreBeginAcknowledged: false, coreStopped: false, failures: new Map()};
+        recordingOwner = owner;
         let beganRevision: number | null = null;
         try {
-          resources = await prepareRecording({projectId, performanceId,
+          const preparationRequest = {projectId, performanceId,
             captureStatus: state.captureStatus as Extract<
-              PerformanceMasterCaptureStatus, {state: "ready"}>});
+              PerformanceMasterCaptureStatus, {state: "ready"}>};
+          resources = await (prepareRecording === undefined
+            ? defaultPrepareRecording(session, preparationRequest,
+                (outcome) => { owner.preparationFailure = outcome; })
+            : prepareRecording(preparationRequest));
+          owner.resources = resources;
           const listener: MasterTapListener = {
             requestCaptureStop: () => { void controller.stop().catch(fail); },
             onFailure: (failure: MasterTapFailure) => {
+              if (failure.reason !== "frame-limit") {
+                rememberShutdownFailure(owner, "wav", failure);
+                report(failure);
+              }
               dispatch({type: "error", message: failure.message});
               void controller.stop();
             },
           };
-          queue = createQueue(resources.writer, listener);
+          owner.queueAttempted = true;
+          const sourceQueue = createQueue(resources.writer, listener);
+          queue = {
+            onBatch: (channels) => sourceQueue.onBatch(channels),
+            onStopped: () => {
+              owner.captureStopObserved = true;
+              sourceQueue.onStopped();
+            },
+            onFailure: (reason, droppedFrames) => sourceQueue.onFailure(reason, droppedFrames),
+            get settled() { return sourceQueue.settled; },
+          };
+          owner.queue = queue;
           await priorControls;
           const liveStatus = await session.queryPerformanceLiveStatus()
             .catch(() => null);
@@ -1195,12 +1354,14 @@ export function createPerformController(options: PerformControllerOptions): Perf
             // the returned capture handle and keeps the first recorded Pad
             // behind both gates in this fence → capture sequence.
             const receipt = await mutate(async () => {
+              owner.coreBeginAttempted = true;
               const began = await session.beginPerformanceRecording({
                 sessionId, performanceId,
                 expectedRevision: expectedProjectRevision(),
                 controlEpoch: liveStatus.controlEpoch,
               });
               beganRevision = began.committedRevision;
+              owner.coreBeginAcknowledged = true;
               return began;
             });
             for (const binding of receipt.fxBindings) {
@@ -1223,24 +1384,30 @@ export function createPerformController(options: PerformControllerOptions): Perf
                 }
               }
             }
+            owner.captureAttempted = true;
             capture = await session.startPerformanceMasterCapture(queue);
+            owner.capture = capture;
             if (closed) throw new Error("Performance controller closed during setup");
             if (state.captureStatus.state !== "ready") {
               throw new Error("Performance capture became unavailable during setup");
             }
             setRecording("recording", {expectedRevision: receipt.committedRevision});
           } else {
+            owner.captureAttempted = true;
             capture = await session.startPerformanceMasterCapture(queue);
+            owner.capture = capture;
             if (closed) throw new Error("Performance controller closed during setup");
             if (state.captureStatus.state !== "ready") {
               throw new Error("Performance capture became unavailable during setup");
             }
             const receipt = await mutate(async () => {
+              owner.coreBeginAttempted = true;
               const began = await session.beginPerformanceRecording({
                 sessionId, performanceId,
                 expectedRevision: expectedProjectRevision(),
               });
               beganRevision = began.committedRevision;
+              owner.coreBeginAcknowledged = true;
               return began;
             });
             setRecording("recording", {expectedRevision: receipt.committedRevision});
@@ -1259,41 +1426,90 @@ export function createPerformController(options: PerformControllerOptions): Perf
           }
         } catch (error) {
           clearRecordingBindings();
+          if (resources === null && owner.preparationFailure?.knownNoOwner !== true) {
+            rememberShutdownFailure(owner, "prepare", error);
+          }
+          if (owner.queueAttempted && queue === null) {
+            rememberShutdownFailure(owner, "queue-setup", error);
+          }
+          if (owner.coreBeginAttempted && !owner.coreBeginAcknowledged) {
+            rememberShutdownFailure(owner, "core-begin", error);
+          }
+          if (owner.captureAttempted && capture === null && !owner.captureStopObserved) {
+            rememberShutdownFailure(owner, "capture-start", error);
+          }
           if (beganRevision !== null) {
-            await session.stopPerformanceRecording({sessionId, requestId: createId()})
-              .catch(() => {});
-          }
-          await capture?.stop().catch(() => {});
-          let wav: WavWriterSnapshot | null = null;
-          if (capture !== null && queue !== null) {
-            wav = await queue.settled.catch(() => null);
-          }
-          if (beganRevision !== null && resources !== null) {
-            const discardRevision = beganRevision;
             try {
-              await runProjectMutation(() => resources!.store.discard({
-                expectedRevision: discardRevision,
-                performanceId,
-              }));
-            } catch (compensationError) {
-              capture = null;
-              setRecording("stopped", {expectedRevision: beganRevision, wav});
-              dispatch({type: "wav-status", message: "sealed · temporary retained"});
-              dispatch({type: "recovery-checking"});
-              dispatch({type: "recovery-status", message: "recovery required"});
-              report(error);
-              report(compensationError);
-              dispatch({type: "error", message:
-                `${errorMessage(error)} The interrupted recording is kept for recovery.`});
-              await loadRecovery("recovery required").catch(fail);
-              return;
+              await session.stopPerformanceRecording({sessionId, requestId: createId()});
+              owner.coreStopped = true;
+            } catch (cleanupError) {
+              rememberShutdownFailure(owner, "setup", error);
+              rememberShutdownFailure(owner, "core-stop", cleanupError);
             }
-          } else {
-            await resources?.cleanupTemporary().catch(() => {});
+          }
+          if (capture !== null) {
+            try {
+              await capture.stop();
+              owner.captureStopped = true;
+            } catch (cleanupError) {
+              rememberShutdownFailure(owner, "setup", error);
+              rememberShutdownFailure(owner, "capture-stop", cleanupError);
+            }
+          } else if (owner.captureStopObserved) {
+            owner.captureStopped = true;
+          }
+          let wav: WavWriterSnapshot | null = null;
+          if (owner.captureStopped && queue !== null) {
+            try {
+              wav = await queue.settled;
+              owner.wavSettled = true;
+              capture = null;
+              owner.capture = null;
+            } catch (cleanupError) {
+              rememberShutdownFailure(owner, "setup", error);
+              rememberShutdownFailure(owner, "wav", cleanupError);
+            }
+          }
+          // Unknown begin/capture admission is still original ownership. The
+          // original bytes and resource references survive; no extra Stop or
+          // discard is invented to make the failed setup look absent.
+          const knownOwnersStopped =
+            (!owner.captureAttempted || (owner.captureStopped && owner.wavSettled)) &&
+            (!owner.coreBeginAttempted || (owner.coreBeginAcknowledged && owner.coreStopped));
+          let compensationError: unknown;
+          if (knownOwnersStopped && owner.failures.size === 0 && resources !== null) {
+            try {
+              if (beganRevision !== null) {
+                const discardRevision = beganRevision;
+                await runProjectMutation(() => resources!.store.discard({
+                  expectedRevision: discardRevision, performanceId,
+                }));
+              } else {
+                await resources.cleanupTemporary();
+              }
+            } catch (cleanupError) {
+              compensationError = cleanupError;
+              rememberShutdownFailure(owner, "setup", error);
+              rememberShutdownFailure(owner, "setup-compensation", cleanupError);
+            }
+          }
+          if (owner.failures.size > 0) {
+            setRecording("stopped", {expectedRevision: beganRevision, wav});
+            dispatch({type: "wav-status", message: wav === null
+              ? "temporary retained · cleanup unconfirmed" : "sealed · temporary retained"});
+            dispatch({type: "recovery-checking"});
+            dispatch({type: "recovery-status", message: "recovery required"});
+            report(error);
+            if (compensationError !== undefined) report(compensationError);
+            dispatch({type: "error", message:
+              `${errorMessage(error)} The interrupted recording is kept for recovery.`});
+            await loadRecovery("recovery required").catch(fail);
+            return;
           }
           queue = null;
           resources = null;
           capture = null;
+          recordingOwner = null;
           setRecording("idle", {sessionId: null, performanceId: null,
             expectedRevision: null, wav: null});
           dispatch({type: "wav-status", message: "temporary removed"});
@@ -1307,12 +1523,20 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (flushPromise !== null) return flushPromise;
       if (state.recording.phase !== "recording") return Promise.resolve();
       const {sessionId} = currentRecording();
+      const owner = recordingOwner;
       setRecording("flushing");
       const operation = (async () => {
         try {
-          const receipt = await mutate(() => session.flushPerformanceRecording({
-            sessionId, commandId: createId(),
-          }));
+          const receipt = await mutate(async () => {
+            try {
+              return await session.flushPerformanceRecording({
+                sessionId, commandId: createId(),
+              });
+            } catch (error) {
+              rememberShutdownFailure(owner, "flush", error);
+              throw error;
+            }
+          });
           if (state.recording.phase === "flushing") {
             setRecording("recording", {expectedRevision: receipt.committedRevision});
             dispatch({type: "recording-note", message: "flushed"});
@@ -1340,6 +1564,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
         }
         if (state.recording.phase !== "recording" || queue === null) return;
         const {sessionId} = currentRecording();
+        const owner = recordingOwner;
         launchPollGeneration += 1;
         setRecording("stopping");
         cancelWaitingControls();
@@ -1353,14 +1578,32 @@ export function createPerformController(options: PerformControllerOptions): Perf
         let coreError: unknown = null;
         try {
           await session.stopPerformanceRecording({sessionId, requestId: createId()});
+          if (owner !== null) owner.coreStopped = true;
+          settleShutdownFailure(owner, "core-stop");
         } catch (error) {
           coreError = error;
+          rememberShutdownFailure(owner, "core-stop", error);
         }
         clearRecordingBindings();
         try {
-          await capture?.stop();
-          const wav = await queue.settled;
+          try {
+            await capture?.stop();
+            if (owner !== null) owner.captureStopped = true;
+            settleShutdownFailure(owner, "capture-stop");
+          } catch (error) {
+            rememberShutdownFailure(owner, "capture-stop", error);
+            throw error;
+          }
+          let wav: WavWriterSnapshot;
+          try {
+            wav = await queue.settled;
+            if (owner !== null) owner.wavSettled = true;
+          } catch (error) {
+            rememberShutdownFailure(owner, "wav", error);
+            throw error;
+          }
           capture = null;
+          if (owner !== null) owner.capture = null;
           setRecording("stopped", {wav});
           dispatch({type: "wav-status", message: `sealed · ${wav.reason ?? "stopped"}`});
           dispatch({type: "session-neutral"});
@@ -1377,8 +1620,10 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (state.recording.phase !== "stopped" || resources === null) {
         return Promise.resolve();
       }
+      if (refuseUnsettledFinalization()) return Promise.resolve();
       return runFinalization(async () => {
         const {performanceId} = currentRecording();
+        const owner = recordingOwner;
         dispatch({type: "error", message: null});
         setRecording("saving");
         try {
@@ -1390,6 +1635,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
             observeProjectRevision(inspected);
             saveCommitted = true;
             saveOutcomeUnknown = false;
+            settleShutdownFailure(owner, "save");
             setRecording("saving", {expectedRevision: inspected.projectRevision});
           } else if (!saveCommitted) {
             savedName = name;
@@ -1404,6 +1650,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
                 return saved;
               });
             } catch (error) {
+              rememberShutdownFailure(owner, "save", error);
               if (errorCode(error) === "PROJECT_BUSY") throw error;
               saveOutcomeUnknown = true;
               const inspected = await session.inspectPerformance(performanceId);
@@ -1416,11 +1663,13 @@ export function createPerformController(options: PerformControllerOptions): Perf
               receipt = {committedRevision: inspected.projectRevision};
             }
             saveCommitted = true;
+            settleShutdownFailure(owner, "save");
             setRecording("saving", {expectedRevision: receipt.committedRevision});
           }
           try {
             await refreshProjectTruth();
           } catch (error) {
+            rememberShutdownFailure(owner, "save-projection", error);
             setRecording("stopped");
             report(error);
             dispatch({type: "error", message:
@@ -1430,6 +1679,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
           }
           await bindSavedRecording();
         } catch (error) {
+          rememberShutdownFailure(owner, "save", error);
           setRecording("stopped");
           if (saveOutcomeUnknown) {
             report(error);
@@ -1466,8 +1716,10 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (state.recording.phase !== "stopped" || resources === null) {
         return Promise.resolve();
       }
+      if (refuseUnsettledFinalization()) return Promise.resolve();
       return runFinalization(async () => {
         const {performanceId} = currentRecording();
+        const owner = recordingOwner;
         setRecording("discarding");
         try {
           if (!discardCommitted) {
@@ -1478,11 +1730,15 @@ export function createPerformController(options: PerformControllerOptions): Perf
               });
               observeProjectRevision(receipt);
               discardCommitted = true;
+              settleShutdownFailure(owner, "discard", "bind", "save", "save-projection");
+              if (recordingOwnersStopped(owner)) {
+                settleShutdownFailure(owner, "setup", "setup-compensation");
+              }
               return receipt;
             });
           }
           await refreshProjectTruth();
-          resources = null; queue = null;
+          resources = null; queue = null; recordingOwner = null;
           setRecording("idle", {sessionId: null, performanceId: null,
             expectedRevision: null, wav: null});
           dispatch({type: "wav-status", message: "temporary removed"});
@@ -1499,12 +1755,13 @@ export function createPerformController(options: PerformControllerOptions): Perf
               "The Performance was discarded, but Creator could not show the latest Project. " +
               "Choose Discard Performance again."});
           } else {
+            rememberShutdownFailure(owner, "discard", error);
             fail(error);
           }
         }
       });
     },
-    recordRawEvent(event) {
+    recordRawEvent(event, physicalKey) {
       if (!["recording", "flushing"].includes(state.recording.phase) ||
           state.recording.sessionId === null) {
         return Promise.resolve();
@@ -1522,7 +1779,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
         openPadGestures.delete(event.gestureId);
       }
       const sessionId = state.recording.sessionId;
-      return appendRawEvent(sessionId, event);
+      return appendRawEvent(sessionId, event, physicalKey);
     },
     engageFx(fx, value) {
       const existing = openFxGestures.get(fx);

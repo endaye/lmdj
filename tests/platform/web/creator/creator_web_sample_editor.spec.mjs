@@ -93,6 +93,64 @@ async function installHostProofRecorder(page) {
       },
       set(nativeHost) {
         const nativeTransport = nativeHost.transport;
+        window.__sampleInputProof = [];
+        window.__sampleVoiceProof = [];
+        nativeTransport.subscribe(message => {
+          if (message.event === "runtime.voice_state") {
+            window.__sampleVoiceProof.push(...structuredClone(message.payload.events));
+          }
+        });
+        // Observe actual transport receipts only; never issue a synthetic
+        // inspection or consume. Admission cannot enter the proof counter.
+        const inputAdmissions = new Map();
+        const consumedInputs = new Set();
+        const ticketKey = ticket => JSON.stringify([ticket?.command_id,
+          ticket?.runtime_generation, ticket?.frame_epoch, ticket?.ticket]);
+        const observeInput = (request, response) => {
+          if (request?.operation === "pattern.transport.input.request" &&
+              request.payload?.kind === "press" && response?.ok === true &&
+              response.request_id === request.request_id) {
+            const ticket = {command_id: request.payload.command_id,
+              runtime_generation: request.payload.runtime_generation,
+              frame_epoch: request.payload.frame_epoch, ticket: request.payload.input_serial};
+            const sameTicket = value => Object.keys(ticket).length === Object.keys(value ?? {}).length &&
+              Object.entries(ticket).every(([key, expected]) => value?.[key] === expected);
+            if (sameTicket(response.result?.ticket) && sameTicket(response.result?.status?.ticket)) {
+              inputAdmissions.set(ticketKey(ticket), structuredClone({request, response}));
+            }
+          }
+          if (request?.operation !== "pattern.transport.input.inspect" ||
+              request.payload?.consume !== true || response?.ok !== true ||
+              response.request_id !== request.request_id) return null;
+          const key = ticketKey(request.payload);
+          const original = inputAdmissions.get(key);
+          if (!original || consumedInputs.has(key)) return null;
+          const status = response.result;
+          const admission = original.response.result.status.admission;
+          const native = status?.native_result;
+          if (!admission?.authority) return null;
+          const ticket = original.response.result.ticket;
+          const decimal = value => typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
+            BigInt(value) <= 18446744073709551615n;
+          if (Object.keys(ticket).length !== Object.keys(status?.ticket ?? {}).length ||
+              !Object.entries(ticket).every(([field, expected]) => status.ticket[field] === expected) ||
+              status.complete !== true || status.durable_settled !== true || status.error !== null ||
+              (admission.authority.recording === true && status.retained !== true) ||
+              !native || native.disposition !== "voice_started" ||
+              JSON.stringify(status.admission) !== JSON.stringify(admission) ||
+              !decimal(native.sequence) || native.sequence !== admission.sequence ||
+              !decimal(native.acceptance_ordinal) || native.acceptance_ordinal !== admission.acceptance_ordinal ||
+              native.runtime_generation !== ticket.runtime_generation || native.frame_epoch !== ticket.frame_epoch ||
+              native.slot !== original.request.payload.slot || native.held_press_sequence !== null ||
+              JSON.stringify(native.authority) !== JSON.stringify(admission.authority) ||
+              !Number.isSafeInteger(native.runtime_frame) || native.runtime_frame < 0 ||
+              !Number.isSafeInteger(Number(native.sequence)) || Number(native.sequence) <= 0) return null;
+          consumedInputs.add(key);
+          return {payload: original.request.payload, ok: response.ok, sequence: Number(native.sequence),
+            operation: "pattern.transport.input.inspect", status: structuredClone(status),
+            evidence: {admission: original, consume: structuredClone({request, response})}};
+        };
+
         const transport = Object.freeze({
           async send(...arguments_) {
               const [request] = arguments_;
@@ -111,6 +169,8 @@ async function installHostProofRecorder(page) {
                 };
               }
               const response = await nativeTransport.send(...arguments_);
+              const consumed = observeInput(request, response);
+              if (consumed) window.__sampleInputProof.push(consumed);
               window.__sampleProofResponses ??= [];
               window.__sampleProofResponses.push({
                 operation: request?.operation ?? null,
@@ -1413,11 +1473,24 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   await expect(transportStatus("playing")).toBeVisible();
   await record.click();
   await expect(transportStatus("recording")).toBeVisible();
-  const triggerOffset = await page.evaluate(() => window.__sampleProofResponses.length);
+  const triggerOffset = await page.evaluate(() => ({
+    responses: window.__sampleProofResponses.length, consumed: window.__sampleInputProof.length,
+  }));
   await page.keyboard.press("KeyZ");
-  await expect.poll(() => page.evaluate((offset) =>
-    window.__sampleProofResponses.slice(offset).some((entry) => entry.operation === "trigger" && entry.ok),
-  triggerOffset), {timeout: 30_000}).toBe(true);
+  // Gate Record-off on the actual complete durable consume of this press,
+  // with its matching Native voice. Ordinary Record's Native authority may
+  // be live-only; this recording window still requires actual retained=true.
+  // Request admission or a live-only completed consume cannot satisfy it.
+  await expect.poll(() => page.evaluate((offset) => {
+    const presses = window.__sampleInputProof.slice(offset.consumed);
+    const legacy = window.__sampleProofResponses.slice(offset.responses)
+      .filter(entry => entry.operation === "trigger" && entry.ok === true);
+    const sequences = presses.map(entry => entry.sequence).concat(legacy.map(entry => entry.result.sequence));
+    return presses.every(entry => entry.status.retained === true) &&
+      sequences.length === 1 && sequences.every(sequence =>
+      Number.isSafeInteger(sequence) && sequence > 0 && window.__sampleVoiceProof.some(event =>
+        event.sequence === sequence && event.slot === 0 && event.state === "started"));
+  }, triggerOffset), {timeout: 30_000}).toBe(true);
   await record.click();
   await expect(transportStatus("playing")).toBeVisible();
   await play.click();

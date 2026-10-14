@@ -753,14 +753,18 @@ async function observePerformPadRequests(page) {
       set(host) {
         const native = host.transport;
         host.transport = new Proxy({}, {get(_target, key) {
-          if (key === "send") return async (...args) => {
-            const observed = {operation: args[0]?.operation, ok: null};
-            window.__performPadRequests.push(observed);
-            const result = await native.send(...args);
-            observed.ok = result?.ok;
-            return result;
-          };
-          const value = Reflect.get(native, key);
+          const value = Reflect.get(native, key, native);
+          if ((key === "send" || key === "sendRetained") && typeof value === "function") {
+            return (...args) => {
+              const observed = {operation: args[0]?.operation, ok: null};
+              window.__performPadRequests.push(observed);
+              const result = Reflect.apply(value, native, args);
+              if (key === "send") {
+                Promise.resolve(result).then(response => {observed.ok = response?.ok;}, () => {});
+              }
+              return result;
+            };
+          }
           return typeof value === "function" ? value.bind(native) : value;
         }});
         exposed = host;
@@ -833,7 +837,7 @@ test("Perform Pad arrows share all 64 silent selections and retain SHIFT/System 
   expect(await inspectTruth(page)).toEqual(truth);
   const requests = await page.evaluate(() => window.__performPadRequests);
   expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
-    "performance.fx.gesture"].includes(request.operation))).toEqual([]);
+    "pattern.transport.input.request", "performance.fx.gesture"].includes(request.operation))).toEqual([]);
 });
 
 test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value", async ({page}) => {
@@ -878,6 +882,7 @@ test("Perform Pad steps keep real held FX, HOLD and the shared ENC4 MASTER value
   expect(await inspectTruth(page)).toEqual(truth);
   const requests = await page.evaluate(() => window.__performPadRequests);
   expect(requests.filter(request => ["trigger", "sample.stop", "sample.update_pad",
-    "performance.fx.gesture", "performance.live.control", "performance.record.begin", "performance.record.stop",
+    "pattern.transport.input.request", "performance.fx.gesture", "performance.live.control",
+    "performance.record.begin", "performance.record.stop",
     "pattern.transport.request"].includes(request.operation))).toEqual([]);
 });

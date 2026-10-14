@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/902
     observed_by: Claude Code (Opus 5)
+  - date: 2026-10-13
+    occurrence: https://github.com/endaye/lmdj/issues/2092
+    observed_by: Codex
 exit: none
 ---
 
@@ -73,3 +76,25 @@ are discovered, one at a time, and a gate cannot enforce a contract that is
 still being recovered from the implementation. Revisit when the interface
 states its full precondition set; until then this entry and the header comments
 are the mechanism.
+
+
+## Second recurrence and escalation
+
+S6's real durable I/O child shares a storage-platform object with Control, but
+its JS realm has a separate lease map. The original Native owning checks passed
+while the complete Web run failed: the child tried to acquire a second physical
+OPFS lock already held by Control. A Native shared lease and a green Native
+suite did not prove the Web realm's writer precondition. The product repair
+states that custody rule in `storage_platform.hpp` and adds a real production
+pthread/OPFS witness with parent reset, independent physical exclusion,
+child-local release without Control service, natural join and full readback.
+That regression expresses this product defect; it does not decide whether a
+future Task's arbitrary storage helper has the right coverage plan.
+
+[Escalation #2092](https://github.com/endaye/lmdj/issues/2092) owns a separate
+eligible skill mechanism. Keep this entry open with `exit: none` until that
+mechanism actually lands; no diff keyword scan or extra full-CI gate was added.
+Before planning a storage worker, trace the exact platform identity and realm
+of acquisition, mutation and destruction. Keep local mutation authorization,
+shared genuine custody and actual physical close distinct, and include the
+corresponding real Web journey even when Native's storage checks are green.

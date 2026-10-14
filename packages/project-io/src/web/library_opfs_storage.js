@@ -1,6 +1,7 @@
-/* global Asyncify, HEAPU8, LibraryManager, UTF8ToString, _malloc, mergeInto, setValue */
+/* global Asyncify, HEAPU8, HEAPU32, LibraryManager, UTF8ToString, _malloc, _free, _lmdj_project_io_physical_writer_count, mergeInto, setValue */
 
 mergeInto(LibraryManager.library, {
+  $LmdjOpfs__deps: ["lmdj_project_io_physical_writer_count", "free"],
   $LmdjOpfs: {
     root: null,
     leaseTokens: new Map(),
@@ -248,6 +249,8 @@ mergeInto(LibraryManager.library, {
     coveringLease(destination) {
       let match = null;
       for (const state of this.leasesByPath.values()) {
+        // A retained physical lock is not this realm's mutation authorization.
+        if (state.references === 0 || !this.writerUsable(state)) continue;
         const contained = destination === state.projectPath ||
             destination.startsWith(`${state.projectPath}/`);
         if (contained && (!match || state.projectPath.length > match.projectPath.length)) {
@@ -730,17 +733,66 @@ mergeInto(LibraryManager.library, {
       return token;
     },
 
-    async acquireWriter(path, length, platformIdentity) {
+    // Fixed uint32 words shared with WebWriterState, independent of C++ atomic
+    // object layout: memory refs, total gate, remote refs, debt, generation,
+    // terminal seal, physical-close receipt, module physical-count pointer.
+    writerSealed: 0x80000000,
+    writerReferences: 0x7fffffff,
+
+    writerWord(state, index) {
+      return (state.block >>> 2) + index;
+    },
+
+    validWriterBlock(block, generation) {
+      return Number.isInteger(block) && block > 0 && (block & 3) === 0 &&
+          Number.isInteger(generation) && (generation >>> 0) !== 0 &&
+          block + 32 <= HEAPU32.byteLength &&
+          Atomics.load(HEAPU32, (block >>> 2) + 4) === (generation >>> 0);
+    },
+
+    writerUsable(state) {
+      if (!state.block) return !state.closed;
+      if (!this.validWriterBlock(state.block, state.generation)) return false;
+      const gate = Atomics.load(HEAPU32, this.writerWord(state, 1));
+      return (gate & this.writerSealed) === 0 &&
+          (gate & this.writerReferences) > 0 &&
+          Atomics.load(HEAPU32, this.writerWord(state, 3)) === 0 &&
+          Atomics.load(HEAPU32, this.writerWord(state, 6)) === 0;
+    },
+
+    async acquireWriter(path, length, platformIdentity,
+        block = 0, generation = 0, borrowed = 0) {
+      this.drainWriters();
       const projectPath = this.canonicalPath(this.parts(path, length));
+      const shared = block !== 0;
+      const candidate = {block, generation};
+      if (shared && (!this.validWriterBlock(block, generation) ||
+          !this.writerUsable(candidate))) {
+        throw new DOMException("", "InvalidStateError");
+      }
       const existing = this.leasesByPath.get(projectPath);
       if (existing) {
-        if (existing.platformIdentity !== platformIdentity) {
+        if (existing.platformIdentity !== platformIdentity ||
+            existing.block !== block || existing.generation !== generation ||
+            !this.writerUsable(existing)) {
           throw new DOMException("", "NoModificationAllowedError");
         }
         return this.newLeaseToken(existing);
       }
 
       const scopeKey = await this.pathKey(projectPath);
+      if (shared && borrowed) {
+        // C++ has already pinned the EXACT acquired state. This local token
+        // delegates that real custody; it neither acquires a second OPFS lock
+        // nor reruns recovery. Recheck admission after the digest suspension.
+        if (!this.writerUsable(candidate)) {
+          throw new DOMException("", "NoModificationAllowedError");
+        }
+        const state = {projectPath, scopeKey, platformIdentity, block, generation,
+          delegated: true, references: 0};
+        this.leasesByPath.set(projectPath, state);
+        return this.newLeaseToken(state);
+      }
       const leases = await this.directory([".lmdj-host", "leases"], true);
       const file = await leases.getFileHandle(`${scopeKey}.lock`, {create: true});
       let access;
@@ -761,6 +813,18 @@ mergeInto(LibraryManager.library, {
         }
         throw error;
       }
+      const state = {projectPath, scopeKey, platformIdentity, access,
+        block, generation, delegated: false, references: 0, closed: false,
+        drainTimer: null};
+      // Physical custody begins at createSyncAccessHandle, even if subsequent
+      // initialization or recovery fails. A failed close must remain visible
+      // to the owner drain and the module-wide terminal retirement check.
+      if (shared) {
+        Atomics.add(HEAPU32, this.writerWord(state, 0), 1);
+        const count = Atomics.load(HEAPU32, this.writerWord(state, 7));
+        Atomics.add(HEAPU32, count >>> 2, 1);
+      }
+      this.leasesByPath.set(projectPath, state);
       try {
         if (access.getSize() === 0) {
           const identity = crypto.getRandomValues(new Uint8Array(32));
@@ -777,41 +841,115 @@ mergeInto(LibraryManager.library, {
           }
           access.flush();
         }
-        const state = {
-          projectPath,
-          scopeKey,
-          platformIdentity,
-          access,
-          references: 0,
-        };
         await this.recoverIntents(state);
-        this.leasesByPath.set(projectPath, state);
+        if (shared && !this.writerUsable(state)) {
+          throw new DOMException("", "InvalidStateError");
+        }
         return this.newLeaseToken(state);
       } catch (error) {
-        access.close();
+        // Recovery is unpublished: references remains zero. If physical close
+        // also fails, closeWriter keeps the exact handle, memory and count.
+        this.closeWriter(state);
         throw error;
       }
     },
 
-    releaseWriter(token) {
+    releaseWriter(token, block = 0, generation = 0) {
       const state = this.leaseTokens.get(token);
-      if (!state) return;
+      if (!state || state.block !== block || state.generation !== generation ||
+          (block && !this.validWriterBlock(block, generation))) return false;
+      // Remove exactly this realm's token BEFORE C++ retires its shared pin.
       this.leaseTokens.delete(token);
       state.references -= 1;
       if (state.references === 0) {
+        if (state.delegated) {
+          if (this.leasesByPath.get(state.projectPath) === state)
+            this.leasesByPath.delete(state.projectPath);
+        } else if (!block) {
+          this.closeWriter(state);
+        } else {
+          this.scheduleWriterDrain(state);
+        }
+      }
+      return true;
+    },
+
+    closeWriter(state) {
+      // A close exception retains the real owner, memory, and physical count.
+      // Never turn an attempted close into a receipt or erase its custody.
+      state.access.close();
+      state.closed = true;
+      if (state.drainTimer !== null) clearTimeout(state.drainTimer);
+      state.drainTimer = null;
+      for (const [token, lease] of this.leaseTokens) {
+        if (lease === state) this.leaseTokens.delete(token);
+      }
+      state.references = 0;
+      if (this.leasesByPath.get(state.projectPath) === state)
         this.leasesByPath.delete(state.projectPath);
-        state.access.close();
+      if (state.block) {
+        Atomics.store(HEAPU32, this.writerWord(state, 6), 1);
+        const count = Atomics.load(HEAPU32, this.writerWord(state, 7));
+        Atomics.sub(HEAPU32, count >>> 2, 1);
+        // Final action: there may be no C++ memory owner left at this point.
+        if (Atomics.sub(HEAPU32, this.writerWord(state, 0), 1) === 1)
+          _free(state.block);
       }
     },
 
+    drainWriter(state) {
+      if (state.closed || state.delegated || !state.block) return;
+      if (this.leasesByPath.get(state.projectPath) !== state ||
+          !this.validWriterBlock(state.block, state.generation)) return;
+      const gate = Atomics.load(HEAPU32, this.writerWord(state, 1));
+      const terminal = Atomics.load(HEAPU32, this.writerWord(state, 5)) === 1;
+      if (Atomics.load(HEAPU32, this.writerWord(state, 2)) !== 0 ||
+          Atomics.load(HEAPU32, this.writerWord(state, 3)) !== 0) return;
+      if (terminal || ((gate & this.writerSealed) !== 0 &&
+          (gate & this.writerReferences) === 0)) this.closeWriter(state);
+    },
+
+    drainWriters() {
+      // No Asyncify, C++ callbacks, or Control/main-thread proxy. An ordinary
+      // owner's inline drain either closes physically or reports its exception.
+      for (const state of this.leasesByPath.values()) this.drainWriter(state);
+    },
+
+    scheduleWriterDrain(state) {
+      if (state.closed || state.delegated || state.drainTimer !== null) return;
+      state.drainTimer = setTimeout(() => {
+        state.drainTimer = null;
+        try {
+          this.drainWriter(state);
+        } catch (error) {
+          state.closeError = error;
+        }
+        if (!state.closed && this.leasesByPath.get(state.projectPath) === state)
+          this.scheduleWriterDrain(state);
+      }, 2);
+    },
+
     releaseAllWriters() {
-      const states = new Set(this.leasesByPath.values());
-      this.leaseTokens.clear();
-      this.leasesByPath.clear();
-      for (const state of states) {
-        state.references = 0;
-        state.access.close();
+      // Called ONLY after native's one-shot terminal authorization. Seal new
+      // admission without inventing the retirement of any retained C++ lease.
+      try {
+        for (const state of this.leasesByPath.values()) {
+          if (!state.block) {
+            this.closeWriter(state);
+          } else if (!state.delegated) {
+            Atomics.or(HEAPU32, this.writerWord(state, 1), this.writerSealed);
+            Atomics.store(HEAPU32, this.writerWord(state, 5), 1);
+            this.drainWriter(state);
+          }
+        }
+      } catch (_) {
+        return false;
       }
+      if (this.leasesByPath.size !== 0) return false;
+      // This module-wide atomic also counts physical owners in other pthread
+      // realms. An empty Control map alone is never proof of their retirement.
+      const physical = _lmdj_project_io_physical_writer_count();
+      return Number.isInteger(physical) && physical === 0;
     },
 
     async replaceComplete(
@@ -974,16 +1112,21 @@ mergeInto(LibraryManager.library, {
   },
 
   lmdj_opfs_acquire_writer__deps: ["$LmdjOpfs"],
-  lmdj_opfs_acquire_writer: (path, length, platformIdentity) => LmdjOpfs.suspend(async () => {
+  lmdj_opfs_acquire_writer: (path, length, platformIdentity, block, generation, borrowed) => LmdjOpfs.suspend(async () => {
     try {
-      return await LmdjOpfs.acquireWriter(path, length, platformIdentity);
+      return await LmdjOpfs.acquireWriter(
+          path, length, platformIdentity, block, generation >>> 0, borrowed);
     } catch (error) {
       return LmdjOpfs.status(error);
     }
   }),
 
   lmdj_opfs_release_writer__deps: ["$LmdjOpfs"],
-  lmdj_opfs_release_writer: (token) => LmdjOpfs.releaseWriter(token),
+  lmdj_opfs_release_writer: (token, block, generation) =>
+      LmdjOpfs.releaseWriter(token, block, generation >>> 0) ? 1 : 0,
+
+  lmdj_opfs_drain_writers__deps: ["$LmdjOpfs"],
+  lmdj_opfs_drain_writers: () => LmdjOpfs.drainWriters(),
 
   lmdj_opfs_ensure_directory__deps: ["$LmdjOpfs"],
   lmdj_opfs_ensure_directory: (path, length) => LmdjOpfs.suspend(async () => {

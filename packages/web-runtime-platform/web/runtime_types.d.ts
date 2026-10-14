@@ -132,7 +132,93 @@ export interface PatternTransportTicket {
   readonly status: PatternTransportStatus;
 }
 
+/** Canonical nonzero decimal; exact uint64, or uint60 for a schedule serial. */
+export type PatternTransportDecimalIdentity = string;
+
+export interface PatternCountInCapabilities {
+  readonly supported: boolean;
+  readonly negotiated: boolean;
+  readonly outputReady: boolean;
+  readonly runtimeGeneration: PatternTransportDecimalIdentity | null;
+  readonly frameEpoch: PatternTransportDecimalIdentity | null;
+  readonly nextSerial: PatternTransportDecimalIdentity | null;
+  readonly inputCapacity: number;
+}
+
+export interface PatternCountInTicket {
+  readonly sessionId: string;
+  readonly commandId: string;
+  readonly runtimeGeneration: PatternTransportDecimalIdentity;
+  readonly frameEpoch: PatternTransportDecimalIdentity;
+  readonly scheduleSerial: PatternTransportDecimalIdentity;
+}
+
+export interface PatternCountInRequest extends PatternCountInTicket {
+  readonly projectId: string;
+  readonly expectedEpoch: PatternTransportDecimalIdentity;
+  readonly bars: 1 | 2;
+  readonly expectedRevision: number | null;
+}
+
+export interface PatternCountInReceipt {
+  readonly runtimeGeneration: PatternTransportDecimalIdentity;
+  readonly frameEpoch: PatternTransportDecimalIdentity;
+  readonly scheduleSerial: PatternTransportDecimalIdentity;
+  readonly transportEpoch: PatternTransportDecimalIdentity;
+  readonly patternGeneration: PatternTransportDecimalIdentity;
+  readonly patternId: string;
+  readonly result: "applied" | "cancelled" | "refused";
+  /** Absent for an unapplied cancellation or refused intent. */
+  readonly effectiveFrame: number | null;
+  readonly originFrame: number | null;
+  readonly playing: boolean;
+}
+
+export interface PatternCountInStatus {
+  readonly ticket: PatternCountInTicket | null;
+  readonly countIn: Readonly<{
+    runtimeGeneration: PatternTransportDecimalIdentity;
+    frameEpoch: PatternTransportDecimalIdentity;
+    scheduleSerial: PatternTransportDecimalIdentity;
+    phase: "empty" | "submitted" | "preparing" | "cancel_preparing" | "armed" |
+      "starting" | "applied" | "cancelled" | "failing" | "refused";
+    bars: 1 | 2;
+    bpm: number | null;
+    barFrames: number | null;
+    countInFrame: number | null;
+    /** Planned native boundary; only an Applied receipt proves actual start. */
+    startFrame: number | null;
+  }> | null;
+  readonly startReceipt: PatternCountInReceipt | null;
+  readonly cancelReceipt: PatternCountInReceipt | null;
+  readonly openingPending: boolean;
+  readonly openingComplete: boolean;
+  readonly observedAtMilliseconds: number;
+  readonly error: PatternTransportStatus["error"];
+}
+
+export interface PatternCountInAdmission {
+  readonly submit: "accepted" | "replayed";
+  readonly ticket: PatternCountInTicket;
+  readonly status: PatternCountInStatus;
+}
+
+export interface PatternCountInCancel {
+  readonly ticket: PatternCountInTicket;
+  readonly projectId: string;
+  readonly commandId: string;
+  readonly expectedEpoch: PatternTransportDecimalIdentity;
+  readonly intent: PatternTransportIntent;
+}
+
 export interface PatternTransportRuntimeSession {
+  requestPatternInput(request: PatternInputRequest): Promise<PatternInputAdmission>;
+  inspectPatternInput(ticket: PatternInputTicket, consume?: boolean): Promise<PatternInputStatus>;
+  queryPatternCountInCapabilities(): Promise<PatternCountInCapabilities>;
+  /** Returns admission promptly; inspect observes native and durable progress. */
+  requestPatternCountIn(request: PatternCountInRequest): Promise<PatternCountInAdmission>;
+  inspectPatternCountIn(ticket: PatternCountInTicket, consume?: boolean): Promise<PatternCountInStatus>;
+  cancelPatternCountIn(request: PatternCountInCancel): Promise<PatternCountInAdmission>;
   requestPatternTransport(
     request: PatternTransportRequest,
   ): Promise<PatternTransportTicket>;
@@ -140,6 +226,84 @@ export interface PatternTransportRuntimeSession {
   requestTransportPatternSwitch(
     request: TransportPatternSwitchRequest,
   ): Promise<TransportPatternSwitchResult>;
+}
+
+export interface PatternInputTicket {
+  readonly commandId: string;
+  readonly runtimeGeneration: PatternTransportDecimalIdentity;
+  readonly frameEpoch: PatternTransportDecimalIdentity;
+  readonly ticket: PatternTransportDecimalIdentity;
+}
+export interface PatternInputRequest {
+  readonly commandId: string;
+  readonly runtimeGeneration: PatternTransportDecimalIdentity;
+  readonly frameEpoch: PatternTransportDecimalIdentity;
+  readonly inputSerial: PatternTransportDecimalIdentity;
+  readonly slot: number;
+  readonly velocity: number;
+  readonly kind: "press" | "release";
+  readonly held: boolean;
+  readonly heldPressSequence: PatternTransportDecimalIdentity | null;
+}
+export interface PatternInputAuthority {
+  readonly recording: boolean;
+  readonly scheduleSerial: PatternTransportDecimalIdentity | null;
+  readonly transportEpoch: PatternTransportDecimalIdentity | null;
+}
+export interface PatternInputStatus {
+  readonly ticket: PatternInputTicket;
+  readonly admission: Readonly<{sequence: PatternTransportDecimalIdentity;
+    acceptanceOrdinal: PatternTransportDecimalIdentity; authority: PatternInputAuthority}>;
+  readonly nativeResult: Readonly<{runtimeGeneration: PatternTransportDecimalIdentity;
+    frameEpoch: PatternTransportDecimalIdentity; sequence: PatternTransportDecimalIdentity;
+    heldPressSequence: PatternTransportDecimalIdentity | null; acceptanceOrdinal: PatternTransportDecimalIdentity;
+    runtimeFrame: number; slot: number; authority: PatternInputAuthority;
+    disposition: "voice_started" | "voice_capacity" | "toggle_stopped" | "muted_no_voice" |
+      "release_applied" | "release_no_voice" | "invalidated_before_consume"}> | null;
+  readonly durableSettled: boolean;
+  readonly retained: boolean;
+  readonly complete: boolean;
+  readonly expired: boolean;
+  readonly error: Readonly<{code: string; message: string; details: Readonly<Record<string, unknown>>}> | null;
+}
+export interface PatternInputAdmission {
+  readonly ticket: PatternInputTicket;
+  readonly status: PatternInputStatus;
+}
+/** Local Session lifecycle; these waits introduce no Native RPC or wire DTO. */
+export interface RuntimeLifecycleSession {
+  start(): Promise<boolean>;
+  /** True only for a clean normal close; a fatal close still returns false. */
+  close(): Promise<boolean>;
+  /**
+   * Observes this Session's already initiated cleanup. True requires actual
+   * owner/backend retirement and SDK teardown. Failure is false; unknown
+   * retained debt remains pending. Before cleanup begins returns false and
+   * starts no owner action. Older healthy normal closure and a known empty,
+   * never-loaded Session retain their separate closure contracts.
+   */
+  waitForTerminalCleanup(): Promise<boolean>;
+}
+
+/** Local physical ownership only; neither method manufactures a Native ACK. */
+export interface InputGestureLease {
+  cancelUnsubmittedPattern(): void;
+  releasePhysical(): void;
+}
+
+/** Same already-running frozen Session; never a second input/controller owner. */
+export interface RuntimeSessionNamespace {
+  readonly session: RuntimeLifecycleSession & PatternTransportRuntimeSession & MonitorOutputSession &
+    WebAudioClockSession & WebPerformanceCaptureSession & Readonly<{
+    /** Synchronous combined admission before caller queues retain this press. */
+    reserveInputGesture(key: object, slot: number, source?: "pointer" | "keyboard" | "midi"):
+      InputGestureLease | null;
+    /** Opaque local reference; exact hold correlation requires the negotiated input profile. */
+    trigger(slot: number, velocity: number, source?: "pointer" | "keyboard" | "midi", gestureKey?: object):
+      Promise<false | Readonly<{sequence: number; slot: number; velocity: number; source: "pointer" | "keyboard" | "midi"}>>;
+    release(slot: number, source: "pointer" | "keyboard" | "midi", gestureKey?: object): Promise<boolean>;
+  }>;
+  readonly patternTransport: PatternTransportRuntimeSession;
 }
 
 export interface PatternEventKeyRequest {
@@ -666,6 +830,21 @@ export type PerformanceEventResult =
     }>;
 
 export interface PerformanceRuntimeSession {
+  // Synchronous local ownership only: no wire admission/ACK. The current SDK
+  // supplies this optional companion for Hosts with an ordered event tail.
+  // A fresh Press/matching Release is single-use; submit is idempotent and
+  // cancelBeforeSubmit succeeds only before that handoff. Original deadlines
+  // and physical keys survive the Host wait. Foreign/replay events use the
+  // ordinary recordPerformanceEvent API instead, after the original token's
+  // handoff; an exact replay cannot bypass a still-prepared Press.
+  preparePerformancePadEvent?(request: Readonly<{
+    sessionId: string;
+    eventId: string;
+    event: Extract<PerformanceRawEvent, {kind: "pad_press" | "pad_release"}>;
+  }>, physicalKey?: object): Readonly<{
+    submit(): Promise<PerformanceEventResult>;
+    cancelBeforeSubmit(): boolean;
+  }>;
   assignPatternSlot(request: Readonly<{
     expectedRevision: number;
     patternSlot: number;
@@ -733,7 +912,7 @@ export interface PerformanceRuntimeSession {
     sessionId: string;
     eventId: string;
     event: PerformanceRawEvent | PerformanceHeaderedEvent;
-  }>): Promise<PerformanceEventResult>;
+  }>, physicalKey?: object): Promise<PerformanceEventResult>;
   applyFxGesture(event: PerformanceFxGesture): Promise<Readonly<{
     applied: true;
   }>>;

@@ -35,6 +35,18 @@ async function send(page, operation, payload = {}, bytes) {
     bytes ? {sidecar: new Uint8Array(bytes)} : undefined),
   {operation, payload, bytes: bytes ? [...bytes] : undefined});
 }
+// Creator owns an opted-in Session. Reopening through that public producer
+// preserves negotiation; the standalone Web Host retains its raw contract.
+async function reopenCandidateProject(page, host) {
+  if (host === "Creator Web") {
+    const opened = await page.evaluate(({projectId, patternId}) =>
+      window.lmdjWebRuntimeHost.session.openProject(projectId, patternId), {projectId, patternId});
+    expect(opened.project_id).toBe(projectId);
+    expect(opened.pattern_id).toBe(patternId);
+  } else {
+    success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
+  }
+}
 async function call(page, group, method, ...args) {
   return page.evaluate(async ({group, method, args}) => {
     try { return {ok: true, result: await window.lmdjWebRuntimeHost[group][method](...args)}; }
@@ -137,7 +149,7 @@ export function registerCandidateJourneys(host, {wakeCreatorAudio} = {}) {
     expect(set.recipes.map(({start_frame, end_frame}) => [start_frame, end_frame])).toEqual([[0, 1], [1, 144000]]);
     expect(await files(page)).toEqual(before);
     expect(success(await send(page, "project.inspect"))).toEqual(truth);
-    success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
+    await reopenCandidateProject(page, host);
     expect(success(await candidate(page, "auditionCandidate", selection(set))).played).toBe(false);
     if (host === "Creator Web") {
       if (typeof wakeCreatorAudio !== "function") throw new Error("Creator journey requires a real musical activation gesture");
@@ -192,7 +204,7 @@ export function registerCandidateJourneys(host, {wakeCreatorAudio} = {}) {
     await start(page, host);
     const restored = success(await candidate(page, "inspectCandidateJob", "browser-slice"));
     expect(restored.sets.find(value => value.set_id === set.set_id).status).toBe("discarded");
-    success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
+    await reopenCandidateProject(page, host);
     expect(success(await send(page, "project.inspect"))).toEqual(after);
     expect(await files(page)).toEqual(committed);
     success(await send(page, "host.close"));
@@ -207,7 +219,7 @@ export function registerCandidateJourneys(host, {wakeCreatorAudio} = {}) {
     success(await send(page, "host.close"));
     await start(page, host);
     expect(success(await candidate(page, "inspectCandidateJob", "browser-slice"))).toEqual(job);
-    success(await send(page, "project.open", {project_id: projectId, pattern_id: patternId}));
+    await reopenCandidateProject(page, host);
     expect(success(await send(page, "project.inspect"))).toEqual(truth);
     success(await send(page, "host.close"));
   });

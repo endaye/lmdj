@@ -589,6 +589,9 @@ class Application {
   // Facade/Audio types.
   std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
       PatternTransportAudioPort& audio, PatternTransportControllerConfig config);
+  std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
+      PatternTransportAudioPort& audio, ScheduledPatternTransportAudioPort& scheduled,
+      PatternTransportControllerConfig config);
   foundation::Result<domain::ProjectState> create_initial_project(
       const InitialProjectRequest& request);
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(

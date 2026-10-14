@@ -4323,9 +4323,11 @@ test("rail Bank changes keep the Sample slot until another Pad is chosen", async
 test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", async () => {
   const fixture = mutableSampleRuntimeFixture();
   fixture.assigned.set(20, "44444444-4444-4444-8444-444444444444");
-  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi") =>
+  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi", _gestureKey?: object) =>
     ({sequence: 1, slot, velocity, source}));
   fixture.session.trigger = triggers;
+  const releases = vi.fn(fixture.session.release);
+  fixture.session.release = releases;
   Object.assign(fixture.session, sequenceSessionStubs());
   setRunningAudioFixture(fixture.session);
   render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
@@ -4347,8 +4349,12 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
   const padA01 = within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad A01 — assigned — Key Z"});
   fireEvent(padA01, pointer("pointerdown"));
-  await waitFor(() => expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer"));
+  await waitFor(() => expect(triggers).toHaveBeenCalledTimes(1));
+  const firstKey = triggers.mock.calls[0]![3];
+  expect(firstKey).toEqual(expect.any(Object));
+  expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer", firstKey);
   fireEvent(padA01, pointer("pointerup"));
+  await waitFor(() => expect(releases).toHaveBeenCalledExactlyOnceWith(0, "pointer", firstKey));
   expect(currentPad()).toBe("A01");
 
   // A Bank key only switches the performing slots: the current Pad stays A01
@@ -4364,8 +4370,11 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
   const pad = within(screen.getByRole("region", {name: "Pad matrix"}))
     .getByRole("button", {name: "Pad B05 — assigned — Key A"});
   fireEvent(pad, pointer("pointerdown"));
-  await waitFor(() => expect(triggers).toHaveBeenLastCalledWith(20, 100, "pointer"));
-  expect(triggers).toHaveBeenCalledTimes(2);
+  await waitFor(() => expect(triggers).toHaveBeenCalledTimes(2));
+  const secondKey = triggers.mock.calls[1]![3];
+  expect(secondKey).toEqual(expect.any(Object));
+  expect(secondKey).not.toBe(firstKey);
+  expect(triggers).toHaveBeenLastCalledWith(20, 100, "pointer", secondKey);
   expect(currentPad()).toBe("B05");
   expect(overview.querySelector(".sequence-overview-names [data-current-pad]")?.textContent)
     .toBe("B05 / SAMPLE");
@@ -4373,6 +4382,8 @@ test("a Pad strike moves the one current Pad, a Bank key does not (#1961)", asyn
     ?.textContent).toBe("B05");
   expect(document.querySelector('.pad[aria-current="true"] strong')?.textContent).toBe("B05");
   fireEvent(pad, pointer("pointerup"));
+  await waitFor(() => expect(releases).toHaveBeenCalledTimes(2));
+  expect(releases).toHaveBeenLastCalledWith(20, "pointer", secondKey);
 
   // The Sample edit object is the same current Pad.
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
@@ -4402,7 +4413,7 @@ test("↑/↓ steps the one current Pad into the Sample editor (#1961)", async (
 });
 
 test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate voice", async (releaseEvent) => {
-  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi") =>
+  const triggers = vi.fn(async (slot: number, velocity: number, source: "pointer" | "keyboard" | "midi", _gestureKey?: object) =>
     ({sequence: 1, slot, velocity, source}));
   const releases = vi.fn(async () => true);
   const fixture = sampleRuntimeFixture({trigger: triggers, release: releases});
@@ -4422,8 +4433,11 @@ test.each(["pointerup", "pointercancel"])("Sample rail Pad %s releases a gate vo
   };
   fireEvent(pad, pointer("pointerdown"));
   await waitFor(() => expect(triggers).toHaveBeenCalledTimes(1));
+  const key = triggers.mock.calls[0]![3];
+  expect(key).toEqual(expect.any(Object));
+  expect(triggers).toHaveBeenCalledExactlyOnceWith(0, 100, "pointer", key);
   fireEvent(pad, pointer(releaseEvent));
-  await waitFor(() => expect(releases).toHaveBeenCalledExactlyOnceWith(0, "pointer"));
+  await waitFor(() => expect(releases).toHaveBeenCalledExactlyOnceWith(0, "pointer", key));
   expect(pad.getAttribute("data-outcome")).toBe("idle");
 });
 
@@ -7027,6 +7041,123 @@ test("Perform Pad steps preserve held FX, HOLD, monitor volume and transport own
   } finally {rendered.unmount(); vi.unstubAllGlobals();}
 });
 
+
+test.each(["running", "failed"] as const)(
+  "ordinary retained Pad timeout leaves Record-off reachable only while SDK is %s",
+  async sdkState => {
+    const fixture = mutableSampleRuntimeFixture();
+    // This component seam publishes running only at boot. No later state
+    // event, prop replacement or fake readiness transition repairs the UI.
+    const publishRunning = vi.fn(controlledSampleAudio(fixture.session));
+    const pending = deferred<Awaited<ReturnType<CreatorRuntimeSession["trigger"]>>>();
+    const observedRejection = pending.promise.catch(error => error);
+    const trigger = vi.spyOn(fixture.session, "trigger")
+      .mockImplementation((_slot, _velocity, _source, _key) => pending.promise);
+    const release = vi.spyOn(fixture.session, "release").mockResolvedValue(true);
+    const close = vi.spyOn(fixture.session, "close");
+    const initialStatus = engagedTransportStatus({recording: true});
+    let actualStatus = initialStatus;
+    let originalSessionId: string | undefined;
+    const inspect = vi.fn(async (sessionId: string) => {
+      originalSessionId ??= sessionId;
+      return actualStatus;
+    });
+    const request = vi.fn(async (command: PatternTransportRequest): Promise<PatternTransportTicket> => {
+      actualStatus = engagedTransportStatus({playing: true, recording: false,
+        transportEpoch: command.expectedEpoch, commandId: command.commandId});
+      return {sessionId: command.sessionId, commandId: command.commandId,
+        submit: "accepted", status: actualStatus};
+    });
+    const session = Object.assign(fixture.session, sequenceSessionStubs(), {
+      inspectPatternTransport: inspect,
+      requestPatternTransport: request,
+    });
+    const factory = vi.fn(() => session);
+    const rendered = render(<App initialState={ready} runtimeFactory={factory} />);
+    const recordKey = () => within(screen.getByTestId("physical-controls"))
+      .getByRole("button", {name: /^Record\b/});
+    const playStopKey = () => within(screen.getByTestId("physical-controls"))
+      .getByRole("button", {name: /^Play\/Stop/});
+    const timeout = Object.assign(new Error("original Pad observer deadline expired"), {
+      code: "HOST_TIMEOUT", details: {pending: true},
+    });
+    try {
+      await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+      await publishRunning();
+      const diagnostics = session.diagnostics;
+      let actualSdkState: "running" | "failed" = "running";
+      session.diagnostics = () => ({...diagnostics(), state: actualSdkState,
+        error_code: actualSdkState === "failed" ? "HOST_TIMEOUT" : null});
+      await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
+      await waitFor(() => expect(transportPhase()).toBe("recording"));
+      // Establish actual rendered admission before introducing the error;
+      // a boot/monitor failure must not masquerade as this regression's RED.
+      await waitFor(() => expect(recordKey()).toHaveProperty("disabled", false));
+      expect(recordKey().getAttribute("aria-current")).toBe("page");
+      expect(screen.getByTestId("creator-phase").textContent).toBe("running");
+      expect(session.diagnostics().state).toBe("running");
+      expect(request).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, {key: "z", code: "KeyZ"});
+      await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
+      const originalKey = trigger.mock.calls[0]![3];
+      expect(originalKey).toBeDefined();
+      expect(trigger.mock.calls[0]!.slice(0, 3)).toEqual([0, 100, "keyboard"]);
+      actualSdkState = sdkState;
+      await act(async () => {pending.reject(timeout);});
+      await flushAsyncTurns();
+      expect(await observedRejection).toBe(timeout);
+      fireEvent.keyUp(window, {key: "z", code: "KeyZ"});
+      await flushAsyncTurns();
+      expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+      expect(session.diagnostics().state).toBe(sdkState);
+      expect(session.diagnostics().error_code)
+        .toBe(sdkState === "failed" ? "HOST_TIMEOUT" : null);
+      expect(publishRunning).toHaveBeenCalledTimes(1);
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+      if (sdkState === "failed") {
+        expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
+        expect(recordKey()).toHaveProperty("disabled", true);
+        expect(playStopKey()).toHaveProperty("disabled", true);
+        expect(request).not.toHaveBeenCalled();
+        return;
+      }
+      expect(screen.getByTestId("creator-phase").textContent).toBe("running");
+      expect(recordKey()).toHaveProperty("disabled", false);
+      expect(playStopKey()).toHaveProperty("disabled", false);
+      await userEvent.click(recordKey());
+      await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      const command = request.mock.calls[0]![0];
+      expect(originalSessionId).toBeDefined();
+      expect(command).toMatchObject({sessionId: originalSessionId, intent: "record",
+        expectedEpoch: initialStatus.transportEpoch + 1, expectedRevision: null});
+      expect(command.commandId).toEqual(expect.any(String));
+      expect(command.commandId).not.toBe(initialStatus.commandId);
+      await waitFor(() => expect(transportPhase()).toBe("playing"));
+      expect(screen.getByTestId("creator-phase").textContent).toBe("running");
+      expect(recordKey().getAttribute("aria-current")).toBeNull();
+      expect(playStopKey().getAttribute("aria-current")).toBe("page");
+      expect(release).toHaveBeenCalledExactlyOnceWith(0, "keyboard", originalKey);
+      expect(publishRunning).toHaveBeenCalledTimes(1);
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", {name: "System"}));
+      fireEvent.click(screen.getByText(/^Developer diagnostics \(\d+\)$/));
+      const diagnosticsPanel = screen.getByRole("region", {name: "Developer diagnostics"});
+      const originalErrorRecord = within(diagnosticsPanel).getByText(timeout.message).closest("li");
+      expect(originalErrorRecord).not.toBeNull();
+      expect(within(originalErrorRecord!).getByText("Pad input")).toBeTruthy();
+      expect(within(originalErrorRecord!).getByText("HOST_TIMEOUT")).toBeTruthy();
+      expect(JSON.parse(originalErrorRecord!.querySelector("pre")!.textContent!))
+        .toEqual({pending: true});
+    } finally {
+      pending.reject(timeout);
+      await observedRejection;
+      rendered.unmount();
+      await flushAsyncTurns();
+    }
+  },
+);
 
 test("Perform live Pad gates retain current identity across Bank and Pattern, then await leave reset without Truth writes", async () => {
   const fixture = mutableSampleRuntimeFixture();

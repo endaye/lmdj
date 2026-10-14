@@ -33,6 +33,11 @@
 #include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
+
+namespace {
+void observe_audio_terminal_on_control(
+    lmdj::web_runtime::ControlRuntime& runtime) noexcept;
+}
 #endif
 
 #if defined(__EMSCRIPTEN__) && defined(LMDJ_WEB_AUDIO_CONFORMANCE)
@@ -112,12 +117,15 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::size_t kBridgeRequestSlotCount = 16;
+constexpr std::uint32_t kTerminalAdmissionBorrow = 1;
+constexpr std::uint32_t kTerminalAdmissionSealed = 2;
 
 enum class RequestState : std::uint8_t {
   free,
   writing,
   queued,
   processing,
+  awaiting_continuation,
   awaiting_response,
   response_consumed,
 };
@@ -168,6 +176,44 @@ bool valid_request_id(const Json& value) {
   return true;
 }
 
+bool retained_owner_envelope(const Json& value) {
+  if (!exact_keys(value, {"protocol_version", "request_id", "operation", "payload"}) ||
+      !value.at("protocol_version").is_number_integer() ||
+      value.at("protocol_version") != 1 || !valid_request_id(value.at("request_id")) ||
+      !value.at("operation").is_string() || !value.at("payload").is_object()) return false;
+  const auto& operation = value.at("operation").get_ref<const std::string&>();
+  const auto& payload = value.at("payload");
+  // The Runtime still validates every exact identity and retained owner.
+  // Admission, generation negotiation, replacement and ordinary Stop stay
+  // sealed. This whitelist grants no new Native effect or caller receipt.
+  if (operation == "pattern.transport.input.inspect")
+    return exact_keys(payload, {"command_id", "runtime_generation", "frame_epoch", "ticket", "consume"});
+  if (operation == "pattern.transport.count-in.inspect")
+    return exact_keys(payload, {"session_id", "command_id", "runtime_generation", "frame_epoch", "schedule_serial", "consume"});
+  if (operation == "pattern.transport.count-in.cancel")
+    return exact_keys(payload, {"session_id", "project_id", "command_id", "start_command_id",
+        "runtime_generation", "frame_epoch", "schedule_serial", "expected_epoch", "intent"});
+  if (operation == "pattern.transport.inspect")
+    return exact_keys(payload, {"session_id"});
+  return operation == "pattern.transport.input.request" &&
+      exact_keys(payload, {"command_id", "runtime_generation", "frame_epoch", "input_serial",
+          "slot", "velocity", "kind", "held", "held_press_sequence"}) &&
+      payload.at("kind").is_string() && payload.at("kind") == "release" &&
+      payload.at("held_press_sequence").is_string();
+}
+
+bool retained_owner_bytes(std::span<const std::byte> envelope) noexcept {
+  try {
+    const std::string_view bytes(
+        reinterpret_cast<const char*>(envelope.data()), envelope.size());
+    const auto parsed = foundation::valid_utf8(bytes)
+        ? foundation::parse_bounded_json(bytes) : std::nullopt;
+    return parsed && retained_owner_envelope(*parsed);
+  } catch (...) {
+    return false;
+  }
+}
+
 Json bridge_protocol_error() {
   return {
       {"ok", false},
@@ -214,7 +260,11 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
   if (operation == "host.close") {
     return std::chrono::seconds(10);
   }
-  if (operation == "host.status" || operation == "audio.activate" ||
+  if (operation.starts_with("pattern.transport.count-in.") ||
+      operation.starts_with("pattern.transport.input.") ||
+      operation == "host.status" || operation == "audio.activate" ||
+      operation == "performance.live.control" ||
+      operation == "performance.live.status" ||
       operation == "audio.suspend" || operation == "trigger" ||
       operation == "sample.preview.set" ||
       operation == "sample.preview.clear" || operation == "sample.stop") {
@@ -224,7 +274,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 105> operations{
+  static constexpr std::array<std::string_view, 111> operations{
       "host.status",
       "project.create",
       "project.duplicate",
@@ -265,6 +315,12 @@ bool supported_operation(std::string_view operation) {
       "audio.activate",
       "audio.suspend",
       "trigger",
+      "pattern.transport.count-in.capabilities",
+      "pattern.transport.count-in.request",
+      "pattern.transport.count-in.inspect",
+      "pattern.transport.count-in.cancel",
+      "pattern.transport.input.request",
+      "pattern.transport.input.inspect",
       "pattern.transport.request",
       "pattern.transport.switch",
       "pattern.transport.inspect",
@@ -378,6 +434,8 @@ struct ControlBridge::Impl {
     std::optional<std::chrono::steady_clock::time_point> caller_deadline;
     std::string request_id;
     bool has_request_id = false;
+    std::string legacy_ticket;
+    std::string continuation_operation;
     std::atomic<PublicationState> publication{PublicationState::open};
     // Next request waiting for the control thread while a dispatch is in
     // progress; see process(). Control-thread state, never shared.
@@ -666,11 +724,23 @@ struct ControlBridge::Impl {
     MessageSlot* voice_message = nullptr;
     MessageSlot* boundary_message = nullptr;
     try {
+#if defined(__EMSCRIPTEN__)
+      observe_audio_terminal_on_control(runtime);
+#endif
 #if !defined(__EMSCRIPTEN__)
       if (hooks.after_capture_drain != nullptr) {
         hooks.after_capture_drain(hooks.context);
       }
 #endif
+      observe_runtime_failure();
+      if (runtime.failed()) {
+        // A lifecycle observer can expire while its original Native/worker
+        // obligations remain. Keep those short continuations available;
+        // failure is neither closure nor Bridge-pool reclamation.
+        runtime.service_pattern_transport();
+        service_retained_responses();
+        return;
+      }
       if (!runtime.validate_realtime_health()) {
         fail_control();
         return;
@@ -684,6 +754,7 @@ struct ControlBridge::Impl {
       // dispatch can release its tail instead of awaiting the audio receipt
       // or the journal settlement (#1230).
       runtime.service_pattern_transport();
+      service_retained_responses();
       outcome_message = reserve_realtime_message();
       if (outcome_message == nullptr) {
         return;
@@ -999,6 +1070,8 @@ struct ControlBridge::Impl {
     }
     request.envelope_size = 0;
     request.sidecar_size = 0;
+    request.legacy_ticket.clear();
+    request.continuation_operation.clear();
     request.publication.store(
         PublicationState::open, std::memory_order_release);
     request.state.store(RequestState::free, std::memory_order_release);
@@ -1016,6 +1089,17 @@ struct ControlBridge::Impl {
       return;
     }
     release_request(request);
+  }
+
+  bool failure_observed() const noexcept {
+    return failed.load(std::memory_order_acquire) ||
+           runtime_failed_observer.load(std::memory_order_acquire);
+  }
+
+  void observe_runtime_failure() noexcept {
+    // Only serialized control reads Runtime's ordinary mutable state. Main
+    // observes this separate atomic, never a resource-retirement surrogate.
+    if (runtime.failed()) runtime_failed_observer.store(true, std::memory_order_release);
   }
 
   void fail_control() noexcept {
@@ -1180,8 +1264,7 @@ struct ControlBridge::Impl {
       fail_control();
       return;
     }
-    if (failed.load(std::memory_order_acquire) ||
-        hooks.on_control == nullptr || !hooks.on_control(hooks.context)) {
+    if (hooks.on_control == nullptr || !hooks.on_control(hooks.context)) {
       release_request(request);
       fail_control();
       return;
@@ -1204,6 +1287,13 @@ struct ControlBridge::Impl {
     if (!parsed.has_value() || !parsed->is_object() ||
         !parsed->contains("request_id") ||
         !valid_request_id(parsed->at("request_id"))) {
+      response_slot->state.store(MessageState::free, std::memory_order_release);
+      release_request(request);
+      fail_control();
+      return;
+    }
+    if (failed.load(std::memory_order_acquire) &&
+        (request.sidecar_size != 0 || !retained_owner_envelope(*parsed))) {
       response_slot->state.store(MessageState::free, std::memory_order_release);
       release_request(request);
       fail_control();
@@ -1249,9 +1339,15 @@ struct ControlBridge::Impl {
                    std::chrono::steady_clock::now() >= deadline) {
           request.publication.store(
               PublicationState::cancelled, std::memory_order_release);
-          runtime.fail_and_seal("request_timeout");
+          runtime.fail_and_seal("request_timeout",
+              ControlRuntime::AbsoluteRequestDeadline{deadline});
+          observe_runtime_failure();
           response = bridge_timeout_error();
-          terminal_after_response = true;
+          // An expired envelope cannot retire a retained transport/input owner
+          // or spend the caller's count-in receipt acknowledgment.
+          terminal_after_response = !runtime.pattern_transport_pending();
+          realtime_service_enabled.store(
+              runtime.pattern_transport_pending(), std::memory_order_release);
         } else {
           if (snapshot_notification_operation(operation)) {
             notification_slot = reserve_message();
@@ -1289,13 +1385,17 @@ struct ControlBridge::Impl {
                 ControlRuntime::AbsoluteRequestDeadline{
                     deadline,
                     &request,
-                    &publication_settlement_owned});
+                    &publication_settlement_owned}, request.request_id);
             if (!runtime_was_failed && runtime.failed()) {
-              terminal_after_response = true;
+              // Preserve the legacy diagnostic Bridge created around an
+              // already-failed, stopped Runtime. This Bridge's real failure
+              // transition still latches immediately, independently of debt.
+              observe_runtime_failure();
+              terminal_after_response = !runtime.pattern_transport_pending();
             }
             realtime_service_enabled.store(
                 runtime.engine().telemetry().state ==
-                    audio::RealtimeState::running,
+                    audio::RealtimeState::running || runtime.pattern_transport_pending(),
                 std::memory_order_release);
           }
         }
@@ -1381,6 +1481,38 @@ struct ControlBridge::Impl {
       }
     }
 
+    // Keep the original 16-slot RPC cell, RequestId and absolute deadline,
+    // but release Asyncify's dispatch gate. Legacy success remains the exact
+    // old schema and waits for its original candidate's real I/O result.
+    const auto pending_transport = !response.value("ok", false) &&
+        runtime.owns_pending_pattern_rpc(request.request_id, operation);
+    if (pending_transport && (operation == "trigger" || operation == "audio.suspend" ||
+        operation == "host.close" || operation == "project.open" || operation == "project.create" ||
+        operation == "history.undo" || operation == "history.redo")) {
+      if (operation == "trigger") {
+        // Only this original accepted input's retained cell authorizes a
+        // continuation; a different refused request cannot acquire its ticket.
+        request.legacy_ticket = request.request_id;
+      }
+      if (operation != "trigger" || !request.legacy_ticket.empty()) {
+        request.continuation_operation = operation;
+        request.deadline = deadline;
+        if (!request.legacy_ticket.empty()) {
+          auto expected_publication = PublicationState::open;
+          request.publication.compare_exchange_strong(expected_publication, PublicationState::committed,
+              std::memory_order_acq_rel, std::memory_order_acquire);
+        }
+        request.state.store(RequestState::awaiting_continuation, std::memory_order_release);
+        response_slot->state.store(MessageState::free, std::memory_order_release);
+        reservations.response = nullptr;
+        if (notification_slot) notification_slot->state.store(MessageState::free, std::memory_order_release);
+        reservations.notification = nullptr;
+        realtime_service_enabled.store(true, std::memory_order_release);
+        request_realtime_service();
+        return;
+      }
+    }
+
 #if !defined(__EMSCRIPTEN__)
     if (hooks.before_response_serialization != nullptr) {
       hooks.before_response_serialization(hooks.context);
@@ -1408,9 +1540,13 @@ struct ControlBridge::Impl {
     } else if (has_deadline && publication == PublicationState::cancelled) {
       mark_publication(request, PublicationState::cancelled);
       request.publication.notify_all();
-      runtime.fail_and_seal("request_timeout");
+      runtime.fail_and_seal("request_timeout",
+          ControlRuntime::AbsoluteRequestDeadline{deadline});
+      observe_runtime_failure();
       response = bridge_timeout_error();
-      terminal_after_response = true;
+      terminal_after_response = !runtime.pattern_transport_pending();
+      realtime_service_enabled.store(
+          runtime.pattern_transport_pending(), std::memory_order_release);
       if (notification_slot != nullptr) {
         notification_slot->state.store(
             MessageState::free, std::memory_order_release);
@@ -1456,6 +1592,45 @@ struct ControlBridge::Impl {
     }
   }
 
+  void service_retained_responses() {
+    for (auto& request : requests) {
+      if (request.state.load(std::memory_order_acquire) != RequestState::awaiting_continuation) continue;
+      const bool expired = std::chrono::steady_clock::now() >= request.deadline ||
+          request.publication.load(std::memory_order_acquire) == PublicationState::cancelled;
+      std::optional<Json> response;
+      if (!request.legacy_ticket.empty()) response = runtime.inspect_legacy_trigger(request.legacy_ticket);
+      if (expired) {
+        response = bridge_timeout_error();
+        if (request.legacy_ticket.empty()) runtime.fail_and_seal("request_timeout",
+            ControlRuntime::AbsoluteRequestDeadline{request.deadline});
+        observe_runtime_failure();
+      }
+      if (!response && request.legacy_ticket.empty()) {
+        // The exact lifecycle operation may resume only before its original
+        // deadline; its guard precedes every mutation. The single dispatch
+        // gate parks this thunk if another Asyncify call still owns control.
+        request.state.store(RequestState::queued, std::memory_order_release);
+        if (hooks.schedule == nullptr || !hooks.schedule(hooks.context, &process_thunk, &request))
+          fail_control();
+        continue;
+      }
+      if (!response) continue;
+      auto* message = reserve_realtime_message();
+      if (!message) continue;
+      Json envelope{{"protocol_version", 1}, {"request_id", request.request_id}, {"ok", response->at("ok")}};
+      envelope[response->at("ok").get<bool>() ? "result" : "error"] =
+          response->at(response->at("ok").get<bool>() ? "result" : "error");
+      request.state.store(RequestState::awaiting_response, std::memory_order_release);
+      if (!publish_message(*message, envelope, &request, true)) {
+        message->state.store(MessageState::free, std::memory_order_release);
+        request.state.store(RequestState::awaiting_continuation, std::memory_order_release);
+        continue;
+      }
+      if (!request.legacy_ticket.empty())
+        static_cast<void>(runtime.inspect_legacy_trigger(request.legacy_ticket, true));
+    }
+  }
+
   ControlRuntime& runtime;
   BridgeHooks hooks;
   std::array<RequestSlot, kBridgeRequestSlotCount> requests{};
@@ -1467,6 +1642,10 @@ struct ControlBridge::Impl {
   std::atomic<bool> realtime_service_requested{false};
   std::atomic<bool> realtime_service_scheduled{false};
   std::atomic<bool> failed{false};
+  std::atomic<bool> runtime_failed_observer{false};
+  // Main-browser submit is one producer. A single CAS gives its copy/schedule
+  // body a borrow; control cannot close the owner between check and publish.
+  std::atomic<std::uint32_t> terminal_admission{0};
   // Control-thread-only dispatch gate; see process(). Not atomics on purpose:
   // no other thread reads them.
   bool dispatch_in_progress = false;
@@ -1494,7 +1673,20 @@ BridgeSubmitStatus ControlBridge::submit(
   if (sidecar.size() > kBridgeMaximumSidecarBytes) {
     return BridgeSubmitStatus::sidecar_too_large;
   }
-  if (impl_->failed.load(std::memory_order_acquire)) {
+  std::uint32_t admission = 0;
+  if (!impl_->terminal_admission.compare_exchange_strong(
+          admission, kTerminalAdmissionBorrow,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
+    return BridgeSubmitStatus::queue_full;
+  }
+  struct SubmitCompletion {
+    std::atomic<std::uint32_t>& admission;
+    ~SubmitCompletion() {
+      admission.fetch_sub(kTerminalAdmissionBorrow, std::memory_order_release);
+    }
+  } submit_completion{impl_->terminal_admission};
+  if (impl_->failure_observed() &&
+      (!sidecar.empty() || !retained_owner_bytes(envelope))) {
     return BridgeSubmitStatus::queue_full;
   }
   ControlBridge::Impl::RequestSlot* selected = nullptr;
@@ -1734,11 +1926,61 @@ bool ControlBridge::terminal_release_ready() const noexcept {
   if (impl_->dispatch_in_progress || impl_->deferred_head != nullptr) {
     return false;
   }
+  if ((impl_->terminal_admission.load(std::memory_order_acquire) &
+       kTerminalAdmissionBorrow) != 0) return false;
+  // Controller worker, retained Native inputs and physical/authoring owners
+  // outlive a finished RPC. Their acknowledgments are independent gates.
+  if (!impl_->runtime.pattern_transport_shutdown_complete()) return false;
   for (const auto& request : impl_->requests) {
-    if (request.state.load(std::memory_order_acquire) ==
-        RequestState::processing) {
+    const auto state = request.state.load(std::memory_order_acquire);
+    // Awaiting-response and its actual release thunk still belong to the
+    // original consumer. Worker exit cannot substitute for either receipt.
+    if (state != RequestState::free) {
       return false;
     }
+  }
+  return true;
+}
+
+bool ControlBridge::seal_terminal_admission() noexcept {
+  if (impl_->hooks.on_control == nullptr ||
+      !impl_->hooks.on_control(impl_->hooks.context)) return false;
+  std::uint32_t expected = 0;
+  return impl_->terminal_admission.compare_exchange_strong(
+             expected, kTerminalAdmissionSealed,
+             std::memory_order_acq_rel, std::memory_order_acquire) ||
+         expected == kTerminalAdmissionSealed;
+}
+
+bool ControlBridge::service_terminal_retirement() noexcept {
+  if (impl_->hooks.on_control == nullptr ||
+      !impl_->hooks.on_control(impl_->hooks.context) ||
+      impl_->dispatch_in_progress) {
+    return false;
+  }
+  // The authenticated terminal channel is a real terminal intent. It closes
+  // admission, but keeps failed Bridge/Runtime owners available to drain.
+  // Do not park repeated terminal polling in the finite one-shot task pool.
+  Impl::ForeignTaskScope scope(*impl_);
+  impl_->dispatch_in_progress = true;
+  struct Completion {
+    Impl& owner;
+    ~Completion() {
+      owner.dispatch_in_progress = false;
+      owner.resume_deferred();
+    }
+  } completion{*impl_};
+  try {
+#if defined(__EMSCRIPTEN__)
+    observe_audio_terminal_on_control(impl_->runtime);
+#endif
+    impl_->runtime.fail_and_seal("terminal_transport_failure");
+    impl_->observe_runtime_failure();
+    impl_->runtime.service_pattern_transport();
+    impl_->service_retained_responses();
+  } catch (...) {
+    impl_->runtime.fail_and_seal("terminal_retirement_failure");
+    impl_->observe_runtime_failure();
   }
   return true;
 }
@@ -1759,7 +2001,7 @@ BridgePollStatus ControlBridge::poll(
   if (selected == nullptr) {
     impl_->request_realtime_service();
     required = 0;
-    return impl_->failed.load(std::memory_order_acquire)
+    return impl_->failure_observed()
                ? BridgePollStatus::failed
                : BridgePollStatus::empty;
   }
@@ -1791,7 +2033,7 @@ BridgePollStatus ControlBridge::poll(
 }
 
 bool ControlBridge::failed() const noexcept {
-  return impl_->failed.load(std::memory_order_acquire);
+  return impl_->failure_observed();
 }
 
 }  // namespace lmdj::web_runtime::detail
@@ -1902,7 +2144,6 @@ void fail_manifest_on_control(void* argument) noexcept {
     return;
   }
   if (web_runtime != nullptr) {
-    web_runtime->engine().stop();
     web_runtime->fail_and_seal("manifest_protocol_mismatch");
   }
 }
@@ -1946,6 +2187,26 @@ bool audio_ready(void* context) noexcept {
   return static_cast<RealtimeAudioWorklet*>(context)->ready();
 }
 
+bool count_in_output_ready(void* context) noexcept {
+  const auto* adapter = static_cast<RealtimeAudioWorklet*>(context);
+  // ready() is the paused startup/mutation barrier. Count-in is requested on
+  // an already rendering graph, whose immutable second output remains valid.
+  const auto gate = adapter->gate_state();
+  return adapter->state() == RealtimeAudioWorkletState::ready &&
+      adapter->fatal() == RealtimeAudioWorkletFatal::none &&
+      adapter->has_count_in_output() &&
+      (gate == RealtimeAudioWorkletGate::paused ||
+       gate == RealtimeAudioWorkletGate::open);
+}
+
+void request_audio_terminal_drain(void* context) noexcept {
+  static_cast<RealtimeAudioWorklet*>(context)->request_terminal_drain();
+}
+
+bool audio_physically_quiescent(void* context) noexcept {
+  return static_cast<RealtimeAudioWorklet*>(context)->physically_quiescent();
+}
+
 std::uint64_t acknowledged_audio_generation(void* context) noexcept {
   return static_cast<RealtimeAudioWorklet*>(context)
       ->acknowledged_generation();
@@ -1976,7 +2237,17 @@ void install_audio_coordinator(void* argument) noexcept {
           &audio_ready,
           &acknowledged_audio_generation,
       });
-  adapter->complete_control_install(installed.has_value());
+  const auto cue_installed =
+      lmdj::web_runtime::detail::ControlRuntimeCountInOutputAccess::install(
+          *web_runtime,
+          {adapter, &count_in_output_ready});
+  const auto physical_installed =
+      lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess::install(
+          *web_runtime,
+          {adapter, &request_audio_terminal_drain, &audio_physically_quiescent});
+  adapter->complete_control_install(
+      installed.has_value() && cue_installed.has_value() &&
+      physical_installed.has_value());
   if (adapter->fatal() ==
       RealtimeAudioWorkletFatal::coordinator_install_failed) {
     static_cast<void>(schedule_audio_control_failure(
@@ -1999,9 +2270,35 @@ const char* audio_failure_reason(RealtimeAudioWorkletFatal fatal) noexcept {
       return "coordinator_install_failed";
     case RealtimeAudioWorkletFatal::bootstrap_timeout:
       return "bootstrap_timeout";
+    case RealtimeAudioWorkletFatal::processor_error:
+      return "processor_error";
+    case RealtimeAudioWorkletFatal::callback_reentry:
+      return "callback_reentry";
+    case RealtimeAudioWorkletFatal::invalid_callback_shape:
+      return "invalid_callback_shape";
+    case RealtimeAudioWorkletFatal::quiescence_timeout:
+      return "quiescence_timeout";
     default:
       return "audio_bootstrap_failed";
   }
+}
+
+void observe_audio_terminal_on_control(ControlRuntime& runtime) noexcept {
+  const auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) return;
+  const auto fatal = adapter->fatal();
+  if (fatal == RealtimeAudioWorkletFatal::none) return;
+  auto expected = AudioFailureCommitState::idle;
+  if (web_audio_control_failure_state.compare_exchange_strong(
+          expected, AudioFailureCommitState::reserving,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
+    web_audio_control_failure_code.store(fatal, std::memory_order_release);
+    web_audio_control_failure_state.store(
+        AudioFailureCommitState::committed, std::memory_order_release);
+  }
+  // This runs inside the serialized service gate. The render callback only
+  // publishes atomics; no audio-thread proxy, storage call or allocation.
+  runtime.fail_and_seal(audio_failure_reason(fatal));
 }
 
 void fail_audio_on_control(void* argument) noexcept {
@@ -2163,13 +2460,15 @@ void run_quiescence_timeout_on_control(void*) noexcept {
   quiescence_timeout_diagnostic.state.store(2, std::memory_order_release);
 }
 
+void run_physical_fence_wait_on_control(void* argument) noexcept {
+  if (auto* bridge = web_bridge.load(std::memory_order_acquire);
+      bridge != nullptr &&
+      bridge->defer_while_dispatching(&run_physical_fence_wait_on_control, argument)) return;
+  run_quiescence_timeout_on_control(nullptr);
+}
+
 void fail_processor_error_on_control(void*) noexcept {
   if (web_runtime != nullptr) {
-    auto* adapter = web_audio.load(std::memory_order_acquire);
-    if (adapter != nullptr) {
-      static_cast<void>(adapter->await_quiescent(1'000));
-    }
-    web_runtime->engine().stop();
     web_runtime->fail_and_seal("processor_error");
     web_audio_control_failure_state.store(
         AudioFailureCommitState::committed,
@@ -2421,6 +2720,9 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_authorize_terminal_release(
     return 0;
   }
   auto* bridge = web_bridge.load(std::memory_order_acquire);
+  if (bridge != nullptr && !bridge->service_terminal_retirement()) return 2;
+  if (bridge != nullptr && !bridge->terminal_release_ready()) return 2;
+  if (bridge != nullptr && !bridge->seal_terminal_admission()) return 2;
   if (bridge != nullptr && !bridge->terminal_release_ready()) return 2;
   auto expected = TerminalReleaseState::ready;
   return web_terminal_release_state.compare_exchange_strong(
@@ -2532,6 +2834,34 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
   return static_cast<int>(result);
 }
 
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start_with_count_in(
+    std::int32_t audio_context_handle,
+    std::int32_t output_destination_handle,
+    std::int32_t cue_destination_handle) {
+  if (!emscripten_is_main_browser_thread() ||
+      web_manifest_terminal_failure.load(std::memory_order_acquire)) {
+    return -1;
+  }
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) {
+    return static_cast<int>(RealtimeAudioWorkletStart::unpublished);
+  }
+  const auto result = adapter->start_with_count_in_on_browser_main(
+      audio_context_handle, output_destination_handle, cue_destination_handle);
+  if (result == RealtimeAudioWorkletStart::unsupported_sample_rate ||
+      result == RealtimeAudioWorkletStart::unsupported_render_quantum) {
+    if (!schedule_audio_control_failure(adapter->fatal())) {
+      return static_cast<int>(RealtimeAudioWorkletStart::fatal);
+    }
+  }
+  return static_cast<int>(result);
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_has_count_in_output() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter != nullptr && adapter->has_count_in_output() ? 1 : 0;
+}
+
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_connect_direct(
     std::int32_t audio_context_handle,
     std::int32_t output_destination_handle) {
@@ -2633,6 +2963,55 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_callback_heartbeat() {
 }
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_fence_arm(std::uint32_t stages) {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr || stages == 0 || (stages & ~3U) != 0) return 0;
+  adapter->arm_physical_fence_barrier_for_conformance(stages);
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_fence_release(std::uint32_t stages) {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr || stages == 0 || (stages & ~3U) != 0) return 0;
+  adapter->release_physical_fence_barrier_for_conformance(stages);
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_physical_fence_stage() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0x80000000U :
+      adapter->physical_fence_barrier_stage_for_conformance();
+}
+
+EMSCRIPTEN_KEEPALIVE double lmdj_web_audio_test_physical_fence_cue_batch() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : static_cast<double>(
+      adapter->physical_fence_cue_batch_for_conformance());
+}
+
+EMSCRIPTEN_KEEPALIVE double lmdj_web_audio_test_physical_fence_pending_cue_batch() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : static_cast<double>(
+      adapter->physical_fence_pending_cue_batch_for_conformance());
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_physical_fence_borrows() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : adapter->physical_fence_borrow_count_for_conformance();
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physically_quiescent() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter != nullptr && adapter->physically_quiescent() ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_request_physical_terminal_drain() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) return 0;
+  adapter->request_terminal_drain();
+  return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_observed_frames() {
   auto* adapter = web_audio.load(std::memory_order_acquire);
   return adapter == nullptr ? 0 : adapter->observed_frames();
@@ -2762,6 +3141,27 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_quiescence_timeout(
           web_control_thread,
           &run_quiescence_timeout_on_control,
           nullptr) == 0) {
+    quiescence_timeout_diagnostic.state.store(0, std::memory_order_release);
+    return 0;
+  }
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_quiescence_wait(
+    std::uint32_t timeout_ms) {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr || web_proxy_queue == nullptr || timeout_ms == 0 ||
+      timeout_ms > 100 || !adapter->callback_in_flight()) return 0;
+  const auto stage = adapter->physical_fence_barrier_stage_for_conformance();
+  if ((stage & 1U) == 0 || (stage & 0x80000000U) != 0) return 0;
+  std::uint32_t expected = 0;
+  if (!quiescence_timeout_diagnostic.state.compare_exchange_strong(
+          expected, 1, std::memory_order_acq_rel, std::memory_order_acquire)) return 0;
+  quiescence_timeout_diagnostic.timeout_ms.store(timeout_ms, std::memory_order_release);
+  // The accepted real callback owns the borrow. This path does not fabricate
+  // in-flight state or acknowledge either cue, Native or caller ownership.
+  if (emscripten_proxy_async(web_proxy_queue, web_control_thread,
+          &run_physical_fence_wait_on_control, nullptr) == 0) {
     quiescence_timeout_diagnostic.state.store(0, std::memory_order_release);
     return 0;
   }
@@ -3043,6 +3443,14 @@ int main() {
           web_runtime.get(),
           &schedule_audio_install,
       });
+  // Install the physical capability before async bootstrap can fail. It binds
+  // the same owned adapter later used by the unchanged coordinator ABI.
+  const auto physical_installed =
+      lmdj::web_runtime::detail::ControlRuntimePhysicalAudioAccess::install(
+          *web_runtime,
+          {web_audio_owner.get(), &request_audio_terminal_drain,
+           &audio_physically_quiescent});
+  if (!physical_installed.has_value()) return 1;
   web_bridge_owner = std::make_unique<ControlBridge>(
       *web_runtime,
       BridgeHooks{nullptr, schedule_control, on_control});

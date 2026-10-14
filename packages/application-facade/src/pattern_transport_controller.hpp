@@ -3,18 +3,21 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <map>
 #include <optional>
 #include <vector>
 
 #include <lmdj/audio/realtime_engine.hpp>
-#include <lmdj/facade/pattern_transport_ports.hpp>
+#include <lmdj/facade/pattern_transport_controller.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
 #include "pattern_admission_controller.hpp"
 
 namespace lmdj::facade::detail {
+
+struct PatternTransportOpeningPublication;
 
 class PatternTransportAudioPort {
  public:
@@ -70,6 +73,28 @@ class PatternTransportCoordinator {
       foundation::PatternId pattern, std::uint64_t runtime_generation,
       PatternAdmissionOwner::Clock clock = {});
 
+  PatternTransportCoordinator(PatternTransportAudioPort& audio,
+      PatternTransportExecutor& executor, PatternTransportControllerConfig config,
+      ScheduledPatternTransportAudioPort* scheduled = nullptr,
+      std::shared_ptr<PatternTransportOpeningPublication> opening = {});
+  ~PatternTransportCoordinator();
+  PatternTransportSubmit request_count_in(const ScheduledPatternTransportRequest&);
+  ScheduledPatternTransportStatus inspect_count_in() const;
+  PatternTransportSubmit cancel_count_in(const ScheduledPatternTransportCancel&);
+  foundation::Result<PatternTransportInputTicket> reserve_input(const PatternTransportInputRequest&);
+  bool bind_input(const PatternTransportInputTicket&, const audio::PatternInputAdmission&);
+  bool complete_input(const audio::PatternInputCompletion&);
+  std::optional<PatternTransportInputStatus> inspect_input(const PatternTransportInputTicket&) const;
+  bool consume_input(const PatternTransportInputTicket&);
+  bool abandon_input(const PatternTransportInputTicket&);
+  PatternTransportIngressStatus inspect_ingress() const;
+  PatternTransportInputOwnerStatus inspect_input_owner() const;
+  bool request_input_owner_disposition(std::uint64_t runtime_generation);
+  bool acknowledge_input_owner(std::uint64_t runtime_generation);
+  void request_shutdown();
+  bool shutdown_complete() const;
+  PatternTransportExecutorStatus inspect_io() const;
+
   PatternTransportSubmit request(const PatternTransportRequest& request);
   bool retains_command_id(const foundation::CommandId& command_id) const;
   PatternTransportStatus inspect() const;
@@ -112,12 +137,14 @@ class PatternTransportCoordinator {
       const audio::PatternTransportReceipt& receipt,
       const PatternTransportRequest& request);
 
+  struct Async;
+  std::unique_ptr<Async> async_;
   PatternTransportAudioPort& audio_;
-  project_io::SequenceJournal& journals_;
+  project_io::SequenceJournal* journals_{};
   std::filesystem::path bundle_;
   PatternAdmissionOwner::Clock clock_;
-  PatternAdmissionOwner owner_;
-  project_io::ProjectStore& store_;
+  std::unique_ptr<PatternAdmissionOwner> owner_;
+  project_io::ProjectStore* store_{};
   foundation::SequenceSessionId session_;
   foundation::ProjectId project_;
   foundation::PatternId pattern_;

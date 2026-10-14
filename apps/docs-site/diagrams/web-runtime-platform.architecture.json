@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Web Runtime Platform Module",
-    "summary": "Creator 与诊断 Host 共用一个受 Product Assembly 约束的浏览器 Runtime"
+    "summary": "S6 源码草稿：同一 frozen Session、strict companion 与 product/cue 双输出；执行 UNVERIFIED"
   },
   "boundaries": [
     {
@@ -10,8 +10,8 @@
       "label": "packages/web-runtime-platform · product-neutral",
       "x": 300,
       "y": 100,
-      "width": 910,
-      "height": 470
+      "width": 930,
+      "height": 490
     }
   ],
   "components": [
@@ -21,7 +21,7 @@
       "detail": "Sample · Sequence · Perform UI",
       "kind": "host",
       "x": 40,
-      "y": 150,
+      "y": 145,
       "width": 210,
       "height": 92
     },
@@ -31,7 +31,7 @@
       "detail": "proof · diagnostics",
       "kind": "host",
       "x": 40,
-      "y": 360,
+      "y": 380,
       "width": 210,
       "height": 92
     },
@@ -41,38 +41,38 @@
       "detail": "exact Host allowlist",
       "kind": "core",
       "x": 340,
-      "y": 150,
+      "y": 170,
       "width": 220,
       "height": 92
     },
     {
       "id": "session",
       "label": "Runtime Session",
-      "detail": "frame input · bounded live window",
+      "detail": "frozen owner · tickets · live window",
       "kind": "core",
       "x": 650,
-      "y": 255,
-      "width": 230,
+      "y": 170,
+      "width": 290,
       "height": 92
     },
     {
       "id": "audio",
-      "label": "Web Audio",
-      "detail": "claimed Bar publication",
+      "label": "Wasm Worklet",
+      "detail": "stereo128 · product + cue",
       "kind": "core",
-      "x": 950,
-      "y": 150,
+      "x": 340,
+      "y": 380,
       "width": 220,
       "height": 92
     },
     {
       "id": "facade",
       "label": "Application Facade",
-      "detail": "only Core entry",
+      "detail": "control · one I/O worker",
       "kind": "core",
-      "x": 1300,
-      "y": 255,
-      "width": 220,
+      "x": 1010,
+      "y": 170,
+      "width": 250,
       "height": 92
     },
     {
@@ -80,30 +80,30 @@
       "label": "Project Bundle",
       "detail": "transfer-only bytes",
       "kind": "host",
-      "x": 950,
-      "y": 410,
-      "width": 220,
+      "x": 1310,
+      "y": 170,
+      "width": 230,
       "height": 92
     },
     {
       "id": "tap",
       "label": "Master Tap Worklet",
-      "detail": "platform-owned processor",
+      "detail": "product only · real PCM tap",
       "kind": "core",
       "x": 650,
-      "y": 410,
-      "width": 230,
-      "height": 92
+      "y": 490,
+      "width": 260,
+      "height": 96
     },
     {
       "id": "capture",
-      "label": "Master Capture",
-      "detail": "bounded batch queue",
+      "label": "Capture / Resample",
+      "detail": "product PCM · no cue",
       "kind": "core",
-      "x": 950,
-      "y": 255,
-      "width": 220,
-      "height": 92
+      "x": 1010,
+      "y": 490,
+      "width": 250,
+      "height": 96
     },
     {
       "id": "offline",
@@ -111,18 +111,18 @@
       "detail": "complete build · waiting update",
       "kind": "host",
       "x": 40,
-      "y": 260,
+      "y": 270,
       "width": 210,
       "height": 80
     },
     {
       "id": "monitor",
       "label": "Monitor Gain",
-      "detail": "Session state · after capture",
+      "detail": "product + cue · monitor volume",
       "kind": "core",
-      "x": 340,
-      "y": 410,
-      "width": 220,
+      "x": 1010,
+      "y": 380,
+      "width": 250,
       "height": 92
     },
     {
@@ -130,22 +130,27 @@
       "label": "Physical Output",
       "detail": "speaker / headphones",
       "kind": "host",
-      "x": 40,
-      "y": 490,
-      "width": 210,
-      "height": 60
+      "x": 1310,
+      "y": 380,
+      "width": 230,
+      "height": 92
     }
   ],
   "connections": [
     {
       "from": "creator",
       "to": "manifest",
-      "label": "creator identity"
+      "label": "Creator identity"
     },
     {
       "from": "diagnostic",
       "to": "manifest",
-      "label": "diagnostic identity"
+      "label": "Diagnostic identity"
+    },
+    {
+      "from": "creator",
+      "to": "offline",
+      "label": "verified shell cache"
     },
     {
       "from": "manifest",
@@ -154,71 +159,66 @@
     },
     {
       "from": "session",
-      "to": "audio",
-      "label": "immutable view"
+      "to": "facade",
+      "label": "strict companion + ordinary"
+    },
+    {
+      "from": "facade",
+      "to": "bundle",
+      "label": "transfer-only bytes"
     },
     {
       "from": "session",
-      "to": "facade",
-      "label": "typed overlay API"
-    },
-    {
-      "from": "bundle",
-      "to": "facade",
-      "label": "import/export"
+      "to": "audio",
+      "label": "full startup identity"
     },
     {
       "from": "audio",
       "to": "tap",
-      "label": "master bus"
+      "label": "output 0: product"
     },
     {
       "from": "tap",
       "to": "capture",
-      "label": "started · batch · stopped"
+      "label": "started · PCM · stopped"
+    },
+    {
+      "from": "audio",
+      "to": "monitor",
+      "label": "output 1: cue only"
+    },
+    {
+      "from": "tap",
+      "to": "monitor",
+      "label": "product monitor"
+    },
+    {
+      "from": "monitor",
+      "to": "output",
+      "label": "same monitor gain"
     },
     {
       "from": "session",
       "to": "capture",
       "label": "capture status"
-    },
-    {
-      "from": "creator",
-      "to": "offline",
-      "label": "verified build cache"
-    },
-    {
-      "from": "tap",
-      "to": "monitor",
-      "label": "transparent output"
-    },
-    {
-      "from": "audio",
-      "to": "monitor",
-      "label": "tap failure recovery"
-    },
-    {
-      "from": "monitor",
-      "to": "output",
-      "label": "monitor volume"
     }
   ],
   "cards": [
     {
-      "title": "Product identity",
-      "body": "Product CMake 注入 Product Build、Platform version 与精确 Host triple。 Creator owns a complete verified shell cache. Publish readiness only after manifest, immutable assets and isolation headers pass; partial updates preserve the prior build. Activation waits for existing documents to close. Project assets remain Facade-owned OPFS. Offline inventory activation requires coordinated Creator Host MAJOR settlement."
+      "title": "身份与兼容",
+      "body": "清单投影身份；envelope1/ordinary/单输出保留。完整 startup tuple，恢复不加路由；未分配 Build。"
     },
     {
-      "title": "Shared runtime",
-      "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。 Strict retained-Project routing, explicit permission readback and target plan. Facade prepares transient PCM; Host audition pool reports actual admission and consumes stop. Serialize adoption once; unknown response requires inspection. No Host bundle parsing or automatic retry. Session-bound Undo/Redo refresh Project projections and publish derived audio through existing acknowledgement handling. Pattern playback must be stopped."
+      "title": "同一 Session owner",
+      "body": "frozen runtime.session；Pad 同步 reserve，Pad/FX/HOLD 单 tail 顺序 submit。共享64，原1s/Release；短 tickets 释放两条 tails。"
     },
     {
-      "title": "Master tap",
-      "body": "Platform 自有 master tap worklet；capture 状态沿 unconfigured → configured → ready 前进，失败为 unavailable，capture 只能从 ready 启动，每条消息逐键校验。 W1 起 start 携带 begin binding、processor 应用后回 started ACK；controller 在发送前占有唯一 pending start，错 binding/重复/提前 batch/超时均拒绝，旧 generation 的迟到 ACK 不复用。 Capture precedes Session monitor gain. Normal and failed-tap recovery share the same gain; its 0–100 level never changes captured PCM or Project Truth."
+      "title": "双输出与严格 tap ACK",
+      "body": "product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。"
     },
     {
-      "title": "Forbidden boundary",
-      "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。Transport T0 conformance: executor owns paused OPFS while Control admits live press/release. Resume, verify bytes, consume once, release on owner thread and reacquire on a new worker. T3: opted-in sessions reach the Facade-owned transport coordinator through pattern.transport.request/inspect; the pending ticket releases the dispatch tail and the service cadence settles short epoch-checked steps. Legacy stays default. The Pattern transport live overlay: the Facade coordinator owns publication on the control cadence; the Platform implements the publish capability and keeps servicing an open recording (#1550)."
+      "title": "验收仍待执行",
+      "body": "1s Pad/5s opening/16 RPC。held I/O、真 release/Truth/reopen、raw PCM 未验收；S7/听感另行交付。"
     }
   ]
 }

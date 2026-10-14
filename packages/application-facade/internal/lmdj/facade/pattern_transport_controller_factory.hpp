@@ -28,7 +28,8 @@ class PatternTransportControllerInternalFactory {
       PatternTransportControllerConfig config,
       std::shared_ptr<project_io::ProjectStoragePlatform> platform,
       std::shared_ptr<project_io::AuthoringHistory> history = {},
-      std::function<void()> on_destroy = {});
+      std::function<void()> on_destroy = {},
+      ScheduledPatternTransportAudioPort* scheduled = nullptr);
 };
 
 }  // namespace lmdj::facade::detail

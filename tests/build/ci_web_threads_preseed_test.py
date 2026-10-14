@@ -31,6 +31,7 @@ EMSCRIPTEN_PROOF_SCRIPTS = {
     "scripts/web-toolchain-conformance.sh": 3,
     "scripts/web-runtime-host.sh": 1,
     "scripts/creator-web.sh": 1,
+    "scripts/creator-count-in-io-proof.sh": 1,
 }
 
 

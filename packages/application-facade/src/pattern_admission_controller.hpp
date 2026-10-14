@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -12,6 +13,12 @@
 #include <lmdj/project_io/sequence_journal.hpp>
 
 namespace lmdj::facade::detail {
+
+struct PatternTransportOpeningCommit;
+struct PatternAdmissionOpeningEvidence {
+  project_io::SequenceAdmissionFence fence;
+  std::chrono::steady_clock::time_point completed_at;
+};
 
 // Builds one immutable receipt from durable input only. Does not enqueue live
 // input, consult Project settings, or mutate a journal. The worker owner writes
@@ -46,10 +53,11 @@ project_admission_overlay(const project_io::ActiveSequenceJournal& journal,
 enum class PatternAdmissionAdmit : std::uint8_t { retained, live_only };
 
 // Prepared admission owner: closed prepare/activate, post-enqueue candidates,
-// deadline/capacity closure at watermark B, and conversion through
+// opening-deadline/capacity closure at watermark B, and conversion through
 // commit_admission_transfer. Live input before the admission fence, after
 // closure, or after owner loss stays live-only. A delayed cutoff may still
-// drain the retained prefix once.
+// drain the retained prefix once. Once activated, elapsed opening time never
+// seals the take or discards a matching release.
 class PatternAdmissionOwner {
  public:
   using Clock = std::function<std::chrono::steady_clock::time_point()>;
@@ -61,12 +69,20 @@ class PatternAdmissionOwner {
   foundation::Result<void> prepare(
       const project_io::SequenceAdmissionPreparation& preparation);
   // Receipt-bound opening starts its budget before audio submission. An IO
-  // retry must preserve this start, including an already durable prepare.
+  // retry preserves the earliest start for this identity, including an already
+  // durable prepare; a new operation identity captures its own start.
   foundation::Result<void> prepare(
       const project_io::SequenceAdmissionPreparation& preparation,
       std::chrono::steady_clock::time_point started_at);
+  // First activation must precede the captured opening deadline. An exact
+  // already-durable fence replay remains valid after that deadline.
   foundation::Result<void> activate(
-      const project_io::SequenceAdmissionFence& fence);
+      const project_io::SequenceAdmissionFence& fence,
+      PatternTransportOpeningCommit* commit = nullptr);
+  // Worker-local positive evidence, never inferred from readable Journal
+  // bytes. An unknown append response does not establish its completion time.
+  std::optional<std::chrono::steady_clock::time_point> opening_completed_at(
+      const project_io::SequenceAdmissionFence& fence) const;
   foundation::Result<void> cutoff(
       const project_io::SequenceAdmissionFence& fence);
   foundation::Result<void> retain_switch(
@@ -83,6 +99,17 @@ class PatternAdmissionOwner {
       foundation::CommandId flush_id, foundation::CommandId profile_id);
   foundation::Result<PatternAdmissionAdmit> admit(
       const project_io::SequenceAdmissionCandidate& candidate);
+  // Internal same-operation precheck input from the serialized IO owner.
+  // Supply its checked read_active result, rereading after any checkpoint or
+  // other journal mutation. Never retain it across operations. The append
+  // still rereads and validates the current journal under its writer lease.
+  foundation::Result<PatternAdmissionAdmit> admit(
+      const project_io::SequenceAdmissionCandidate& candidate,
+      const project_io::ActiveSequenceJournal& journal);
+  // Recycle a known durable candidate window before it fills. The transfer
+  // retains the real correlation checkpoint; it neither finalizes held input
+  // nor changes the persisted candidate/byte bounds or capacity closure.
+  foundation::Result<void> checkpoint_prefix(foundation::CommandId transfer_id);
   foundation::Result<void> close(
       const project_io::SequenceAdmissionClosure& closure);
   foundation::Result<void> close_requested();
@@ -93,6 +120,8 @@ class PatternAdmissionOwner {
   foundation::Result<void> settle_close(
       project_io::ProjectStore& store, foundation::CommandId transfer_id,
       foundation::CommandId terminal_id, foundation::CommandId flush_id);
+  bool has_settled_close(const foundation::CommandId& terminal_id,
+                         const foundation::CommandId& flush_id) const;
   foundation::Result<project_io::SequenceAdmissionTransfer> drain(
       foundation::CommandId transfer_id, std::uint64_t last_watermark,
       bool terminal);
@@ -100,6 +129,7 @@ class PatternAdmissionOwner {
  private:
   foundation::Result<void> close_at(
       project_io::SequenceAdmissionCloseReason reason);
+  foundation::Result<void> expire_opening();
   bool deadline_elapsed(
       const project_io::SequenceAdmissionPreparation& preparation) const;
 
@@ -108,7 +138,13 @@ class PatternAdmissionOwner {
   foundation::SequenceSessionId session_;
   Clock clock_;
   std::optional<std::chrono::steady_clock::time_point> prepared_at_;
+  std::chrono::milliseconds opening_timeout_{};
+  std::optional<project_io::SequenceAdmissionIdentity> preparation_attempt_identity_;
+  std::optional<std::chrono::steady_clock::time_point> preparation_attempt_started_at_;
   std::optional<project_io::SequenceAdmissionIdentity> identity_;
+  std::shared_ptr<const PatternAdmissionOpeningEvidence> opening_evidence_;
+  std::optional<foundation::Error> opening_failure_;
+  std::optional<std::pair<foundation::CommandId, foundation::CommandId>> settled_close_;
 };
 
 struct PatternOwnedPress {

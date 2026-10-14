@@ -1194,7 +1194,7 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
       await expect.poll(async () => {
         const status = await inspect();
         const position = (status.runtime_frame - status.origin_frame) % barFrames;
-        return status.playing && status.pending_switch == null &&
+        return status.playing && !status.publication_pending && status.pending_switch == null &&
           position >= 0 && position < barFrames / 5;
       }, {timeout: LAUNCH_TRANSITION_TIMEOUT_MS, intervals: [50]}).toBe(true);
     };
@@ -1484,6 +1484,18 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
     pointerId: 21,
   });
   await expect(recordingStatus).toContainText(/open pads?\s*[:·]\s*1/i);
+  // The actual Creator Press reaches Pattern and the Performance journal with
+  // one opaque identity. Probe only local preparation via the same packaged
+  // Session: exactly 63 places remain, not 62 or 64. No wire/Truth injection.
+  const remainingWhileHeld = await page.evaluate(() => {
+    const session = window.lmdjWebRuntimeHost.session;
+    const leases = Array.from({length: 64}, () =>
+      session.reserveInputGesture({}, 0, "pointer"));
+    const count = leases.filter(lease => lease !== null).length;
+    for (const lease of leases) lease?.cancelUnsubmittedPattern();
+    return count;
+  });
+  expect(remainingWhileHeld).toBe(63);
   await page.waitForTimeout(120);
   await pad.dispatchEvent("pointerup", {
     button: 0,
@@ -1491,6 +1503,14 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
     pointerId: 21,
   });
   await expect(recordingStatus).toContainText(/open pads?\s*[:·]\s*0/i);
+  await expect.poll(() => page.evaluate(() => {
+    const session = window.lmdjWebRuntimeHost.session;
+    const leases = Array.from({length: 64}, () =>
+      session.reserveInputGesture({}, 0, "pointer"));
+    const count = leases.filter(lease => lease !== null).length;
+    for (const lease of leases) lease?.cancelUnsubmittedPattern();
+    return count;
+  }), {timeout: AUDIO_TRANSITION_TIMEOUT_MS}).toBe(64);
 
   const launch = page.getByRole("button", {name: "Launch Pattern 2"});
   await armAttributeObservation(launch, "data-launch", "pending");

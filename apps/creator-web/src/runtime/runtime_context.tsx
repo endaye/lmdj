@@ -76,6 +76,8 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   const factoryRef = useRef(factory);
   factoryRef.current = factory;
   const [session, setSession] = useState<CreatorRuntimeSession>(() => factory());
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   const [phase, setPhase] = useState<RuntimeProviderPhase>("booting");
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] =
@@ -83,6 +85,8 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   const [hostState, setHostState] = useState("cold");
   const [recoveryProbeReady, setRecoveryProbeReady] = useState(false);
   const closePromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<boolean>>());
+  const shutdownFailures = useRef(new WeakSet<CreatorRuntimeSession>());
+  const replacementPromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<boolean>>());
   const shutdownBarriers = useRef(new WeakMap<
     CreatorRuntimeSession,
     Set<() => Promise<unknown>>
@@ -100,11 +104,28 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
           shutdownBarriers.current.delete(target);
         }
         return target.close();
-      }).catch(() => false);
+      }).catch(() => {
+        shutdownFailures.current.add(target);
+        return false;
+      });
       closePromises.current.set(target, pending);
     }
     return pending;
   }, []);
+  const replacementEligibleOnce = useCallback((target: CreatorRuntimeSession) => {
+    let pending = replacementPromises.current.get(target);
+    if (!pending) {
+      pending = closeOnce(target).then(async (clean) => {
+        // A failed application barrier or rejected close cannot be repaired by
+        // the SDK's owner-retirement receipt.
+        if (shutdownFailures.current.has(target)) return false;
+        if (target.waitForTerminalCleanup === undefined) return clean === true;
+        return (await target.waitForTerminalCleanup()) === true;
+      }).catch(() => false);
+      replacementPromises.current.set(target, pending);
+    }
+    return pending;
+  }, [closeOnce]);
   const registerShutdownBarrier = useCallback((
     barrier: () => Promise<unknown>,
   ) => {
@@ -115,12 +136,19 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
     }
     let pending: Promise<unknown> | null = null;
     const runOnce = () => {
-      pending ??= Promise.resolve().then(barrier).catch(() => {});
+      if (pending === null) {
+        pending = Promise.resolve().then(barrier);
+        // Observe rejection without changing the original barrier's result.
+        void pending.catch(() => {});
+      }
       return pending;
     };
     barriers.add(runOnce);
     return () => {
-      void runOnce().finally(() => barriers?.delete(runOnce));
+      void runOnce().then(
+        () => barriers?.delete(runOnce),
+        () => {}, // Retain failed persistence work for closeOnce to observe.
+      );
     };
   }, [session]);
 
@@ -130,17 +158,13 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
     automaticRestartAvailable.current = true;
     const replacementGeneration = generation.current + 1;
     generation.current = replacementGeneration;
-    setPhase("booting");
-    setErrorCode(null);
-    setErrorDetails(EMPTY_DETAILS);
-    setHostState("cold");
-    setRecoveryProbeReady(false);
-    void closeOnce(session).then(() => {
-      if (generation.current === replacementGeneration) {
+    // Keep the original failure visible until this exact Session is eligible.
+    void replacementEligibleOnce(session).then((eligible) => {
+      if (eligible && generation.current === replacementGeneration) {
         setSession(factoryRef.current());
       }
     });
-  }, [closeOnce, session]);
+  }, [replacementEligibleOnce, session]);
 
   const yieldRuntime = useCallback(() => {
     // As on pagehide: retire the generation first so the Session's own
@@ -177,8 +201,8 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       automaticRestartAvailable.current = false;
       const replacementGeneration = generation.current + 1;
       generation.current = replacementGeneration;
-      void closeOnce(session).then(() => {
-        if (generation.current === replacementGeneration) {
+      void replacementEligibleOnce(session).then((eligible) => {
+        if (eligible && generation.current === replacementGeneration) {
           setSession(factoryRef.current());
         }
       });
@@ -217,7 +241,9 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       );
     });
     const pagehide = (event: PageTransitionEvent) => {
-      if (event.persisted || !ownsGeneration()) return;
+      // A replacement wait has already retired ownedGeneration, but pagehide
+      // must still invalidate it while this mounted Session owns the Provider.
+      if (event.persisted || !active || sessionRef.current !== session) return;
       generation.current += 1;
       setPhase("closed");
       void closeOnce(session);
@@ -278,7 +304,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       unsubscribeHostState();
       void closeOnce(session);
     };
-  }, [closeOnce, session]);
+  }, [closeOnce, replacementEligibleOnce, session]);
 
   const issue = useMemo<RuntimeIssue | null>(
     () => errorCode === null

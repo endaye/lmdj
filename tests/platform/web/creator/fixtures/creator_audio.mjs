@@ -43,6 +43,22 @@ export async function wakeAudioWithPad(page, {padAddress} = {}) {
         return async (...args) => {
           const result = await target.send(...args);
           if (args[0]?.operation === "trigger" && args[0]?.payload?.velocity > 0) responses.push(result);
+          if (args[0]?.operation === "pattern.transport.input.request" &&
+              args[0]?.payload?.kind === "press") {
+            // The negotiated path returns a retained ticket. Keep its actual
+            // response as evidence and project only a safely representable
+            // admitted sequence for the unchanged real voice-state assertion.
+            const decimal = result?.result?.status?.admission?.sequence;
+            const sequence = typeof decimal === "string" &&
+              /^[1-9][0-9]*(?![\s\S])/.test(decimal) ? Number(decimal) : null;
+            if (!Number.isSafeInteger(sequence) || sequence <= 0) {
+              responses.push({ok: false, rawResponse: result,
+                reason: "companion admission lacks an exact legacy sequence"});
+            } else {
+              responses.push({ok: result.ok, result: {sequence},
+                rawResponse: result, operation: args[0].operation});
+            }
+          }
           return result;
         };
       }});

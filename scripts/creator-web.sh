@@ -432,6 +432,7 @@ run_browser_gate() {
     --repo-root "$repo_root" \
     --port "$requested_port" \
     --catalog-upstream-file "$LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE" \
+    --test-audio-observer-file "$web_test_root/audio/count_in_pcm_probe.js" \
     --ready-file "$ready_file" \
     --ready-nonce "$ready_nonce" >"$build_root/proof-server.log" 2>&1 &
   proof_server_pid=$!

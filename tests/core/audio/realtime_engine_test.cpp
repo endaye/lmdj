@@ -7360,7 +7360,1032 @@ void pad_gates_queue_full_and_stale_epoch_fail_closed() {
 }
 }  // namespace
 
+namespace {
+using namespace lmdj::audio;
+
+struct ScheduledRecordFixture {
+  RealtimeEngine engine;
+  std::uint64_t pattern_generation{};
+  std::weak_ptr<const lmdj::cooker::PcmSample> material_lifetime;
+  explicit ScheduledRecordFixture(std::uint16_t bpm = 120, std::size_t n = 1024,
+                                  bool muted = false, bool empty_pattern = false, bool muted_pattern = false)
+      : engine(RealtimeEngine::ReceiptBoundedVoiceStates{}, n) {
+    LMDJ_CHECK(engine.enable_pattern_transport(71).has_value());
+    LMDJ_CHECK(engine.enable_scheduled_pattern_record(71).has_value());
+    LMDJ_CHECK(engine.enable_pattern_input_profile(71).has_value());
+    std::array<float, 128> pcm{};
+    pcm.fill(0.125F);
+    auto bank = bank_with_playback(1, pcm,
+        {0, 128, TriggerMode::loop_gate, 1.0F, muted});
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+    auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 127, bpm, 12'000);
+    if (empty_pattern) snapshot.events.clear();
+    if (muted_pattern) snapshot.pads[0].playback.muted = true;
+    material_lifetime = snapshot.pads[0].sample;
+    auto view = PreparedPatternView::from_snapshot(snapshot);
+    LMDJ_CHECK(view.has_value());
+    const auto publication = engine.publish_pattern_view(std::move(view.value()));
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    pattern_generation = publication.generation;
+    LMDJ_CHECK(engine.start().has_value());
+  }
+  ScheduledPatternRecordRequest request(std::uint64_t serial = 1,
+      std::uint64_t epoch = 1, std::uint8_t bars = 1) const {
+    return {71, 1, epoch, serial, pattern_generation, PatternId{kPatternA}, bars};
+  }
+  PatternInputAdmission press(bool held = true, ResolvedPlayback playback = {}) {
+    return engine.enqueue_pattern_input({71, 1, 0, 127, false, 0, held, playback});
+  }
+  PatternInputAdmission release(std::uint64_t press_sequence) {
+    return engine.enqueue_pattern_input({71, 1, 0, 0, true, press_sequence});
+  }
+  CountInCueBatch consume_cues() {
+    CountInCueBatch batch{};
+    if (engine.take_count_in_cue_batch_audio(batch))
+      LMDJ_CHECK(engine.acknowledge_count_in_cue_batch_audio(batch.batch_id));
+    return batch;
+  }
+  void advance(std::uint64_t frames) {
+    std::array<float, 256> left{}, right{};
+    while (frames != 0) {
+      const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, left.size()));
+      engine.render(left.data(), right.data(), n);
+      consume_cues();
+      frames -= n;
+    }
+  }
+};
+
+void scheduled_restart_after_tempo_stop_has_a_fresh_musical_origin() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.enable_pattern_transport(71).has_value());
+  LMDJ_CHECK(engine.enable_scheduled_pattern_record(71).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(
+      PreparedSampleBank::empty(ProjectId{kProjectId}, 1)) == PublishResult::accepted);
+  auto snapshot = tempo_quarter_snapshot();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(source.has_value());
+  auto faster = source.value().with_tempo(240);
+  LMDJ_CHECK(faster.has_value());
+  const auto first = engine.publish_pattern_view(std::move(source.value()));
+  LMDJ_CHECK(first.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.submit_pattern_transport({71, 1, first.generation,
+      PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+  render_frames(engine, 1);
+  const auto started = engine.inspect_pattern_transport_receipt(71, 1);
+  LMDJ_CHECK(started && started->playing && started->effective_frame == 0);
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(71, 1));
+
+  render_until(engine, 12'001);
+  const auto tempo = engine.publish_pattern_tempo_transition(
+      std::move(faster.value()), first.generation);
+  LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+  render_until(engine, 13'000);
+  const auto changed = engine.pattern_tempo_observation(tempo.generation);
+  LMDJ_CHECK(changed && changed->playing && changed->applied_frame == 12'001);
+  LMDJ_CHECK(changed->anchor == (TransportAnchor{12'001, 1'382'515'200, 240}));
+  LMDJ_CHECK(engine.submit_pattern_transport({71, 2, tempo.generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  render_frames(engine, 1);
+  const auto stopped = engine.inspect_pattern_transport_receipt(71, 2);
+  LMDJ_CHECK(stopped && !stopped->playing && stopped->effective_frame == 13'000);
+  LMDJ_CHECK(stopped->tempo_anchor == (TransportAnchor{13'000, 1'612'684'800, 240}));
+  LMDJ_CHECK(engine.acknowledge_pattern_transport_receipt(71, 2));
+  LMDJ_CHECK(engine.telemetry().started_voices == 1 && engine.telemetry().active_voices == 0);
+
+  const ScheduledPatternRecordRequest request{
+      71, 1, 3, 1, tempo.generation, PatternId{kPatternA}, 1};
+  LMDJ_CHECK(engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::accepted);
+  const auto pending = engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(pending && !pending->count_in_frame && !pending->start_frame && !pending->start_receipt);
+  // Literal 240-BPM geometry: C=13001, four 12000-frame beats, S=61001.
+  // One real callback crosses every cue and S; no clock/state testing seam.
+  constexpr std::uint64_t count_in = 13'001;
+  constexpr std::uint64_t start = 61'001;
+  std::vector<float> left(start - count_in + 2), right(left.size());
+  g_allocations.store(0); g_deallocations.store(0); g_track_allocations.store(true);
+  engine.render(left.data(), right.data(), static_cast<std::uint32_t>(left.size()));
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  LMDJ_CHECK(std::all_of(left.begin(), left.end() - 1, [](float value) { return value == 0; }));
+  LMDJ_CHECK(std::all_of(right.begin(), right.end() - 1, [](float value) { return value == 0; }));
+  LMDJ_CHECK(left.back() > 0 && right.back() == left.back()); // The new tick-zero note at S+1.
+  LMDJ_CHECK(engine.telemetry().started_voices == 2);
+  const auto applied = engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(applied && applied->phase == ScheduledPatternPhase::applied);
+  LMDJ_CHECK(applied->bpm == 240 && applied->bar_frames == 48'000);
+  LMDJ_CHECK(applied->count_in_frame == count_in && applied->start_frame == start);
+  LMDJ_CHECK(applied->start_receipt && applied->start_receipt->result == ScheduledPatternResult::applied);
+  LMDJ_CHECK(applied->start_receipt->epoch == 3 && applied->start_receipt->serial == 1 &&
+      applied->start_receipt->pattern_generation == tempo.generation);
+  LMDJ_CHECK(applied->start_receipt->effective_frame == start &&
+      applied->start_receipt->origin_frame == start && applied->start_receipt->playing);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == start);
+  const auto restarted = engine.pattern_tempo_observation(tempo.generation);
+  LMDJ_CHECK(restarted && restarted->start_epoch == 1 && restarted->playing);
+  LMDJ_CHECK(restarted->applied_frame == start && restarted->anchor == (TransportAnchor{start, 0, 240}));
+  CountInCueBatch cues{};
+  LMDJ_CHECK(engine.take_count_in_cue_batch_audio(cues));
+  LMDJ_CHECK(cues.runtime_generation == 71 && cues.frame_epoch == 1 && cues.serial == 1);
+  LMDJ_CHECK(cues.begin_frame == count_in && cues.end_frame == start + 2 && !cues.cancellation_frame);
+  constexpr std::array<std::uint64_t, 4> markers{13'001, 25'001, 37'001, 49'001};
+  LMDJ_CHECK(cues.span_count == markers.size());
+  for (std::size_t i = 0; i < markers.size(); ++i) {
+    LMDJ_CHECK(cues.spans[i].marker_frame == markers[i] && cues.spans[i].begin_frame == markers[i]);
+    LMDJ_CHECK(cues.spans[i].end_frame == markers[i] + 1'920);
+    LMDJ_CHECK(cues.spans[i].forced && cues.spans[i].marker && cues.spans[i].accent == (i == 0));
+  }
+  LMDJ_CHECK(engine.acknowledge_count_in_cue_batch_audio(cues.batch_id));
+  LMDJ_CHECK(engine.acknowledge_scheduled_pattern_record(71, 1, 3));
+  // Independent subsequent PCM onsets prove the old fractional position is
+  // not merely hidden in the new observation or inherited by the next loop.
+  check_tempo_onset(engine, 73'001, 2);
+  check_tempo_onset(engine, 109'001, 5);
+  engine.stop();
+  LMDJ_CHECK(engine.scheduled_pattern_record_quiescent());
+}
+
+void quiescent_stop_before_S_requires_a_real_cancellation_intent() {
+  for (const bool armed : {false, true}) {
+    for (const bool cancelled : {false, true}) {
+      ScheduledRecordFixture f;
+      const auto request = f.request();
+      LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::accepted);
+      if (armed) f.advance(1);
+      const auto before = f.engine.inspect_scheduled_pattern_record(71, 1);
+      LMDJ_CHECK(before && !before->start_receipt);
+      LMDJ_CHECK(before->phase == (armed ? ScheduledPatternPhase::armed : ScheduledPatternPhase::submitted));
+      if (cancelled)
+        LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::accepted);
+      f.engine.stop();
+      const auto stopped = f.engine.inspect_scheduled_pattern_record(71, 1);
+      LMDJ_CHECK(stopped && stopped->start_receipt);
+      LMDJ_CHECK(stopped->phase == (cancelled ? ScheduledPatternPhase::cancelled : ScheduledPatternPhase::refused));
+      const auto& receipt = *stopped->start_receipt;
+      LMDJ_CHECK(receipt.runtime_generation == 71 && receipt.frame_epoch == 1 && receipt.serial == 1 && receipt.epoch == 1);
+      LMDJ_CHECK(receipt.pattern_id == request.pattern_id && receipt.pattern_generation == request.expected_pattern_generation);
+      LMDJ_CHECK(receipt.result == (cancelled ? ScheduledPatternResult::cancelled : ScheduledPatternResult::refused));
+      LMDJ_CHECK(!receipt.effective_frame && !receipt.origin_frame && !receipt.playing);
+      LMDJ_CHECK(stopped->count_in_frame == before->count_in_frame && stopped->start_frame == before->start_frame);
+      LMDJ_CHECK(stopped->cancel_receipt.has_value() == cancelled);
+      if (cancelled) {
+        LMDJ_CHECK(stopped->cancel_receipt->epoch == 2 && stopped->cancel_receipt->result == ScheduledPatternResult::cancelled);
+        LMDJ_CHECK(!stopped->cancel_receipt->effective_frame && !stopped->cancel_receipt->origin_frame);
+      }
+      LMDJ_CHECK(!f.engine.scheduled_pattern_record_quiescent());
+      LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+      if (cancelled) {
+        LMDJ_CHECK(!f.engine.scheduled_pattern_record_quiescent());
+        LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+      }
+      LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+    }
+  }
+}
+
+void scheduled_record_has_independent_literal_frames_in_one_long_callback() {
+  for (const auto bpm : {std::uint16_t{120}, std::uint16_t{129}}) {
+    ScheduledRecordFixture f(bpm);
+    f.advance(1000);
+    const auto bars = static_cast<std::uint8_t>(bpm == 129 ? 2 : 1);
+    LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(1, 1, bars)) ==
+        ScheduledPatternSubmit::accepted);
+    const auto before = f.engine.inspect_scheduled_pattern_record(71, 1);
+    LMDJ_CHECK(before && !before->count_in_frame && !before->start_frame);
+    std::array<float, 1> zero_left{}, zero_right{};
+    f.engine.render(zero_left.data(), zero_right.data(), 0);
+    LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1)->start_frame);
+    const std::uint64_t start = bpm == 129 ? 179606 : 97000;
+    std::vector<float> left(static_cast<std::size_t>(start - 1000 + 2)), right(left.size());
+    g_allocations.store(0); g_deallocations.store(0); g_track_allocations.store(true);
+    f.engine.render(left.data(), right.data(), static_cast<std::uint32_t>(left.size()));
+    g_track_allocations.store(false);
+    LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+    LMDJ_CHECK(std::all_of(left.begin(), left.end() - 1, [](float v) { return v == 0; }));
+    LMDJ_CHECK(left.back() > 0 && right.back() > 0); // Independent dry attack: S+1.
+    const auto result = f.engine.inspect_scheduled_pattern_record(71, 1);
+    LMDJ_CHECK(result && result->count_in_frame == 1000 && result->start_frame == start);
+    LMDJ_CHECK(result->start_receipt && result->start_receipt->effective_frame == start);
+    LMDJ_CHECK(f.engine.current_pattern_origin_frame() == start);
+    const auto batch = f.consume_cues();
+    constexpr std::array<std::uint64_t, 8> forced129{
+        1000, 23326, 45652, 67977, 90303, 112629, 134955, 157280};
+    constexpr std::array<std::uint64_t, 4> forced120{1000, 25000, 49000, 73000};
+    LMDJ_CHECK(batch.span_count == static_cast<std::size_t>(bars) * 4);
+    for (std::size_t i = 0; i < batch.span_count; ++i) {
+      LMDJ_CHECK(batch.spans[i].marker_frame == (bpm == 129 ? forced129[i] : forced120[i]));
+      LMDJ_CHECK(batch.spans[i].forced && batch.spans[i].marker);
+      LMDJ_CHECK(batch.spans[i].accent == (i % 4 == 0));
+    }
+    LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+    f.engine.stop();
+    LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+  }
+}
+
+void scheduled_record_waits_only_for_old_pattern_tail_and_keeps_live_pad() {
+  ScheduledRecordFixture f;
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 1, f.pattern_generation,
+      PatternTransportAction::start, {}}) == PatternTransportSubmit::accepted);
+  f.advance(128);
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(71, 1));
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(71, 1));
+  const auto live = f.press();
+  LMDJ_CHECK(live.result == PatternInputSubmit::accepted);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, f.pattern_generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  f.advance(1); // F=129; 95 old Pattern tail frames remain.
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(71, 2)->effective_frame == 129);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(71, 2));
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(1, 3)) ==
+      ScheduledPatternSubmit::accepted);
+  f.advance(95);
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1)->count_in_frame);
+  std::array<float, 2> left{}, right{};
+  f.engine.render(left.data(), right.data(), left.size());
+  const auto armed = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(armed->phase == ScheduledPatternPhase::armed);
+  LMDJ_CHECK(armed->count_in_frame == 225 && armed->start_frame == 96225);
+  LMDJ_CHECK(left[0] > 0 && left[1] > 0); // Live Pad does not delay or stop at C.
+  f.consume_cues();
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 4}) ==
+      ScheduledPatternSubmit::accepted);
+  const auto cancelled = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(cancelled->start_frame == 96225); // Planned geometry is still inspectable.
+  LMDJ_CHECK(cancelled->start_receipt->result == ScheduledPatternResult::cancelled &&
+      !cancelled->start_receipt->effective_frame && !cancelled->start_receipt->origin_frame);
+  LMDJ_CHECK(cancelled->cancel_receipt->result == ScheduledPatternResult::cancelled &&
+      !cancelled->cancel_receipt->effective_frame && !cancelled->cancel_receipt->origin_frame);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 3));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 4));
+  f.advance(1);
+  const auto release = f.release(live.sequence);
+  LMDJ_CHECK(release.result == PatternInputSubmit::accepted && !release.authority.recording);
+  f.advance(96);
+  const auto completed = f.engine.inspect_pattern_input_completion(71, 1, release.sequence);
+  LMDJ_CHECK(completed && completed->held_press_sequence == live.sequence);
+  LMDJ_CHECK(completed->disposition == PatternInputDisposition::release_applied);
+}
+
+void scheduled_preparing_cancellation_waits_for_its_audio_writer() {
+  for (const auto point : {testing::RealtimeHookPoint::scheduled_preparing,
+                           testing::RealtimeHookPoint::scheduled_before_arm}) {
+    ScheduledRecordFixture f;
+    LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+    PausedRealtimeHook gate;
+    testing::set_realtime_hook(point, &gate.hook);
+    std::array<float, 1> left{}, right{};
+    std::thread audio([&] { f.engine.render(left.data(), right.data(), 1); });
+    gate.wait();
+    LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) ==
+        ScheduledPatternSubmit::accepted);
+    LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+    LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(2, 3)) ==
+        ScheduledPatternSubmit::busy);
+    gate.release(); audio.join();
+    const auto result = f.engine.inspect_scheduled_pattern_record(71, 1);
+    LMDJ_CHECK(result->start_receipt->result == ScheduledPatternResult::cancelled);
+    LMDJ_CHECK(result->cancel_receipt->epoch == 2 && left[0] == 0);
+    LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+    LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+    LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+  }
+}
+
+void settled_count_in_waits_for_real_live_release_tail() {
+  ScheduledRecordFixture f(120, 32, false, true);
+  ResolvedPlayback playback{0, 128, TriggerMode::loop_gate, 1.0F, false};
+  playback.dsp.release_frames = 4'800;
+  const auto press = f.press(true, playback);
+  LMDJ_CHECK(press.result == PatternInputSubmit::accepted);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, press.sequence));
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  f.advance(96'001);
+  LMDJ_CHECK(f.engine.inspect_scheduled_pattern_record(71, 1)->start_receipt);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::start_won);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, f.pattern_generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  const auto release = f.release(press.sequence);
+  LMDJ_CHECK(release.result == PatternInputSubmit::accepted);
+  f.advance(1);
+  const auto completed = f.engine.inspect_pattern_input_completion(71, 1, release.sequence);
+  LMDJ_CHECK(completed && completed->disposition == PatternInputDisposition::release_applied);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, release.sequence));
+  const auto inputs = f.engine.pattern_input_profile_status();
+  LMDJ_CHECK(!inputs.ordinary_pending && !inputs.held_release_reservations && !inputs.retained_completions);
+  LMDJ_CHECK(f.engine.telemetry().active_voices == 1); // Fixture has a real tail, not input debt.
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  f.advance(4'700);
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  f.advance(256);
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  f.engine.stop();
+}
+
+void settled_count_in_requires_audio_publication_and_exact_current_lineage() {
+  ScheduledRecordFixture f(120, 32, true, true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  f.advance(1);
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  for (const auto identity : {std::array<std::uint64_t, 3>{0, 1, 1},
+      {72, 1, 1}, {71, 0, 1}, {71, 2, 1}, {71, 1, 0}, {71, 1, 2}})
+    LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(identity[0], identity[1], identity[2]));
+  // A fresh accepted operation invalidates the prior audio publication. Its
+  // no-voice completion is consumed while the real callback's epilogue is held.
+  const auto press = f.press(false);
+  LMDJ_CHECK(press.result == PatternInputSubmit::accepted);
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_before_settled_publish, &gate.hook);
+  std::array<float, 1> left{}, right{};
+  std::thread audio([&] { f.engine.render(left.data(), right.data(), 1); });
+  gate.wait();
+  const auto completion = f.engine.inspect_pattern_input_completion(71, 1, press.sequence);
+  const bool consumed = f.engine.consume_pattern_input_completion(71, 1, press.sequence);
+  const auto during = f.engine.scheduled_pattern_record_settled(71, 1, 1);
+  gate.release(); audio.join(); // Join before assertions, including a broken predicate.
+  LMDJ_CHECK(completion && completion->disposition == PatternInputDisposition::muted_no_voice && consumed);
+  LMDJ_CHECK(!during);
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  PausedRealtimeHook old_publication;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_before_settled_publish,
+      &old_publication.hook);
+  std::thread old_audio([&] { f.engine.render(left.data(), right.data(), 1); });
+  struct FinishOldCallback {
+    PausedRealtimeHook& gate;
+    std::thread& thread;
+    ~FinishOldCallback() { gate.release(); if (thread.joinable()) thread.join(); }
+  } finish_old_callback{old_publication, old_audio};
+  old_publication.wait();
+  const auto old_in_flight = f.engine.scheduled_pattern_record_settled(71, 1, 1);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(2, 3)) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 2));
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 2, 4}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 2, 3));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 2, 4));
+  old_publication.release(); old_audio.join();
+  LMDJ_CHECK(!old_in_flight);
+  // The old callback's late serial-1 publication cannot authenticate serial 2.
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 2));
+  f.advance(1);
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 1));
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_settled(71, 1, 2));
+  f.engine.stop();
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 2));
+  LMDJ_CHECK(f.engine.enable_pattern_transport(72).has_value());
+  LMDJ_CHECK(f.engine.enable_scheduled_pattern_record(72).has_value());
+  LMDJ_CHECK(f.engine.enable_pattern_input_profile(72).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+  f.advance(1); // A new activation's empty callback must not rebind an old serial.
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(72, 2, 2));
+  auto fresh = f.request(3, 1);
+  fresh.runtime_generation = 72;
+  fresh.frame_epoch = 2;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(fresh) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({72, 2, 3, 2}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(72, 3, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(72, 3, 2));
+  f.advance(1);
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_settled(72, 2, 3));
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_settled(71, 1, 3));
+  f.engine.stop();
+}
+
+void committed_cue_survives_cancel_ack_rearm_and_material_reclaim() {
+  ScheduledRecordFixture f;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_cue_committed, &gate.hook);
+  std::array<float, 64> left{}, right{};
+  std::thread audio([&] { f.engine.render(left.data(), right.data(), left.size()); });
+  gate.wait();
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_quiescent());
+  auto next = PreparedPatternView::from_snapshot(pattern_snapshot(kPatternA, {0, 0}, 79));
+  const auto publication = f.engine.publish_pattern_view_immediate(std::move(next.value()));
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+  // Pending ordinary publication must be resolved before accepting another binding.
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(2, 3)) == ScheduledPatternSubmit::busy);
+  gate.release(); audio.join();
+  auto copied = f.consume_cues();
+  LMDJ_CHECK(copied.serial == 1 && copied.span_count == 1);
+  LMDJ_CHECK(copied.spans[0].marker_frame == 0 && copied.spans[0].end_frame == 64);
+  LMDJ_CHECK(copied.cancellation_frame == 1);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  f.pattern_generation = publication.generation;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(2, 3)) == ScheduledPatternSubmit::accepted);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.inspect_scheduled_pattern_record(71, 2)->count_in_frame == 65);
+}
+
+void cancelled_scalar_rearm_never_enters_the_same_callback_lineage() {
+  ScheduledRecordFixture f;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_cue_committed, &gate.hook);
+  std::array<float, 64> left{}, right{};
+  std::thread audio([&] { f.engine.render(left.data(), right.data(), left.size()); });
+  gate.wait();
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(2, 3, 2)) == ScheduledPatternSubmit::accepted);
+  gate.release(); audio.join();
+  const auto old = f.consume_cues();
+  LMDJ_CHECK(old.serial == 1 && old.span_count == 1);
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 2)->start_frame);
+  f.advance(1);
+  const auto new_lineage = f.engine.inspect_scheduled_pattern_record(71, 2);
+  LMDJ_CHECK(new_lineage->count_in_frame == 64 && new_lineage->start_frame == 192064);
+}
+
+void actual_start_claim_admits_presses_and_lost_cancel_retains_both_epochs() {
+  for (const bool after_claim : {false, true}) {
+    ScheduledRecordFixture f;
+    LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+    f.advance(96000);
+    PausedRealtimeHook gate;
+    testing::set_realtime_hook(after_claim ? testing::RealtimeHookPoint::scheduled_start_committed :
+        testing::RealtimeHookPoint::scheduled_before_start, &gate.hook);
+    std::array<float, 64> left{}, right{};
+    std::thread audio([&] { f.engine.render(left.data(), right.data(), left.size()); });
+    gate.wait(); // The rendered frontier is 96064 on BOTH sides of the actual CAS.
+    const auto press = f.press();
+    LMDJ_CHECK(press.result == PatternInputSubmit::accepted);
+    LMDJ_CHECK(press.authority.recording == after_claim);
+    const auto cancel = f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2});
+    LMDJ_CHECK(cancel == (after_claim ? ScheduledPatternSubmit::start_won : ScheduledPatternSubmit::accepted));
+    LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 3}) == ScheduledPatternSubmit::busy);
+    if (after_claim) {
+      LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, f.pattern_generation,
+          PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+    }
+    gate.release(); audio.join();
+    f.consume_cues();
+    auto result = f.engine.inspect_scheduled_pattern_record(71, 1);
+    LMDJ_CHECK(result->start_receipt->result == (after_claim ? ScheduledPatternResult::applied :
+        ScheduledPatternResult::cancelled));
+    if (after_claim) {
+      LMDJ_CHECK(result->start_receipt->effective_frame == 96000 && !result->cancel_receipt);
+      f.advance(1);
+      result = f.engine.inspect_scheduled_pattern_record(71, 1);
+      LMDJ_CHECK(result->cancel_receipt && result->cancel_receipt->effective_frame == 96064);
+      LMDJ_CHECK(result->start_receipt->effective_frame == 96000);
+      const auto after_cutoff = f.press(false);
+      LMDJ_CHECK(after_cutoff.result == PatternInputSubmit::accepted && !after_cutoff.authority.recording);
+      LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+    } else f.advance(1);
+    LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+    LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+    const auto release = f.release(press.sequence);
+    LMDJ_CHECK(release.result == PatternInputSubmit::accepted &&
+        release.authority.recording == after_claim);
+    f.advance(1);
+    const auto terminal = f.engine.inspect_pattern_input_completion(71, 1, release.sequence);
+    LMDJ_CHECK(terminal && terminal->held_press_sequence == press.sequence);
+    LMDJ_CHECK(terminal->acceptance_ordinal > press.acceptance_ordinal);
+  }
+}
+
+void silent_held_press_keeps_release_escrow_after_press_ticket_consumption() {
+  ScheduledRecordFixture f(120, 4, true);
+  const auto silent = f.press();
+  LMDJ_CHECK(silent.result == PatternInputSubmit::accepted);
+  f.advance(1);
+  const auto terminal = f.engine.inspect_pattern_input_completion(71, 1, silent.sequence);
+  LMDJ_CHECK(terminal && terminal->disposition == PatternInputDisposition::muted_no_voice);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, silent.sequence));
+  LMDJ_CHECK(!f.engine.consume_pattern_input_completion(71, 1, silent.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  std::array<PatternInputAdmission, 4> ordinary{};
+  for (auto& ticket : ordinary) { ticket = f.press(false); LMDJ_CHECK(ticket.result == PatternInputSubmit::accepted); }
+  LMDJ_CHECK(f.press(false).result == PatternInputSubmit::queue_full);
+  const auto release = f.release(silent.sequence);
+  LMDJ_CHECK(release.result == PatternInputSubmit::accepted);
+  LMDJ_CHECK(release.sequence != 0 && release.sequence != silent.sequence);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().physical_capacity == 8);
+  f.advance(1);
+  const auto released = f.engine.inspect_pattern_input_completion(71, 1, release.sequence);
+  LMDJ_CHECK(released && released->disposition == PatternInputDisposition::release_no_voice);
+  LMDJ_CHECK(released->held_press_sequence == silent.sequence && !released->authority.recording);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, release.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 0);
+  // FIFO is drained but retained ordinary terminals independently saturate the ledger.
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().ordinary_pending == 0);
+  LMDJ_CHECK(f.press(false).result == PatternInputSubmit::completion_full);
+  for (const auto ticket : ordinary) LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, ticket.sequence));
+  LMDJ_CHECK(f.press(false).result == PatternInputSubmit::accepted);
+}
+
+void input_completion_is_total_for_toggle_capacity_release_and_invalidation() {
+  ScheduledRecordFixture f(120, 1024);
+  const ResolvedPlayback toggle{0, 128, TriggerMode::loop_toggle, 1.0F, false};
+  const auto first = f.press(true, toggle);
+  const auto second = f.press(true, toggle);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.inspect_pattern_input_completion(71, 1, first.sequence)->disposition ==
+      PatternInputDisposition::voice_started);
+  LMDJ_CHECK(f.engine.inspect_pattern_input_completion(71, 1, second.sequence)->disposition ==
+      PatternInputDisposition::toggle_stopped);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, first.sequence));
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, second.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 2);
+  const auto released_first = f.release(first.sequence), released_second = f.release(second.sequence);
+  f.advance(96);
+  for (const auto sequence : {released_first.sequence, released_second.sequence}) {
+    LMDJ_CHECK(f.engine.inspect_pattern_input_completion(71, 1, sequence)->disposition ==
+        PatternInputDisposition::release_no_voice);
+    LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, sequence));
+  }
+  std::array<PatternInputAdmission, 129> voices{};
+  for (auto& ticket : voices) ticket = f.press();
+  f.advance(1);
+  for (std::size_t i = 0; i < voices.size(); ++i) {
+    const auto completion = f.engine.inspect_pattern_input_completion(71, 1, voices[i].sequence);
+    LMDJ_CHECK(completion && completion->disposition == (i == 128 ?
+        PatternInputDisposition::voice_capacity : PatternInputDisposition::voice_started));
+    LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, voices[i].sequence));
+  }
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 129);
+  const auto capacity_release = f.release(voices.back().sequence);
+  LMDJ_CHECK(capacity_release.result == PatternInputSubmit::accepted);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.inspect_pattern_input_completion(71, 1, capacity_release.sequence)->disposition ==
+      PatternInputDisposition::release_no_voice);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, capacity_release.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 128);
+  const auto invalidated = f.press();
+  f.engine.stop();
+  const auto result = f.engine.inspect_pattern_input_completion(71, 1, invalidated.sequence);
+  LMDJ_CHECK(result && result->disposition == PatternInputDisposition::invalidated_before_consume);
+  LMDJ_CHECK(!f.engine.start().has_value());
+  LMDJ_CHECK(!f.engine.inspect_pattern_input_completion(72, 1, invalidated.sequence));
+  LMDJ_CHECK(!f.engine.consume_pattern_input_completion(71, 2, invalidated.sequence));
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, invalidated.sequence));
+  LMDJ_CHECK(!f.engine.start().has_value()); // Consuming press did not revoke its physical hold.
+  LMDJ_CHECK(f.engine.revoke_pattern_input_holds_quiescent(71));
+  LMDJ_CHECK(f.engine.enable_pattern_transport(72).has_value());
+  LMDJ_CHECK(f.engine.enable_pattern_input_profile(72).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+}
+
+void schedule_and_input_refuse_stale_exhausted_identities_and_busy_profile_changes() {
+  ScheduledRecordFixture f;
+  LMDJ_CHECK(!f.engine.enable_pattern_input_profile(71).has_value());
+  auto request = f.request(); request.frame_epoch = 2;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::stale_frame_epoch);
+  request = f.request(); request.serial = 0;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::stale_serial);
+  request = f.request(); request.bars = 3;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::invalid_bars);
+  f.engine.set_scheduled_serial_quiescent_for_testing(kScheduledPatternSerialMaximum - 1);
+  request = f.request(kScheduledPatternSerialMaximum);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, request.serial, 2}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, request.serial, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, request.serial, 2));
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(request.serial, 3)) == ScheduledPatternSubmit::exhausted);
+  f.engine.set_pattern_input_sequence_quiescent_for_testing(std::numeric_limits<std::uint64_t>::max());
+  LMDJ_CHECK(f.press().result == PatternInputSubmit::exhausted);
+  PatternInputCommand input{72, 1, 0, 127};
+  LMDJ_CHECK(f.engine.enqueue_pattern_input(input).result == PatternInputSubmit::stale_generation);
+  input.runtime_generation = 71; input.frame_epoch = 2;
+  LMDJ_CHECK(f.engine.enqueue_pattern_input(input).result == PatternInputSubmit::stale_frame_epoch);
+  f.engine.set_rendered_frames_quiescent_for_testing(std::numeric_limits<std::uint64_t>::max() - 100);
+  // Another fresh engine isolates frame exhaustion from serial exhaustion.
+  ScheduledRecordFixture frame;
+  frame.engine.set_rendered_frames_quiescent_for_testing(std::numeric_limits<std::uint64_t>::max() - 100);
+  LMDJ_CHECK(frame.engine.submit_scheduled_pattern_record(frame.request()) == ScheduledPatternSubmit::exhausted);
+}
+
+void input_identity_exhaustion_keeps_reserved_physical_releases() {
+  const auto maximum = std::numeric_limits<std::uint64_t>::max();
+  for (const bool ordinal : {false, true}) {
+    ScheduledRecordFixture f(120, 4);
+    if (ordinal) f.engine.set_pattern_input_ordinal_quiescent_for_testing(maximum - 3);
+    else f.engine.set_pattern_input_sequence_quiescent_for_testing(maximum - 3);
+    const auto held = f.press();
+    LMDJ_CHECK(held.result == PatternInputSubmit::accepted);
+    f.advance(1);
+    LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, held.sequence));
+    LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+    const auto ordinary = f.press(false);
+    LMDJ_CHECK(ordinary.result == PatternInputSubmit::accepted);
+    f.advance(1);
+    LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, ordinary.sequence));
+    const auto before = f.engine.pattern_input_profile_status();
+    LMDJ_CHECK(f.press(false).result == PatternInputSubmit::exhausted);
+    LMDJ_CHECK(f.press(true).result == PatternInputSubmit::exhausted);
+    const auto refused = f.engine.pattern_input_profile_status();
+    LMDJ_CHECK(refused.ordinary_pending == before.ordinary_pending);
+    LMDJ_CHECK(refused.retained_completions == before.retained_completions);
+    LMDJ_CHECK(refused.held_release_reservations == 1);
+    const auto release = f.release(held.sequence);
+    LMDJ_CHECK(release.result == PatternInputSubmit::accepted && release.sequence != 0);
+    LMDJ_CHECK((ordinal ? release.acceptance_ordinal : release.sequence) == maximum);
+    f.advance(1);
+    const auto completed = f.engine.inspect_pattern_input_completion(71, 1, release.sequence);
+    LMDJ_CHECK(completed && completed->held_press_sequence == held.sequence);
+    LMDJ_CHECK(completed->disposition == PatternInputDisposition::release_applied);
+    LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, release.sequence));
+    LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 0);
+    LMDJ_CHECK(f.press(false).result == PatternInputSubmit::exhausted);
+  }
+  ScheduledRecordFixture final_identity(120, 4);
+  final_identity.engine.set_pattern_input_sequence_quiescent_for_testing(maximum - 1);
+  LMDJ_CHECK(final_identity.press(true).result == PatternInputSubmit::exhausted);
+  LMDJ_CHECK(final_identity.engine.pattern_input_profile_status().held_release_reservations == 0);
+  const auto unheld = final_identity.press(false);
+  LMDJ_CHECK(unheld.result == PatternInputSubmit::accepted && unheld.sequence == maximum);
+  final_identity.advance(1);
+  LMDJ_CHECK(final_identity.engine.consume_pattern_input_completion(71, 1, unheld.sequence));
+  ScheduledRecordFixture controls(120, 4);
+  controls.engine.set_pattern_input_ordinal_quiescent_for_testing(maximum - 2);
+  const auto held_control = controls.press();
+  controls.advance(1);
+  LMDJ_CHECK(controls.engine.consume_pattern_input_completion(71, 1, held_control.sequence));
+  LMDJ_CHECK(controls.engine.enqueue_control({0, 0, 0, PadControlKind::stop_all, {}}) ==
+      EnqueueResult::queue_full);
+  const auto last_release = controls.release(held_control.sequence);
+  LMDJ_CHECK(last_release.result == PatternInputSubmit::accepted && last_release.acceptance_ordinal == maximum);
+  controls.advance(1);
+  LMDJ_CHECK(controls.engine.consume_pattern_input_completion(71, 1, last_release.sequence));
+
+  // Once submitted, a release has already acquired its ordinal. It does not
+  // reserve another identity and cannot wrongly block a later ordinary Stop.
+  ScheduledRecordFixture queued(120, 4);
+  queued.engine.set_pattern_input_ordinal_quiescent_for_testing(maximum - 3);
+  const auto held_queued = queued.press();
+  queued.advance(1);
+  LMDJ_CHECK(queued.engine.consume_pattern_input_completion(71, 1, held_queued.sequence));
+  const auto submitted_release = queued.release(held_queued.sequence);
+  LMDJ_CHECK(submitted_release.result == PatternInputSubmit::accepted);
+  LMDJ_CHECK(queued.engine.enqueue_control({0, 0, 0, PadControlKind::stop_all, {}}) ==
+      EnqueueResult::accepted);
+  queued.advance(1);
+  LMDJ_CHECK(queued.engine.consume_pattern_input_completion(71, 1, submitted_release.sequence));
+  LMDJ_CHECK(queued.engine.pattern_input_profile_status().held_release_reservations == 0);
+}
+
+void independent_material_borrow_outlives_receipt_and_retired_current_slot() {
+  ScheduledRecordFixture f(120, 4, false, false, true);
+  f.engine.set_count_in_metronome(true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  f.advance(96000);
+  std::array<float, 1> left{}, right{};
+  f.engine.render(left.data(), right.data(), 1); // Applied, plus a one-frame S downbeat span.
+  f.consume_cues();
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  auto next = pattern_snapshot(kPatternA, {0, 0}, 79);
+  next.events.clear();
+  auto view = PreparedPatternView::from_snapshot(next);
+  const auto publication = f.engine.publish_pattern_view_preserving_phase(
+      std::move(view.value()), f.pattern_generation);
+  LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_cue_committed, &gate.hook);
+  std::thread audio([&] { f.engine.render(left.data(), right.data(), 1); });
+  gate.wait(); // New current is applied, old slot has NO voices and is reclaimable.
+  LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0); // Only the independent native borrow remains.
+  LMDJ_CHECK(!f.material_lifetime.expired());
+  gate.release(); audio.join();
+  const auto carry = f.consume_cues();
+  LMDJ_CHECK(carry.serial == 1 && carry.spans[0].marker_frame == 96000);
+  PausedRealtimeHook last_use;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_before_last_use, &last_use.hook);
+  std::thread finishing([&] { f.advance(1918); });
+  last_use.wait(); // Logical ACK and current replacement precede actual last use.
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+  LMDJ_CHECK(!f.material_lifetime.expired());
+  last_use.release(); finishing.join();
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  LMDJ_CHECK(f.material_lifetime.expired());
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+}
+
+void full_release_escrow_remains_reserved_after_silent_press_completions() {
+  ScheduledRecordFixture f(120, 4, true);
+  std::array<PatternInputAdmission, 4> held{};
+  for (auto& ticket : held) { ticket = f.press(); LMDJ_CHECK(ticket.result == PatternInputSubmit::accepted); }
+  f.advance(1);
+  for (const auto ticket : held) LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, ticket.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 4);
+  LMDJ_CHECK(f.press().result == PatternInputSubmit::release_full);
+  std::array<PatternInputAdmission, 4> ordinary{}, releases{};
+  for (auto& ticket : ordinary) { ticket = f.press(false); LMDJ_CHECK(ticket.result == PatternInputSubmit::accepted); }
+  for (std::size_t i = 0; i < held.size(); ++i) {
+    releases[i] = f.release(held[i].sequence);
+    LMDJ_CHECK(releases[i].result == PatternInputSubmit::accepted);
+    LMDJ_CHECK(releases[i].acceptance_ordinal > ordinary.back().acceptance_ordinal);
+  }
+  LMDJ_CHECK(f.engine.telemetry().queued_events == 8);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 4);
+  for (const auto ticket : releases) LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, ticket.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 0);
+  for (const auto ticket : ordinary) LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, ticket.sequence));
+  LMDJ_CHECK(f.press().result == PatternInputSubmit::accepted);
+}
+
+void real_fence_closes_recording_at_F_and_preserves_historical_receipts_and_holds() {
+  ScheduledRecordFixture f(120, 4, true, true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  f.advance(96001);
+  const auto held = f.press(); // A silent physical press accepted AFTER actual S.
+  LMDJ_CHECK(held.result == PatternInputSubmit::accepted && held.authority.recording);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.inspect_pattern_input_completion(71, 1, held.sequence)->disposition ==
+      PatternInputDisposition::muted_no_voice);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, held.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::start_won);
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1)->cancel_receipt);
+  f.advance(17); // Lost cancel alone creates NO command or cutoff, even in later callbacks.
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1)->cancel_receipt);
+  const auto before_F = f.press(false);
+  LMDJ_CHECK(before_F.authority.recording);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, f.pattern_generation,
+      PatternTransportAction::fence, {}}) == PatternTransportSubmit::accepted);
+  f.advance(1); // Actual ordinary recording-off fence F = 96019.
+  const auto ordinary = f.engine.inspect_pattern_transport_receipt(71, 2);
+  LMDJ_CHECK(ordinary && ordinary->effective_frame == 96019 && ordinary->playing);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(71, 2));
+  const auto retained = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(retained->start_receipt->effective_frame == 96000 && retained->start_receipt->playing);
+  LMDJ_CHECK(retained->cancel_receipt->effective_frame == 96019 && retained->cancel_receipt->playing);
+  const auto after_F = f.press(false);
+  LMDJ_CHECK(after_F.result == PatternInputSubmit::accepted && !after_F.authority.recording);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  const auto release = f.release(held.sequence);
+  LMDJ_CHECK(release.result == PatternInputSubmit::accepted && release.authority == held.authority);
+  f.advance(1);
+  const auto released = f.engine.inspect_pattern_input_completion(71, 1, release.sequence);
+  LMDJ_CHECK(released && released->held_press_sequence == held.sequence &&
+      released->disposition == PatternInputDisposition::release_no_voice);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, release.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 0);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, before_F.sequence));
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, after_F.sequence));
+}
+
+void copied_cue_waits_for_actual_consumer_ack_across_cancel_and_rearm() {
+  ScheduledRecordFixture f;
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  PausedRealtimeHook copied;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::scheduled_cue_consumption, &copied.hook);
+  CountInCueBatch batch{};
+  std::thread adapter([&] {
+    std::array<float, 64> left{}, right{};
+    f.engine.render(left.data(), right.data(), left.size());
+    LMDJ_CHECK(f.engine.take_count_in_cue_batch_audio(batch));
+    LMDJ_CHECK(f.engine.acknowledge_count_in_cue_batch_audio(batch.batch_id));
+  });
+  copied.wait();
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request(2, 3)) == ScheduledPatternSubmit::accepted);
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_quiescent());
+  LMDJ_CHECK(batch.serial == 1 && batch.spans[0].marker_frame == 0 && batch.spans[0].end_frame == 64);
+  copied.release(); adapter.join();
+  f.advance(1);
+  const auto next = f.engine.inspect_scheduled_pattern_record(71, 2);
+  LMDJ_CHECK(next->count_in_frame == 64 && next->start_frame == 96064);
+}
+
+void unsent_e2_shutdown_refuses_truthfully_and_requires_evidence_and_hold_reconciliation() {
+  ScheduledRecordFixture f(120, 4, true, true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  f.advance(96001);
+  const auto held = f.press();
+  LMDJ_CHECK(held.result == PatternInputSubmit::accepted && held.authority.recording);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, held.sequence));
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::start_won);
+  f.engine.stop(); // Exceptional stopped owner, before a genuine e2 command exists.
+  const auto failed = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(failed->start_receipt->result == ScheduledPatternResult::applied &&
+      failed->start_receipt->effective_frame == 96000);
+  LMDJ_CHECK(failed->cancel_receipt->result == ScheduledPatternResult::refused &&
+      !failed->cancel_receipt->effective_frame && !failed->cancel_receipt->origin_frame);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(71, 2));
+  LMDJ_CHECK(!f.engine.start().has_value() && !f.engine.enable_pattern_transport(72).has_value());
+  LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!f.engine.start().has_value()); // Refusal/receipt ACK did not return physical release escrow.
+  // Native-only fixture has no admitted authoring hold; stopped owner revokes physical input.
+  LMDJ_CHECK(f.engine.revoke_pattern_input_holds_quiescent(71));
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+  LMDJ_CHECK(f.engine.enable_pattern_transport(72).has_value());
+  LMDJ_CHECK(f.engine.enable_scheduled_pattern_record(72).has_value());
+  LMDJ_CHECK(f.engine.enable_pattern_input_profile(72).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1));
+}
+
+void stopped_owner_preserves_already_submitted_real_e2_receipt() {
+  ScheduledRecordFixture f(120, 4, true, true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  f.advance(96001);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::start_won);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, f.pattern_generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  f.engine.stop(); // The submitted real command applies at the actual quiescent F=96001.
+  const auto retained = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(retained->start_receipt->effective_frame == 96000);
+  LMDJ_CHECK(retained->cancel_receipt->result == ScheduledPatternResult::applied &&
+      retained->cancel_receipt->effective_frame == 96001);
+  LMDJ_CHECK(!f.engine.start().has_value());
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+}
+
+// S6 late-intent regression: actual stop precedes registration of the original
+// exact e2. No ordinary command is submitted in this journey.
+void stopped_then_exact_cancel_retains_refused_e2_and_independent_input_owners() {
+  ScheduledRecordFixture f(120, 4, true, true);
+  const auto request = f.request();
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::accepted);
+  f.advance(96001);
+  const auto held = f.press();
+  LMDJ_CHECK(held.result == PatternInputSubmit::accepted && held.authority.recording);
+  f.advance(1);
+  const auto completion = f.engine.inspect_pattern_input_completion(71, 1, held.sequence);
+  LMDJ_CHECK(completion && completion->disposition == PatternInputDisposition::muted_no_voice);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().retained_completions == 1);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  const auto before_stop = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(before_stop && before_stop->start_receipt && !before_stop->cancel_receipt);
+  f.engine.stop();
+  LMDJ_CHECK(f.engine.telemetry().state == RealtimeState::stopped);
+  LMDJ_CHECK(f.engine.telemetry().rendered_frames == 96002);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(71, 2));
+  const auto stopped = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(stopped && stopped->phase == ScheduledPatternPhase::applied &&
+      stopped->start_receipt && !stopped->cancel_receipt);
+
+  // Each wrong identity is refused before it can bind terminal evidence.
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({72, 1, 1, 2}) == ScheduledPatternSubmit::stale_generation);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 2, 1, 2}) == ScheduledPatternSubmit::stale_frame_epoch);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 2, 2}) == ScheduledPatternSubmit::stale_serial);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 1}) == ScheduledPatternSubmit::stale_epoch);
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1)->cancel_receipt);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::start_won);
+  const auto failed = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(failed && failed->start_receipt && failed->cancel_receipt);
+  const auto& e1 = *failed->start_receipt;
+  const auto& e2 = *failed->cancel_receipt;
+  LMDJ_CHECK(e1.runtime_generation == request.runtime_generation && e1.frame_epoch == request.frame_epoch &&
+      e1.serial == request.serial && e1.epoch == request.epoch &&
+      e1.pattern_id == request.pattern_id && e1.pattern_generation == request.expected_pattern_generation);
+  LMDJ_CHECK(e1.result == ScheduledPatternResult::applied && e1.playing &&
+      e1.effective_frame == 96000 && e1.origin_frame == 96000);
+  LMDJ_CHECK(e2.runtime_generation == request.runtime_generation && e2.frame_epoch == request.frame_epoch &&
+      e2.serial == request.serial && e2.epoch == 2 && e2.pattern_id == request.pattern_id &&
+      e2.pattern_generation == request.expected_pattern_generation);
+  LMDJ_CHECK(e2.result == ScheduledPatternResult::refused && !e2.playing &&
+      !e2.effective_frame && !e2.origin_frame);
+  LMDJ_CHECK(!f.engine.inspect_pattern_transport_receipt(71, 2));
+  LMDJ_CHECK(f.engine.telemetry().rendered_frames == 96002);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, f.pattern_generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::not_running);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::busy);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 3}) == ScheduledPatternSubmit::busy);
+  LMDJ_CHECK(!f.engine.start().has_value() && !f.engine.scheduled_pattern_record_quiescent());
+
+  LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(72, 1, 1));
+  LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 2, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.inspect_scheduled_pattern_record(71, 1)->cancel_receipt->result == ScheduledPatternResult::refused);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(!f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  LMDJ_CHECK(!f.engine.inspect_scheduled_pattern_record(71, 1));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().retained_completions == 1);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_quiescent());
+
+  // Receipt ACK spends neither the actual press completion nor its future
+  // physical Release. Each independent owner retires through its own seam.
+  LMDJ_CHECK(!f.engine.consume_pattern_input_completion(72, 1, held.sequence));
+  LMDJ_CHECK(f.engine.consume_pattern_input_completion(71, 1, held.sequence));
+  LMDJ_CHECK(!f.engine.consume_pattern_input_completion(71, 1, held.sequence));
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().retained_completions == 0);
+  LMDJ_CHECK(f.engine.pattern_input_profile_status().held_release_reservations == 1);
+  LMDJ_CHECK(!f.engine.start().has_value());
+  LMDJ_CHECK(!f.engine.revoke_pattern_input_holds_quiescent(72));
+  LMDJ_CHECK(f.engine.revoke_pattern_input_holds_quiescent(71));
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+  LMDJ_CHECK(f.engine.enable_pattern_transport(72).has_value());
+  LMDJ_CHECK(f.engine.enable_scheduled_pattern_record(72).has_value());
+  LMDJ_CHECK(f.engine.enable_pattern_input_profile(72).has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+}
+
+void profile_storage_bounds_are_fixed_and_scheduled_epoch_exhaustion_preserves_legacy() {
+  LMDJ_CHECK(!RealtimeEngine::pattern_input_profile_storage_bytes(0));
+  LMDJ_CHECK(!RealtimeEngine::pattern_input_profile_storage_bytes(1025));
+  for (const std::size_t n : {1U, 128U, 1024U}) {
+    RealtimeEngine engine{RealtimeEngine::ReceiptBoundedVoiceStates{}, n};
+    LMDJ_CHECK(engine.enable_pattern_transport(71).has_value());
+    g_allocations.store(0); g_deallocations.store(0); g_allocation_bytes.store(0);
+    g_track_allocations.store(true);
+    const auto enabled = engine.enable_pattern_input_profile(71);
+    g_track_allocations.store(false);
+    LMDJ_CHECK(enabled.has_value() && g_allocations.load() == 4 && g_deallocations.load() == 0);
+    LMDJ_CHECK(g_allocation_bytes.load() == *RealtimeEngine::pattern_input_profile_storage_bytes(n));
+    const auto capacity = engine.pattern_input_profile_status();
+    LMDJ_CHECK(capacity.capacity == n && capacity.physical_capacity == 2 * n);
+    g_allocations.store(0); g_deallocations.store(0);
+    g_track_allocations.store(true);
+    const auto same_profile = engine.enable_pattern_input_profile(71);
+    g_track_allocations.store(false);
+    LMDJ_CHECK(same_profile.has_value() && g_allocations.load() == 0 && g_deallocations.load() == 0);
+  }
+  ScheduledRecordFixture f;
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 1, f.pattern_generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  f.advance(1);
+  LMDJ_CHECK(f.engine.inspect_pattern_transport_receipt(71, 1));
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(71, 1));
+  auto request = f.request(1, std::numeric_limits<std::uint64_t>::max());
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(request) == ScheduledPatternSubmit::exhausted);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, request.epoch, f.pattern_generation,
+      PatternTransportAction::stop, {}}) == PatternTransportSubmit::accepted);
+  f.advance(1);
+  const auto final = f.engine.inspect_pattern_transport_receipt(71, request.epoch);
+  LMDJ_CHECK(final && final->epoch == std::numeric_limits<std::uint64_t>::max());
+}
+
+void cue_consumer_fence_and_optional_downbeat_survive_applied_ack() {
+  ScheduledRecordFixture f;
+  f.engine.set_count_in_metronome(true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  f.advance(96000);
+  std::array<float, 1> left{}, right{};
+  f.engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  CountInCueBatch batch{};
+  LMDJ_CHECK(f.engine.take_count_in_cue_batch_audio(batch));
+  LMDJ_CHECK(batch.span_count == 1 && batch.spans[0].marker_frame == 96000);
+  LMDJ_CHECK(batch.spans[0].marker && !batch.spans[0].forced && batch.spans[0].accent);
+  LMDJ_CHECK(!f.engine.acknowledge_count_in_cue_batch_audio(batch.batch_id + 1));
+  LMDJ_CHECK(f.engine.acknowledge_count_in_cue_batch_audio(batch.batch_id));
+  f.engine.render(left.data(), right.data(), 1);
+  const auto carry = f.consume_cues();
+  LMDJ_CHECK(carry.span_count == 1 && !carry.spans[0].marker);
+  LMDJ_CHECK(carry.spans[0].begin_frame == 96001 && carry.spans[0].marker_frame == 96000);
+  f.engine.stop();
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+}
+}  // namespace
+
 int main() {
+  scheduled_restart_after_tempo_stop_has_a_fresh_musical_origin();
+  stopped_then_exact_cancel_retains_refused_e2_and_independent_input_owners();
+  quiescent_stop_before_S_requires_a_real_cancellation_intent();
+  scheduled_record_has_independent_literal_frames_in_one_long_callback();
+  scheduled_record_waits_only_for_old_pattern_tail_and_keeps_live_pad();
+  scheduled_preparing_cancellation_waits_for_its_audio_writer();
+  settled_count_in_waits_for_real_live_release_tail();
+  settled_count_in_requires_audio_publication_and_exact_current_lineage();
+  committed_cue_survives_cancel_ack_rearm_and_material_reclaim();
+  cancelled_scalar_rearm_never_enters_the_same_callback_lineage();
+  actual_start_claim_admits_presses_and_lost_cancel_retains_both_epochs();
+  silent_held_press_keeps_release_escrow_after_press_ticket_consumption();
+  input_completion_is_total_for_toggle_capacity_release_and_invalidation();
+  schedule_and_input_refuse_stale_exhausted_identities_and_busy_profile_changes();
+  input_identity_exhaustion_keeps_reserved_physical_releases();
+  cue_consumer_fence_and_optional_downbeat_survive_applied_ack();
+  independent_material_borrow_outlives_receipt_and_retired_current_slot();
+  full_release_escrow_remains_reserved_after_silent_press_completions();
+  real_fence_closes_recording_at_F_and_preserves_historical_receipts_and_holds();
+  copied_cue_waits_for_actual_consumer_ack_across_cancel_and_rearm();
+  profile_storage_bounds_are_fixed_and_scheduled_epoch_exhaustion_preserves_legacy();
+  unsent_e2_shutdown_refuses_truthfully_and_requires_evidence_and_hold_reconciliation();
+  stopped_owner_preserves_already_submitted_real_e2_receipt();
   continuous_selected_switch_retains_claimed_same_bpm_phase_clock();
   selected_switch_waits_for_claimed_tempo_apply_without_consuming_generation();
   continuous_selected_switch_keeps_actual_claimed_predecessor_clock();

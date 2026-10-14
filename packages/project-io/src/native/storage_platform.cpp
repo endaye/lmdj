@@ -1172,7 +1172,9 @@ foundation::Result<std::optional<mode_t>> path_mode_without_symlinks(
       std::optional<mode_t>{metadata.st_mode});
 }
 
-class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
+class NativeProjectStoragePlatform final : public ProjectStoragePlatform,
+                                         public ProjectJournalLayoutValidator,
+                                         public ProjectStorageTextReader {
  public:
   explicit NativeProjectStoragePlatform(std::filesystem::path metadata_root)
       : metadata_root_(std::move(metadata_root)) {}
@@ -1344,15 +1346,12 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<std::vector<std::byte>> read_complete(
       const std::filesystem::path& path) const override {
-    auto result = read_complete_once(path);
-    for (std::size_t attempt = 1;
-         !result.has_value() && replacement_transient_error(result.error()) &&
-         attempt < kCompleteReadAttempts;
-         ++attempt) {
-      std::this_thread::yield();
-      result = read_complete_once(path);
-    }
-    return result;
+    return read_complete_buffer<std::vector<std::byte>>(path);
+  }
+
+  foundation::Result<std::string> read_complete_text(
+      const std::filesystem::path& path) const override {
+    return read_complete_buffer<std::string>(path);
   }
 
   foundation::Result<void> create_immutable(
@@ -2293,22 +2292,164 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
     return validate_directory_contents(directory.value().get(), root);
   }
 
+  foundation::Result<void> validate_journal_layout(
+      const std::filesystem::path& bundle) const override {
+    const auto missing_directory = [](const std::filesystem::path& path) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_project,
+          "Sequence Journal managed directory is missing or invalid",
+          {{"path", path.generic_string()}},
+      });
+    };
+    auto root = open_directory_without_symlinks(bundle);
+    if (!root.has_value()) {
+      // Only this cold error branch consults the old complete-tree stage to
+      // preserve its root/ancestor error priority. Never re-grant an anchor.
+      const auto original_tree = validate_managed_tree(bundle);
+      return original_tree.has_value() ? missing_directory(bundle)
+                                       : original_tree;
+    }
+    struct stat root_identity {};
+    if (fstat_retry(root.value().get(), &root_identity) != 0) {
+      return foundation::Result<void>::failure(
+          storage_error("managed storage tree could not be inspected", bundle));
+    }
+    if (!S_ISDIR(root_identity.st_mode)) {
+      return missing_directory(bundle);
+    }
+    const auto tree = validate_directory_contents(root.value().get(), bundle);
+    if (!tree.has_value()) {
+      return tree;
+    }
+
+    // Anchors exist only for this operation. All required named components
+    // are freshly checked; no later generic operation inherits this authority.
+    const std::array required{
+        bundle, bundle / "assets", bundle / "history",
+        bundle / "history/checkpoints", bundle / "history/transactions",
+        bundle / "recovery", bundle / "recovery/active",
+        bundle / "recovery/sealed",
+    };
+    constexpr std::array<const char*, 8> names{
+        "", "assets", "history", "checkpoints", "transactions",
+        "recovery", "active", "sealed",
+    };
+    constexpr std::array<std::size_t, 8> parents{0, 0, 0, 2, 2, 0, 5, 5};
+    std::array<OwnedDescriptor, 8> directories;
+    directories[0] = std::move(root.value());
+    for (std::size_t index = 1; index < required.size(); ++index) {
+      const auto parent = directories[parents[index]].get();
+      struct stat named {};
+      if (fstatat_no_follow_retry(parent, names[index], &named) != 0 ||
+          !S_ISDIR(named.st_mode)) {
+        return missing_directory(required[index]);
+      }
+      const int descriptor = openat_retry(
+          parent, names[index],
+          O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+      if (descriptor < 0) {
+        return missing_directory(required[index]);
+      }
+      directories[index] = OwnedDescriptor(descriptor);
+      struct stat opened {}, revalidated {};
+      if (fstat_retry(descriptor, &opened) != 0 ||
+          !S_ISDIR(opened.st_mode) || !same_identity(named, opened) ||
+          fstatat_no_follow_retry(parent, names[index], &revalidated) != 0 ||
+          !S_ISDIR(revalidated.st_mode) ||
+          !same_identity(opened, revalidated)) {
+        return missing_directory(required[index]);
+      }
+    }
+
+    const auto manifest = bundle / "manifest.json";
+    const auto invalid_manifest = [&] {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_project,
+          "Sequence Journal Project manifest is missing or invalid",
+          {{"path", manifest.generic_string()}},
+      });
+    };
+    {
+      const int descriptor = openat_retry(
+          directories[0].get(), "manifest.json",
+          O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+      if (descriptor < 0) {
+        return invalid_manifest();
+      }
+      OwnedDescriptor file(descriptor);
+      struct stat metadata {}, locked_metadata {};
+      if (fstat_retry(file.get(), &metadata) != 0 ||
+          !S_ISREG(metadata.st_mode)) {
+        return invalid_manifest();
+      }
+      const auto locked = lock_descriptor(file.get(), LOCK_SH, manifest);
+      if (!locked.has_value() ||
+          fstat_retry(file.get(), &locked_metadata) != 0 ||
+          !S_ISREG(locked_metadata.st_mode) ||
+          !same_identity(metadata, locked_metadata) ||
+          locked_metadata.st_size < 0) {
+        return invalid_manifest();
+      }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+      // The genuine shared manifest lock and its descriptor remain live here.
+      const auto manifest_fault = testing::detail::invoke_fault(
+          testing::FaultPoint::journal_layout_manifest_locked, manifest);
+      if (!manifest_fault.has_value()) {
+        return invalid_manifest();
+      }
+#endif
+    }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::journal_layout_checked, bundle);
+    if (!fault.has_value()) {
+      return fault;
+    }
+#endif
+    auto current_root = open_directory_without_symlinks(bundle);
+    struct stat current_identity {};
+    if (!current_root.has_value() ||
+        fstat_retry(current_root.value().get(), &current_identity) != 0 ||
+        !S_ISDIR(current_identity.st_mode) ||
+        !same_identity(root_identity, current_identity)) {
+      return foundation::Result<void>::failure(invalid_storage_path(
+          "Sequence Journal Project root changed during layout validation",
+          bundle));
+    }
+    return foundation::Result<void>::success();
+  }
+
  private:
   using OpenedRegularFile = std::pair<OwnedDescriptor, struct stat>;
 
-  foundation::Result<std::vector<std::byte>> read_complete_once(
+  template <typename Buffer>
+  foundation::Result<Buffer> read_complete_buffer(
+      const std::filesystem::path& path) const {
+    auto result = read_complete_once<Buffer>(path);
+    for (std::size_t attempt = 1;
+         !result.has_value() && replacement_transient_error(result.error()) &&
+         attempt < kCompleteReadAttempts;
+         ++attempt) {
+      std::this_thread::yield();
+      result = read_complete_once<Buffer>(path);
+    }
+    return result;
+  }
+
+  template <typename Buffer>
+  foundation::Result<Buffer> read_complete_once(
       const std::filesystem::path& path) const {
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
     const auto intercepted = testing::detail::invoke_fault(
         testing::FaultPoint::complete_read, path);
     if (!intercepted.has_value()) {
-      return foundation::Result<std::vector<std::byte>>::failure(
+      return foundation::Result<Buffer>::failure(
           intercepted.error());
     }
 #endif
     auto opened = open_regular_file(path);
     if (!opened.has_value()) {
-      return foundation::Result<std::vector<std::byte>>::failure(
+      return foundation::Result<Buffer>::failure(
           opened.error());
     }
     auto descriptor = std::move(opened.value().first);
@@ -2316,10 +2457,11 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
     if (before.st_size < 0 ||
         static_cast<std::uintmax_t>(before.st_size) >
             std::numeric_limits<std::size_t>::max()) {
-      return foundation::Result<std::vector<std::byte>>::failure(
+      return foundation::Result<Buffer>::failure(
           storage_error("storage file is too large to read", path));
     }
-    std::vector<std::byte> bytes(static_cast<std::size_t>(before.st_size));
+    Buffer bytes;
+    bytes.resize(static_cast<std::size_t>(before.st_size));
     std::size_t offset = 0;
     while (offset < bytes.size()) {
       const auto count = ::pread(
@@ -2331,26 +2473,26 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
         if (errno == EINTR) {
           continue;
         }
-        return foundation::Result<std::vector<std::byte>>::failure(
+        return foundation::Result<Buffer>::failure(
             storage_error("storage file could not be read completely", path));
       }
       if (count == 0) {
-        return foundation::Result<std::vector<std::byte>>::failure(
+        return foundation::Result<Buffer>::failure(
             storage_error("storage file ended during complete read", path));
       }
       offset += static_cast<std::size_t>(count);
     }
     struct stat after {};
     if (fstat_retry(descriptor.get(), &after) != 0) {
-      return foundation::Result<std::vector<std::byte>>::failure(
+      return foundation::Result<Buffer>::failure(
           storage_error("storage metadata could not be revalidated", path));
     }
     if (!S_ISREG(after.st_mode) ||
         !same_stable_metadata(before, after)) {
-      return foundation::Result<std::vector<std::byte>>::failure(
+      return foundation::Result<Buffer>::failure(
           storage_error("storage file changed during complete read", path));
     }
-    return foundation::Result<std::vector<std::byte>>::success(
+    return foundation::Result<Buffer>::success(
         std::move(bytes));
   }
 

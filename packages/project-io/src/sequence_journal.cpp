@@ -149,9 +149,47 @@ struct RecordingJournalDocument {
   std::uint64_t valid_prefix_length{};
 };
 
-using JournalDocument = RecordingJournalDocument<ActiveSequenceJournal>;
+// Sequence-only parse metadata; never a durability or ACK receipt.
+struct JournalDocument {
+  ActiveSequenceJournal journal;
+  std::uint64_t valid_prefix_length{};
+  std::size_t admission_candidate_bytes{};
+};
 using PerformanceJournalDocument =
     RecordingJournalDocument<ActivePerformanceJournal>;
+
+// This is a parsing checkpoint, never a write, durability or ACK receipt.
+// Every reuse compares a fresh complete read byte-for-byte with this exact
+// validated prefix. One private entry per reader thread keeps ownership local
+// and leaves the public Journal layout and storage contract unchanged.
+constexpr std::size_t kSequenceParsePrefixBytes = 1024U * 1024U;
+// Whole Project bytes and the facts checked by validate_admission_project.
+// These share the existing raw-byte bound with the Sequence parsing prefix.
+struct SequenceProjectParsePrefix {
+  std::string manifest_bytes;
+  std::string checkpoint_bytes;
+  std::string checkpoint_path;
+  std::string project_id;
+};
+struct SequenceParsePrefix {
+  const ProjectStoragePlatform* platform;
+  std::filesystem::path path;
+  std::string bytes;
+  JournalDocument document;
+  std::size_t admission_candidate_bytes{};
+  std::shared_ptr<const SequenceProjectParsePrefix> project_parse_prefix;
+};
+thread_local std::shared_ptr<const SequenceParsePrefix> sequence_parse_prefix;
+
+struct SequenceParseRead {
+  bool enabled;
+  bool successful{};
+  ~SequenceParseRead() {
+    if (enabled && !successful) {
+      sequence_parse_prefix.reset();
+    }
+  }
+};
 
 template <typename Source>
 nlohmann::json parse_bounded_or_throw(Source&& source) {
@@ -178,6 +216,21 @@ std::string byte_string(std::span<const std::byte> bytes) {
       reinterpret_cast<const char*>(bytes.data()),
       bytes.size(),
   };
+}
+
+foundation::Result<std::string> read_complete_text(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& path, bool use_text_reader = true) {
+  const auto* reader = use_text_reader
+      ? dynamic_cast<const ProjectStorageTextReader*>(&platform) : nullptr;
+  if (reader != nullptr) {
+    return reader->read_complete_text(path);
+  }
+  auto bytes = platform.read_complete(path);
+  if (!bytes.has_value()) {
+    return foundation::Result<std::string>::failure(bytes.error());
+  }
+  return foundation::Result<std::string>::success(byte_string(bytes.value()));
 }
 
 std::string sha256(std::string_view bytes) {
@@ -483,13 +536,21 @@ struct CheckedJournalRecords {
   std::vector<CheckedJournalRecord> records;
   std::uint64_t valid_prefix_length{};
   std::size_t observed_length{};
+  std::shared_ptr<const SequenceParsePrefix> reused_sequence_prefix;
+  std::string sequence_bytes;
 };
 
 foundation::Result<CheckedJournalRecords> read_checked_journal_records(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     SessionKind session_kind) {
-  auto tree = validate_journal_tree(platform, bundle);
+  SequenceParseRead prefix_read{session_kind == SessionKind::sequence};
+  const auto* layout = session_kind == SessionKind::sequence
+                           ? dynamic_cast<const ProjectJournalLayoutValidator*>(
+                                 &platform)
+                           : nullptr;
+  auto tree = layout != nullptr ? layout->validate_journal_layout(bundle)
+                                : validate_journal_tree(platform, bundle);
   if (!tree.has_value()) {
     return foundation::Result<CheckedJournalRecords>::failure(tree.error());
   }
@@ -506,13 +567,28 @@ foundation::Result<CheckedJournalRecords> read_checked_journal_records(
         {{"path", path.generic_string()}},
     });
   }
-  auto read = platform.read_complete(path);
+  // Performance retains its original byte-vector read path.
+  auto read = read_complete_text(platform, path, session_kind == SessionKind::sequence);
   if (!read.has_value()) {
     return foundation::Result<CheckedJournalRecords>::failure(read.error());
   }
-  const auto bytes = byte_string(read.value());
-  CheckedJournalRecords checked{{}, 0, bytes.size()};
+  auto bytes = std::move(read.value());
+  CheckedJournalRecords checked{{}, 0, bytes.size(), {}, {}};
   std::size_t cursor = 0;
+  if (session_kind == SessionKind::sequence && sequence_parse_prefix) {
+    const auto prefix = sequence_parse_prefix;
+    if (prefix->platform == &platform && prefix->path == path &&
+        bytes.size() >= prefix->bytes.size() &&
+        std::equal(prefix->bytes.begin(), prefix->bytes.end(), bytes.begin())) {
+      checked.reused_sequence_prefix = prefix;
+      cursor = prefix->bytes.size();
+      checked.valid_prefix_length = cursor;
+    } else {
+      // Truncation, a rewritten prefix or a different owner/path requires the
+      // original full checker. A same-length edit is not an append.
+      sequence_parse_prefix.reset();
+    }
+  }
   while (cursor < bytes.size()) {
     const auto record_offset = cursor;
     const auto line_end = bytes.find('\n', cursor);
@@ -561,6 +637,11 @@ foundation::Result<CheckedJournalRecords> read_checked_journal_records(
                   " Journal record is invalid"));
     }
   }
+  if (session_kind == SessionKind::sequence &&
+      bytes.size() <= kSequenceParsePrefixBytes) {
+    checked.sequence_bytes = std::move(bytes);
+  }
+  prefix_read.successful = true;
   return foundation::Result<CheckedJournalRecords>::success(
       std::move(checked));
 }
@@ -857,26 +938,74 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
 
 foundation::Result<void> validate_admission_project(
     const ProjectStoragePlatform& platform, const std::filesystem::path& bundle,
-    const foundation::ProjectId& project_id) {
-  auto read = platform.read_complete(bundle / "manifest.json");
+    const foundation::ProjectId& project_id,
+    const std::shared_ptr<const SequenceProjectParsePrefix>& parsed_prefix = {},
+    std::size_t project_raw_budget = 0,
+    std::shared_ptr<const SequenceProjectParsePrefix>* validated_prefix = nullptr) {
+  SequenceParseRead project_read{true};
+  if (validated_prefix) validated_prefix->reset();
+  // A retained Project node must fit beside the actual fresh Journal bytes.
+  // The other callers supply no parsing prefix and remain cold.
+  const bool can_reuse = parsed_prefix &&
+      parsed_prefix->manifest_bytes.size() <= project_raw_budget &&
+      parsed_prefix->checkpoint_bytes.size() <=
+          project_raw_budget - parsed_prefix->manifest_bytes.size();
+  auto read = read_complete_text(platform, bundle / "manifest.json");
   if (!read.has_value()) return foundation::Result<void>::failure(read.error());
   try {
-    const auto manifest = parse_bounded_or_throw(byte_string(read.value()));
-    if (manifest.at("contract") != "lmdj.project.manifest.v1" ||
-        !manifest.at("head_revision").is_number_unsigned()) {
-      throw std::runtime_error("invalid admission Project manifest");
+    const std::string_view manifest_bytes{read.value()};
+    const bool reused_manifest = can_reuse &&
+        manifest_bytes == std::string_view{parsed_prefix->manifest_bytes};
+    std::string checkpoint;
+    if (reused_manifest) {
+      checkpoint = parsed_prefix->checkpoint_path;
+    } else {
+      const auto manifest = parse_bounded_or_throw(manifest_bytes);
+      if (manifest.at("contract") != "lmdj.project.manifest.v1" ||
+          !manifest.at("head_revision").is_number_unsigned()) {
+        throw std::runtime_error("invalid admission Project manifest");
+      }
+      checkpoint = std::string{"history/checkpoints/"} +
+          std::to_string(manifest.at("head_revision").get<std::uint64_t>()) + ".json";
+      if (manifest.at("head_checkpoint") != checkpoint) {
+        throw std::runtime_error("invalid admission Project checkpoint path");
+      }
     }
-    const auto checkpoint = std::string{"history/checkpoints/"} +
-        std::to_string(manifest.at("head_revision").get<std::uint64_t>()) + ".json";
-    if (manifest.at("head_checkpoint") != checkpoint) {
-      throw std::runtime_error("invalid admission Project checkpoint path");
-    }
-    auto state = platform.read_complete(bundle / checkpoint);
+    // Always read the currently derived path, even when the manifest matched.
+    auto state = read_complete_text(platform, bundle / checkpoint);
     if (!state.has_value()) return foundation::Result<void>::failure(state.error());
-    const auto data = parse_bounded_or_throw(byte_string(state.value()));
-    if (data.at("project_id") != project_id.value()) {
-      throw std::runtime_error("admission Project identity mismatch");
+    const std::string_view checkpoint_bytes{state.value()};
+    const bool reused_checkpoint = can_reuse &&
+        checkpoint == parsed_prefix->checkpoint_path &&
+        checkpoint_bytes == std::string_view{parsed_prefix->checkpoint_bytes};
+    if (reused_checkpoint) {
+      // The current caller's Project identity is checked on every read.
+      if (parsed_prefix->project_id != project_id.value()) {
+        throw std::runtime_error("admission Project identity mismatch");
+      }
+    } else {
+      const auto data = parse_bounded_or_throw(checkpoint_bytes);
+      if (data.at("project_id") != project_id.value()) {
+        throw std::runtime_error("admission Project identity mismatch");
+      }
     }
+    if (validated_prefix && manifest_bytes.size() <= project_raw_budget &&
+        checkpoint_bytes.size() <= project_raw_budget - manifest_bytes.size()) {
+      if (reused_manifest && reused_checkpoint) {
+        *validated_prefix = parsed_prefix;
+      } else {
+        try {
+          *validated_prefix = std::make_shared<const SequenceProjectParsePrefix>(
+              SequenceProjectParsePrefix{
+                  std::string{manifest_bytes}, std::string{checkpoint_bytes},
+                  std::move(checkpoint), project_id.value()});
+        } catch (...) {
+          // Optional parse metadata allocation is not Project validation.
+          validated_prefix->reset();
+        }
+      }
+    }
+    project_read.successful = true;
     return foundation::Result<void>::success();
   } catch (const std::exception& e) {
     return foundation::Result<void>::failure(Error{
@@ -887,35 +1016,41 @@ foundation::Result<void> validate_admission_project(
 foundation::Result<JournalDocument> read_journal(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
+  SequenceParseRead prefix_read{true};
   auto checked = read_checked_journal_records(
       platform, bundle, SessionKind::sequence);
   if (!checked.has_value()) {
     return foundation::Result<JournalDocument>::failure(checked.error());
   }
   const auto path = recording_active_path(bundle, SessionKind::sequence);
-  JournalDocument document{
-      ActiveSequenceJournal{
-          foundation::SequenceSessionId{""},
-          foundation::PatternId{""},
-          0,
-          {},
-          0,
-          0,
-          SequenceSessionState::active,
-          {},
-          std::nullopt,
-          std::nullopt,
-          0,
-          std::nullopt,
-          {},
-      },
-      checked.value().valid_prefix_length,
-  };
+  JournalDocument document = checked.value().reused_sequence_prefix
+      ? checked.value().reused_sequence_prefix->document
+      : JournalDocument{
+          ActiveSequenceJournal{
+              foundation::SequenceSessionId{""},
+              foundation::PatternId{""},
+              0,
+              {},
+              0,
+              0,
+              SequenceSessionState::active,
+              {},
+              std::nullopt,
+              std::nullopt,
+              0,
+              std::nullopt,
+              {},
+          },
+          checked.value().valid_prefix_length,
+      };
+  document.valid_prefix_length = checked.value().valid_prefix_length;
   std::size_t record_offset = 0;
   std::string_view record_reason = "sequence_journal_record_invalid";
   std::string record_message = "active Sequence Journal record is invalid";
-  bool saw_begin = false;
-  std::size_t admission_candidate_bytes = 0;
+  bool saw_begin = checked.value().reused_sequence_prefix != nullptr;
+  std::size_t admission_candidate_bytes = saw_begin
+      ? checked.value().reused_sequence_prefix->admission_candidate_bytes
+      : 0;
   try {
     for (const auto& record : checked.value().records) {
       record_offset = record.offset;
@@ -1251,11 +1386,48 @@ foundation::Result<JournalDocument> read_journal(
     if (!saw_begin) {
       throw std::runtime_error("Sequence Journal has no durable begin record");
     }
+    const auto& reused_prefix = checked.value().reused_sequence_prefix;
+    std::shared_ptr<const SequenceProjectParsePrefix> project_parse_prefix;
     if (document.journal.admission) {
+      const auto project_raw_budget = checked.value().sequence_bytes.empty()
+          ? 0 : kSequenceParsePrefixBytes - checked.value().sequence_bytes.size();
       auto project = validate_admission_project(
-          platform, bundle, document.journal.admission->preparation.project_id);
+          platform, bundle, document.journal.admission->preparation.project_id,
+          reused_prefix ? reused_prefix->project_parse_prefix : nullptr,
+          project_raw_budget, &project_parse_prefix);
       if (!project.has_value()) return foundation::Result<JournalDocument>::failure(project.error());
     }
+    document.admission_candidate_bytes = admission_candidate_bytes;
+    // Publish only a wholly checked read. In particular, an unknown append
+    // may be readable and reusable for parsing, but its original fresh lease
+    // and append_durable retry still have to establish durability separately.
+    if (!checked.value().sequence_bytes.empty()) {
+      if (reused_prefix &&
+          checked.value().observed_length == reused_prefix->bytes.size() &&
+          checked.value().records.empty() &&
+          project_parse_prefix == reused_prefix->project_parse_prefix) {
+        // Both the fresh Journal bytes and freshly validated Project parse
+        // node matched. A changed Project or smaller budget replaces this node.
+        sequence_parse_prefix = reused_prefix;
+      } else {
+        try {
+          sequence_parse_prefix = std::make_shared<const SequenceParsePrefix>(
+              SequenceParsePrefix{
+                  &platform, path, std::move(checked.value().sequence_bytes),
+                  document, admission_candidate_bytes,
+                  std::move(project_parse_prefix)});
+        } catch (...) {
+          // Allocation of an optional parsing checkpoint is not a Journal
+          // validation failure. Keep the successful cold result instead.
+          sequence_parse_prefix.reset();
+        }
+      }
+    } else {
+      // The document must correspond to the entire stored prefix. Never pair
+      // a full-file state with bytes truncated to the private cache bound.
+      sequence_parse_prefix.reset();
+    }
+    prefix_read.successful = true;
     return foundation::Result<JournalDocument>::success(std::move(document));
   } catch (const std::exception& exception) {
     (void)exception;
@@ -1568,8 +1740,9 @@ foundation::Result<void> append_admission_record(
       {"kind", kind}, {"session_id", session.value()},
       {"identity", admission_codec::encode(identity)}, {"data", std::move(data)}};
   try {
-    auto tentative = document.value().journal;
-    if (!admission_codec::apply(tentative, record)) {
+    auto admission_candidate_bytes = document.value().admission_candidate_bytes;
+    auto tentative = std::move(document.value().journal);
+    if (!admission_codec::apply(tentative, record, &admission_candidate_bytes)) {
       // An earlier write can be readable even though its sync failed. Finish
       // durability under this same lease, without appending duplicate bytes.
       return platform->append_durable(recording_active_path(bundle, SessionKind::sequence),
@@ -2037,6 +2210,13 @@ foundation::Result<void> SequenceJournal::set_state(
       document.value().journal.capture_commit.has_value()) {
     return foundation::Result<void>::failure(
         Error{ErrorCode::invalid_argument, "Sequence session does not match"});
+  }
+  if (document.value().journal.state == state) {
+    // A previous append may be readable after its sync failed. Reconfirm the
+    // exact prefix under this writer lease without growing it on every retry.
+    return platform_->append_durable(
+        recording_active_path(bundle, document.value().journal.kind),
+        document.value().valid_prefix_length, {});
   }
   return append_recording_record(
       platform_, bundle, document.value().journal.kind,

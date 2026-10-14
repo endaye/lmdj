@@ -17,6 +17,7 @@
 #include <lmdj/audio/detail/value_channel.hpp>
 #include <lmdj/audio/detail/voice_dsp.hpp>
 #include <lmdj/audio/master_fx.hpp>
+#include <lmdj/audio/scheduled_pattern_transport.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/foundation/error.hpp>
 
@@ -520,6 +521,46 @@ class RealtimeEngine final {
       std::uint64_t generation, std::uint64_t epoch) const;
   bool acknowledge_pattern_transport_receipt(
       std::uint64_t generation, std::uint64_t epoch) noexcept;
+  // Companion capability: serialized control; enable is quiescent only.
+  foundation::Result<void> enable_scheduled_pattern_record(std::uint64_t generation);
+  ScheduledPatternSubmit submit_scheduled_pattern_record(const ScheduledPatternRecordRequest&);
+  std::optional<ScheduledPatternRecordStatus> inspect_scheduled_pattern_record(
+      std::uint64_t generation, std::uint64_t serial) const;
+  // start_won retains e2 intent only. Submit its genuine ordinary Stop/fence
+  // with the same epoch; no cutoff frame exists until that command applies.
+  ScheduledPatternSubmit cancel_scheduled_pattern_record(const ScheduledPatternCancelRequest&);
+  bool acknowledge_scheduled_pattern_record(
+      std::uint64_t generation, std::uint64_t serial, std::uint64_t epoch) noexcept;
+  void set_count_in_metronome(bool enabled) noexcept;
+  // Sole audio adapter, after render and before the next callback. Taking a
+  // copy does not retire it: acknowledge only after both output consumers.
+  bool take_count_in_cue_batch_audio(CountInCueBatch& batch) noexcept;
+  bool acknowledge_count_in_cue_batch_audio(std::uint64_t batch_id) noexcept;
+  // Quiescent caller only; includes retained logical evidence and native pins.
+  bool scheduled_pattern_record_quiescent() const noexcept;
+  // Serialized control, while render runs. Exact lineage's logical debts have
+  // settled and audio has published its completed last-use quantum. This does
+  // NOT stop future callbacks or authorize physical retirement/reclamation.
+  bool scheduled_pattern_record_settled(std::uint64_t generation,
+      std::uint64_t frame_epoch, std::uint64_t serial) const noexcept;
+
+  // N is the existing control queue bound. Activation is stopped/quiescent;
+  // companion inputs replace host press/release admission for this generation.
+  foundation::Result<void> enable_pattern_input_profile(std::uint64_t generation);
+  // Exact additional native profile allocation (wrapper + 2N FIFO with its
+  // sentinel + 2N completion cells + N holds); excludes allocator overhead.
+  static std::optional<std::uint64_t> pattern_input_profile_storage_bytes(
+      std::size_t maximum_pending_commands) noexcept;
+  PatternInputAdmission enqueue_pattern_input(const PatternInputCommand&) noexcept;
+  std::optional<PatternInputCompletion> inspect_pattern_input_completion(
+      std::uint64_t generation, std::uint64_t frame_epoch, std::uint64_t sequence) const noexcept;
+  bool consume_pattern_input_completion(
+      std::uint64_t generation, std::uint64_t frame_epoch, std::uint64_t sequence) noexcept;
+  PatternInputProfileStatus pattern_input_profile_status() const noexcept;
+  // Actual stopped input-owner revocation; caller must already have disposed
+  // every physical and authoring hold. Press completion/silence is not that
+  // authority. It preserves every unconsumed terminal operation result.
+  bool revoke_pattern_input_holds_quiescent(std::uint64_t generation) noexcept;
   // Opt-in only for a caller retaining <= kRealtimeQueueCapacity commands until
   // receipt retirement. It must acquire audio consumption, drain Voice states,
   // then retire receipts, in that order. No switching after construction.
@@ -712,6 +753,9 @@ class RealtimeEngine final {
   // Test-only writer handoff: no render may execute or begin during this call.
   void set_rendered_frames_quiescent_for_testing(std::uint64_t frames) noexcept;
   std::uint32_t queued_host_input_events_for_testing() const noexcept;
+  void set_scheduled_serial_quiescent_for_testing(std::uint64_t serial) noexcept;
+  void set_pattern_input_sequence_quiescent_for_testing(std::uint64_t sequence) noexcept;
+  void set_pattern_input_ordinal_quiescent_for_testing(std::uint64_t ordinal) noexcept;
 #endif
 
  private:
@@ -779,6 +823,8 @@ class RealtimeEngine final {
     bool preserve_phase = false;
     bool tempo_transition = false;
     bool switch_bar = false;
+    std::atomic<std::uint32_t> scheduled_borrows{0};
+    std::uint32_t scheduled_control_pins = 0;
   };
 
   struct PatternPublishEntry {
@@ -839,6 +885,100 @@ class RealtimeEngine final {
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_generations_{};
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
 
+  static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+  static constexpr std::uint64_t schedule_tag(
+      std::uint64_t serial, ScheduledPatternPhase phase) noexcept {
+    return (serial << 4U) | static_cast<std::uint8_t>(phase);
+  }
+  static constexpr ScheduledPatternPhase schedule_phase(std::uint64_t tag) noexcept {
+    return static_cast<ScheduledPatternPhase>(tag & 15U);
+  }
+  struct ScheduledScalars {
+    std::uint64_t runtime_generation{}, frame_epoch{}, epoch{}, serial{};
+    std::uint64_t pattern_generation{}, bar_frames{}, count_in_frame{}, start_frame{};
+    std::uint16_t bpm{};
+    std::uint8_t bars{}, pattern_slot{kNoPatternSlot};
+    bool timed{};
+  };
+  static_assert(std::is_trivially_copyable_v<ScheduledScalars>);
+  struct ScheduledAudioCopy {
+    ScheduledScalars scalars{};
+    const PreparedPatternView* pattern{};
+    std::array<std::uint64_t, kCountInForcedCueCapacity> markers{};
+    std::size_t next_marker{};
+    std::optional<CountInCueSpan> carried_cue;
+    bool borrowed{}, armed{}, started{};
+  };
+  bool scheduled_record_enabled_{};
+  std::atomic<std::uint64_t> scheduled_tag_{0};
+  // Audio publishes only after the completed quantum's final voice/cue/borrow
+  // use. Control invalidates on new admission; exact monotonic serial prevents
+  // an old callback's late publication from authenticating a new schedule.
+  std::atomic<std::uint64_t> scheduled_settled_serial_{0};
+  std::uint64_t last_schedule_serial_{};
+  std::optional<ScheduledPatternRecordRequest> scheduled_request_;
+  ScheduledScalars scheduled_payload_{};  // read only during Preparing
+  ScheduledAudioCopy scheduled_audio_{};  // never overwritten by control
+  detail::ValueChannel<ScheduledScalars> scheduled_timing_;
+  std::optional<ScheduledPatternCancelRequest> scheduled_cancel_;
+  bool scheduled_start_acknowledged_{}, scheduled_cancel_acknowledged_{};
+  bool scheduled_cancel_won_{}, scheduled_cancel_invalidated_{};
+  mutable std::optional<PatternTransportReceiptCell> scheduled_cutoff_receipt_;
+  std::atomic<std::uint64_t> scheduled_cutoff_serial_{0};
+  PatternInputAuthority acknowledged_record_authority_{};
+  std::atomic<bool> count_in_metronome_{false};
+  CountInCueBatch cue_batch_{};
+  std::atomic<std::uint64_t> cue_batch_pending_{0};
+  std::atomic<std::uint64_t> next_cue_batch_id_{1};
+  bool cue_batch_taken_{};
+  bool cue_batch_blocked_{};
+  void prepare_scheduled_record_audio() noexcept;
+  void advance_scheduled_record_audio(std::uint64_t frame, std::uint64_t end) noexcept;
+  void finish_scheduled_record_audio() noexcept;
+  bool commit_count_in_span(CountInCueSpan span, ScheduledPatternPhase phase) noexcept;
+  void release_scheduled_borrow_audio() noexcept;
+  void retire_scheduled_control_cell() noexcept;
+
+  enum class InputCompletionState : std::uint8_t { empty, reserved, pending, terminal };
+  static_assert(std::atomic<InputCompletionState>::is_always_lock_free);
+  static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+  struct InputCompletionCell {
+    std::atomic<InputCompletionState> state{InputCompletionState::empty};
+    PatternInputCompletion result{};
+  };
+  struct HeldInput {
+    std::uint64_t sequence{};
+    std::uint8_t slot{};
+    PatternInputAuthority authority{};
+    bool release_queued{};
+  };
+  static constexpr std::uint16_t kNoInputCell = 0xffff;
+  struct ProfileInputCell {
+    PadControlEvent event{};
+    std::uint64_t ordinal{};
+    std::uint16_t completion{kNoInputCell};
+    std::uint16_t hold{kNoInputCell};
+    bool release{};
+  };
+  static_assert(std::is_trivially_copyable_v<ProfileInputCell>);
+  static_assert(2 * kRealtimeQueueCapacity < kNoInputCell);
+  struct PatternInputProfile {
+    explicit PatternInputProfile(std::size_t bound) : capacity(bound), queue(2 * bound),
+        completions(std::make_unique<InputCompletionCell[]>(2 * bound)),
+        holds(std::make_unique<HeldInput[]>(bound)) {}
+    const std::size_t capacity;
+    detail::RuntimeSpscStorage<ProfileInputCell> queue;
+    std::unique_ptr<InputCompletionCell[]> completions;
+    std::unique_ptr<HeldInput[]> holds;
+    std::atomic<std::uint32_t> ordinary_pending{0};
+    std::uint64_t generation{}, last_sequence{}, last_ordinal{};
+  };
+  std::unique_ptr<PatternInputProfile> input_profile_;
+  std::atomic<PatternInputProfile*> input_profile_observed_{nullptr};
+  bool push_profile_control(PadControlEvent event) noexcept;
+  void complete_profile_input(const ProfileInputCell&, PatternInputDisposition,
+                              std::uint64_t frame) noexcept;
+  void invalidate_profile_inputs_quiescent() noexcept;
   enum class MasterFxControlKind : std::uint8_t { gesture, tempo, filter, pad_gates };
   struct MasterFxControlEvent {
     MasterFxControlKind kind;

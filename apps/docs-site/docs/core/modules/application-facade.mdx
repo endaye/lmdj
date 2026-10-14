@@ -1,7 +1,7 @@
 ---
 title: Application Facade
 area: core
-status: implemented
+status: partial
 owners: [core, hosts]
 module: application-facade
 source_paths: [packages/application-facade, tests/core/facade, docs/research/2026-09-09-cardputer-audio-hearing.md]
@@ -13,6 +13,15 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 <BuildIdentity kind="modules" id="application-facade" />
 
 <DiagramFrame title="Application Facade Module" diagramId="application-facade" />
+
+S6 当前为**源码草稿，执行验收 UNVERIFIED**：生产 transport 的 I/O owner 迁移与
+scheduled/input companion 已接入源码，尚不能宣称完整 S6 通过。既有自动化和物理
+证据只保留原身份与范围；完整 persistence、并发、Web/OPFS 和 Portal 验证仍待执行。
+
+普通 Record 每次 admission 都绑定自己的原始五秒开录时钟，包含准备与耐久
+opening；先前已结算的 count-in 不提供新录音的 deadline。旧 scheduled ticket
+仍保留原 request、start/cancel receipt 和 opening/error 状态，普通录音的完成或
+拒绝不会改写它。跨 take 复用 controller 的运行回归仍须验证，源码修复不代表验收。
 
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
@@ -92,7 +101,7 @@ admission fence 之后才保留 post-enqueue 候选，fence 前、closure 后与
 关闭后的延迟 cutoff 仍可 drain 该前缀一次。drain 走 `commit_admission_transfer`，
 并可经 T0 执行端口提交。内部 `PatternTransportCoordinator` 按六格表解析
 Play/Stop 与 Record：journal 由 Facade 拥有，只播放从不创建；Record 在无 active
-journal 时由 coordinator 懒创建（load Project 取 bars/fingerprint/当前 revision，请求
+journal 时由 Facade 懒创建（生产 I/O owner load Project 取 bars/fingerprint/当前 revision，请求
 携带的 expected_revision 不符则拒绝且不建），并兼容骑在显式已开 journal 上的形态；
 停止态 Record 用 start 收据激活 admission；播放中 Record 用 fence 且 origin 不变；录音中 Record 关闭准入并保持
 播放；录音中 Play/Stop 先停调度再关闭准入。请求校验 session/project；关闭录音时先耐久 cutoff 再 acknowledge 收据。
@@ -133,13 +142,14 @@ opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
 开始，不能替代未知 cutoff 的恢复验收，也不是 Creator、听感或设备验收。
 新增时间历史属于 Project I/O 的私有 Sequence v3 journal 元数据，不写 Project Truth。
 
-`pattern_transport_ports.hpp` 提供 staged 的单单元异步执行端口：ticket 绑定
+`pattern_transport_ports.hpp` 提供单单元异步执行端口：ticket 绑定
 Runtime generation、transport epoch、Command ID 和单调 step；请求与结果 metadata
 各有固定上限。重复请求不重新执行，未消费的 immutable completion 占用容量，
 异常/不合规结果保留为 `unknown`，不能据此重试副作用。work owner 的创建、执行、
 writer lease 释放全部在同一非音频线程，控制侧 submit/inspect 不等待 IO。
 shutdown 请求只停止接收新工作；已接收操作继续结算，调用方观察 stopped 后才销毁。
-该端口尚未接入全局 transport coordinator，既有 Sequence admission 行为不变。
+S6 生产工厂已在源码中接入既有 `PatternTransportExecutor`；旧同步 coordinator
+仍供原内部测试使用，不能把孤立 executor 证明称作生产迁移验收。
 
 `pattern_transport_controller.hpp` 把上述 coordinator 包装成 Host 可消费的公开
 `facade::PatternTransportController`，由 `make_pattern_transport_controller(audio, config)`
@@ -148,7 +158,8 @@ shutdown 请求只停止接收新工作；已接收操作继续结算，调用�
 pattern_generation/pending_switch/current_pattern，全部只含 Audio Runtime 与
 Foundation 类型；`current_pattern` 有默认实现，返回 `std::nullopt` 表示没有
 重锚信息），
-controller 在 Facade 编译单元内自持 Sequence Journal 与 Project Store，公开签名
+controller 的同一个专用 I/O worker 构造、执行和析构 Sequence Journal、Project Store、
+admission owner 与其 writer leases，公开签名
 不出现任何 Project I/O 类型，因此浏览器 Host 在不越过 Host 源码边界的前提下驱动
 transport。`request`/`inspect`/`continue_operation` 都是串行 control lane 短步：
 request 只解析一次 toggle 并保留 command/epoch，continuation 由 Host 在自己的
@@ -177,7 +188,8 @@ current/generation/origin 和有界双 authority 观察；Controller 不从 late
 新公开 virtual 方法是 staged native ABI break；旧源码端口有默认实现，旧二进制仍需
 coherent 重编与协调 Module/Assembly MAJOR 结算，不能直接替换旧 ABI package。
 
-新能力下有 pending 的 Record 打开流程为：只读核对原 expected revision、已存在 Journal
+支持原生凭据能力的普通 Record 打开流程为：以同一 coherent observation 取得预检的
+Pattern/generation，只读核对原 expected revision、已存在 Journal
 的 session/Pattern/revision/bars/fingerprint 与 Performance owner → native cutoff accepted
 → 保留真实 receipt → 按 receipt 的 Pattern/generation begin/prepare/activate → exact ack。
 已知 owner/target 冲突拒绝且不提交音频、不写 Journal；pending 仍保留。已有同 owner 的
@@ -191,11 +203,17 @@ Journal，不换用较新 revision。原单 switch persisted Contract 没有扩�
 
 request 捕获与 admission owner 使用同一 monotone Clock；receipt 延迟和 prepare IO 重试
 保持最初预算起点，不重新启动 deadline。缺省 `fence_timeout_ms` 仍为 5000 ms，显式值
-保持原语义；preparation aggregate 的 10 是 `first_watermark`。无耐久 admission fence
+仍限制首次打开；preparation aggregate 的 10 是 `first_watermark`。2026-10-11 用户确认
+这五秒只限制打开录音：首次 fence 的实际耐久完成必须早于原期限；到期仍未完成则
+保留失败、真实 receipt 与恢复日志，不 ACK 为打开成功。可读 fence 字节不证明此前
+sync 成功，unknown 重试必须完成同一 immutable fence 的真实耐久确认。只有已明确
+记录期限前耐久成功的 exact replay 才不受晚观察时刻影响，也不续期或抹去 closure。
+成功打开后，Press 与匹配 Release 不按这五秒自动封口，录音继续到真实
+Record-off/Stop cutoff。无耐久 admission fence
 不 ack，新流程完成 exact ack 后才报告 recording=true。晚 revision/authority 冲突保留
 实际 receipt 与明确 error phase；可重试 IO 保留 awaiting phase。
 
-自由函数形态的 controller 用默认 storage platform 全新实例自持 Journal/Store；
+自由函数形态的 controller 用默认 storage platform 全新实例，在 I/O worker 自持 Journal/Store；
 原生/OPFS 的 bundle writer 锁按 open file description 生效，因此当 Host 已经过
 `Application::acquire_project_writer` 持有 lease 时，自由函数 controller 的首次
 admission 写入会得到 `project_busy` 拒绝（释放对方 lease 后同一 command identity
@@ -230,8 +248,137 @@ correlation。无录音时 admit 失败；pre-fence、closure 后或 owner-lost 
 协作者声明，`application.hpp` 继续包含它，保持原 namespace、签名及配置布局。
 `performance_runtime.hpp` / `performance_engine_adapter.hpp` 直接包含 ports 和既有
 `performance_replay.hpp`，不再通过完整 `application.hpp` 获得声明。
+### S6 生产异步 I/O、scheduled admission 与独立 release（source draft）
+
+生产 `PatternTransportController` 复用一个 `PatternTransportExecutor`、一个 retained
+work cell 与原 64 KiB metadata bound（completion payload 与 error metadata 合计）。
+work 不携带 mutable Project 或 PCM。coordinator/audio 留在 serialized control，
+Store、SequenceJournal、PatternAdmissionOwner、writer leases 的创建、执行、释放与
+析构都在同一个 worker。factory 仅保留 immutable binding、同一 storage platform 和
+共享 `AuthoringHistory`；Application controller registry 持续到实际 worker owner 析构。
+普通 Off、playing-overdub、六态、flush/reconcile/overlay/Truth/history/recovery 也经
+异步 turns，原测试旅程与一秒 Pad/五秒 opening 预算须保留。
+写入后 sync 失败仍保留原 work cell。候选、cutoff、overlay 或 owner-loss 的可读
+结果不能直接变成成功；同一 I/O owner 通过实际耐久 API 精确重放，成功后才允许
+相应消费者结算。cutoff 保留原 overlay／switch companion 的顺序和身份。
+
+新 `scheduled_pattern_transport.hpp` 独立定义
+`ScheduledPatternTransportAudioPort` 的 submit/inspect/cancel/acknowledge/quiescent
+能力，不追加旧 `PatternTransportAudioPort` 或 work-owner vtable；Controller/Application
+使用既有 Pimpl 和 nonvirtual additions。Application 成员工厂与自由工厂新增
+`make_pattern_transport_controller(audio, scheduled, config)` overload，旧入口保留。
+这里保留的是 S6 开始时的 public layout/vtable；上文更早的 observation ABI debt 不消失。
+
+Controller 的 `request_count_in`/`inspect_count_in`/`cancel_count_in` 使用 companion
+request（ordinary transport binding、frame_epoch、schedule_serial、bars）和 cancel
+（transport binding、frame_epoch、schedule_serial）。status 分开保留 request/count_in、
+start_receipt/cancel_receipt、opening_pending/opening_complete/error。arming 只提交
+Native immutable identity；**S 前不 load Project、不 begin/open/prepare Journal、不取得
+writer lease、不做 mutation**。只有收到并核验真实 e1 Applied/实际 S 后，worker 才
+晚校验 expected revision、Project/Performance/Journal owner，begin/prepare 并施加 exact S
+fence。五秒 opening 预算在 control 首次取得实际 Applied 时开始，重复 inspect/retry
+不重置；40 BPM 两 Bar 的十二秒等待不消耗该预算。真实 admission fence 耐久完成后，
+该 opening 预算不限制录音时长，也不丢弃持久化积压中的匹配 Release。
+
+S6 草稿的私有 opening companion 以完整 immutable work request 匹配原录音，
+不使用 epoch/hash 或可读 Journal 字节代替耐久正值。真实 durable API 成功后，
+worker 在同一个短裁决区内捕获 completion clock、检查原五秒期限并发布确切成功；
+复制和分配先完成，存储操作、失败 closure 与旧对象销毁留在区外。这里的打开点是
+owner 的逻辑完成时钟，不声称物理 filesystem sync 与另一线程的计时器原子同步。
+Control 只 try-lock；忙时本轮不据此自动 Stop，也不阻塞真实用户的 Record-off/Stop。
+未完成的 held begin 尚未进入裁决区，仍保留原到期 error 与真实 Stop 旅程。
+已送达的成功 completion 在消费原 work identity 前核对裁决，只能清纯 timer failure，
+不能撤销真实 accepted e2。companion 不提前 ACK、消费 work 或显示 recording；
+这些仍等待实际 executor completion。确定性抢占 gate 只编入明确 testable Facade，
+普通 Core/Creator/Host library 不含此 seam；此修复及完整旅程仍待重建验证。
+
+普通重复录音的每次 Record-off／Stop 被 Native 接受后，旧录音的 cutoff observer
+不再供应这次请求的 F。Controller 等待当前 pending identity 的真实回执，再写当前
+admission 的 cutoff；不能在 callback 前把上一轮 epoch／Pattern／generation 的 F
+用于新录音。完成开录后，由 shutdown 新接受的关闭请求发生无 F owner loss，保留
+原 recording-owner failure 分类；显式 scheduled cancellation 保留原 scheduled-owner
+failure，后续 shutdown 不重分类已经建立的失败。未完成开录仍保留 scheduled-owner
+failure；实际 refused e2 与前缀恢复证据都不丢弃。
+
+旧 active cutoff 在 closed／preparing 期间继续界定上一轮迟到输入；下一次真实
+ordinary Record receipt 建立新的 start frame／epoch 时，才清除 active cutoff。
+新录音的 Press／Release 不受上一轮 F 过滤，durable opening 仍是保留输入的前提。
+独立 closed-owner request／F 的恢复与 physical hold 生命周期保持原有规则。
+
+winning cancel 无 storage effect。losing cancel 保留 e1/S、登记 e2，再走真实普通
+Stop/fence；先复制真实 ordinary F 并完成对应 ACK，才允许 companion e2 退役。
+晚 ownership/revision 冲突或 opening failure 是有实际音频效果的失败，需要真实 Stop/
+settlement；不能改称无副作用拒绝。异常 unsent e2 Refused、无 F/origin 时，保留实际
+S/前缀，经真实 owner_lost disposition 与 Application recovery 处置，不能声称 closure。
+
+输入新增 `reserve_input`→Native enqueue→`bind_input`，在同一 control owner 立即
+绑定 real sequence/acceptance ordinal/authority；`complete_input` 输入该项 Native
+terminal result，`inspect_input`/`consume_input` 查询并消费 exact ticket。
+仅 Native 尚未接受的 reservation 可 `abandon_input`。request 保留 Command ID、
+generation/frame epoch、原 runtime_frame、Pad/pressed/velocity、真实 press correlation
+与 held 标记。pre-S Native 的 recording=false、serial/epoch=0 明确无录音 lineage，
+ticket 保留真实输入身份与独立 schedule context，不能补造录音 authority。
+
+固定 N ordinary candidates 与 N held-release metadata 分开计数，N 仍是原
+`audio::kRealtimeQueueCapacity`；`inspect_ingress` 报 ordinary_pending、
+held_release_metadata、retained_tickets。e1/e2 有独立 control cells，不与 Pad 抢占。
+Native 2N FIFO/completion/physical escrow 是另一套责任；两层都必须在 enqueue 前
+有额度，按真实 acceptance ordinal 转换，不用队列余量冒充 durable metadata。
+input status 分开保留 admission、native_result、durable_settled、retained、complete、
+expired、error；complete 要求 Native 终态与必要 durable disposition 都结算，仍须检查
+error/expired。silent/toggle/no-voice 成功仍须耐久录制，不虚构 voice_started。
+
+资源只按真实 owner 边界各退役一次：
+
+| 责任 | 退役证据 |
+| --- | --- |
+| press-operation ticket | Native terminal effect 与 durable press admission 已 reconciliation 后消费 exact ticket。 |
+| Native future release escrow | matching physical release 的真实消费/结算，或已静止且实际处置 physical/authoring holds 的 owner revocation。 |
+| ordinary candidate metadata | exact candidate 已耐久 retain 并 reconciliation；unknown effect 留住 work identity。 |
+| recording release metadata/correlation | matching durable release，或真实 cutoff/owner disposition 耐久关闭原 hold 并 reconciliation 其前缀。 |
+
+因此 press ticket 已消费、voice 已安静或 muted/toggle 终态不会丢未来 release。
+Record-off/Stop 可以结清 recording hold，physical hold 仍独立等真实松开；Native
+invalidation 也不能抹去已耐久的录音。failed/live-only release 若仍关联 recorded hold，
+等待实际 cutoff/owner disposition。原一秒观察 expiry 留住真实效果、work ticket 与
+release metadata，不授权取消、重入、回收或重启 deadline。
+
+原 `admit(candidate)` 也跨异步 turns；Error `details.pending=true` 时 continuation 后
+再次查询**同一个 candidate**，不再 enqueue、不改 correlation/watermark。terminal result
+属于原候选，closing 后仍可读。`project_overlay` pending 同样需等待 fresh worker snapshot，
+旧缓存 generation 不可冒充当前 projection；generation 内容身份仍跨 recording/Pattern
+保持单调。`publish_overlay` 是 prompt control cadence。unknown work 用 companion
+`PatternTransportWorkReconciler` 在同 owner/thread 回读真实 identity，已知前缀 retry
+保留 semantic IDs/原 deadline，以单调 work step 继续；unknown 不是重做 side effect 的许可。
+
+`request_shutdown` 是短请求；继续驱动 retained effects，直到 `shutdown_complete`
+证明 executor 实际 stopped 后再析构 control。I/O stopped 不证明 Native schedule、cue
+consumer、voice/input/physical holds 全部 quiescent，Host 需另外完成这些 owner 责任。
+有限 RAM ingress 也不代表 crash durability 或无限 storage stall 保证。
+
+异常 input-owner 回收使用 nonvirtual `inspect_input_owner`、
+`request_input_owner_disposition`、`acknowledge_input_owner`；它与普通 transport status 和
+durable cutoff 收据分开。只有真实 Native stopped/revocation、输入 completion 已消费、
+queued Release/legacy work 已结算及同 I/O owner 的真实 disposition 完成，才能退役
+correlation。未录制过的 live-only owner 使用实际已接受的 input CommandId/generation
+提交独立 resource-only `owner_lost` work，epoch=0 明确没有 transport authority；普通
+executor submit 仍拒绝零 epoch，独立 nonvirtual `submit_owner_disposition` 只接受
+canonical `owner_lost` resource work，不降低普通工作的 monotone epoch floor。
+worker 实际读取 Journal：确实不存在时无写入；存在录音则保留前缀、owner-loss error 与
+recovery 责任。wrong generation、未消费 completion、unknown I/O effect 或重复 ACK 都
+不能当作成功收尾。这些是待执行验证的 source draft，不是当前 main 的回收证明。
+已真实耐久关闭录音后仍持有的 physical hold，在异常 Native owner revocation 后使用
+原 closing request 的真实正 epoch/CommandId 做独立 resource disposition；已完成的
+F/Truth/history 保留，普通 live Stop 不能借此丢弃 physical hold。
+
+新增 `facade.pattern_count_in` 与 `facade.pattern_count_in_stress` 测试源码包含 held-begin/
+held-append/control availability、winning/losing cancel、独立 metadata saturation、silent
+held press 消费→真实 reserved release→实际 duration→Record-off/Stop→flush/reconcile→
+complete Truth/reopen，以及 expiry、failure/retry/owner-loss/shutdown。执行结果仍
+UNVERIFIED；孤立 executor 或旧 recovery 证据不能代替该生产完整旅程。
+
 ## 4. 架构与数据流
-Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、pending-overlay projection、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有；overlay projection 只复制当前内存事件，不扩大 JSON/C API 或持久化 surface。Performance 录制沿同一路径：Host 提交手势 → Facade 用 `PerformanceClock` 定 tick、用 `PerformanceInputSequencer` 定次序 → Project I/O 在 performance session kind 的 journal 上耐久 append → 返回权威 status；replay 则是 Project Truth → `cook_performance_replay` → `PerformanceReplayController` → Runtime sink 的单向派生流。
+Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、pending-overlay projection、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有；transport overlay projection 从 I/O worker 的 fresh owned snapshot 跨短 turn 返回，不扩大 JSON/C API 或持久化 surface。Performance 录制沿同一路径：Host 提交手势 → Facade 用 `PerformanceClock` 定 tick、用 `PerformanceInputSequencer` 定次序 → Project I/O 在 performance session kind 的 journal 上耐久 append → 返回权威 status；replay 则是 Project Truth → `cook_performance_replay` → `PerformanceReplayController` → Runtime sink 的单向派生流。
 
 直接传入 Replay Controller 的 projection 也须在保留 replay ID 或产生任何
 header、事件、reset 和 transport 副作用前通过 profile 校验。Legacy 不携带
@@ -396,6 +543,10 @@ admission/lifecycle，但 T4 exact-revision ESP-IDF 完整闭包和静态预算�
 load/start/stop/reset；该压力注册不进入 coverage，确定性交错注册仍进入 coverage。
 ## 10. 版本身份
 版本和完整依赖集由模块清单与 Product Assembly 固定。
+
+S6 companion/Pimpl additions 保留旧 public layout/vtable 与 ordinary DTO，staged MINOR
+debt 尚待协调 settlement 和兼容验收；本源码/文档草稿不分配新版本或 Product Build。
+Project5.4.1 的 whole-string `input_sequence` Contract 与 Project/Journal schema 保持原约束。
 
 ## Provider owner API
 
@@ -613,3 +764,17 @@ requires no Runtime projection. Undo/Redo restore it under the history label
 ## 分 Pad Sound Set 获取
 
 `soundset.catalog.describe` 返回经 Core 解析的 Catalog 身份与总字节，不获取整套素材。`soundset.slot.acquire` 校验并缓存一个已占用槽；`soundset.slot.install` 对同编号目标 Pad 提交一个 InstallSoundSet assignment，保留原 manifest 身份、lineage、配额及 revision/receipt 语义，且不允许 replace policy。
+
+
+## S6 普通录音准备失败的 owner 结算（修复源码）
+
+普通 Record 的真实 prepare/preflight 在关停时仍可能 pending。只有原准备工作已
+真实完成、Native 对未发送的 start/fence 确认 `not_running`，且已有 shutdown 意图，
+才进入保留原请求与失败的私有结算路径。同一真实 worker 执行既有 `owner_lost`：
+实际读取 Journal 确认不存在，或为同一 owner 的真实前缀持久化 owner-loss 状态。
+未知工作、同步失败和外部 owner 冲突仍保留原责任；可读前缀不等于持久化通过。
+
+这条未开始录音的路径不生成 S/F、opening 完成、取消成功或 ACK，不借用旧 take
+或输入专用 epoch。实际 worker owner 释放、输入/物理 hold、原响应消费和独立
+writer/reopen 继续各自验收。私有 bookkeeping 不改变公共布局、wire 或持久化
+Contract；此处是修复源码的义务，当前完整候选执行与物理验收另行记录。

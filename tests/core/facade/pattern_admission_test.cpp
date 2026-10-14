@@ -474,6 +474,8 @@ class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatfo
   std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner =
       lmdj::project_io::make_default_project_storage_platform();
   int fail_appends = 0;
+  bool lose_append_response = false;
+  std::function<void(std::span<const std::byte>)> before_append;
 
   lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& path) override {
@@ -508,6 +510,7 @@ class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatfo
   lmdj::foundation::Result<void> append_durable(
       const std::filesystem::path& path, std::uint64_t prefix,
       std::span<const std::byte> bytes) override {
+    if (before_append) before_append(bytes);
     if (fail_appends > 0) {
       --fail_appends;
       return lmdj::foundation::Result<void>::failure(
@@ -515,7 +518,13 @@ class FailingAppendStorage final : public lmdj::project_io::ProjectStoragePlatfo
            "injected admission append failure",
            {{"journal_retained", true}}});
     }
-    return inner->append_durable(path, prefix, bytes);
+    const auto result = inner->append_durable(path, prefix, bytes);
+    if (result.has_value() && lose_append_response) {
+      lose_append_response = false;
+      return lmdj::foundation::Result<void>::failure(
+          {lmdj::foundation::ErrorCode::io_error, "lost actual durable append response"});
+    }
+    return result;
   }
   lmdj::foundation::Result<void> remove(
       const std::filesystem::path& path) override {
@@ -577,6 +586,268 @@ struct OwnerFixture {
             120, true, {}, lmdj::project_io::SequenceSwitchOutcome::none, {}};
   }
 };
+
+void same_operation_journal_admit_reopens_the_real_candidate() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  const auto active = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(active.has_value());
+  const project_io::SequenceAdmissionCandidate press{
+      10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72};
+  const auto admitted = f.owner.admit(press, active.value());
+  LMDJ_CHECK(admitted.has_value() && admitted.value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(active.value().admission->candidates.empty());
+  const auto reopened = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().admission->candidates == std::vector{press});
+  LMDJ_CHECK(!reopened.value().admission->closure);
+}
+
+void prepared_owner_opens_at_4999_but_not_5000() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  for (const auto elapsed_ms : {4999, 5000}) {
+    for (const bool explicit_start : {false, true}) {
+      OwnerFixture f;
+      LMDJ_CHECK(f.preparation.fence_timeout_ms == 5000);
+      const auto started = f.now;
+      LMDJ_CHECK((explicit_start ? f.owner.prepare(f.preparation, started)
+                                : f.owner.prepare(f.preparation)).has_value());
+      f.now += std::chrono::milliseconds{elapsed_ms};
+      // Neither a default-clock replay nor a later explicit retry start renews
+      // the same already-durable preparation's original opening budget.
+      LMDJ_CHECK((explicit_start ? f.owner.prepare(f.preparation, f.now)
+                                : f.owner.prepare(f.preparation)).has_value());
+      const auto activated = f.owner.activate(f.fence());
+      const auto reopened = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+      LMDJ_CHECK(reopened.has_value());
+      LMDJ_CHECK(reopened.value().admission->candidates.empty());
+      if (elapsed_ms == 4999) {
+        LMDJ_CHECK(activated.has_value());
+        LMDJ_CHECK(reopened.value().admission->admission_fence == f.fence());
+        LMDJ_CHECK(!reopened.value().admission->closure);
+        f.now += std::chrono::milliseconds{1};
+        LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+        LMDJ_CHECK(f.journals.read_active(f.bundle).value() == reopened.value());
+      } else {
+        LMDJ_CHECK(!activated.has_value());
+        LMDJ_CHECK(activated.error().details.at("reason") == "admission_opening_deadline_elapsed");
+        LMDJ_CHECK(!reopened.value().admission->admission_fence);
+        LMDJ_CHECK(reopened.value().admission->closure ==
+            (project_io::SequenceAdmissionClosure{
+                std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+        LMDJ_CHECK(!f.owner.activate(f.fence()).has_value());
+        LMDJ_CHECK(f.journals.read_active(f.bundle).value() == reopened.value());
+      }
+    }
+  }
+}
+
+void first_durable_opening_completion_keeps_the_original_strict_boundary() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  for (const auto completion_ms : {4999, 5000}) {
+    for (const auto close_failure : {0, 1, 2}) {
+      OwnerFixture f;
+      const auto started = f.now;
+      LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+      f.now = started + std::chrono::milliseconds{4999};
+      bool close_failed = false;
+      f.platform->before_append = [&](std::span<const std::byte> bytes) {
+        const std::string text(bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        if (text.find("admission-fence") != std::string::npos)
+          f.now = started + std::chrono::milliseconds{completion_ms};
+        if (completion_ms == 5000 && close_failure && !close_failed &&
+            text.find("admission-close") != std::string::npos) {
+          close_failed = true;
+          if (close_failure == 1) f.platform->fail_appends = 1;
+          else f.platform->lose_append_response = true;
+        }
+      };
+      const auto opened = f.owner.activate(f.fence());
+      const auto journal = f.journals.read_active(f.bundle);
+      LMDJ_CHECK(journal.has_value() && journal.value().admission->admission_fence == f.fence());
+      LMDJ_CHECK(journal.value().admission->preparation.fence_timeout_ms == 5000);
+      LMDJ_CHECK(journal.value().admission->candidates.empty());
+      if (completion_ms == 4999) {
+        LMDJ_CHECK(opened.has_value() && !journal.value().admission->closure);
+        LMDJ_CHECK(f.owner.opening_completed_at(f.fence()) == started + std::chrono::milliseconds{4999});
+        f.now = started + std::chrono::milliseconds{7000};
+        LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+        LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+        LMDJ_CHECK(f.journals.read_active(f.bundle).value() == journal.value());
+        continue;
+      }
+      LMDJ_CHECK(!opened.has_value() && !f.owner.opening_completed_at(f.fence()));
+      if (close_failure) {
+        LMDJ_CHECK(opened.error().details.at("opening_deadline_elapsed") == true);
+        LMDJ_CHECK(opened.error().details.at("closure_unresolved") == true);
+        LMDJ_CHECK(journal.value().admission->closure.has_value() == (close_failure == 2));
+      } else {
+        LMDJ_CHECK(opened.error().details.at("reason") == "admission_opening_deadline_elapsed");
+      }
+      // Even a real readable fence and a failed closure cannot turn this late
+      // first completion into an earlier opening on exact prepare/activate retry.
+      f.now = started + std::chrono::milliseconds{7000};
+      LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+      if (close_failure == 2) {
+        // The readable unknown closure must still go through actual sync.
+        f.platform->fail_appends = 1;
+        const auto unresolved = f.owner.activate(f.fence());
+        LMDJ_CHECK(!unresolved.has_value() && unresolved.error().details.at("closure_unresolved") == true);
+      }
+      const auto retried = f.owner.activate(f.fence());
+      LMDJ_CHECK(!retried.has_value());
+      LMDJ_CHECK(retried.error().details.at("reason") == "admission_opening_deadline_elapsed");
+      const auto closed = f.journals.read_active(f.bundle);
+      LMDJ_CHECK(closed.value().admission->admission_fence == f.fence());
+      LMDJ_CHECK(closed.value().admission->closure ==
+          (project_io::SequenceAdmissionClosure{std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+      LMDJ_CHECK(!f.owner.activate(f.fence()).has_value());
+      LMDJ_CHECK(f.journals.read_active(f.bundle).value() == closed.value());
+      LMDJ_CHECK(!f.owner.opening_completed_at(f.fence()));
+    }
+  }
+}
+
+void unknown_fence_response_cannot_prove_an_earlier_opening() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  const auto started = f.now;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  f.now = started + std::chrono::milliseconds{4999};
+  f.platform->lose_append_response = true;
+  const auto unknown = f.owner.activate(f.fence());
+  LMDJ_CHECK(!unknown.has_value() && unknown.error().code == foundation::ErrorCode::io_error);
+  LMDJ_CHECK(!f.owner.opening_completed_at(f.fence()));
+  const auto readable = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(readable.value().admission->admission_fence == f.fence());
+  LMDJ_CHECK(!readable.value().admission->closure);
+  f.now = started + std::chrono::milliseconds{5000};
+  const auto late = f.owner.activate(f.fence());
+  LMDJ_CHECK(!late.has_value() && late.error().details.at("reason") == "admission_opening_deadline_elapsed");
+  LMDJ_CHECK(!f.owner.opening_completed_at(f.fence()));
+  LMDJ_CHECK(f.owner.admit({10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+      .value() == PatternAdmissionAdmit::live_only);
+  const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(closed.value().admission->admission_fence == f.fence());
+  LMDJ_CHECK(closed.value().admission->candidates.empty());
+  LMDJ_CHECK(closed.value().admission->closure ==
+      (project_io::SequenceAdmissionClosure{std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+}
+
+void default_prepare_captures_before_io_and_preserves_unknown_retry_clock() {
+  using namespace lmdj;
+  for (const bool crosses_during_io : {false, true}) {
+    OwnerFixture f;
+    const auto started = f.now;
+    f.platform->lose_append_response = true;
+    f.platform->before_append = [&](std::span<const std::byte>) {
+      if (crosses_during_io) f.now = started + std::chrono::milliseconds{5000};
+    };
+    LMDJ_CHECK(!f.owner.prepare(f.preparation).has_value());
+    LMDJ_CHECK(f.journals.read_active(f.bundle).value().admission->preparation == f.preparation);
+    f.now = started + std::chrono::milliseconds{5000};
+    f.platform->before_append = {};
+    LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+    const auto opened = f.owner.activate(f.fence());
+    LMDJ_CHECK(!opened.has_value() && opened.error().details.at("reason") == "admission_opening_deadline_elapsed");
+    const auto closed = f.journals.read_active(f.bundle);
+    LMDJ_CHECK(!closed.value().admission->admission_fence);
+    LMDJ_CHECK(closed.value().admission->closure ==
+        (project_io::SequenceAdmissionClosure{std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+  }
+  OwnerFixture f;
+  f.platform->fail_appends = 1;  // A known non-write of the old operation.
+  LMDJ_CHECK(!f.owner.prepare(f.preparation).has_value());
+  f.now += std::chrono::milliseconds{6000};
+  auto next = f.preparation;
+  next.identity.operation_id = foundation::CommandId{uuid(99)};
+  LMDJ_CHECK(f.owner.prepare(next).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  const auto fresh = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(fresh.value().admission->preparation.identity == next.identity);
+  LMDJ_CHECK(!fresh.value().admission->closure);
+}
+
+void same_operation_journal_admit_keeps_recording_after_the_opening_deadline() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  for (const auto release_elapsed_ms : {5000, 7000}) {
+    OwnerFixture f;
+    LMDJ_CHECK(f.preparation.fence_timeout_ms == 5000);
+    const auto started = f.now;
+    LMDJ_CHECK(f.owner.prepare(f.preparation, started).has_value());
+    LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+    f.now += std::chrono::milliseconds{release_elapsed_ms == 5000 ? 4999 : 6000};
+    const auto active = f.journals.read_active(f.bundle);
+    LMDJ_CHECK(active.has_value());
+    const project_io::SequenceAdmissionCandidate press{
+        10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72};
+    const auto pressed = f.owner.admit(press, active.value());
+    LMDJ_CHECK(pressed.has_value() && pressed.value() == PatternAdmissionAdmit::retained);
+    const auto retained = f.journals.read_active(f.bundle);
+    LMDJ_CHECK(retained.has_value());
+    f.now = started + std::chrono::milliseconds{release_elapsed_ms};
+    const project_io::SequenceAdmissionCandidate release{
+        11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72};
+    const auto released = f.owner.admit(release, retained.value());
+    LMDJ_CHECK(released.has_value() && released.value() == PatternAdmissionAdmit::retained);
+    const auto reopened = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+    LMDJ_CHECK(reopened.has_value());
+    LMDJ_CHECK(reopened.value().admission->candidates == std::vector({press, release}));
+    LMDJ_CHECK(!reopened.value().admission->closure);
+    LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
+    LMDJ_CHECK(f.owner.close_requested().has_value());
+    const auto closed = f.journals.read_active(f.bundle);
+    LMDJ_CHECK(closed.has_value());
+    LMDJ_CHECK(closed.value().admission->closure ==
+        (project_io::SequenceAdmissionClosure{
+            11, project_io::SequenceAdmissionCloseReason::requested}));
+    LMDJ_CHECK(f.owner.admit(
+        {12, 37000, {0, 1}, project_io::SequenceCandidateKind::press, 80, 80}).value() ==
+        PatternAdmissionAdmit::live_only);
+    LMDJ_CHECK(f.journals.read_active(f.bundle).value() == closed.value());
+    LMDJ_CHECK(f.owner.settle_close(f.store, foundation::CommandId{uuid(21)},
+        foundation::CommandId{uuid(22)}, foundation::CommandId{uuid(23)}).has_value());
+    const auto project = f.store.load(f.bundle);
+    LMDJ_CHECK(project.has_value() && project.value().revision == 1);
+    LMDJ_CHECK(project.value().patterns.at(f.pattern).events ==
+        std::vector<domain::PatternEvent>({{{0, 1}, 960, 240, 90}}));
+    LMDJ_CHECK(!f.journals.read_active(f.bundle).has_value());
+  }
+}
+
+void same_operation_journal_admit_rechecks_durable_payload_collisions() {
+  using namespace lmdj;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  const auto active = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(active.has_value());
+  const project_io::SequenceAdmissionCandidate press{
+      10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72};
+  // A real durable write after the precheck read must still be reconciled by
+  // append_admission_record's fresh lease-bound read, never by the snapshot.
+  LMDJ_CHECK(f.journals.append_admission_candidate(
+      f.bundle, f.session, f.preparation.identity, press).has_value());
+  auto changed = press;
+  changed.velocity++;
+  const auto rejected = f.owner.admit(changed, active.value());
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().details.at("uncertain_suffix_watermark") == 10);
+  LMDJ_CHECK(rejected.error().details.at("last_retained_watermark") == 10);
+  const auto reopened = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().admission->candidates == std::vector{press});
+  LMDJ_CHECK(reopened.value().admission->closure ==
+      (project_io::SequenceAdmissionClosure{
+          10, project_io::SequenceAdmissionCloseReason::storage_failure}));
+}
 
 void prepared_owner_uses_origin_not_the_admission_frame() {
   using namespace lmdj;
@@ -702,6 +973,49 @@ void prepared_owner_drains_through_the_execution_port() {
              std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
 }
 
+void checkpoint_retains_the_real_hold_until_its_matching_release() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f;
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  const project_io::SequenceAdmissionCandidate press{10, 25000, {0, 1},
+      project_io::SequenceCandidateKind::press, 90, 72};
+  LMDJ_CHECK(f.owner.admit(press).value() == PatternAdmissionAdmit::retained);
+  const auto checkpoint = foundation::CommandId{uuid(20)};
+  LMDJ_CHECK(f.owner.checkpoint_prefix(checkpoint).has_value());
+  const auto after = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(after.value().admission->candidates.empty());
+  LMDJ_CHECK(!after.value().admission->closure);
+  LMDJ_CHECK(after.value().admission->transfers.back().transfer_id == checkpoint);
+  LMDJ_CHECK(after.value().admission->transfers.back().checkpoint.owned_presses.size() == 1);
+  LMDJ_CHECK(after.value().admission->transfers.back().checkpoint.owned_presses[0].press_sequence == 72);
+  LMDJ_CHECK(f.owner.checkpoint_prefix(checkpoint).has_value());
+  LMDJ_CHECK(f.journals.read_active(f.bundle).value() == after.value());
+  // A replay uses the retained candidate digest; it appends no new candidate.
+  LMDJ_CHECK(f.owner.admit(press).value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(f.journals.read_active(f.bundle).value() == after.value());
+  f.now += std::chrono::milliseconds{7000};
+  LMDJ_CHECK(f.owner.admit({11, 49000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+      .value() == PatternAdmissionAdmit::retained);
+  const auto released = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+  LMDJ_CHECK(released.has_value() && !released.value().admission->closure);
+  LMDJ_CHECK(released.value().admission->candidates ==
+      std::vector<project_io::SequenceAdmissionCandidate>({
+          {11, 49000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72}}));
+  auto cutoff = f.cutoff_fence();
+  cutoff.effective_frame = 50000;
+  LMDJ_CHECK(f.owner.cutoff(cutoff).has_value());
+  LMDJ_CHECK(f.owner.close_requested().has_value());
+  LMDJ_CHECK(f.owner.settle_close(f.store, foundation::CommandId{uuid(21)},
+      foundation::CommandId{uuid(22)}, foundation::CommandId{uuid(23)}).has_value());
+  const auto reopened = f.store.load(f.bundle);
+  LMDJ_CHECK(reopened.has_value() && reopened.value().revision == 1);
+  LMDJ_CHECK(reopened.value().patterns.at(f.pattern).events ==
+      std::vector<domain::PatternEvent>({{{0, 1}, 960, 960, 90}}));
+  LMDJ_CHECK(!f.journals.read_active(f.bundle).has_value());
+}
+
 void prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff() {
   using namespace lmdj;
   using namespace facade::detail;
@@ -744,20 +1058,22 @@ void prepared_owner_closes_an_empty_prefix_at_deadline() {
   OwnerFixture f;
   f.preparation.fence_timeout_ms = 1;
   LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
-  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
   f.now += std::chrono::milliseconds{2};
   LMDJ_CHECK(f.owner.admit(
       {10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
                  .value() == PatternAdmissionAdmit::live_only);
   const auto closed = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(!closed.value().admission->admission_fence);
   LMDJ_CHECK(closed.value().admission->candidates.empty());
   LMDJ_CHECK(closed.value().admission->closure ==
              (project_io::SequenceAdmissionClosure{
                  std::nullopt, project_io::SequenceAdmissionCloseReason::deadline}));
+  LMDJ_CHECK(!f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.journals.read_active(f.bundle).value() == closed.value());
   LMDJ_CHECK(!f.owner.drain(foundation::CommandId{uuid(6)}, 0, false).has_value());
 }
 
-void prepared_owner_closes_at_deadline_before_the_next_candidate() {
+void prepared_owner_keeps_open_input_past_the_explicit_opening_deadline() {
   using namespace lmdj;
   using namespace facade::detail;
   OwnerFixture f;
@@ -770,15 +1086,20 @@ void prepared_owner_closes_at_deadline_before_the_next_candidate() {
   f.now += std::chrono::milliseconds{2};
   LMDJ_CHECK(f.owner.admit(
       {11, 31000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
-                 .value() == PatternAdmissionAdmit::live_only);
+                 .value() == PatternAdmissionAdmit::retained);
+  const auto open = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(open.value().admission->candidates.size() == 2);
+  LMDJ_CHECK(!open.value().admission->closure);
+  LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
+  LMDJ_CHECK(f.owner.close_requested().has_value());
   const auto closed = f.journals.read_active(f.bundle);
-  LMDJ_CHECK(closed.value().admission->candidates.size() == 1);
+  LMDJ_CHECK(closed.value().admission->candidates.size() == 2);
   LMDJ_CHECK(closed.value().admission->closure ==
              (project_io::SequenceAdmissionClosure{
-                 10, project_io::SequenceAdmissionCloseReason::deadline}));
-  LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
-  const auto transfer = f.owner.drain(foundation::CommandId{uuid(6)}, 10, false);
+                 11, project_io::SequenceAdmissionCloseReason::requested}));
+  const auto transfer = f.owner.drain(foundation::CommandId{uuid(6)}, 11, false);
   LMDJ_CHECK(transfer.has_value());
+  LMDJ_CHECK(transfer.value().checkpoint.owned_presses.empty());
   LMDJ_CHECK(transfer.value().recoverable_tail ==
              std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
 }
@@ -858,16 +1179,24 @@ int main() {
     swing_uses_the_existing_odd_sixteenth_grid();
     release_duration_stops_at_the_pattern_end();
     multi_bar_onset_does_not_wrap_at_one_bar();
+    same_operation_journal_admit_reopens_the_real_candidate();
+    prepared_owner_opens_at_4999_but_not_5000();
+    first_durable_opening_completion_keeps_the_original_strict_boundary();
+    unknown_fence_response_cannot_prove_an_earlier_opening();
+    default_prepare_captures_before_io_and_preserves_unknown_retry_clock();
+    same_operation_journal_admit_keeps_recording_after_the_opening_deadline();
+    same_operation_journal_admit_rechecks_durable_payload_collisions();
     prepared_owner_uses_origin_not_the_admission_frame();
     prepared_owner_keeps_post_close_input_live_only();
     prepared_owner_leaves_unresolved_fence_after_owner_loss();
     prepared_owner_drains_through_the_execution_port();
+    checkpoint_retains_the_real_hold_until_its_matching_release();
     prepared_owner_closes_at_capacity_and_drains_after_delayed_cutoff();
     prepared_owner_closes_an_empty_prefix_at_deadline();
-    prepared_owner_closes_at_deadline_before_the_next_candidate();
+    prepared_owner_keeps_open_input_past_the_explicit_opening_deadline();
     prepared_owner_reports_an_uncertain_suffix_on_storage_failure();
     prepared_owner_surfaces_a_failed_storage_failure_close();
-    std::cout << "pattern admission tests: PASS (29 scenarios)\n";
+    std::cout << "pattern admission tests: PASS (38 scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

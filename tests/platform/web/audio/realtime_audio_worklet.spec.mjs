@@ -312,11 +312,11 @@ test("global Pattern transport records live input through real OPFS and settles 
   expect(journey.importCommitted).toMatchObject({ok: true});
   expect(journey.snapshot).toMatchObject({ok: true});
   expect(journey.activated).toMatchObject({ok: true});
-  // Completion ordering: the ticket's status snapshot precedes any
-  // continuation step, so it always reports the pending phase.
+  // The accepted ticket precedes the durable-opening continuation. Audio
+  // receipt polling starts only after that preparation has actually finished.
   expect(journey.ticket).toMatchObject({
     ok: true,
-    result: {submit: "accepted", status: {phase: "awaiting_audio"}},
+    result: {submit: "accepted", status: {phase: "preparing"}},
   });
 
   await expect.poll(async () => {
@@ -1250,4 +1250,253 @@ test("a stale Bank generation never masquerades as the current acknowledgement",
     accepted: false,
     reason: "generation_mismatch",
   });
+});
+
+
+test("real count-in cue ACK and callback last use independently fence terminal retirement", async ({page}, testInfo) => {
+  await waitForFormalHost(page);
+  const seam = await page.evaluate(() => Object.fromEntries([
+    "armPhysicalFenceBarrier", "releasePhysicalFenceBarrier",
+    "physicalFenceState", "runPhysicalFenceQuiescenceWait", "dispatchProcessorError",
+  ].map((name) => [name, typeof window.lmdjWebRuntimeHostTest?.[name]])));
+  for (const [name, type] of Object.entries(seam)) {
+    expect(type, `UNEXECUTED: guarded packaged adapter requires ${name}`)
+      .toBe("function");
+  }
+
+  // Keep the master tap and cue destination distinct. Output 1 joins the
+  // monitor downstream of the master tap, using the actual packaged processor.
+  await page.evaluate(() => {
+    const button = document.createElement("button");
+    button.id = "activate-physical-fence-audio";
+    button.addEventListener("click", async () => {
+      try {
+        const host = window.lmdjWebRuntimeHost;
+        const context = new AudioContext({sampleRate: 48_000});
+        await context.resume();
+        const handle = host.registerAudioContext(context);
+        const masterTap = context.createGain();
+        const monitor = context.createGain();
+        masterTap.connect(monitor);
+        monitor.connect(context.destination);
+        const masterHandle = host.registerAudioNode(masterTap);
+        const cueHandle = host.registerAudioNode(monitor);
+        window.__lmdjPhysicalFenceGraph = {
+          context, masterTap, monitor, handle, masterHandle, cueHandle,
+        };
+        window.__lmdjPhysicalFenceActivation = await host
+          .startAudioWorkletWithCountIn(handle, masterHandle, cueHandle);
+      } catch (error) {
+        window.__lmdjPhysicalFenceActivation = {ok: false, error: String(error)};
+      }
+    }, {once: true});
+    document.body.append(button);
+  });
+  await page.locator("#activate-physical-fence-audio").click();
+  await page.waitForFunction(() =>
+    window.__lmdjPhysicalFenceActivation !== undefined);
+  expect(await page.evaluate(() => window.__lmdjPhysicalFenceActivation))
+    .toMatchObject({ok: true, sampleRate: 48_000, inputs: 0,
+      outputs: 2, channels: 2, frames: 128});
+
+  const setup = await page.evaluate(async () => {
+    const send = async (operation, payload, sidecar) => {
+      const response = await window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1, request_id: crypto.randomUUID(), operation, payload,
+      }, sidecar === undefined ? {} : {sidecar});
+      if (!response.ok) {
+        throw new Error(`real fence setup ${operation}: ${JSON.stringify(response)}`);
+      }
+      return response.result;
+    };
+    const projectId = crypto.randomUUID();
+    const patternId = crypto.randomUUID();
+    await send("project.create", {project_id: projectId, bpm: 120,
+      initial_pattern: {pattern_id: patternId, bars: 1, events: []},
+      pattern_transport: true});
+
+    // A real imported Bank permits ordinary audio.activate. It does not
+    // generate the cue: only the subsequent scheduled Record request does.
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    for (const [offset, tag] of [[0, "RIFF"], [8, "WAVE"], [12, "fmt "], [36, "data"]]) {
+      for (let index = 0; index < tag.length; ++index) {
+        wav[offset + index] = tag.charCodeAt(index);
+      }
+    }
+    view.setUint32(4, 36 + frames * 2, true);
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(44 + frame * 2,
+        Math.round(Math.sin(2 * Math.PI * 440 * frame / 48_000) * 8_000), true);
+    }
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", wav))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const importToken = crypto.randomUUID();
+    await send("sample.import.begin", {import_token: importToken,
+      command_id: crypto.randomUUID(), expected_revision: 0,
+      slot: {bank: 0, pad: 0}, asset_id: crypto.randomUUID(), byte_length: wav.byteLength});
+    await send("sample.import.chunk", {import_token: importToken, offset: 0, final: true,
+      sidecar: {sidecar_bytes: wav.byteLength, sidecar_sha256: sha256}}, wav);
+    await send("sample.import.commit", {import_token: importToken});
+    await send("snapshot.reload", {pattern_id: patternId});
+    const negotiated = await send("pattern.transport.count-in.capabilities", {negotiate: true});
+    if (!negotiated.supported || !negotiated.negotiated || !negotiated.output_ready) {
+      throw new Error(`UNEXECUTED: real count-in negotiation unavailable: ${JSON.stringify(negotiated)}`);
+    }
+    await send("audio.activate", {});
+    const capability = await send("pattern.transport.count-in.capabilities", {negotiate: false});
+    return {projectId, sessionId: crypto.randomUUID(), commandId: crypto.randomUUID(), capability};
+  });
+  expect(setup.capability).toMatchObject({supported: true, negotiated: true, output_ready: true});
+  for (const field of ["runtime_generation", "frame_epoch", "next_serial"]) {
+    expect(setup.capability[field], `actual count-in ${field}`).toMatch(/^[1-9]\d*$/);
+  }
+
+  const checkpoints = {setup};
+  const assertValidFence = (state) => {
+    expect(state.stage).toBeGreaterThanOrEqual(0);
+    expect(state.stage).toBeLessThanOrEqual(0xffff_ffff);
+    expect(state.stage & 0x8000_0000,
+      "INVALID witness: the producer's original 1000 * 10 ms guard expired").toBe(0);
+    expect(state.cuePendingBatch,
+      "UNEXECUTED: actual atomic cue_batch_pending_ readback is required")
+      .toEqual(expect.any(Number));
+  };
+  const readFence = () => page.evaluate(() =>
+    window.lmdjWebRuntimeHostTest.physicalFenceState());
+  const waitFence = async (stage, physicalQuiescent = false) => {
+    // Only JS polling yields on browser main. No synchronous C quiescence
+    // wait may prevent the main-loop release of an admitted Worklet callback.
+    const handle = await page.waitForFunction(({stage, physicalQuiescent}) => {
+      const state = window.lmdjWebRuntimeHostTest.physicalFenceState();
+      if ((state.stage & 0x8000_0000) !== 0) {
+        throw new Error("INVALID witness: physical fence guard expired");
+      }
+      return (state.stage & stage) === stage &&
+        (!physicalQuiescent || state.physicalQuiescent === true) ? state : false;
+    }, {stage, physicalQuiescent}, {polling: 10, timeout: 5_000});
+    try {
+      const state = await handle.jsonValue();
+      assertValidFence(state);
+      return state;
+    } finally {
+      await handle.dispose();
+    }
+  };
+
+  try {
+    expect(await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.armPhysicalFenceBarrier(3))).toBe(true);
+    checkpoints.request = await page.evaluate(({projectId, sessionId, commandId, capability}) =>
+      window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1, request_id: crypto.randomUUID(),
+        operation: "pattern.transport.count-in.request", payload: {
+          session_id: sessionId, project_id: projectId, command_id: commandId,
+          runtime_generation: capability.runtime_generation, frame_epoch: capability.frame_epoch,
+          schedule_serial: capability.next_serial, expected_epoch: "1", bars: 1, expected_revision: null,
+        },
+      }), setup);
+    expect(checkpoints.request).toMatchObject({ok: true, result: {submit: "accepted",
+      ticket: {session_id: setup.sessionId, command_id: setup.commandId,
+        runtime_generation: setup.capability.runtime_generation,
+        frame_epoch: setup.capability.frame_epoch, schedule_serial: setup.capability.next_serial}}});
+
+    checkpoints.cueHeld = await waitFence(1);
+    expect(checkpoints.cueHeld).toMatchObject({stage: 1, physicalQuiescent: false, callbackInFlight: 1});
+    expect(checkpoints.cueHeld.cueBatch).toBeGreaterThan(0);
+    expect(checkpoints.cueHeld.cuePendingBatch).toBe(checkpoints.cueHeld.cueBatch);
+    expect(checkpoints.cueHeld.borrows).toBeGreaterThan(0);
+
+    // The actual control wait exhausts both original 20 ms budgets against
+    // this real held callback. Its failed Result cannot retire either borrow.
+    checkpoints.operationalWait = await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.runPhysicalFenceQuiescenceWait(20));
+    expect(checkpoints.operationalWait).toMatchObject({completed: true, has_value: false,
+      error: {code: "INTERNAL_ERROR",
+        message: "Wasm AudioWorklet quiescence timed out with callback still in flight"}});
+    expect(checkpoints.operationalWait.elapsed_ms).toBeGreaterThanOrEqual(40);
+    expect(checkpoints.operationalWait.observed_wall_ms).toBeLessThan(500);
+
+    // The low-level adapter wait does not itself dispatch a Host lifecycle
+    // failure. Deliver the separate processor-error notification through its
+    // existing actual control handler while this same callback still borrows.
+    // Its notification must preserve the first quiescence_timeout fatal and
+    // cannot stand in for either physical release below.
+    await page.evaluate(() => window.lmdjWebRuntimeHostTest.dispatchProcessorError());
+    await page.waitForFunction(() =>
+      window.Module._lmdj_web_audio_control_failure_committed() === 1);
+    checkpoints.controlFailureCommitted = await page.evaluate(() =>
+      window.Module._lmdj_web_audio_control_failure_committed() === 1);
+    expect(checkpoints.controlFailureCommitted).toBe(true);
+    checkpoints.phase1 = await readFence();
+    assertValidFence(checkpoints.phase1);
+    expect(checkpoints.phase1).toMatchObject({stage: 1, gate: "terminal", fatal: "quiescence_timeout",
+      physicalQuiescent: false, callbackInFlight: 1,
+      cueBatch: checkpoints.cueHeld.cueBatch, cuePendingBatch: checkpoints.cueHeld.cueBatch});
+    expect(checkpoints.phase1.borrows).toBeGreaterThan(0);
+
+    // Release only the actual cue consumer. Its real ACK must finish before
+    // stage 2, while the SAME callback still protects its epilogue's Impl use.
+    expect(await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.releasePhysicalFenceBarrier(1))).toBe(true);
+    checkpoints.phase2 = await waitFence(3);
+    expect(checkpoints.phase2).toMatchObject({stage: 3, gate: "terminal", fatal: "quiescence_timeout",
+      cueBatch: checkpoints.cueHeld.cueBatch, cuePendingBatch: 0,
+      physicalQuiescent: false, callbackInFlight: 1});
+    expect(checkpoints.phase2.borrows).toBeGreaterThan(0);
+
+    expect(await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.releasePhysicalFenceBarrier(2))).toBe(true);
+    checkpoints.retired = await waitFence(3, true);
+    expect(checkpoints.retired).toMatchObject({stage: 3, gate: "terminal", fatal: "quiescence_timeout",
+      cuePendingBatch: 0, physicalQuiescent: true, borrows: 0, callbackInFlight: 0});
+    checkpoints.retainedOperationalWait = await page.evaluate(() => JSON.parse(
+      window.Module.ccall("lmdj_web_audio_test_quiescence_timeout_result", "string", [], [])));
+    expect(checkpoints.retainedOperationalWait).toEqual({completed: true, has_value: false,
+      elapsed_ms: checkpoints.operationalWait.elapsed_ms, error: checkpoints.operationalWait.error});
+
+    // Physical retirement permits resource cleanup; it preserves the original
+    // operational failure rather than reporting successful Host operation.
+    checkpoints.hostStatus = await page.evaluate(async () => {
+      try {
+        const response = await window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
+          request_id: crypto.randomUUID(), operation: "host.status", payload: {}});
+        return {settlement: "response", response};
+      } catch (error) {
+        return {settlement: "rejected", error: {
+          code: error.code, message: error.message, details: error.details,
+        }};
+      }
+    });
+    if (checkpoints.hostStatus.settlement === "response") {
+      expect(checkpoints.hostStatus.response)
+        .toMatchObject({ok: false, error: {code: "HOST_STATE_INVALID"}});
+    } else {
+      expect(checkpoints.hostStatus)
+        .toMatchObject({settlement: "rejected", error: {code: "HOST_STATE_INVALID"}});
+    }
+  } finally {
+    // Release both finite guards even when a diagnostic assertion fails.
+    // Never kill the callback, Engine, Control, backend, or their owners.
+    checkpoints.guardReleased = await page.evaluate(() =>
+      window.lmdjWebRuntimeHostTest.releasePhysicalFenceBarrier(3));
+    checkpoints.finalFence = await readFence();
+    const checkpointPath = testInfo.outputPath("real-count-in-terminal-physical-fence.json");
+    await (await import("node:fs/promises")).writeFile(checkpointPath,
+      JSON.stringify(checkpoints, null, 2), {flag: "wx"});
+    await testInfo.attach("real-count-in-terminal-physical-fence", {
+      path: checkpointPath, contentType: "application/json",
+    });
+    expect(checkpoints.guardReleased).toBe(true);
+    assertValidFence(checkpoints.finalFence);
+  }
 });

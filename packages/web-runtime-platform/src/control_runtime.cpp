@@ -101,7 +101,9 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
   if (operation == "host.close") {
     return std::chrono::seconds(10);
   }
-  if (operation == "host.status" || operation == "audio.activate" ||
+  if (operation.starts_with("pattern.transport.count-in.") ||
+      operation.starts_with("pattern.transport.input.") ||
+      operation == "host.status" || operation == "audio.activate" ||
       operation == "audio.suspend" || operation == "trigger" ||
       operation == "sequence.record.event" ||
       operation == "sequence.record.status" ||
@@ -149,6 +151,22 @@ const std::string& string_field(const Json& value, std::string_view key) {
   const auto& field = value.at(std::string(key));
   require(field.is_string());
   return field.get_ref<const std::string&>();
+}
+
+std::uint64_t nonzero_decimal_field(
+    const Json& value, std::string_view key,
+    std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max()) {
+  const auto& text = string_field(value, key);
+  require(!text.empty() && text.front() >= '1' && text.front() <= '9');
+  std::uint64_t result = 0;
+  for (const auto character : text) {
+    require(character >= '0' && character <= '9');
+    const auto digit = static_cast<std::uint64_t>(character - '0');
+    require(result <= maximum / 10 &&
+        (result != maximum / 10 || digit <= maximum % 10));
+    result = result * 10 + digit;
+  }
+  return result;
 }
 
 std::uint64_t unsigned_field(
@@ -1622,6 +1640,34 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
   mutable std::optional<audio::PatternReplacementAuthority> queued_overlay_;
 };
 
+class EngineScheduledPatternTransportPort final
+    : public facade::ScheduledPatternTransportAudioPort {
+ public:
+  explicit EngineScheduledPatternTransportPort(audio::RealtimeEngine& engine)
+      noexcept : engine_(engine) {}
+  audio::ScheduledPatternSubmit submit_scheduled(
+      const audio::ScheduledPatternRecordRequest& request) override {
+    return engine_.submit_scheduled_pattern_record(request);
+  }
+  std::optional<audio::ScheduledPatternRecordStatus> inspect_scheduled(
+      std::uint64_t generation, std::uint64_t serial) const override {
+    return engine_.inspect_scheduled_pattern_record(generation, serial);
+  }
+  audio::ScheduledPatternSubmit cancel_scheduled(
+      const audio::ScheduledPatternCancelRequest& request) override {
+    return engine_.cancel_scheduled_pattern_record(request);
+  }
+  bool acknowledge_scheduled(std::uint64_t generation, std::uint64_t serial,
+      std::uint64_t epoch) override {
+    return engine_.acknowledge_scheduled_pattern_record(generation, serial, epoch);
+  }
+  bool scheduled_quiescent() const override {
+    return engine_.scheduled_pattern_record_quiescent();
+  }
+ private:
+  audio::RealtimeEngine& engine_;
+};
+
 // One engaged global Pattern transport session. The Facade factory owns the
 // Journal/Store behind the controller; the Host holds only the audio port it
 // implements and the controller itself, and never names a Project I/O type.
@@ -1629,9 +1675,11 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
 // Host-side input identities assigned at the existing post-enqueue point,
 // never reused across engagement.
 struct TransportEngagement {
-  explicit TransportEngagement(audio::RealtimeEngine& engine) : port(engine) {}
+  explicit TransportEngagement(audio::RealtimeEngine& engine)
+      : port(engine), scheduled_port(engine) {}
 
   EnginePatternTransportPort port;
+  EngineScheduledPatternTransportPort scheduled_port;
   std::unique_ptr<facade::PatternTransportController> controller;
   std::optional<foundation::SequenceSessionId> session;
   // The Pattern identity the Facade controller is bound to; a cross-identity
@@ -1643,10 +1691,52 @@ struct TransportEngagement {
   // monotone per engagement. The Host test pins this contract.
   std::uint64_t next_watermark = 10;
   std::map<domain::PadSlotId, std::uint64_t> owned_presses;
+  std::optional<facade::PatternTransportCandidate> legacy_candidate;
+  std::optional<std::string> legacy_request_id;
+  bool shutdown_requested = false;
   // Set when a recording close has settled durably but the committed Pattern
   // publication is still outstanding; publication is a separate completion.
   bool publish_pending = false;
+  bool count_in_ticket_consumed = true;
+  bool count_in_cancel_pending = false;
 };
+
+struct RetainedPatternInput {
+  Json original_request;
+  facade::PatternTransportInputTicket ticket;
+  std::uint64_t frame_epoch{};
+  audio::PatternInputAdmission admission;
+  std::optional<facade::PatternTransportInputTicket> facade_ticket;
+  std::optional<audio::PatternInputCompletion> completion;
+  std::chrono::steady_clock::time_point started;
+  bool durable_settled{};
+  bool retained{};
+  bool complete{};
+  std::optional<Error> error;
+};
+struct RetainedPatternHold {
+  std::uint64_t sequence{}, generation{}, frame_epoch{};
+  std::uint8_t slot{};
+  bool facade_owned{}, release_submitted{};
+};
+struct RetainedLegacyInput {
+  Json accepted_response;
+  std::optional<Json> terminal_response;
+  std::chrono::steady_clock::time_point deadline;
+  bool observer_consumed{};
+};
+
+Json pattern_input_authority_json(const audio::PatternInputAuthority& authority) {
+  return {{"recording", authority.recording},
+      {"schedule_serial", authority.schedule_serial ? Json(std::to_string(authority.schedule_serial)) : Json(nullptr)},
+      {"transport_epoch", authority.transport_epoch ? Json(std::to_string(authority.transport_epoch)) : Json(nullptr)}};
+}
+Json pattern_input_ticket_json(const RetainedPatternInput& input) {
+  return {{"command_id", input.ticket.command_id.value()},
+      {"runtime_generation", std::to_string(input.ticket.runtime_generation)},
+      {"frame_epoch", std::to_string(input.frame_epoch)},
+      {"ticket", std::to_string(input.ticket.ticket)}};
+}
 
 std::string_view pattern_transport_phase_name(
     facade::PatternTransportPhase phase) noexcept {
@@ -1717,6 +1807,123 @@ Json pattern_transport_status_json(
       {"current_pattern_id", std::move(current_pattern_id)},
       {"pending_switch", std::move(pending_switch)},
   };
+}
+
+Json safe_count_in_frame(std::uint64_t frame) {
+  require(frame <= kMaximumSafeInteger);
+  return frame;
+}
+Json optional_count_in_frame(const std::optional<std::uint64_t>& frame) {
+  return frame ? safe_count_in_frame(*frame) : Json(nullptr);
+}
+Json pattern_input_status_json(const RetainedPatternInput& input,
+    std::chrono::steady_clock::time_point now) {
+  Json completion = nullptr;
+  if (input.completion) {
+    constexpr std::array<std::string_view, 7> dispositions{"voice_started", "voice_capacity",
+        "toggle_stopped", "muted_no_voice", "release_applied", "release_no_voice",
+        "invalidated_before_consume"};
+    const auto& c = *input.completion;
+    const auto disposition = static_cast<std::size_t>(c.disposition);
+    require(disposition < dispositions.size());
+    completion = {{"runtime_generation", std::to_string(c.runtime_generation)},
+        {"frame_epoch", std::to_string(c.frame_epoch)}, {"sequence", std::to_string(c.sequence)},
+        {"held_press_sequence", c.held_press_sequence ? Json(std::to_string(c.held_press_sequence)) : Json(nullptr)},
+        {"acceptance_ordinal", std::to_string(c.acceptance_ordinal)},
+        {"runtime_frame", safe_count_in_frame(c.runtime_frame)}, {"slot", c.slot},
+        {"authority", pattern_input_authority_json(c.authority)},
+        {"disposition", std::string(dispositions[disposition])}};
+  }
+  return {{"ticket", pattern_input_ticket_json(input)},
+      {"admission", {{"sequence", std::to_string(input.admission.sequence)},
+          {"acceptance_ordinal", std::to_string(input.admission.acceptance_ordinal)},
+          {"authority", pattern_input_authority_json(input.admission.authority)}}},
+      {"native_result", std::move(completion)}, {"durable_settled", input.durable_settled},
+      {"retained", input.retained}, {"complete", input.complete},
+      {"expired", !input.complete && now - input.started >= facade::kPatternTransportInputDeadline},
+      {"error", input.error ? normalized_error(*input.error).at("error") : Json(nullptr)}};
+}
+Json scheduled_pattern_receipt_json(
+    const std::optional<audio::ScheduledPatternRecordReceipt>& receipt) {
+  if (!receipt) return nullptr;
+  constexpr std::array<std::string_view, 3> results{"applied", "cancelled", "refused"};
+  const auto result = static_cast<std::size_t>(receipt->result);
+  require(result < results.size());
+  return {
+      {"runtime_generation", std::to_string(receipt->runtime_generation)},
+      {"frame_epoch", std::to_string(receipt->frame_epoch)},
+      {"schedule_serial", std::to_string(receipt->serial)},
+      {"transport_epoch", std::to_string(receipt->epoch)},
+      {"pattern_generation", std::to_string(receipt->pattern_generation)},
+      {"pattern_id", receipt->pattern_id.value()},
+      {"result", std::string(results[result])},
+      {"effective_frame", optional_count_in_frame(receipt->effective_frame)},
+      {"origin_frame", optional_count_in_frame(receipt->origin_frame)},
+      {"playing", receipt->playing},
+  };
+}
+Json scheduled_pattern_ticket_json(
+    const facade::ScheduledPatternTransportRequest& request) {
+  return {{"session_id", request.transport.session.value()},
+      {"command_id", request.transport.command_id.value()},
+      {"runtime_generation", std::to_string(request.transport.runtime_generation)},
+      {"frame_epoch", std::to_string(request.frame_epoch)},
+      {"schedule_serial", std::to_string(request.schedule_serial)}};
+}
+Json scheduled_pattern_status_json(
+    const facade::ScheduledPatternTransportStatus& status) {
+  Json view = nullptr;
+  if (status.request) {
+    const auto& request = *status.request;
+    constexpr std::array<std::string_view, 10> phases{"empty", "submitted", "preparing",
+        "cancel_preparing", "armed", "starting", "applied", "cancelled", "failing", "refused"};
+    const auto phase = status.count_in
+        ? static_cast<std::size_t>(status.count_in->phase)
+        : static_cast<std::size_t>(audio::ScheduledPatternPhase::submitted);
+    require(phase < phases.size() && !phases[phase].empty());
+    view = {{"runtime_generation", std::to_string(request.transport.runtime_generation)},
+        {"frame_epoch", std::to_string(request.frame_epoch)},
+        {"schedule_serial", std::to_string(request.schedule_serial)},
+        {"phase", std::string(phases[phase])}, {"bars", request.bars},
+        {"bpm", status.count_in && status.count_in->bpm != 0 ? Json(status.count_in->bpm) : Json(nullptr)},
+        {"bar_frames", status.count_in && status.count_in->bar_frames != 0
+            ? safe_count_in_frame(status.count_in->bar_frames) : Json(nullptr)},
+        {"count_in_frame", status.count_in
+            ? optional_count_in_frame(status.count_in->count_in_frame) : Json(nullptr)},
+        {"start_frame", status.count_in
+            ? optional_count_in_frame(status.count_in->start_frame) : Json(nullptr)}};
+  }
+  Json error = status.error ? normalized_error(*status.error).at("error") : Json(nullptr);
+  if (status.error && status.error->details.is_object()) {
+    const auto& details = status.error->details;
+    const auto reason = details.find("reason");
+    // Only these count-in-owned deadline facts cross this status boundary.
+    // Keep the generic sanitizer, safe messages and unrelated details intact.
+    if (reason != details.end() && reason->is_string()) {
+      const bool provisional = status.error->code == ErrorCode::io_error &&
+          *reason == "pattern_transport_opening_expired";
+      const bool final = status.error->code == ErrorCode::invalid_argument &&
+          *reason == "admission_opening_deadline_elapsed";
+      if (provisional || final) {
+        error["details"]["reason"] = *reason;
+        for (const auto* flag : {"closure_unresolved", "retryable"}) {
+          const auto value = details.find(flag);
+          if (value != details.end() && value->is_boolean() && *value == true)
+            error["details"][flag] = true;
+        }
+      }
+      const auto retained = details.find("journal_retained");
+      if (final && retained != details.end() && retained->is_boolean() && *retained == true)
+        error["details"]["journal_retained"] = true;
+    }
+  }
+  return {{"ticket", status.request ? scheduled_pattern_ticket_json(*status.request) : Json(nullptr)},
+      {"count_in", std::move(view)},
+      {"start_receipt", scheduled_pattern_receipt_json(status.start_receipt)},
+      {"cancel_receipt", scheduled_pattern_receipt_json(status.cancel_receipt)},
+      {"opening_pending", status.opening_pending},
+      {"opening_complete", status.opening_complete},
+      {"error", std::move(error)}};
 }
 
 struct ControlRuntime::Impl {
@@ -2386,11 +2593,283 @@ struct ControlRuntime::Impl {
     if (engine.telemetry().state != audio::RealtimeState::stopped) {
       return;
     }
+    if (has_pattern_input_owners()) return;
+    if (next_transport_generation == 0 ||
+        next_transport_generation == std::numeric_limits<std::uint64_t>::max()) {
+      count_in_input_enabled = false;
+      return;
+    }
     if (engine.enable_pattern_transport(next_transport_generation)
             .has_value()) {
       enabled_transport_generation = next_transport_generation;
       ++next_transport_generation;
+      count_in_input_enabled = false;
+      if (count_in_input_negotiated &&
+          engine.enable_scheduled_pattern_record(enabled_transport_generation)
+              .has_value() &&
+          engine.enable_pattern_input_profile(enabled_transport_generation)
+              .has_value()) {
+        count_in_input_enabled = true;
+        initialize_pattern_input_ledger();
+      }
+    } else {
+      count_in_input_enabled = false;
     }
+  }
+
+  bool has_pattern_input_owners() const noexcept {
+    return std::any_of(pattern_inputs.begin(), pattern_inputs.end(), [](const auto& i) { return i.has_value(); }) ||
+        std::any_of(pattern_holds.begin(), pattern_holds.end(), [](const auto& h) { return h.has_value(); });
+  }
+  void initialize_pattern_input_ledger() {
+    const auto native = engine.pattern_input_profile_status();
+    if (!native.enabled || has_pattern_input_owners()) return;
+    if (input_ledger_generation != native.runtime_generation) {
+      input_acceptance_floor = 0;
+      input_ledger_generation = native.runtime_generation;
+    }
+    pattern_inputs.resize(2 * native.capacity);
+    pattern_holds.resize(native.capacity);
+  }
+  void service_pattern_inputs() {
+    for (auto& cell : pattern_inputs) {
+      if (!cell) continue;
+      auto& input = *cell;
+      if (!input.completion) {
+        const auto completion = engine.inspect_pattern_input_completion(
+            input.ticket.runtime_generation, input.frame_epoch, input.admission.sequence);
+        if (!completion) continue;
+        input.completion = completion;
+        if (input.facade_ticket && (!transport ||
+            !transport->controller->complete_input(*completion))) {
+          input.error = Error{ErrorCode::internal_error, "Pattern input completion owner mismatch"};
+          continue; // Accepted resources stay retained on this failure.
+        }
+      }
+      if (input.facade_ticket) {
+        const auto status = transport->controller->inspect_input(*input.facade_ticket);
+        if (!status) continue;
+        input.durable_settled = status->durable_settled;
+        input.retained = status->retained;
+        input.complete = status->complete;
+        input.error = status->error;
+      } else {
+        // This input was accepted before a real session engaged, or releases
+        // that original owner. It never invents a Journal/controller binding.
+        input.durable_settled = true;
+        input.complete = true;
+        if (input.completion->disposition == audio::PatternInputDisposition::voice_capacity ||
+            input.completion->disposition == audio::PatternInputDisposition::invalidated_before_consume)
+          input.error = Error{ErrorCode::invalid_argument, "Accepted live input failed at native consumption"};
+      }
+    }
+  }
+
+  bool acknowledge_pattern_input_owner_quiescent(std::uint64_t generation) {
+    service_terminal_audio_retirement();
+    auto native = engine.pattern_input_profile_status();
+    if (!generation || generation != input_ledger_generation ||
+        input_owner_acknowledged_generation == generation || !native.enabled ||
+        native.runtime_generation != generation ||
+        engine.telemetry().state != audio::RealtimeState::stopped) return false;
+    bool needs_resource_disposition = false;
+    if (transport) {
+      auto& engagement = *transport;
+      if (engagement.generation != generation || engagement.publish_pending) return false;
+      if (!engagement.shutdown_requested) {
+        engagement.controller->request_shutdown();
+        engagement.shutdown_requested = true;
+        if (!engagement.count_in_ticket_consumed) engagement.count_in_cancel_pending = true;
+      }
+      static_cast<void>(transport_continuation_step());
+      const auto owner = engagement.controller->inspect_input_owner();
+      if (!owner.invalidated) {
+        if (state != State::failed || owner.pending) return false;
+        needs_resource_disposition = true;
+      }
+      // Actual failed authoring ownership remains observable after resources
+      // settle. This never enters the ordinary successful lifecycle barrier.
+      trigger_admission = false;
+      state = State::failed;
+      if (owner.runtime_generation != generation || (owner.invalidated && !owner.disposed) || owner.pending ||
+          owner.acknowledged || engagement.legacy_candidate) return false;
+    } else if (state != State::failed) return false;
+    service_pattern_inputs();
+    if (!legacy_inputs.empty() || std::any_of(pattern_inputs.begin(), pattern_inputs.end(),
+        [](const auto& i) { return i.has_value(); })) return false;
+    std::size_t physical_holds = 0, facade_holds = 0;
+    const auto epoch = engine.telemetry().start_epoch;
+    for (const auto& h : pattern_holds) if (h) {
+      if (h->generation != generation || h->frame_epoch != epoch || h->release_submitted) return false;
+      ++physical_holds;
+      facade_holds += h->facade_owned;
+    }
+    if (transport && transport->controller->inspect_input_owner().held_correlations != facade_holds)
+      return false;
+    native = engine.pattern_input_profile_status();
+    if (native.ordinary_pending || native.retained_completions ||
+        (input_owner_revoked_generation != generation && native.held_release_reservations != physical_holds))
+      return false;
+    if (input_owner_revoked_generation != generation) {
+      // A terminal operational Result remains failed even after real callback
+      // retirement. Only the separate physical fence authorizes revocation;
+      // stopped telemetry, silence and a timeout are not that proof.
+      const auto drained = physical_audio
+          ? physical_audio->physically_quiescent(physical_audio->context)
+          : coordinator && coordinator->await_quiescent(
+                coordinator->context, 1).has_value();
+      if (!drained || terminal_native_stop_pending ||
+          engine.telemetry().state != audio::RealtimeState::stopped ||
+          !engine.revoke_pattern_input_holds_quiescent(generation)) return false;
+      input_owner_revoked_generation = generation; // Actual Native operation receipt.
+    }
+    native = engine.pattern_input_profile_status();
+    if (engine.telemetry().state != audio::RealtimeState::stopped ||
+        native.runtime_generation != generation || native.ordinary_pending ||
+        native.held_release_reservations || native.retained_completions ||
+        !engine.scheduled_pattern_record_quiescent()) return false;
+    if (transport && needs_resource_disposition) {
+      if (facade_holds == 0) {
+        // These holds belonged to the live-only Host before this controller
+        // engaged. Its later session never acquires their correlation or a
+        // fictional Journal. Actual worker retirement proves it owns no work.
+        if (!transport->controller->shutdown_complete()) return false;
+      } else {
+        // The same I/O owner proves absence/disposition after Native revocation:
+        // either the actual live-only input identity or its retained whole real
+        // closing request/F, never an invented recording or closing authority.
+        static_cast<void>(transport->controller->request_input_owner_disposition(generation));
+        return false;
+      }
+    }
+    if (transport && !needs_resource_disposition &&
+        !transport->controller->acknowledge_input_owner(generation)) return false;
+    for (auto& h : pattern_holds) h.reset();
+    input_owner_acknowledged_generation = generation;
+    return true;
+  }
+
+  Json request_pattern_input(const Json& payload) {
+    const auto command = uuid_field(payload, "command_id");
+    const auto generation = nonzero_decimal_field(payload, "runtime_generation");
+    const auto epoch = nonzero_decimal_field(payload, "frame_epoch");
+    const auto serial = nonzero_decimal_field(payload, "input_serial");
+    const auto slot = safe_unsigned_field(payload, "slot", 63);
+    const auto velocity = safe_unsigned_field(payload, "velocity", 127);
+    const auto kind = string_field(payload, "kind");
+    const auto held = bool_field(payload, "held");
+    require(kind == "press" || kind == "release");
+    const bool release = kind == "release";
+    require(release ? velocity == 0 && held : velocity != 0 && payload.at("held_press_sequence").is_null());
+    const auto correlation = release ? nonzero_decimal_field(payload, "held_press_sequence") : 0;
+    // Exact replay is resolved before current-state admission: an interruption
+    // does not erase an accepted operation or authorize a second enqueue.
+    for (const auto& cell : pattern_inputs) if (cell &&
+        (cell->ticket.command_id.value() == command || cell->ticket.ticket == serial)) {
+      if (cell->original_request != payload) return state_error("Pattern input replay changed its identity or payload");
+      service_pattern_inputs();
+      return success({{"ticket", pattern_input_ticket_json(*cell)},
+          {"status", pattern_input_status_json(*cell, clock_now())}});
+    }
+    const bool retained_release = release && state == State::failed;
+    if (!count_in_input_enabled || (state != State::running && !retained_release) ||
+        (!trigger_admission && !retained_release) ||
+        active_sequence || generation != enabled_transport_generation ||
+        epoch != engine.telemetry().start_epoch || generation != input_ledger_generation)
+      return state_error("Pattern input profile is unavailable or stale");
+    if (serial <= input_acceptance_floor || input_acceptance_floor == UINT64_MAX)
+      return state_error("Pattern input serial is stale, consumed or exhausted");
+    auto future_releases = static_cast<std::uint64_t>(std::count_if(pattern_holds.begin(), pattern_holds.end(),
+        [](const auto& h) { return h && !h->release_submitted; }));
+    if (release && future_releases) --future_releases;
+    else if (!release && held) ++future_releases;
+    if (serial > UINT64_MAX - future_releases)
+      return state_error("Pattern input serial cannot preserve existing physical release identities");
+    const auto n = pattern_holds.size();
+    std::optional<std::size_t> index, hold_index;
+    if (release) {
+      for (std::size_t h = 0; h < n; ++h) if (pattern_holds[h] &&
+          pattern_holds[h]->sequence == correlation && pattern_holds[h]->generation == generation &&
+          pattern_holds[h]->frame_epoch == epoch && pattern_holds[h]->slot == slot &&
+          !pattern_holds[h]->release_submitted) { hold_index = h; index = n + h; break; }
+      if (!index || pattern_inputs[*index]) return state_error("Pattern release has no matching physical hold");
+    } else {
+      for (std::size_t i = 0; i < n; ++i) if (!pattern_inputs[i]) { index = i; break; }
+      if (held) for (std::size_t h = 0; h < n; ++h) if (!pattern_holds[h]) { hold_index = h; break; }
+      if (!index || (held && !hold_index)) return state_error("Pattern input retained metadata is full");
+    }
+    const bool facade_owned = release ? pattern_holds[*hold_index]->facade_owned : transport != nullptr;
+    std::optional<facade::PatternTransportInputTicket> reserved;
+    const auto frame = engine.telemetry().rendered_frames;
+    require(frame <= kMaximumSafeInteger);
+    if (facade_owned) {
+      if (!transport) return state_error("Pattern input lost its original Facade owner");
+      const auto result = transport->controller->reserve_input({foundation::CommandId{command},
+          generation, epoch, frame, {static_cast<std::uint8_t>(slot / 16), static_cast<std::uint8_t>(slot % 16)},
+          !release, static_cast<std::uint8_t>(velocity), correlation, held});
+      if (!result.has_value()) return normalized_error(result.error());
+      reserved = result.value();
+    }
+    // Host ticket and future release storage is allocated before acceptance;
+    // native enqueue itself reserves its physical FIFO/completion/hold credits.
+    const auto original_started = request_deadline.value_or(
+        clock_now() + facade::kPatternTransportInputDeadline) - facade::kPatternTransportInputDeadline;
+    pattern_inputs[*index].emplace(RetainedPatternInput{payload,
+        {generation, foundation::CommandId{command}, serial}, epoch, {}, reserved, {}, original_started,
+        false, false, false, {}});
+    if (!release && held) pattern_holds[*hold_index] = RetainedPatternHold{0, generation, epoch,
+        static_cast<std::uint8_t>(slot), facade_owned, false};
+    const auto admission = engine.enqueue_pattern_input({generation, epoch, static_cast<std::uint8_t>(slot),
+        static_cast<std::uint8_t>(velocity), release, correlation, held, {}});
+    if (admission.result != audio::PatternInputSubmit::accepted) {
+      if (reserved) static_cast<void>(transport->controller->abandon_input(*reserved));
+      pattern_inputs[*index].reset();
+      if (!release && held) pattern_holds[*hold_index].reset();
+      return state_error("Pattern input Native admission refused");
+    }
+    input_acceptance_floor = serial; // Refused pre-enqueue operations do not advance it.
+    auto& input = *pattern_inputs[*index];
+    input.admission = admission;
+    if (hold_index) {
+      if (release) pattern_holds[*hold_index]->release_submitted = true;
+      else pattern_holds[*hold_index]->sequence = admission.sequence;
+    }
+    if (reserved && !transport->controller->bind_input(*reserved, admission))
+      input.error = Error{ErrorCode::internal_error, "Accepted Pattern input metadata binding failed"};
+    service_pattern_inputs();
+    return success({{"ticket", pattern_input_ticket_json(input)},
+        {"status", pattern_input_status_json(input, clock_now())}});
+  }
+
+  Json inspect_pattern_input(const Json& payload) {
+    const auto command = uuid_field(payload, "command_id");
+    const auto generation = nonzero_decimal_field(payload, "runtime_generation");
+    const auto epoch = nonzero_decimal_field(payload, "frame_epoch");
+    const auto serial = nonzero_decimal_field(payload, "ticket");
+    const auto consume = bool_field(payload, "consume");
+    service_pattern_inputs();
+    if (transport) static_cast<void>(transport_continuation_step());
+    service_pattern_inputs();
+    for (auto& cell : pattern_inputs) if (cell && cell->ticket.ticket == serial &&
+        cell->ticket.command_id.value() == command && cell->ticket.runtime_generation == generation &&
+        cell->frame_epoch == epoch) {
+      auto result = pattern_input_status_json(*cell, clock_now());
+      if (consume) {
+        if (!cell->complete || !cell->durable_settled || !cell->completion)
+          return state_error("Pattern input evidence is still pending");
+        if (cell->facade_ticket && !transport->controller->consume_input(*cell->facade_ticket))
+          return state_error("Pattern input Facade consumption refused");
+        if (!engine.consume_pattern_input_completion(generation, epoch, cell->admission.sequence))
+          throw std::logic_error("Pattern input Native consumption refused after reconciliation");
+        if (cell->original_request.at("kind") == "release") {
+          const auto press = cell->completion->held_press_sequence;
+          for (auto& h : pattern_holds) if (h && h->sequence == press) { h.reset(); break; }
+        }
+        cell.reset(); // A press leaves its independent future release intact.
+      }
+      return success(std::move(result));
+    }
+    return state_error("Pattern input ticket is stale or consumed");
   }
 
   // Engages the global transport session on first use. Returns nullptr when
@@ -2418,15 +2897,17 @@ struct ControlRuntime::Impl {
           return publish_project_pattern(
               selected, std::nullopt, events);
         });
-    engagement->controller = application.make_pattern_transport_controller(
-        engagement->port,
-        facade::PatternTransportControllerConfig{
+    const facade::PatternTransportControllerConfig config{
             *retained_project_path,
             session_id,
             foundation::ProjectId{*project_id},
             foundation::PatternId{*pattern_id},
             enabled_transport_generation,
-        });
+        };
+    engagement->controller = count_in_input_enabled
+        ? application.make_pattern_transport_controller(
+            engagement->port, engagement->scheduled_port, config)
+        : application.make_pattern_transport_controller(engagement->port, config);
     transport = std::move(engagement);
     return transport.get();
   }
@@ -2438,16 +2919,22 @@ struct ControlRuntime::Impl {
   foundation::Result<void> admit_transport_pad(
       domain::PadSlotId slot,
       std::uint8_t velocity,
-      bool pressed) {
+      bool pressed, Json accepted_response) {
     auto& engagement = *transport;
-    const auto watermark = engagement.next_watermark++;
+    if (engagement.legacy_candidate) {
+      return foundation::Result<void>::failure(Error{ErrorCode::io_error,
+          "An original Pattern input is still pending",
+          {{"pending", true}, {"reason", "pattern_transport_metadata_full"}}});
+    }
+    const auto watermark = engagement.next_watermark;
     auto correlation = watermark;
     if (pressed) {
+      // Native already accepted the physical press. Pending or failed I/O
+      // cannot erase its original correlation/held ownership.
       engagement.owned_presses[slot] = watermark;
     } else if (const auto found = engagement.owned_presses.find(slot);
                found != engagement.owned_presses.end()) {
       correlation = found->second;
-      engagement.owned_presses.erase(found);
     }
     const facade::PatternTransportCandidate candidate{
         watermark,
@@ -2457,9 +2944,49 @@ struct ControlRuntime::Impl {
         velocity,
         correlation,
     };
+    engagement.legacy_candidate = candidate;
+    const auto original_id = current_rpc_request_id.value_or(generated_uuid());
+    engagement.legacy_request_id = original_id;
+    legacy_inputs.emplace(original_id, RetainedLegacyInput{std::move(accepted_response), {},
+        *request_deadline, false});
+    const auto result = resume_legacy_transport_pad();
+    if (!result.has_value() && result.error().details.value("pending", false)) {
+      auto error = result.error();
+      error.details["legacy_ticket"] = original_id;
+      return foundation::Result<void>::failure(std::move(error));
+    }
+    legacy_inputs.erase(original_id);
+    return result;
+  }
+
+  foundation::Result<void> resume_legacy_transport_pad() {
+    auto& engagement = *transport;
+    if (!engagement.legacy_candidate) return foundation::Result<void>::success();
+    const auto candidate = *engagement.legacy_candidate;
     const auto admitted = engagement.controller->admit(candidate);
     if (!admitted.has_value()) {
+      if (!admitted.error().details.value("pending", false)) {
+        // A terminal refusal still retires this original watermark once.
+        ++engagement.next_watermark;
+        engagement.legacy_candidate.reset();
+        if (engagement.legacy_request_id) {
+          auto& original = legacy_inputs.at(*engagement.legacy_request_id);
+          original.terminal_response = normalized_error(admitted.error());
+          if (original.observer_consumed) legacy_inputs.erase(*engagement.legacy_request_id);
+          engagement.legacy_request_id.reset();
+        }
+      }
       return foundation::Result<void>::failure(admitted.error());
+    }
+    if (candidate.pressed) engagement.owned_presses[candidate.slot] = candidate.correlation;
+    else engagement.owned_presses.erase(candidate.slot);
+    ++engagement.next_watermark;
+    engagement.legacy_candidate.reset();
+    if (engagement.legacy_request_id) {
+      auto& original = legacy_inputs.at(*engagement.legacy_request_id);
+      original.terminal_response = original.accepted_response;
+      if (original.observer_consumed) legacy_inputs.erase(*engagement.legacy_request_id);
+      engagement.legacy_request_id.reset();
     }
     return foundation::Result<void>::success();
   }
@@ -2468,6 +2995,7 @@ struct ControlRuntime::Impl {
   // recording close has just settled durably, arms the separate publication
   // completion. Never waits for an audio receipt or a long IO job.
   foundation::Result<void> transport_continuation_step() {
+    service_pattern_inputs();
     auto& engagement = *transport;
     if (engagement.publish_pending) {
       const auto inspected = application.query({
@@ -2490,6 +3018,7 @@ struct ControlRuntime::Impl {
     }
     const auto was_recording = engagement.controller->inspect().recording;
     auto stepped = engagement.controller->continue_operation();
+    if (engagement.legacy_candidate) static_cast<void>(resume_legacy_transport_pad());
     if (!stepped.has_value()) {
       return stepped;
     }
@@ -2606,69 +3135,41 @@ struct ControlRuntime::Impl {
   // complete before the lifecycle effect. A receipt that never arrives or a
   // settlement refusal is an unknown closure and fails the caller rather than
   // claiming a clean replacement.
-  foundation::Result<void> transport_shutdown_barrier() {
+  foundation::Result<void> transport_shutdown_barrier(bool retire = true) {
+    service_pattern_inputs();
+    if (transport == nullptr && has_pattern_input_owners()) {
+      return foundation::Result<void>::failure(Error{ErrorCode::io_error,
+          "Accepted Pattern inputs or physical holds are still owned",
+          {{"pending", true}, {"reason", "pattern_transport_input_owners_pending"}}});
+    }
     if (transport == nullptr) {
       return foundation::Result<void>::success();
     }
-    if (engine.telemetry().state != audio::RealtimeState::running) {
-      const auto status = transport->controller->inspect();
-      if (status.recording ||
-          status.phase != facade::PatternTransportPhase::idle ||
-          status.error.has_value() || transport->publish_pending) {
-        return foundation::Result<void>::failure(Error{
-            ErrorCode::internal_error,
-            "Pattern transport closure is unknown",
-            {{"reason", "pattern_transport_closure_unknown"}}});
-      }
-      return foundation::Result<void>::success();
+    auto& engagement = *transport;
+    if (retire && !engagement.shutdown_requested) {
+      // The Facade submits a genuine Stop/cancel and drains its sole I/O
+      // owner. This call never joins; later short turns observe stopped.
+      engagement.controller->request_shutdown();
+      engagement.shutdown_requested = true;
+      if (!engagement.count_in_ticket_consumed)
+        engagement.count_in_cancel_pending = true;
     }
-    while (true) {
-      const auto status = transport->controller->inspect();
-      if (status.error.has_value()) {
-        return foundation::Result<void>::failure(*status.error);
-      }
-      if (status.phase == facade::PatternTransportPhase::idle &&
-          !transport->publish_pending) {
-        if (!status.recording) {
-          return foundation::Result<void>::success();
-        }
-        // Acknowledged Pattern Stop precedes admission closure; the
-        // settlement loop below owns closure, journal settlement and the
-        // separate publication completion before any lifecycle effect.
-        const auto acknowledged_stop = facade::PatternTransportRequest{
-            *transport->session,
-            foundation::ProjectId{*project_id},
-            foundation::CommandId{generated_uuid()},
-            transport->generation,
-            status.transport_epoch + 1,
-            facade::PatternTransportIntent::play_stop,
-            std::nullopt,
-        };
-        const auto submitted =
-            transport->controller->request(acknowledged_stop);
-        if (submitted != facade::PatternTransportSubmit::accepted &&
-            submitted != facade::PatternTransportSubmit::replayed) {
-          return foundation::Result<void>::failure(Error{
-              ErrorCode::internal_error,
-              "Pattern transport Stop could not be submitted",
-              {{"reason", "pattern_transport_stop_refused"}}});
-        }
-        continue;
-      }
-      if (request_cancelled()) {
-        return foundation::Result<void>::failure(Error{
-            ErrorCode::internal_error,
-            "Pattern transport settlement did not finish before the request "
-            "deadline",
-            {{"reason", "pattern_transport_settlement_timeout"}}});
-      }
-      auto stepped = transport_continuation_step();
-      if (!stepped.has_value() &&
-          !transport->controller->inspect().error.has_value()) {
-        return stepped;
-      }
-      std::this_thread::yield();
+    const auto stepped = transport_continuation_step();
+    const auto status = engagement.controller->inspect();
+    if (status.error) return foundation::Result<void>::failure(*status.error);
+    if (!stepped.has_value() && !stepped.error().details.value("pending", false)) return stepped;
+    const auto ingress = engagement.controller->inspect_ingress();
+    if (status.phase != facade::PatternTransportPhase::idle || status.recording ||
+        engagement.publish_pending || engagement.legacy_candidate ||
+        has_pattern_input_owners() ||
+        ingress.ordinary_pending || ingress.held_release_metadata || ingress.retained_tickets ||
+        (retire && (!engagement.controller->shutdown_complete() ||
+            !engagement.count_in_ticket_consumed))) {
+      return foundation::Result<void>::failure(Error{ErrorCode::io_error,
+          "Pattern transport shutdown is pending",
+          {{"pending", true}, {"reason", "pattern_transport_shutdown_pending"}}});
     }
+    return foundation::Result<void>::success();
   }
 
   std::chrono::steady_clock::time_point clock_now() const noexcept {
@@ -2726,6 +3227,21 @@ struct ControlRuntime::Impl {
     return static_cast<std::uint32_t>(std::min<std::int64_t>(
         rounded.count(),
         std::numeric_limits<std::uint32_t>::max()));
+  }
+
+  std::uint32_t legacy_retirement_budget_ms() const noexcept {
+    const auto deadline = terminal_origin_deadline.has_value()
+        ? terminal_origin_deadline : request_deadline;
+    // The existing standalone legacy cleanup turn has a one-ms receipt
+    // budget. A cleared dispatch deadline never replaces a retained origin.
+    if (!deadline.has_value()) return 1;
+    const auto now = clock_now();
+    if (now >= *deadline) return 0;
+    const auto remaining = *deadline - now;
+    auto rounded = std::chrono::duration_cast<std::chrono::milliseconds>(remaining);
+    if (rounded < remaining) rounded += std::chrono::milliseconds(1);
+    return static_cast<std::uint32_t>(std::min<std::int64_t>(
+        rounded.count(), std::numeric_limits<std::uint32_t>::max()));
   }
 
   Json status() const {
@@ -2909,7 +3425,9 @@ struct ControlRuntime::Impl {
       audio::PadControlKind kind,
       domain::PadSlotId slot,
       cooker::ResolvedPlayback playback = {}) {
-    if (state != State::running || !trigger_admission || !runtime_ready ||
+    const bool retained_release = state == State::failed && kind == audio::PadControlKind::release &&
+        transport && transport->owned_presses.contains(slot);
+    if ((state != State::running && !retained_release) || (!trigger_admission && !retained_release) || !runtime_ready ||
         runtime_bank_project_id != project_id) {
       return state_error("runtime control is unavailable");
     }
@@ -3307,43 +3825,140 @@ struct ControlRuntime::Impl {
     return success(std::move(result));
   }
 
+  void request_terminal_audio_retirement(bool clear_pattern = false) noexcept {
+    trigger_admission = false;
+    terminal_pattern_clear_pending |= clear_pattern;
+    if (!terminal_audio_retirement_requested) {
+      terminal_audio_retirement_requested = true;
+      terminal_origin_deadline = request_deadline;
+      terminal_native_stop_pending = true;
+      if (physical_audio) {
+        physical_audio->request_terminal_drain(physical_audio->context);
+      }
+    }
+  }
+
+  void service_terminal_audio_retirement() noexcept {
+    if (!terminal_audio_retirement_requested) return;
+    if (physical_audio) {
+      if (!physical_audio->physically_quiescent(physical_audio->context)) return;
+    } else {
+      // Legacy Hosts retain their existing coordinator contract: after their
+      // real Native stop, a successful operational quiescence receipt can
+      // retire that stop. Neither stopped telemetry alone nor a failed Result
+      // pays this debt. A configured physical producer never uses this path.
+      if (!terminal_legacy_quiescent) {
+        if (engine.telemetry().state != audio::RealtimeState::stopped ||
+            !coordinator) return;
+        const auto budget = legacy_retirement_budget_ms();
+        if (budget == 0 || !coordinator->await_quiescent(
+                coordinator->context, std::min(budget, 1U)).has_value()) return;
+      }
+      terminal_legacy_quiescent = true;
+      terminal_native_stop_pending = false;
+    }
+    if (terminal_native_stop_pending) {
+      // Exactly one real Native stop follows admitted callback last use.
+      // It does not turn the failed lifecycle request into success or consume
+      // a Native/input/count-in caller acknowledgment.
+      engine.stop();
+      terminal_native_stop_pending = false;
+    }
+    if (terminal_pattern_clear_pending) {
+      const auto cleared = engine.clear_pattern_view();
+      if (cleared.has_value()) {
+        static_cast<void>(engine.reclaim_retired_patterns());
+        terminal_pattern_clear_pending = false;
+      }
+    }
+  }
+
+  foundation::Result<void> failed_audio_retirement(Error error) noexcept {
+    if (!terminal_audio_failure) terminal_audio_failure = error;
+    request_terminal_audio_retirement();
+    service_terminal_audio_retirement();
+    return foundation::Result<void>::failure(std::move(error));
+  }
+
   foundation::Result<void> quiesce_and_stop_audio() noexcept {
     trigger_admission = false;
     if (!coordinator.has_value() ||
         coordinator->await_quiescent == nullptr) {
-      return foundation::Result<void>::failure(Error{
+      return failed_audio_retirement(Error{
           ErrorCode::internal_error,
           "audio quiescence is unavailable",
       });
     }
     const auto timeout_ms = remaining_request_budget_ms();
     if (timeout_ms == 0) {
-      return foundation::Result<void>::failure(Error{
+      return failed_audio_retirement(Error{
           ErrorCode::internal_error,
           "request deadline expired before audio quiescence",
       });
     }
-    // The coordinator contract guarantees paused-or-terminal and no callback
-    // in flight on every return, including a timeout/failure return.
+    // Only a successful operational Result establishes the ordinary paused
+    // transition. Failure may still have a live callback after both original
+    // budgets; preserve that failure and defer Native stop behind its fence.
     const auto quiescent = coordinator->await_quiescent(
         coordinator->context, timeout_ms);
+    if (!quiescent.has_value()) {
+      return failed_audio_retirement(quiescent.error());
+    }
+    // This is a genuine operational receipt for this activation, even if
+    // the caller subsequently expires. Reuse it during that activation's
+    // failure cleanup; beginning a successor invalidates it below.
+    if (!physical_audio) terminal_legacy_quiescent = true;
     engine.stop();
     return quiescent;
   }
 
   void stop_and_clear_pattern_noexcept() noexcept {
+    if (terminal_audio_retirement_requested) {
+      // A first legacy publication-cleanup failure still owns the original
+      // operational quiescence call. Acquire its real successful receipt
+      // before stopping; an earlier failed Result or a configured physical
+      // producer must continue to use the separate retirement fence.
+      if (!physical_audio && !terminal_audio_failure &&
+          engine.telemetry().state == audio::RealtimeState::running &&
+          coordinator && coordinator->await_quiescent != nullptr) {
+        const auto budget = legacy_retirement_budget_ms();
+        if (budget != 0) {
+          const auto quiescent = coordinator->await_quiescent(
+              coordinator->context, budget);
+          if (quiescent.has_value()) {
+            engine.stop();
+            terminal_legacy_quiescent = true;
+            terminal_native_stop_pending = false;
+          } else {
+            terminal_audio_failure = quiescent.error();
+          }
+        }
+      }
+      request_terminal_audio_retirement(true);
+      service_terminal_audio_retirement();
+      return;
+    }
     if (engine.telemetry().state == audio::RealtimeState::running) {
       if (!coordinator.has_value() ||
           coordinator->await_quiescent == nullptr) {
         return;
       }
-      // The coordinator contract establishes paused-or-terminal with no
-      // callback in flight on every return, including timeout/failure. Cleanup
-      // therefore gets a minimal independent budget even after request expiry.
-      const auto timeout_ms = std::max<std::uint32_t>(
-          remaining_request_budget_ms(), 1U);
-      static_cast<void>(coordinator->await_quiescent(
-          coordinator->context, timeout_ms));
+      // This cleanup retains its original budget. A failed observer cannot
+      // authorize stop, clear or reclaim while a real callback still borrows.
+      const auto timeout_ms = legacy_retirement_budget_ms();
+      if (timeout_ms == 0) {
+        request_terminal_audio_retirement(true);
+        return;
+      }
+      const auto quiescent = coordinator->await_quiescent(
+          coordinator->context, timeout_ms);
+      if (!quiescent.has_value()) {
+        if (!terminal_audio_failure) terminal_audio_failure = quiescent.error();
+        request_terminal_audio_retirement(true);
+        service_terminal_audio_retirement();
+        return;
+      }
+      if (!physical_audio) terminal_legacy_quiescent = true;
       engine.stop();
     }
     static_cast<void>(engine.clear_pattern_view());
@@ -3383,10 +3998,24 @@ struct ControlRuntime::Impl {
   }
 
   void seal_all_noexcept() noexcept {
+    // Seal audio admission even when retained Pattern owners prevent generic
+    // authoring cleanup. Their actual worker/input/caller gates remain live.
+    // An unconfigured stopped Host cannot have admitted a producer through
+    // audio.activate. It has no operational/physical audio retirement debt.
+    // Installed producers and any already-requested debt keep their gates.
+    if (coordinator || physical_audio || terminal_audio_retirement_requested ||
+        engine.telemetry().state != audio::RealtimeState::stopped) {
+      request_terminal_audio_retirement();
+      service_terminal_audio_retirement();
+    }
     try {
       static_cast<void>(abort_imports());
     } catch (...) {
     }
+    // Failed observers close new admission, but the Pattern controller's
+    // sole worker, exact legacy candidate and physical release escrow still
+    // own their real effects. A generic legacy seal cannot abandon them.
+    if (transport || has_pattern_input_owners() || !legacy_inputs.empty()) return;
     bool clean_pattern_published = true;
     if (active_sequence.has_value()) {
       try {
@@ -3465,9 +4094,29 @@ struct ControlRuntime::Impl {
   // or Close. While present, direct legacy Sequence writes are rejected.
   std::unique_ptr<TransportEngagement> transport;
   bool transport_opted_in = false;
+  bool count_in_input_negotiated = false;
+  bool count_in_input_enabled = false;
+  std::vector<std::optional<RetainedPatternInput>> pattern_inputs;
+  std::vector<std::optional<RetainedPatternHold>> pattern_holds;
+  std::uint64_t input_acceptance_floor = 0;
+  std::uint64_t input_ledger_generation = 0;
+  std::uint64_t input_owner_revoked_generation = 0;
+  std::uint64_t input_owner_acknowledged_generation = 0;
+  std::map<std::string, RetainedLegacyInput> legacy_inputs;
+  std::optional<std::string> current_rpc_request_id;
+  std::optional<std::pair<std::string, std::string>> pending_dispatch_rpc;
+  std::uint64_t next_count_in_serial = 1;
   std::uint64_t next_transport_generation = 1;
   std::uint64_t enabled_transport_generation = 0;
   std::optional<detail::AudioQuiescenceCoordinator> coordinator;
+  std::optional<detail::CountInOutputCapability> count_in_output;
+  std::optional<detail::AudioPhysicalQuiescenceCapability> physical_audio;
+  bool terminal_audio_retirement_requested = false;
+  std::optional<std::chrono::steady_clock::time_point> terminal_origin_deadline;
+  bool terminal_legacy_quiescent = false;
+  bool terminal_native_stop_pending = false;
+  bool terminal_pattern_clear_pending = false;
+  std::optional<Error> terminal_audio_failure;
   std::optional<detail::ControlRuntimeClock> clock;
   std::set<std::string> import_tokens;
   std::set<std::string> sample_import_tokens;
@@ -3484,6 +4133,48 @@ struct ControlRuntime::Impl {
 
 ControlRuntime::ControlRuntime(std::shared_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
+
+Json ControlRuntime::dispatch(std::string_view operation, const Json& payload,
+    std::span<const std::byte> sidecar, AbsoluteRequestDeadline deadline,
+    std::string_view original_request_id) {
+  struct Reset {
+    std::optional<std::string>& identity;
+    ~Reset() { identity.reset(); }
+  } reset{impl_->current_rpc_request_id};
+  impl_->current_rpc_request_id = std::string(original_request_id);
+  return dispatch(operation, payload, sidecar, deadline);
+}
+
+std::optional<Json> ControlRuntime::inspect_legacy_trigger(std::string_view id, bool consume) {
+  service_pattern_transport();
+  const auto found = impl_->legacy_inputs.find(std::string(id));
+  if (found == impl_->legacy_inputs.end()) return std::nullopt;
+  auto& retained = found->second;
+  if (impl_->clock_now() >= retained.deadline) {
+    if (consume) {
+      retained.observer_consumed = true;
+      if (retained.terminal_response) impl_->legacy_inputs.erase(found);
+    }
+    return timeout_error();
+  }
+  if (!retained.terminal_response) return std::nullopt;
+  auto response = *retained.terminal_response;
+  if (consume) impl_->legacy_inputs.erase(found);
+  return response;
+}
+
+bool ControlRuntime::owns_pending_pattern_rpc(
+    std::string_view id, std::string_view operation) const {
+  if (operation == "trigger") {
+    const auto found = impl_->legacy_inputs.find(std::string{id});
+    // An expired observer may be consumed while its original accepted I/O
+    // effect is still retained. A reused RPC identity cannot acquire it.
+    return found != impl_->legacy_inputs.end() && !found->second.observer_consumed;
+  }
+  return impl_->pending_dispatch_rpc &&
+      impl_->pending_dispatch_rpc->first == id &&
+      impl_->pending_dispatch_rpc->second == operation;
+}
 
 foundation::Result<std::unique_ptr<ControlRuntime>> ControlRuntime::create(
     std::filesystem::path workspace_root,
@@ -3550,8 +4241,32 @@ Json ControlRuntime::dispatch(
   impl_->request_publication_context = deadline.publication_context;
   impl_->request_publication_settlement_owned =
       deadline.publication_settlement_owned;
+  impl_->pending_dispatch_rpc.reset();
+  const auto transport_error = [&](const Error& error) {
+    if (impl_->current_rpc_request_id && error.details.is_object() &&
+        error.details.value("pending", false) &&
+        error.details.value("reason", std::string{}).starts_with("pattern_transport_")) {
+      impl_->pending_dispatch_rpc = std::pair{
+          *impl_->current_rpc_request_id, std::string(operation)};
+    }
+    return normalized_error(error);
+  };
   try {
-    if (impl_->state == Impl::State::failed ||
+    const bool retained_owner_operation =
+        operation == "pattern.transport.input.inspect" ||
+        operation == "pattern.transport.input.request" ||
+        operation == "pattern.transport.count-in.inspect" ||
+        operation == "pattern.transport.count-in.cancel" ||
+        operation == "pattern.transport.inspect" ||
+        (operation == "trigger" && payload.is_object() &&
+         payload.contains("kind") && payload.at("kind").is_string() &&
+         payload.at("kind") == "release" && impl_->transport &&
+         payload.contains("slot") && payload.at("slot").is_number_integer() &&
+         payload.at("slot") >= 0 && payload.at("slot") < 64 &&
+         impl_->transport->owned_presses.contains(domain::PadSlotId{
+             static_cast<std::uint8_t>(payload.at("slot").get<std::uint64_t>() / 16),
+             static_cast<std::uint8_t>(payload.at("slot").get<std::uint64_t>() % 16)}));
+    if ((impl_->state == Impl::State::failed && !retained_owner_operation) ||
         impl_->state == Impl::State::closed) {
       return state_error();
     }
@@ -4067,7 +4782,7 @@ Json ControlRuntime::dispatch(
       // transport closure prevents a clean replacement claim.
       const auto create_barrier = impl_->transport_shutdown_barrier();
       if (!create_barrier.has_value()) {
-        return normalized_error(create_barrier.error());
+        return transport_error(create_barrier.error());
       }
       impl_->transport.reset();
       // Pattern transport stays disabled — and Pattern event scheduling
@@ -4179,7 +4894,7 @@ Json ControlRuntime::dispatch(
       // transport closure prevents a clean replacement claim.
       const auto open_barrier = impl_->transport_shutdown_barrier();
       if (!open_barrier.has_value()) {
-        return normalized_error(open_barrier.error());
+        return transport_error(open_barrier.error());
       }
       impl_->transport.reset();
       // Pattern transport stays disabled — and Pattern event scheduling
@@ -4267,6 +4982,11 @@ Json ControlRuntime::dispatch(
           "Undo/Redo is unavailable until the current authoring operation settles",
           {{"reason", history.at("disabled_reason")}});
       if (impl_->cancel_if_expired()) return timeout_error();
+      if (impl_->transport) {
+        const auto retired = impl_->transport_shutdown_barrier();
+        if (!retired.has_value()) return transport_error(retired.error());
+        impl_->transport.reset();
+      }
       auto response = impl_->application.command({{"operation", operation},
           {"project_path", impl_->retained_project_path->generic_string()},
           {"session_id", uuid_field(payload, "session_id")},
@@ -5189,7 +5909,7 @@ Json ControlRuntime::dispatch(
         if (engaged.recording ||
             engaged.phase != facade::PatternTransportPhase::idle ||
             impl_->transport->publish_pending) {
-          const auto barrier = impl_->transport_shutdown_barrier();
+          const auto barrier = impl_->transport_shutdown_barrier(false);
           if (!barrier.has_value()) {
             return normalized_error(barrier.error());
           }
@@ -5273,6 +5993,9 @@ Json ControlRuntime::dispatch(
           impl_->state != Impl::State::audio_suspended) {
         return state_error();
       }
+      if (impl_->terminal_audio_retirement_requested) {
+        return state_error("failed audio retirement cannot be reactivated");
+      }
       const auto bank = impl_->engine.bank_telemetry();
       const auto expected_generation = bank.accepted_publications;
       if (expected_generation == 0 ||
@@ -5293,18 +6016,29 @@ Json ControlRuntime::dispatch(
       // reservation; an opted-in session re-arms the port on every activation
       // while the Engine is quiescent. A surviving engagement from before the
       // stop is stale and retires here.
-      if (impl_->transport_opted_in) {
-        impl_->enable_pattern_transport_quiescent();
-      }
-      if (impl_->transport != nullptr &&
-          impl_->transport->generation != impl_->enabled_transport_generation) {
+      if (impl_->transport != nullptr) {
+        // Retire the original actual-generation owner before asking Native
+        // to enable a successor. Enabling first would overwrite its evidence.
+        const auto retired = impl_->transport_shutdown_barrier();
+        if (!retired.has_value()) return normalized_error(retired.error());
         impl_->transport.reset();
+      }
+      if (impl_->transport_opted_in) {
+        if (impl_->has_pattern_input_owners())
+          return normalized_error(Error{ErrorCode::io_error, "Previous Pattern input owners are pending",
+              {{"pending", true}, {"reason", "pattern_transport_input_owners_pending"}}});
+        impl_->enable_pattern_transport_quiescent();
+        if (impl_->count_in_input_negotiated &&
+            !impl_->count_in_input_enabled) {
+          return rollback();
+        }
       }
       const auto prepared_fx =
           impl_->engine.prepare_master_fx(*impl_->project_bpm);
       if (!prepared_fx.has_value()) {
         return rollback();
       }
+      impl_->terminal_legacy_quiescent = false;
       const auto started = impl_->engine.start();
       if (!started.has_value()) {
         return rollback();
@@ -5357,6 +6091,16 @@ Json ControlRuntime::dispatch(
     }
     if (operation == "trigger") {
       require(sidecar.empty());
+      if (impl_->count_in_input_enabled)
+        return state_error("Negotiated Pattern input requires its companion identity");
+      // Exactly the existing Bridge RPC pool bound, reserved before Native
+      // acceptance. Expired observers keep their accepted candidate until its
+      // actual durable result reconciles; this never enlarges the pool.
+      if (impl_->legacy_inputs.size() >= 16)
+        return state_error("Retained legacy Pattern input metadata is full");
+      if (impl_->transport && impl_->transport->legacy_candidate)
+        return normalized_error(Error{ErrorCode::io_error, "An original input is still pending",
+            {{"pending", true}, {"reason", "pattern_transport_metadata_full"}}});
       if (exact_keys(payload, {"slot", "kind"})) {
         const auto selected_slot = unsigned_field(payload, "slot", 63);
         require(string_field(payload, "kind") == "release");
@@ -5384,7 +6128,7 @@ Json ControlRuntime::dispatch(
         if (impl_->transport != nullptr &&
             impl_->transport->controller->inspect().recording) {
           const auto admitted =
-              impl_->admit_transport_pad(structured_slot, 0, false);
+              impl_->admit_transport_pad(structured_slot, 0, false, success({{"accepted", true}}));
           if (!admitted.has_value()) {
             return normalized_error(admitted.error());
           }
@@ -5441,13 +6185,248 @@ Json ControlRuntime::dispatch(
                 static_cast<std::uint8_t>(selected_slot % 16U),
             },
             static_cast<std::uint8_t>(velocity),
-            true);
+            true, success({{"sequence", sequence}, {"status", "enqueued"}}));
         if (!admitted.has_value()) {
           return normalized_error(admitted.error());
         }
       }
       return success(
           {{"sequence", sequence}, {"status", "enqueued"}});
+    }
+    if (operation == "pattern.transport.input.request") {
+      require(exact_keys(payload, {"command_id", "runtime_generation", "frame_epoch", "input_serial",
+          "slot", "velocity", "kind", "held", "held_press_sequence"}) && sidecar.empty());
+      return impl_->request_pattern_input(payload);
+    }
+    if (operation == "pattern.transport.input.inspect") {
+      require(exact_keys(payload, {"command_id", "runtime_generation", "frame_epoch", "ticket", "consume"}) &&
+          sidecar.empty());
+      return impl_->inspect_pattern_input(payload);
+    }
+    if (operation == "pattern.transport.count-in.capabilities") {
+      require(exact_keys(payload, {"negotiate"}) && sidecar.empty());
+      const auto negotiate = bool_field(payload, "negotiate");
+      if (negotiate && !impl_->count_in_input_negotiated) {
+        if (impl_->engine.telemetry().state != audio::RealtimeState::stopped ||
+            impl_->transport != nullptr || impl_->active_sequence.has_value()) {
+          return state_error("Pattern input profile requires quiescent activation");
+        }
+        impl_->count_in_input_negotiated = true;
+        if (impl_->transport_opted_in && impl_->enabled_transport_generation != 0) {
+          const auto generation = impl_->enabled_transport_generation;
+          const auto scheduled = impl_->engine.enable_scheduled_pattern_record(generation);
+          const auto inputs = scheduled.has_value()
+              ? impl_->engine.enable_pattern_input_profile(generation)
+              : foundation::Result<void>::failure(scheduled.error());
+          if (!inputs.has_value()) {
+            impl_->count_in_input_negotiated = false;
+            return normalized_error(inputs.error());
+          }
+          impl_->count_in_input_enabled = true;
+          impl_->initialize_pattern_input_ledger();
+        }
+      }
+      const auto frame_epoch = impl_->engine.telemetry().start_epoch;
+      const auto output_ready = impl_->count_in_output &&
+          impl_->count_in_output->available(impl_->count_in_output->context);
+      return success({{"supported", true},
+          {"negotiated", impl_->count_in_input_negotiated},
+          {"output_ready", output_ready},
+          {"runtime_generation", impl_->enabled_transport_generation != 0
+              ? Json(std::to_string(impl_->enabled_transport_generation)) : Json(nullptr)},
+          {"frame_epoch", frame_epoch != 0 ? Json(std::to_string(frame_epoch)) : Json(nullptr)},
+          {"next_serial", impl_->next_count_in_serial != 0
+              ? Json(std::to_string(impl_->next_count_in_serial)) : Json(nullptr)},
+          {"input_capacity", impl_->count_in_input_enabled
+              ? impl_->engine.pattern_input_profile_status().capacity : audio::kRealtimeQueueCapacity}});
+    }
+    if (operation == "pattern.transport.count-in.request") {
+      require(exact_keys(payload, {"session_id", "project_id", "command_id",
+          "runtime_generation", "frame_epoch", "schedule_serial", "expected_epoch",
+          "bars", "expected_revision"}) && sidecar.empty());
+      const auto session = uuid_field(payload, "session_id");
+      const auto project = uuid_field(payload, "project_id");
+      const auto command = uuid_field(payload, "command_id");
+      const auto generation = nonzero_decimal_field(payload, "runtime_generation");
+      const auto frame_epoch = nonzero_decimal_field(payload, "frame_epoch");
+      const auto serial = nonzero_decimal_field(payload, "schedule_serial",
+          audio::kScheduledPatternSerialMaximum);
+      const auto epoch = nonzero_decimal_field(payload, "expected_epoch");
+      const auto bars = safe_unsigned_field(payload, "bars", 2);
+      require(bars == 1 || bars == 2);
+      std::optional<std::uint64_t> revision;
+      if (!payload.at("expected_revision").is_null())
+        revision = safe_unsigned_field(payload, "expected_revision");
+      if (impl_->state != Impl::State::running || !impl_->session_available() ||
+          !impl_->count_in_input_enabled || !impl_->transport_opted_in ||
+          impl_->active_sequence.has_value() || !impl_->count_in_output ||
+          !impl_->count_in_output->available(impl_->count_in_output->context)) {
+        return state_error("Native count-in is unavailable for this generation");
+      }
+      if (project != *impl_->project_id || generation != impl_->enabled_transport_generation ||
+          frame_epoch != impl_->engine.telemetry().start_epoch) {
+        return state_error("Count-in request belongs to a stale Project or frame epoch");
+      }
+      if (const auto stopped = impl_->stop_replay_before_command(true)) return *stopped;
+      auto* engagement = impl_->ensure_transport_engaged(foundation::SequenceSessionId{session});
+      if (engagement == nullptr) return state_error("Pattern transport session is unavailable");
+      const auto before = engagement->controller->inspect_count_in();
+      const auto replay = before.request &&
+          before.request->transport.command_id.value() == command;
+      if (!replay && (!engagement->count_in_ticket_consumed ||
+          impl_->next_count_in_serial == 0 || serial < impl_->next_count_in_serial)) {
+        return state_error("A retained count-in ticket must settle and be consumed first");
+      }
+      if (impl_->engine.pattern_telemetry().pending_generation != 0 && !replay)
+        return state_error("A Pattern publication is pending");
+      const facade::ScheduledPatternTransportRequest request{
+          {*engagement->session, foundation::ProjectId{project}, foundation::CommandId{command},
+              generation, epoch, facade::PatternTransportIntent::record, revision},
+          frame_epoch, serial, static_cast<std::uint8_t>(bars)};
+      const auto submitted = engagement->controller->request_count_in(request);
+      if (submitted != facade::PatternTransportSubmit::accepted &&
+          submitted != facade::PatternTransportSubmit::replayed)
+        return state_error("Count-in request is busy, stale or refused");
+      if (submitted == facade::PatternTransportSubmit::accepted) {
+        impl_->next_count_in_serial = serial == audio::kScheduledPatternSerialMaximum ? 0 : serial + 1;
+        engagement->count_in_ticket_consumed = false;
+        engagement->count_in_cancel_pending = false;
+      }
+      return success({{"submit", std::string(pattern_transport_submit_name(submitted))},
+          {"ticket", scheduled_pattern_ticket_json(request)},
+          {"status", scheduled_pattern_status_json(engagement->controller->inspect_count_in())}});
+    }
+    if (operation == "pattern.transport.count-in.inspect" ||
+        operation == "pattern.transport.count-in.cancel") {
+      const auto cancel = operation == "pattern.transport.count-in.cancel";
+      require((cancel
+          ? exact_keys(payload, {"session_id", "project_id", "command_id", "start_command_id",
+              "runtime_generation", "frame_epoch", "schedule_serial", "expected_epoch", "intent"})
+          : exact_keys(payload, {"session_id", "command_id", "runtime_generation",
+              "frame_epoch", "schedule_serial", "consume"})) && sidecar.empty());
+      const auto session = uuid_field(payload, "session_id");
+      const auto command = uuid_field(payload, cancel ? "start_command_id" : "command_id");
+      const auto generation = nonzero_decimal_field(payload, "runtime_generation");
+      const auto frame_epoch = nonzero_decimal_field(payload, "frame_epoch");
+      const auto serial = nonzero_decimal_field(payload, "schedule_serial",
+          audio::kScheduledPatternSerialMaximum);
+      if (!impl_->transport || impl_->transport->count_in_ticket_consumed ||
+          impl_->transport->session->value() != session ||
+          impl_->transport->generation != generation)
+        return state_error("Count-in ticket is stale or consumed");
+      auto& engagement = *impl_->transport;
+      const auto before = engagement.controller->inspect_count_in();
+      if (!before.request || before.request->transport.command_id.value() != command ||
+          before.request->frame_epoch != frame_epoch || before.request->schedule_serial != serial)
+        return state_error("Count-in ticket identity does not match");
+      if (cancel) {
+        const auto project = uuid_field(payload, "project_id");
+        const auto cancel_command = uuid_field(payload, "command_id");
+        const auto epoch = nonzero_decimal_field(payload, "expected_epoch");
+        const auto intent = string_field(payload, "intent");
+        require(intent == "record" || intent == "play_stop");
+        if (project != before.request->transport.project_id.value())
+          return state_error("Count-in cancellation belongs to another Project");
+        const facade::ScheduledPatternTransportCancel request{
+            {before.request->transport.session, foundation::ProjectId{project},
+                foundation::CommandId{cancel_command}, generation, epoch,
+                intent == "record" ? facade::PatternTransportIntent::record
+                                   : facade::PatternTransportIntent::play_stop,
+                before.request->transport.expected_revision}, frame_epoch, serial};
+        const auto submitted = engagement.controller->cancel_count_in(request);
+        if (submitted != facade::PatternTransportSubmit::accepted &&
+            submitted != facade::PatternTransportSubmit::replayed)
+          return state_error("Count-in cancellation is busy, stale or refused");
+        engagement.count_in_cancel_pending = true;
+        return success({{"submit", std::string(pattern_transport_submit_name(submitted))},
+            {"ticket", scheduled_pattern_ticket_json(*before.request)},
+            {"status", scheduled_pattern_status_json(engagement.controller->inspect_count_in())}});
+      }
+      const auto consume = bool_field(payload, "consume");
+      if (impl_->state == Impl::State::running)
+        static_cast<void>(impl_->transport_continuation_step());
+      const auto status = engagement.controller->inspect_count_in();
+      const auto result = scheduled_pattern_status_json(status);
+      if (consume) {
+        const auto ordinary = engagement.controller->inspect();
+        const auto native_terminal = status.start_receipt &&
+            (status.start_receipt->result != audio::ScheduledPatternResult::applied ||
+             (status.cancel_receipt &&
+              status.cancel_receipt->result == audio::ScheduledPatternResult::applied &&
+              status.cancel_receipt->effective_frame && status.opening_complete &&
+              !ordinary.recording && ordinary.phase == facade::PatternTransportPhase::idle &&
+              !ordinary.error && !engagement.publish_pending));
+        const auto owner = engagement.controller->inspect_input_owner();
+        const auto native = impl_->engine.pattern_input_profile_status();
+        // Caller acknowledgment of failed evidence is independent of physical
+        // owner acknowledgment. Return the original e1/e2/error unchanged only
+        // after both actual owners and every input consumer have settled.
+        const auto failed_resource_terminal = impl_->state == Impl::State::failed &&
+            engagement.shutdown_requested && status.start_receipt && status.cancel_receipt &&
+            status.error && ordinary.error && ordinary.phase == facade::PatternTransportPhase::error &&
+            owner.runtime_generation == generation && owner.invalidated && owner.disposed &&
+            owner.acknowledged && !owner.pending && !owner.held_correlations &&
+            impl_->input_owner_revoked_generation == generation &&
+            impl_->input_owner_acknowledged_generation == generation &&
+            impl_->engine.telemetry().state == audio::RealtimeState::stopped &&
+            impl_->engine.telemetry().start_epoch == frame_epoch && native.enabled &&
+            native.runtime_generation == generation && !native.ordinary_pending &&
+            !native.held_release_reservations && !native.retained_completions &&
+            impl_->engine.scheduled_pattern_record_quiescent() &&
+            !impl_->has_pattern_input_owners() && impl_->legacy_inputs.empty() &&
+            !engagement.legacy_candidate && !engagement.publish_pending;
+        const auto io = engagement.controller->inspect_io();
+        const auto ingress = engagement.controller->inspect_ingress();
+        // A known final opening refusal has no admitted take. Its original S
+        // and actual Stop F can be acknowledged once after every real owner
+        // has settled, while its error and recovery journal remain unchanged.
+        // Unknown closure effects retain their I/O cell and never enter here.
+        const auto known_opening_failure_terminal = impl_->state == Impl::State::running &&
+            status.request && status.count_in && status.start_receipt && status.cancel_receipt &&
+            status.error && ordinary.error && !status.opening_pending && !status.opening_complete &&
+            status.error->code == ErrorCode::invalid_argument && ordinary.error->code == ErrorCode::invalid_argument &&
+            status.error->details.value("reason", std::string{}) == "admission_opening_deadline_elapsed" &&
+            ordinary.error->details.value("reason", std::string{}) == "admission_opening_deadline_elapsed" &&
+            status.error->details.value("journal_retained", false) &&
+            ordinary.error->details.value("journal_retained", false) &&
+            !status.error->details.value("closure_unresolved", false) &&
+            !status.error->details.value("retryable", false) &&
+            !ordinary.error->details.value("closure_unresolved", false) &&
+            !ordinary.error->details.value("retryable", false) &&
+            status.start_receipt->runtime_generation == generation && status.start_receipt->frame_epoch == frame_epoch &&
+            status.start_receipt->serial == serial &&
+            status.start_receipt->epoch == status.request->transport.expected_epoch &&
+            status.start_receipt->result == audio::ScheduledPatternResult::applied && status.start_receipt->playing &&
+            status.start_receipt->effective_frame && status.start_receipt->origin_frame &&
+            status.start_receipt->effective_frame == status.start_receipt->origin_frame &&
+            status.cancel_receipt->runtime_generation == generation && status.cancel_receipt->frame_epoch == frame_epoch &&
+            status.cancel_receipt->serial == serial && status.cancel_receipt->epoch > status.start_receipt->epoch &&
+            status.cancel_receipt->pattern_id == status.start_receipt->pattern_id &&
+            status.cancel_receipt->pattern_generation == status.start_receipt->pattern_generation &&
+            status.cancel_receipt->result == audio::ScheduledPatternResult::applied && !status.cancel_receipt->playing &&
+            status.cancel_receipt->effective_frame && status.cancel_receipt->origin_frame &&
+            *status.cancel_receipt->effective_frame > *status.start_receipt->effective_frame &&
+            status.cancel_receipt->origin_frame == status.start_receipt->origin_frame &&
+            status.count_in->runtime_generation == generation && status.count_in->frame_epoch == frame_epoch &&
+            status.count_in->serial == serial && status.count_in->start_frame == status.start_receipt->effective_frame &&
+            ordinary.phase == facade::PatternTransportPhase::error && !ordinary.recording && !ordinary.playing &&
+            !io.ticket && !io.completion && !io.startup_error && (io.ready || io.stopped) &&
+            owner.runtime_generation == generation && !owner.invalidated && !owner.disposed && !owner.acknowledged &&
+            !owner.pending && !owner.held_correlations &&
+            !ingress.ordinary_pending && !ingress.held_release_metadata && !ingress.retained_tickets &&
+            impl_->engine.telemetry().start_epoch == frame_epoch && native.enabled &&
+            native.runtime_generation == generation && !native.ordinary_pending &&
+            !native.held_release_reservations && !native.retained_completions &&
+            impl_->engine.scheduled_pattern_record_settled(generation, frame_epoch, serial) &&
+            !impl_->has_pattern_input_owners() && impl_->legacy_inputs.empty() &&
+            !engagement.legacy_candidate && engagement.owned_presses.empty() && !engagement.publish_pending &&
+            !impl_->pending_transport_switch && impl_->engine.pattern_telemetry().pending_generation == 0;
+        if ((!native_terminal && !failed_resource_terminal && !known_opening_failure_terminal) || status.opening_pending ||
+            (engagement.count_in_cancel_pending && !status.cancel_receipt))
+          return state_error("Count-in evidence is still pending");
+        engagement.count_in_ticket_consumed = true;
+      }
+      return success(result);
     }
     if (operation == "pattern.transport.request") {
       require(exact_keys(
@@ -5545,6 +6524,12 @@ Json ControlRuntime::dispatch(
           return state_error("Pattern transport request is refused");
         }
       }
+      // Ordinary Stop/Record-off during a retained schedule is also its e2
+      // intent. Consumption must wait for that actual receipt and closure.
+      const auto scheduled = engagement->controller->inspect_count_in();
+      if (!engagement->count_in_ticket_consumed && scheduled.request &&
+          request.expected_epoch > scheduled.request->transport.expected_epoch)
+        engagement->count_in_cancel_pending = true;
       // The pending ticket returns through the ordinary serializer here; the
       // tail is released and later inspect/service turns reenter the
       // coordinator for short epoch-checked continuation steps.
@@ -5584,10 +6569,14 @@ Json ControlRuntime::dispatch(
         // One short continuation step per inspection turn.
         static_cast<void>(impl_->transport_continuation_step());
       }
+      const auto pattern_state = impl_->engine.pattern_transport_observation();
       return success(pattern_transport_status_json(
           true,
           impl_->transport->controller->inspect(),
-          impl_->transport->publish_pending,
+          // Withdrawal clears pending_switch before audio retires its slot.
+          // Add only that observed fence to the transport's own completion.
+          impl_->transport->publish_pending ||
+              (pattern_state && pattern_state->outstanding_cancellation),
           impl_->engine.telemetry().rendered_frames,
           impl_->current_pattern_id_json(),
           impl_->pending_transport_switch_json()));
@@ -6241,15 +7230,17 @@ Json ControlRuntime::dispatch(
         transport_settled_recording =
             impl_->transport->controller->inspect().recording ||
             impl_->transport->publish_pending;
-        const auto barrier = impl_->transport_shutdown_barrier();
-        if (!barrier.has_value()) {
-          sequence_failure = barrier.error();
-        } else {
-          // Suspend stops the Engine, which wipes the transport generation
-          // the engagement is bound to; the settled engagement retires here
-          // and re-engages lazily after re-activation.
-          impl_->transport.reset();
-        }
+      }
+      const auto barrier = impl_->transport_shutdown_barrier();
+      if (!barrier.has_value()) {
+        if (barrier.error().details.value("pending", false))
+          return transport_error(barrier.error());
+        sequence_failure = barrier.error();
+      } else {
+        // A pre-engagement input owns the same lifecycle barrier even though
+        // no Creator supplied a session/controller. Settled workers retire
+        // only after their true stopped acknowledgment.
+        impl_->transport.reset();
       }
       if (impl_->cancel_if_expired()) {
         return timeout_error();
@@ -6321,11 +7312,11 @@ Json ControlRuntime::dispatch(
         // Disposal enters the same shutdown barrier as Suspend: the Pattern
         // transport journal settles before the lifecycle effect, and an
         // unknown closure fails the close instead of claiming it clean.
-        if (impl_->transport != nullptr) {
-          const auto barrier = impl_->transport_shutdown_barrier();
-          if (!barrier.has_value()) {
-            close_failure = barrier.error();
-          }
+        const auto barrier = impl_->transport_shutdown_barrier();
+        if (!barrier.has_value()) {
+          if (barrier.error().details.value("pending", false))
+            return transport_error(barrier.error());
+          close_failure = barrier.error();
         }
         observe_timeout();
         if (close_timed_out) {
@@ -6333,7 +7324,12 @@ Json ControlRuntime::dispatch(
         }
         const auto cleanup = impl_->quiesce_and_stop_audio();
         if (!cleanup.has_value()) {
-          close_failure = cleanup.error();
+          // Bank release is also a quiescent mutation. Do not run it merely
+          // because the operational observer returned, or overwrite a prior
+          // genuine sequence failure with a later cleanup error.
+          const auto failure = close_failure ? *close_failure : cleanup.error();
+          fail_and_seal("host_close_failed");
+          return normalized_error(failure);
         }
       }
       const auto imports_released = impl_->abort_imports();
@@ -6354,6 +7350,8 @@ Json ControlRuntime::dispatch(
         fail_and_seal("host_close_failed");
         return normalized_error(*close_failure);
       }
+      const auto final_barrier = impl_->transport_shutdown_barrier();
+      if (!final_barrier.has_value()) return transport_error(final_barrier.error());
       impl_->trigger_admission = false;
       impl_->state = Impl::State::closed;
       (void)impl_->application.command({{"operation", "history.close"}});
@@ -6391,7 +7389,9 @@ ControlRuntime::drain_outcomes() {
     return {};
   }
   for (std::size_t index = 0; index < count; ++index) {
-    result.push_back(batch[index]);
+    // The negotiated profile uses its retained total completion channel.
+    // Unnegotiated Hosts retain the exact old outcome stream and schema.
+    if (!impl_->count_in_input_enabled) result.push_back(batch[index]);
   }
   if (!validate_realtime_health()) {
     return {};
@@ -6425,10 +7425,26 @@ ControlRuntime::drain_sequence_bar_boundary() {
 
 void ControlRuntime::service_pattern_transport() noexcept {
   try {
-    if (impl_->state != Impl::State::running) {
+    if (impl_->state == Impl::State::closed) {
       return;
     }
+    impl_->service_terminal_audio_retirement();
     // An audio interruption retires the engagement but not a deferral.
+    impl_->service_pattern_inputs();
+    if (impl_->state == Impl::State::failed &&
+        impl_->engine.telemetry().state == audio::RealtimeState::stopped) {
+      // The controller's real I/O worker also belongs to an unnegotiated
+      // legacy Play engagement. Its shutdown intent cannot depend on a
+      // negotiated Pattern input generation or spend any physical/caller ACK.
+      if (impl_->transport && !impl_->transport->shutdown_requested) {
+        auto& engagement = *impl_->transport;
+        engagement.controller->request_shutdown();
+        engagement.shutdown_requested = true;
+        if (!engagement.count_in_ticket_consumed)
+          engagement.count_in_cancel_pending = true;
+      }
+      static_cast<void>(impl_->acknowledge_pattern_input_owner_quiescent(impl_->input_ledger_generation));
+    }
     impl_->retry_deferred_pattern_edit();
     // The queued playing-state switch follows native apply on the same
     // cadence; native audio already owns any claimed-safe successor.
@@ -6440,8 +7456,11 @@ void ControlRuntime::service_pattern_transport() noexcept {
     // An open recording keeps the cadence alive even while idle: the
     // coordinator publishes the pending overlay from continue_operation
     // (#1513), and its own pending flag makes the steady-state call O(1).
+    const auto ingress = impl_->transport->controller->inspect_ingress();
     if (status.phase == facade::PatternTransportPhase::idle &&
-        !impl_->transport->publish_pending && !status.recording) {
+        !impl_->transport->publish_pending && !status.recording &&
+        !impl_->transport->legacy_candidate && !impl_->transport->shutdown_requested &&
+        ingress.ordinary_pending == 0 && ingress.retained_tickets == 0) {
       return;
     }
     // A continuation failure is retained on the coordinator and surfaced
@@ -6452,12 +7471,47 @@ void ControlRuntime::service_pattern_transport() noexcept {
 }
 
 bool ControlRuntime::pattern_transport_pending() const noexcept {
+  if (impl_->terminal_native_stop_pending ||
+      impl_->terminal_pattern_clear_pending) return true;
+  if (!impl_->legacy_inputs.empty()) return true;
+  if (impl_->has_pattern_input_owners()) return true;
   if (impl_->transport == nullptr) {
     return false;
   }
-  return impl_->transport->publish_pending ||
+  return !impl_->transport->count_in_ticket_consumed ||
+         impl_->transport->publish_pending ||
+         impl_->transport->legacy_candidate.has_value() ||
+         (impl_->transport->shutdown_requested && !impl_->transport->controller->shutdown_complete()) ||
+         impl_->transport->controller->inspect_ingress().retained_tickets != 0 ||
          impl_->transport->controller->inspect().phase !=
              facade::PatternTransportPhase::idle;
+}
+
+bool ControlRuntime::pattern_transport_shutdown_complete() const noexcept {
+  if (impl_->terminal_native_stop_pending || impl_->terminal_pattern_clear_pending ||
+      (impl_->terminal_audio_retirement_requested &&
+       (impl_->physical_audio ? !impl_->physical_audio->physically_quiescent(
+           impl_->physical_audio->context) : !impl_->terminal_legacy_quiescent))) return false;
+  if (impl_->engine.telemetry().state != audio::RealtimeState::stopped ||
+      impl_->has_pattern_input_owners() || !impl_->legacy_inputs.empty()) return false;
+  const auto input = impl_->engine.pattern_input_profile_status();
+  if (input.ordinary_pending || input.held_release_reservations || input.retained_completions ||
+      !impl_->engine.scheduled_pattern_record_quiescent()) return false;
+  if (!impl_->transport) return true;
+  const auto& engagement = *impl_->transport;
+  const auto ingress = engagement.controller->inspect_ingress();
+  const auto owner = engagement.controller->inspect_input_owner();
+  return engagement.controller->shutdown_complete() && engagement.count_in_ticket_consumed &&
+      !engagement.legacy_candidate &&
+      !engagement.publish_pending && !ingress.ordinary_pending &&
+      !ingress.held_release_metadata && !ingress.retained_tickets && !owner.held_correlations &&
+      (!owner.invalidated || (owner.disposed && !owner.pending &&
+          (!input.enabled || owner.acknowledged)));
+}
+
+bool ControlRuntime::acknowledge_pattern_input_owner_quiescent(std::uint64_t generation) noexcept {
+  try { return impl_->acknowledge_pattern_input_owner_quiescent(generation); }
+  catch (...) { return false; }
 }
 
 std::vector<audio::RuntimeVoiceStateEvent>
@@ -6530,9 +7584,18 @@ bool ControlRuntime::validate_realtime_health() noexcept {
 }
 
 void ControlRuntime::fail_and_seal(std::string_view) noexcept {
+  if (impl_->state == Impl::State::closed) return;
   impl_->trigger_admission = false;
   impl_->seal_all_noexcept();
   impl_->state = Impl::State::failed;
+}
+
+void ControlRuntime::fail_and_seal(
+    std::string_view cause, AbsoluteRequestDeadline original_deadline) noexcept {
+  const auto ambient_deadline = impl_->request_deadline;
+  impl_->request_deadline = original_deadline.value;
+  fail_and_seal(cause);
+  impl_->request_deadline = ambient_deadline;
 }
 
 bool ControlRuntime::failed() const noexcept {
@@ -6571,6 +7634,45 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
     });
   }
   runtime.impl_->coordinator = coordinator;
+  if (runtime.impl_->physical_audio &&
+      runtime.impl_->physical_audio->context != coordinator.context) {
+    runtime.impl_->physical_audio.reset();
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> detail::ControlRuntimeCountInOutputAccess::install(
+    ControlRuntime& runtime, CountInOutputCapability capability) noexcept {
+  if (capability.context == nullptr || capability.available == nullptr ||
+      runtime.impl_->state == ControlRuntime::Impl::State::closed ||
+      runtime.impl_->state == ControlRuntime::Impl::State::failed) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument, "native count-in output capability is invalid"});
+  }
+  runtime.impl_->count_in_output = capability;
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> detail::ControlRuntimePhysicalAudioAccess::install(
+    ControlRuntime& runtime,
+    AudioPhysicalQuiescenceCapability capability) noexcept {
+  if (capability.context == nullptr ||
+      capability.request_terminal_drain == nullptr ||
+      capability.physically_quiescent == nullptr ||
+      runtime.impl_->terminal_audio_retirement_requested ||
+      runtime.impl_->state == ControlRuntime::Impl::State::running ||
+      runtime.impl_->state == ControlRuntime::Impl::State::closed ||
+      runtime.impl_->state == ControlRuntime::Impl::State::failed ||
+      (runtime.impl_->coordinator &&
+       runtime.impl_->coordinator->context != capability.context) ||
+      (runtime.impl_->physical_audio &&
+       runtime.impl_->physical_audio->context != capability.context)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "physical audio capability is invalid or belongs to another adapter",
+    });
+  }
+  runtime.impl_->physical_audio = capability;
   return foundation::Result<void>::success();
 }
 
@@ -6592,6 +7694,30 @@ foundation::Result<void> detail::ControlRuntimeClockAccess::install(
   }
   runtime.impl_->clock = clock;
   return foundation::Result<void>::success();
+}
+
+bool detail::ControlRuntimePatternIoAccess::idle(
+    const ControlRuntime& runtime) noexcept {
+  try {
+    if (!runtime.impl_->transport || !runtime.impl_->transport->controller)
+      return true;
+    const auto status = runtime.impl_->transport->controller->inspect_io();
+    return !status.ticket &&
+           (status.ready || status.stopped || status.startup_error.has_value());
+  } catch (...) {
+    return false;
+  }
+}
+
+bool detail::ControlRuntimePatternIoAccess::stopped(
+    const ControlRuntime& runtime) noexcept {
+  try {
+    // No engagement is not evidence that an admitted worker has stopped.
+    return runtime.impl_->transport && runtime.impl_->transport->controller &&
+        runtime.impl_->transport->controller->inspect_io().stopped;
+  } catch (...) {
+    return false;
+  }
 }
 
 detail::ControlRuntimeSnapshotTruth

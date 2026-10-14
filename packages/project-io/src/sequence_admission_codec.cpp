@@ -813,18 +813,22 @@ bool apply(ActiveSequenceJournal& journal, const Json& record,
       require(*existing == c, "candidate watermark payload collision");
       return false;
     }
-    for (const auto& transfer : s.transfers) {
-      for (const auto& receipt : transfer.candidate_receipts) {
-        if (receipt.watermark == c.watermark) {
-          require(receipt.payload_sha256 == digest(encode(c)), "consumed candidate collision");
-          return false;
+    const auto previous = last_watermark(s);
+    // New candidates advance beyond every transferred prefix. Only a retry
+    // at or below that frontier can name a historical candidate receipt.
+    if (previous && c.watermark <= *previous) {
+      for (const auto& transfer : s.transfers) {
+        for (const auto& receipt : transfer.candidate_receipts) {
+          if (receipt.watermark == c.watermark) {
+            require(receipt.payload_sha256 == digest(encode(c)), "consumed candidate collision");
+            return false;
+          }
         }
       }
     }
     require(!s.completed && !s.closure && !terminal_retained(s) &&
                 (journal.state == SequenceSessionState::active ||
                  journal.state == SequenceSessionState::switching), "admission is closed");
-    const auto previous = last_watermark(s);
     require(c.watermark >= s.preparation.first_watermark &&
                 (!previous || c.watermark > *previous), "candidate watermark is not increasing");
     const auto size = (replay_candidate_bytes ? *replay_candidate_bytes : candidate_bytes(s)) +

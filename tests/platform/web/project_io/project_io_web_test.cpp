@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +15,8 @@
 #include <vector>
 
 #include <cstring>
+#include <exception>
+#include <thread>
 
 #include <emscripten.h>
 #include <emscripten/stack.h>
@@ -1430,6 +1433,154 @@ nlohmann::json project_bundle_import(
 
 }
 
+// The proxied Control main and its one child use the existing two-worker pool.
+// Only the owner publishes fixture stages; the child uses the real platform.
+[[gnu::noinline]] nlohmann::json cross_realm_writer_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  const auto path = bundle / "cross-realm.bin";
+  const std::string seed{"root\0worker", 11};
+  const std::string first_tail{"\0append\n", 8};
+  const std::string second_tail{"-parent-gone"};
+  const auto expected = seed + first_tail + second_tail;
+  success(platform->ensure_directory(bundle), "shared writer directory");
+  auto root = value(platform->acquire_writer(bundle), "Control root writer");
+  require(root != nullptr, "Control returned an empty writer lease");
+  const auto control_thread = std::this_thread::get_id();
+  struct State {
+    std::atomic<unsigned> phase{0};
+    std::atomic<bool> parent_gone{false}, release_child{false}, exit_ready{false};
+    std::string child_error, child_content;
+    bool distinct_thread = false, exact_platform = false, local_release = false;
+  };
+  // A failed, unfinished child retains its own immutable inputs and state;
+  // bounded failure cleanup cannot leave stack references dangling.
+  const auto state = std::make_shared<State>();
+  const auto wait_owner = [&](auto predicate, const char* message) {
+    // Same bound as the browser's existing terminal-report observation.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+    while (!predicate()) {
+      require(std::chrono::steady_clock::now() < deadline, message);
+      emscripten_sleep(1);
+    }
+  };
+  std::thread child([state, shared = platform, bundle, path, seed, first_tail, second_tail, expected,
+      control_thread, expected_platform = platform.get()] {
+    try {
+      state->distinct_thread = std::this_thread::get_id() != control_thread;
+      state->exact_platform = shared.get() == expected_platform;
+      require(state->distinct_thread && state->exact_platform, "worker did not share the exact platform");
+      auto acquired = shared->acquire_writer(bundle);
+      require(acquired.has_value(), "shared worker writer acquisition: " +
+          mutation_result(acquired).dump());
+      auto local = std::move(acquired.value());
+      require(local != nullptr, "worker returned an empty writer lease");
+      success(shared->create_immutable(path, bytes(seed)), "shared worker immutable write");
+      success(shared->append_durable(path, seed.size(), bytes(first_tail)), "shared worker first append");
+      require(text(value(shared->read_complete(path), "worker initial read")) == seed + first_tail,
+          "worker initial bytes changed");
+      state->phase.store(1, std::memory_order_release);
+      const auto parent_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+      while (!state->parent_gone.load(std::memory_order_acquire)) {
+        require(std::chrono::steady_clock::now() < parent_deadline, "Control root was not released");
+        emscripten_sleep(1);
+      }
+      success(shared->append_durable(path, seed.size() + first_tail.size(), bytes(second_tail)),
+          "shared worker append after parent root release");
+      state->child_content = text(value(shared->read_complete(path), "worker parent-free read"));
+      require(state->child_content == expected, "worker parent-free bytes changed");
+      state->phase.store(2, std::memory_order_release);
+      const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+      while (!state->release_child.load(std::memory_order_acquire)) {
+        require(std::chrono::steady_clock::now() < release_deadline, "worker release was not requested");
+        emscripten_sleep(1);
+      }
+      // No Control proxy, OPFS call, or owner callback may be needed here.
+      local.reset();
+      state->local_release = true;
+    } catch (const std::exception& error) {
+      state->child_error = error.what();
+    } catch (...) {
+      state->child_error = "unknown shared writer child failure";
+    }
+    state->exit_ready.store(true, std::memory_order_release);
+  });
+  bool released_without_control_service = false;
+  try {
+    wait_owner([&] { return state->phase.load(std::memory_order_acquire) >= 1 || state->exit_ready.load(std::memory_order_acquire); },
+        "worker initial writer phase did not finish");
+    if (state->exit_ready.load(std::memory_order_acquire))
+      throw std::runtime_error(state->child_error.empty() ? "worker exited before holding its lease" : state->child_error);
+    root.reset();
+    auto reentered = value(platform->acquire_writer(bundle), "same platform reacquire while child held");
+    require(reentered != nullptr, "same platform returned an empty writer lease");
+    reentered.reset();
+    const auto foreign = project_io::make_web_project_storage_platform();
+    const auto same_realm_foreign = foreign->acquire_writer(bundle);
+    require(!same_realm_foreign.has_value() &&
+        same_realm_foreign.error().code == foundation::ErrorCode::io_error &&
+        same_realm_foreign.error().details.value("storage_condition", "") == project_io::kStorageConditionProjectBusy,
+        "foreign platform acquired the child-held writer");
+    state->parent_gone.store(true, std::memory_order_release);
+    wait_owner([&] { return state->phase.load(std::memory_order_acquire) == 2 || state->exit_ready.load(std::memory_order_acquire); },
+        "worker parent-free write did not finish");
+    if (state->exit_ready.load(std::memory_order_acquire))
+      throw std::runtime_error(state->child_error.empty() ? "worker exited before parent-free holding" : state->child_error);
+    report_progress("cross-realm-child-held-parent-free");
+    // The independent browser page must prove physical exclusion before it
+    // sends this fixture-only command. It never edits storage or lease state.
+    wait_owner([] { return MAIN_THREAD_EM_ASM_INT({
+      return window.lmdjProjectIoWriterWitnessRelease === true ? 1 : 0;
+    }) != 0; }, "browser did not finish the physical exclusion leg");
+    state->release_child.store(true, std::memory_order_release);
+    const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    // Deliberately do not yield, proxy, sleep or call OPFS while the child
+    // destroys its lease. An owner-pumped release must fail this witness.
+    while (!state->exit_ready.load(std::memory_order_acquire) &&
+        std::chrono::steady_clock::now() < release_deadline) {}
+    released_without_control_service = state->exit_ready.load(std::memory_order_acquire);
+    if (!released_without_control_service) {
+      // Failure cleanup may service the owner, but cannot turn the failure
+      // above into a successful release witness or join an unfinished child.
+      wait_owner([&] { return state->exit_ready.load(std::memory_order_acquire); }, "worker cleanup did not finish");
+    }
+    const bool child_exit_ready_before_join = state->exit_ready.load(std::memory_order_acquire);
+    require(child_exit_ready_before_join, "join attempted before child exit readiness");
+    child.join(); // Only after actual local destruction; root is already gone.
+    require(state->child_error.empty(), state->child_error);
+    require(state->local_release && released_without_control_service,
+        "worker lease release required Control service");
+    auto drained = value(platform->acquire_writer(bundle), "owner fresh acquire after child release");
+    const auto content = text(value(platform->read_complete(path), "owner drained full-byte read"));
+    require(content == expected, "owner drained bytes changed");
+    drained.reset();
+    return {{"childThreadDistinct", state->distinct_thread}, {"childPlatformExact", state->exact_platform},
+        {"parentRootReset", true}, {"samePlatformReacquire", "pass"},
+        {"sameRealmForeign", mutation_result(same_realm_foreign)},
+        {"childReleaseWithoutControlService", released_without_control_service},
+        {"childExitReadyBeforeJoin", child_exit_ready_before_join}, {"joined", true}, {"ownerFreshAcquire", "pass"},
+        {"childContent", state->child_content}, {"content", content},
+        {"length", content.size()}, {"sha256", sha256_hex(content)}};
+  } catch (...) {
+    const auto failure = std::current_exception();
+    root.reset();
+    state->parent_gone.store(true, std::memory_order_release);
+    state->release_child.store(true, std::memory_order_release);
+    if (child.joinable()) {
+      const auto cleanup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+      while (!state->exit_ready.load(std::memory_order_acquire) &&
+          std::chrono::steady_clock::now() < cleanup_deadline) emscripten_sleep(1);
+      if (!state->exit_ready.load(std::memory_order_acquire)) {
+        child.detach(); // Retain heap-owned debt; no claimed release/join.
+        throw std::runtime_error("unfinished writer child; no release or join witness");
+      }
+      child.join();
+    }
+    std::rethrow_exception(failure);
+  }
+}
+
 [[gnu::noinline]] nlohmann::json run_storage_fault_action() {
   using namespace lmdj;
   auto platform = project_io::make_web_project_storage_platform();
@@ -1440,6 +1591,21 @@ nlohmann::json project_bundle_import(
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "cross_realm_writer") {
+      return {{"complete", true}, {"result", cross_realm_writer_witness(platform, fault_bundle)}};
+    }
+    if (action == "cross_realm_writer_probe") {
+      auto acquired = platform->acquire_writer(fault_bundle);
+      if (!acquired.has_value()) {
+        return {{"complete", true}, {"result", {{"acquisition", mutation_result(acquired)}}}};
+      }
+      held_lease = std::move(acquired.value());
+      const auto content = text(value(platform->read_complete(fault_bundle / "cross-realm.bin"),
+          "independent realm writer full-byte read"));
+      return {{"complete", true}, {"result", {{"acquisition", mutation_result(acquired)},
+          {"lease", "held"}, {"content", content}, {"length", content.size()},
+          {"sha256", sha256_hex(content)}}}};
+    }
     if (action == "hold_lease") {
       auto acquired = platform->acquire_writer(fault_bundle);
       if (!acquired.has_value()) {

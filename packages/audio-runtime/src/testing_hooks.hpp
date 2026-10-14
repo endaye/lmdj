@@ -35,6 +35,16 @@ enum class RealtimeHookPoint : std::size_t {
   capture_event_published,
   capture_idle_published,
   capture_observe_state,
+  scheduled_preparing,
+  scheduled_before_arm,
+  scheduled_before_start,
+  scheduled_start_committed,
+  scheduled_cue_committed,
+  scheduled_before_last_use,
+  scheduled_before_settled_publish,
+  scheduled_cue_consumption,
+  pattern_input_authority_acquired,
+  pattern_input_consumed,
   count,
 };
 void set_realtime_hook(RealtimeHookPoint point, PatternClaimHook* hook) noexcept;

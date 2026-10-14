@@ -4,12 +4,25 @@ area: hosts
 status: implemented
 owners: [product, native-host]
 host: cardputer-host
-source_paths: [apps/cardputer-host, apps/cardputer-host/module.json]
+source_paths: [apps/cardputer-host, apps/cardputer-host/module.json, products/lmdj/src/cardputer_assembly.cpp]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
+
+## Source identity binding
+
+Product Assembly owns the Cardputer profile's Product Build, Host version and
+Assembly identity. These copied fields must agree with
+`products/lmdj/version.json`, `apps/cardputer-host/module.json` and the SHA256
+of the raw `products/lmdj/assembly.json` bytes. The firmware's `PROJECT_VER`
+must agree with the same Product Build before ESP-IDF configures the project.
+
+`tests/build/version_test.py` checks both consumers against those active inputs.
+Reconciling a stale copy preserves the physical pin and resource profile; it
+does not allocate a Build, amend an immutable snapshot or establish device
+acceptance.
 
 ## B1 测试候选
 

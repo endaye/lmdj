@@ -28,9 +28,7 @@ target_link_libraries(
 lmdj_target_warnings(lmdj_performance_runtime)
 lmdj_target_sanitizers(lmdj_performance_runtime)
 
-add_library(
-  lmdj_application
-  STATIC
+set(lmdj_application_sources
     src/application.cpp
     src/candidate_store.cpp
     src/assembly_loader.cpp
@@ -39,32 +37,43 @@ add_library(
     src/pattern_transport_controller.cpp
     src/pattern_transport_controller_factory.cpp
     src/pattern_transport_executor.cpp
+    src/pattern_transport_io_owner.cpp
     src/soundset_catalog.cpp
 )
+add_library(lmdj_application STATIC ${lmdj_application_sources})
 add_library(lmdj::application ALIAS lmdj_application)
 
+# Instrument the actual I/O owner only in the explicit Web conformance link.
+# Ordinary Core/Creator/Host production targets contain no hook or test export.
+if(EMSCRIPTEN AND LMDJ_WEB_AUDIO_CONFORMANCE)
+  target_compile_definitions(lmdj_application PRIVATE LMDJ_PATTERN_TRANSPORT_TESTING=1)
+endif()
+
+function(lmdj_configure_application target project_io_target)
 target_include_directories(
-  lmdj_application
+  ${target}
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/internal"
 )
 target_link_libraries(
-  lmdj_application
+  ${target}
   PUBLIC
     lmdj::performance_runtime
     lmdj::runtime_facade
     lmdj::authoring_domain
-    lmdj::project_io
+    ${project_io_target}
     lmdj::project_cooker
     lmdj::audio_runtime
     lmdj::provider_sdk
   PRIVATE
     lmdj_picosha2
 )
-lmdj_target_warnings(lmdj_application)
-lmdj_target_sanitizers(lmdj_application)
+lmdj_target_warnings(${target})
+lmdj_target_sanitizers(${target})
+endfunction()
+lmdj_configure_application(lmdj_application lmdj::project_io)
 
 add_library(
   lmdj_core_c
@@ -141,6 +150,28 @@ if(BUILD_TESTING)
   lmdj_target_sanitizers(lmdj_pattern_transport_controller_tests)
   lmdj_add_test(NAME facade.pattern_transport_controller TIER component
     COMMAND lmdj_pattern_transport_controller_tests)
+  add_executable(lmdj_pattern_count_in_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_count_in_stress_test.cpp")
+  target_include_directories(lmdj_pattern_count_in_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  if(NOT EMSCRIPTEN)
+    # The typed opening pause exists only in this explicit native test variant.
+    # Ordinary product targets continue to link the uninstrumented library.
+    add_library(lmdj_application_opening_testable STATIC ${lmdj_application_sources})
+    lmdj_configure_application(lmdj_application_opening_testable lmdj_project_io_testable)
+    target_compile_definitions(lmdj_application_opening_testable PRIVATE LMDJ_PATTERN_OPENING_TESTING=1)
+    target_compile_definitions(lmdj_pattern_count_in_tests PRIVATE
+      LMDJ_PATTERN_OPENING_TESTING=1 LMDJ_PROJECT_IO_TESTING=1)
+    target_link_libraries(lmdj_pattern_count_in_tests PRIVATE lmdj_application_opening_testable Threads::Threads)
+  else()
+    target_link_libraries(lmdj_pattern_count_in_tests PRIVATE lmdj::application Threads::Threads)
+  endif()
+  lmdj_target_warnings(lmdj_pattern_count_in_tests)
+  lmdj_target_sanitizers(lmdj_pattern_count_in_tests)
+  lmdj_add_test(NAME facade.pattern_count_in TIER component
+    COMMAND lmdj_pattern_count_in_tests LABELS concurrency)
+  lmdj_add_test(NAME facade.pattern_count_in_stress TIER stress
+    COMMAND lmdj_pattern_count_in_tests --stress LABELS concurrency)
+
   add_executable(lmdj_pattern_transport_executor_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_executor_test.cpp")
   target_include_directories(lmdj_pattern_transport_executor_tests PRIVATE "${CMAKE_SOURCE_DIR}")

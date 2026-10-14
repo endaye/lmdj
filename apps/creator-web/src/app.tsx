@@ -880,6 +880,10 @@ function Workspace({
     if (!session || runtimePhase !== "ready") return;
     const common = {
       session,
+      onInputObservationError: (error: unknown) => {
+        const record = diagnosticRecord("Pad input", error);
+        setDiagnostics((records) => appendDiagnostic(records, record));
+      },
       getActiveBank: () => stateRef.current.activeBank,
       isAssigned: (slot: number) =>
         (stateRef.current.project.current?.pads[slot]?.assetId !== null &&
@@ -911,9 +915,10 @@ function Workspace({
       onEmptyPadCancel: (key?: object) => {void padCapture.current?.cancel(key);},
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
-      onPerformancePadEvent: (event: PerformancePadInputEvent) => {
+      onPerformancePadEvent: (event: PerformancePadInputEvent,
+        _source: import("./runtime/runtime_types").RuntimeTriggerSource, gestureKey: object) => {
         if (activeModeRef.current !== "perform") return;
-        void performControllerRef.current?.recordRawEvent(event).catch(() => {});
+        void performControllerRef.current?.recordRawEvent(event, gestureKey).catch(() => {});
       },
     };
     const controller = isSampleSession(session)

@@ -120,7 +120,7 @@ if(EMSCRIPTEN)
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     target_compile_definitions(
       lmdj_web_runtime_host
-      PRIVATE LMDJ_WEB_AUDIO_CONFORMANCE=1
+      PRIVATE LMDJ_WEB_AUDIO_CONFORMANCE=1 LMDJ_PATTERN_TRANSPORT_TESTING=1
     )
     set(
       LMDJ_WEB_CONFORMANCE_MANIFEST
@@ -154,6 +154,8 @@ if(EMSCRIPTEN)
     _lmdj_web_host_failed
     _lmdj_web_host_initialize_manifest
     _lmdj_web_audio_start
+    _lmdj_web_audio_start_with_count_in
+    _lmdj_web_audio_has_count_in_output
     _lmdj_web_audio_connect_direct
     _lmdj_web_audio_state
     _lmdj_web_audio_fatal
@@ -169,6 +171,15 @@ if(EMSCRIPTEN)
     list(
       APPEND lmdj_web_runtime_exports
       _lmdj_web_audio_test_poll
+      _lmdj_web_audio_test_physical_fence_arm
+      _lmdj_web_audio_test_physical_fence_release
+      _lmdj_web_audio_test_physical_fence_stage
+      _lmdj_web_audio_test_physical_fence_cue_batch
+      _lmdj_web_audio_test_physical_fence_pending_cue_batch
+      _lmdj_web_audio_test_physical_fence_borrows
+      _lmdj_web_audio_test_physically_quiescent
+      _lmdj_web_audio_test_request_physical_terminal_drain
+      _lmdj_web_audio_test_physical_quiescence_wait
       _lmdj_web_audio_test_transport_probe
       _lmdj_web_audio_test_render_calls
       _lmdj_web_audio_test_output_energy
@@ -196,6 +207,7 @@ if(EMSCRIPTEN)
       _lmdj_web_audio_test_outcome_code
       _lmdj_web_audio_test_outcome_frame
       _lmdj_web_audio_test_clear_outcomes
+      _lmdj_web_audio_test_pattern_controller_io_gate
     )
   endif()
   list(JOIN lmdj_web_runtime_exports "," lmdj_web_runtime_exports_csv)
@@ -211,7 +223,7 @@ if(EMSCRIPTEN)
     string(
       REPLACE
       "  /* LMDJ_WEB_AUDIO_CONFORMANCE_MANIFEST */"
-      "  Module[\"lmdjHostManifestBytes\"] = new TextEncoder().encode('${LMDJ_WEB_CONFORMANCE_MANIFEST}');\n  Module[\"lmdjHostManifestSha256\"] = \"${LMDJ_WEB_CONFORMANCE_MANIFEST_SHA256}\";"
+      "  if (!(Module[\"lmdjHostManifestBytes\"] instanceof Uint8Array)) {\n    Module[\"lmdjHostManifestBytes\"] = new TextEncoder().encode('${LMDJ_WEB_CONFORMANCE_MANIFEST}');\n    Module[\"lmdjHostManifestSha256\"] = \"${LMDJ_WEB_CONFORMANCE_MANIFEST_SHA256}\";\n  }"
       lmdj_web_runtime_pre_js
       "${lmdj_web_runtime_pre_js}"
     )

@@ -39,6 +39,16 @@
    - Koala 把它放在通用设置里，不在工程里。LMDJ 与节拍器开关、SEQ SNAP 一样存设备级设置，重开恢复。
    - 设置放在 Sequence 触摸区 SETUP 层，与节拍器开关相邻。
 
+## 2026-10-11 补充：5 秒只限制打开录音
+
+- 来源：owner 在 Pattern Switch Goal 中对「录音的 5 秒限制应如何定义？」明确选择「只限制打开录音（推荐）」。这是 LMDJ 的产品决定，Koala 手册没有保证这一时限语义。
+- 打开录音保留原来的 5 秒期限，重试不续期：4999 ms 时可以首次打开，到 5000 ms 时仍未打开就不能新开。
+- 这里的打开要求实际 owner 获得 admission fence 的耐久写入成功，且其成功完成时钟仍早于原期限；4999 ms 开始写、5000 ms 才首次成功也不能称已打开。可读 Journal、unknown 响应或仅提交写入不证明先前已耐久成功。
+- 录音的 admission fence 已真实激活并持久化后，这 5 秒不再封口；录音持续到用户 Record-off／Stop。持久化积压不会把期限后原始 frame／watermark／Pad correlation 对应的 Press 或真实 Release 降为只发声、不录入。
+- 已持久化 admission fence 的同一请求重试，仍按原 fence 身份验证；不会重新打开录音或重置时限。现有候选数量、字节边界、capacity／storage failure／owner loss 的处置，以及真实 cutoff／close、恢复和 Project Truth 规则不变。
+- 同一实际 owner 已保留原期限内的确切耐久成功，而结果交付延迟或丢失时，期限后的确切重试仍可协调原结果。首次成功跨期则保留真实 fence、Native receipt 和 deadline failure，关闭写入失败也不允许重试绕过原期限；新 operation identity 不继承旧 operation 的打开时钟。
+- 开录的逻辑判定点是实际 durable API 返回成功后，owner 在同一短临界区捕获的 steady clock：期限核查、本地确切成功与完整请求发布在该区内一起完成。这不声称记录 OS 的物理 fsync 瞬间。Control 只尝试取得该区；区忙时这一轮保留未决开录，不误发超时 Stop、不提前 ACK 或宣称开录，真实用户 Record-off／Stop 仍即时受理。任何已经真实 accepted 的第二意图都不能被后来交付的开录成功撤销。
+
 ## 原因
 
 - owner 要求按 Koala 来。Koala 用三个不同的入口完成三种录音，录音键只管 Sequence；LMDJ 现在的分工与之一致，不需要改。

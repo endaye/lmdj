@@ -1,9 +1,16 @@
 import {act, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test, vi} from "vitest";
+import {createRuntimeSession} from "@lmdj/web-runtime-platform/runtime_session.mjs";
+import {useEffect} from "react";
+import {RuntimeProvider, useRuntime} from "../src/runtime/runtime_context";
+import type {RuntimeDiagnostics, RuntimeHostState} from "../src/runtime/runtime_types";
+import {PerformanceRecordingStore} from "../src/record/performance_recording_store";
+import {openWavStreamWriter} from "../src/record/wav_stream_writer";
 
 import type {ContextualEncoders} from "../src/components/physical_controls";
-import type {PatternTransportStatus} from "@lmdj/web-runtime-platform/runtime_types";
+import type {PatternTransportStatus, PerformanceMasterCapture, PerformanceEventResult} from
+  "@lmdj/web-runtime-platform/runtime_types";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
@@ -137,10 +144,16 @@ function sessionFixture(initialStatus = status("ready")) {
   let liveCommandIndex = 0;
   const listeners = new Set<(value: typeof initialStatus) => void>();
   const calls = {
-    // The raw/begin doubles keep loose promise shapes so a test can stage the
-    // headered profile's receipts; the session cast pins the real contract.
+    // Flexible doubles retain headered receipts; prepare forwards the same physical key.
+    prepare: vi.fn((request: {eventId: string; event: Record<string, unknown>;
+      sessionId: string}, physicalKey?: object): {
+        submit(): Promise<PerformanceEventResult>; cancelBeforeSubmit(): boolean;
+      } => ({
+      submit: () => (physicalKey === undefined ? calls.raw(request) : calls.raw(request, physicalKey)) as Promise<PerformanceEventResult>,
+      cancelBeforeSubmit: () => true,
+    })),
     raw: vi.fn(async ({eventId}: {eventId: string; event: Record<string, unknown>;
-      sessionId: string}): Promise<unknown> => ({eventId,
+      sessionId: string}, _physicalKey?: object): Promise<unknown> => ({eventId,
       acceptedTick: 1, inputSequence: 1, coalesced: false,
       replayed: false, projectRevision: null})),
     fx: vi.fn(async (_event: Record<string, unknown>) => ({applied: true as const})),
@@ -152,7 +165,7 @@ function sessionFixture(initialStatus = status("ready")) {
         committedRevision: 8, replayed: false, projectRevision: 8})),
     flush: vi.fn(async () => ({performanceId: ids.performance,
       committedRevision: 9, replayed: false, projectRevision: 9})),
-    stop: vi.fn(async () => ({requestId: "stop", sessionId: ids.session,
+    stop: vi.fn(async (_request: {sessionId: string; requestId: string}) => ({requestId: "stop", sessionId: ids.session,
       performanceId: ids.performance, state: "stopped" as const,
       pendingEventCount: 0, replayed: false, projectRevision: null})),
     capture: vi.fn(async (sink: {onStopped(): void}) => ({
@@ -190,6 +203,7 @@ function sessionFixture(initialStatus = status("ready")) {
     startPerformanceMasterCapture: calls.capture,
     beginPerformanceRecording: calls.begin,
     recordPerformanceEvent: calls.raw,
+    preparePerformancePadEvent: calls.prepare,
     applyFxGesture: calls.fx,
     applyPerformanceLiveControl: calls.liveControl,
     queryPerformanceLiveStatus: calls.liveStatus,
@@ -293,6 +307,7 @@ test("the replay poll default stays neutral and never settles", async () => {
 });
 
 function controllerFixture(options: {
+  createId?: () => string;
   captureState?: "unconfigured" | "configured" | "ready" | "unavailable";
   state?: CreatorState;
   opfsAvailable?: boolean;
@@ -323,7 +338,7 @@ function controllerFixture(options: {
     order.push("capture-stop");
   });
   const dependencies: PerformControllerDependencies = {
-    createId: (() => {
+    createId: options.createId ?? (() => {
       let index = 0;
       return () => [ids.session, ids.performance, `event-${index - 1}`][index++] ?? `id-${index}`;
     })(),
@@ -677,17 +692,22 @@ test("installs writer and queue sink, starts capture, then begins the Core draft
     .toBe(fixture.controller.recordingSink());
 });
 
-test("capture start failure cleans the temporary WAV without beginning Core", async () => {
+test("unknown capture start failure retains the temporary WAV without beginning Core", async () => {
   const fixture = controllerFixture();
+  const original = new Error("tap unavailable");
   fixture.runtime.calls.capture.mockImplementationOnce(async () => {
     fixture.order.push("capture");
-    throw new Error("tap unavailable");
+    throw original;
   });
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
-  await waitFor(() => expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
   expect(fixture.runtime.calls.begin).not.toHaveBeenCalled();
-  expect(fixture.order).toEqual(["writer", "queue", "capture", "temporary-cleanup"]);
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.order).toEqual(["writer", "queue", "capture"]);
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  await expect(fixture.controller.close()).rejects.toBe(original);
 });
 
 test("capture readiness loss stops the matching Core recording and WAV", async () => {
@@ -718,20 +738,26 @@ test("capture-stop rejection converges through the controller stop path", async 
     expect.objectContaining({message: "tap stop failed"}));
 });
 
-test("begin failure stops capture, drains its tail, and removes the temporary WAV", async () => {
+test("unknown begin failure stops capture, drains its tail, and retains the temporary WAV", async () => {
   const fixture = controllerFixture();
+  const original = new Error("begin rejected");
   fixture.runtime.calls.begin.mockImplementationOnce(async () => {
     fixture.order.push("begin");
-    throw new Error("begin rejected");
+    throw original;
   });
   renderSurface(fixture);
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
-  await waitFor(() => expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(fixture.controller.getState().recording.phase).toBe("stopped"));
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
   expect(fixture.order).toEqual([
     "writer", "queue", "capture", "begin", "capture-stop", "tail-drained",
-    "temporary-cleanup",
   ]);
   expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  expect(fixture.controller.getState().recording.expectedRevision).toBeNull();
+  expect(fixture.controller.getState().wavStatus).toContain("temporary retained");
+  await expect(fixture.controller.close()).rejects.toBe(original);
 });
 
 test("projection failure after begin discards the stopped Core draft and temporary WAV", async () => {
@@ -1017,10 +1043,18 @@ test("closes raw admission before Stop drains its synthetic releases", async () 
   expect(fixture.controller.getState().recording.phase).toBe("stopping");
   await fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "too-late",
     slot: 1, velocity: 100});
-  expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(1);
+  // Both original Press and its synthetic matching Release reserve SDK
+  // ownership now; the Host submits Release after the held receipt. The
+  // later external Press remains refused by the Host stopping phase.
+  expect(fixture.runtime.calls.prepare.mock.calls.map(([request]) => request.event))
+    .toEqual([{kind: "pad_press", gestureId: "open", slot: 0, velocity: 100},
+      {kind: "pad_release", gestureId: "open", slot: 0}]);
   firstEvent.resolve({eventId: "event", acceptedTick: 1, inputSequence: 1,
     coalesced: false, replayed: false, projectRevision: null});
   await Promise.all([first, stopping]);
+  expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event))
+    .toEqual([{kind: "pad_press", gestureId: "open", slot: 0, velocity: 100},
+      {kind: "pad_release", gestureId: "open", slot: 0}]);
   expect(fixture.runtime.calls.raw.mock.calls.map(([request]) => request.event.gestureId))
     .toEqual(["open", "open"]);
 });
@@ -1906,6 +1940,892 @@ test("touch continues a rotary FX gesture until page exit journals its matching 
   expect(fixture.controller.getState().recording.phase).toBe("stopped");
 });
 
+
+// This is a component storage/capture model with real Controller, WAV writer
+// and recording Store. Its receipts are not production OPFS/Native/physical proof.
+async function shutdownRecordingFixture() {
+  const runtime = sessionFixture();
+  let temporaryPresent = true;
+  let bytes = new Uint8Array(0);
+  let writerOwned = false;
+  let captureOwned = false;
+  let coreOwned = false;
+  let coreRecordState: "idle" | "active" | "stopped" = "idle";
+  let nextCheckpoint: Promise<void> | null = null;
+  let abortFailure: {error: unknown} | null = null;
+  let checkpointEntered = false;
+  const abort = vi.fn(async () => {
+    if (abortFailure !== null) throw abortFailure.error;
+    writerOwned = false;
+  });
+  let sink: Parameters<CreatorPerformanceRuntimeSession["startPerformanceMasterCapture"]>[0] | null = null;
+  const truth = {revision: 7, name: null as string | null, artifact: null as unknown};
+  const file = {
+    name: `${ids.performance}.wav`,
+    async createWritable({keepExistingData = false} = {}) {
+      if (writerOwned) throw new Error("The original modeled writer still owns its transaction");
+      writerOwned = true;
+      let pending = keepExistingData ? bytes.slice() : new Uint8Array(0);
+      let cursor = 0;
+      return {
+        async seek(position: number) { cursor = position; },
+        async write(data: Uint8Array) {
+          const next = new Uint8Array(Math.max(pending.length, cursor + data.length));
+          next.set(pending); next.set(data, cursor); pending = next; cursor += data.length;
+        },
+        async truncate(length: number) {
+          const next = new Uint8Array(length);
+          next.set(pending.subarray(0, length)); pending = next;
+        },
+        async close() {
+          if (nextCheckpoint !== null) {
+            const original = nextCheckpoint; nextCheckpoint = null;
+            checkpointEntered = true;
+            await original;
+          }
+          bytes = pending; writerOwned = false;
+        },
+        abort,
+      };
+    },
+    async getFile() {
+      if (!temporaryPresent) throw new Error("The original temporary has been deleted");
+      const snapshot = bytes.slice();
+      return {size: snapshot.length, type: "audio/wav",
+        slice(start = 0, end = snapshot.length) {
+          return {arrayBuffer: async () => snapshot.slice(start, end).buffer};
+        }};
+    },
+  };
+  const cleanupTemporary = vi.fn(async () => {
+    if (writerOwned || captureOwned) throw new Error("Cannot delete live original capture/writer bytes");
+    temporaryPresent = false;
+  });
+  const installed = new Map<string, Uint8Array>();
+  const storage = {
+    installManaged: vi.fn(async (artifact: {sha256: string}) => {
+      installed.set(artifact.sha256, bytes.slice());
+      return {name: `${artifact.sha256}.wav`};
+    }),
+    deleteTemporary: cleanupTemporary,
+  };
+  const writer = await openWavStreamWriter(file, {
+    perform_recording_frames: 86_400_000, perform_recording_queue_batches: 32,
+  });
+  const bind = vi.fn<CreatorPerformanceRuntimeSession["bindPerformanceRecording"]>(async (request) => {
+    truth.artifact = request.recordingArtifact; truth.revision = 11;
+    return {performanceId: ids.performance, committedRevision: 11,
+      replayed: false, projectRevision: 11};
+  });
+  runtime.session.bindPerformanceRecording = bind;
+  const discard = runtime.session.discardPerformance as ReturnType<typeof vi.fn>;
+  discard.mockImplementation(async () => {
+    truth.name = null; truth.artifact = null; truth.revision = 11;
+    return {committedRevision: 11};
+  });
+  const save = runtime.session.savePerformance as ReturnType<typeof vi.fn>;
+  save.mockImplementation(async (request) => {
+    truth.name = request.name; truth.revision = 10;
+    return {performanceId: ids.performance, committedRevision: 10, replayed: false, projectRevision: 10};
+  });
+  const inspect = runtime.session.inspectPerformance as ReturnType<typeof vi.fn>;
+  inspect.mockImplementation(async () => ({id: ids.performance, name: truth.name,
+    projectRevision: truth.revision, recordingArtifact: truth.artifact, events: []}));
+  runtime.calls.begin.mockImplementation(async () => {
+    coreOwned = true; coreRecordState = "active"; truth.revision = 8;
+    return {performanceId: ids.performance, committedRevision: 8, replayed: false, projectRevision: 8};
+  });
+  runtime.calls.stop.mockImplementation(async () => {
+    coreOwned = false; coreRecordState = "stopped";
+    return {requestId: "stop", sessionId: ids.session, performanceId: ids.performance,
+      state: "stopped" as const, pendingEventCount: 0, replayed: false, projectRevision: null};
+  });
+  // Successful raw events refresh this authoring status. This complete reply
+  // models the original begin/Stop operations, not an owner retirement receipt.
+  (runtime.session.queryPerformanceRecordingStatus as ReturnType<typeof vi.fn>)
+    .mockImplementation(async () => authority({state: coreRecordState,
+      sessionId: coreRecordState === "idle" ? null : ids.session,
+      performanceId: coreRecordState === "idle" ? null : ids.performance}));
+  const captureStop = vi.fn(async () => { captureOwned = false; sink?.onStopped(); });
+  const startCapture = vi.fn<CreatorPerformanceRuntimeSession["startPerformanceMasterCapture"]>(
+    async (capturing): Promise<PerformanceMasterCapture> => {
+      sink = capturing; captureOwned = true;
+      return {stop: captureStop};
+    });
+  runtime.session.startPerformanceMasterCapture = startCapture;
+  const store = new PerformanceRecordingStore(file, storage, runtime.session);
+  const refresh = vi.fn(async () => ({revision: truth.revision}));
+  const reports = vi.fn();
+  let sequence = 0;
+  const controller = createPerformController({session: runtime.session,
+    getCreatorState: () => creatorState(), refreshProject: refresh,
+    reportFailure: reports, opfsAvailable: () => true,
+    dependencies: {
+      createId: () => [ids.session, ids.performance][sequence++] ?? `shutdown-${sequence}`,
+      prepareRecording: async () => ({writer, store, cleanupTemporary}),
+    }});
+  await controller.refreshRecovery();
+  return {runtime: {...runtime, calls: {...runtime.calls, capture: startCapture}},
+    controller, file, writer, store, storage, captureStop,
+    cleanupTemporary, bind, discard, save, inspect, refresh, reports, truth, installed,
+    temporaryPresent: () => temporaryPresent,
+    bytes: () => bytes.slice(), writerOwned: () => writerOwned,
+    captureOwned: () => captureOwned, coreOwned: () => coreOwned,
+    getSink: () => sink, abort,
+    holdNextCheckpoint: (original: Promise<void>) => { nextCheckpoint = original; },
+    rejectAbort: (error: unknown) => { abortFailure = {error}; },
+    checkpointEntered: () => checkpointEntered,
+  };
+}
+
+function modeledCleanupSession(session: CreatorPerformanceRuntimeSession) {
+  const listeners = new Set<(value: RuntimeHostState) => void>();
+  let diagnostics = {state: "audio-suspended", error_code: null, error_details: {},
+    capabilities: {opfs: true, opfsWritableReplace: true}} as unknown as RuntimeDiagnostics;
+  const independentCleanup = deferred<boolean>();
+  const wait = vi.fn(() => independentCleanup.promise);
+  const close = vi.fn(async () => false);
+  const modeled = Object.assign(session, {
+    start: vi.fn(async () => true), close, waitForTerminalCleanup: wait,
+    diagnostics: () => diagnostics,
+    subscribeHostState(listener: (value: RuntimeHostState) => void) {
+      listeners.add(listener); return () => listeners.delete(listener);
+    },
+    subscribeDiagnostics: () => () => {},
+  });
+  return {session: modeled, independentCleanup, wait, close,
+    emit(state: string) {
+      diagnostics = {...diagnostics, state, error_code: "HOST_TIMEOUT"};
+      for (const listener of [...listeners]) listener({state, errorCode: "HOST_TIMEOUT",
+        errorDetails: {reason: "independent modeled SDK fatal"}});
+    },
+  };
+}
+
+function PerformShutdownBoundary({barrier}: {barrier: () => Promise<void>}) {
+  const runtime = useRuntime();
+  useEffect(() => runtime.registerShutdownBarrier(barrier), [runtime.registerShutdownBarrier, barrier]);
+  return <>
+    <output aria-label="shutdown-provider-phase">{runtime.phase}</output>
+    <button type="button" onClick={runtime.retryRuntime}>Retry failed Perform Runtime</button>
+  </>;
+}
+
+function mountPerformShutdown(fixture: {controller: ReturnType<typeof createPerformController>;
+  runtime: {session: CreatorPerformanceRuntimeSession}}) {
+  const old = modeledCleanupSession(fixture.runtime.session);
+  const next = modeledCleanupSession(sessionFixture().session);
+  const sessions = [old.session, next.session];
+  let creations = 0;
+  const factory = vi.fn(() => sessions[creations++]!);
+  // Exact actual controller.close is the registered producer; no synthetic reject.
+  const barrier = vi.fn(() => fixture.controller.close());
+  const rendered = render(<RuntimeProvider factory={factory}>
+    <PerformShutdownBoundary barrier={barrier} />
+  </RuntimeProvider>);
+  return {old, next, factory, barrier, rendered};
+}
+
+function triggerPerformReplacement(harness: ReturnType<typeof mountPerformShutdown>, mode: "manual" | "automatic") {
+  act(() => harness.old.emit(mode === "automatic" ? "restart-required" : "failed"));
+  if (mode === "manual") fireEvent.click(screen.getByRole("button", {name: "Retry failed Perform Runtime"}));
+}
+
+for (const mode of ["manual", "automatic"] as const) {
+  for (const stage of ["core-stop", "capture-stop"] as const) {
+    test(`${mode} Provider blocks replacement after the original Perform ${stage} fails despite independent positive modeled SDK cleanup`, async () => {
+      const fixture = await shutdownRecordingFixture();
+      await fixture.controller.record();
+      const originalBytes = fixture.bytes();
+      const originalTruth = {...fixture.truth};
+      const original = new Error(`original ${stage} failure`);
+      const gate = deferred<void>();
+      if (stage === "core-stop") fixture.runtime.calls.stop.mockImplementationOnce(async () => {
+        await gate.promise;
+        throw original;
+      });
+      else fixture.captureStop.mockImplementationOnce(async () => {
+        await gate.promise;
+        throw original;
+      });
+      const harness = mountPerformShutdown(fixture);
+      await screen.findByText("ready");
+      harness.old.independentCleanup.resolve(true);
+      expect(await harness.old.independentCleanup.promise).toBe(true);
+      triggerPerformReplacement(harness, mode);
+      await waitFor(() => expect(stage === "core-stop" ? fixture.runtime.calls.stop : fixture.captureStop)
+        .toHaveBeenCalledTimes(1));
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(fixture.temporaryPresent()).toBe(true);
+      await act(async () => { gate.resolve(); await gate.promise; });
+      await expect(fixture.controller.close()).rejects.toBe(original);
+      await act(async () => {});
+      const originalClose = harness.barrier.mock.results[0]?.value;
+      expect(fixture.controller.close()).toBe(originalClose);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.old.wait).not.toHaveBeenCalled();
+      expect(harness.old.close).not.toHaveBeenCalled();
+      expect(fixture.controller.getState().recording.phase).toBe("stopped");
+      expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+      expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+      expect(fixture.bytes()).toEqual(originalBytes);
+      expect(fixture.truth).toEqual(originalTruth);
+      expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+      expect(fixture.reports).toHaveBeenCalledWith("Perform", original);
+      // Unrelated save/discard cannot delete the still-unsettled exact owner.
+      await fixture.controller.save("Unrelated retry");
+      await fixture.controller.discard();
+      expect(fixture.bind).not.toHaveBeenCalled();
+      expect(fixture.discard).not.toHaveBeenCalled();
+      expect(fixture.temporaryPresent()).toBe(true);
+      expect(fixture.coreOwned()).toBe(stage === "core-stop");
+      expect(fixture.captureOwned()).toBe(stage === "capture-stop");
+    });
+  }
+}
+
+for (const stage of ["bind", "discard", "save-unknown"] as const) {
+  test(`real Perform ${stage} retained failure reaches the registered barrier and prevents automatic replacement`, async () => {
+    const fixture = await shutdownRecordingFixture();
+    await fixture.controller.record();
+    await fixture.controller.stop();
+    const original = new Error(`original ${stage} storage failure`);
+    const gate = deferred<never>();
+    if (stage === "bind") fixture.bind.mockImplementationOnce(() => gate.promise);
+    else if (stage === "discard") fixture.discard.mockImplementationOnce(() => gate.promise);
+    else {
+      fixture.save.mockImplementationOnce(() => gate.promise);
+      fixture.inspect.mockRejectedValueOnce(new Error("later readback also unavailable"));
+    }
+    const originalBytes = fixture.bytes();
+    const operation = stage === "discard" ? fixture.controller.discard() : fixture.controller.save("Original Take");
+    await waitFor(() => expect(stage === "bind" ? fixture.bind : stage === "discard" ? fixture.discard : fixture.save)
+      .toHaveBeenCalledTimes(1));
+    const retainedTruth = {...fixture.truth};
+    const harness = mountPerformShutdown(fixture);
+    await screen.findByText("ready");
+    harness.old.independentCleanup.resolve(true);
+    expect(await harness.old.independentCleanup.promise).toBe(true);
+    triggerPerformReplacement(harness, "automatic");
+    await waitFor(() => expect(harness.barrier).toHaveBeenCalledTimes(1));
+    expect(harness.factory).toHaveBeenCalledTimes(1);
+    expect(fixture.temporaryPresent()).toBe(true);
+    await act(async () => { gate.reject(original); await operation; });
+    await expect(fixture.controller.close()).rejects.toBe(original);
+    await act(async () => {});
+    expect(harness.factory).toHaveBeenCalledTimes(1);
+    expect(fixture.controller.close()).toBe(harness.barrier.mock.results[0]?.value);
+    expect(harness.old.wait).not.toHaveBeenCalled();
+    expect(fixture.bytes()).toEqual(originalBytes);
+    expect(fixture.file.name).toBe(`${ids.performance}.wav`);
+    expect(fixture.truth).toEqual(retainedTruth);
+    expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+    expect(fixture.temporaryPresent()).toBe(true);
+    expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+    expect(fixture.coreOwned()).toBe(false);
+    expect(fixture.captureOwned()).toBe(false);
+    expect(fixture.writerOwned()).toBe(false);
+  });
+}
+
+test("unknown original Core begin retains exact bytes and original error through the real manual Provider barrier", async () => {
+  const fixture = await shutdownRecordingFixture();
+  const original = new Error("original begin response lost");
+  const admitBegin = fixture.runtime.calls.begin.getMockImplementation()!;
+  fixture.runtime.calls.begin.mockImplementationOnce(async () => {
+    await admitBegin();
+    throw original;
+  });
+  await fixture.controller.record();
+  const bytes = fixture.bytes();
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  triggerPerformReplacement(harness, "manual");
+  await expect(fixture.controller.close()).rejects.toBe(original);
+  await act(async () => {});
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.bytes()).toEqual(bytes);
+  expect(fixture.controller.getState().recording.expectedRevision).toBeNull();
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  expect(fixture.coreOwned()).toBe(true); // Original begin was actually admitted in this component model.
+  expect(fixture.truth.revision).toBe(8);
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+});
+
+test("setup interrupted before Core submission closes actual capture/WAV and temporary before replacement", async () => {
+  const fixture = await shutdownRecordingFixture();
+  const captureGate = deferred<Awaited<ReturnType<CreatorPerformanceRuntimeSession["startPerformanceMasterCapture"]>>>();
+  fixture.runtime.calls.capture.mockImplementationOnce(() => captureGate.promise);
+  const starting = fixture.controller.record();
+  await waitFor(() => expect(fixture.runtime.calls.capture).toHaveBeenCalledTimes(1));
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(harness.barrier).toHaveBeenCalledTimes(1));
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  const queue = fixture.controller.recordingSink();
+  expect(queue).not.toBeNull();
+  captureGate.resolve({stop: vi.fn(async () => queue!.onStopped())});
+  await starting;
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+  await waitFor(() => expect(harness.factory).toHaveBeenCalledTimes(2));
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  expect(harness.old.wait).toHaveBeenCalledTimes(1);
+  expect(fixture.runtime.calls.begin).not.toHaveBeenCalled();
+  expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(1);
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.controller.getState().recording.phase).toBe("idle");
+  expect(fixture.reports).toHaveBeenCalledWith("Perform",
+    expect.objectContaining({message: "Performance controller closed during setup"}));
+});
+
+test("the same acknowledged bind cleanup retry clears only its real retained debt before clean close", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const original = new Error("original temporary deletion failed");
+  fixture.cleanupTemporary.mockRejectedValueOnce(original);
+  await fixture.controller.save("Matching Take");
+  expect(fixture.bind).toHaveBeenCalledTimes(1);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.controller.getState().bindingStatus).toBe("retry");
+  await fixture.controller.retryWavBind();
+  expect(fixture.bind).toHaveBeenCalledTimes(1);
+  expect(fixture.cleanupTemporary).toHaveBeenCalledTimes(2);
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.truth.name).toBe("Matching Take");
+  expect(fixture.truth.artifact).not.toBeNull();
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+});
+
+test("a committed bind's display failure alone is not unresolved application shutdown ownership", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const commitBind = fixture.bind.getMockImplementation()!;
+  fixture.bind.mockImplementationOnce(async (request) => {
+    const receipt = await commitBind(request);
+    fixture.refresh.mockRejectedValueOnce(new Error("display projection unavailable"));
+    return receipt;
+  });
+  await fixture.controller.save("Display Only Failure");
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.controller.getState().bindingStatus).toBe("retry");
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.captureOwned()).toBe(false);
+  expect(fixture.coreOwned()).toBe(false);
+});
+
+
+test("original setup projection and failed real discard preserve exact errors and bytes at the Provider barrier", async () => {
+  const fixture = await shutdownRecordingFixture();
+  const primary = new Error("original setup projection failed");
+  const compensation = new Error("original discard response failed");
+  const gate = deferred<never>();
+  fixture.refresh.mockRejectedValueOnce(primary);
+  fixture.discard.mockImplementationOnce(() => gate.promise);
+  const starting = fixture.controller.record();
+  await waitFor(() => expect(fixture.discard).toHaveBeenCalledTimes(1));
+  const retainedBytes = fixture.bytes();
+  const retainedTruth = {...fixture.truth};
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(harness.barrier).toHaveBeenCalledTimes(1));
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  await act(async () => { gate.reject(compensation); await starting; });
+  await expect(fixture.controller.close()).rejects.toBe(primary);
+  await act(async () => {});
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.close()).toBe(harness.barrier.mock.results[0]?.value);
+  expect(fixture.reports).toHaveBeenCalledWith("Perform", primary);
+  expect(fixture.reports).toHaveBeenCalledWith("Perform", compensation);
+  expect(fixture.bytes()).toEqual(retainedBytes);
+  expect(fixture.truth).toEqual(retainedTruth);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.expectedRevision).toBe(8);
+  expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+});
+
+test("a trusted default preparation failure before any writer attempt does not latch shutdown failure", async () => {
+  const runtime = sessionFixture();
+  const previousStorage = navigator.storage;
+  Object.defineProperty(navigator, "storage", {configurable: true, value: undefined});
+  const reports = vi.fn();
+  const controller = createPerformController({session: runtime.session,
+    getCreatorState: () => creatorState(), refreshProject: async () => {},
+    opfsAvailable: () => true, reportFailure: reports});
+  try {
+    await controller.refreshRecovery();
+    await controller.record();
+    expect(reports).toHaveBeenCalledWith("Perform",
+      expect.objectContaining({message: "Origin-private storage is unavailable"}));
+    expect(runtime.calls.capture).not.toHaveBeenCalled();
+    expect(runtime.calls.begin).not.toHaveBeenCalled();
+    expect(controller.getState().recording.phase).toBe("idle");
+    const harness = mountPerformShutdown({controller, runtime});
+    await screen.findByText("ready");
+    harness.old.independentCleanup.resolve(true);
+    triggerPerformReplacement(harness, "manual");
+    await expect(controller.close()).resolves.toBeUndefined();
+    await waitFor(() => expect(harness.factory).toHaveBeenCalledTimes(2));
+    expect(await harness.old.independentCleanup.promise).toBe(true);
+    expect(harness.old.wait).toHaveBeenCalledTimes(1);
+  } finally {
+    Object.defineProperty(navigator, "storage", {configurable: true, value: previousStorage});
+  }
+});
+
+test("a late matching cleanup retry cannot rewrite the original cached rejected close or permit a factory", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const original = new Error("original temporary cleanup rejected");
+  fixture.cleanupTemporary.mockRejectedValueOnce(original);
+  await fixture.controller.save("Retained Take");
+  const pendingError = fixture.reports.mock.calls.find((call) =>
+    (call[1] as {cause?: unknown} | undefined)?.cause === original)?.[1];
+  expect(pendingError).toBeDefined();
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await expect(fixture.controller.close()).rejects.toBe(pendingError);
+  const cached = fixture.controller.close();
+  await fixture.controller.retryWavBind();
+  expect(fixture.temporaryPresent()).toBe(false);
+  expect(fixture.bind).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.close()).toBe(cached);
+  await expect(cached).rejects.toBe(pendingError);
+  fireEvent.click(screen.getByRole("button", {name: "Retry failed Perform Runtime"}));
+  await act(async () => {});
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+});
+
+
+test("the original real WAV checkpoint holds the registered Perform barrier until durable PCM completion", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  const original = deferred<void>();
+  fixture.holdNextCheckpoint(original.promise);
+  fixture.getSink()!.onBatch([new Float32Array([0.25, -0.25]), new Float32Array([0.5, -0.5])]);
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(fixture.checkpointEntered()).toBe(true));
+  let settled = false;
+  const close = fixture.controller.close();
+  void close.then(() => { settled = true; });
+  await act(async () => {});
+  expect(settled).toBe(false);
+  expect(fixture.writerOwned()).toBe(true);
+  expect(fixture.bytes()).toHaveLength(44);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(harness.old.close).not.toHaveBeenCalled();
+  expect(harness.old.wait).not.toHaveBeenCalled();
+  await act(async () => { original.resolve(); await close; });
+  await waitFor(() => expect(harness.factory).toHaveBeenCalledTimes(2));
+  expect(fixture.writer.snapshot).toMatchObject({state: "sealed", reason: "stopped", durableFrames: 2});
+  expect(fixture.bytes()).toHaveLength(52);
+  expect(new DataView(fixture.bytes().buffer).getUint32(40, true)).toBe(8);
+  expect(fixture.writerOwned()).toBe(false);
+  expect(fixture.captureOwned()).toBe(false);
+  expect(fixture.coreOwned()).toBe(false);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  expect(fixture.truth).toEqual({revision: 8, name: null, artifact: null});
+  expect(harness.old.close).toHaveBeenCalledTimes(1);
+  expect(harness.old.wait).toHaveBeenCalledTimes(1);
+});
+
+test("a real Queue writer-error snapshot cannot erase the failed original writable abort or permit replacement", async () => {
+  const fixture = await shutdownRecordingFixture();
+  await fixture.controller.record();
+  const checkpoint = deferred<void>();
+  const checkpointFailure = new Error("original writable checkpoint failed");
+  const abortFailure = new Error("original writable abort failed and still owns its transaction");
+  fixture.holdNextCheckpoint(checkpoint.promise);
+  fixture.rejectAbort(abortFailure);
+  fixture.getSink()!.onBatch([new Float32Array([0.25, -0.25]), new Float32Array([0.5, -0.5])]);
+  const harness = mountPerformShutdown(fixture);
+  await screen.findByText("ready");
+  harness.old.independentCleanup.resolve(true);
+  triggerPerformReplacement(harness, "automatic");
+  await waitFor(() => expect(fixture.checkpointEntered()).toBe(true));
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  expect(fixture.writerOwned()).toBe(true);
+  const close = fixture.controller.close();
+  // Observe the original cached Promise before releasing the real storage operation.
+  void close.catch(() => {});
+  await act(async () => { checkpoint.reject(checkpointFailure); });
+  await waitFor(() => expect(fixture.reports.mock.calls.some(([, error]) =>
+    (error as {reason?: string} | undefined)?.reason === "writer-error")).toBe(true));
+  const realQueueFailure = fixture.reports.mock.calls.find(([, error]) =>
+    (error as {reason?: string} | undefined)?.reason === "writer-error")![1];
+  expect(Object.isFrozen(realQueueFailure)).toBe(true);
+  await expect(close).rejects.toBe(realQueueFailure);
+  expect(fixture.abort).toHaveBeenCalledTimes(1);
+  expect(fixture.abort).toHaveBeenCalledWith(checkpointFailure);
+  expect(fixture.writer.snapshot).toMatchObject({state: "sealed", reason: "writer-error", durableFrames: 0});
+  expect(fixture.writerOwned()).toBe(true);
+  expect(fixture.captureOwned()).toBe(false);
+  expect(fixture.coreOwned()).toBe(false);
+  expect(fixture.bytes()).toHaveLength(44);
+  expect(fixture.temporaryPresent()).toBe(true);
+  expect(fixture.controller.getState().recording.wav?.reason).toBe("writer-error");
+  expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+  await fixture.controller.save("Do not delete the original owner");
+  await fixture.controller.discard();
+  expect(fixture.save).not.toHaveBeenCalled();
+  expect(fixture.bind).not.toHaveBeenCalled();
+  expect(fixture.discard).not.toHaveBeenCalled();
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.truth).toEqual({revision: 8, name: null, artifact: null});
+  expect(fixture.controller.close()).toBe(close);
+  expect(await harness.old.independentCleanup.promise).toBe(true);
+  expect(harness.old.close).not.toHaveBeenCalled();
+  expect(harness.old.wait).not.toHaveBeenCalled();
+  expect(harness.factory).toHaveBeenCalledTimes(1);
+  // The real writer currently hides abortFailure; this test does not invent its
+  // missing channel or claim that the live writable/physical owner was released.
+});
+
+
+for (const operation of ["raw-event", "flush"] as const) {
+  test(`an unrelated later ${operation} command cannot discharge the original unknown recording operation`, async () => {
+    const fixture = await shutdownRecordingFixture();
+    await fixture.controller.record();
+    const original = new Error(`original ${operation} response lost`);
+    if (operation === "raw-event") {
+      fixture.runtime.calls.raw.mockRejectedValueOnce(original);
+      await expect(fixture.controller.recordRawEvent({kind: "hold_on"})).rejects.toBe(original);
+      await fixture.controller.recordRawEvent({kind: "hold_off"});
+      expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
+    } else {
+      fixture.runtime.calls.flush.mockRejectedValueOnce(original);
+      await fixture.controller.flush();
+      await fixture.controller.flush();
+      expect(fixture.runtime.calls.flush).toHaveBeenCalledTimes(2);
+    }
+    await fixture.controller.stop();
+    expect(fixture.coreOwned()).toBe(false);
+    expect(fixture.captureOwned()).toBe(false);
+    expect(fixture.writerOwned()).toBe(false);
+    const harness = mountPerformShutdown(fixture);
+    await screen.findByText("ready");
+    harness.old.independentCleanup.resolve(true);
+    triggerPerformReplacement(harness, "automatic");
+    await expect(fixture.controller.close()).rejects.toBe(original);
+    await act(async () => {});
+    expect(await harness.old.independentCleanup.promise).toBe(true);
+    expect(harness.factory).toHaveBeenCalledTimes(1);
+    expect(fixture.controller.getState().recording.sessionId).toBe(ids.session);
+    expect(fixture.controller.getState().recording.performanceId).toBe(ids.performance);
+    expect(fixture.temporaryPresent()).toBe(true);
+    expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  });
+}
+
+
+test("reserves Perform presses and physical release before the first receipt and submits in order", async () => {
+  const fixture = controllerFixture();
+  const firstReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise);
+  const view = renderSurface(fixture);
+  const firstKey = Object.freeze({});
+  const secondKey = Object.freeze({});
+  let pending: Promise<void>[] = [];
+  try {
+    await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+    await fixture.controller.record();
+    pending = [
+      fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "physical-first",
+        slot: 0, velocity: 100}, firstKey),
+      fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "physical-second",
+        slot: 0, velocity: 100}, secondKey),
+      fixture.controller.recordRawEvent({kind: "pad_release", gestureId: "physical-first",
+        slot: 0}, firstKey),
+    ];
+    // These are real Perform-controller calls into the Session double, not
+    // proof of the SDK's aggregate ledger or Native/durable completion.
+    expect(fixture.runtime.calls.prepare).toHaveBeenCalledTimes(3);
+    expect(fixture.runtime.calls.prepare.mock.calls.map(([, key]) => key))
+      .toEqual([firstKey, secondKey, firstKey]);
+    expect(fixture.runtime.calls.prepare.mock.calls.map(([request]) => request.sessionId))
+      .toEqual([ids.session, ids.session, ids.session]);
+    expect(fixture.runtime.calls.prepare.mock.calls.map(([request]) => request.event.kind))
+      .toEqual(["pad_press", "pad_press", "pad_release"]);
+    await act(async () => {});
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(1);
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await Promise.all(pending);
+    expect(fixture.runtime.calls.raw.mock.calls.map(([, key]) => key))
+      .toEqual([firstKey, secondKey, firstKey]);
+    await fixture.controller.stop();
+    expect(fixture.controller.getState().recording.phase).toBe("stopped");
+  } finally {
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await Promise.all(pending.map(operation => operation.catch(() => {})));
+    view.unmount();
+  }
+});
+
+test("Stop retains the original journal owner and waits for its matching release before finalizing", async () => {
+  const fixture = controllerFixture();
+  const pressReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  const releaseReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  fixture.runtime.calls.raw.mockReturnValueOnce(pressReceipt.promise)
+    .mockReturnValueOnce(releaseReceipt.promise);
+  const view = renderSurface(fixture);
+  const physicalKey = Object.freeze({});
+  let press: Promise<void> | undefined;
+  let stopping: Promise<void> | undefined;
+  try {
+    await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+    await fixture.controller.record();
+    press = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "original-owner",
+      slot: 3, velocity: 100}, physicalKey);
+    stopping = fixture.controller.stop();
+    expect(fixture.runtime.calls.prepare).toHaveBeenCalledTimes(2);
+    const [submittedPress, submittedRelease] = fixture.runtime.calls.prepare.mock.calls;
+    expect(submittedPress?.[1]).toBe(physicalKey);
+    // Synthetic Stop may join the SDK's original (Session, gestureId) owner
+    // mapping without a second physical-key argument; never invent an owner.
+    expect(submittedRelease?.[0]).toMatchObject({sessionId: submittedPress?.[0].sessionId,
+      event: {kind: "pad_release", gestureId: "original-owner", slot: 3}});
+    expect(fixture.controller.getState().recording.phase).toBe("stopping");
+    expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+    expect(fixture.captureStop).not.toHaveBeenCalled();
+    pressReceipt.resolve({eventId: "press", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await press;
+    await act(async () => {});
+    expect(fixture.runtime.calls.raw).toHaveBeenCalledTimes(2);
+    expect(fixture.runtime.calls.stop).not.toHaveBeenCalled();
+    releaseReceipt.resolve({eventId: "release", acceptedTick: 2, inputSequence: 2,
+      coalesced: false, replayed: false, projectRevision: null});
+    await stopping;
+    expect(fixture.runtime.calls.stop).toHaveBeenCalledTimes(1);
+    expect(fixture.runtime.calls.stop.mock.calls[0]?.[0]).toMatchObject({sessionId: ids.session});
+    expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+    expect(fixture.order.indexOf("core-stop")).toBeLessThan(fixture.order.indexOf("capture-stop"));
+    expect(fixture.order.indexOf("capture-stop")).toBeLessThan(fixture.order.indexOf("tail-drained"));
+    expect(fixture.controller.getState().recording).toMatchObject({phase: "stopped",
+      wav: {state: "sealed", durableFrames: 100, reason: "stopped"}});
+  } finally {
+    pressReceipt.resolve({eventId: "press", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    releaseReceipt.resolve({eventId: "release", acceptedTick: 2, inputSequence: 2,
+      coalesced: false, replayed: false, projectRevision: null});
+    await press?.catch(() => {});
+    await stopping?.catch(() => {});
+    view.unmount();
+  }
+});
+
+test("observes a later SDK reservation refusal while an earlier Perform receipt is still held", async () => {
+  const fixture = controllerFixture();
+  const firstReceipt = deferred<Awaited<ReturnType<typeof fixture.runtime.calls.raw>>>();
+  const original = new Error("second SDK admission rejected before first receipt");
+  fixture.runtime.calls.raw.mockReturnValueOnce(firstReceipt.promise);
+  const prepare = fixture.runtime.calls.prepare.getMockImplementation()!;
+  fixture.runtime.calls.prepare.mockImplementationOnce(prepare)
+    .mockImplementationOnce(() => { throw original; });
+  const view = renderSurface(fixture);
+  let first: Promise<void> | undefined;
+  let rejected: Promise<unknown> | undefined;
+  try {
+    await waitFor(() => expect(fixture.controller.canRecord()).toBe(true));
+    await fixture.controller.record();
+    first = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "held-first",
+      slot: 0, velocity: 100}, Object.freeze({}));
+    rejected = fixture.controller.recordRawEvent({kind: "pad_press", gestureId: "rejected-second",
+      slot: 1, velocity: 100}, Object.freeze({})).then(() => null, error => error);
+    expect(fixture.runtime.calls.prepare).toHaveBeenCalledTimes(2);
+    // Leave one ordinary event-loop turn with the first receipt still held.
+    // Vitest's unhandled-rejection check must remain clean: observing this
+    // SDK reservation refusal cannot wait for the ordered tail to drain.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await first;
+    expect(await rejected).toBe(original);
+    // #1680: the public rejection retains the original error, while the
+    // surface projects the existing catalogue message for an untyped error.
+    expect(fixture.controller.getState().error).toBe(
+      "Something went wrong in Creator. Try again. Details are in Developer diagnostics.",
+    );
+  } finally {
+    firstReceipt.resolve({eventId: "first", acceptedTick: 1, inputSequence: 1,
+      coalesced: false, replayed: false, projectRevision: null});
+    await first?.catch(() => {});
+    await rejected;
+    view.unmount();
+  }
+});
+
+
+test("real SDK admission preserves the interleaved Perform FX release after a held move", async () => {
+  // Integration boundary: Creator's existing recording/Store/capture fixture
+  // stays modeled. Only raw input admission and status reads use the REAL SDK;
+  // no input queue or shared-gesture algorithm is reproduced by this test.
+  // The SDK is not bootstrapped: no Runtime/Core/audio lifecycle is claimed.
+  type WireEvent = {
+    kind: string; gesture_id?: string; fx?: string; value?: number;
+    slot?: number; velocity?: number;
+  };
+  type Envelope = {
+    request_id: string; operation: string;
+    payload: {session_id?: string; event_id?: string; event?: WireEvent};
+  };
+  const inputWire: Array<{sessionId: string; eventId: string; event: WireEvent}> = [];
+  const openFx = new Set<string>();
+  const openPads = new Set<string>();
+  const enteredMove = deferred<void>();
+  const heldMove = deferred<void>();
+  const reports = vi.fn();
+  let requestSerial = 0;
+  const eventUuid = (serial: number) =>
+    `60000000-0000-4000-8000-${String(serial).padStart(12, "0")}`;
+  const sdk = createRuntimeSession({
+    document: {}, window: {}, navigator: {},
+    crypto: {randomUUID: () => eventUuid(++requestSerial)},
+    manifestSource: {}, inputOwnership: "host",
+    // Explicit synthetic identity reused from runtime_session.test.mjs's
+    // fixture, not a claim about the current Product or a shipped manifest.
+    assemblyIdentity: {
+      distributionContract: "lmdj.web-runtime-host.distribution.v1",
+      hostId: "web-runtime-host", hostVersion: "1.2.15",
+      platformVersion: "0.3.6", productBuild: "9.8.7.6", protocolVersion: 1,
+    },
+    seams: {transport: {
+      async send(envelope: Envelope) {
+        const reply = (result: Record<string, unknown>) => ({
+          protocol_version: 1, request_id: envelope.request_id, ok: true, result,
+        });
+        if (envelope.operation === "performance.record.event") {
+          const {session_id, event_id, event} = envelope.payload;
+          if (typeof session_id !== "string" || typeof event_id !== "string" || !event) {
+            throw new Error("Test transport received an incomplete raw event");
+          }
+          inputWire.push({sessionId: session_id, eventId: event_id, event: {...event}});
+          if (event.kind === "fx_move" && event.value === 630) {
+            enteredMove.resolve();
+            await heldMove.promise;
+          }
+          // These counts model only requests that reached this transport;
+          // the wire order below is the proof, not a manufactured Core ACK.
+          if (event.kind === "fx_engage") openFx.add(event.gesture_id!);
+          if (event.kind === "fx_release") openFx.delete(event.gesture_id!);
+          if (event.kind === "pad_press") openPads.add(event.gesture_id!);
+          if (event.kind === "pad_release") openPads.delete(event.gesture_id!);
+          return reply({event_id, accepted_tick: 0, input_sequence: inputWire.length,
+            coalesced: false, replayed: false, project_revision: null});
+        }
+        if (envelope.operation === "performance.record.status") {
+          return reply({state: "active", session_id: ids.session,
+            performance_id: ids.performance, journal_revision: 1,
+            next_flush_seq: 1, pending_event_count: 0,
+            open_pad_gestures: openPads.size, open_fx_gestures: openFx.size,
+            hold: false, pending_launch: null, last_launch_ack: null,
+            project_revision: null});
+        }
+        throw new Error(`Unexpected test transport operation: ${envelope.operation}`);
+      },
+    }},
+  });
+  let idIndex = 0;
+  const fixture = controllerFixture({reportFailure: reports,
+    createId: () => [ids.session, ids.performance][idIndex++] ?? eventUuid(100 + idIndex)});
+  fixture.runtime.session.recordPerformanceEvent = sdk.recordPerformanceEvent;
+  fixture.runtime.session.preparePerformancePadEvent = sdk.preparePerformancePadEvent!;
+  fixture.runtime.session.queryPerformanceRecordingStatus = sdk.queryPerformanceRecordingStatus;
+  const disconnect = fixture.controller.connect();
+  const physicalKey = {};
+  let lease: ReturnType<typeof sdk.reserveInputGesture> = null;
+  try {
+    await fixture.controller.refreshRecovery();
+    await fixture.controller.record();
+    expect(fixture.controller.getState().recording.phase).toBe("recording");
+    const fxGesture = fixture.controller.engageFx("filter", 500);
+    await waitFor(() => expect(fixture.controller.getState().authority?.openFxGestures).toBe(1));
+    expect(reports).not.toHaveBeenCalled();
+
+    fixture.controller.moveFx(fxGesture, "filter", 630);
+    await enteredMove.promise;
+    lease = sdk.reserveInputGesture(physicalKey, 0, "pointer");
+    expect(lease).not.toBeNull();
+    const padGesture = eventUuid(900);
+    const padPress = fixture.controller.recordRawEvent({
+      kind: "pad_press", gestureId: padGesture, slot: 0, velocity: 100,
+    }, physicalKey);
+    // This integration case has no Pattern consumer. Cancel ONLY its unused
+    // preparation; the real SDK Performance claim remains until release.
+    lease!.cancelUnsubmittedPattern();
+    const padRelease = fixture.controller.recordRawEvent({
+      kind: "pad_release", gestureId: padGesture, slot: 0,
+    }, physicalKey);
+    const padsSettled = Promise.allSettled([padPress, padRelease]);
+    fixture.controller.moveFx(fxGesture, "filter", 631);
+    fixture.controller.releaseFx(fxGesture, "filter");
+    // No fake clock, delayed extra up, enlarged queue or per-event await is
+    // inserted in the above reproducing sequence.
+    heldMove.resolve();
+    const padResults = await padsSettled;
+    // Existing Stop awaits rawEventTail. Its modeled lifecycle receipt does
+    // not add any FX release to inputWire, so it cannot repair the RED.
+    await fixture.controller.stop();
+    const failures = reports.mock.calls.map(([, error]) => ({
+      code: (error as {code?: string}).code,
+      message: (error as Error).message,
+    }));
+    expect(inputWire.map(({event}) => event),
+      `Actual SDK/controller failures: ${JSON.stringify(failures)}`).toEqual([
+      {kind: "fx_engage", gesture_id: fxGesture, fx: "filter", value: 500},
+      {kind: "fx_move", gesture_id: fxGesture, fx: "filter", value: 630},
+      {kind: "pad_press", gesture_id: padGesture, slot: 0, velocity: 100},
+      {kind: "pad_release", gesture_id: padGesture, slot: 0},
+      {kind: "fx_move", gesture_id: fxGesture, fx: "filter", value: 631},
+      {kind: "fx_release", gesture_id: fxGesture, fx: "filter"},
+    ]);
+    expect(padResults).toEqual([
+      {status: "fulfilled", value: undefined}, {status: "fulfilled", value: undefined},
+    ]);
+    expect(failures).toEqual([]);
+    expect(inputWire.every(({sessionId}) => sessionId === ids.session)).toBe(true);
+    expect(new Set(inputWire.map(({eventId}) => eventId)).size).toBe(6);
+    expect(await sdk.queryPerformanceRecordingStatus()).toMatchObject({
+      openPadGestures: 0, openFxGestures: 0,
+    });
+  } finally {
+    heldMove.resolve();
+    lease?.cancelUnsubmittedPattern();
+    lease?.releasePhysical();
+    await fixture.controller.stop();
+    disconnect();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // C1 typed independent Filter and live-control consumer oracles.
 // ---------------------------------------------------------------------------
@@ -2640,12 +3560,15 @@ test("the first Pad waits for the capture start ACK in a headered recording", as
     .toMatchObject({kind: "pad_press", slot: 1});
 });
 
-test("headered capture start failure compensates the already committed begin", async () => {
+test("headered capture start failure with stopped ACK compensates the already committed begin", async () => {
   const fixture = controllerFixture();
   const {calls} = fixture.runtime;
   enableTypedCore(calls);
   calls.begin.mockImplementation(headeredBegin());
-  calls.capture.mockRejectedValueOnce(new Error("capture start refused"));
+  calls.capture.mockImplementationOnce(async (sink: {onStopped(): void}) => {
+    sink.onStopped();
+    throw new Error("capture start refused after stopped ACK");
+  });
   fixture.controller.connect();
   await fixture.controller.refreshRecovery();
   await fixture.controller.refreshLiveStatus();
@@ -2837,6 +3760,242 @@ test("a legacy Filter gesture opened before the first status answer keeps its ro
   expect(screen.getByText("20.0 kHz")).toBeTruthy();
   expect(Object.values(current!.bindings).map((binding) => binding.label))
     .toEqual(["Cutoff", "Delay", "Reverb"]);
+});
+
+test("headered capture start without stopped ACK retains the original owner and bytes", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  const original = new Error("headered capture outcome unknown");
+  calls.capture.mockRejectedValueOnce(original);
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  expect(calls.stop).toHaveBeenCalledWith({sessionId: ids.session,
+    requestId: expect.any(String)});
+  expect(fixture.store.discard).not.toHaveBeenCalled();
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording).toMatchObject({
+    phase: "stopped", sessionId: ids.session, performanceId: ids.performance,
+    expectedRevision: 8,
+  });
+  expect(fixture.controller.getState().wavStatus).toContain("temporary retained");
+  await fixture.controller.save();
+  expect(fixture.runtime.session.savePerformance).not.toHaveBeenCalled();
+  expect(fixture.store.bind).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording).toMatchObject({
+    phase: "stopped", sessionId: ids.session, performanceId: ids.performance,
+    expectedRevision: 8,
+  });
+  expect(fixture.controller.getState().wavStatus).toContain("temporary retained");
+  await fixture.controller.discard();
+  expect(fixture.runtime.session.savePerformance).not.toHaveBeenCalled();
+  expect(fixture.store.bind).not.toHaveBeenCalled();
+  expect(fixture.controller.getState().recording).toMatchObject({
+    phase: "stopped", sessionId: ids.session, performanceId: ids.performance,
+    expectedRevision: 8,
+  });
+  expect(fixture.controller.getState().wavStatus).toContain("temporary retained");
+  expect(fixture.store.save).not.toHaveBeenCalled();
+  expect(fixture.store.discard).not.toHaveBeenCalled();
+  expect(fixture.cleanupTemporary).not.toHaveBeenCalled();
+  await expect(fixture.controller.close()).rejects.toBe(original);
+});
+
+test("headered Filter and prepared physical Pad events keep one submission order", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const engage = deferred<void>();
+  calls.raw.mockImplementation(async ({eventId, event}) => {
+    if (event.kind === "filter_parameter" && event.phase === "engage") {
+      await engage.promise;
+    }
+    return {eventId, gestureGeneration: "ordered-filter-generation",
+      recordingGestureId: "ordered-recording-filter", replayed: false};
+  });
+  const token = fixture.controller.touchFilterEngage("cutoff");
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+  const physicalKey = {};
+  const press = fixture.controller.recordRawEvent({kind: "pad_press",
+    gestureId: "ordered-pad", slot: 0, velocity: 100}, physicalKey);
+  const release = fixture.controller.recordRawEvent({kind: "pad_release",
+    gestureId: "ordered-pad", slot: 0}, physicalKey);
+  fixture.controller.touchFilterRelease(token, "cutoff");
+  expect(calls.prepare.mock.calls.map(([request, key]) => [request.event.kind, key]))
+    .toEqual([["pad_press", physicalKey], ["pad_release", physicalKey]]);
+  expect(calls.raw).toHaveBeenCalledTimes(1);
+  expect(calls.prepare.mock.calls[0]?.[1]).toBe(physicalKey);
+  expect(calls.prepare.mock.calls[1]?.[1]).toBe(physicalKey);
+  const preparedIds = calls.prepare.mock.calls.map(([request]) => request.eventId);
+  engage.resolve();
+  await Promise.all([press, release]);
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(4));
+  expect(calls.raw.mock.calls.map(([request]) => request.event.kind)).toEqual([
+    "filter_parameter", "pad_press", "pad_release", "filter_release",
+  ]);
+  expect(calls.raw.mock.calls.slice(1, 3).map(([request, key]) => [request.eventId, key]))
+    .toEqual(preparedIds.map(eventId => [eventId, physicalKey]));
+  expect(calls.raw.mock.calls[1]?.[1]).toBe(physicalKey);
+  expect(calls.raw.mock.calls[2]?.[1]).toBe(physicalKey);
+  expect(calls.raw.mock.calls[3]?.[0].event).toEqual({kind: "filter_release",
+    gestureId: "ordered-recording-filter", gestureGeneration: "ordered-filter-generation"});
+  await fixture.controller.stop();
+  expect(calls.stop).toHaveBeenCalledTimes(1);
+  expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+  expect(fixture.controller.getState().recording.phase).toBe("stopped");
+});
+
+test("a rejected headered control remains the original shutdown debt after capture drains", async () => {
+  const fixture = controllerFixture();
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const original = Object.assign(new Error("headered control outcome unknown"), {
+    code: "HOST_TIMEOUT", details: {pending: true},
+  });
+  calls.raw.mockRejectedValueOnce(original);
+  fixture.controller.turnFilterCutoff(-1);
+  await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+  await fixture.controller.stop();
+  expect(calls.stop).toHaveBeenCalledTimes(1);
+  expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+  expect(fixture.order).toContain("tail-drained");
+  await expect(fixture.controller.close()).rejects.toBe(original);
+});
+
+
+test("a control queued during Stop does not assign its sessionless failure to the old recording", async () => {
+  const reportFailure = vi.fn();
+  const fixture = controllerFixture({reportFailure});
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const stopGate = deferred<void>();
+  const stop = calls.stop.getMockImplementation()!;
+  calls.stop.mockImplementationOnce(async request => {
+    await stopGate.promise;
+    return stop(request);
+  });
+  const stopped = fixture.controller.stop();
+  await waitFor(() => expect(calls.stop).toHaveBeenCalledTimes(1));
+  const original = new Error("sessionless control rejected");
+  calls.liveControl.mockRejectedValueOnce(original);
+  fixture.controller.turnFilterCutoff(-1);
+  expect(calls.liveControl).not.toHaveBeenCalled();
+  stopGate.resolve();
+  await stopped;
+  await waitFor(() => expect(reportFailure).toHaveBeenCalledWith("Perform", original));
+  expect(calls.raw).not.toHaveBeenCalled();
+  expect(calls.liveControl).toHaveBeenCalledTimes(1);
+  await expect(fixture.controller.close()).resolves.toBeUndefined();
+});
+
+test("ordinary raw refusal preserves both admitted controls before a prepared physical Pad", async () => {
+  const eventIds = ["held-hold-on", "held-hold-off", "refused-hold-on",
+    "reserved-pad-press", "reserved-pad-release"];
+  const allIds = [ids.session, ids.performance, ...eventIds];
+  let identityIndex = 0;
+  const fixture = controllerFixture({createId: () =>
+    allIds[identityIndex++] ?? `later-${identityIndex}`});
+  const {calls} = fixture.runtime;
+  enableTypedCore(calls);
+  calls.begin.mockImplementation(headeredBegin());
+  const disconnect = fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.refreshLiveStatus();
+  await fixture.controller.record();
+  const firstGate = deferred<void>();
+  const secondGate = deferred<void>();
+  const completed: string[] = [];
+  const submitted: string[] = [];
+  const raw = calls.raw.getMockImplementation()!;
+  calls.raw.mockImplementation(async (request, key) => {
+    if (request.eventId === eventIds[0]) await firstGate.promise;
+    if (request.eventId === eventIds[1]) await secondGate.promise;
+    const receipt = await raw(request, key);
+    completed.push(request.eventId);
+    return receipt;
+  });
+  const prepare = calls.prepare.getMockImplementation()!;
+  calls.prepare.mockImplementation((request, key) => {
+    const descriptor = prepare(request, key);
+    return {...descriptor, submit() {
+      submitted.push(request.eventId);
+      return descriptor.submit();
+    }};
+  });
+  const admitted: Promise<void>[] = [];
+  try {
+    const first = fixture.controller.recordRawEvent({kind: "hold_on"});
+    const second = fixture.controller.recordRawEvent({kind: "hold_off"});
+    admitted.push(first, second);
+    await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(1));
+    await expect(fixture.controller.recordRawEvent({kind: "hold_on"}))
+      .rejects.toMatchObject({code: "HOST_STATE_INVALID",
+        message: "Live input window is full; wait for the current input to settle"});
+    const physicalKey = {};
+    const press = fixture.controller.recordRawEvent({kind: "pad_press",
+      gestureId: "reserved-physical-pad", slot: 0, velocity: 100}, physicalKey);
+    const release = fixture.controller.recordRawEvent({kind: "pad_release",
+      gestureId: "reserved-physical-pad", slot: 0}, physicalKey);
+    admitted.push(press, release);
+    expect(calls.prepare).toHaveBeenCalledTimes(2);
+    expect(calls.prepare.mock.calls.map(([request]) => request.eventId))
+      .toEqual(eventIds.slice(3));
+    expect(calls.prepare.mock.calls[0]?.[1]).toBe(physicalKey);
+    expect(calls.prepare.mock.calls[1]?.[1]).toBe(physicalKey);
+    // One event-loop turn drains all runnable Promise reactions. Both
+    // original requests remain explicitly gated; no duration grants passage.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(calls.raw.mock.calls.map(([request]) => request.eventId))
+      .toEqual([eventIds[0]]);
+    expect(submitted).toEqual([]);
+    expect(completed).toEqual([]);
+    firstGate.resolve();
+    await first;
+    await waitFor(() => expect(calls.raw).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(calls.raw.mock.calls.map(([request]) => request.eventId))
+      .toEqual(eventIds.slice(0, 2));
+    expect(completed).toEqual([eventIds[0]]);
+    expect(submitted).toEqual([]);
+    secondGate.resolve();
+    await Promise.all(admitted);
+    expect(calls.raw.mock.calls.map(([request]) => [request.eventId, request.event.kind]))
+      .toEqual([[eventIds[0], "hold_on"], [eventIds[1], "hold_off"],
+        [eventIds[3], "pad_press"], [eventIds[4], "pad_release"]]);
+    expect(completed).toEqual([eventIds[0], eventIds[1], eventIds[3], eventIds[4]]);
+    expect(submitted).toEqual(eventIds.slice(3));
+    expect(calls.raw.mock.calls[2]?.[1]).toBe(physicalKey);
+    expect(calls.raw.mock.calls[3]?.[1]).toBe(physicalKey);
+    await fixture.controller.stop();
+    expect(calls.stop).toHaveBeenCalledTimes(1);
+    expect(fixture.captureStop).toHaveBeenCalledTimes(1);
+    expect(fixture.order).toContain("tail-drained");
+    expect(fixture.controller.getState().recording.phase).toBe("stopped");
+  } finally {
+    firstGate.resolve();
+    secondGate.resolve();
+    await Promise.allSettled(admitted);
+    await fixture.controller.stop();
+    disconnect();
+  }
 });
 
 // C2: the masks below are producer readbacks, never a Host-authored Project.

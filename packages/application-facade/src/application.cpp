@@ -12027,6 +12027,43 @@ Application::make_pattern_transport_controller(
   return controller;
 }
 
+std::unique_ptr<PatternTransportController>
+Application::make_pattern_transport_controller(
+    PatternTransportAudioPort& audio, ScheduledPatternTransportAudioPort& scheduled,
+    PatternTransportControllerConfig config) {
+  const auto key = config.bundle.generic_string();
+  const auto session = config.session;
+  const auto registry = impl_->transport_sessions;
+  // Register only after successful construction: a throwing factory leaves no
+  // stale owner registration behind.
+  auto controller = detail::PatternTransportControllerInternalFactory::make(
+      audio,
+      std::move(config),
+      impl_->storage_platform,
+      impl_->authoring_history,
+      // The registry is shared state, so a controller destroyed after its
+      // Application observes an expired weak reference and stops cleanly
+      // instead of dereferencing a freed Impl.
+      [weak = std::weak_ptr<Impl::TransportSessionRegistry>(registry),
+       key, session]() {
+        const auto locked = weak.lock();
+        if (!locked) {
+          return;
+        }
+        std::lock_guard guard(locked->mutex);
+        const auto found = locked->sessions.find(key);
+        if (found != locked->sessions.end() && found->second.erase(session) != 0 &&
+            found->second.empty()) {
+          locked->sessions.erase(found);
+        }
+      }, &scheduled);
+  {
+    std::lock_guard lock(registry->mutex);
+    registry->sessions[key].insert(session);
+  }
+  return controller;
+}
+
 foundation::Result<domain::ProjectState>
 Application::create_initial_project(
     const InitialProjectRequest& request) {

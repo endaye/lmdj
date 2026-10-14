@@ -18,6 +18,9 @@ import {
 import { PREFLIGHT_CAPABILITIES, runPreflight } from "./preflight.mjs";
 import {
   HostProtocolError,
+  PATTERN_COUNT_IN_SERIAL_MAXIMUM,
+  UNSIGNED_64_MAXIMUM,
+  isCanonicalNonzeroDecimal,
   MAX_ASSET_BYTES,
   createRequestEnvelope,
   deadlineForOperation,
@@ -164,6 +167,23 @@ function safeErrorDetails(error) {
     if (typeof value === "string" && /^[a-z0-9._-]{1,64}$/.test(value)) {
       details[name] = value;
     }
+  }
+  // Only deadline failures expose bounded original RPC provenance. Other
+  // errors keep the existing privacy filter, including request-ID removal.
+  if (["HOST_TIMEOUT", "HOST_RESTART_REQUIRED"].includes(error.code)) {
+    if (typeof source.operation === "string" && /^[a-z][a-z0-9._-]{0,63}$/.test(source.operation)) {
+      details.operation = source.operation;
+    }
+    if (typeof source.request_id === "string" && UUID_PATTERN.test(source.request_id)) {
+      details.request_id = source.request_id;
+    }
+    if (Number.isFinite(source.deadline_ms) && source.deadline_ms >= 0 && source.deadline_ms <= 0xffff_ffff) {
+      details.deadline_ms = source.deadline_ms;
+    }
+    if (Number.isFinite(source.deadline_at_ms) && source.deadline_at_ms >= 0) {
+      details.deadline_at_ms = source.deadline_at_ms;
+    }
+    if (Number.isSafeInteger(source.cancel_return)) details.cancel_return = source.cancel_return;
   }
   return Object.freeze(details);
 }
@@ -1297,8 +1317,7 @@ async function verifyDocumentManifest({
     : verifySourceShellManifest({document, crypto, assemblyIdentity});
 }
 
-async function loadSourceRuntime({ window }) {
-  const runtime = window?.lmdjWebRuntimeHost;
+function requireLoadedRuntime(runtime) {
   if (
     typeof runtime?.registerAudioContext !== "function" ||
     typeof runtime?.audioCallbackHeartbeat !== "function" ||
@@ -1306,6 +1325,12 @@ async function loadSourceRuntime({ window }) {
   ) {
     throw typedError("HOST_STATE_INVALID", "Source runtime is not loaded");
   }
+  return runtime;
+}
+
+async function loadSourceRuntime({ window, onRuntimeOwnerCreated }) {
+  const runtime = requireLoadedRuntime(window?.lmdjWebRuntimeHost);
+  onRuntimeOwnerCreated?.(runtime);
   return runtime;
 }
 
@@ -1328,66 +1353,92 @@ function sha256Integrity(hexDigest, window) {
   return `sha256-${window.btoa(binary)}`;
 }
 
-async function loadPackagedRuntime({ document, window, crypto, manifest }) {
-  const runtimeScript = assetForRole(manifest, "runtime_script");
-  const runtimeWasm = assetForRole(manifest, "runtime_wasm");
-  const runtimeScriptURL = new URL(
-    `./${runtimeScript.path}`,
-    document.baseURI,
-  ).href;
-  const wasmURL = new URL(`./${runtimeWasm.path}`, document.baseURI).href;
-  const wasmResponse = await window.fetch(wasmURL, {
-    cache: "force-cache",
-    credentials: "same-origin",
-  });
-  const wasmBytes = await readBoundedResponse(wasmResponse, runtimeWasm.bytes);
-  if (
-    wasmBytes.byteLength !== runtimeWasm.bytes ||
-    (await sha256Hex(wasmBytes, crypto)) !== runtimeWasm.sha256
-  ) {
-    throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
+const packagedRuntimeLoads = new WeakMap();
+
+async function loadPackagedRuntime({ document, window, crypto, manifest, onRuntimeOwnerCreated }) {
+  // Scripts consume the shared Module configuration. Fail closed while the
+  // original actual script/load invocation still owns it, rather than letting
+  // a second default loader bind the first producer to its configuration.
+  if (packagedRuntimeLoads.has(window)) {
+    throw typedError("HOST_STATE_INVALID", "Packaged runtime loading is already owned", {pending: false});
   }
-  window.Module = {
-    lmdjHostManifestBytes: manifest.canonical_bytes,
-    lmdjHostManifestSha256: manifest.manifest_sha256,
-    wasmBinary: wasmBytes,
-    locateFile: createPackagedRuntimeLocator({
-      baseURI: document.baseURI,
-      runtimeScriptURL,
-      runtimeWasmURL: wasmURL,
-    }),
-  };
-  await new Promise((resolvePromise, rejectPromise) => {
-    const script = document.createElement("script");
-    script.src = runtimeScriptURL;
-    script.integrity = sha256Integrity(runtimeScript.sha256, window);
-    script.crossOrigin = "anonymous";
-    script.addEventListener("load", resolvePromise, { once: true });
-    script.addEventListener(
-      "error",
-      () => rejectPromise(
-        typedError("HOST_PROTOCOL_MISMATCH", "Runtime script asset mismatch"),
-      ),
-      { once: true },
-    );
-    document.head.append(script);
-  });
-  const runtime = await loadSourceRuntime({ window });
-  const initializationDeadline =
-    (window.performance ?? globalThis.performance).now() + 30_000;
-  while (
-    runtime.runtimeInitialized !== true &&
-    (window.performance ?? globalThis.performance).now() < initializationDeadline
-  ) {
-    await new Promise((resolvePromise) => window.setTimeout(resolvePromise, 2));
+  const reservation = {};
+  packagedRuntimeLoads.set(window, reservation);
+  try {
+    const runtimeScript = assetForRole(manifest, "runtime_script");
+    const runtimeWasm = assetForRole(manifest, "runtime_wasm");
+    const runtimeScriptURL = new URL(
+      `./${runtimeScript.path}`,
+      document.baseURI,
+    ).href;
+    const wasmURL = new URL(`./${runtimeWasm.path}`, document.baseURI).href;
+    const wasmResponse = await window.fetch(wasmURL, {
+      cache: "force-cache",
+      credentials: "same-origin",
+    });
+    const wasmBytes = await readBoundedResponse(wasmResponse, runtimeWasm.bytes);
+    if (
+      wasmBytes.byteLength !== runtimeWasm.bytes ||
+      (await sha256Hex(wasmBytes, crypto)) !== runtimeWasm.sha256
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
+    }
+    let runtime = null;
+    const moduleConfiguration = {
+      lmdjRuntimeOwnerCreated(owner, producerModule) {
+        if (producerModule !== moduleConfiguration || owner === null || typeof owner !== "object" ||
+            (runtime !== null && runtime !== owner)) {
+          throw typedError("HOST_STATE_INVALID", "Runtime producer ownership does not match its invocation");
+        }
+        runtime = owner;
+        onRuntimeOwnerCreated?.(owner);
+      },
+      lmdjHostManifestBytes: manifest.canonical_bytes,
+      lmdjHostManifestSha256: manifest.manifest_sha256,
+      wasmBinary: wasmBytes,
+      locateFile: createPackagedRuntimeLocator({
+        baseURI: document.baseURI,
+        runtimeScriptURL,
+        runtimeWasmURL: wasmURL,
+      }),
+    };
+    window.Module = moduleConfiguration;
+    await new Promise((resolvePromise, rejectPromise) => {
+      const script = document.createElement("script");
+      script.src = runtimeScriptURL;
+      script.integrity = sha256Integrity(runtimeScript.sha256, window);
+      script.crossOrigin = "anonymous";
+      script.addEventListener("load", resolvePromise, { once: true });
+      script.addEventListener(
+        "error",
+        () => rejectPromise(
+          typedError("HOST_PROTOCOL_MISMATCH", "Runtime script asset mismatch"),
+        ),
+        { once: true },
+      );
+      document.head.append(script);
+    });
+    // This producer reported its local Host through the exact Module input.
+    // Neither a different global Host nor a missing callback proves ownership.
+    requireLoadedRuntime(runtime);
+    const initializationDeadline =
+      (window.performance ?? globalThis.performance).now() + 30_000;
+    while (
+      runtime.runtimeInitialized !== true &&
+      (window.performance ?? globalThis.performance).now() < initializationDeadline
+    ) {
+      await new Promise((resolvePromise) => window.setTimeout(resolvePromise, 2));
+    }
+    if (runtime.runtimeInitialized !== true) {
+      throw typedError("HOST_STATE_INVALID", "Runtime initialization timed out");
+    }
+    if (typeof runtime.transport?.send !== "function") {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
+    }
+    return runtime;
+  } finally {
+    if (packagedRuntimeLoads.get(window) === reservation) packagedRuntimeLoads.delete(window);
   }
-  if (runtime.runtimeInitialized !== true) {
-    throw typedError("HOST_STATE_INVALID", "Runtime initialization timed out");
-  }
-  if (typeof runtime.transport?.send !== "function") {
-    throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
-  }
-  return runtime;
 }
 
 function createRuntimeSessionController(options = {}) {
@@ -1438,10 +1489,10 @@ function createRuntimeSessionController(options = {}) {
   const preflight = options.preflight ?? runPreflight;
   const loadRuntime =
     options.loadRuntime ??
-    ((manifest) =>
+    ((manifest, invocation) =>
       Array.isArray(manifest?.assets)
-        ? loadPackagedRuntime({ document, window, crypto, manifest })
-        : loadSourceRuntime({ window }));
+        ? loadPackagedRuntime({ document, window, crypto, manifest, ...invocation })
+        : loadSourceRuntime({ window, ...invocation }));
   const createAudioContext =
     options.createAudioContext ??
     ((audioOptions) => new window.AudioContext(audioOptions));
@@ -1469,6 +1520,12 @@ function createRuntimeSessionController(options = {}) {
         }
         return runtime.transport.send(...arguments_);
       },
+      get sendRetained() {
+        return typeof runtime?.transport?.sendRetained === "function"
+          ? runtime.transport.sendRetained.bind(runtime.transport) : undefined;
+      },
+      get terminated() { return runtime?.transport?.terminated === true; },
+      get terminalOwnerReleased() { return runtime?.transport?.terminalOwnerReleased; },
       subscribe(listener) {
         if (typeof runtime?.transport?.subscribe !== "function") {
           throw typedError("HOST_STATE_INVALID", "Runtime transport is unavailable");
@@ -1528,11 +1585,20 @@ function createRuntimeSessionController(options = {}) {
   let verifiedSampleImportLimit = null;
   let verifiedSampleIngestLimits = null;
   let runtime = null;
+  let runtimeLoadStarted = false;
+  let runtimeLoadPromise = null;
+  let runtimeLoadOwner = null;
+  let runtimeLoadError = null;
   let audioContext = null;
   let contextHandle = null;
   // Host monitoring is downstream of capture and never enters Project Truth.
   let monitorGain = null;
   let monitorHandle = null;
+  // The product and native cue outputs must have distinct graph destinations.
+  // This bus carries only product audio when no master tap is available.
+  let productMonitorBus = null;
+  let productMonitorHandle = null;
+  let countInOutputActive = false;
   let monitorLevel = 100;
   let performanceMasterTap = null;
   let activePerformanceMasterCapture = null;
@@ -1550,6 +1616,10 @@ function createRuntimeSessionController(options = {}) {
   let closing = false;
   let terminalCleanupStarted = false;
   let terminalCleanupPromise = null;
+  let terminalCleanupWaitPromise = null;
+  let terminalCleanupEligible = false;
+  let terminalCleanupError = null;
+  let normalCloseReservation = null;
   let unsubscribeTransport = null;
   let unsubscribeTransportFailure = null;
   let expectedContextSuspend = false;
@@ -1580,7 +1650,111 @@ function createRuntimeSessionController(options = {}) {
   let activeHostQueryAbort = null;
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
-  let triggerResponseReservation = null;
+  const triggerResponseReservations = new Map();
+  const earlyTriggerOutcomes = new Map();
+  let patternInputProfile = null;
+  let patternInputCapacity = null;
+  const patternInputPressReservations = new Set();
+  // One place per real physical gesture across both input contracts. Opaque
+  // keys never cross the wire; each original domain still owns its receipts.
+  const sharedGestures = new Set();
+  const physicalGestureOwners = new Map();
+  const leasedPhysicalKeys = new WeakSet();
+  const retiredLeasedPhysicalKeys = new WeakSet();
+
+  function newSharedGesture(gestureKey) {
+    if (sharedGestures.size >= 64) return null;
+    const owner = {gestureKey, slot: null, source: null, startedAt: monotonicNow(), releaseStartedAt: null,
+      physicalEnded: gestureKey === undefined, preparation: false, preparationCancelled: false,
+      handedOff: false, claims: new Set()};
+    sharedGestures.add(owner);
+    if (gestureKey !== undefined) physicalGestureOwners.set(gestureKey, owner);
+    return owner;
+  }
+  function retireSharedGesture(owner) {
+    if (owner.preparation || owner.claims.size !== 0 ||
+        (owner.handedOff && !owner.physicalEnded)) return;
+    sharedGestures.delete(owner);
+    if (owner.gestureKey !== undefined && leasedPhysicalKeys.has(owner.gestureKey))
+      retiredLeasedPhysicalKeys.add(owner.gestureKey);
+    // An old lease cannot remove a later owner using the same local object.
+    if (physicalGestureOwners.get(owner.gestureKey) === owner)
+      physicalGestureOwners.delete(owner.gestureKey);
+  }
+  function claimSharedGesture(gestureKey, domain, slot, source) {
+    if (gestureKey !== undefined && retiredLeasedPhysicalKeys.has(gestureKey)) return null;
+    const owner = gestureKey === undefined ? newSharedGesture(undefined)
+      : physicalGestureOwners.get(gestureKey) ?? newSharedGesture(gestureKey);
+    if (owner === null || (domain === "pattern" && owner.preparationCancelled) ||
+        (owner.slot !== null && slot !== undefined && owner.slot !== slot) ||
+        (domain === "pattern" && owner.source !== null && source !== undefined && owner.source !== source) ||
+        [...owner.claims].some(claim => claim.domain === domain)) return null;
+    owner.slot ??= slot ?? null;
+    owner.source ??= source ?? null;
+    const claim = {owner, domain, submitted: false};
+    owner.claims.add(claim);
+    if (domain === "pattern") owner.preparation = false;
+    return claim;
+  }
+  function submitSharedGesture(claim) {
+    if (claim === null || claim === undefined) return;
+    claim.submitted = true;
+    claim.owner.handedOff = true;
+  }
+  function settleSharedGesture(claim) {
+    if (claim === null || claim === undefined) return;
+    claim.owner.claims.delete(claim);
+    retireSharedGesture(claim.owner);
+  }
+  function endPhysicalGesture(gestureKey) {
+    const owner = physicalGestureOwners.get(gestureKey);
+    if (owner === undefined) return;
+    owner.physicalEnded = true;
+    owner.releaseStartedAt ??= monotonicNow();
+    retireSharedGesture(owner);
+  }
+  function reserveInputGesture(gestureKey, slot, source = "pointer") {
+    validateGestureKey(gestureKey);
+    if (gestureKey === undefined) throw new TypeError("A physical gesture key is required");
+    flatSlotAddress(slot);
+    if (!TRIGGER_SOURCES.has(source)) throw new TypeError("Runtime gesture source is invalid");
+    if (closing || machine.state === "closed" || physicalGestureOwners.has(gestureKey) ||
+        leasedPhysicalKeys.has(gestureKey)) return null;
+    const owner = newSharedGesture(gestureKey);
+    if (owner === null) return null;
+    owner.preparation = true;
+    owner.slot = slot;
+    owner.source = source;
+    leasedPhysicalKeys.add(gestureKey);
+    return Object.freeze({
+      cancelUnsubmittedPattern() {
+        // Only preparation is ours to cancel. Transferred or unknown domain
+        // claims have their own positive retirement boundaries.
+        if (owner.preparation) {
+          owner.preparation = false;
+          owner.preparationCancelled = true;
+          retireSharedGesture(owner);
+        }
+      },
+      releasePhysical() {
+        owner.physicalEnded = true;
+        owner.releaseStartedAt ??= monotonicNow();
+        retireSharedGesture(owner);
+      },
+    });
+  }
+  const patternInputPendingTickets = new Map();
+  const patternInputReleaseReservations = new Map();
+  const profileReleaseObservers = new WeakMap();
+  let profileInputAdmissionTail = Promise.resolve();
+  let patternTransportCompanionSupported = null;
+  let patternInputSerial = 1n;
+  const patternInputOperations = new Map();
+  const patternInputHolds = new Map();
+  let nativeInputLifecycleWait = null;
+  const patternInputTickets = new Map();
+  const patternCountInTickets = new Map();
+  const postResponseFailures = new WeakSet();
   let pendingSequenceSwitch = null;
   let sequenceBoundaryFlush = null;
   let interruptionReservation = null;
@@ -1754,6 +1928,8 @@ function createRuntimeSessionController(options = {}) {
     }
     let capture = null;
     let settled = false;
+    const pendingOwner = {cancelled: false};
+    const originalTap = performanceMasterTap;
     function releaseOwnership() {
       settled = true;
       if (activePerformanceMasterCapture === capture) {
@@ -1779,10 +1955,9 @@ function createRuntimeSessionController(options = {}) {
       },
     });
     let platformCapture;
-    const pendingOwner = {released: false};
     pendingPerformanceMasterCaptureStart = pendingOwner;
     try {
-      platformCapture = await performanceMasterTap.start(
+      platformCapture = await originalTap.start(
         platformSink,
         binding === null
           ? null
@@ -1800,6 +1975,13 @@ function createRuntimeSessionController(options = {}) {
         "HOST_STATE_INVALID",
         "Performance master capture state changed; retry after the current capture settles or reload",
       );
+    }
+    if (pendingOwner.cancelled || closing || terminalCleanupStarted || performanceMasterTap !== originalTap) {
+      // The real tap owner still closes after the Native/backend fence. Do
+      // not await its stop here or arm a late ACK into this closed Session.
+      void Promise.resolve().then(() => platformCapture.stop()).catch(() => {});
+      releaseOwnership();
+      throw typedError("HOST_STATE_INVALID", "Performance master capture start was cancelled by closure");
     }
     let stopping = null;
     capture = Object.freeze({
@@ -1824,9 +2006,9 @@ function createRuntimeSessionController(options = {}) {
 
   async function closePerformanceMasterTap() {
     const tap = performanceMasterTap;
-    performanceMasterTap = null;
     if (tap === null) return;
     await tap.close();
+    if (performanceMasterTap === tap) performanceMasterTap = null;
     activePerformanceMasterCapture = null;
   }
 
@@ -1941,6 +2123,19 @@ function createRuntimeSessionController(options = {}) {
     safetyReservation = reservation;
     reservation.promise = stopActivePerformanceMasterCapture()
       .then(() => serializeRuntimeAction(async () => {
+        // Clearing local pressed UI owns physical input disposition. Submit
+        // each real correlated release before the lifecycle Stop; await its
+        // completion outside this short runtime lane.
+        for (const hold of patternInputHolds.values()) {
+          if (!hold.releaseSubmitted) {
+            try {
+              await admitProfileHoldRelease(hold, monotonicNow());
+            } catch {
+              // A refused admission leaves the real input/physical owner
+              // retained. It must not prevent the other safety attempts.
+            }
+          }
+        }
         await clearOwnedPreviews(null, true);
         return stopAllInRuntimeLane(true);
       }));
@@ -1984,39 +2179,140 @@ function createRuntimeSessionController(options = {}) {
     cleanup: cleanupForTransition,
   });
 
-  function terminalCleanup() {
+  function terminalCleanup(normalClose = null) {
     if (terminalCleanupStarted) {
       return terminalCleanupPromise;
     }
     terminalCleanupStarted = true;
-    if (probeReservation?.timeout != null) {
-      timers.clearTimeout(probeReservation.timeout);
-    }
-    probeReservation = null;
-    clearPressed();
-    unsubscribeTransport?.();
-    unsubscribeTransport = null;
-    unsubscribeTransportFailure?.();
-    unsubscribeTransportFailure = null;
-    activePreviewSlots.clear();
-    pendingSequenceSwitch = null;
-    sequenceBoundaryFlush = null;
-    sequenceBoundaryListeners.clear();
-    voiceStateListeners.clear();
-    performanceMasterCaptureStatusListeners.clear();
-    for (const dispose of listenerDisposers.splice(0)) {
-      dispose();
-    }
-    midiAdapter?.dispose();
-    terminalCleanupPromise = closePerformanceMasterTap()
-      .then(() => {
-        diagnosticsListeners.clear();
-        try { monitorGain?.disconnect(); } catch {}
-        monitorGain = null;
-        return runtimeTerminator({ runtime, audioContext });
-      })
-      .catch(() => {});
+    cancelPreparedLiveInputs();
+    // Bind before any timer, pressed-state or diagnostic callback can
+    // reenter this already initiated cleanup. A seal never means completion.
+    let resolveCleanup;
+    let rejectCleanup;
+    terminalCleanupPromise = new Promise((resolve, reject) => {
+      resolveCleanup = resolve;
+      rejectCleanup = reject;
+    });
+    terminalCleanupWaitPromise = terminalCleanupPromise.then(
+      () => terminalCleanupEligible, () => false);
+    // Observe failure without replacing the original rejected owner Promise.
+    void terminalCleanupPromise.catch((error) => {
+      terminalCleanupError = error;
+      if (normalClose && fatalReservation === null) fail(error);
+    });
+    void (async () => {
+      if (probeReservation?.timeout != null) {
+        timers.clearTimeout(probeReservation.timeout);
+      }
+      probeReservation = null;
+      clearPressed();
+      // A loader already invoked still owns its eventual real resources.
+      // Wait that exact invocation before retiring them; a null runtime while
+      // it is pending is not evidence that this session never loaded.
+      if (runtimeLoadPromise !== null && runtime === null) {
+        try { runtime = await runtimeLoadPromise; }
+        catch (error) {
+          runtimeLoadError = error;
+          // Only the original producer's explicit invocation binding can
+          // identify a partial owner. A foreign global publication is ignored.
+          runtime = runtimeLoadOwner;
+        }
+      }
+      // Start the real transport stop/drain first. Its returned Promise is
+      // not permission to detach SDK resources or discard retained owners.
+      let termination;
+      try {
+        if (normalClose) normalClose.invokingTerminator = true;
+        termination = Promise.resolve(runtimeTerminator({runtime, audioContext}));
+      } catch (error) {
+        termination = Promise.reject(error);
+      } finally {
+        if (normalClose) normalClose.invokingTerminator = false;
+      }
+      // Keep servicing original owner debt even when actual backend closure
+      // rejects. A failed terminator must also reach the normal close caller.
+      const retirement = waitForTerminalOwnerRelease();
+      void retirement.catch(() => {});
+      await termination;
+      if (normalClose?.failure) throw normalClose.failure;
+      if (normalClose && (transport.terminated === true || transport.terminalOwnerReleased !== undefined) &&
+          transport.terminalOwnerReleased !== true)
+        throw typedError("HOST_STATE_INVALID", "Runtime owner did not confirm normal closure", {pending: true});
+      await retirement;
+      if (runtimeLoadError !== null) throw runtimeLoadError;
+      if (normalClose?.failure) throw normalClose.failure;
+      if (typeof audioContext?.close === "function" && audioContext.state !== "closed")
+        throw typedError("HOST_STATE_INVALID", "AudioContext did not confirm backend closure", {pending: true});
+      await closePerformanceMasterTap();
+      unsubscribeTransport?.();
+      unsubscribeTransport = null;
+      unsubscribeTransportFailure?.();
+      unsubscribeTransportFailure = null;
+      activePreviewSlots.clear();
+      pendingSequenceSwitch = null;
+      sequenceBoundaryFlush = null;
+      sequenceBoundaryListeners.clear();
+      voiceStateListeners.clear();
+      performanceMasterCaptureStatusListeners.clear();
+      for (const dispose of listenerDisposers.splice(0)) {
+        dispose();
+      }
+      midiAdapter?.dispose();
+      diagnosticsListeners.clear();
+      try { productMonitorBus?.disconnect(); } catch {}
+      productMonitorBus = null;
+      productMonitorHandle = null;
+      countInOutputActive = false;
+      try { monitorGain?.disconnect(); } catch {}
+      monitorGain = null;
+      const fullOwnerReceipt = transport.terminalOwnerReleased;
+      const neverLoaded = !runtimeLoadStarted && runtime === null && audioContext === null &&
+        window?.lmdjWebRuntimeHost == null;
+      // A healthy older transport has a separate normal-close contract. Its
+      // missing getter is never a Native ACK for a fatal or negotiated owner.
+      const legacyNormalClose = normalClose !== null && normalClose.failure === null &&
+        fatalReservation === null && transport.terminated !== true &&
+        fullOwnerReceipt === undefined && patternInputProfile === null;
+      // The full Host receipt proves its Native/Pattern owners and actual
+      // backend closure above. It is not a Performance journal stop receipt.
+      // Retain that domain's unresolved claim until its genuine Release/Stop.
+      for (const owner of sharedGestures) {
+        owner.preparation = false;
+        owner.preparationCancelled = true;
+        for (const claim of owner.claims) {
+          if (!claim.submitted ||
+              ((fullOwnerReceipt === true || legacyNormalClose) && claim.domain === "pattern"))
+            owner.claims.delete(claim);
+        }
+        if (fullOwnerReceipt === true || legacyNormalClose) owner.physicalEnded = true;
+        retireSharedGesture(owner);
+      }
+      terminalCleanupEligible = sharedGestures.size === 0 && !hasRetainedPatternOwners() &&
+        (audioContext === null || audioContext.state === "closed") &&
+        (fullOwnerReceipt === true || neverLoaded || legacyNormalClose);
+    })().then(resolveCleanup, rejectCleanup);
     return terminalCleanupPromise;
+  }
+
+  function waitForTerminalCleanup() {
+    // This is a read-only wait on this Session's already initiated cleanup.
+    // It never starts close, repeats an owner action or clears the first fault.
+    return terminalCleanupWaitPromise ?? Promise.resolve(false);
+  }
+
+  function observeTransportFailure(error) {
+    const normalClose = normalCloseReservation;
+    if (normalClose?.invokingTerminator && normalClose.expectedTerminationError === null && transport.terminated === true &&
+        error?.code === "HOST_STATE_INVALID" &&
+        error.message === "formal Web Host transport is terminated" &&
+        exactKeys(error.details, [])) {
+      // Production terminate emits this exact local failure synchronously.
+      // Only this call's own deliberate seal is expected; backend closure
+      // still needs the real owner receipt and successful termination result.
+      normalClose.expectedTerminationError = error;
+      return;
+    }
+    fail(error);
   }
 
   function fail(codeOrError, targetOverride) {
@@ -2035,6 +2331,12 @@ function createRuntimeSessionController(options = {}) {
       typeof codeOrError === "string"
         ? Object.freeze({})
         : safeErrorDetails(codeOrError);
+    const originalFailure = typeof codeOrError === "string" ? typedError(code) : codeOrError;
+    if (normalCloseReservation) normalCloseReservation.failure ??= originalFailure;
+    for (const entry of patternInputOperations.values()) {
+      entry.observerError ??= originalFailure;
+      entry.rejectObserver?.(entry.observerError);
+    }
     closing = true;
     const target =
       targetOverride ??
@@ -2044,7 +2346,7 @@ function createRuntimeSessionController(options = {}) {
     const safety = beginSafetyCleanup(`fatal:${code}`);
     const reservation = Object.freeze({code, safety, target});
     fatalReservation = reservation;
-    void safety.promise.then(() => {
+    const finishFailure = () => {
       if (
         fatalReservation !== reservation ||
         ["restart-required", "failed", "closed"].includes(machine.state)
@@ -2054,9 +2356,10 @@ function createRuntimeSessionController(options = {}) {
       invalidateProbe();
       machine.transition(target, {reason: code});
       renderDiagnostics();
-    }).catch(() => {
-      // The best-effort safety lane absorbs Host cleanup failures.
-    });
+    };
+    // Cleanup rejection is not physical readiness, but the original fatal
+    // state must still become observable and initiate gated terminal cleanup.
+    void safety.promise.then(finishFailure, finishFailure).catch(() => {});
     renderDiagnostics();
     return true;
   }
@@ -2083,22 +2386,50 @@ function createRuntimeSessionController(options = {}) {
     if (requestOptions.cancelQuery === true) {
       transportOptions.cancelQuery = true;
     }
-    if (
-      operation === "trigger" &&
-      typeof requestOptions.beforeDispatch === "function"
-    ) {
-      requestOptions.beforeDispatch();
+    if (["pattern.transport.input.request", "trigger", "performance.record.event"].includes(operation) &&
+        requestOptions.originalStartedAt !== undefined) {
+      // Both SDK tails spend the same Pad budget. Compute it at the actual
+      // transport handoff, not before waiting behind an independent query.
+      transportOptions.deadlineMs = (requestOptions.originalBudgetMs ?? deadlineForOperation(operation)) -
+        (monotonicNow() - requestOptions.originalStartedAt);
+      if (transportOptions.deadlineMs <= 0)
+        throw typedError("HOST_TIMEOUT", "Original Pad input deadline expired", {pending: false});
     }
-    const response = validateResponseEnvelope(
-      await transport.send(request, transportOptions),
-      operation,
-    );
-    if (response.request_id !== request.request_id) {
-      throw typedError(
-        "HOST_PROTOCOL_MISMATCH", "Response request_id mismatch",
-      );
+    const retainedOwner = typeof requestOptions.retainedOwner === "function" &&
+      requestOptions.retainedOwner();
+    const sealed = transport.terminated === true;
+    if (sealed && retainedOwner && operation === "pattern.transport.inspect") {
+      // This existing owner's query keeps the short count continuation cadence.
+      transportOptions.deadlineMs = Math.min(transportOptions.deadlineMs,
+        deadlineForOperation("pattern.transport.count-in.inspect"));
+    }
+    const send = sealed && retainedOwner ? transport.sendRetained : transport.send;
+    if (sealed && retainedOwner && typeof send !== "function")
+      throw typedError("HOST_STATE_INVALID", "Retained transport continuation is unavailable", {pending: true});
+    // A sealed ordinary send cannot submit anything. In particular it cannot
+    // turn a never-dispatched count-in or release into an unknown admission.
+    if (!sealed || retainedOwner) requestOptions.beforeDispatch?.(request.request_id);
+    const received = await send.call(transport, request, transportOptions);
+    let response;
+    try {
+      response = validateResponseEnvelope(received, operation);
+      if (response.request_id !== request.request_id) {
+        throw typedError(
+          "HOST_PROTOCOL_MISMATCH", "Response request_id mismatch",
+        );
+      }
+    } catch (error) {
+      throw markPostResponseFailure(error);
     }
     if (!response.ok) {
+      // Only a validated rejection of this additive operation can mean an
+      // older Host. Malformed envelopes and wrong request IDs still fail.
+      if (operation === "pattern.transport.count-in.capabilities" &&
+          requestOptions.capabilityProbe === true &&
+          response.error.code === "HOST_PROTOCOL_MISMATCH") {
+        return {supported: false, negotiated: false, output_ready: false,
+          runtime_generation: null, frame_epoch: null, next_serial: null, input_capacity: 0};
+      }
       throw typedError(
         validatedErrorCode(response.error.code, "HOST_PROTOCOL_MISMATCH"),
         "Host request was rejected",
@@ -2108,7 +2439,20 @@ function createRuntimeSessionController(options = {}) {
     return response.result;
   }
 
+  async function requestInputLifecycle(operation) {
+    const owner = {operation};
+    try {
+      return await boundedRequest(operation, {}, {beforeDispatch: () => {
+        // Mark the actual Host handoff, not time spent in its SDK queue.
+        nativeInputLifecycleWait = owner;
+      }});
+    } finally {
+      if (nativeInputLifecycleWait === owner) nativeInputLifecycleWait = null;
+    }
+  }
+
   function boundedRequest(operation, payload, requestOptions = {}) {
+    const startedAt = requestOptions.originalStartedAt ?? monotonicNow();
     const interruptible = SAFETY_INTERRUPTIBLE_HOST_OPERATIONS.has(operation);
     const queryGeneration = hostQueryGeneration;
     const action = async () => {
@@ -2142,7 +2486,17 @@ function createRuntimeSessionController(options = {}) {
     void completion.then(() => {
       if (hostRequestTail === completion) hostRequestTail = null;
     });
-    return pending;
+    if (!["audio.suspend", "host.close", "project.open", "project.create", "history.undo", "history.redo"].includes(operation))
+      return pending;
+    return pending.catch(async (error) => {
+      if (error?.details?.pending !== true || !String(error.details.reason ?? "").startsWith("pattern_transport_")) throw error;
+      const remaining = (requestOptions.originalBudgetMs ?? requestOptions.deadlineMs ?? deadlineForOperation(operation)) -
+        (monotonicNow() - startedAt);
+      if (remaining <= 0) throw typedError("HOST_TIMEOUT", "Original lifecycle deadline expired", {pending: true});
+      await new Promise((resolve) => timers.setTimeout(resolve, 5));
+      return boundedRequest(operation, payload, {...requestOptions, originalStartedAt: startedAt,
+        deadlineMs: remaining, originalBudgetMs: requestOptions.originalBudgetMs ?? requestOptions.deadlineMs ?? deadlineForOperation(operation)});
+    });
   }
 
   async function recoverableQuery(operation, payload) {
@@ -2207,6 +2561,36 @@ function createRuntimeSessionController(options = {}) {
   let liveLaneRunning = false;
   let liveLaneHoldCount = 0;
   let liveLaneOpenPads = new Map();
+  const liveLanePendingPresses = new Set();
+  const liveLaneReleaseReservations = new Map();
+  let liveLaneCleanupReservation = null;
+
+  function liveLaneOwners(gestureKey, identity = {}) {
+    return [...liveLaneOpenPads.values(), ...liveLanePendingPresses].filter((owner) => {
+      const key = owner.gestureKey;
+      const sameKey = key === gestureKey ||
+        (typeof key === "object" && gestureKey === `slot:${key.slot}`);
+      return sameKey &&
+        (identity.slot === undefined || owner.identity.slot === identity.slot) &&
+        (identity.sessionId === undefined || owner.identity.sessionId === identity.sessionId);
+    });
+  }
+
+  function supersedeKeylessOpenPad(flatSlot) {
+    const owner = liveLaneOpenPads.get(`slot:${flatSlot}`);
+    if (owner === undefined || liveLaneReleaseReservations.has(owner)) return;
+    liveLaneOpenPads.delete(owner.gestureKey);
+    settleSharedGesture(owner.sharedClaim);
+  }
+
+  function retireLiveLaneRelease(entry) {
+    for (const owner of entry.releaseOwners) {
+      liveLanePendingPresses.delete(owner);
+      liveLaneOpenPads.delete(owner.gestureKey);
+      liveLaneReleaseReservations.delete(owner);
+      settleSharedGesture(owner.sharedClaim);
+    }
+  }
 
   function liveInputOverflow() {
     return typedError(
@@ -2222,23 +2606,40 @@ function createRuntimeSessionController(options = {}) {
     liveLaneRunning = true;
     entry.started = true;
     Promise.resolve()
-      .then(entry.action)
+      .then(() => entry.action(entry))
       .then(
         (value) => {
-          // A press occupies its release slot only once Core admitted it.
           if (entry.classification === "pad_press") {
-            liveLaneOpenPads.set(entry.gestureKey, true);
+            liveLanePendingPresses.delete(entry);
+            // Legacy trigger deliberately projects several outcomes to false.
+            // Only actual beforeDispatch evidence distinguishes an untouched
+            // local reservation from a handed-off/possibly unknown owner.
+            if (!entry.identity.legacy || entry.submitted)
+              liveLaneOpenPads.set(entry.gestureKey, entry);
+            else settleSharedGesture(entry.sharedClaim);
           }
+          if (entry.classification === "pad_release") {
+            if (value !== false) retireLiveLaneRelease(entry);
+            else for (const owner of entry.releaseOwners) liveLaneReleaseReservations.delete(owner);
+          }
+          if (entry.classification === "cleanup") liveLaneCleanupReservation = null;
           entry.resolve(value);
         },
         (error) => {
+          // A definitely unsubmitted refusal frees local capacity. A lost
+          // admission response keeps it; an observer rejection is no receipt.
+          if (!unknownSubmittedOutcome(error, entry.submitted)) {
+            const preparedRelease = liveLaneReleaseReservations.get(entry);
+            if (preparedRelease !== undefined) cancelPreparedLiveInput(preparedRelease, error, true);
+            liveLanePendingPresses.delete(entry);
+            settleSharedGesture(entry.sharedClaim);
+            for (const owner of entry.releaseOwners) liveLaneReleaseReservations.delete(owner);
+            if (liveLaneCleanupReservation === entry) liveLaneCleanupReservation = null;
+          }
           entry.reject(error);
         },
       )
       .finally(() => {
-        if (entry.classification === "pad_release") {
-          liveLaneOpenPads.delete(entry.gestureKey);
-        }
         liveLaneRunning = false;
         pumpLiveLane();
       });
@@ -2248,26 +2649,58 @@ function createRuntimeSessionController(options = {}) {
    * @template T
    * @param {() => Promise<T>} action
    * @param {"ordinary"|"pad_press"|"pad_release"|"cleanup"} classification
-   * @param {string|null} gestureKey
+   * @param {string|object|null} gestureKey
    * @returns {Promise<Awaited<T>>}
    */
-  function submitLiveInput(
+  function reserveLiveInput(
     action,
     classification = "ordinary",
     gestureKey = null,
+    identity = {},
+    padOnly = false,
   ) {
     if (closing || machine.state === "closed") {
-      return Promise.reject(typedError(
+      throw typedError(
         "HOST_STATE_INVALID",
         "Runtime session is closed",
-      ));
+      );
     }
+    const releaseOwners = classification === "pad_release"
+      ? liveLaneOwners(gestureKey, identity) : [];
+    if (releaseOwners.some(owner => liveLaneReleaseReservations.has(owner))) {
+      throw typedError("HOST_STATE_INVALID",
+        "Matching Pad Release is already reserved", {pending: true});
+    }
+    // A foreign/replayed Release has no reserved owner position. Preserve its
+    // public wire API through the bounded ordinary window, not an exception.
+    if (classification === "pad_release" && releaseOwners.length === 0)
+      classification = "ordinary";
+    // Only the exact original event ID can replay a UUID Press without a new
+    // owner. A different request cannot borrow the original gesture position.
+    if (classification === "pad_press") {
+      const prior = liveLaneOwners(gestureKey, {sessionId: identity.sessionId});
+      if (prior.length !== 0) {
+        if (identity.eventId === undefined || prior.some(owner =>
+            owner.identity.eventId !== identity.eventId || owner.identity.slot !== identity.slot))
+          throw typedError("HOST_STATE_INVALID",
+            "Pad gesture already owns a Press position", {pending: true});
+        if (prior.some(owner => owner.prepared))
+          throw typedError("HOST_STATE_INVALID",
+            "The original prepared Pad Press must submit through its token", {pending: false});
+        classification = "ordinary";
+      }
+    }
+    if (padOnly && classification === "ordinary")
+      throw typedError("HOST_STATE_INVALID", "Only a fresh Pad Press or its matching Release can be prepared");
+    if (classification === "cleanup" && liveLaneCleanupReservation !== null)
+      throw typedError("HOST_STATE_INVALID",
+        "Performance cleanup token is already reserved", {pending: true});
     if (classification === "pad_press" &&
-        liveLaneOpenPads.size >= LIVE_INPUT_OPEN_PAD_LIMIT) {
-      return Promise.reject(typedError(
+        liveLaneOpenPads.size + liveLanePendingPresses.size >= LIVE_INPUT_OPEN_PAD_LIMIT) {
+      throw typedError(
         "HOST_STATE_INVALID",
         "Too many open Pad gestures; the 65th press is not admitted",
-      ));
+      );
     }
     // Pad presses and their matching releases occupy the per-gesture slots,
     // never the ordinary 1+1 window; only ordinary inputs face that limit.
@@ -2276,7 +2709,7 @@ function createRuntimeSessionController(options = {}) {
         (entry) => !entry.started && entry.classification === "ordinary",
       ).length;
       if ((liveLaneRunning ? 1 : 0) + ordinaryWaiting >= 2) {
-        return Promise.reject(liveInputOverflow());
+        throw liveInputOverflow();
       }
     }
     if (classification === "cleanup") {
@@ -2297,13 +2730,77 @@ function createRuntimeSessionController(options = {}) {
         }
       }
     }
-    return new Promise((resolve, reject) => {
-      liveLaneQueue.push({
-        action, resolve, reject, classification, gestureKey,
-        started: false, cancelled: false,
-      });
-      pumpLiveLane();
-    });
+    const sharedClaim = classification === "pad_press"
+      ? claimSharedGesture(identity.physicalKey, identity.legacy ? "pattern" : "performance", identity.slot, identity.source) : null;
+    if (classification === "pad_press" && sharedClaim === null)
+      throw typedError("HOST_STATE_INVALID",
+        "Combined Pad gesture window is full or this domain already owns the Press", {pending: false});
+    let resolve, reject;
+    const promise = new Promise((done, failed) => { resolve = done; reject = failed; });
+    // Prepared entries may be cancelled before their caller invokes submit.
+    // Observe that rejection without changing the original public Promise.
+    void promise.catch(() => {});
+    const entry = {action, resolve, reject, promise, classification, gestureKey, identity, releaseOwners, sharedClaim,
+      startedAt: sharedClaim?.owner.startedAt ?? identity.releaseStartedAt ?? monotonicNow(),
+      prepared: true, started: false, submitted: false, cancelled: false};
+    if (classification === "pad_press") liveLanePendingPresses.add(entry);
+    if (classification === "pad_release")
+      for (const owner of releaseOwners) liveLaneReleaseReservations.set(owner, entry);
+    if (classification === "cleanup") liveLaneCleanupReservation = entry;
+    return entry;
+  }
+
+  function cancelPreparedLiveInput(entry, error, allowQueued = false) {
+    if (entry.cancelled || (!entry.prepared && !(allowQueued && !entry.started &&
+        !entry.submitted && liveLaneQueue.includes(entry)))) return false;
+    const queued = liveLaneQueue.indexOf(entry);
+    if (queued !== -1) liveLaneQueue.splice(queued, 1);
+    entry.cancelled = true;
+    entry.prepared = false;
+    liveLanePendingPresses.delete(entry);
+    // A cancelled never-submitted Press cannot own a wire Release. Cancel
+    // only a still-prepared matching descriptor; submitted debts stay intact.
+    const release = liveLaneReleaseReservations.get(entry);
+    if (release !== undefined) cancelPreparedLiveInput(release, error);
+    for (const owner of entry.releaseOwners)
+      if (liveLaneReleaseReservations.get(owner) === entry)
+        liveLaneReleaseReservations.delete(owner);
+    settleSharedGesture(entry.sharedClaim);
+    entry.reject(error);
+    return true;
+  }
+
+  function cancelPreparedLiveInputs(sessionId) {
+    const error = typedError("HOST_STATE_INVALID", "Live input was cancelled before Core admission", {pending: false});
+    const entries = new Set([...liveLanePendingPresses, ...liveLaneReleaseReservations.values()]);
+    for (const entry of entries)
+      if (sessionId === undefined || entry.identity.sessionId === sessionId)
+        cancelPreparedLiveInput(entry, error);
+  }
+
+  function submitReservedLiveInput(entry) {
+    if (!entry.prepared) return entry.promise;
+    if (entry.releaseOwners.some(owner => owner.prepared)) {
+      cancelPreparedLiveInput(entry, typedError("HOST_STATE_INVALID",
+        "Submit the original Pad Press before its matching Release", {pending: false}));
+      return entry.promise;
+    }
+    if (closing || terminalCleanupStarted || machine.state === "closed") {
+      cancelPreparedLiveInput(entry, typedError("HOST_STATE_INVALID", "Runtime session is closed", {pending: false}));
+      return entry.promise;
+    }
+    entry.prepared = false;
+    liveLaneQueue.push(entry);
+    pumpLiveLane();
+    return entry.promise;
+  }
+
+  function submitLiveInput(action, classification = "ordinary", gestureKey = null, identity = {}) {
+    try {
+      return submitReservedLiveInput(reserveLiveInput(action, classification, gestureKey, identity));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   // The dual-ready gate of a headered recording begin: recorded inputs stay
@@ -2366,7 +2863,10 @@ function createRuntimeSessionController(options = {}) {
    *   source: "pointer" | "keyboard" | "midi",
    * }>>}
    */
-  async function dispatchTrigger(flatSlot, velocity, source) {
+  async function dispatchTrigger(flatSlot, velocity, source, liveEntry = null) {
+    // An ordinary live input's budget starts at its own turn, not when it
+    // joined the queue behind earlier input. A recovery probe keeps its start.
+    const turnStartedAt = monotonicNow();
     if (
       !Number.isInteger(flatSlot) ||
       flatSlot < 0 ||
@@ -2402,7 +2902,7 @@ function createRuntimeSessionController(options = {}) {
       };
     }
 
-    const responseReservation = {earlyOutcome: null};
+    const responseReservation = {requestId: null};
     try {
       const result = await boundedRequest("trigger", {
         slot: flatSlot,
@@ -2410,8 +2910,17 @@ function createRuntimeSessionController(options = {}) {
       }, {
         // The Wasm transport may resolve this response and synchronously drain
         // its following notification before this async continuation can run.
-        beforeDispatch() {
-          triggerResponseReservation = responseReservation;
+        originalStartedAt: recoveryProbe ? liveEntry?.startedAt : turnStartedAt,
+        beforeDispatch(requestId) {
+          if (triggerResponseReservations.size >= TRIGGER_LEDGER_LIMIT) {
+            throw typedError("HOST_STATE_INVALID", "Trigger response ledger is full");
+          }
+          responseReservation.requestId = requestId;
+          if (liveEntry !== null) {
+            liveEntry.submitted = true;
+            submitSharedGesture(liveEntry.sharedClaim);
+          }
+          triggerResponseReservations.set(requestId, responseReservation);
         },
       });
       const responseIsCurrent = recoveryProbe
@@ -2427,11 +2936,8 @@ function createRuntimeSessionController(options = {}) {
       if (!responseIsCurrent) {
         return false;
       }
-      const earlyOutcome = responseReservation.earlyOutcome;
-      if (
-        earlyOutcome !== null &&
-        earlyOutcome.sequence !== result?.sequence
-      ) {
+      const earlyOutcome = earlyTriggerOutcomes.get(result?.sequence) ?? null;
+      if (earlyOutcome === null && earlyTriggerOutcomes.size !== 0 && triggerResponseReservations.size === 1) {
         fail("HOST_PROTOCOL_MISMATCH");
         return false;
       }
@@ -2439,9 +2945,14 @@ function createRuntimeSessionController(options = {}) {
       if (recoveryProbe && probeReservation?.epochId === admissionEpoch) {
         probeReservation.sequence = result.sequence;
       }
-      triggerResponseReservation = null;
+      triggerResponseReservations.delete(responseReservation.requestId);
       if (earlyOutcome !== null) {
+        earlyTriggerOutcomes.delete(result.sequence);
         acceptOutcome(earlyOutcome);
+      }
+      if (triggerResponseReservations.size === 0 && earlyTriggerOutcomes.size !== 0) {
+        fail("HOST_PROTOCOL_MISMATCH");
+        return false;
       }
       if (
         recoveryProbe &&
@@ -2468,18 +2979,52 @@ function createRuntimeSessionController(options = {}) {
       fail(error);
       return false;
     } finally {
-      if (triggerResponseReservation === responseReservation) {
-        triggerResponseReservation = null;
-      }
+      triggerResponseReservations.delete(responseReservation.requestId);
     }
   }
 
-  function trigger(flatSlot, velocity, source = "pointer") {
-    return submitLiveInput(
-      () => dispatchTrigger(flatSlot, velocity, source),
-      "pad_press",
-      `slot:${flatSlot}`,
-    );
+  function validateGestureKey(gestureKey) {
+    if (gestureKey !== undefined && (gestureKey === null || typeof gestureKey !== "object"))
+      throw new TypeError("Runtime gesture key must be a local object reference");
+  }
+
+  function trigger(flatSlot, velocity, source = "pointer", gestureKey) {
+    validateGestureKey(gestureKey);
+    if (patternInputProfile !== null) {
+      // Only the short admission owns the runtime tail. Native/durable
+      // completion may remain held while Release, Stop and inspect proceed.
+      const startedAt = physicalGestureOwners.get(gestureKey)?.startedAt ?? monotonicNow();
+      const reservation = reservePatternInputPress({slot: flatSlot, source, gestureKey});
+      if (reservation === null) {
+        const owner = physicalGestureOwners.get(gestureKey);
+        if (owner?.preparation) {
+          owner.preparation = false;
+          owner.preparationCancelled = true;
+          retireSharedGesture(owner);
+        }
+        return Promise.resolve(rejectTrigger());
+      }
+      const admission = serializeRuntimeAction(() =>
+        admitProfileTrigger(flatSlot, velocity, source, startedAt, gestureKey, reservation));
+      reservation.admission = admission;
+      return admission
+        .then((entry) => entry === false ? false : entry.completion)
+        .then((result) => {
+          if (result === false) return false;
+          if (BigInt(result.sequence) > BigInt(Number.MAX_SAFE_INTEGER))
+            throw typedError("HOST_STATE_INVALID", "Accepted input sequence cannot be safely projected to the legacy trigger result",
+              {accepted: true, sequence: result.sequence});
+          return Object.freeze({sequence: Number(result.sequence), slot: result.slot,
+            velocity: result.velocity, source: result.source});
+        });
+    }
+    // A keyless legacy caller retriggers a Pad without a Release, as on main:
+    // it holds one position per Pad, and a new Press supersedes a settled one.
+    if (gestureKey === undefined) supersedeKeylessOpenPad(flatSlot);
+    return submitLiveInput(entry => dispatchTrigger(flatSlot, velocity, source, entry),
+      "pad_press", gestureKey === undefined ? `slot:${flatSlot}` : {slot: flatSlot, source, gestureKey},
+      {legacy: true, slot: flatSlot, source, physicalKey: gestureKey});
+
   }
 
   function completeRecovery(status) {
@@ -2543,6 +3088,7 @@ function createRuntimeSessionController(options = {}) {
       await boundedRequest("audio.activate", {}, {
         deadlineMs: remainingActivationBudget(controlDeadline),
       });
+      await refreshPatternInputProfile();
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
       }
@@ -2601,7 +3147,7 @@ function createRuntimeSessionController(options = {}) {
       };
       nextRecoveryEpoch += 1;
       recoveryEpoch = epoch;
-      await boundedRequest("audio.suspend", {});
+      await requestInputLifecycle("audio.suspend");
       if (recoveryEpoch !== epoch || closing) {
         return;
       }
@@ -2788,14 +3334,16 @@ function createRuntimeSessionController(options = {}) {
         continue;
       }
       if (
-        triggerResponseReservation !== null &&
-        triggerResponseReservation.earlyOutcome === null
+        triggerResponseReservations.size !== 0 &&
+        !admittedSequences.has(event.sequence) &&
+        !earlyTriggerOutcomes.has(event.sequence) &&
+        earlyTriggerOutcomes.size < TRIGGER_LEDGER_LIMIT
       ) {
-        triggerResponseReservation.earlyOutcome = Object.freeze({
+        earlyTriggerOutcomes.set(event.sequence, Object.freeze({
           sequence: event.sequence,
           outcome: event.outcome,
           runtime_frame: event.runtime_frame,
-        });
+        }));
         continue;
       }
       fail("HOST_PROTOCOL_MISMATCH");
@@ -3108,6 +3656,11 @@ function createRuntimeSessionController(options = {}) {
     activationReservation = reservation;
     activationRefusal = null;
     try {
+      if (options.patternTransport === true && typeof runtime.startAudioWorkletWithCountIn === "function") {
+        const capability = await readCountInCapabilities(true);
+        if (capability.supported && !capability.negotiated)
+          throw typedError("HOST_STATE_INVALID", "Pattern input negotiation was refused");
+      }
       if (audioContext === null) {
         audioContext = createAudioContext({ sampleRate: 48_000 });
         // A context created inside the gesture is already running, and
@@ -3130,7 +3683,18 @@ function createRuntimeSessionController(options = {}) {
         if (!isPositiveInteger(monitorHandle)) {
           throw typedError("HOST_STATE_INVALID", "Monitor output registration failed");
         }
-        let outputDestinationHandle = monitorHandle;
+        const supportsCountInOutput =
+          typeof runtime.startAudioWorkletWithCountIn === "function";
+        if (supportsCountInOutput) {
+          productMonitorBus = audioContext.createGain();
+          productMonitorBus.connect(monitorGain);
+          productMonitorHandle = runtime.registerAudioNode(productMonitorBus);
+          if (!isPositiveInteger(productMonitorHandle) ||
+              productMonitorHandle === monitorHandle) {
+            throw typedError("HOST_STATE_INVALID", "Product output registration failed");
+          }
+        }
+        let outputDestinationHandle = productMonitorHandle ?? monitorHandle;
         if (captureConfig !== null) {
           let localTap = null;
           try {
@@ -3171,19 +3735,25 @@ function createRuntimeSessionController(options = {}) {
             if (!graphBootstrapIsCurrent(reservation, "audio-suspended")) {
               return false;
             }
-            outputDestinationHandle = monitorHandle;
+            outputDestinationHandle = productMonitorHandle ?? monitorHandle;
             publishCaptureUnavailable(
               "tap-initialization-failed",
               "Reload the page and activate audio again before retrying Perform capture",
             );
           }
         }
-        audioWorkletStartPromise = Promise.resolve(runtime.startAudioWorklet(
-          contextHandle, outputDestinationHandle));
+        audioWorkletStartPromise = Promise.resolve(supportsCountInOutput
+          ? runtime.startAudioWorkletWithCountIn(
+            contextHandle, outputDestinationHandle, monitorHandle)
+          : runtime.startAudioWorklet(contextHandle, outputDestinationHandle));
         const workletResult = await audioWorkletStartPromise;
         if (workletResult?.ok === false) {
           throw typedError("HOST_STATE_INVALID", "AudioWorklet start failed");
         }
+        if (supportsCountInOutput && workletResult?.outputs !== 2) {
+          throw typedError("HOST_PROTOCOL_MISMATCH", "Native cue output was not established");
+        }
+        countInOutputActive = supportsCountInOutput;
         if (tapFallbackPromise !== null && !await tapFallbackPromise) {
           return false;
         }
@@ -3241,6 +3811,7 @@ function createRuntimeSessionController(options = {}) {
       await boundedRequest("audio.activate", {}, {
         deadlineMs: remainingActivationBudget(activationDeadline),
       });
+      await refreshPatternInputProfile();
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
@@ -3289,7 +3860,7 @@ function createRuntimeSessionController(options = {}) {
       // AudioWorklet quantum. Suspending the browser context concurrently can
       // remove that quantum and strand Host quiescence until its deadline.
       // Commit Host quiescence first, then park the browser context.
-      await boundedRequest("audio.suspend", {});
+      await requestInputLifecycle("audio.suspend");
       if (closing || machine.state !== "running") {
         return false;
       }
@@ -3846,6 +4417,1008 @@ function createRuntimeSessionController(options = {}) {
     }
   }
 
+  function countInUuid(value) {
+    return typeof value === "string" && value.length === 36 && UUID_PATTERN.test(value);
+  }
+
+  function countInTicket(value) {
+    if (!exactKeys(value, ["session_id", "command_id", "runtime_generation", "frame_epoch", "schedule_serial"]) ||
+        !countInUuid(value.session_id) || !countInUuid(value.command_id) ||
+        !isCanonicalNonzeroDecimal(value.runtime_generation) ||
+        !isCanonicalNonzeroDecimal(value.frame_epoch) ||
+        !isCanonicalNonzeroDecimal(value.schedule_serial, PATTERN_COUNT_IN_SERIAL_MAXIMUM)) {
+      throw protocolMismatch("Count-in ticket identity is invalid");
+    }
+    return Object.freeze({sessionId: value.session_id, commandId: value.command_id,
+      runtimeGeneration: value.runtime_generation, frameEpoch: value.frame_epoch,
+      scheduleSerial: value.schedule_serial});
+  }
+
+  function countInTicketPayload(ticket) {
+    if (!exactKeys(ticket, ["sessionId", "commandId", "runtimeGeneration", "frameEpoch", "scheduleSerial"])) {
+      throw new TypeError("Count-in ticket is invalid");
+    }
+    const payload = {session_id: ticket.sessionId, command_id: ticket.commandId,
+      runtime_generation: ticket.runtimeGeneration, frame_epoch: ticket.frameEpoch,
+      schedule_serial: ticket.scheduleSerial};
+    try { countInTicket(payload); } catch { throw new TypeError("Count-in ticket is invalid"); }
+    return payload;
+  }
+
+  const COUNT_IN_PHASES = new Set(["empty", "submitted", "preparing", "cancel_preparing",
+    "armed", "starting", "applied", "cancelled", "failing", "refused"]);
+  const countInOptionalFrame = (value) => value === null || isUnsignedInteger(value);
+
+  function normalizeCountInReceipt(value, ticket, start) {
+    if (value === null) return null;
+    if (!exactKeys(value, ["runtime_generation", "frame_epoch", "schedule_serial", "transport_epoch",
+        "pattern_generation", "pattern_id", "result", "effective_frame", "origin_frame", "playing"]) ||
+        value.runtime_generation !== ticket.runtimeGeneration || value.frame_epoch !== ticket.frameEpoch ||
+        value.schedule_serial !== ticket.scheduleSerial ||
+        !isCanonicalNonzeroDecimal(value.transport_epoch) ||
+        !isCanonicalNonzeroDecimal(value.pattern_generation) || !countInUuid(value.pattern_id) ||
+        !["applied", "cancelled", "refused"].includes(value.result) ||
+        !countInOptionalFrame(value.effective_frame) || !countInOptionalFrame(value.origin_frame) ||
+        typeof value.playing !== "boolean" ||
+        (value.result === "applied"
+          ? value.effective_frame === null || value.origin_frame === null ||
+            (start ? !value.playing || value.effective_frame !== value.origin_frame
+              : value.effective_frame <= value.origin_frame)
+          : value.effective_frame !== null || value.origin_frame !== null || value.playing)) {
+      throw protocolMismatch("Count-in receipt is invalid");
+    }
+    return Object.freeze({runtimeGeneration: value.runtime_generation, frameEpoch: value.frame_epoch,
+      scheduleSerial: value.schedule_serial, transportEpoch: value.transport_epoch,
+      patternGeneration: value.pattern_generation, patternId: value.pattern_id, result: value.result,
+      effectiveFrame: value.effective_frame, originFrame: value.origin_frame, playing: value.playing});
+  }
+
+  function normalizeCountInStatus(value, expected = null) {
+    if (!exactKeys(value, ["ticket", "count_in", "start_receipt", "cancel_receipt",
+        "opening_pending", "opening_complete", "error"]) ||
+        typeof value.opening_pending !== "boolean" || typeof value.opening_complete !== "boolean" ||
+        (value.opening_pending && value.opening_complete) ||
+        (value.error !== null && (!exactKeys(value.error, ["code", "message", "details"]) ||
+          typeof value.error.code !== "string" || typeof value.error.message !== "string" ||
+          value.error.details === null || typeof value.error.details !== "object" || Array.isArray(value.error.details)))) {
+      throw protocolMismatch("Count-in status is invalid");
+    }
+    const ticket = value.ticket === null ? null : countInTicket(value.ticket);
+    if (expected !== null && (ticket === null || Object.keys(expected).some((key) => ticket[key] !== expected[key]))) {
+      throw protocolMismatch("Count-in status belongs to another ticket");
+    }
+    if (ticket === null && (value.count_in !== null || value.start_receipt !== null ||
+        value.cancel_receipt !== null || value.opening_pending || value.opening_complete)) {
+      throw protocolMismatch("Count-in evidence has no owning ticket");
+    }
+    let countIn = null;
+    if (value.count_in !== null) {
+      const view = value.count_in;
+      if (!exactKeys(view, ["runtime_generation", "frame_epoch", "schedule_serial", "phase", "bars",
+          "bpm", "bar_frames", "count_in_frame", "start_frame"]) || ticket === null ||
+          view.runtime_generation !== ticket.runtimeGeneration || view.frame_epoch !== ticket.frameEpoch ||
+          view.schedule_serial !== ticket.scheduleSerial || !COUNT_IN_PHASES.has(view.phase) ||
+          (view.bars !== 1 && view.bars !== 2) ||
+          (view.bpm !== null && (!isUnsignedInteger(view.bpm) || view.bpm < 40 || view.bpm > 300)) ||
+          (view.bar_frames !== null && !isPositiveInteger(view.bar_frames)) ||
+          !countInOptionalFrame(view.count_in_frame) || !countInOptionalFrame(view.start_frame) ||
+          ((view.count_in_frame === null) !== (view.start_frame === null)) ||
+          (view.start_frame !== null && (view.bar_frames === null || view.bpm === null ||
+            view.start_frame - view.count_in_frame !== view.bars * view.bar_frames))) {
+        throw protocolMismatch("Count-in timeline is invalid");
+      }
+      countIn = Object.freeze({runtimeGeneration: view.runtime_generation, frameEpoch: view.frame_epoch,
+        scheduleSerial: view.schedule_serial, phase: view.phase, bars: view.bars, bpm: view.bpm,
+        barFrames: view.bar_frames, countInFrame: view.count_in_frame, startFrame: view.start_frame});
+    }
+    const startReceipt = normalizeCountInReceipt(value.start_receipt, ticket, true);
+    const cancelReceipt = normalizeCountInReceipt(value.cancel_receipt, ticket, false);
+    if ((value.opening_complete && startReceipt?.result !== "applied") ||
+        (startReceipt?.result === "applied" && countIn?.startFrame !== startReceipt.effectiveFrame) ||
+        (cancelReceipt !== null && (startReceipt === null ||
+          cancelReceipt.patternId !== startReceipt.patternId ||
+          cancelReceipt.patternGeneration !== startReceipt.patternGeneration ||
+          BigInt(cancelReceipt.transportEpoch) <= BigInt(startReceipt.transportEpoch) ||
+          (cancelReceipt.result === "applied" && (startReceipt.result !== "applied" ||
+            cancelReceipt.originFrame !== startReceipt.originFrame))))) {
+      throw protocolMismatch("Count-in evidence lineage is invalid");
+    }
+    return Object.freeze({ticket, countIn, startReceipt, cancelReceipt,
+      openingPending: value.opening_pending, openingComplete: value.opening_complete,
+      observedAtMilliseconds: monotonicNow(),
+      error: value.error === null ? null : Object.freeze({...value.error,
+        details: Object.freeze({...value.error.details})})});
+  }
+
+  function countInTicketKey(ticket) {
+    return Object.values(countInTicketPayload(ticket)).join(":");
+  }
+
+  function patternInputTicketKey(ticket) {
+    return Object.values(patternInputTicketPayload(ticket)).join(":");
+  }
+
+  function unknownSubmittedOutcome(error, submitted) {
+    return submitted && error?.details?.pending !== false &&
+      (error?.code === "HOST_TIMEOUT" || error?.details?.pending === true ||
+        transport.terminated === true || postResponseFailures.has(error));
+  }
+
+  function markPostResponseFailure(error) {
+    // Local response/positive DTO validation follows a received reply. A
+    // bare protocol code from an unsealed send has no such evidence.
+    // Preserve the original Error and public DTO without adding wire fields.
+    if (error !== null && (typeof error === "object" || typeof error === "function"))
+      postResponseFailures.add(error);
+    return error;
+  }
+
+  function retainedPollPause() {
+    return new Promise((resolve) => {
+      const timer = timers.setTimeout(resolve, 5);
+      // Browser handles are numbers. A server-side diagnostic/test observer
+      // may leave genuine retained debt pending without owning process life.
+      timer?.unref?.();
+    });
+  }
+
+  function retireTerminalOwners() {
+    if (transport.terminalOwnerReleased !== true) return false;
+    // This positive full Host receipt proves there are no remaining owned
+    // gates. It is not an admission, input result or caller-ticket consume.
+    for (const entry of patternCountInTickets.values()) entry.retired = true;
+    patternInputTickets.clear();
+    patternInputOperations.clear();
+    patternInputHolds.clear();
+    for (const reservation of patternInputPressReservations)
+      settleSharedGesture(reservation.sharedClaim);
+    patternInputPressReservations.clear();
+    patternInputPendingTickets.clear();
+    patternInputReleaseReservations.clear();
+    return true;
+  }
+
+  function finalCountInCandidate(status, entry) {
+    if (status.openingPending || status.startReceipt === null ||
+        (entry.cancelSubmitted && status.cancelReceipt === null)) return false;
+    if (status.error !== null) return status.cancelReceipt !== null;
+    return status.startReceipt.result !== "applied" ||
+      (status.cancelReceipt?.result === "applied" && status.openingComplete);
+  }
+
+  function recordCountInEvidence(entry, status) {
+    const before = entry.status;
+    // The control timer's pending expiry may become the original owner's
+    // known deadline refusal only with an applied start and a real Stop F.
+    // It never clears failure, changes a receipt, or reopens the deadline.
+    const openingDeadlineSettled = before?.openingPending === true && !before.openingComplete &&
+      before.error?.code === "IO_ERROR" &&
+      before.error.details.reason === "pattern_transport_opening_expired" &&
+      before.startReceipt?.result === "applied" &&
+      !status.openingPending && !status.openingComplete &&
+      status.error?.code === "INVALID_ARGUMENT" &&
+      status.error.details.reason === "admission_opening_deadline_elapsed" &&
+      status.error.details.journal_retained === true &&
+      status.error.details.closure_unresolved !== true && status.error.details.retryable !== true &&
+      status.startReceipt?.result === "applied" &&
+      status.cancelReceipt?.result === "applied" && status.cancelReceipt.playing === false;
+    // Original receipts and final errors remain immutable on inspection and
+    // the exact consumer RPC. A previously unobserved e2 may still arrive.
+    for (const field of ["startReceipt", "cancelReceipt", "error"]) {
+      if (before?.[field] !== null && before?.[field] !== undefined &&
+          JSON.stringify(before[field]) !== JSON.stringify(status[field]) &&
+          !(field === "error" && openingDeadlineSettled))
+        throw protocolMismatch("Retained count-in changed its original evidence");
+    }
+    entry.status = status;
+    entry.accepted = true;
+    return status;
+  }
+
+  function inspectCountInEntry(entry, consume, automatic = false) {
+    const action = async () => {
+      if (entry.consumed) {
+        if (!consume) return entry.status;
+        throw typedError("HOST_STATE_INVALID", "Count-in ticket was already consumed");
+      }
+      const payload = {...countInTicketPayload(entry.ticket), consume};
+      // Both known and unknown original callers can owe this exact consume
+      // while a Bridge lifecycle RPC retains its response. Keep the owner's
+      // inspection independent of that RPC, with the same short envelope,
+      // deadline and sealed-transport checks.
+      const retainedOwner = () => patternCountInTickets.get(countInTicketKey(entry.ticket)) === entry &&
+        !entry.consumed && !entry.retired;
+      const request = automatic || retainedOwner() ? dispatchBoundedRequest : boundedRequest;
+      const status = recordCountInEvidence(entry, normalizeCountInStatus(await request(
+        "pattern.transport.count-in.inspect", payload,
+        {retainedOwner}), entry.ticket));
+      if (consume) {
+        // Host success is the independent physical/input/recording gate;
+        // merely reaching a terminal-looking view never clears caller debt.
+        if (automatic && !finalCountInCandidate(status, entry))
+          throw protocolMismatch("Retained count-in consumption returned unfinished evidence");
+        entry.consumed = true;
+        if (!automatic && !entry.unknown) patternCountInTickets.delete(countInTicketKey(entry.ticket));
+      }
+      return status;
+    };
+    const pending = entry.inspectionTail === null ? action() : entry.inspectionTail.then(action);
+    entry.inspectionTail = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+
+  function continueCountInConsumer(entry) {
+    if (entry.consumer !== null || entry.consumed || entry.retired) return;
+    entry.consumer = (async () => {
+      while (!entry.consumed && !entry.retired) {
+        if (retireTerminalOwners()) return;
+        try {
+          const status = await inspectCountInEntry(entry, false, true);
+          if (finalCountInCandidate(status, entry)) await inspectCountInEntry(entry, true, true);
+        } catch (error) {
+          entry.continuationError = error;
+          // A stale/state error has no never-accepted meaning. Keep the
+          // original identity and evidence until a real consume or full ACK.
+        }
+        if (!entry.consumed && !entry.retired) await retainedPollPause();
+      }
+    })();
+    void entry.consumer.catch(() => {});
+  }
+
+  function hasRetainedPatternOwners() {
+    return patternInputTickets.size !== 0 || patternInputHolds.size !== 0 ||
+      [...patternCountInTickets.values()].some((entry) => !entry.consumed && !entry.retired);
+  }
+
+  async function waitForTerminalOwnerRelease() {
+    // Older healthy transports keep their ordinary explicit public consumer
+    // behavior. A sealed/fatal transport or unknown admission never obtains
+    // physical disposal permission from a custom terminator's resolved value.
+    const retained = transport.terminated === true ||
+      [...patternCountInTickets.values()].some((entry) => entry.unknown && !entry.retired) ||
+      (fatalReservation !== null && (hasRetainedPatternOwners() || transport.terminalOwnerReleased !== undefined));
+    if (!retained) return;
+    for (const entry of patternInputTickets.values()) {
+      if (entry.observerError !== null && !entry.profileConsumer) continueDirectPatternInputConsumer(entry);
+    }
+    for (const entry of patternCountInTickets.values()) continueCountInConsumer(entry);
+    while (!retireTerminalOwners()) await retainedPollPause();
+  }
+
+  async function readCountInCapabilities(negotiate) {
+    const value = await boundedRequest("pattern.transport.count-in.capabilities", {negotiate}, {capabilityProbe: true});
+    if (!exactKeys(value, ["supported", "negotiated", "output_ready", "runtime_generation", "frame_epoch",
+        "next_serial", "input_capacity"]) || typeof value.supported !== "boolean" ||
+        typeof value.negotiated !== "boolean" || typeof value.output_ready !== "boolean" ||
+        (value.runtime_generation !== null && !isCanonicalNonzeroDecimal(value.runtime_generation)) ||
+        (value.frame_epoch !== null && !isCanonicalNonzeroDecimal(value.frame_epoch)) ||
+        (value.next_serial !== null && !isCanonicalNonzeroDecimal(value.next_serial, PATTERN_COUNT_IN_SERIAL_MAXIMUM)) ||
+        !isUnsignedInteger(value.input_capacity) || value.input_capacity > 1024 ||
+        (value.supported ? value.input_capacity === 0 : value.negotiated || value.output_ready ||
+          value.runtime_generation !== null || value.frame_epoch !== null || value.next_serial !== null || value.input_capacity !== 0)) {
+      throw protocolMismatch("Count-in capabilities are invalid");
+    }
+    patternTransportCompanionSupported = value.supported;
+    patternInputCapacity = value.supported ? Math.min(64, value.input_capacity) : 0;
+    return Object.freeze({supported: value.supported, negotiated: value.negotiated,
+      outputReady: value.output_ready && countInOutputActive, runtimeGeneration: value.runtime_generation,
+      frameEpoch: value.frame_epoch, nextSerial: value.next_serial, inputCapacity: value.input_capacity});
+  }
+
+  async function refreshPatternInputProfile() {
+    if (options.patternTransport !== true || typeof runtime.startAudioWorkletWithCountIn !== "function") return;
+    const capability = await readCountInCapabilities(false);
+    if (!capability.supported) return;
+    if (!capability.negotiated || capability.runtimeGeneration === null || capability.frameEpoch === null)
+      throw protocolMismatch("Activated Pattern input identity is unavailable");
+    if (patternInputProfile?.runtimeGeneration !== capability.runtimeGeneration) {
+      if (patternInputOperations.size !== 0 || patternInputHolds.size !== 0)
+        throw typedError("HOST_STATE_INVALID", "Previous Pattern input ownership is still retained");
+      patternInputSerial = 1n;
+    } else if (patternInputProfile.frameEpoch !== capability.frameEpoch &&
+        (patternInputOperations.size !== 0 || patternInputHolds.size !== 0)) {
+      throw typedError("HOST_STATE_INVALID", "Pattern input frame epoch still has owners");
+    }
+    patternInputProfile = capability;
+  }
+
+  function patternInputTicketPayload(ticket) {
+    if (!exactKeys(ticket, ["commandId", "runtimeGeneration", "frameEpoch", "ticket"]) ||
+        !countInUuid(ticket.commandId) || !isCanonicalNonzeroDecimal(ticket.runtimeGeneration) ||
+        !isCanonicalNonzeroDecimal(ticket.frameEpoch) || !isCanonicalNonzeroDecimal(ticket.ticket))
+      throw new TypeError("Pattern input ticket is invalid");
+    return {command_id: ticket.commandId, runtime_generation: ticket.runtimeGeneration,
+      frame_epoch: ticket.frameEpoch, ticket: ticket.ticket};
+  }
+  function requirePatternTransportCompanion() {
+    if (patternTransportCompanionSupported === false)
+      throw typedError("UNSUPPORTED_AUDIO", "Pattern transport companion is unsupported by this Host");
+  }
+  function normalizePatternInputStatus(value, expectedTicket) {
+    const identity = patternInputTicketPayload(expectedTicket);
+    const authority = (a) => exactKeys(a, ["recording", "schedule_serial", "transport_epoch"]) &&
+      typeof a.recording === "boolean" &&
+      (a.schedule_serial === null || isCanonicalNonzeroDecimal(a.schedule_serial, PATTERN_COUNT_IN_SERIAL_MAXIMUM)) &&
+      (a.transport_epoch === null || isCanonicalNonzeroDecimal(a.transport_epoch)) &&
+      (a.schedule_serial === null || a.transport_epoch !== null) &&
+      (!a.recording || a.transport_epoch !== null);
+    const a = value?.admission;
+    const native = value?.native_result;
+    const dispositions = ["voice_started", "voice_capacity", "toggle_stopped", "muted_no_voice",
+      "release_applied", "release_no_voice", "invalidated_before_consume"];
+    if (!exactKeys(value, ["ticket", "admission", "native_result", "durable_settled", "retained", "complete",
+        "expired", "error"]) || !exactKeys(value.ticket, Object.keys(identity)) ||
+        Object.entries(identity).some(([key, expected]) => value.ticket[key] !== expected) ||
+        !exactKeys(a, ["sequence", "acceptance_ordinal", "authority"]) ||
+        !isCanonicalNonzeroDecimal(a.sequence) || !isCanonicalNonzeroDecimal(a.acceptance_ordinal) || !authority(a.authority) ||
+        [value.durable_settled, value.retained, value.complete, value.expired].some((b) => typeof b !== "boolean") ||
+        (value.retained && !value.durable_settled) ||
+        value.complete !== (native !== null && value.durable_settled) ||
+        (value.error !== null && (!exactKeys(value.error, ["code", "message", "details"]) ||
+          !ALLOWED_TYPED_ERROR_CODES.has(value.error.code) || typeof value.error.message !== "string" ||
+          value.error.details === null || typeof value.error.details !== "object" || Array.isArray(value.error.details))))
+      throw protocolMismatch("Pattern input status is invalid");
+    if (native !== null && (!exactKeys(native, ["runtime_generation", "frame_epoch", "sequence", "held_press_sequence",
+        "acceptance_ordinal", "runtime_frame", "slot", "authority", "disposition"]) ||
+        native.runtime_generation !== identity.runtime_generation || native.frame_epoch !== identity.frame_epoch ||
+        native.sequence !== a.sequence || native.acceptance_ordinal !== a.acceptance_ordinal ||
+        (native.held_press_sequence !== null && !isCanonicalNonzeroDecimal(native.held_press_sequence)) ||
+        !isUnsignedInteger(native.runtime_frame) || !isUnsignedInteger(native.slot, 63) || !authority(native.authority) ||
+        Object.keys(a.authority).some((key) => native.authority[key] !== a.authority[key]) ||
+        !dispositions.includes(native.disposition))) throw protocolMismatch("Pattern input completion is invalid");
+    if (native !== null && native.disposition !== "invalidated_before_consume" &&
+        (native.held_press_sequence !== null) !==
+          ["release_applied", "release_no_voice"].includes(native.disposition))
+      throw protocolMismatch("Pattern input disposition changed its physical input kind");
+    const publicAuthority = (a) => Object.freeze({recording: a.recording,
+      scheduleSerial: a.schedule_serial, transportEpoch: a.transport_epoch});
+    return Object.freeze({ticket: Object.freeze({...expectedTicket}),
+      admission: Object.freeze({sequence: a.sequence, acceptanceOrdinal: a.acceptance_ordinal,
+        authority: publicAuthority(a.authority)}),
+      nativeResult: native === null ? null : Object.freeze({runtimeGeneration: native.runtime_generation,
+        frameEpoch: native.frame_epoch, sequence: native.sequence, heldPressSequence: native.held_press_sequence,
+        acceptanceOrdinal: native.acceptance_ordinal, runtimeFrame: native.runtime_frame, slot: native.slot,
+        authority: publicAuthority(native.authority), disposition: native.disposition}),
+      durableSettled: value.durable_settled, retained: value.retained, complete: value.complete,
+      expired: value.expired, error: value.error === null ? null : Object.freeze({...value.error,
+        details: Object.freeze({...value.error.details})})});
+  }
+
+  // Enqueue reservations are local capacity, not Native admission. They
+  // transfer once to the original ticket and survive observer expiry until
+  // both actual caller and physical ownership are released.
+  function reservePatternInputPress({slot, source, gestureKey} = {}) {
+    const capacity = Math.min(64, patternInputProfile?.inputCapacity ?? 64, patternInputCapacity ?? 64);
+    if (patternInputPressReservations.size >= capacity ||
+        (gestureKey !== undefined && [...patternInputPressReservations].some(r => r.gestureKey === gestureKey)))
+      return null;
+    const sharedClaim = claimSharedGesture(gestureKey, "pattern", slot, source);
+    if (sharedClaim === null) return null;
+    const reservation = {slot, source, gestureKey, owner: null, admission: null, sharedClaim};
+    patternInputPressReservations.add(reservation);
+    return reservation;
+  }
+  function cancelPatternInputReservation(reservation) {
+    patternInputPressReservations.delete(reservation);
+    settleSharedGesture(reservation?.sharedClaim);
+  }
+  function releasePatternInputCapacity(entry) {
+    if (entry.consumed && (!entry.request.held || entry.physicalReleased))
+      cancelPatternInputReservation(entry.pressReservation);
+  }
+  function matchingProfileReleaseReservation(slot, source, gestureKey) {
+    const matches = [...patternInputPressReservations].reverse().filter(r =>
+      r.slot === slot && r.source === source && (gestureKey === undefined || r.gestureKey === gestureKey));
+    return matches.find(r => !r.releaseObserver) ?? matches[0];
+  }
+  function queueProfileRelease(slot, source, startedAt, gestureKey) {
+    const reservation = matchingProfileReleaseReservation(slot, source, gestureKey);
+    if (!reservation) return Promise.resolve(false);
+    const previous = profileReleaseObservers.get(reservation);
+    if (previous) return previous;
+    // Reserve the public observer before it waits behind the short admission;
+    // repeated keyup/cancel joins, and completion never owns the runtime tail.
+    const released = Promise.resolve(reservation.admission).then(entry => {
+      if (entry === false || entry === undefined || entry === null) return false;
+      if (entry.releaseIntent !== null) return entry.releaseIntent.completion.then(() => true);
+      // A lifecycle wait can own the ordinary runtime tail while this exact
+      // Release is still owed. The separate bounded short-admission tail
+      // protects serial assignment without waiting on that owner's cleanup.
+      const admission = nativeInputLifecycleWait !== null
+        ? admitProfileHoldRelease(entry, startedAt)
+        : serializeRuntimeAction(() => admitProfileHoldRelease(entry, startedAt));
+      return Promise.resolve(admission)
+        .then(release => release === false ? false : release.completion.then(() => true));
+    });
+    profileReleaseObservers.set(reservation, released);
+    reservation.releaseObserver = released;
+    void released.catch(() => {
+      const hold = [...patternInputHolds.values()].find(h => h.pressReservation === reservation);
+      if ((!hold || (!hold.releaseSubmitted && hold.releaseIntent === null)) &&
+          profileReleaseObservers.get(reservation) === released) {
+        profileReleaseObservers.delete(reservation);
+        reservation.releaseObserver = null;
+      }
+    });
+    return released;
+  }
+
+  async function requestPatternInput(request, requestOptions = {}) {
+    if (!exactKeys(request, ["commandId", "runtimeGeneration", "frameEpoch", "inputSerial", "slot", "velocity",
+        "kind", "held", "heldPressSequence"])) throw new TypeError("Pattern input request is invalid");
+    requirePatternTransportOptIn();
+    requirePatternTransportCompanion();
+    if (closing && request.kind !== "release")
+      throw typedError("HOST_STATE_INVALID", "New Pattern input admission is closed", {pending: false});
+    const payload = {command_id: request.commandId, runtime_generation: request.runtimeGeneration,
+      frame_epoch: request.frameEpoch, input_serial: request.inputSerial, slot: request.slot,
+      velocity: request.velocity, kind: request.kind, held: request.held, held_press_sequence: request.heldPressSequence};
+    const ticket = Object.freeze({commandId: request.commandId, runtimeGeneration: request.runtimeGeneration,
+      frameEpoch: request.frameEpoch, ticket: request.inputSerial});
+    const key = patternInputTicketKey(ticket);
+    const previous = patternInputTickets.get(key) ?? patternInputPendingTickets.get(key);
+    if (previous) throw previous.observerError ??
+      typedError("HOST_STATE_INVALID", "Original Pattern input identity is still retained", {pending: true});
+    const pressReservation = request.kind === "press"
+      ? requestOptions.pressReservation ?? reservePatternInputPress()
+      : null;
+    if (request.kind === "press" && (pressReservation === null || !patternInputPressReservations.has(pressReservation)))
+      throw typedError("HOST_STATE_INVALID", "Pattern input window is full; wait for the original owners", {pending: false});
+    const releaseKey = request.kind === "release"
+      ? [request.runtimeGeneration, request.frameEpoch, request.slot, request.heldPressSequence].join(":") : null;
+    if (releaseKey !== null && patternInputReleaseReservations.has(releaseKey))
+      throw typedError("HOST_STATE_INVALID", "Original matching Release is already retained", {pending: true});
+    const releaseOwner = request.kind === "release" ? [...patternInputTickets.values()].find(owner =>
+      owner.request.kind === "press" && owner.request.held && !owner.physicalReleased &&
+      owner.request.slot === request.slot && owner.ticket.runtimeGeneration === request.runtimeGeneration &&
+      owner.ticket.frameEpoch === request.frameEpoch && owner.status?.admission.sequence === request.heldPressSequence) : null;
+    if (releaseKey !== null && !releaseOwner &&
+        [...patternInputReleaseReservations.values()].filter(e => !e.releaseOwner).length >= 64)
+      throw typedError("HOST_STATE_INVALID", "Pattern Release window is full; wait for the original owners", {pending: false});
+    const entry = {ticket, request: Object.freeze({...request}), submitted: false,
+      status: null, consumed: false, physicalReleased: false, observerError: null,
+      pressReservation, releaseKey, releaseOwner,
+      profileConsumer: requestOptions.profileConsumer === true, consumer: null, inspectionTail: null};
+    if (pressReservation !== null) pressReservation.owner = entry;
+    patternInputPendingTickets.set(key, entry);
+    if (releaseKey !== null) patternInputReleaseReservations.set(releaseKey, entry);
+    const retainedOwner = () => request.kind === "release" && request.held === true &&
+      [...patternInputTickets.values()].some(owner => owner.request.kind === "press" &&
+        owner.request.held === true && !owner.physicalReleased && owner.request.slot === request.slot &&
+        owner.ticket.runtimeGeneration === request.runtimeGeneration && owner.ticket.frameEpoch === request.frameEpoch &&
+        owner.status?.admission.sequence === request.heldPressSequence);
+    // A lifecycle RPC can already be waiting for this original physical
+    // owner when its lost admission finally reconciles. Only this profile's
+    // exact matching Release continues independently; new input and ordinary
+    // requests retain host ordering, and actual handoff spends the same budget.
+    const dispatch = entry.profileConsumer && nativeInputLifecycleWait !== null && retainedOwner()
+      ? dispatchBoundedRequest : boundedRequest;
+    try {
+      const value = await dispatch("pattern.transport.input.request", payload, {...requestOptions,
+        retainedOwner,
+        beforeDispatch: (requestId) => {
+          entry.submitted = true;
+          submitSharedGesture(pressReservation?.sharedClaim);
+          patternInputTickets.set(key, entry);
+          requestOptions.beforeDispatch?.(requestId);
+        }});
+      let status;
+      try {
+        const wire = patternInputTicketPayload(ticket);
+        if (!exactKeys(value, ["ticket", "status"]) || !exactKeys(value.ticket, Object.keys(wire)) ||
+            Object.entries(wire).some(([key, expected]) => value.ticket[key] !== expected))
+          throw protocolMismatch("Pattern input admission is invalid");
+        status = normalizePatternInputStatus(value.status, ticket);
+        if (status.nativeResult && (status.nativeResult.slot !== request.slot ||
+            status.nativeResult.heldPressSequence !== request.heldPressSequence))
+          throw protocolMismatch("Pattern input changed its original physical owner");
+      } catch (error) {
+        throw markPostResponseFailure(error);
+      }
+      entry.status = status;
+      patternInputPendingTickets.delete(key);
+      if (patternInputProfile?.runtimeGeneration === request.runtimeGeneration &&
+          isCanonicalNonzeroDecimal(request.inputSerial))
+        patternInputSerial = patternInputSerial > BigInt(request.inputSerial) ? patternInputSerial : BigInt(request.inputSerial) + 1n;
+      return Object.freeze({ticket, status});
+    } catch (error) {
+      patternInputPendingTickets.delete(key);
+      if (!unknownSubmittedOutcome(error, entry.submitted)) {
+        patternInputTickets.delete(key);
+        cancelPatternInputReservation(pressReservation);
+        if (patternInputReleaseReservations.get(releaseKey) === entry)
+          patternInputReleaseReservations.delete(releaseKey);
+      }
+      else {
+        entry.observerError = error;
+        if (!entry.profileConsumer) {
+          continueDirectPatternInputConsumer(entry);
+          fail(error);
+        }
+      }
+      throw error;
+    }
+  }
+  function continueDirectPatternInputConsumer(entry) {
+    if (entry.consumer !== null || entry.consumed) return;
+    entry.consumer = (async () => {
+      while (!entry.consumed && patternInputTickets.get(patternInputTicketKey(entry.ticket)) === entry) {
+        if (retireTerminalOwners()) return;
+        try {
+          const status = await inspectPatternInputTicket(entry.ticket, false, true);
+          if (status.complete) await inspectPatternInputTicket(entry.ticket, true, true);
+        } catch (error) {
+          entry.continuationError = error;
+          // The original observer already rejected. Inspection failure is no
+          // consumer ACK and says nothing about this held physical owner.
+        }
+        if (!entry.consumed) await retainedPollPause();
+      }
+    })();
+    void entry.consumer.catch(() => {});
+  }
+
+  async function inspectPatternInput(ticket, consume = false) {
+    return inspectPatternInputTicket(ticket, consume, false);
+  }
+
+  async function inspectPatternInputTicket(ticket, consume, automatic) {
+    if (typeof consume !== "boolean") throw new TypeError("Pattern input consume must be boolean");
+    requirePatternTransportOptIn();
+    requirePatternTransportCompanion();
+    const key = patternInputTicketKey(ticket);
+    const entry = patternInputTickets.get(key);
+    const action = async () => {
+      if (automatic && entry?.consumed) return entry.status;
+      const retainedOwner = () => patternInputTickets.get(key) === entry && entry !== undefined && !entry.consumed;
+      // A Bridge lifecycle RPC can retain its response until this original
+      // caller consumes its input. Queueing that consumer behind host.close
+      // or audio.suspend would make each wait for the other. Only an exact
+      // locally admitted owner takes this continuation path; unknown public
+      // tickets and new admissions keep the ordinary Host dispatch tail.
+      const request = automatic || retainedOwner() ? dispatchBoundedRequest : boundedRequest;
+      const status = normalizePatternInputStatus(await request("pattern.transport.input.inspect",
+        {...patternInputTicketPayload(ticket), consume}, {
+          retainedOwner,
+        }), ticket);
+      if (entry) {
+        // An unknown worker outcome may clear its error when the same retained
+        // effect reconciles. Only a complete result freezes the final error;
+        // admission and Native completion identity are immutable throughout.
+        if ((entry.status && JSON.stringify(entry.status.admission) !== JSON.stringify(status.admission)) ||
+            (entry.status?.nativeResult && JSON.stringify(entry.status.nativeResult) !== JSON.stringify(status.nativeResult)) ||
+            (entry.status?.complete && JSON.stringify(entry.status.error) !== JSON.stringify(status.error)) ||
+            (status.nativeResult && (status.nativeResult.slot !== entry.request.slot ||
+              status.nativeResult.heldPressSequence !== entry.request.heldPressSequence)))
+          throw protocolMismatch("Retained Pattern input changed its original physical owner");
+        entry.status = status;
+      }
+      if (consume) {
+        if (!status.complete) throw protocolMismatch("Pattern input consumption returned an incomplete result");
+        if (entry) {
+          entry.consumed = true;
+          releasePatternInputCapacity(entry);
+          if (patternInputReleaseReservations.get(entry.releaseKey) === entry)
+            patternInputReleaseReservations.delete(entry.releaseKey);
+          if (entry.request.kind !== "press" || !entry.request.held || entry.physicalReleased) patternInputTickets.delete(key);
+          if (entry.request.kind === "release" &&
+              ["release_applied", "release_no_voice"].includes(status.nativeResult.disposition)) {
+            for (const [ownerKey, owner] of patternInputTickets) {
+              if (owner.request.kind === "press" && owner.request.slot === entry.request.slot &&
+                  owner.ticket.runtimeGeneration === ticket.runtimeGeneration && owner.ticket.frameEpoch === ticket.frameEpoch &&
+                  owner.status?.admission.sequence === entry.request.heldPressSequence) {
+                owner.physicalReleased = true;
+                releasePatternInputCapacity(owner);
+                if (owner.consumed) patternInputTickets.delete(ownerKey);
+              }
+            }
+            patternInputHolds.delete(entry.request.heldPressSequence);
+          }
+        }
+      }
+      return status;
+    };
+    if (!entry) return action();
+    // Known and lost admissions use the same independent continuation. Its
+    // exact ticket remains serialized with any later public inspection.
+    const pending = entry.inspectionTail === null ? action() : entry.inspectionTail.then(action);
+    entry.inspectionTail = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+
+  function currentProfileProbe(probe) {
+    return probe !== null && probe !== undefined && probe.profile === true && !probe.failed &&
+      probeReservation === probe && recoveryEpoch === probe.epoch &&
+      machine.state === "recovering" && !closing && safetyReservation === null &&
+      interruptionReservation === null && !visibilityHidden && !pageHidden &&
+      foregroundLossEpoch === probe.foregroundEpoch;
+  }
+  function expiredProfileProbe() {
+    return typedError("HOST_TIMEOUT", "Original recovery probe deadline expired", {pending: true});
+  }
+  function failProfileProbe(probe, error) {
+    if (!currentProfileProbe(probe)) return;
+    // Claim once before fail rejects all raw observers. No rejection callback
+    // may recursively acquire this probe's fatal transition.
+    probe.failed = true;
+    fail(error);
+  }
+  function releaseInvalidatedProfileProbe(entry) {
+    // A late accepted admission is still a real physical owner. Submit its
+    // original Release in a later short runtime turn, never await that turn
+    // from the admission which currently owns it. Safety joins the same intent.
+    void serializeRuntimeAction(() => admitProfileHoldRelease(entry, monotonicNow()))
+      .then(result => result === false ? false : result.completion).catch(() => {});
+  }
+
+  async function awaitPatternInput(entry) {
+    let status = entry.status;
+    for (;;) {
+      if (retireTerminalOwners()) throw entry.observerError ??
+        typedError("HOST_STATE_INVALID", "Original Pattern input owner was retired without a caller result");
+      try {
+        if (status === null) status = await inspectPatternInput(entry.ticket);
+        if (entry.sequence === null) {
+          entry.sequence = status.admission.sequence;
+          if (entry.kind === "press") {
+            patternInputHolds.delete(`pending:${entry.ticket.ticket}`);
+            patternInputHolds.set(entry.sequence, entry);
+          }
+        }
+        if (status.nativeResult && (status.nativeResult.slot !== entry.slot ||
+            status.nativeResult.heldPressSequence !== entry.heldPressSequence))
+          throw protocolMismatch("Pattern input completion changed its physical owner");
+        if (status.complete) {
+          const consumed = await inspectPatternInput(entry.ticket, true);
+          patternInputOperations.delete(entry.ticket.ticket);
+          const native = consumed.nativeResult;
+          if (entry.kind === "release" && ["release_applied", "release_no_voice"].includes(native.disposition))
+            patternInputHolds.delete(entry.heldPressSequence);
+          let probeSucceeded = false;
+          let currentProbeCapacityOutcome = false;
+          if (currentProfileProbe(entry.probe)) {
+            // The timer may not have run yet. Judge the original budget before
+            // publishing any probe success or restoring running after consume.
+            if (monotonicNow() - entry.probe.startedAt >= deadlineForOperation("trigger"))
+              failProfileProbe(entry.probe, expiredProfileProbe());
+            else if (consumed.error || native.disposition !== "voice_started") {
+              currentProbeCapacityOutcome = native.disposition === "voice_capacity";
+              failProfileProbe(entry.probe, typedError(consumed.error?.code ?? "HOST_STATE_INVALID",
+                consumed.error?.message ?? "Recovery probe made no voice", consumed.error?.details ?? {}));
+            } else probeSucceeded = true;
+          }
+          if ((!entry.probe || probeSucceeded || currentProbeCapacityOutcome) && ["voice_started", "voice_capacity"].includes(native.disposition) &&
+              BigInt(native.sequence) <= BigInt(Number.MAX_SAFE_INTEGER)) {
+            triggerOutcomeCount += 1;
+            for (const listener of runtimeOutcomeListeners) listener(Object.freeze({sequence: Number(native.sequence),
+              outcome: native.disposition, runtimeFrame: native.runtimeFrame}));
+          }
+          if (consumed.error || ["voice_capacity", "invalidated_before_consume"].includes(native.disposition))
+            throw typedError(consumed.error?.code ?? "HOST_STATE_INVALID", consumed.error?.message ?? "Native input failed",
+              consumed.error?.details ?? {});
+          const result = Object.freeze({sequence: native.sequence, slot: entry.slot, velocity: entry.velocity,
+            source: entry.source, disposition: native.disposition, runtimeFrame: native.runtimeFrame,
+            heldPressSequence: native.heldPressSequence, recorded: consumed.retained});
+          if (probeSucceeded && currentProfileProbe(entry.probe)) {
+            probeReservation = null;
+            recoveryEpoch = null;
+            machine.transition("running", {reason: "recovery_probe_completed"});
+          }
+          return result;
+        }
+        // This loop owns no SDK dispatch tail. Expiry of the public observer
+        // does not cancel it, consume its ticket or release physical escrow.
+        await new Promise((resolve) => timers.setTimeout(resolve, 5));
+        status = await inspectPatternInput(entry.ticket);
+      } catch (error) {
+        if (!patternInputOperations.has(entry.ticket.ticket) ||
+            !(transport.terminated === true || entry.unknown)) throw error;
+        entry.observerError ??= error;
+        entry.rejectObserver?.(entry.observerError);
+        // Original caller failure and independent consumption are separate.
+        // A sealed/missing lane retains the owner, never re-enqueues input.
+        status = null;
+        await retainedPollPause();
+      }
+    }
+  }
+  function observePatternInputDeadline(completion, startedAt, entry = null) {
+    return new Promise((resolve, reject) => {
+      if (entry) entry.rejectObserver = reject;
+      const expired = () => typedError("HOST_TIMEOUT",
+        "Pattern input effect remains retained after its original deadline", {pending: true});
+      const rejectObservation = error => {
+        reject(error);
+        failProfileProbe(entry?.probe, error);
+      };
+      const remaining = deadlineForOperation("trigger") - (monotonicNow() - startedAt);
+      const timeout = remaining > 0 ? timers.setTimeout(() => rejectObservation(expired()), remaining) : null;
+      if (remaining <= 0) rejectObservation(expired());
+      if (entry?.observerError) rejectObservation(entry.observerError);
+      completion.then((result) => {
+        if (timeout !== null) timers.clearTimeout(timeout);
+        if (monotonicNow() - startedAt >= deadlineForOperation("trigger")) rejectObservation(expired());
+        else resolve(result);
+      }, (error) => {
+        if (timeout !== null) timers.clearTimeout(timeout);
+        if (entry?.probe && monotonicNow() - startedAt >= deadlineForOperation("trigger"))
+          rejectObservation(expired());
+        else rejectObservation(error);
+      });
+    });
+  }
+  function admitProfileInput(slot, velocity, source, kind, hold = null, startedAt = monotonicNow(), gestureKey = hold?.gestureKey, probe = null, pressReservation = null) {
+    // Only short admission runs here. Every Press already owns bounded local
+    // capacity; every Release is one reserved original intent. Native/durable
+    // completion stays outside this tail and spends the first caller budget.
+    const pending = profileInputAdmissionTail.then(() =>
+      dispatchProfileInput(slot, velocity, source, kind, hold, startedAt, gestureKey, probe, pressReservation));
+    profileInputAdmissionTail = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+  async function dispatchProfileInput(slot, velocity, source, kind, hold, startedAt, gestureKey, probe, pressReservation) {
+    if (patternInputSerial > BigInt(UNSIGNED_64_MAXIMUM)) throw typedError("HOST_STATE_INVALID", "Pattern input serial exhausted");
+    // An ordinary Press or Release budget measures Runtime response from its
+    // own admission turn. Time queued before this turn, in the Host or in
+    // these runtime tails, is not charged. A recovery probe keeps its
+    // original epoch start.
+    if (probe === null) startedAt = monotonicNow();
+    const capacity = patternInputProfile.inputCapacity;
+    if (kind === "press" && ([...patternInputOperations.values()].filter((i) => i.kind === "press").length >= capacity ||
+        patternInputHolds.size >= capacity)) return false;
+    const futureReleases = BigInt([...patternInputHolds.values()].filter((h) => !h.releaseSubmitted).length) +
+      (kind === "press" ? 1n : -1n);
+    if (patternInputSerial > BigInt(UNSIGNED_64_MAXIMUM) - futureReleases)
+      throw typedError("HOST_STATE_INVALID", "Pattern input serial must preserve its physical releases");
+    const serial = patternInputSerial.toString();
+    const request = {commandId: crypto.randomUUID(),
+      runtimeGeneration: patternInputProfile.runtimeGeneration, frameEpoch: patternInputProfile.frameEpoch,
+      inputSerial: serial, slot, velocity, kind, held: true, heldPressSequence: hold?.sequence ?? null};
+    const remaining = deadlineForOperation("trigger") - (monotonicNow() - startedAt);
+    // This branch has not submitted anything to Native. It cannot invent an
+    // unknown ticket or a physical hold merely because the SDK tail expired.
+    if (remaining <= 0) throw typedError("HOST_TIMEOUT", "Original Pattern input deadline expired", {pending: false});
+    let admission;
+    let submitted = false;
+    let observerError = null;
+    try {
+      admission = await requestPatternInput(request, {deadlineMs: remaining, profileConsumer: true,
+        ...(pressReservation === null ? {} : {pressReservation}),
+        originalStartedAt: startedAt, originalBudgetMs: deadlineForOperation("trigger"),
+        beforeDispatch: () => {
+          submitted = true;
+          if (kind === "release" && hold.releaseIntent) hold.releaseIntent.dispatched = true;
+        }});
+    } catch (error) {
+      if (!unknownSubmittedOutcome(error, submitted)) throw error;
+      observerError = error;
+      // The original CommandId/serial is sufficient for inspection. An
+      // unknown RPC reply never sends a second Native enqueue.
+      admission = {ticket: {commandId: request.commandId, runtimeGeneration: request.runtimeGeneration,
+        frameEpoch: request.frameEpoch, ticket: serial}, status: null};
+      // Unknown acceptance spends this identity; a known pre-enqueue refusal
+      // does not. Both paths preserve every existing future release serial.
+      if (patternInputSerial <= BigInt(serial)) patternInputSerial = BigInt(serial) + 1n;
+    }
+    const entry = {ticket: admission.ticket, status: admission.status, slot, velocity, source, kind,
+      heldPressSequence: hold?.sequence ?? null, sequence: admission.status?.admission.sequence ?? null,
+      gestureKey, pressReservation, releaseIntent: null,
+      unknown: admission.status === null, observerError, rejectObserver: null,
+      probe};
+    patternInputOperations.set(serial, entry);
+    if (kind === "press") {
+      patternInputHolds.set(entry.sequence ?? `pending:${serial}`, entry);
+      triggerAdmittedCount += 1;
+      if (currentProfileProbe(probe)) probe.sequence = entry.sequence;
+    } else hold.releaseSubmitted = true;
+    const completion = awaitPatternInput(entry);
+    entry.completion = observePatternInputDeadline(completion, startedAt, entry);
+    // The caller may attach its handler after the short runtime turn releases.
+    void entry.completion.catch(() => {});
+    if (kind === "press" && probe && !currentProfileProbe(probe)) releaseInvalidatedProfileProbe(entry);
+    return entry;
+  }
+  function admitProfileTrigger(slot, velocity, source, startedAt, gestureKey, reservation) {
+    if (!isUnsignedInteger(slot, 63) || !isUnsignedInteger(velocity, 127) || velocity === 0 ||
+        !TRIGGER_SOURCES.has(source) || closing || safetyReservation || interruptionReservation ||
+        !(machine.state === "running" || (machine.state === "recovering" && recoveryEpoch?.probeWindow)))
+      {
+        cancelPatternInputReservation(reservation);
+        return rejectTrigger();
+      }
+    // Reconciliation preserves the original entry object, including this
+    // opaque local reference. Physical and caller debts both forbid reuse.
+    if (gestureKey !== undefined &&
+        ([...patternInputHolds.values()].some(h => h.gestureKey === gestureKey) ||
+         [...patternInputOperations.values()].some(e => e.kind === "press" && e.gestureKey === gestureKey)))
+      {
+        cancelPatternInputReservation(reservation);
+        return rejectTrigger();
+      }
+    const probe = machine.state === "recovering" ? {
+      profile: true, epoch: recoveryEpoch, epochId: recoveryEpoch.id,
+      foregroundEpoch: foregroundLossEpoch, startedAt, sequence: null, timeout: null, failed: false,
+    } : null;
+    if (probe) {
+      recoveryEpoch.probeWindow = false;
+      probeReservation = probe;
+    }
+    return admitProfileInput(slot, velocity, source, "press", null, startedAt, gestureKey, probe, reservation).then(entry => {
+      if (entry === false) cancelPatternInputReservation(reservation);
+      if (entry === false && currentProfileProbe(probe)) {
+        // Known local refusal created no Native debt. Restore only this same
+        // epoch's original opportunity; never overwrite a newer reservation.
+        probeReservation = null;
+        probe.epoch.probeWindow = true;
+        renderDiagnostics();
+      }
+      return entry;
+    }, error => {
+      if (reservation.owner === null || !unknownSubmittedOutcome(error, reservation.owner.submitted))
+        cancelPatternInputReservation(reservation);
+      failProfileProbe(probe, error);
+      throw error;
+    });
+  }
+  function admitProfileRelease(slot, source, startedAt, gestureKey) {
+    const matching = [...patternInputHolds.values()].reverse().filter(h => h.slot === slot && h.source === source);
+    const hold = gestureKey === undefined
+      ? matching.find(h => !h.releaseSubmitted) ?? matching.find(h => h.releaseIntent !== null)
+      : matching.find(h => h.gestureKey === gestureKey);
+    if (!hold) return false;
+    return admitProfileHoldRelease(hold, startedAt);
+  }
+  function admitProfileHoldRelease(hold, startedAt) {
+    if (hold.releaseIntent !== null) return {completion: hold.releaseIntent.completion};
+    if (hold.releaseSubmitted) return false;
+    const {slot, source} = hold;
+    // Intent is private caller coordination, not Native admission. Reserve it
+    // before resolving a response-lost press, so keyup/cancel/safety share one
+    // release and the first observer budget instead of enqueuing duplicates.
+    const intent = {startedAt, dispatched: false, completion: null};
+    hold.releaseIntent = intent;
+    const refused = error => {
+      // admitProfileInput retains every submitted-unknown admission and sets
+      // releaseSubmitted for it. Its remaining rejection created no release
+      // entry; a later truthful retry may use a new observer budget.
+      if (!hold.releaseSubmitted && hold.releaseIntent === intent) hold.releaseIntent = null;
+      throw error;
+    };
+    if (hold.sequence === null) {
+      const completion = (async () => {
+        while (hold.sequence === null) {
+          if (retireTerminalOwners()) throw hold.observerError ??
+            typedError("HOST_STATE_INVALID", "Original held input owner was retired");
+          await retainedPollPause();
+        }
+        const entry = await (nativeInputLifecycleWait !== null
+          ? admitProfileInput(slot, 0, source, "release", hold, startedAt)
+          : serializeRuntimeAction(() => admitProfileInput(slot, 0, source, "release", hold, startedAt)));
+        return entry.completion;
+      })().catch(refused);
+      intent.completion = observePatternInputDeadline(completion, startedAt);
+      void intent.completion.catch(() => {});
+      return {completion: intent.completion};
+    }
+    const admission = admitProfileInput(slot, 0, source, "release", hold, startedAt).catch(refused);
+    intent.completion = admission.then(entry => entry.completion);
+    void intent.completion.catch(() => {});
+    // Keep only real short admission in the existing runtime lane. Durable
+    // completion remains outside it; another observer joins the same intent.
+    return admission.then(() => ({completion: intent.completion}));
+  }
+
+  function queryPatternCountInCapabilities() {
+    requirePatternTransportOptIn();
+    return serializeRuntimeAction(() => readCountInCapabilities(false));
+  }
+
+  function requestPatternCountIn(request) {
+    if (!exactKeys(request, ["sessionId", "projectId", "commandId", "runtimeGeneration", "frameEpoch",
+        "scheduleSerial", "expectedEpoch", "bars", "expectedRevision"]) ||
+        !countInUuid(request.sessionId) || !countInUuid(request.projectId) || !countInUuid(request.commandId) ||
+        !isCanonicalNonzeroDecimal(request.runtimeGeneration) || !isCanonicalNonzeroDecimal(request.frameEpoch) ||
+        !isCanonicalNonzeroDecimal(request.scheduleSerial, PATTERN_COUNT_IN_SERIAL_MAXIMUM) ||
+        !isCanonicalNonzeroDecimal(request.expectedEpoch) || (request.bars !== 1 && request.bars !== 2) ||
+        (request.expectedRevision !== null && !isUnsignedInteger(request.expectedRevision))) {
+      throw new TypeError("Count-in request is invalid");
+    }
+    requirePatternTransportOptIn();
+    const ticket = Object.freeze({sessionId: request.sessionId, commandId: request.commandId,
+      runtimeGeneration: request.runtimeGeneration, frameEpoch: request.frameEpoch, scheduleSerial: request.scheduleSerial});
+    const key = countInTicketKey(ticket);
+    const originalRequest = Object.freeze({...request});
+    return serializeRuntimeAction(async () => {
+      requirePatternTransportCompanion();
+      const previous = patternCountInTickets.get(key);
+      if (previous?.unknown) throw previous.observerError;
+      if (closing) throw typedError("HOST_STATE_INVALID", "New count-in admission is closed", {pending: false});
+      if (!countInOutputActive) throw typedError("UNSUPPORTED_AUDIO", "Native count-in output is unavailable");
+      const entry = previous ?? {ticket, request: originalRequest, requestId: null, submitted: false,
+        accepted: false, unknown: false, consumed: false, retired: false, cancelSubmitted: false,
+        status: null, observerError: null, continuationError: null, inspectionTail: null, consumer: null};
+      try {
+        const value = await boundedRequest("pattern.transport.count-in.request", {
+          ...countInTicketPayload(ticket), project_id: originalRequest.projectId, expected_epoch: originalRequest.expectedEpoch,
+          bars: originalRequest.bars, expected_revision: originalRequest.expectedRevision,
+        }, {beforeDispatch: (requestId) => {
+          // Save the private original owner before the actual handoff, even
+          // when Host accepts and the original success response is lost.
+          entry.submitted = true;
+          entry.requestId = requestId;
+          patternCountInTickets.set(key, entry);
+        }});
+        try {
+          if (!exactKeys(value, ["submit", "ticket", "status"]) || !["accepted", "replayed"].includes(value.submit) ||
+              Object.entries(ticket).some(([key, expected]) => countInTicket(value.ticket)[key] !== expected))
+            throw protocolMismatch("Count-in admission is invalid");
+          const status = recordCountInEvidence(entry, normalizeCountInStatus(value.status, ticket));
+          return Object.freeze({submit: value.submit, ticket, status});
+        } catch (error) {
+          throw markPostResponseFailure(error);
+        }
+      } catch (error) {
+        if (unknownSubmittedOutcome(error, entry.submitted)) {
+          entry.unknown = true;
+          entry.observerError = error;
+          continueCountInConsumer(entry);
+          fail(error);
+        } else if (!previous) patternCountInTickets.delete(key);
+        throw error;
+      }
+    });
+  }
+
+  function inspectPatternCountIn(ticket, consume = false) {
+    const payload = countInTicketPayload(ticket);
+    if (typeof consume !== "boolean") throw new TypeError("Count-in consume must be boolean");
+    requirePatternTransportOptIn();
+    requirePatternTransportCompanion();
+    const entry = patternCountInTickets.get(countInTicketKey(ticket));
+    // An existing owner has its own inspectionTail. Waiting behind a Runtime
+    // action that itself waits for a retained lifecycle RPC would recreate
+    // the same cycle even after removing the Host dispatch-tail dependency.
+    if (entry !== undefined && !entry.retired) return inspectCountInEntry(entry, consume);
+    if (entry !== undefined) return serializeRuntimeAction(() => inspectCountInEntry(entry, consume));
+    return serializeRuntimeAction(async () => normalizeCountInStatus(
+      await boundedRequest("pattern.transport.count-in.inspect", {...payload, consume}), ticket));
+  }
+
+  function cancelPatternCountIn(request) {
+    if (!exactKeys(request, ["ticket", "projectId", "commandId", "expectedEpoch", "intent"]) ||
+        !countInUuid(request.projectId) || !countInUuid(request.commandId) ||
+        !isCanonicalNonzeroDecimal(request.expectedEpoch) || !["record", "play_stop"].includes(request.intent)) {
+      throw new TypeError("Count-in cancellation is invalid");
+    }
+    const original = countInTicketPayload(request.ticket);
+    requirePatternTransportOptIn();
+    requirePatternTransportCompanion();
+    const entry = patternCountInTickets.get(countInTicketKey(request.ticket));
+    return serializeRuntimeAction(async () => {
+      const priorCancel = entry?.cancelSubmitted ?? false;
+      let submitted = false;
+      let value;
+      try {
+        value = await boundedRequest("pattern.transport.count-in.cancel", {
+          ...original, start_command_id: original.command_id, command_id: request.commandId,
+          project_id: request.projectId, expected_epoch: request.expectedEpoch, intent: request.intent,
+        }, {retainedOwner: () => entry !== undefined && !entry.consumed && !entry.retired,
+          beforeDispatch: () => { submitted = true; if (entry) entry.cancelSubmitted = true; }});
+      } catch (error) {
+        if (entry && !unknownSubmittedOutcome(error, submitted)) entry.cancelSubmitted = priorCancel;
+        throw error;
+      }
+      if (!exactKeys(value, ["submit", "ticket", "status"]) || !["accepted", "replayed"].includes(value.submit) ||
+          Object.entries(request.ticket).some(([key, expected]) => countInTicket(value.ticket)[key] !== expected)) {
+        throw protocolMismatch("Count-in cancellation admission is invalid");
+      }
+      const status = normalizeCountInStatus(value.status, request.ticket);
+      if (entry) recordCountInEvidence(entry, status);
+      return Object.freeze({submit: value.submit, ticket: request.ticket, status});
+    });
+  }
+
   /** @param {import("./runtime_types.d.ts").PatternTransportRequest} request */
   function requestPatternTransport(request) {
     if (
@@ -3907,7 +5480,10 @@ function createRuntimeSessionController(options = {}) {
     const id = requireSequenceIdentity(sessionId, "sessionId");
     return serializeRuntimeAction(async () =>
       normalizePatternTransportStatus(
-        await boundedRequest("pattern.transport.inspect", {session_id: id}),
+        await boundedRequest("pattern.transport.inspect", {session_id: id}, {
+          retainedOwner: () => [...patternCountInTickets.values()].some((entry) =>
+            entry.ticket.sessionId === id && !entry.retired && !entry.consumed),
+        }),
       ));
   }
 
@@ -4591,14 +6167,12 @@ function createRuntimeSessionController(options = {}) {
         performance_id: performanceId,
         control_epoch: controlEpoch,
       });
-      headeredRecording = {
-        sessionId,
-        performanceId,
-        controlEpoch,
-        beginCommandId,
+      if (closing || terminalCleanupStarted)
+        throw typedError("HOST_STATE_INVALID", "Performance begin was cancelled by closure");
+      const recording = {sessionId, performanceId, controlEpoch, beginCommandId,
         nextRecordingSequence: value.next_recording_sequence,
-        coreControlReady: value.core_control_ready === true,
-      };
+        coreControlReady: value.core_control_ready === true};
+      headeredRecording = recording;
       // The window holds every recorded input until both producers prove
       // ready for this begin; nothing is delivered early or dropped.
       holdLiveInputs();
@@ -4606,7 +6180,9 @@ function createRuntimeSessionController(options = {}) {
       try {
         const deadline =
           monotonicNow() + CORE_CONTROL_READY_TIMEOUT_MS;
-        while (!headeredRecording.coreControlReady) {
+        while (!recording.coreControlReady) {
+          if (closing || terminalCleanupStarted || headeredRecording !== recording)
+            throw typedError("HOST_STATE_INVALID", "Performance begin owner was closed");
           if (monotonicNow() >= deadline) {
             throw typedError(
               "HOST_TIMEOUT",
@@ -4620,9 +6196,11 @@ function createRuntimeSessionController(options = {}) {
           if (status.profile === "header_input_sequence" &&
               status.control_epoch === controlEpoch &&
               status.core_control_ready === true) {
-            headeredRecording.coreControlReady = true;
+            recording.coreControlReady = true;
           }
         }
+        if (closing || terminalCleanupStarted || headeredRecording !== recording)
+          throw typedError("HOST_STATE_INVALID", "Performance begin owner was closed");
         if (captureSink !== null) {
           capture = await startPerformanceMasterCapture(captureSink, {
             controlEpoch,
@@ -4643,10 +6221,12 @@ function createRuntimeSessionController(options = {}) {
             requestId: crypto.randomUUID(),
           });
         } catch {}
-        headeredRecording = null;
+        if (headeredRecording === recording) headeredRecording = null;
         throw error;
       }
       releaseLiveInputs();
+      if (closing || terminalCleanupStarted || headeredRecording !== recording)
+        throw typedError("HOST_STATE_INVALID", "Performance begin owner was closed");
       return Object.freeze({
         performanceId: value.performance_id,
         committedRevision: value.committed_revision,
@@ -4655,7 +6235,7 @@ function createRuntimeSessionController(options = {}) {
         profile: value.profile,
         controlEpoch: value.control_epoch,
         coreControlReady: true,
-        nextRecordingSequence: headeredRecording.nextRecordingSequence,
+        nextRecordingSequence: recording.nextRecordingSequence,
         fxBindings: Object.freeze((value.fx_bindings ?? []).map((binding) =>
           Object.freeze({
             fx: binding.fx,
@@ -4764,10 +6344,11 @@ function createRuntimeSessionController(options = {}) {
     throw new TypeError("Performance raw event is invalid");
   }
 
-  function recordPerformanceEvent(request) {
+  function reservePerformanceEvent(request, physicalKey, padOnly = false) {
+    validateGestureKey(physicalKey);
     if (request === null || typeof request !== "object" ||
         !exactKeys(request, ["sessionId", "eventId", "event"])) {
-      return Promise.reject(new TypeError("Performance event request is invalid"));
+      throw new TypeError("Performance event request is invalid");
     }
     const sessionId = performanceIdentity(request.sessionId, "sessionId");
     const eventId = performanceIdentity(request.eventId, "eventId");
@@ -4775,39 +6356,60 @@ function createRuntimeSessionController(options = {}) {
     // window's expected sequence; the legacy wire is unchanged.
     const headered = headeredRecording !== null &&
       headeredRecording.sessionId === sessionId;
-    let event;
-    try {
-      event = headered
-        ? wireHeaderedPerformanceEvent(request.event)
-        : wirePerformanceEvent(request.event);
-    } catch (error) {
-      return Promise.reject(error);
-    }
+    const recording = headered ? headeredRecording : null;
+    const event = headered
+      ? wireHeaderedPerformanceEvent(request.event)
+      : wirePerformanceEvent(request.event);
     const classification = event.kind === "pad_press"
       ? "pad_press"
       : event.kind === "pad_release" ? "pad_release" : "ordinary";
     const gestureKey = Object.hasOwn(event, "gesture_id")
-      ? `gesture:${event.gesture_id}`
+      ? `gesture:${sessionId}:${event.gesture_id}`
       : null;
-    return submitLiveInput(async () => {
+    if (padOnly && classification === "ordinary")
+      throw new TypeError("Only Performance Pad events can be prepared");
+    if (padOnly) {
+      flatSlotAddress(event.slot);
+      if (event.kind === "pad_press" && (!Number.isInteger(event.velocity) ||
+          event.velocity < 1 || event.velocity > 127))
+        throw new TypeError("Performance Pad velocity is invalid");
+    }
+    if (padOnly && event.kind === "pad_release" && physicalKey !== undefined &&
+        !liveLaneOwners(gestureKey, {sessionId, slot: event.slot}).some(owner =>
+          owner.sharedClaim?.owner.gestureKey === physicalKey))
+      throw typedError("HOST_STATE_INVALID", "Performance Pad Release has a different physical owner", {pending: false});
+    if (event.kind === "pad_release" && physicalKey !== undefined &&
+        liveLaneOwners(gestureKey, {sessionId, slot: event.slot}).some(owner =>
+          owner.sharedClaim?.owner.gestureKey === physicalKey)) endPhysicalGesture(physicalKey);
+    const releaseStartedAt = classification === "pad_release" && physicalKey !== undefined
+      ? physicalGestureOwners.get(physicalKey)?.releaseStartedAt : undefined;
+    return reserveLiveInput(async entry => {
+      const turnStartedAt = monotonicNow();
+      if (headered && headeredRecording !== recording)
+        throw typedError("HOST_STATE_INVALID", "Performance recording owner changed before input submission", {pending: false});
       const value = await boundedRequest("performance.record.event", {
         session_id: sessionId,
         event_id: eventId,
         event,
         ...(headered
           ? {
-              control_epoch: headeredRecording.controlEpoch,
+              control_epoch: recording.controlEpoch,
               expected_recording_sequence:
-                headeredRecording.nextRecordingSequence,
+                recording.nextRecordingSequence,
             }
           : {}),
-      });
+      }, {originalStartedAt: turnStartedAt, beforeDispatch() {
+        if (headered && headeredRecording !== recording)
+          throw typedError("HOST_STATE_INVALID", "Performance recording owner changed before input submission", {pending: false});
+        entry.submitted = true;
+        submitSharedGesture(entry.sharedClaim);
+      }});
       if (headered) {
         // The window advances only on a fresh admission; an exact replay
         // reuses the retained receipt.
         if (value.replayed === false &&
             typeof value.next_recording_sequence === "string") {
-          headeredRecording.nextRecordingSequence =
+          recording.nextRecordingSequence =
             value.next_recording_sequence;
         }
         if (value.replayed === false) {
@@ -4838,7 +6440,23 @@ function createRuntimeSessionController(options = {}) {
         replayed: value.replayed,
         projectRevision: value.project_revision,
       });
-    }, classification, gestureKey);
+    }, classification, gestureKey, {sessionId, eventId, slot: event.slot, physicalKey, releaseStartedAt}, padOnly);
+  }
+
+  function preparePerformancePadEvent(request, physicalKey) {
+    const entry = reservePerformanceEvent(request, physicalKey, true);
+    return Object.freeze({
+      submit() { return submitReservedLiveInput(entry); },
+      cancelBeforeSubmit() {
+        return cancelPreparedLiveInput(entry, typedError("HOST_STATE_INVALID",
+          "Performance Pad input was cancelled before submission", {pending: false}));
+      },
+    });
+  }
+
+  function recordPerformanceEvent(request, physicalKey) {
+    try { return submitReservedLiveInput(reservePerformanceEvent(request, physicalKey)); }
+    catch (error) { return Promise.reject(error); }
   }
 
   function wireFxGesture(event) {
@@ -5134,17 +6752,33 @@ function createRuntimeSessionController(options = {}) {
     }
     const sessionId = performanceIdentity(request.sessionId, "sessionId");
     const requestId = performanceIdentity(request.requestId, "requestId");
+    cancelPreparedLiveInputs(sessionId);
     // The cleanup token: never-Core-received waiting inputs are rejected
     // explicitly; admitted work finishes first.
-    return submitLiveInput(async () => {
+    return submitLiveInput(async entry => {
       const value = await boundedRequest("performance.record.stop", {
         session_id: sessionId, request_id: requestId,
-      });
+      }, {beforeDispatch() { entry.submitted = true; }});
+      if (value.request_id !== requestId || value.session_id !== sessionId)
+        throw markPostResponseFailure(protocolMismatch("Performance stop changed its original owner"));
       if (headeredRecording !== null &&
           headeredRecording.sessionId === sessionId) {
         headeredRecording = null;
       }
-      liveLaneOpenPads = new Map();
+      for (const [key, owner] of liveLaneOpenPads) {
+        if (owner.identity.sessionId === sessionId) {
+          liveLaneOpenPads.delete(key);
+          liveLaneReleaseReservations.delete(owner);
+          settleSharedGesture(owner.sharedClaim);
+        }
+      }
+      for (const owner of liveLanePendingPresses) {
+        if (owner.identity.sessionId === sessionId && owner.submitted) {
+          liveLanePendingPresses.delete(owner);
+          liveLaneReleaseReservations.delete(owner);
+          settleSharedGesture(owner.sharedClaim);
+        }
+      }
       return Object.freeze({
         requestId: value.request_id,
         sessionId: value.session_id,
@@ -5792,20 +7426,55 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
-  async function release(flatSlot, source) {
+  async function release(flatSlot, source, gestureKey) {
+    validateGestureKey(gestureKey);
     flatSlotAddress(flatSlot);
     if (!TRIGGER_SOURCES.has(source)) {
       throw new TypeError("Runtime release source is invalid");
     }
-    return serializeRuntimeAction(async () => normalizeAccepted(
-      await boundedRequest("trigger", {slot: flatSlot, kind: "release"}),
-    ));
+    if (patternInputProfile !== null) {
+      const reservation = matchingProfileReleaseReservation(flatSlot, source, gestureKey);
+      // A foreign slot/source or a journal-only key has no original Pattern
+      // physical Release authority. Merely returning false cannot end it.
+      // Slot-only compatibility may consume its real Native owner, but it
+      // cannot attest keyup of an explicitly leased physical gesture.
+      if (reservation && (gestureKey !== undefined || !leasedPhysicalKeys.has(reservation.gestureKey)))
+        endPhysicalGesture(reservation.gestureKey);
+      const startedAt = physicalGestureOwners.get(reservation?.gestureKey)?.releaseStartedAt ?? monotonicNow();
+      return queueProfileRelease(flatSlot, source, startedAt, gestureKey);
+    }
+    const owners = [...liveLaneOpenPads.values(), ...liveLanePendingPresses].filter(owner => {
+      const key = owner.gestureKey;
+      return typeof key === "object" && key.slot === flatSlot && key.source === source &&
+        (gestureKey === undefined || key.gestureKey === gestureKey);
+    });
+    for (const owner of owners) {
+      if (gestureKey !== undefined || !leasedPhysicalKeys.has(owner.identity.physicalKey))
+        endPhysicalGesture(owner.identity.physicalKey);
+    }
+    // Same FIFO as the original Press, including a parked header/receipt.
+    // Profile Release above continues independently through its reserved lane.
+    const keyless = gestureKey === undefined && owners.length === 0 &&
+      liveLaneOpenPads.has(`slot:${flatSlot}`) &&
+      ![...liveLaneOpenPads.keys(), ...[...liveLanePendingPresses].map(owner => owner.gestureKey)]
+        .some(key => typeof key === "object" && key.slot === flatSlot);
+    const key = owners.length === 1 ? owners[0].gestureKey : owners.length > 1 || keyless
+      ? `slot:${flatSlot}` : {slot: flatSlot, source, gestureKey};
+    return submitLiveInput(async entry => {
+      const turnStartedAt = monotonicNow();
+      // A queued Press can be definitely refused locally (e.g. not activated).
+      // That is not a Native owner and owes no fabricated wire Release.
+      if (owners.length !== 0 && owners.every(owner => !owner.submitted)) return false;
+      return normalizeAccepted(await boundedRequest("trigger", {slot: flatSlot, kind: "release"},
+        {originalStartedAt: turnStartedAt, beforeDispatch() { entry.submitted = true; }}));
+    }, "pad_release", key, {slot: flatSlot, legacy: true});
   }
 
   async function stopPad(flatSlot) {
     const slot = flatSlotAddress(flatSlot);
-    return submitLiveInput(async () => {
-      const result = await boundedRequest("sample.stop", {slot});
+    return submitLiveInput(async entry => {
+      const result = await boundedRequest("sample.stop", {slot},
+        {beforeDispatch() { entry.submitted = true; }});
       if (result?.scope !== "slot") {
         throw protocolMismatch("Sample stop scope is invalid");
       }
@@ -5883,14 +7552,23 @@ function createRuntimeSessionController(options = {}) {
 
   async function close() {
     if (terminalCleanupStarted) {
-      await terminalCleanupPromise;
+      // A seal is not completed owner/backend cleanup. With no retained
+      // Pattern debt, every caller waits the same original cleanup Promise.
+      // Live retained debt still reports false promptly, preserving its
+      // independent continuation and resources without manufacturing release.
+      if (!hasRetainedPatternOwners()) {
+        try { await terminalCleanupPromise; } catch { /* Original fatal state remains observable. */ }
+      }
       return false;
     }
     if (closing || machine.state === "closed" || machine.state === "failed") {
       return false;
     }
     closing = true;
+    cancelPreparedLiveInputs();
     invalidateProbe();
+    const reservation = {invokingTerminator: false, expectedTerminationError: null, failure: null};
+    normalCloseReservation = reservation;
     // A closing session rejects every never-admitted live input explicitly;
     // nothing queued can still reach Core afterwards.
     for (const entry of liveLaneQueue) {
@@ -5901,26 +7579,33 @@ function createRuntimeSessionController(options = {}) {
     for (let index = liveLaneQueue.length - 1; index >= 0; index -= 1) {
       if (liveLaneQueue[index].cancelled) {
         const [entry] = liveLaneQueue.splice(index, 1);
+        liveLanePendingPresses.delete(entry);
+        settleSharedGesture(entry.sharedClaim);
+        for (const owner of entry.releaseOwners) liveLaneReleaseReservations.delete(owner);
+        if (liveLaneCleanupReservation === entry) liveLaneCleanupReservation = null;
         entry.reject(typedError(
           "HOST_STATE_INVALID",
           "Live input was cancelled before Core admission",
         ));
       }
     }
+    if (pendingPerformanceMasterCaptureStart !== null) pendingPerformanceMasterCaptureStart.cancelled = true;
     headeredRecording = null;
     liveLaneOpenPads = new Map();
-    await closePerformanceMasterTap();
     const safety = beginSafetyCleanup("host.close");
     try {
       await safety.promise;
-      await boundedRequest("host.close", {});
+      await requestInputLifecycle("host.close");
+      if (reservation.failure) throw reservation.failure;
+      await terminalCleanup(reservation);
+      if (reservation.failure || fatalReservation !== null || terminalCleanupError !== null) return false;
       machine.transition("closed", { reason: "pagehide" });
-      await terminalCleanup();
       return true;
     } catch (error) {
-      closing = false;
       fail(error);
       return false;
+    } finally {
+      if (normalCloseReservation === reservation) normalCloseReservation = null;
     }
   }
 
@@ -5941,14 +7626,14 @@ function createRuntimeSessionController(options = {}) {
           probeReservation === null
         )
       );
-    const releaseInput = (flatSlot, source) => {
+    const releaseInput = (flatSlot, source, gestureKey) => {
       if (suppressInputRelease) {
         return;
       }
-      void release(flatSlot, source).catch(() => {});
+      void release(flatSlot, source, gestureKey).catch(() => {});
     };
-    const cancelInput = (flatSlot, source) => {
-      void release(flatSlot, source).catch(() => {});
+    const cancelInput = (flatSlot, source, gestureKey) => {
+      void release(flatSlot, source, gestureKey).catch(() => {});
       clearPreviewsForCancellation(flatSlot);
     };
     pointerAdapter = createPointerAdapter({
@@ -6046,7 +7731,7 @@ function createRuntimeSessionController(options = {}) {
       unsubscribeTransport = transport.subscribe(observeNotification);
     }
     if (typeof transport.subscribeFailure === "function") {
-      unsubscribeTransportFailure = transport.subscribeFailure(fail);
+      unsubscribeTransportFailure = transport.subscribeFailure(observeTransportFailure);
     }
   }
 
@@ -6057,7 +7742,9 @@ function createRuntimeSessionController(options = {}) {
     started = true;
     try {
       machine.transition("preflight", { reason: "bootstrap" });
-      manifest = Object.freeze(await verifyManifest());
+      const verifiedManifest = await verifyManifest();
+      if (closing || terminalCleanupStarted) return false;
+      manifest = Object.freeze(verifiedManifest);
       if (
         manifest.product_build !== assemblyIdentity.productBuild ||
         manifest.host_version !== assemblyIdentity.hostVersion ||
@@ -6095,6 +7782,7 @@ function createRuntimeSessionController(options = {}) {
         (preflight === runPreflight
           ? await defaultCapabilities(window, capabilityProbeTimeoutMs)
           : {});
+      if (closing || terminalCleanupStarted) return false;
       const resolvedCapabilities = {};
       for (const name of PREFLIGHT_CAPABILITIES) {
         try {
@@ -6104,6 +7792,7 @@ function createRuntimeSessionController(options = {}) {
         } catch {
           resolvedCapabilities[name] = false;
         }
+        if (closing || terminalCleanupStarted) return false;
       }
       capabilitySnapshot = Object.freeze({
         ...resolvedCapabilities,
@@ -6112,13 +7801,38 @@ function createRuntimeSessionController(options = {}) {
       try {
         await preflight(resolvedCapabilities);
       } catch (error) {
+        if (closing || terminalCleanupStarted) return false;
         publishCaptureUnavailable(
           "capture-unsupported",
           "Use a browser with the required secure audio and storage capabilities.",
         );
         throw error;
       }
-      runtime = await loadRuntime(manifest);
+      if (closing || terminalCleanupStarted) return false;
+      runtimeLoadStarted = true;
+      const invocation = Object.freeze({onRuntimeOwnerCreated(owner) {
+        if (owner === null || typeof owner !== "object" ||
+            (runtimeLoadOwner !== null && runtimeLoadOwner !== owner)) {
+          throw typedError("HOST_STATE_INVALID", "Runtime invocation reported a different owner");
+        }
+        runtimeLoadOwner = owner;
+      }});
+      let resolveLoad;
+      let rejectLoad;
+      runtimeLoadPromise = new Promise((resolve, reject) => {
+        resolveLoad = resolve; rejectLoad = reject;
+      });
+      // Publish the invocation debt before any synchronous loader callback
+      // can reenter close. Both start and cleanup await this same owner.
+      try {
+        Promise.resolve(loadRuntime(manifest, invocation)).then((loaded) => {
+          if (runtimeLoadOwner !== null && runtimeLoadOwner !== loaded) {
+            rejectLoad(typedError("HOST_STATE_INVALID", "Loaded runtime differs from its actual producer owner"));
+          } else resolveLoad(loaded);
+        }, rejectLoad);
+      } catch (error) { rejectLoad(error); }
+      runtime = await runtimeLoadPromise;
+      if (closing || terminalCleanupStarted) return false;
       if (window?.lmdjWebRuntimeHost === runtime) {
         // The packaged Host already publishes this runtime namespace. Expose
         // the same session methods for trusted programmatic callers through
@@ -6138,6 +7852,15 @@ function createRuntimeSessionController(options = {}) {
           configurable: false,
           writable: false,
         });
+        Object.defineProperty(runtime, "patternTransport", {
+          value: Object.freeze({requestPatternTransport, inspectPatternTransport,
+            requestTransportPatternSwitch, queryPatternCountInCapabilities, requestPatternCountIn,
+            inspectPatternCountIn, cancelPatternCountIn, requestPatternInput, inspectPatternInput,
+            trigger, release}), configurable: false, writable: false,
+        });
+        Object.defineProperty(runtime, "session", {
+          value: session, configurable: false, writable: false,
+        });
       }
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });
@@ -6147,7 +7870,7 @@ function createRuntimeSessionController(options = {}) {
       renderDiagnostics();
       return true;
     } catch (error) {
-      fail(error, "failed");
+      if (!closing && !terminalCleanupStarted) fail(error, "failed");
       return false;
     }
   }
@@ -6735,6 +8458,8 @@ function createRuntimeSessionController(options = {}) {
     inspectPerformance,
     beginPerformanceRecording,
     recordPerformanceEvent,
+    preparePerformancePadEvent,
+    reserveInputGesture,
     applyFxGesture,
     applyPerformanceLiveControl,
     requestPerformancePatternLaunch,
@@ -6762,6 +8487,10 @@ function createRuntimeSessionController(options = {}) {
     requestPatternSwitch,
     requestPatternTransport,
     inspectPatternTransport,
+    queryPatternCountInCapabilities,
+    requestPatternCountIn,
+    inspectPatternCountIn,
+    cancelPatternCountIn,
     requestTransportPatternSwitch,
     createPattern,
     editPatternEvents,
@@ -6812,6 +8541,8 @@ function createRuntimeSessionController(options = {}) {
       monitorLevel = value;
     },
     activateAudio,
+    requestPatternInput,
+    inspectPatternInput,
     suspendAudio,
     release,
     stopPad,
@@ -6821,6 +8552,7 @@ function createRuntimeSessionController(options = {}) {
     subscribePerformanceMasterCaptureStatus,
     startPerformanceMasterCapture,
     close,
+    waitForTerminalCleanup,
     subscribeDiagnostics,
     subscribeHostState,
     subscribeRuntimeOutcome,

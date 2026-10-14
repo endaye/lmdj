@@ -1129,9 +1129,11 @@ PublishResult RealtimeEngine::publish_sample_bank(
 foundation::Result<void> RealtimeEngine::enable_pattern_transport(
     std::uint64_t generation) {
   if (state_.load(std::memory_order_acquire) != RealtimeState::stopped ||
-      generation == 0 || generation <= last_pattern_transport_generation_) {
+      generation == 0 || generation <= last_pattern_transport_generation_ ||
+      !scheduled_pattern_record_quiescent()) {
     return invalid_argument("Pattern transport requires a fresh quiescent generation");
   }
+  scheduled_record_enabled_ = false;
   pattern_transport_enabled_ = true;
   pattern_transport_generation_ = generation;
   last_pattern_transport_generation_ = generation;
@@ -1147,7 +1149,14 @@ PatternTransportSubmit RealtimeEngine::submit_pattern_transport(
   if (pattern_transport_generation_ == 0 ||
       command.runtime_generation != pattern_transport_generation_)
     return PatternTransportSubmit::stale_generation;
-  if (pattern_transport_reserved_) return PatternTransportSubmit::busy;
+  const auto schedule = scheduled_tag_.load(std::memory_order_seq_cst);
+  const bool scheduled_cutoff = scheduled_request_ && scheduled_cancel_ &&
+      !scheduled_cancel_won_ && command.epoch == scheduled_cancel_->epoch &&
+      (schedule_phase(schedule) == ScheduledPatternPhase::starting ||
+       schedule_phase(schedule) == ScheduledPatternPhase::applied) &&
+      command.action != PatternTransportAction::start;
+  if (pattern_transport_reserved_ || (scheduled_request_ && !scheduled_cutoff))
+    return PatternTransportSubmit::busy;
   if (command.epoch == 0 || command.epoch <= pattern_transport_epoch_ ||
       (pattern_transport_epoch_ == 0 && command.epoch != 1))
     return PatternTransportSubmit::stale_epoch;
@@ -1157,7 +1166,8 @@ PatternTransportSubmit RealtimeEngine::submit_pattern_transport(
     return PatternTransportSubmit::invalid_action;
   if (command.action == PatternTransportAction::start && control_pattern_playing_)
     return PatternTransportSubmit::invalid_action;
-  if (command.action == PatternTransportAction::fence && !control_pattern_playing_)
+  if (command.action == PatternTransportAction::fence &&
+      !control_pattern_playing_ && !scheduled_cutoff)
     return PatternTransportSubmit::not_running;
 
   PatternTransportCommandCell cell{command.runtime_generation, command.epoch,
@@ -1253,6 +1263,8 @@ RealtimeEngine::inspect_pattern_transport_receipt(
   }
   const auto& cell = *retained_transport_receipt_;
   if (cell.generation != generation || cell.epoch != epoch) return std::nullopt;
+  if (scheduled_cancel_ && !scheduled_cancel_won_ &&
+      scheduled_cancel_->epoch == epoch) scheduled_cutoff_receipt_ = cell;
   const auto legacy_decision = cell.legacy_is_predecessor
       ? cell.predecessor_decision : cell.decision;
   const auto legacy_authority = cell.legacy_is_predecessor
@@ -1289,6 +1301,9 @@ bool RealtimeEngine::acknowledge_pattern_transport_receipt(
       retained_transport_receipt_->generation != generation ||
       retained_transport_receipt_->epoch != epoch)
     return false;
+  if (scheduled_cancel_ && !scheduled_cancel_won_ &&
+      scheduled_cancel_->epoch == epoch)
+    scheduled_cutoff_receipt_ = *retained_transport_receipt_;
   control_pattern_playing_ = retained_transport_receipt_->playing;
   acknowledged_pattern_generation_ = retained_transport_receipt_->pattern_generation;
   retained_transport_receipt_.reset();
@@ -1372,6 +1387,13 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
         stop_voice(voice, frame, VoiceStop::declick);
     }
   }
+  if (command.action != PatternTransportAction::start) {
+    const auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+    if (schedule_phase(tag) == ScheduledPatternPhase::starting ||
+        schedule_phase(tag) == ScheduledPatternPhase::applied ||
+        schedule_phase(tag) == ScheduledPatternPhase::empty)
+      scheduled_cutoff_serial_.store(tag >> 4U, std::memory_order_seq_cst);
+  }
   receipt.origin_frame = pattern_origin_frame_;
   if (command.action == PatternTransportAction::start)
     receipt.tempo_anchor = TransportAnchor{frame, 0, bpm};
@@ -1382,6 +1404,534 @@ void RealtimeEngine::apply_pattern_transport(std::uint64_t frame) noexcept {
   receipt.pattern_generation = pattern_slots_[receipt.pattern_slot].generation;
   publish_transport_decision();
   static_cast<void>(pattern_transport_receipts_.try_push(receipt));
+}
+
+foundation::Result<void> RealtimeEngine::enable_scheduled_pattern_record(
+    std::uint64_t generation) {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::stopped ||
+      !pattern_transport_enabled_ || generation == 0 ||
+      generation != pattern_transport_generation_ ||
+      !scheduled_pattern_record_quiescent())
+    return invalid_argument("scheduled Record requires a quiescent transport generation");
+  scheduled_record_enabled_ = true;
+  scheduled_settled_serial_.store(0, std::memory_order_release);
+  return foundation::Result<void>::success();
+}
+
+ScheduledPatternSubmit RealtimeEngine::submit_scheduled_pattern_record(
+    const ScheduledPatternRecordRequest& request) {
+  if (!scheduled_record_enabled_) return ScheduledPatternSubmit::disabled;
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running)
+    return ScheduledPatternSubmit::not_running;
+  if (request.runtime_generation == 0 ||
+      request.runtime_generation != pattern_transport_generation_)
+    return ScheduledPatternSubmit::stale_generation;
+  if (request.frame_epoch == 0 || request.frame_epoch != start_epoch_)
+    return ScheduledPatternSubmit::stale_frame_epoch;
+  if (scheduled_request_ || pattern_transport_reserved_)
+    return ScheduledPatternSubmit::busy;
+  if (request.epoch == 0 || request.epoch <= pattern_transport_epoch_ ||
+      (pattern_transport_epoch_ == 0 && request.epoch != 1))
+    return ScheduledPatternSubmit::stale_epoch;
+  if (request.epoch == std::numeric_limits<std::uint64_t>::max())
+    return ScheduledPatternSubmit::exhausted;
+  if (last_schedule_serial_ == kScheduledPatternSerialMaximum ||
+      request.serial > kScheduledPatternSerialMaximum)
+    return ScheduledPatternSubmit::exhausted;
+  if (request.serial == 0 || request.serial <= last_schedule_serial_)
+    return ScheduledPatternSubmit::stale_serial;
+  if (request.bars != 1 && request.bars != 2)
+    return ScheduledPatternSubmit::invalid_bars;
+  if (control_pattern_playing_) return ScheduledPatternSubmit::not_stopped;
+  const auto observation = pattern_transport_observation();
+  if (!observation || observation->pending_switches[0] ||
+      observation->pending_switches[1] || observation->outstanding_cancellation)
+    return ScheduledPatternSubmit::busy;
+  const auto slot = current_pattern_slot_.load(std::memory_order_acquire);
+  if (slot == kNoPatternSlot || request.expected_pattern_generation == 0 ||
+      pattern_slots_[slot].generation != request.expected_pattern_generation ||
+      pattern_slots_[slot].pattern->pattern_id() != request.pattern_id)
+    return ScheduledPatternSubmit::identity_mismatch;
+  const auto& pattern = *pattern_slots_[slot].pattern;
+  const auto maximum = std::numeric_limits<std::uint64_t>::max();
+  const auto frontier = transport_decision_.read().rendered_frames;
+  if (pattern.bar_frames() == 0 ||
+      frontier == maximum ||
+      pattern.bar_frames() > (maximum - frontier - 1) / request.bars ||
+      next_cue_batch_id_.load(std::memory_order_acquire) == maximum)
+    return ScheduledPatternSubmit::exhausted;
+  // Control pins protect the payload until Preparing establishes its separate
+  // audio borrow. Acknowledgment releases only this pin, never that borrow.
+  scheduled_request_ = request;
+  ++pattern_slots_[slot].scheduled_control_pins;
+  scheduled_payload_ = {request.runtime_generation, request.frame_epoch,
+      request.epoch, request.serial, request.expected_pattern_generation,
+      pattern.bar_frames(), 0, 0, pattern.bpm(), request.bars, slot, false};
+  scheduled_cancel_.reset();
+  scheduled_start_acknowledged_ = false;
+  scheduled_cancel_acknowledged_ = false;
+  scheduled_cancel_won_ = false;
+  scheduled_cancel_invalidated_ = false;
+  scheduled_cutoff_receipt_.reset();
+  last_schedule_serial_ = request.serial;
+  scheduled_settled_serial_.store(0, std::memory_order_release);
+  pattern_transport_epoch_ = request.epoch;
+  scheduled_tag_.store(schedule_tag(request.serial, ScheduledPatternPhase::submitted),
+      std::memory_order_seq_cst);
+  return ScheduledPatternSubmit::accepted;
+}
+
+std::optional<ScheduledPatternRecordStatus>
+RealtimeEngine::inspect_scheduled_pattern_record(
+    std::uint64_t generation, std::uint64_t serial) const {
+  if (!scheduled_request_ || generation == 0 || serial == 0 ||
+      scheduled_request_->runtime_generation != generation ||
+      scheduled_request_->serial != serial) return std::nullopt;
+  const auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  if ((tag >> 4U) != serial) return std::nullopt;
+  const auto phase = schedule_phase(tag);
+  const auto timing = scheduled_timing_.read();
+  const auto& request = *scheduled_request_;
+  ScheduledPatternRecordStatus result{generation, request.frame_epoch, serial,
+      phase, request.bars, scheduled_payload_.bpm, scheduled_payload_.bar_frames,
+      {}, {}, {}, {}};
+  if (timing.serial == serial && timing.timed) {
+    result.count_in_frame = timing.count_in_frame;
+    result.start_frame = timing.start_frame;
+  }
+  const auto receipt = [&](std::uint64_t epoch, ScheduledPatternResult outcome,
+                           std::optional<std::uint64_t> frame, bool playing) {
+    return ScheduledPatternRecordReceipt{generation, request.frame_epoch, serial,
+        epoch, request.expected_pattern_generation, request.pattern_id,
+        outcome, outcome == ScheduledPatternResult::applied ? frame : std::nullopt,
+        outcome == ScheduledPatternResult::applied ? result.start_frame : std::nullopt, playing};
+  };
+  if (!scheduled_start_acknowledged_) {
+    if (phase == ScheduledPatternPhase::applied)
+      result.start_receipt = receipt(request.epoch, ScheduledPatternResult::applied,
+          result.start_frame, true);
+    else if (phase == ScheduledPatternPhase::cancelled)
+      result.start_receipt = receipt(request.epoch, ScheduledPatternResult::cancelled,
+          std::nullopt, false);
+    else if (phase == ScheduledPatternPhase::refused)
+      result.start_receipt = receipt(request.epoch, ScheduledPatternResult::refused,
+          std::nullopt, false);
+  }
+  if (scheduled_cancel_ && !scheduled_cancel_acknowledged_) {
+    if (scheduled_cancel_won_ && phase == ScheduledPatternPhase::cancelled)
+      result.cancel_receipt = receipt(scheduled_cancel_->epoch,
+          ScheduledPatternResult::cancelled, std::nullopt, false);
+    else if (scheduled_cancel_invalidated_) {
+      // Exceptional owner invalidation has NO e2 command, effective F or
+      // origin F. Failure evidence does not claim a durable closure.
+      result.cancel_receipt = ScheduledPatternRecordReceipt{generation,
+          request.frame_epoch, serial, scheduled_cancel_->epoch,
+          request.expected_pattern_generation, request.pattern_id,
+          ScheduledPatternResult::refused, {}, {}, false};
+    } else if (!scheduled_cancel_won_) {
+      if (!scheduled_cutoff_receipt_)
+        static_cast<void>(inspect_pattern_transport_receipt(generation,
+            scheduled_cancel_->epoch));
+      if (scheduled_cutoff_receipt_) {
+        const auto& cutoff = *scheduled_cutoff_receipt_;
+        result.cancel_receipt = receipt(cutoff.epoch, ScheduledPatternResult::applied,
+            cutoff.effective_frame, cutoff.playing);
+      }
+    }
+  }
+  return result;
+}
+
+ScheduledPatternSubmit RealtimeEngine::cancel_scheduled_pattern_record(
+    const ScheduledPatternCancelRequest& request) {
+  if (!scheduled_request_ || request.runtime_generation == 0 ||
+      request.runtime_generation != scheduled_request_->runtime_generation)
+    return ScheduledPatternSubmit::stale_generation;
+  if (request.frame_epoch != scheduled_request_->frame_epoch)
+    return ScheduledPatternSubmit::stale_frame_epoch;
+  if (request.serial == 0 || request.serial != scheduled_request_->serial)
+    return ScheduledPatternSubmit::stale_serial;
+  if (scheduled_cancel_ || pattern_transport_reserved_)
+    return ScheduledPatternSubmit::busy;
+  if (request.epoch == 0 || request.epoch <= pattern_transport_epoch_)
+    return ScheduledPatternSubmit::stale_epoch;
+  // Control may retry a racing phase change; the audio thread never retries.
+  auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  for (;;) {
+    const auto phase = schedule_phase(tag);
+    auto target = ScheduledPatternPhase::cancelled;
+    if (phase == ScheduledPatternPhase::preparing)
+      target = ScheduledPatternPhase::cancel_preparing;
+    else if (phase == ScheduledPatternPhase::starting ||
+             phase == ScheduledPatternPhase::applied) {
+      // Retain the second intent without consuming its epoch/reservation.
+      // Facade submits its genuine ordinary Stop or recording fence; only that
+      // command's applied receipt establishes F and closes input admission.
+      scheduled_cancel_ = request;
+      scheduled_cancel_won_ = false;
+      // A retained Applied start can receive its original second intent only
+      // after the callback owner has stopped. With no submitted command or
+      // actual F left to reconcile, retain terminal refusal for that exact e2;
+      // do not spend its ordinary epoch or manufacture a cutoff frame.
+      if (phase == ScheduledPatternPhase::applied &&
+          state_.load(std::memory_order_acquire) == RealtimeState::stopped &&
+          !pattern_transport_reserved_ && !scheduled_cutoff_receipt_ &&
+          !retained_transport_receipt_ && pattern_transport_commands_.size_approx() == 0)
+        scheduled_cancel_invalidated_ = true;
+      return ScheduledPatternSubmit::start_won;
+    } else if (phase != ScheduledPatternPhase::submitted &&
+               phase != ScheduledPatternPhase::armed) {
+      return ScheduledPatternSubmit::busy;
+    }
+    if (scheduled_tag_.compare_exchange_strong(tag,
+            schedule_tag(request.serial, target), std::memory_order_seq_cst,
+            std::memory_order_seq_cst)) {
+      scheduled_cancel_ = request;
+      scheduled_cancel_won_ = true;
+      pattern_transport_epoch_ = request.epoch;
+      return ScheduledPatternSubmit::accepted;
+    }
+  }
+}
+
+void RealtimeEngine::retire_scheduled_control_cell() noexcept {
+  if (!scheduled_request_ || !scheduled_start_acknowledged_ ||
+      (scheduled_cancel_ && !scheduled_cancel_acknowledged_)) return;
+  --pattern_slots_[scheduled_payload_.pattern_slot].scheduled_control_pins;
+  scheduled_request_.reset();
+  scheduled_cancel_.reset();
+  scheduled_cutoff_receipt_.reset();
+  if (state_.load(std::memory_order_acquire) == RealtimeState::stopped) {
+    pattern_transport_generation_ = 0;
+    pattern_transport_epoch_ = 0;
+  }
+  scheduled_tag_.store(schedule_tag(last_schedule_serial_, ScheduledPatternPhase::empty),
+      std::memory_order_seq_cst);
+}
+
+bool RealtimeEngine::acknowledge_scheduled_pattern_record(
+    std::uint64_t generation, std::uint64_t serial, std::uint64_t epoch) noexcept {
+  if (!scheduled_request_ || scheduled_request_->runtime_generation != generation ||
+      scheduled_request_->serial != serial || generation == 0 || serial == 0) return false;
+  const auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  if ((tag >> 4U) != serial) return false;
+  const auto phase = schedule_phase(tag);
+  if (!scheduled_start_acknowledged_ && epoch == scheduled_request_->epoch &&
+      (phase == ScheduledPatternPhase::applied || phase == ScheduledPatternPhase::cancelled ||
+       phase == ScheduledPatternPhase::refused)) {
+    scheduled_start_acknowledged_ = true;
+    control_pattern_playing_ = phase == ScheduledPatternPhase::applied;
+    acknowledged_pattern_generation_ = scheduled_request_->expected_pattern_generation;
+    if (phase == ScheduledPatternPhase::applied)
+      acknowledged_record_authority_ = {serial, epoch, true};
+  } else if (scheduled_start_acknowledged_ && scheduled_cancel_ &&
+      !scheduled_cancel_acknowledged_ && epoch == scheduled_cancel_->epoch) {
+    if (scheduled_cancel_won_) {
+      if (phase != ScheduledPatternPhase::cancelled) return false;
+      control_pattern_playing_ = false;
+    } else if (scheduled_cancel_invalidated_) {
+      control_pattern_playing_ = false;
+    } else {
+      // No DTO construction/allocation on this noexcept acknowledgment path.
+      // The ordinary consumer may already have copied and acknowledged e2.
+      if (!scheduled_cutoff_receipt_) {
+        if (!retained_transport_receipt_) {
+          PatternTransportReceiptCell cell;
+          if (!pattern_transport_receipts_.try_pop(cell)) return false;
+          retained_transport_receipt_ = cell;
+        }
+        const auto& cell = *retained_transport_receipt_;
+        if (cell.generation != generation || cell.epoch != epoch) return false;
+        scheduled_cutoff_receipt_ = cell;
+      }
+      if (pattern_transport_reserved_ &&
+          !acknowledge_pattern_transport_receipt(generation, epoch)) return false;
+      control_pattern_playing_ = scheduled_cutoff_receipt_->playing;
+    }
+    scheduled_cancel_acknowledged_ = true;
+  } else return false;
+  retire_scheduled_control_cell();
+  return true;
+}
+
+void RealtimeEngine::set_count_in_metronome(bool enabled) noexcept {
+  count_in_metronome_.store(enabled, std::memory_order_release);
+}
+
+bool RealtimeEngine::take_count_in_cue_batch_audio(CountInCueBatch& batch) noexcept {
+  if (cue_batch_pending_.load(std::memory_order_acquire) == 0 || cue_batch_taken_)
+    return false;
+  batch = cue_batch_;
+  cue_batch_taken_ = true;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_cue_consumption);
+#endif
+  return true;
+}
+
+bool RealtimeEngine::acknowledge_count_in_cue_batch_audio(std::uint64_t id) noexcept {
+  if (id == 0 || !cue_batch_taken_ ||
+      cue_batch_pending_.load(std::memory_order_acquire) != id) return false;
+  cue_batch_taken_ = false;
+  cue_batch_pending_.store(0, std::memory_order_release);
+  return true;
+}
+
+bool RealtimeEngine::scheduled_pattern_record_quiescent() const noexcept {
+  if (scheduled_request_ || pattern_transport_reserved_ ||
+      pattern_transport_commands_.size_approx() != 0 ||
+      cue_batch_pending_.load(std::memory_order_acquire) != 0 || active_voices_ != 0)
+    return false;
+  if (input_profile_) {
+    const auto inputs = pattern_input_profile_status();
+    if (inputs.ordinary_pending || inputs.held_release_reservations || inputs.retained_completions)
+      return false;
+  }
+  for (const auto& slot : pattern_slots_)
+    if (slot.scheduled_control_pins != 0 ||
+        slot.scheduled_borrows.load(std::memory_order_acquire) != 0) return false;
+  return true;
+}
+
+bool RealtimeEngine::scheduled_pattern_record_settled(
+    std::uint64_t generation, std::uint64_t frame_epoch, std::uint64_t serial) const noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running ||
+      !scheduled_record_enabled_ ||
+      generation == 0 || generation != pattern_transport_generation_ ||
+      frame_epoch == 0 || frame_epoch != start_epoch_ ||
+      serial == 0 || serial != last_schedule_serial_ ||
+      scheduled_payload_.runtime_generation != generation ||
+      scheduled_payload_.frame_epoch != frame_epoch || scheduled_payload_.serial != serial ||
+      scheduled_request_ || pattern_transport_reserved_ ||
+      pattern_transport_commands_.size_approx() != 0 || queue_.size_approx() != 0 ||
+      cue_batch_pending_.load(std::memory_order_acquire) != 0) return false;
+  if (input_profile_) {
+    const auto inputs = pattern_input_profile_status();
+    if (inputs.ordinary_pending || inputs.held_release_reservations || inputs.retained_completions)
+      return false;
+  }
+  for (const auto& slot : pattern_slots_)
+    if (slot.scheduled_control_pins != 0 ||
+        slot.scheduled_borrows.load(std::memory_order_acquire) != 0) return false;
+  // Read last: terminal input publication acquires the callback's entry
+  // invalidation; a consumed Release is never mistaken for the voice tail's
+  // last use. Only audio, after that last use, can publish this serial again.
+  return scheduled_settled_serial_.load(std::memory_order_acquire) == serial;
+}
+
+void RealtimeEngine::release_scheduled_borrow_audio() noexcept {
+  if (!scheduled_audio_.borrowed) return;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_before_last_use);
+#endif
+  const auto slot = scheduled_audio_.scalars.pattern_slot;
+  scheduled_audio_.pattern = nullptr;
+  scheduled_audio_.borrowed = false;
+  pattern_slots_[slot].scheduled_borrows.fetch_sub(1, std::memory_order_release);
+}
+
+void RealtimeEngine::prepare_scheduled_record_audio() noexcept {
+  const auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  if (scheduled_audio_.borrowed) {
+    if ((tag >> 4U) == scheduled_audio_.scalars.serial &&
+        (schedule_phase(tag) == ScheduledPatternPhase::armed ||
+         schedule_phase(tag) == ScheduledPatternPhase::preparing ||
+         ((schedule_phase(tag) == ScheduledPatternPhase::applied ||
+           schedule_phase(tag) == ScheduledPatternPhase::empty) && scheduled_audio_.started &&
+          scheduled_cutoff_serial_.load(std::memory_order_seq_cst) != (tag >> 4U)))) return;
+    release_scheduled_borrow_audio();
+  }
+  if (schedule_phase(tag) != ScheduledPatternPhase::submitted) return;
+  auto expected = tag;
+  if (!scheduled_tag_.compare_exchange_strong(expected,
+          schedule_tag(tag >> 4U, ScheduledPatternPhase::preparing),
+          std::memory_order_seq_cst, std::memory_order_seq_cst)) return;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_preparing);
+#endif
+  // The cell cannot be acknowledged in Preparing/CancelPreparing. All bounded
+  // data and the immutable material owner are acquired BEFORE publishing Armed.
+  scheduled_audio_ = {};
+  scheduled_audio_.scalars = scheduled_payload_;
+  const auto slot = scheduled_audio_.scalars.pattern_slot;
+  pattern_slots_[slot].scheduled_borrows.fetch_add(1, std::memory_order_acq_rel);
+  scheduled_audio_.borrowed = true;
+  scheduled_audio_.pattern = &*pattern_slots_[slot].pattern;
+}
+
+bool RealtimeEngine::commit_count_in_span(
+    CountInCueSpan span, ScheduledPatternPhase phase) noexcept {
+  // Complete pointer-free descriptor exists before the RMW. After it wins we
+  // read only the private copy; the control payload can be recycled immediately.
+  if (cue_batch_blocked_ || cue_batch_.span_count == cue_batch_.spans.size()) return false;
+  const auto tag = schedule_tag(scheduled_audio_.scalars.serial, phase);
+  auto expected = tag;
+  if (!scheduled_tag_.compare_exchange_strong(expected, tag,
+          std::memory_order_seq_cst, std::memory_order_seq_cst)) return false;
+  cue_batch_.spans[cue_batch_.span_count++] = span;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_cue_committed);
+#endif
+  return true;
+}
+
+void RealtimeEngine::advance_scheduled_record_audio(
+    std::uint64_t frame, std::uint64_t end) noexcept {
+  if (!scheduled_audio_.borrowed) return;
+  auto& local = scheduled_audio_;
+  auto& s = local.scalars;
+  auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  if ((tag >> 4U) != s.serial) {
+    if (!cue_batch_blocked_ && !cue_batch_.cancellation_frame)
+      cue_batch_.cancellation_frame = frame;
+    return;
+  }
+  auto phase = schedule_phase(tag);
+  if ((cue_batch_blocked_ || end < frame) && phase == ScheduledPatternPhase::armed) {
+    auto expected = tag;
+    if (scheduled_tag_.compare_exchange_strong(expected,
+        schedule_tag(s.serial, ScheduledPatternPhase::failing),
+        std::memory_order_seq_cst, std::memory_order_seq_cst))
+      scheduled_tag_.store(schedule_tag(s.serial, ScheduledPatternPhase::refused),
+          std::memory_order_seq_cst);
+    return;
+  }
+  if (phase == ScheduledPatternPhase::cancel_preparing) {
+    auto expected = tag;
+    scheduled_tag_.compare_exchange_strong(expected,
+        schedule_tag(s.serial, ScheduledPatternPhase::cancelled),
+        std::memory_order_seq_cst, std::memory_order_seq_cst);
+    return;
+  }
+  if (phase == ScheduledPatternPhase::cancelled ||
+      (phase == ScheduledPatternPhase::empty && !local.started)) {
+    // Fast control ACK may already have retired the cancelled cell. The
+    // independently copied committed prefix still carries its first cutoff.
+    if (!cue_batch_blocked_ && !cue_batch_.cancellation_frame)
+      cue_batch_.cancellation_frame = frame;
+    return;
+  }
+  if (phase == ScheduledPatternPhase::preparing) {
+    // Only an old Pattern tail delays C; live Pad and replay voices stay live.
+    for (const auto& voice : voices_)
+      if (voice.active && voice.pattern_voice) return;
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    if (cue_batch_blocked_ || end < frame ||
+        frame == maximum || s.bar_frames > (maximum - frame - 1) / s.bars) {
+      auto expected = tag;
+      if (scheduled_tag_.compare_exchange_strong(expected,
+              schedule_tag(s.serial, ScheduledPatternPhase::failing),
+              std::memory_order_seq_cst, std::memory_order_seq_cst))
+        scheduled_tag_.store(schedule_tag(s.serial, ScheduledPatternPhase::refused),
+            std::memory_order_seq_cst);
+      return;
+    }
+    s.count_in_frame = frame;
+    s.start_frame = frame + s.bars * s.bar_frames;
+    s.timed = true;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(s.bars) * 4; ++i)
+      local.markers[i] = frame + (i / 4) * s.bar_frames +
+          ((i % 4) * s.bar_frames + 2) / 4;
+    scheduled_timing_.publish(s);
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_before_arm);
+#endif
+    auto expected = tag;
+    if (!scheduled_tag_.compare_exchange_strong(expected,
+            schedule_tag(s.serial, ScheduledPatternPhase::armed),
+            std::memory_order_seq_cst, std::memory_order_seq_cst)) return;
+    local.armed = true;
+    phase = ScheduledPatternPhase::armed;
+  }
+  if (scheduled_cutoff_serial_.load(std::memory_order_seq_cst) == s.serial) return;
+  if (phase != ScheduledPatternPhase::armed && phase != ScheduledPatternPhase::applied &&
+      !(phase == ScheduledPatternPhase::empty && local.started)) return;
+  const auto envelope_end = [](std::uint64_t marker) noexcept {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    return marker > maximum - kCountInCueEnvelopeFrames
+        ? maximum : marker + kCountInCueEnvelopeFrames;
+  };
+  if (local.carried_cue && frame == cue_batch_.begin_frame &&
+      frame < envelope_end(local.carried_cue->marker_frame)) {
+    auto span = *local.carried_cue;
+    span.begin_frame = frame;
+    span.end_frame = std::min(end, envelope_end(span.marker_frame));
+    span.marker = false;
+    static_cast<void>(commit_count_in_span(span, phase));
+  }
+  if (phase == ScheduledPatternPhase::armed &&
+      local.next_marker < static_cast<std::size_t>(s.bars) * 4 &&
+      frame == local.markers[local.next_marker]) {
+    const CountInCueSpan span{frame, frame, std::min(end, envelope_end(frame)),
+        local.next_marker % 4 == 0, true, true};
+    if (commit_count_in_span(span, ScheduledPatternPhase::armed)) {
+      local.carried_cue = span;
+      ++local.next_marker;
+    }
+  }
+  if (phase != ScheduledPatternPhase::armed || frame != s.start_frame) return;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_before_start);
+#endif
+  auto expected = schedule_tag(s.serial, ScheduledPatternPhase::armed);
+  if (!scheduled_tag_.compare_exchange_strong(expected,
+          schedule_tag(s.serial, ScheduledPatternPhase::starting),
+          std::memory_order_seq_cst, std::memory_order_seq_cst)) return;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_start_committed);
+#endif
+  // The actual CAS, not the already-published callback frontier, admits input.
+  pattern_playing_ = true;
+  pattern_origin_frame_ = s.start_frame;
+  pattern_event_index_ = 0;
+  // Scheduled S is the same tick-zero restart as an ordinary Start. A prior
+  // tempo transition/Stop must not carry its continuous clock into this run.
+  pattern_event_loop_ = 0;
+  pattern_tempo_anchor_ = {s.start_frame, 0, s.bpm};
+  pattern_position_available_ = true;
+  pattern_tempo_applied_frame_ = s.start_frame;
+  pattern_continuous_timing_ = false;
+  local.started = true;
+  publish_transport_decision();
+  scheduled_tag_.store(schedule_tag(s.serial, ScheduledPatternPhase::applied),
+      std::memory_order_seq_cst);
+  if (count_in_metronome_.load(std::memory_order_acquire)) {
+    const CountInCueSpan downbeat{frame, frame,
+        std::min(end, envelope_end(frame)), true, false, true};
+    if (commit_count_in_span(downbeat, ScheduledPatternPhase::applied))
+      local.carried_cue = downbeat;
+  }
+}
+
+void RealtimeEngine::finish_scheduled_record_audio() noexcept {
+  if (!cue_batch_blocked_ && cue_batch_.span_count != 0) {
+    cue_batch_.batch_id = next_cue_batch_id_.fetch_add(1, std::memory_order_acq_rel);
+    cue_batch_.runtime_generation = scheduled_audio_.scalars.runtime_generation;
+    cue_batch_.frame_epoch = scheduled_audio_.scalars.frame_epoch;
+    cue_batch_.serial = scheduled_audio_.scalars.serial;
+    cue_batch_pending_.store(cue_batch_.batch_id, std::memory_order_release);
+  }
+  if (!scheduled_audio_.borrowed) return;
+  const auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  auto phase = schedule_phase(tag);
+  if (phase == ScheduledPatternPhase::cancel_preparing) {
+    auto expected = tag;
+    if (scheduled_tag_.compare_exchange_strong(expected,
+        schedule_tag(tag >> 4U, ScheduledPatternPhase::cancelled),
+        std::memory_order_seq_cst, std::memory_order_seq_cst))
+      phase = ScheduledPatternPhase::cancelled;
+  }
+  const auto marker = scheduled_audio_.carried_cue
+      ? scheduled_audio_.carried_cue->marker_frame : 0;
+  const auto exhausted_envelope = !scheduled_audio_.carried_cue ||
+      (cue_batch_.end_frame >= marker && cue_batch_.end_frame - marker >= kCountInCueEnvelopeFrames);
+  if ((tag >> 4U) != scheduled_audio_.scalars.serial ||
+      phase == ScheduledPatternPhase::cancelled || phase == ScheduledPatternPhase::refused ||
+      (phase == ScheduledPatternPhase::empty && !scheduled_audio_.started) ||
+      scheduled_cutoff_serial_.load(std::memory_order_seq_cst) == scheduled_audio_.scalars.serial ||
+      ((phase == ScheduledPatternPhase::applied || phase == ScheduledPatternPhase::empty) &&
+       exhausted_envelope))
+    release_scheduled_borrow_audio();
 }
 
 PatternPublication RealtimeEngine::publish_pattern_view(
@@ -1436,7 +1986,11 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
   const bool tempo_transition = timing == PatternPublicationTiming::tempo_transition;
   const bool preserves_position = tempo_transition ||
       timing == PatternPublicationTiming::preserve_phase;
-  if (pattern_transport_reserved_) {
+  // Once S has applied, overlay publication no longer competes with the
+  // scheduled start. Its original material stays independently pinned until
+  // the recording owner consumes e1/e2 and every audio borrow has ended.
+  if (pattern_transport_reserved_ || (scheduled_request_ &&
+      schedule_phase(scheduled_tag_.load(std::memory_order_seq_cst)) != ScheduledPatternPhase::applied)) {
     ++pattern_publication_rejections_;
     return {PatternPublishResult::publication_pending, 0, 0};
   }
@@ -1776,7 +2330,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
 
 bool RealtimeEngine::cancel_pattern_publication(
     const PatternReplacementAuthority& authority) noexcept {
-  if (pattern_transport_reserved_) return false;
+  if (pattern_transport_reserved_ || (scheduled_request_ &&
+      schedule_phase(scheduled_tag_.load(std::memory_order_seq_cst)) != ScheduledPatternPhase::applied)) return false;
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   if (cancel_unclaimed_pattern_publication(authority)) {
     return true;
@@ -1811,7 +2366,8 @@ bool RealtimeEngine::cancel_pattern_publication(
 
 bool RealtimeEngine::cancel_unclaimed_pattern_publication(
     const PatternReplacementAuthority& authority) noexcept {
-  if (pattern_transport_reserved_) return false;
+  if (pattern_transport_reserved_ || (scheduled_request_ &&
+      schedule_phase(scheduled_tag_.load(std::memory_order_seq_cst)) != ScheduledPatternPhase::applied)) return false;
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   while (pattern_claim_closed_.load(std::memory_order_seq_cst) != 0) {
     // Control only; do not issue another Q modification during audio claim.
@@ -1892,6 +2448,8 @@ std::size_t RealtimeEngine::reclaim_retired_patterns() noexcept {
         PatternState::reclaimable) {
       continue;
     }
+    if (slot.scheduled_control_pins != 0 ||
+        slot.scheduled_borrows.load(std::memory_order_acquire) != 0) continue;
     slot.pattern.reset();
     slot.generation = 0;
     slot.activation_frame = 0;
@@ -2164,6 +2722,10 @@ foundation::Result<void> RealtimeEngine::start() {
   if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
     return invalid_argument("realtime engine is already running");
   }
+  if (!scheduled_pattern_record_quiescent() ||
+      (input_profile_ && (pattern_input_profile_status().retained_completions != 0 ||
+                         pattern_input_profile_status().held_release_reservations != 0)))
+    return invalid_argument("companion ownership must settle before restart");
   const auto start_epoch = start_epoch_;
   if (start_epoch == std::numeric_limits<std::uint64_t>::max()) {
     return invalid_argument(
@@ -2177,6 +2739,7 @@ foundation::Result<void> RealtimeEngine::start() {
   pattern_transport_reserved_ = false;
   control_pattern_playing_ = false;
   acknowledged_pattern_generation_ = 0;
+  acknowledged_record_authority_ = {};
   pattern_playing_ = false;
   queue_.clear_quiescent();
   fx_queue_.clear_quiescent();
@@ -2275,18 +2838,46 @@ foundation::Result<void> RealtimeEngine::start() {
 }
 
 void RealtimeEngine::stop() noexcept {
+  // Callback/adapter gate is drained by the Host before this quiescent entry.
+  // Retain companion evidence rather than silently treating shutdown as ACK.
+  if (scheduled_cancel_ && !scheduled_cancel_won_ && pattern_transport_reserved_ &&
+      !retained_transport_receipt_) {
+    apply_pattern_transport(rendered_frames_);
+    PatternTransportReceiptCell cell;
+    if (pattern_transport_receipts_.try_pop(cell)) {
+      retained_transport_receipt_ = cell;
+      scheduled_cutoff_receipt_ = cell;
+    }
+  }
+  if (scheduled_cancel_ && !scheduled_cancel_won_ &&
+      !pattern_transport_reserved_ && !scheduled_cutoff_receipt_)
+    scheduled_cancel_invalidated_ = true; // Unsent e2 only; never replace actual evidence.
+  auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  const auto phase = schedule_phase(tag);
+  if (phase == ScheduledPatternPhase::submitted || phase == ScheduledPatternPhase::preparing ||
+      phase == ScheduledPatternPhase::cancel_preparing || phase == ScheduledPatternPhase::armed)
+    // Only the retained real cancellation intent can claim cancellation
+    // success. Exceptional quiescent owner loss before S refuses e1 instead.
+    scheduled_tag_.store(schedule_tag(tag >> 4U, scheduled_cancel_won_
+        ? ScheduledPatternPhase::cancelled : ScheduledPatternPhase::refused),
+        std::memory_order_seq_cst);
+  scheduled_cutoff_serial_.store(tag >> 4U, std::memory_order_seq_cst);
+  release_scheduled_borrow_audio();
+  invalidate_profile_inputs_quiescent();
   // The callback is quiescent here. Discard volatile transport state together
   // with its generation; obsolete reservations must not block stopped setup.
-  pattern_transport_generation_ = 0;
-  pattern_transport_epoch_ = 0;
+  if (!scheduled_cancel_ || scheduled_cancel_won_) pattern_transport_generation_ = 0;
+  if (!scheduled_request_) pattern_transport_epoch_ = 0;
   pattern_transport_commands_.clear_quiescent();
   pattern_transport_receipts_.clear_quiescent();
-  retained_transport_receipt_.reset();
+  if (!scheduled_cancel_ || scheduled_cancel_won_) retained_transport_receipt_.reset();
   retained_transport_switch_.reset();
   retained_transport_predecessor_.reset();
-  for (auto& id : retained_transport_ids_) id.reset();
-  retained_transport_bpms_.fill(0);
-  pattern_transport_reserved_ = false;
+  if (!scheduled_cancel_ || scheduled_cancel_won_) {
+    for (auto& id : retained_transport_ids_) id.reset();
+    retained_transport_bpms_.fill(0);
+  }
+  if (!scheduled_cancel_ || scheduled_cancel_won_) pattern_transport_reserved_ = false;
   control_pattern_playing_ = false;
   acknowledged_pattern_generation_ = 0;
   pattern_playing_ = false;
@@ -2475,7 +3066,12 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
     testing::invoke_realtime_hook(testing::RealtimeHookPoint::host_input_reserved);
 #endif
   }
-  if (!queue_.try_push(event)) {
+  if (input_profile_ && !replay &&
+      (event.kind == PadControlKind::press || event.kind == PadControlKind::release)) {
+    queued_host_input_events_.fetch_sub(1, std::memory_order_relaxed);
+    return EnqueueResult::invalid_velocity;  // Use the negotiated companion identity.
+  }
+  if (!(input_profile_ ? push_profile_control(event) : queue_.try_push(event))) {
     if (!replay) {
       queued_host_input_events_.fetch_sub(1, std::memory_order_relaxed);
     }
@@ -2485,6 +3081,265 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
 
   enqueued_events_ += 1;
   return EnqueueResult::accepted;
+}
+
+std::optional<std::uint64_t> RealtimeEngine::pattern_input_profile_storage_bytes(
+    std::size_t pending) noexcept {
+  if (pending == 0 || pending > kRealtimeQueueCapacity) return std::nullopt;
+  const auto queue = detail::RuntimeSpscStorage<ProfileInputCell>::allocation_bytes(2 * pending);
+  if (!queue) return std::nullopt;
+  const auto first = checked_runtime_byte_sum(sizeof(PatternInputProfile), *queue);
+  const auto second = first ? checked_runtime_byte_sum(*first,
+      2 * pending * sizeof(InputCompletionCell)) : std::nullopt;
+  return second ? checked_runtime_byte_sum(*second, pending * sizeof(HeldInput)) : std::nullopt;
+}
+
+foundation::Result<void> RealtimeEngine::enable_pattern_input_profile(
+    std::uint64_t generation) {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::stopped ||
+      generation == 0 || generation != pattern_transport_generation_ ||
+      queue_.size_approx() != 0 || active_voices_ != 0 ||
+      !scheduled_pattern_record_quiescent())
+    return invalid_argument("input profile requires quiescent generation activation");
+  if (input_profile_) {
+    const auto status = pattern_input_profile_status();
+    if (status.ordinary_pending || status.held_release_reservations ||
+        status.retained_completions)
+      return invalid_argument("input profile still owns accepted operations or holds");
+    if (generation < input_profile_->generation)
+      return invalid_argument("input profile generation is stale");
+  } else {
+    input_profile_ = std::make_unique<PatternInputProfile>(queue_.capacity());
+  }
+  input_profile_->generation = generation;
+  input_profile_observed_.store(input_profile_.get(), std::memory_order_release);
+  return foundation::Result<void>::success();
+}
+
+PatternInputAdmission RealtimeEngine::enqueue_pattern_input(
+    const PatternInputCommand& command) noexcept {
+  const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
+  const auto refuse = [](PatternInputSubmit result) {
+    return PatternInputAdmission{result};
+  };
+  if (!input_profile_) return refuse(PatternInputSubmit::disabled);
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running)
+    return refuse(PatternInputSubmit::not_running);
+  auto& profile = *input_profile_;
+  if (command.runtime_generation == 0 || command.runtime_generation != profile.generation ||
+      command.runtime_generation != pattern_transport_generation_)
+    return refuse(PatternInputSubmit::stale_generation);
+  if (command.frame_epoch == 0 || command.frame_epoch != start_epoch_)
+    return refuse(PatternInputSubmit::stale_frame_epoch);
+  if (command.slot >= kRealtimeSampleSlots ||
+      (!command.release && (command.velocity == 0 || command.velocity > 127)) ||
+      (!command.release && command.held_press_sequence != 0))
+    return refuse(PatternInputSubmit::invalid_input);
+  if (profile.last_sequence == std::numeric_limits<std::uint64_t>::max() ||
+      profile.last_ordinal == std::numeric_limits<std::uint64_t>::max())
+    return refuse(PatternInputSubmit::exhausted);
+  const auto n = profile.capacity;
+  std::size_t completion = 2 * n, hold = n;
+  PatternInputAuthority authority{};
+  if (command.release) {
+    for (std::size_t i = 0; i < n; ++i)
+      if (command.held_press_sequence != 0 &&
+          profile.holds[i].sequence == command.held_press_sequence &&
+          profile.holds[i].slot == command.slot && !profile.holds[i].release_queued) {
+        hold = i;
+        break;
+      }
+    if (hold == n) return refuse(PatternInputSubmit::stale_hold);
+    completion = n + hold;
+    if (profile.completions[completion].state.load(std::memory_order_acquire) !=
+        InputCompletionState::reserved) return refuse(PatternInputSubmit::stale_hold);
+    authority = profile.holds[hold].authority;
+  } else {
+    if (pending_publications_.load(std::memory_order_acquire) != 0)
+      return refuse(PatternInputSubmit::bank_transition);
+    if ((availability_mask_ & (std::uint64_t{1} << command.slot)) == 0)
+      return refuse(PatternInputSubmit::sample_unavailable);
+    if (!is_default_playback_sentinel(command.playback) &&
+        !valid_playback(command.playback, current_sample(command.slot).frame_count))
+      return refuse(PatternInputSubmit::invalid_input);
+    if (profile.ordinary_pending.load(std::memory_order_acquire) >= n)
+      return refuse(PatternInputSubmit::queue_full);
+    for (std::size_t i = 0; i < n; ++i)
+      if (profile.completions[i].state.load(std::memory_order_acquire) ==
+          InputCompletionState::empty) { completion = i; break; }
+    if (completion == 2 * n) return refuse(PatternInputSubmit::completion_full);
+    if (command.held) {
+      for (std::size_t i = 0; i < n; ++i)
+        if (profile.holds[i].sequence == 0 &&
+            profile.completions[n + i].state.load(std::memory_order_acquire) ==
+                InputCompletionState::empty) { hold = i; break; }
+      if (hold == n) return refuse(PatternInputSubmit::release_full);
+    }
+    // This acquire is the press admission point. A callback may have already
+    // published a frontier beyond S while its actual start CAS has not happened.
+    const auto tag = scheduled_tag_.load(std::memory_order_seq_cst);
+    const auto phase = schedule_phase(tag);
+    if (scheduled_request_ && (tag >> 4U) == scheduled_request_->serial &&
+        (phase == ScheduledPatternPhase::starting || phase == ScheduledPatternPhase::applied))
+      authority = {scheduled_request_->serial, scheduled_request_->epoch, true};
+    else if (phase == ScheduledPatternPhase::empty)
+      authority = acknowledged_record_authority_;
+    if (authority.recording && scheduled_cutoff_serial_.load(std::memory_order_seq_cst) ==
+        authority.schedule_serial) authority.recording = false;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(testing::RealtimeHookPoint::pattern_input_authority_acquired);
+#endif
+  }
+  // Capacity escrow also promises a future positive operation identity. Do
+  // not let an ordinary input spend the last IDs owed to physical releases.
+  // A queued release already owns its identity and needs no second one.
+  std::uint64_t future_release_identities = 0;
+  for (std::size_t i = 0; i < n; ++i)
+    future_release_identities += profile.holds[i].sequence != 0 &&
+        !profile.holds[i].release_queued;
+  if (command.release) --future_release_identities; // Actual matching hold above.
+  else if (command.held) ++future_release_identities;
+  const auto identity_maximum = std::numeric_limits<std::uint64_t>::max();
+  if (identity_maximum - profile.last_sequence <= future_release_identities ||
+      identity_maximum - profile.last_ordinal <= future_release_identities)
+    return refuse(PatternInputSubmit::exhausted);
+  const auto sequence = profile.last_sequence + 1;
+  const auto ordinal = profile.last_ordinal + 1;
+  auto& ledger = profile.completions[completion];
+  ledger.result = {command.runtime_generation, command.frame_epoch, sequence,
+      command.held_press_sequence, ordinal, 0, command.slot, authority,
+      PatternInputDisposition::invalidated_before_consume};
+  ledger.state.store(InputCompletionState::pending, std::memory_order_release);
+  if (!command.release) {
+    profile.ordinary_pending.fetch_add(1, std::memory_order_acq_rel);
+    if (hold != n) {
+      profile.holds[hold] = {sequence, command.slot, authority, false};
+      profile.completions[n + hold].state.store(InputCompletionState::reserved,
+          std::memory_order_release);
+    }
+  } else profile.holds[hold].release_queued = true;
+  const PadControlEvent event{sequence, command.slot, command.velocity,
+      command.release ? PadControlKind::release : PadControlKind::press, command.playback};
+  queued_host_input_events_.fetch_add(1, std::memory_order_relaxed);
+  const ProfileInputCell cell{event, ordinal, static_cast<std::uint16_t>(completion),
+      hold == n ? kNoInputCell : static_cast<std::uint16_t>(hold), command.release};
+  if (!profile.queue.try_push(cell)) {
+    queued_host_input_events_.fetch_sub(1, std::memory_order_relaxed);
+    ledger.state.store(command.release ? InputCompletionState::reserved :
+        InputCompletionState::empty, std::memory_order_release);
+    if (!command.release) {
+      profile.ordinary_pending.fetch_sub(1, std::memory_order_release);
+      if (hold != n) {
+        profile.holds[hold] = {};
+        profile.completions[n + hold].state.store(InputCompletionState::empty,
+            std::memory_order_release);
+      }
+    } else profile.holds[hold].release_queued = false;
+    return refuse(PatternInputSubmit::queue_full);
+  }
+  profile.last_sequence = sequence;
+  profile.last_ordinal = ordinal;
+  scheduled_settled_serial_.store(0, std::memory_order_release);
+  ++enqueued_events_;
+  return {PatternInputSubmit::accepted, sequence, ordinal, authority};
+}
+
+std::optional<PatternInputCompletion> RealtimeEngine::inspect_pattern_input_completion(
+    std::uint64_t generation, std::uint64_t epoch, std::uint64_t sequence) const noexcept {
+  if (!input_profile_ || generation == 0 || epoch == 0 || sequence == 0 ||
+      generation != input_profile_->generation) return std::nullopt;
+  for (std::size_t i = 0; i < 2 * input_profile_->capacity; ++i) {
+    const auto& cell = input_profile_->completions[i];
+    if (cell.state.load(std::memory_order_acquire) == InputCompletionState::terminal &&
+        cell.result.runtime_generation == generation && cell.result.frame_epoch == epoch &&
+        cell.result.sequence == sequence) return cell.result;
+  }
+  return std::nullopt;
+}
+
+bool RealtimeEngine::consume_pattern_input_completion(
+    std::uint64_t generation, std::uint64_t epoch, std::uint64_t sequence) noexcept {
+  if (!inspect_pattern_input_completion(generation, epoch, sequence)) return false;
+  auto& profile = *input_profile_;
+  for (std::size_t i = 0; i < 2 * profile.capacity; ++i) {
+    auto& cell = profile.completions[i];
+    if (cell.state.load(std::memory_order_acquire) != InputCompletionState::terminal ||
+        cell.result.sequence != sequence) continue;
+    // Only a RELEASE ticket retires its physical escrow. Consuming the press
+    // ticket, including muted/toggle/capacity, does not touch its HeldInput.
+    if (i >= profile.capacity) profile.holds[i - profile.capacity] = {};
+    cell.state.store(InputCompletionState::empty, std::memory_order_release);
+    return true;
+  }
+  return false;
+}
+
+PatternInputProfileStatus RealtimeEngine::pattern_input_profile_status() const noexcept {
+  if (!input_profile_) return {};
+  const auto& p = *input_profile_;
+  PatternInputProfileStatus result{true, p.generation, p.capacity, 2 * p.capacity,
+      p.ordinary_pending.load(std::memory_order_acquire), 0, 0};
+  for (std::size_t i = 0; i < p.capacity; ++i)
+    result.held_release_reservations += p.holds[i].sequence != 0;
+  for (std::size_t i = 0; i < 2 * p.capacity; ++i) {
+    const auto state = p.completions[i].state.load(std::memory_order_acquire);
+    result.retained_completions += state == InputCompletionState::pending ||
+        state == InputCompletionState::terminal;
+  }
+  return result;
+}
+
+bool RealtimeEngine::revoke_pattern_input_holds_quiescent(std::uint64_t generation) noexcept {
+  if (!input_profile_ || generation == 0 || generation != input_profile_->generation ||
+      state_.load(std::memory_order_acquire) != RealtimeState::stopped ||
+      input_profile_->queue.size_approx() != 0 || active_voices_ != 0) return false;
+  auto& p = *input_profile_;
+  for (std::size_t i = 0; i < p.capacity; ++i) {
+    if (p.holds[i].release_queued) continue;  // Retained release ticket still owns it.
+    p.holds[i] = {};
+    p.completions[p.capacity + i].state.store(InputCompletionState::empty,
+        std::memory_order_release);
+  }
+  return true;
+}
+
+bool RealtimeEngine::push_profile_control(PadControlEvent event) noexcept {
+  auto& p = *input_profile_;
+  if (p.ordinary_pending.load(std::memory_order_acquire) >= p.capacity ||
+      p.last_ordinal == std::numeric_limits<std::uint64_t>::max()) return false;
+  std::uint64_t future_release_ordinals = 0;
+  for (std::size_t i = 0; i < p.capacity; ++i)
+    future_release_ordinals += p.holds[i].sequence != 0 && !p.holds[i].release_queued;
+  if (std::numeric_limits<std::uint64_t>::max() - p.last_ordinal <=
+      future_release_ordinals) return false;
+  p.ordinary_pending.fetch_add(1, std::memory_order_acq_rel);
+  const ProfileInputCell cell{event, p.last_ordinal + 1};
+  if (!p.queue.try_push(cell)) {
+    p.ordinary_pending.fetch_sub(1, std::memory_order_release);
+    return false;
+  }
+  ++p.last_ordinal;
+  return true;
+}
+
+void RealtimeEngine::complete_profile_input(const ProfileInputCell& input,
+    PatternInputDisposition disposition, std::uint64_t frame) noexcept {
+  if (!input_profile_ || input.completion == kNoInputCell) return;
+  auto& cell = input_profile_->completions[input.completion];
+  cell.result.runtime_frame = frame;
+  cell.result.disposition = disposition;
+  cell.state.store(InputCompletionState::terminal, std::memory_order_release);
+}
+
+void RealtimeEngine::invalidate_profile_inputs_quiescent() noexcept {
+  if (!input_profile_) return;
+  ProfileInputCell cell{};
+  while (input_profile_->queue.try_pop(cell)) {
+    complete_profile_input(cell, PatternInputDisposition::invalidated_before_consume,
+        rendered_frames_);
+    ++cancelled_events_;
+  }
+  input_profile_->ordinary_pending.store(0, std::memory_order_release);
 }
 
 foundation::Result<void> RealtimeEngine::prepare_master_fx(
@@ -2685,13 +3540,23 @@ void RealtimeEngine::claim_queued_pattern(bool switch_only) noexcept {
 
 void RealtimeEngine::render(
     float* left, float* right, std::uint32_t frames) noexcept {
+  scheduled_settled_serial_.store(0, std::memory_order_release);
   std::fill_n(left, frames, 0.0F);
   std::fill_n(right, frames, 0.0F);
   callback_count_ += 1;
+  cue_batch_blocked_ = cue_batch_pending_.load(std::memory_order_acquire) != 0 ||
+      next_cue_batch_id_.load(std::memory_order_acquire) ==
+          std::numeric_limits<std::uint64_t>::max();
+  if (!cue_batch_blocked_) cue_batch_ = {};
   const auto absolute_start_frame = rendered_frames_;
   rendered_frames_ += frames;
   publish_transport_decision();
   max_callback_frames_ = std::max(max_callback_frames_, frames);
+  if (!cue_batch_blocked_) {
+    cue_batch_.begin_frame = absolute_start_frame;
+    cue_batch_.end_frame = rendered_frames_;
+  }
+  if (frames != 0) prepare_scheduled_record_audio();
 
   MasterFxControlEvent fx_control{};
   auto filter_state_dirty = false;
@@ -2782,10 +3647,32 @@ void RealtimeEngine::render(
 #endif
 
   PadControlEvent event{};
+  ProfileInputCell profile_input{};
+  const auto pop_input = [&]() noexcept {
+    profile_input = {};
+    if (!input_profile_) return queue_.try_pop(event);
+    if (!input_profile_->queue.try_pop(profile_input)) return false;
+    event = profile_input.event;
+    if (!profile_input.release)
+      input_profile_->ordinary_pending.fetch_sub(1, std::memory_order_release);
+    return true;
+  };
   for (std::size_t processed = 0;
-       processed < kRealtimeQueueCapacity && queue_.try_pop(event);
+       processed < kRealtimeQueueCapacity && pop_input();
        ++processed) {
     dequeued_events_ += 1;
+    auto disposition = PatternInputDisposition::invalidated_before_consume;
+    struct CompleteOnReturn {
+      RealtimeEngine& engine;
+      const ProfileInputCell& input;
+      PatternInputDisposition& disposition;
+      std::uint64_t frame;
+      ~CompleteOnReturn() { engine.complete_profile_input(input, disposition, frame); }
+    } completion{*this, profile_input, disposition, absolute_start_frame};
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    if (input_profile_) testing::invoke_realtime_hook(
+        testing::RealtimeHookPoint::pattern_input_consumed);
+#endif
     const auto replay = event.origin == PadControlOrigin::performance_replay;
     if (!replay) {
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
@@ -2803,14 +3690,19 @@ void RealtimeEngine::render(
       continue;
     }
     if (event.kind == PadControlKind::release) {
+      disposition = PatternInputDisposition::release_no_voice;
+      const auto correlated = input_profile_ && profile_input.completion != kNoInputCell
+          ? input_profile_->completions[profile_input.completion].result.held_press_sequence : 0;
       for (auto& voice : voices_) {
         // A Pad already in its release tail is not released again, so a
         // repeated release never shortens a long tail.
         if (voice.active && !voice.releasing && voice.slot == event.slot &&
             !is_audition_bank_slot(voice.bank_slot) &&
             voice.origin == PadControlOrigin::host_input &&
+            (correlated == 0 || voice.sequence == correlated) &&
             (voice.trigger_mode == domain::TriggerMode::gate ||
              voice.trigger_mode == domain::TriggerMode::loop_gate)) {
+          disposition = PatternInputDisposition::release_applied;
           stop_voice(voice, absolute_start_frame, VoiceStop::release);
         }
       }
@@ -2864,6 +3756,7 @@ void RealtimeEngine::render(
       }
     }
     if (stopped_toggle) {
+      disposition = PatternInputDisposition::toggle_stopped;
       continue;
     }
 
@@ -2910,12 +3803,16 @@ void RealtimeEngine::render(
       continue;
     }
     if (playback.muted) {
+      disposition = PatternInputDisposition::muted_no_voice;
       continue;
     }
     // A currently gated Pad accepts no new input either: the press is
     // blocked, not queued into a silent voice, so unmuting later does not
     // resurrect it. Audition starts bypass the gate entirely.
     if (!audition && pad_live_gated(event.slot)) {
+      // Live gating silences an actually consumed press; its recording and
+      // physical-release owners still need the successful no-voice result.
+      disposition = PatternInputDisposition::muted_no_voice;
       continue;
     }
     bool dsp_active = false;
@@ -2927,6 +3824,7 @@ void RealtimeEngine::render(
     if (!replay && voice_state_stream_state_.load(std::memory_order_relaxed) ==
         RuntimeVoiceStateStreamState::corrupted) {
       voice_drops_ += 1;
+      disposition = PatternInputDisposition::voice_capacity;
       continue;
     }
     auto voice = std::find_if(
@@ -2934,6 +3832,7 @@ void RealtimeEngine::render(
           return !candidate.active;
         });
     if (voice == voices_.end()) {
+      disposition = PatternInputDisposition::voice_capacity;
       voice_drops_ += 1;
       // Trigger outcomes describe Pad triggers the Host reports back to the
       // performer. An audition that loses the voice race is silent, not a
@@ -2990,8 +3889,10 @@ void RealtimeEngine::render(
                        : playback.start_frame)) {
       *voice = Voice{};
       voice_drops_ += 1;
+      disposition = PatternInputDisposition::voice_capacity;
       continue;
     }
+    disposition = PatternInputDisposition::voice_started;
     voice->active = true;
     voice_scan_extent_ = std::max(
         voice_scan_extent_, static_cast<std::size_t>(voice - voices_.begin()) + 1);
@@ -3017,6 +3918,7 @@ void RealtimeEngine::render(
 
   for (std::uint32_t frame = 0; frame < frames; ++frame) {
     const auto runtime_frame = absolute_start_frame + frame;
+    advance_scheduled_record_audio(runtime_frame, rendered_frames_);
     if (audio_pending_pattern_.has_value() &&
         runtime_frame >= audio_pending_pattern_->activation_frame) {
       auto expected_generation =
@@ -3213,6 +4115,8 @@ void RealtimeEngine::render(
     right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
   }
 
+  finish_scheduled_record_audio();
+
   // A fading or silent voice's filter memory decays toward denormals; flush
   // it to exact zero once per block.
   for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
@@ -3239,6 +4143,17 @@ void RealtimeEngine::render(
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
   testing::invoke_realtime_hook(testing::RealtimeHookPoint::capture_idle_published);
 #endif
+  const auto settled_tag = scheduled_tag_.load(std::memory_order_seq_cst);
+  if (schedule_phase(settled_tag) == ScheduledPatternPhase::empty &&
+      (settled_tag >> 4U) != 0 && active_voices_ == 0 && !scheduled_audio_.borrowed &&
+      cue_batch_pending_.load(std::memory_order_acquire) == 0) {
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+    testing::invoke_realtime_hook(testing::RealtimeHookPoint::scheduled_before_settled_publish);
+#endif
+    // Logical failed-ticket consumption may observe this completed last use.
+    // The adapter can still be running; its physical barrier remains separate.
+    scheduled_settled_serial_.store(settled_tag >> 4U, std::memory_order_release);
+  }
 }
 
 RealtimeTelemetry RealtimeEngine::telemetry() const noexcept {
@@ -3253,7 +4168,9 @@ RealtimeTelemetry RealtimeEngine::telemetry() const noexcept {
       c.start_epoch_,
       c.enqueued_events_,
       a.dequeued_events_,
-      queue_.size_approx(),
+      input_profile_observed_.load(std::memory_order_acquire)
+          ? input_profile_observed_.load(std::memory_order_acquire)->queue.size_approx()
+          : queue_.size_approx(),
       c.cancelled_events_,
       a.started_voices_,
       a.completed_voices_,
@@ -3292,6 +4209,21 @@ void RealtimeEngine::set_rendered_frames_quiescent_for_testing(
   rendered_frames_ = frames;
   publish_transport_decision();
   publish_audio_observation();
+}
+
+void RealtimeEngine::set_scheduled_serial_quiescent_for_testing(std::uint64_t serial) noexcept {
+  if (!scheduled_request_ && serial <= kScheduledPatternSerialMaximum &&
+      serial >= last_schedule_serial_) last_schedule_serial_ = serial;
+}
+void RealtimeEngine::set_pattern_input_sequence_quiescent_for_testing(
+    std::uint64_t sequence) noexcept {
+  if (input_profile_ && pattern_input_profile_status().retained_completions == 0 &&
+      sequence >= input_profile_->last_sequence) input_profile_->last_sequence = sequence;
+}
+void RealtimeEngine::set_pattern_input_ordinal_quiescent_for_testing(
+    std::uint64_t ordinal) noexcept {
+  if (input_profile_ && pattern_input_profile_status().retained_completions == 0 &&
+      ordinal >= input_profile_->last_ordinal) input_profile_->last_ordinal = ordinal;
 }
 
 std::uint32_t RealtimeEngine::queued_host_input_events_for_testing() const noexcept {

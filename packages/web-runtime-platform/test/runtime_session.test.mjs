@@ -10,6 +10,7 @@ import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
 import {createUserGestureToken} from "../web/input_adapters.mjs";
 import {createPerformanceMasterTap} from "../web/performance_master_capture.mjs";
 import {createRuntimeSession} from "../web/runtime_session.mjs";
+import {decodeLegacyPatternTransportStatus} from "./fixtures/legacy_pattern_transport_status.mjs";
 
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
@@ -38,6 +39,7 @@ const API = [
   "clearSamplePreview",
   "clearPatternSlot",
   "close",
+  "waitForTerminalCleanup",
   "commitPerformanceResample",
   "createPattern",
   "editPatternEvents",
@@ -85,6 +87,8 @@ const API = [
   "querySequenceStatus",
   "recordSequenceEvent",
   "recordPerformanceEvent",
+  "preparePerformancePadEvent",
+  "reserveInputGesture",
   "renamePerformance",
   "release",
   "reloadSnapshot",
@@ -92,7 +96,13 @@ const API = [
   "requestPerformancePatternLaunch",
   "requestPatternSwitch",
   "requestPatternTransport",
+  "requestPatternInput",
+  "inspectPatternInput",
   "inspectPatternTransport",
+  "queryPatternCountInCapabilities",
+  "requestPatternCountIn",
+  "inspectPatternCountIn",
+  "cancelPatternCountIn",
   "requestTransportPatternSwitch",
   "resetPad",
   "deletePad",
@@ -242,6 +252,8 @@ function defaultResult(operation) {
     "sample.preview.clear": {accepted: true},
     "sample.stop": {accepted: true, scope: "all"},
     trigger: {accepted: true},
+    "pattern.transport.count-in.capabilities": {supported: true, negotiated: true, output_ready: true,
+      runtime_generation: "1", frame_epoch: "1", next_serial: "1", input_capacity: 1024},
   };
   return results[operation] ?? {};
 }
@@ -268,16 +280,24 @@ function fixture({
   inputConfiguration = {},
   patternTransport,
   runtimeTransport,
+  sessionTransport,
+  timers,
   publishRuntime = false,
   runtimeTerminator,
   audioCallbackHeartbeat,
   startAudioWorklet,
+  startAudioWorkletWithCountIn,
   registerAudioNode,
   createPerformanceMasterTap,
   connectAudioWorkletDirect,
   preflight,
+  beforeRuntimeLoad,
+  beforeManifest,
+  useDefaultRuntimeLoader = false,
+  verifiedManifest,
   now,
   inputOwnership,
+  onPressedChange,
   soundsetCatalog,
   manifestSource = {
     resourceLimits: RESOURCE_LIMITS,
@@ -357,7 +377,10 @@ function fixture({
       productBuild: TEST_PRODUCT_BUILD,
       protocolVersion: 1,
     },
-    inputConfiguration,
+    inputConfiguration: {
+      ...inputConfiguration,
+      ...(onPressedChange === undefined ? {} : {onPressedChange}),
+    },
     inputOwnership,
     ...(patternTransport === undefined ? {} : {patternTransport}),
     soundsetCatalog,
@@ -367,7 +390,8 @@ function fixture({
         ? {}
         : {capabilityProbeTimeoutMs}),
       createAudioContext: () => context,
-      loadRuntime: async () => {
+      ...(useDefaultRuntimeLoader ? {} : {loadRuntime: async (_manifest, invocation) => {
+        if (beforeRuntimeLoad !== undefined) await beforeRuntimeLoad(invocation);
         const loaded = {
         registerAudioContext: () => 1,
         registerAudioNode: registerAudioNode ?? (() => 2),
@@ -376,6 +400,9 @@ function fixture({
           (() => ++defaultAudioCallbackHeartbeat),
         startAudioWorklet:
           startAudioWorklet ?? (async () => ({ok: true})),
+        ...(startAudioWorkletWithCountIn === undefined ? {} : {
+          startAudioWorkletWithCountIn,
+        }),
         connectAudioWorkletDirect:
           connectAudioWorkletDirect ?? (() => true),
         workers: [],
@@ -383,9 +410,10 @@ function fixture({
           ? {}
           : {transport: runtimeTransport}),
         };
+        invocation?.onRuntimeOwnerCreated?.(loaded);
         if (publishRuntime) browserWindow.lmdjWebRuntimeHost = loaded;
         return loaded;
-      },
+      }}),
       preflight: preflight ?? (async () => {}),
       ...(createPerformanceMasterTap === undefined
         ? {}
@@ -394,15 +422,19 @@ function fixture({
         terminated += 1;
         await runtimeTerminator?.(...arguments_);
       },
-      transport,
-      verifyManifest: async () => ({
+      transport: sessionTransport ?? transport,
+      verifyManifest: async () => {
+        if (beforeManifest !== undefined) await beforeManifest();
+        return verifiedManifest ?? {
         host_id: "web-runtime-host",
         host_version: "1.2.15",
         platform_version: "0.3.6",
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
-      }),
+        };
+      },
       ...(now === undefined ? {} : {now}),
+      ...(timers === undefined ? {} : {timers}),
     },
   });
   return {
@@ -938,6 +970,89 @@ test("constructs and registers the tap before starting the engine", async () => 
   assert.equal(session.performanceMasterCaptureStatus().state, "ready");
   assert.deepEqual(seen, ["configured", "ready"]);
   unsubscribe();
+});
+
+test("native cue bypasses the master tap and shares only the downstream monitor gain", async () => {
+  const nodes = [];
+  const starts = [];
+  const destinationNode = new EventTarget();
+  destinationNode.disconnect = () => {};
+  let tapMonitor;
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    registerAudioNode(node) { nodes.push(node); return nodes.length + 10; },
+    createPerformanceMasterTap: async ({destination}) => {
+      tapMonitor = destination;
+      return {
+        destinationNode,
+        async start() { return {stop: async () => {}}; },
+        failProcessor() {},
+        async close() {},
+      };
+    },
+    startAudioWorklet() { assert.fail("two-output Host must use its native cue entry point"); },
+    startAudioWorkletWithCountIn(...args) { starts.push(args); return {ok: true, outputs: 2}; },
+  });
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(starts, [[1, 13, 11]]);
+  assert.equal(nodes[2], destinationNode);
+  assert.equal(nodes[0], tapMonitor);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+  await session.setMonitorVolume(37);
+  assert.equal(tapMonitor.gain.value, 0.37);
+  assert.deepEqual(starts, [[1, 13, 11]], "volume changes do not reconnect either stream");
+  await session.close();
+  assert.equal(nodes[1].disconnected.length, 1, "terminal cleanup retires the fallback product bus");
+});
+
+test("native cue remains separate from product output without a master tap", async () => {
+  const nodes = [];
+  const starts = [];
+  const {context, session} = fixture({
+    registerAudioNode(node) { nodes.push(node); return nodes.length + 10; },
+    startAudioWorkletWithCountIn(...args) { starts.push(args); return {ok: true, outputs: 2}; },
+  });
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(starts, [[1, 12, 11]]);
+  assert.deepEqual(nodes[1].connected, [nodes[0]]);
+  assert.deepEqual(nodes[0].connected, [context.destination]);
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), false);
+  assert.equal(starts.length, 1);
+  await session.close();
+  assert.equal(nodes[1].disconnected.length, 1);
+});
+
+test("tap initialization failure preserves both native outputs with distinct product and cue routes", async () => {
+  const nodes = [];
+  const starts = [];
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    registerAudioNode(node) { nodes.push(node); return nodes.length + 10; },
+    createPerformanceMasterTap: async () => { throw new Error("module missing"); },
+    startAudioWorkletWithCountIn(...args) { starts.push(args); return {ok: true, outputs: 2}; },
+  });
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(starts, [[1, 12, 11]]);
+  assert.deepEqual(nodes[1].connected, [nodes[0]]);
+  assert.equal(session.performanceMasterCaptureStatus().state, "unavailable");
+  await session.close();
 });
 
 test("loads both AudioWorklet modules on a parked context so the device starts once, at the resume edge", async () => {
@@ -2924,6 +3039,37 @@ test("Host-state failures expose only allowlisted structured details", async () 
   assert.deepEqual(session.diagnostics().error_details, states.at(-1).errorDetails);
 });
 
+for (const code of ["HOST_TIMEOUT", "HOST_RESTART_REQUIRED"]) {
+test(`timeout diagnostics retain bounded original request provenance (${code})`, async () => {
+  const {emitFailure, session} = fixture();
+  const states = [];
+  session.subscribeHostState((state) => states.push(state));
+  await session.start();
+  const details = {operation: "project.inspect",
+    request_id: "11111111-1111-4111-8111-111111111111",
+    deadline_ms: 1000.5, deadline_at_ms: 1100.5, cancel_return: -1,
+    terminal_state: "restart-required", mutation_outcome: "unknown"};
+  emitFailure(Object.assign(new Error("private path"), {code,
+    details: {...details, payload: {path: "/private"}, sidecar: [1, 2], path: "/private"}}));
+  await drainTasks();
+  assert.deepEqual(states.at(-1).errorDetails, details);
+  assert.deepEqual(session.diagnostics().error_details, details);
+  assert.equal(Object.isFrozen(session.diagnostics().error_details), true);
+});
+}
+
+test("timeout diagnostics reject malformed provenance without coercion", async () => {
+  const {emitFailure, session} = fixture();
+  await session.start();
+  emitFailure(Object.assign(new Error("private path"), {code: "HOST_TIMEOUT", details: {
+    operation: "/private/project", request_id: "not-an-original-uuid",
+    deadline_ms: 0x1_0000_0000, deadline_at_ms: Infinity, cancel_return: "1",
+    payload: {private: true}, sidecar: [1],
+  }}));
+  await drainTasks();
+  assert.deepEqual(session.diagnostics().error_details, {});
+});
+
 test("defaults diagnostics to session-owned input listeners", async () => {
   const browserWindow = trackedEventTarget();
   const {session} = fixture({browserWindow});
@@ -4337,6 +4483,9 @@ test("Sample preview, release, stop, and retry use exact Runtime-only envelopes"
   const projectId = "11111111-1111-4111-8111-111111111111";
   const patternId = "22222222-2222-4222-8222-222222222222";
   const {session} = fixture({
+    // This envelope-shape oracle models no elapsed time. A separate original
+    // clock witness below proves queue time is charged, with exact budgets.
+    now: () => 0,
     send: async (envelope, transportOptions) => {
       calls.push({envelope, transportOptions});
       if (envelope.operation === "sample.preview.set" ||
@@ -6768,6 +6917,179 @@ function transportStatus(overrides = {}) {
   };
 }
 
+function countInWireTicket() {
+  return {session_id: TRANSPORT_SESSION_ID, command_id: TRANSPORT_COMMAND_ID,
+    runtime_generation: "18446744073709551615", frame_epoch: "18446744073709551615",
+    schedule_serial: "1152921504606846975"};
+}
+function countInPublicTicket() {
+  const ticket = countInWireTicket();
+  return {sessionId: ticket.session_id, commandId: ticket.command_id,
+    runtimeGeneration: ticket.runtime_generation, frameEpoch: ticket.frame_epoch,
+    scheduleSerial: ticket.schedule_serial};
+}
+function countInWireStatus(overrides = {}) {
+  const {session_id: _session, command_id: _command, ...identity} = countInWireTicket();
+  return {ticket: countInWireTicket(),
+    count_in: {...identity, phase: "submitted", bars: 2, bpm: null,
+      bar_frames: null, count_in_frame: null, start_frame: null},
+    start_receipt: null, cancel_receipt: null, opening_pending: false, opening_complete: false,
+    error: null, ...overrides};
+}
+function countInRequest() {
+  return {...countInPublicTicket(), projectId: TRANSPORT_PROJECT_ID,
+    expectedEpoch: "1", bars: 2, expectedRevision: null};
+}
+
+test("frozen legacy decoder preserves the strict original Pattern transport schema", () => {
+  const raw = transportStatus({playing: true, phase: "idle", origin_frame: 96_000,
+    runtime_frame: 150_000});
+  const decoded = decodeLegacyPatternTransportStatus(raw);
+  assert.equal(decoded.originFrame, 96_000);
+  assert.equal(decoded.runtimeFrame, 150_000);
+  assert.equal(decoded.transportEpoch, 1);
+  assert.throws(() => decodeLegacyPatternTransportStatus({...raw, count_in: null}),
+    {code: "HOST_PROTOCOL_MISMATCH"});
+  const {runtime_frame: _missing, ...missing} = raw;
+  assert.throws(() => decodeLegacyPatternTransportStatus(missing), {code: "HOST_PROTOCOL_MISMATCH"});
+});
+
+test("count-in unknown capability on an old Host leaves ordinary Pattern transport usable", async () => {
+  const sent = [];
+  const {session} = fixture({patternTransport: true, send: async (envelope) => {
+    sent.push(envelope.operation);
+    if (envelope.operation === "pattern.transport.count-in.capabilities") return {
+      protocol_version: 1, request_id: envelope.request_id, ok: false,
+      error: {code: "HOST_PROTOCOL_MISMATCH", message: "host protocol request is invalid", details: {}},
+    };
+    if (envelope.operation === "pattern.transport.request") return success(envelope, {
+      session_id: TRANSPORT_SESSION_ID, command_id: TRANSPORT_COMMAND_ID,
+      submit: "accepted", status: transportStatus(),
+    });
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  assert.deepEqual(await session.queryPatternCountInCapabilities(), {
+    supported: false, negotiated: false, outputReady: false, runtimeGeneration: null,
+    frameEpoch: null, nextSerial: null, inputCapacity: 0,
+  });
+  await assert.rejects(session.requestPatternCountIn(countInRequest()), {code: "UNSUPPORTED_AUDIO"});
+  const ordinary = await session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID,
+    expectedEpoch: 1, intent: "record", expectedRevision: null});
+  assert.equal(ordinary.submit, "accepted");
+  assert.deepEqual(sent.filter((name) => name.startsWith("pattern.transport.")), [
+    "pattern.transport.count-in.capabilities", "pattern.transport.request",
+  ]);
+  await session.close();
+});
+
+test("count-in capability probing never downgrades a malformed Host envelope to unsupported", async () => {
+  const {session} = fixture({patternTransport: true, send: async (envelope) =>
+    envelope.operation === "pattern.transport.count-in.capabilities"
+      ? {protocol_version: 1, request_id: envelope.request_id, ok: false,
+          error: {code: "HOST_PROTOCOL_MISMATCH", message: "invalid", details: {}}, extra: true}
+      : success(envelope, defaultResult(envelope.operation))});
+  await session.start();
+  await assert.rejects(session.queryPatternCountInCapabilities(), {code: "HOST_PROTOCOL_MISMATCH"});
+  await session.close();
+});
+
+test("count-in pending admission releases SDK tails through the full twelve-second control interval", async () => {
+  let clock = 0;
+  let handle = 10;
+  const sent = [];
+  const {session} = fixture({patternTransport: true, now: () => clock,
+    registerAudioNode: () => ++handle,
+    startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+    send: async (envelope) => {
+      sent.push(envelope);
+      if (["pattern.transport.count-in.request", "pattern.transport.count-in.cancel"].includes(envelope.operation))
+        return success(envelope, {submit: "accepted", ticket: countInWireTicket(), status: countInWireStatus()});
+      if (envelope.operation === "pattern.transport.count-in.inspect")
+        return success(envelope, countInWireStatus());
+      if (envelope.operation === "pattern.transport.inspect") return success(envelope, transportStatus());
+      return success(envelope, defaultResult(envelope.operation));
+    }});
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const admission = await session.requestPatternCountIn(countInRequest());
+  assert.equal(admission.status.countIn.startFrame, null);
+  assert.equal(admission.status.openingComplete, false);
+  assert.equal(admission.ticket.runtimeGeneration, "18446744073709551615");
+  for (clock = 0; clock <= 12_000; clock += 1_000) {
+    const observed = await session.inspectPatternCountIn(admission.ticket);
+    assert.equal(observed.countIn.startFrame, null);
+    assert.equal(observed.observedAtMilliseconds, clock);
+    assert.equal((await session.inspectPatternTransport(TRANSPORT_SESSION_ID)).phase, "awaiting_audio");
+  }
+  const cancel = await session.cancelPatternCountIn({ticket: admission.ticket,
+    projectId: TRANSPORT_PROJECT_ID, commandId: "00000000-0000-4000-8000-0000000000de",
+    expectedEpoch: "2", intent: "play_stop"});
+  assert.equal(cancel.submit, "accepted");
+  assert.equal(cancel.status.startReceipt, null);
+  const request = sent.find((entry) => entry.operation === "pattern.transport.count-in.request");
+  assert.equal(request.payload.runtime_generation, "18446744073709551615");
+  assert.equal(request.payload.schedule_serial, "1152921504606846975");
+  assert.equal(request.payload.expected_epoch, "1");
+  assert.equal(sent.filter((entry) => entry.operation === "pattern.transport.count-in.inspect").length, 13);
+  await session.close();
+});
+
+test("count-in Applied S remains distinct from pending Journal opening and later true cutoff F", async () => {
+  let handle = 10;
+  const {session_id: _session, command_id: _command, ...identity} = countInWireTicket();
+  const start = {...identity, transport_epoch: "1", pattern_generation: "1",
+    pattern_id: TRANSPORT_PATTERN_ID, result: "applied", effective_frame: 577_000,
+    origin_frame: 577_000, playing: true};
+  const view = {...identity, phase: "applied", bars: 2, bpm: 40, bar_frames: 288_000,
+    count_in_frame: 1_000, start_frame: 577_000};
+  let cutoff = null;
+  const {session} = fixture({patternTransport: true, registerAudioNode: () => ++handle,
+    startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+    send: async (envelope) => {
+      if (envelope.operation === "pattern.transport.count-in.request") return success(envelope,
+        {submit: "accepted", ticket: countInWireTicket(), status: countInWireStatus()});
+      if (envelope.operation === "pattern.transport.count-in.inspect") return success(envelope,
+        countInWireStatus({count_in: view, start_receipt: start, cancel_receipt: cutoff, opening_pending: true}));
+      return success(envelope, defaultResult(envelope.operation));
+    }});
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const {ticket} = await session.requestPatternCountIn(countInRequest());
+  const opened = await session.inspectPatternCountIn(ticket);
+  assert.equal(opened.startReceipt.effectiveFrame, 577_000);
+  assert.equal(opened.openingPending, true);
+  assert.equal(opened.openingComplete, false);
+  cutoff = {...start, transport_epoch: "2", effective_frame: 577_128, playing: false};
+  const stopped = await session.inspectPatternCountIn(ticket);
+  assert.equal(stopped.startReceipt.effectiveFrame, 577_000);
+  assert.equal(stopped.cancelReceipt.effectiveFrame, 577_128);
+  assert.equal(stopped.cancelReceipt.originFrame, 577_000);
+  cutoff = {...cutoff, effective_frame: 577_000};
+  await assert.rejects(session.inspectPatternCountIn(ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+  await session.close();
+});
+
+test("count-in winning cancellation refuses a fabricated future origin", async () => {
+  let handle = 10;
+  const {session_id: _session, command_id: _command, ...identity} = countInWireTicket();
+  const {session} = fixture({patternTransport: true, registerAudioNode: () => ++handle,
+    startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+    send: async (envelope) => envelope.operation === "pattern.transport.count-in.request"
+      ? success(envelope, {submit: "accepted", ticket: countInWireTicket(), status: countInWireStatus({
+          count_in: {...identity, phase: "cancelled", bars: 2, bpm: 40, bar_frames: 288_000,
+            count_in_frame: 1_000, start_frame: 577_000},
+          start_receipt: {...identity, transport_epoch: "1", pattern_generation: "1",
+            pattern_id: TRANSPORT_PATTERN_ID, result: "cancelled", effective_frame: null,
+            origin_frame: 577_000, playing: false},
+        })}) : success(envelope, defaultResult(envelope.operation))});
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  await assert.rejects(session.requestPatternCountIn(countInRequest()), {code: "HOST_PROTOCOL_MISMATCH"});
+  await session.close();
+});
+
 test("Pattern transport requires opt-in and negotiates the marker at Project open", async () => {
   const opens = [];
   const {session} = fixture({
@@ -7959,6 +8281,3050 @@ test("Project inspection hands each Pad's Core-resolved colour through unchanged
   await session.close();
 });
 
+function inputWireStatus(payload, sequence, complete = true, disposition = null) {
+  const ticket = {command_id: payload.command_id, runtime_generation: payload.runtime_generation,
+    frame_epoch: payload.frame_epoch, ticket: payload.input_serial};
+  const authority = {recording: false, schedule_serial: null, transport_epoch: null};
+  return {ticket, admission: {sequence, acceptance_ordinal: sequence, authority},
+    native_result: {runtime_generation: payload.runtime_generation, frame_epoch: payload.frame_epoch,
+      sequence, held_press_sequence: payload.held_press_sequence, acceptance_ordinal: sequence,
+      runtime_frame: 123, slot: payload.slot, authority,
+      disposition: disposition ?? (payload.kind === "release" ? "release_no_voice" : "muted_no_voice")},
+    durable_settled: complete, retained: false, complete, expired: false, error: null};
+}
+function inputProfileFixture({settled = () => true, onRequest = () => {}, sequenceFor = (p) => p.input_serial,
+  now, publishRuntime = false, browserWindow = {}, runtimeTerminator, extraSend = () => null} = {}) {
+  const entries = new Map();
+  const sent = [];
+  let handle = 10;
+  const f = fixture({patternTransport: true, publishRuntime, browserWindow, now, runtimeTerminator,
+    registerAudioNode: () => ++handle, startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+    send: async (envelope, options) => {
+      sent.push(envelope);
+      const p = envelope.payload;
+      // Allow a strict transport failure before the default admission or
+      // inspection fixture can fabricate a successful reply.
+      const custom = extraSend(envelope, options);
+      if (custom !== null && custom !== undefined) return custom;
+      if (envelope.operation === "pattern.transport.input.request") {
+        onRequest(p, options);
+        const status = inputWireStatus(p, sequenceFor(p), settled());
+        entries.set(p.input_serial, {payload: p, status});
+        return success(envelope, {ticket: status.ticket, status});
+      }
+      if (envelope.operation === "pattern.transport.input.inspect") {
+        const entry = entries.get(p.ticket);
+        const status = {...entry.status, complete: settled(), durable_settled: settled()};
+        return success(envelope, status);
+      }
+      return success(envelope, envelope.operation === "pattern.transport.inspect"
+        ? transportStatus({phase: "idle"}) : defaultResult(envelope.operation));
+    }});
+  return {...f, entries, sent};
+}
+async function activateInputProfile(f) {
+  assert.equal(await f.session.start(), true);
+  assert.equal(await f.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+}
+async function untilInputRequests(f, count) {
+  for (let attempt = 0; attempt < 100 && f.sent.filter((e) => e.operation === "pattern.transport.input.request").length < count; ++attempt)
+    await drainTasks();
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, count);
+}
+
+test("packaged runtime.session is the same frozen public Session and forwards the companion API", async () => {
+  const browserWindow = {};
+  const f = inputProfileFixture({publishRuntime: true, browserWindow});
+  await activateInputProfile(f);
+  assert.equal(browserWindow.lmdjWebRuntimeHost.session, f.session);
+  assert.equal(Object.isFrozen(browserWindow.lmdjWebRuntimeHost.session), true);
+  assert.equal(Object.isFrozen(browserWindow.lmdjWebRuntimeHost.patternTransport), true);
+  assert.equal(browserWindow.lmdjWebRuntimeHost.patternTransport.requestPatternInput, f.session.requestPatternInput);
+  assert.equal(Object.getOwnPropertyDescriptor(browserWindow.lmdjWebRuntimeHost, "session").writable, false);
+  assert.equal(typeof browserWindow.lmdjWebRuntimeHost.inspection.inspectProject, "function");
+  assert.equal(typeof browserWindow.lmdjWebRuntimeHost.providers.listProviders, "function");
+  const result = await f.session.trigger(0, 100, "pointer");
+  assert.deepEqual(result, {sequence: 1, slot: 0, velocity: 100, source: "pointer"});
+  assert.equal(await f.session.release(0, "pointer"), true);
+  const activation = f.sent.findIndex((e) => e.operation === "audio.activate");
+  const negotiation = f.sent.findIndex((e) => e.operation === "pattern.transport.count-in.capabilities" && e.payload.negotiate);
+  const refresh = f.sent.findIndex((e, i) => i > activation && e.operation === "pattern.transport.count-in.capabilities");
+  const press = f.sent.findIndex((e) => e.operation === "pattern.transport.input.request");
+  assert.ok(negotiation < activation && activation < refresh && refresh < press);
+  await f.session.close();
+});
+
+test("two concurrent durable presses retain their own tickets while Release and Stop remain serviceable", async () => {
+  let settled = false;
+  const f = inputProfileFixture({settled: () => settled, extraSend: (e) => e.operation === "pattern.transport.request"
+    ? success(e, {session_id: e.payload.session_id, command_id: e.payload.command_id, submit: "accepted",
+        status: transportStatus({phase: "idle"})}) : null});
+  await activateInputProfile(f);
+  const first = f.session.trigger(0, 100, "pointer");
+  const second = f.session.trigger(1, 110, "keyboard");
+  await untilInputRequests(f, 2);
+  let firstDone = false;
+  void first.then(() => { firstDone = true; });
+  const released = f.session.release(0, "pointer");
+  await untilInputRequests(f, 3);
+  const stop = await f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  assert.equal(stop.submit, "accepted");
+  assert.equal((await f.session.inspectPatternTransport(TRANSPORT_SESSION_ID)).phase, "idle");
+  assert.equal(firstDone, false);
+  const requests = f.sent.filter((e) => e.operation === "pattern.transport.input.request");
+  assert.deepEqual(requests.map((e) => e.payload.input_serial), ["1", "2", "3"]);
+  assert.equal(requests[2].payload.held_press_sequence, "1");
+  settled = true;
+  assert.equal((await first).sequence, 1);
+  assert.equal((await second).sequence, 2);
+  assert.equal(await released, true);
+  assert.equal(await f.session.release(1, "keyboard"), true, "consuming the press kept its physical release owner");
+  const consumes = f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume);
+  assert.deepEqual(consumes.map((e) => e.payload.ticket).sort(), ["1", "2", "3", "4"]);
+  await f.session.close();
+});
+
+test("companion input round-trips exact uint64 and rejects unsafe completion frames", async () => {
+  const f = inputProfileFixture({sequenceFor: () => "18446744073709551615"});
+  await activateInputProfile(f);
+  const request = {commandId: TRANSPORT_COMMAND_ID, runtimeGeneration: "18446744073709551615",
+    frameEpoch: "9007199254740993", inputSerial: "18446744073709551615", slot: 0, velocity: 1,
+    kind: "press", held: false, heldPressSequence: null};
+  const admission = await f.session.requestPatternInput(request);
+  assert.equal(admission.status.admission.sequence, "18446744073709551615");
+  assert.equal(admission.status.nativeResult.frameEpoch, "9007199254740993");
+  assert.equal((await f.session.inspectPatternInput(admission.ticket)).nativeResult.disposition, "muted_no_voice");
+  f.entries.get(request.inputSerial).status.native_result.runtime_frame = Number.MAX_SAFE_INTEGER + 1;
+  await assert.rejects(f.session.inspectPatternInput(admission.ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+  await f.session.close();
+});
+
+test("unsafe legacy trigger projection retains a real physical Release after truthful completion", async () => {
+  const f = inputProfileFixture({sequenceFor: (p) => p.kind === "press" ? "9007199254740993" : "9007199254740994"});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.trigger(0, 100, "pointer"), {code: "HOST_STATE_INVALID"});
+  assert.equal(await f.session.release(0, "pointer"), true);
+  const release = f.sent.filter((e) => e.operation === "pattern.transport.input.request")[1];
+  assert.equal(release.payload.held_press_sequence, "9007199254740993");
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, 2);
+  await f.session.close();
+});
+
+test("original Pad deadline expiry keeps reconciliation and held release alive without re-enqueue", async () => {
+  let clock = 0;
+  let settled = false;
+  const f = inputProfileFixture({now: () => clock, settled: () => settled,
+    onRequest: (p) => { if (p.kind === "press") clock = 1001; }});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.trigger(0, 100, "pointer"), {code: "HOST_TIMEOUT"});
+  const release = f.session.release(0, "pointer");
+  await untilInputRequests(f, 2);
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 0);
+  settled = true;
+  assert.equal(await release, true);
+  await drainTasks();
+  const consumed = f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume);
+  assert.deepEqual(consumed.map((e) => e.payload.ticket).sort(), ["1", "2"]);
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, 2);
+  await f.session.close();
+});
+
+test("a Pad queued behind a runtime action spends its budget only from its admission turn", async () => {
+  let clock = 0;
+  let resolveStop;
+  let stopStarted;
+  const started = new Promise((resolve) => { stopStarted = resolve; });
+  const gate = new Promise((resolve) => { resolveStop = resolve; });
+  const f = inputProfileFixture({now: () => clock, extraSend: (e) => {
+    if (e.operation !== "pattern.transport.request") return null;
+    stopStarted();
+    return gate.then(() => success(e, {session_id: e.payload.session_id, command_id: e.payload.command_id,
+      submit: "accepted", status: transportStatus({phase: "idle"})}));
+  }});
+  await activateInputProfile(f);
+  const stop = f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  await started;
+  const press = f.session.trigger(0, 100, "pointer");
+  clock = 1001;
+  resolveStop();
+  await stop;
+  assert.equal((await press).sequence, 1);
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(await f.session.release(0, "pointer"), true);
+  await f.session.close();
+});
+
+test("an independent host queue cannot dispatch an expired Pad or spend its input identity", async () => {
+  let clock = 0;
+  let releaseQuery;
+  let queryStarted;
+  const started = new Promise((resolve) => { queryStarted = resolve; });
+  const gate = new Promise((resolve) => { releaseQuery = resolve; });
+  const f = inputProfileFixture({now: () => clock, extraSend: (e) => {
+    if (e.operation !== "project.inspect") return null;
+    queryStarted();
+    return gate.then(() => success(e, {project_revision: 7}));
+  }});
+  await activateInputProfile(f);
+  const query = f.session.inspectProject();
+  await started;
+  const press = f.session.trigger(0, 100, "pointer").then(
+    (value) => ({value}), (error) => ({error}));
+  await drainTasks();
+  assert.equal(f.sent.filter((e) => e.operation.startsWith("pattern.transport.input.")).length, 0);
+  clock = 1001;
+  releaseQuery();
+  assert.equal((await query).project_revision, 7, "the independent Host query actually completed");
+  const expired = await press;
+  assert.equal(expired.error?.code, "HOST_TIMEOUT");
+  assert.equal(expired.error.details.pending, false, "nothing was submitted to Native");
+  assert.equal(f.sent.filter((e) => e.operation.startsWith("pattern.transport.input.")).length, 0);
+  assert.equal(f.entries.size, 0);
+  assert.equal(f.session.diagnostics().trigger_admitted_count, 0);
+  assert.equal(await f.session.release(0, "pointer"), false, "expiry created no physical owner");
+  assert.equal((await f.session.trigger(1, 100, "pointer")).sequence, 1);
+  const admitted = f.sent.find((e) => e.operation === "pattern.transport.input.request");
+  assert.equal(admitted.payload.input_serial, "1", "pre-dispatch expiry spent no input identity");
+  assert.equal(await f.session.release(1, "pointer"), true);
+  await f.session.close();
+});
+
+test("host queue residence after the admission turn spends the Pad budget; runtime queue residence does not", async () => {
+  let clock = 0;
+  let releaseStop;
+  let stopStarted;
+  let releaseQuery;
+  let queryStarted;
+  const stopReady = new Promise((resolve) => { stopStarted = resolve; });
+  const stopGate = new Promise((resolve) => { releaseStop = resolve; });
+  const queryReady = new Promise((resolve) => { queryStarted = resolve; });
+  const queryGate = new Promise((resolve) => { releaseQuery = resolve; });
+  const deadlines = [];
+  const f = inputProfileFixture({now: () => clock, onRequest: (p, options) => {
+    if (p.kind === "press") deadlines.push({submittedAt: clock, deadlineMs: options.deadlineMs});
+  }, extraSend: (e) => {
+    if (e.operation === "pattern.transport.request") {
+      stopStarted();
+      return stopGate.then(() => success(e, {session_id: e.payload.session_id,
+        command_id: e.payload.command_id, submit: "accepted", status: transportStatus({phase: "idle"})}));
+    }
+    if (e.operation === "project.inspect") {
+      queryStarted();
+      return queryGate.then(() => success(e, {project_revision: 7}));
+    }
+    return null;
+  }});
+  await activateInputProfile(f);
+  const stop = f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  await stopReady;
+  const query = f.session.inspectProject();
+  const press = f.session.trigger(0, 100, "pointer");
+  await drainTasks();
+  assert.equal(deadlines.length, 0, "the Pad waited behind the runtime action");
+  clock = 400;
+  releaseStop();
+  assert.equal((await stop).submit, "accepted", "the runtime action actually completed");
+  await queryReady;
+  await drainTasks();
+  assert.equal(deadlines.length, 0, "the Pad then waited behind the independent Host query");
+  clock = 750;
+  releaseQuery();
+  assert.equal((await query).project_revision, 7);
+  assert.equal((await press).sequence, 1);
+  // The admission turn began at 400 when the runtime action released it.
+  assert.deepEqual(deadlines, [{submittedAt: 750, deadlineMs: 650}]);
+  assert.equal(deadlines[0].submittedAt + deadlines[0].deadlineMs, 1400,
+    "the Native handoff kept one second from the admission turn");
+  assert.equal(await f.session.release(0, "pointer"), true);
+  assert.deepEqual(f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+    .map((e) => e.payload.ticket), ["1", "2"]);
+  await f.session.close();
+});
+
+for (const lateAt of ["admission", "consume"]) {
+  test(`a total input result late at ${lateAt} is consumed without a late Pad success`, async () => {
+    let clock = 0;
+    const f = inputProfileFixture({now: () => clock, onRequest: (p) => {
+      if (lateAt === "admission" && p.kind === "press") clock = 1000;
+    }, extraSend: (e) => {
+      if (lateAt === "consume" && e.operation === "pattern.transport.input.inspect" &&
+          e.payload.consume && e.payload.ticket === "1") clock = 1000;
+      return null;
+    }});
+    await activateInputProfile(f);
+    await assert.rejects(f.session.trigger(0, 100, "pointer"),
+      (error) => error.code === "HOST_TIMEOUT" && error.details.pending === true);
+    await drainTasks();
+    assert.deepEqual(f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+      .map((e) => e.payload.ticket), ["1"], "the accepted total result was genuinely inspected for consumption");
+    assert.equal(f.entries.get("1").status.native_result.disposition, "muted_no_voice");
+    assert.equal(f.entries.get("1").status.error, null);
+    assert.equal(await f.session.release(0, "pointer"), true,
+      "caller expiry and press consumption preserved the independent physical release");
+    const requests = f.sent.filter((e) => e.operation === "pattern.transport.input.request");
+    assert.deepEqual(requests.map((e) => e.payload.input_serial), ["1", "2"]);
+    assert.equal(requests[1].payload.held_press_sequence, "1");
+    assert.deepEqual(f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+      .map((e) => e.payload.ticket), ["1", "2"]);
+    await f.session.close();
+  });
+}
+
+for (const code of ["HOST_STATE_INVALID", "HOST_PROTOCOL_MISMATCH"]) {
+  test(`fatal ${code} survives rejected correlated releases with its real owner debts retained`, async () => {
+    let settled = true;
+    let sealed = false;
+    const physicalOwners = new Map();
+    const consumed = new Set();
+    const terminalError = Object.assign(new Error("original retained transport failure"), {
+      code, details: {resource: "pattern_input", terminal_state: "sealed", observed: 2},
+    });
+    const cleanupAttempts = [];
+    const terminalAttempts = [];
+    const f = inputProfileFixture({settled: () => settled, onRequest: (p) => {
+      if (p.kind === "press") physicalOwners.set(p.input_serial, {...p});
+    }, extraSend: (e) => {
+      if (sealed) {
+        cleanupAttempts.push(e);
+        throw terminalError;
+      }
+      if (e.operation === "pattern.transport.input.inspect" && e.payload.consume) {
+        assert.equal(f.entries.get(e.payload.ticket).status.complete, true,
+          "only a total input result can be consumed");
+        assert.equal(consumed.has(e.payload.ticket), false, "each input result is consumed exactly once");
+        consumed.add(e.payload.ticket);
+      }
+      return null;
+    }, runtimeTerminator: async () => {
+      // This seam refuses actual outstanding fixture debts. It provides no
+      // successful worker shutdown, owner ACK or invented terminal receipt.
+      terminalAttempts.push({unconsumed: [...f.entries.keys()].filter((key) => !consumed.has(key)),
+        physical: [...physicalOwners.keys()]});
+      throw terminalError;
+    }});
+    await activateInputProfile(f);
+    await f.session.setSamplePreview(0, PLAYBACK);
+    assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, 1);
+    assert.deepEqual([...consumed], ["1"]);
+    assert.deepEqual([...physicalOwners.keys()], ["1"], "a consumed silent press still owes physical release");
+    settled = false;
+    const pendingPress = f.session.trigger(1, 110, "keyboard").then(
+      (value) => ({value}), (error) => ({error}));
+    await untilInputRequests(f, 2);
+    assert.equal(f.entries.get("2").status.durable_settled, false);
+    assert.equal(consumed.has("2"), false);
+    const originalInputs = [...f.entries.values()].map((entry) => structuredClone(entry));
+    const failedObservations = [];
+    f.session.subscribeHostState((event) => {
+      if (event.state === "failed") failedObservations.push({event, operations: cleanupAttempts.map((e) => e.operation)});
+    });
+    sealed = true;
+    f.emitTransportFailure(terminalError);
+    f.emitTransportFailure({code: "IO_ERROR"});
+    assert.equal(f.session.diagnostics().state, "running");
+    assert.equal((await pendingPress).error, terminalError);
+    await drainTasks();
+    await drainTasks();
+    assert.equal(f.session.diagnostics().state, "failed", "release refusal cannot strand running/closing state");
+    assert.equal(f.session.diagnostics().error_code, code);
+    assert.deepEqual(f.session.diagnostics().error_details, terminalError.details);
+    assert.equal(failedObservations.length, 1);
+    assert.equal(failedObservations[0].event.errorCode, code);
+    assert.deepEqual(failedObservations[0].event.errorDetails, terminalError.details);
+    const releases = cleanupAttempts.filter((e) => e.operation === "pattern.transport.input.request");
+    assert.deepEqual(releases.map((e) => e.payload.held_press_sequence), ["1", "2"],
+      "each retained physical owner received its own real correlated release attempt");
+    assert.deepEqual(releases.map((e) => e.payload.input_serial), ["3", "3"],
+      "known admission rejection did not spend a new ticket identity");
+    assert.deepEqual(failedObservations[0].operations.filter((operation) => operation !== "pattern.transport.input.inspect"),
+      ["pattern.transport.input.request", "pattern.transport.input.request", "sample.preview.clear", "sample.stop"],
+      "preview clear and best-effort Stop were attempted before the failed state was observable");
+    assert.deepEqual(terminalAttempts, [{unconsumed: ["2"], physical: ["1", "2"]}]);
+    assert.equal(f.terminated(), 1, "terminal cleanup was attempted, never acknowledged as successful");
+    assert.equal(await f.session.close(), false);
+    assert.equal(await f.session.trigger(2, 100, "pointer"), false);
+    await assert.rejects(f.session.release(0, "pointer"), (error) => error === terminalError);
+    assert.equal(cleanupAttempts.at(-1).payload.held_press_sequence, "1",
+      "the first physical owner remains correlated after terminal cleanup refusal");
+    await assert.rejects(f.session.release(1, "keyboard"), (error) => error === terminalError);
+    assert.equal(cleanupAttempts.at(-1).payload.held_press_sequence, "2");
+    assert.deepEqual([...f.entries.values()], originalInputs, "neither input evidence nor error was rewritten");
+    assert.deepEqual([...consumed], ["1"], "the failed incomplete ticket was never forged as consumed");
+    assert.deepEqual([...physicalOwners.keys()], ["1", "2"], "no rejected release or terminal ACK cleared physical debts");
+    assert.equal(f.session.diagnostics().error_code, code);
+  });
+}
+
+test("a queued fatal cleanup release spends its own original deadline without replacing the fatal error", async () => {
+  let clock = 0;
+  let blockInspection = false;
+  let failed = false;
+  let releaseInspection;
+  let inspectionStarted;
+  const gate = new Promise((resolve) => { releaseInspection = resolve; });
+  const started = new Promise((resolve) => { inspectionStarted = resolve; });
+  const originalError = Object.assign(new Error("original fatal observation"), {
+    code: "HOST_PROTOCOL_MISMATCH", details: {resource: "pattern_input", terminal_state: "failed"},
+  });
+  const cleanupError = Object.assign(new Error("cleanup is not physically ready"), {code: "HOST_STATE_INVALID"});
+  let terminalRefusals = 0;
+  const f = inputProfileFixture({now: () => clock, extraSend: (e) => {
+    if (blockInspection && e.operation === "provider.list") {
+      inspectionStarted();
+      return gate.then(() => success(e, {providers: [], granted_permissions: [], project_revision: null}));
+    }
+    if (failed && ["pattern.transport.input.request", "sample.preview.clear", "sample.stop"].includes(e.operation))
+      throw cleanupError;
+    return null;
+  }, runtimeTerminator: async () => {
+    terminalRefusals += 1;
+    throw cleanupError;
+  }});
+  await activateInputProfile(f);
+  await f.session.setSamplePreview(0, PLAYBACK);
+  assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, 1);
+  blockInspection = true;
+  const inspection = f.session.listProviders();
+  await started;
+  const beforeFailure = f.sent.length;
+  failed = true;
+  f.emitTransportFailure(originalError);
+  await drainTasks();
+  assert.equal(f.sent.length, beforeFailure, "the correlated cleanup release waited on the real Host tail");
+  clock = 1001;
+  releaseInspection();
+  assert.deepEqual((await inspection).providers, [], "the independent Host inventory actually finished");
+  await drainTasks();
+  await drainTasks();
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.equal(f.session.diagnostics().error_code, originalError.code);
+  assert.deepEqual(f.session.diagnostics().error_details, originalError.details);
+  assert.deepEqual(f.sent.slice(beforeFailure).map((e) => e.operation), ["sample.preview.clear", "sample.stop"],
+    "expired cleanup release was never dispatched, but the remaining safety attempts still ran");
+  assert.equal(f.entries.size, 1, "expiry forged no unknown input ticket");
+  assert.equal(terminalRefusals, 1, "terminal cleanup refused outstanding physical ownership");
+  assert.equal(await f.session.close(), false);
+  await assert.rejects(f.session.release(0, "pointer"), (error) => error === cleanupError);
+  const retainedRelease = f.sent.at(-1);
+  assert.equal(retainedRelease.operation, "pattern.transport.input.request");
+  assert.equal(retainedRelease.payload.input_serial, "2", "pre-dispatch expiry preserved the real release identity");
+  assert.equal(retainedRelease.payload.held_press_sequence, "1", "the original physical owner remained serviceable");
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 1,
+    "only the already total press was consumed, never a fabricated release");
+  assert.equal(f.session.diagnostics().error_code, originalError.code);
+});
+
+test("valid unknown companion capability keeps legacy Pads usable on a two-output SDK", async () => {
+  const f = inputProfileFixture({extraSend: (e) => {
+    if (e.operation === "pattern.transport.count-in.capabilities") return {
+      protocol_version: 1, request_id: e.request_id, ok: false,
+      error: {code: "HOST_PROTOCOL_MISMATCH", message: "host protocol request is invalid", details: {}},
+    };
+    if (e.operation === "trigger") return success(e, e.payload.kind === "release"
+      ? {accepted: true} : {sequence: 1, status: "enqueued"});
+    return null;
+  }});
+  await activateInputProfile(f);
+  assert.deepEqual(await f.session.trigger(0, 100, "pointer"), {sequence: 1, slot: 0, velocity: 100, source: "pointer"});
+  assert.equal(await f.session.release(0, "pointer"), true);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), {code: "UNSUPPORTED_AUDIO"});
+  await assert.rejects(f.session.requestPatternInput({commandId: TRANSPORT_COMMAND_ID,
+    runtimeGeneration: "1", frameEpoch: "1", inputSerial: "1", slot: 0, velocity: 1,
+    kind: "press", held: false, heldPressSequence: null}), {code: "UNSUPPORTED_AUDIO"});
+  assert.equal(f.sent.filter((e) => ["pattern.transport.count-in.request", "pattern.transport.input.request"].includes(e.operation)).length, 0);
+  assert.equal(f.sent.filter((e) => e.operation === "trigger").length, 2);
+  await f.session.close();
+});
+
+test("SDK serial exhaustion preserves an existing physical Release without spending refused identities", async () => {
+  const f = inputProfileFixture();
+  await activateInputProfile(f);
+  assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, 1);
+  const manual = await f.session.requestPatternInput({commandId: TRANSPORT_COMMAND_ID,
+    runtimeGeneration: "1", frameEpoch: "1", inputSerial: "18446744073709551613", slot: 2, velocity: 1,
+    kind: "press", held: false, heldPressSequence: null});
+  await f.session.inspectPatternInput(manual.ticket, true);
+  const before = f.sent.filter((e) => e.operation === "pattern.transport.input.request").length;
+  await assert.rejects(f.session.trigger(1, 100, "pointer"), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(f.session.trigger(1, 100, "pointer"), {code: "HOST_STATE_INVALID"});
+  assert.equal(f.sent.filter((e) => e.operation === "pattern.transport.input.request").length, before);
+  assert.equal(await f.session.release(0, "pointer"), true);
+  const release = f.sent.filter((e) => e.operation === "pattern.transport.input.request").at(-1);
+  assert.equal(release.payload.input_serial, "18446744073709551614");
+  assert.equal(release.payload.held_press_sequence, "1");
+  await f.session.close();
+});
+
+test("total Native dispositions cannot relabel a press as release or a release as a voice", async () => {
+  const f = inputProfileFixture();
+  await activateInputProfile(f);
+  const admitted = await f.session.requestPatternInput({commandId: TRANSPORT_COMMAND_ID,
+    runtimeGeneration: "1", frameEpoch: "1", inputSerial: "1", slot: 0, velocity: 1,
+    kind: "press", held: false, heldPressSequence: null});
+  const native = f.entries.get("1").status.native_result;
+  native.disposition = "release_no_voice";
+  await assert.rejects(f.session.inspectPatternInput(admitted.ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+  native.disposition = "voice_started";
+  native.held_press_sequence = "1";
+  await assert.rejects(f.session.inspectPatternInput(admitted.ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+  await f.session.close();
+});
+
+// SOURCE_ONLY witnesses for the independent sealed transport/owner lane. The
+// Host seam admits once, keeps exact identities, and refuses consumer ACKs
+// until its own input, physical-owner and original count evidence gates pass.
+function retainedConsumerFixture({countMode = "accepted", retainedAvailable = true, loseInputAdmission = false,
+  terminate, beforeAdmission, admissionReply, beforeInputInspect, beforeInputAdmission, inputReply,
+  inputDisposition = () => null, browserWindow = {}, browserDocument = {}, retainLifecycleUntilInputConsumed = false} = {}) {
+  let clock = 0;
+  let timerId = 0;
+  let failureListener = null;
+  let sealed = false;
+  let terminalOwnerReleased = false;
+  let resolveTerminalOwnerRelease;
+  const terminalOwnerRelease = new Promise((resolve) => { resolveTerminalOwnerRelease = resolve; });
+  const pendingTimers = new Map();
+  let timerSchedulingCancelled = false;
+  const normal = [];
+  const retained = [];
+  const inputEntries = new Map();
+  const physicalOwners = new Map();
+  const inputConsumed = new Set();
+  const nodes = [];
+  const originalError = Object.assign(new Error("original count/input response loss"), {
+    code: "HOST_TIMEOUT", details: {pending: true, resource: "pattern_input", terminal_state: "sealed"},
+  });
+  const state = {retainedAvailable, inputComplete: false, nativeOwnerAcknowledged: false,
+    countAccepted: false, countConsumed: false, countStatus: countInWireStatus(), countConsumes: 0,
+    countInspects: 0, terminalStarts: 0, corruptConsume: false, zeroTimersServiced: 0, backendCloses: 0,
+    lifecyclePending: [], lifecycleCompleted: []};
+  state.completeInput = () => state.inputComplete;
+  const reject = (e, code = "HOST_STATE_INVALID", details = {pending: true}) => ({
+    protocol_version: 1, request_id: e.request_id, ok: false,
+    error: {code, message: "real retained owner remains pending", details},
+  });
+  const sameCountTicket = (payload) => Object.entries(countInWireTicket())
+    .every(([key, value]) => payload[key] === value);
+  const admission = (e, result) => {
+    const response = success(e, result);
+    return admissionReply?.(e, response) ?? response;
+  };
+  const assertNoTerminalDebt = () => {
+    assert.equal(physicalOwners.size, 0);
+    assert.equal([...inputEntries.keys()].some((key) => !inputConsumed.has(key)), false);
+    assert.equal(state.countAccepted && !state.countConsumed, false, "NativeStop cannot consume the count caller ticket");
+  };
+  const resolveLifecycleContinuations = () => {
+    if (physicalOwners.size === 0 && [...inputEntries.keys()].every((key) => inputConsumed.has(key)) &&
+        !(state.countAccepted && !state.countConsumed)) {
+      for (const continuation of state.lifecyclePending.splice(0)) continuation.resolve();
+    }
+  };
+  const releaseTerminalOwner = () => {
+    assert.equal(state.nativeOwnerAcknowledged, true, "the real backend independently acknowledged retirement");
+    assertNoTerminalDebt();
+    terminalOwnerReleased = true;
+    resolveTerminalOwnerRelease();
+  };
+  const host = async (e, options, retainedLane) => {
+    assert.equal(options.deadlineMs > 0 && options.deadlineMs <= 1000, true,
+      "each retained/ordinary short RPC keeps the original short deadline");
+    const p = e.payload;
+    if (retainedLane) assert.equal([
+      "pattern.transport.input.inspect", "pattern.transport.count-in.inspect",
+      "pattern.transport.count-in.cancel", "pattern.transport.inspect",
+    ].includes(e.operation) || (e.operation === "pattern.transport.input.request" && p.kind === "release"), true);
+    if (e.operation === "pattern.transport.count-in.request") {
+      beforeAdmission?.(e);
+      assert.equal(retainedLane, false, "a retained lane can never admit or replay count-in");
+      assert.equal(normal.filter((entry) => entry.operation === e.operation).length, 1,
+        "there is exactly one original Native count-in submission");
+      if (countMode === "pre-refusal") return reject(e, "HOST_TIMEOUT", {pending: false});
+      state.countAccepted = countMode !== "unknown-unaccepted";
+      if (countMode !== "accepted") {
+        sealed = true;
+        failureListener?.(originalError);
+        throw originalError;
+      }
+      return admission(e, {submit: "accepted", ticket: countInWireTicket(), status: state.countStatus});
+    }
+    if (e.operation === "pattern.transport.count-in.inspect") {
+      assert.equal(sameCountTicket(p), true, "inspect/consume owns the exact original scheduled ticket");
+      state.countInspects += 1;
+      if (!state.countAccepted || state.countConsumed) return reject(e);
+      if (p.consume) {
+        state.countConsumes += 1;
+        if (!state.countStatus.start_receipt || !state.countStatus.cancel_receipt ||
+            state.countStatus.opening_pending || !state.nativeOwnerAcknowledged || physicalOwners.size ||
+            [...inputEntries.keys()].some((key) => !inputConsumed.has(key))) return reject(e);
+        state.countConsumed = true;
+        resolveLifecycleContinuations();
+      }
+      return success(e, state.corruptConsume && p.consume
+        ? {...state.countStatus, start_receipt: {...state.countStatus.start_receipt, frame_epoch: "2"}}
+        : state.countStatus);
+    }
+    if (e.operation === "pattern.transport.count-in.cancel") {
+      assert.equal(p.start_command_id, countInWireTicket().command_id);
+      assert.equal(sameCountTicket({...p, command_id: p.start_command_id}), true);
+      assert.equal(p.project_id, TRANSPORT_PROJECT_ID);
+      if (!state.countAccepted || state.countConsumed) return reject(e, "HOST_STATE_INVALID", {pending: false});
+      return success(e, {submit: "accepted", ticket: countInWireTicket(), status: state.countStatus});
+    }
+    if (e.operation === "pattern.transport.input.request") {
+      beforeAdmission?.(e);
+      const refusal = beforeInputAdmission?.(e);
+      if (refusal !== undefined) return refusal;
+      if (p.kind === "release") {
+        const owner = physicalOwners.get(p.held_press_sequence);
+        assert.ok(owner, "release targets a still-retained original physical press");
+        assert.equal(p.slot, owner.slot);
+        assert.equal(p.runtime_generation, owner.runtime_generation);
+        assert.equal(p.frame_epoch, owner.frame_epoch);
+      } else assert.equal(retainedLane, false, "no new press enters the sealed lane");
+      assert.equal(inputEntries.has(p.input_serial), false, "no original input is re-enqueued");
+      const status = inputWireStatus(p, p.input_serial, state.completeInput(p), inputDisposition(p));
+      inputEntries.set(p.input_serial, {payload: {...p}, status});
+      if (p.kind === "press" && p.held) physicalOwners.set(status.admission.sequence, {...p});
+      if (loseInputAdmission && p.kind === "press") {
+        sealed = true;
+        failureListener?.(originalError);
+        throw originalError;
+      }
+      return admission(e, {ticket: status.ticket, status});
+    }
+    if (e.operation === "pattern.transport.input.inspect") {
+      await beforeInputInspect?.(e, retainedLane);
+      const entry = inputEntries.get(p.ticket);
+      assert.ok(entry, "there must be an actual original input admission");
+      assert.equal(p.command_id, entry.status.ticket.command_id);
+      assert.equal(p.runtime_generation, entry.status.ticket.runtime_generation);
+      assert.equal(p.frame_epoch, entry.status.ticket.frame_epoch);
+      const status = {...entry.status, complete: state.completeInput(entry.payload),
+        durable_settled: state.completeInput(entry.payload)};
+      if (p.consume) {
+        assert.equal(status.complete, true, "only total Native plus durable input evidence is consumed");
+        assert.equal(inputConsumed.has(p.ticket), false, "an original input is consumed exactly once");
+        inputConsumed.add(p.ticket);
+        if (entry.payload.kind === "release" &&
+            ["release_applied", "release_no_voice"].includes(status.native_result.disposition))
+          physicalOwners.delete(entry.payload.held_press_sequence);
+        resolveLifecycleContinuations();
+      }
+      const response = success(e, status);
+      return inputReply?.(e, response) ?? response;
+    }
+    if (e.operation === "pattern.transport.inspect") return success(e, transportStatus({phase: "idle"}));
+    assert.equal(retainedLane, false, "ordinary operations never borrow a retained capability");
+    return success(e, defaultResult(e.operation));
+  };
+  const transport = {
+    async send(e, options) {
+      normal.push(e);
+      if (sealed) throw originalError;
+      if (e.operation === "pattern.transport.count-in.capabilities") return success(e, {
+        supported: true, negotiated: true, output_ready: true,
+        runtime_generation: countInWireTicket().runtime_generation,
+        frame_epoch: countInWireTicket().frame_epoch, next_serial: countInWireTicket().schedule_serial,
+        input_capacity: 16,
+      });
+      if (retainLifecycleUntilInputConsumed && ["host.close", "audio.suspend"].includes(e.operation)) {
+        // Model the production Bridge continuation: the lifecycle RPC keeps
+        // its original response pending while the Host still owns an input
+        // caller ticket. It never substitutes Stop for the actual consume.
+        const startedAt = clock;
+        const tickets = [...inputEntries.keys()].filter((key) => !inputConsumed.has(key));
+        const countPending = state.countAccepted && !state.countConsumed;
+        if (tickets.length !== 0 || countPending) await new Promise((resolve) => {
+          state.lifecyclePending.push({operation: e.operation, tickets, countPending, resolve});
+        });
+        assert.equal(clock - startedAt < options.deadlineMs, true,
+          "the lifecycle response still fits its unchanged original deadline");
+        assertNoTerminalDebt();
+        state.lifecycleCompleted.push({operation: e.operation, consumed: [...inputConsumed]});
+        return success(e, defaultResult(e.operation));
+      }
+      // Non-short bootstrap/project operations use the existing fixture.
+      if (!["pattern.transport.count-in.request", "pattern.transport.count-in.inspect",
+        "pattern.transport.count-in.cancel",
+        "pattern.transport.input.request", "pattern.transport.input.inspect", "pattern.transport.inspect"].includes(e.operation))
+        return success(e, defaultResult(e.operation));
+      return host(e, options, false);
+    },
+    get sendRetained() {
+      if (!state.retainedAvailable) return undefined;
+      return async (e, options) => {
+        assert.equal(sealed, true, "only the sealed real lane uses sendRetained");
+        retained.push(e);
+        return host(e, options, true);
+      };
+    },
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return terminalOwnerReleased; },
+    subscribe() { return () => {}; },
+    subscribeFailure(listener) { failureListener = listener; return () => { failureListener = null; }; },
+  };
+  let handle = 10;
+  const f = fixture({patternTransport: true, browserWindow, browserDocument, sessionTransport: transport, now: () => clock,
+    timers: {
+      setTimeout(callback, ms) {
+        const id = ++timerId;
+        if (timerSchedulingCancelled) return id;
+        const timer = {callback, at: clock + ms, realHandle: null};
+        pendingTimers.set(id, timer);
+        // Device resume polling must observe the real Promise outcome before
+        // activation can return. Service zero turns without moving this clock.
+        if (ms === 0) timer.realHandle = globalThis.setTimeout(() => {
+          if (!pendingTimers.delete(id)) return;
+          state.zeroTimersServiced += 1;
+          callback();
+        }, 0);
+        return id;
+      },
+      clearTimeout(id) {
+        const timer = pendingTimers.get(id);
+        if (timer?.realHandle !== null && timer?.realHandle !== undefined) globalThis.clearTimeout(timer.realHandle);
+        pendingTimers.delete(id);
+      },
+    },
+    registerAudioNode: (node) => { nodes.push(node); return ++handle; },
+    startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+    runtimeTerminator: async (...arguments_) => {
+      state.terminalStarts += 1;
+      if (terminate !== undefined) { await terminate(...arguments_); return; }
+      if (!sealed && f.session.diagnostics().error_code === null) {
+        // The scripted normal backend retires only an empty owner. This is a
+        // separate full receipt, never a Stop, count result or mock resolution.
+        assertNoTerminalDebt();
+        sealed = true;
+        failureListener?.(deliberateTerminationSeal());
+        if (!terminalOwnerReleased) {
+          state.nativeOwnerAcknowledged = true;
+          releaseTerminalOwner();
+        }
+      } else sealed = true;
+      await terminalOwnerRelease;
+      const {audioContext} = arguments_[0];
+      await audioContext.close();
+      assert.equal(audioContext.state, "closed", "a full owner receipt cannot manufacture backend closure");
+    },
+  });
+  f.context.close = async () => {
+    assert.equal(terminalOwnerReleased, true, "backend close waits for the independent full owner receipt");
+    state.backendCloses += 1;
+    f.context.state = "closed";
+  };
+  return {...f, state, normal, retained, transport, originalError, inputEntries, inputConsumed, physicalOwners, nodes,
+    clockMilliseconds: () => clock,
+    advanceClock(ms) { clock += ms; }, // Do not dispatch timers: models a delayed timer task.
+    seal(error = originalError) { sealed = true; failureListener?.(error); },
+    releaseTerminal: releaseTerminalOwner,
+    cancelTimers() {
+      // Test-resource disposal only. Do not resolve a retained RPC, invoke
+      // its callback, consume a caller ticket or retire a physical owner.
+      timerSchedulingCancelled = true;
+      for (const timer of pendingTimers.values()) {
+        if (timer.realHandle !== null) globalThis.clearTimeout(timer.realHandle);
+      }
+      pendingTimers.clear();
+    },
+    async tick(ms = 5) {
+      clock += ms;
+      for (const [id, timer] of [...pendingTimers]) if (timer.at <= clock) {
+        pendingTimers.delete(id);
+        if (timer.realHandle !== null) globalThis.clearTimeout(timer.realHandle);
+        timer.callback();
+      }
+      await drainTasks();
+      await drainTasks();
+    },
+  };
+}
+
+function failedOriginalCountInEvidence() {
+  const {session_id: _session, command_id: _command, ...identity} = countInWireTicket();
+  const start = {...identity, transport_epoch: "1", pattern_generation: "7",
+    pattern_id: TRANSPORT_PATTERN_ID, result: "refused", effective_frame: null, origin_frame: null, playing: false};
+  return countInWireStatus({count_in: {...countInWireStatus().count_in, phase: "refused"},
+    start_receipt: start, cancel_receipt: {...start, transport_epoch: "2"},
+    error: {code: "IO_ERROR", message: "original owner failure", details: {resource: "journal"}}});
+}
+
+function expiredOpeningCountInEvidence(pending = true) {
+  const {session_id: _session, command_id: _command, ...identity} = countInWireTicket();
+  const start = {...identity, transport_epoch: "1", pattern_generation: "7",
+    pattern_id: TRANSPORT_PATTERN_ID, result: "applied", effective_frame: 192_000,
+    origin_frame: 192_000, playing: true};
+  return countInWireStatus({count_in: {...identity, phase: "applied", bars: 2, bpm: 120,
+    bar_frames: 96_000, count_in_frame: 0, start_frame: start.effective_frame},
+    start_receipt: start, cancel_receipt: {...start, transport_epoch: "2",
+      effective_frame: 192_001, playing: false}, opening_pending: pending,
+    // These safe messages and exact reasons require the count-in Host's
+    // narrow error projection; a generic redacted details={} is insufficient.
+    error: pending
+      ? {code: "IO_ERROR", message: "project storage operation failed",
+          details: {reason: "pattern_transport_opening_expired"}}
+      : {code: "INVALID_ARGUMENT", message: "request is invalid",
+          details: {reason: "admission_opening_deadline_elapsed", journal_retained: true}}});
+}
+
+async function tickRetainedUntil(f, predicate) {
+  for (let step = 0; step < 40 && !predicate(); ++step) await f.tick();
+  assert.equal(predicate(), true);
+}
+
+async function settleRetainedCall(f, promise) {
+  let outcome = null;
+  void promise.then(
+    (value) => { outcome = {ok: true, value}; },
+    (error) => { outcome = {ok: false, error}; });
+  // Observe a bounded number of existing fixture turns. A queue cycle must
+  // fail this test naturally; it must not wedge the module awaiting an RPC
+  // whose response is deliberately retained. This neither changes the RPC's
+  // deadline nor resolves it on behalf of its original owner.
+  await tickRetainedUntil(f, () => outcome !== null);
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
+}
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  for (const expireObserver of [false, true]) {
+    test(`retained ${operation} consumes the original Release ${expireObserver ? "after observer expiry" : "within its observer budget"}`, async (t) => {
+      const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
+      t.after(() => f.cancelTimers());
+      await activateInputProfile(f);
+      // The press is genuinely admitted and consumed first. Its physical
+      // owner remains held; only its exact correlated Release may
+      // remove it. Leave that Release's durable completion unresolved.
+      f.state.completeInput = (payload) => payload.kind === "press" || f.state.inputComplete;
+      assert.deepEqual(await f.session.trigger(0, 100, "pointer"),
+        {sequence: 1, slot: 0, velocity: 100, source: "pointer"});
+      assert.deepEqual([...f.inputConsumed], ["1"]);
+      assert.equal(f.physicalOwners.size, 1);
+      let originalRelease = null;
+      if (expireObserver) {
+        originalRelease = f.session.release(0, "pointer").then(
+          (value) => ({value}), (error) => ({error}));
+        await tickRetainedUntil(f, () => f.inputEntries.has("2"));
+        // Spend the original input observer's time before lifecycle dispatch,
+        // so its expiry remains inside audio.suspend's own original budget.
+        await f.tick(750);
+      }
+      let lifecycleResult = null;
+      const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+        .then((value) => { lifecycleResult = value; return value; });
+      await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+      assert.deepEqual(f.state.lifecyclePending[0].tickets, ["2"]);
+      assert.equal(f.state.lifecyclePending[0].operation, operation);
+      const release = f.inputEntries.get("2");
+      assert.equal(release.payload.kind, "release");
+      assert.equal(release.payload.held_press_sequence, "1");
+      assert.equal(release.payload.slot, 0);
+      assert.equal(lifecycleResult, null, "admission and Stop do not finish the retained lifecycle RPC");
+      assert.equal(f.state.backendCloses, 0);
+
+      let ordinaryQuery = null;
+      if (operation === "audio.suspend") {
+        ordinaryQuery = f.session.inspectProject();
+        await drainTasks();
+        assert.equal(f.normal.some((e) => e.operation === "project.inspect"), false,
+          "an ordinary query still waits behind the lifecycle RPC");
+      }
+      if (expireObserver) {
+        await f.tick(250);
+        const originalOutcome = await originalRelease;
+        assert.equal(originalOutcome.error?.code, "HOST_TIMEOUT");
+        assert.equal(originalOutcome.error.details.pending, true);
+      }
+      assert.equal(f.physicalOwners.size, 1, "observer time cannot release the held physical owner");
+      assert.deepEqual([...f.inputConsumed], ["1"], "pending durability cannot pay caller debt");
+      assert.equal(lifecycleResult, null);
+
+      f.state.inputComplete = true;
+      await tickRetainedUntil(f, () => f.inputConsumed.has("2"));
+      assert.equal(await settleRetainedCall(f, lifecycle), true);
+      if (ordinaryQuery !== null) assert.deepEqual(await settleRetainedCall(f, ordinaryQuery), {});
+      assert.equal(f.state.lifecyclePending.length, 0);
+      assert.deepEqual(f.state.lifecycleCompleted[0], {operation, consumed: ["1", "2"]});
+      assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.request")
+        .map((e) => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+        [["press", "1", null], ["release", "2", "1"]]);
+      assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+        .map((e) => e.payload.ticket), ["1", "2"]);
+      assert.equal(f.physicalOwners.size, 0);
+      assert.equal(f.retained.length, 0, "a healthy continuation keeps ordinary transport.send");
+      if (operation === "audio.suspend") {
+        assert.equal(f.session.diagnostics().state, "audio-suspended");
+        assert.equal(f.context.state, "suspended");
+        assert.equal(f.state.backendCloses, 0);
+        assert.equal(await settleRetainedCall(f, f.session.close()), true);
+      }
+      assert.equal(f.state.backendCloses, 1);
+    });
+  }
+}
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  test(`retained ${operation} releases every same-slot/source physical hold by its exact sequence`, async (t) => {
+    const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
+    t.after(() => f.cancelTimers());
+    await activateInputProfile(f);
+    f.state.completeInput = (payload) => payload.kind === "press" || f.state.inputComplete;
+    for (const sequence of [1, 2]) {
+      assert.deepEqual(await f.session.trigger(0, 100, "keyboard"),
+        {sequence, slot: 0, velocity: 100, source: "keyboard"});
+    }
+    assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+    assert.deepEqual([...f.physicalOwners.keys()], ["1", "2"],
+      "consuming both press results leaves both real physical owners held");
+    let lifecycleResult = null;
+    const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+      .then((value) => { lifecycleResult = value; return value; });
+    await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+    assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.request")
+      .map((e) => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+      [["press", "1", null], ["press", "2", null], ["release", "3", "1"], ["release", "4", "2"]]);
+    assert.deepEqual(f.state.lifecyclePending[0].tickets, ["3", "4"]);
+    assert.equal(lifecycleResult, null, "real release admission does not consume either caller ticket");
+    assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+    assert.deepEqual([...f.physicalOwners.keys()], ["1", "2"]);
+    assert.equal(f.state.backendCloses, 0);
+    f.state.inputComplete = true;
+    await tickRetainedUntil(f, () => f.inputConsumed.has("3") && f.inputConsumed.has("4"));
+    assert.equal(await settleRetainedCall(f, lifecycle), true);
+    assert.equal(f.physicalOwners.size, 0);
+    assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+      .map((e) => e.payload.ticket), ["1", "2", "3", "4"]);
+    assert.equal(f.retained.length, 0);
+    if (operation === "audio.suspend") {
+      assert.equal(f.session.diagnostics().state, "audio-suspended");
+      assert.equal(f.context.state, "suspended");
+      assert.equal(await settleRetainedCall(f, f.session.close()), true);
+    }
+    assert.equal(f.state.backendCloses, 1);
+  });
+}
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  test(`known count-in consumption stays independent of retained ${operation}`, async (t) => {
+    const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true});
+    t.after(() => f.cancelTimers());
+    await activateInputProfile(f);
+    const admission = await f.session.requestPatternCountIn(countInRequest());
+    let lifecycleResult = null;
+    const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+      .then((value) => { lifecycleResult = value; return value; });
+    await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+    assert.equal(f.state.lifecyclePending[0].countPending, true);
+    assert.deepEqual(f.state.lifecyclePending[0].tickets, []);
+    assert.equal(lifecycleResult, null);
+    assert.equal(f.state.countConsumed, false, "the lifecycle Stop cannot consume its original count caller");
+
+    let ordinaryStop = null;
+    if (operation === "audio.suspend") {
+      const priorStops = f.normal.filter((e) => e.operation === "sample.stop").length;
+      ordinaryStop = f.session.stopAll();
+      await drainTasks();
+      assert.equal(f.normal.filter((e) => e.operation === "sample.stop").length, priorStops,
+        "an ordinary Runtime action still waits for the retained lifecycle RPC");
+    }
+    const pending = await settleRetainedCall(f, f.session.inspectPatternCountIn(admission.ticket));
+    assert.equal(pending.startReceipt, null);
+    assert.equal(f.state.countConsumes, 0);
+    assert.equal(lifecycleResult, null);
+
+    // The Host seam separately publishes its original applied S and Stop F,
+    // with the opened recording fully settled. The SDK neither creates that
+    // evidence nor turns it into the independent physical-owner ACK.
+    const final = expiredOpeningCountInEvidence(false);
+    final.error = null;
+    final.opening_complete = true;
+    f.state.countStatus = final;
+    const terminal = await settleRetainedCall(f, f.session.inspectPatternCountIn(admission.ticket));
+    assert.equal(terminal.startReceipt.result, "applied");
+    assert.equal(terminal.cancelReceipt.result, "applied");
+    assert.equal(terminal.cancelReceipt.playing, false);
+    assert.equal(terminal.openingComplete, true);
+    await settleRetainedCall(f,
+      assert.rejects(f.session.inspectPatternCountIn(admission.ticket, true), {code: "HOST_STATE_INVALID"}));
+    assert.equal(f.state.countConsumed, false, "terminal-looking evidence alone never pays caller debt");
+    assert.equal(lifecycleResult, null);
+    assert.equal(f.state.backendCloses, 0);
+
+    f.state.nativeOwnerAcknowledged = true;
+    const consumed = await settleRetainedCall(f, f.session.inspectPatternCountIn(admission.ticket, true));
+    assert.deepEqual(consumed.startReceipt, terminal.startReceipt);
+    assert.deepEqual(consumed.cancelReceipt, terminal.cancelReceipt);
+    assert.equal(f.state.countConsumed, true);
+    assert.equal(await settleRetainedCall(f, lifecycle), true);
+    if (ordinaryStop !== null) assert.equal(await settleRetainedCall(f, ordinaryStop), true);
+    assert.equal(f.state.lifecyclePending.length, 0);
+    assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.count-in.request").length, 1);
+    assert.equal(f.normal.some((e) => e.operation === "pattern.transport.count-in.cancel"), false);
+    assert.equal(f.retained.length, 0, "healthy original callers use ordinary transport.send");
+    if (operation === "audio.suspend") {
+      assert.equal(f.session.diagnostics().state, "audio-suspended");
+      assert.equal(f.context.state, "suspended");
+      assert.equal(await settleRetainedCall(f, f.session.close()), true);
+    }
+    assert.equal(f.state.backendCloses, 1);
+  });
+}
+
+test("accepted count-in response loss keeps original failure and exact final caller consumption", async () => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.state.countInspects > 0 && f.state.terminalStarts === 1);
+  assert.equal(f.state.countConsumes, 0, "pending evidence cannot pay caller debt");
+  assert.equal(f.state.countAccepted, true);
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  const final = failedOriginalCountInEvidence();
+  f.state.countStatus = final;
+  await f.tick();
+  assert.equal(f.state.countConsumed, false, "valid final evidence cannot replace the independent physical ACK");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0), "mock terminator resolution did not detach output");
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  const consumed = f.retained.filter((e) => e.operation === "pattern.transport.count-in.inspect" && e.payload.consume);
+  assert.ok(consumed.length >= 1);
+  assert.ok(consumed.every((e) => e.payload.command_id === countInWireTicket().command_id));
+  const before = f.retained.length;
+  const retainedFinal = await f.session.inspectPatternCountIn(countInPublicTicket());
+  assert.equal(f.retained.length, before, "the frozen final evidence survives exact private consumption locally");
+  assert.equal(Object.isFrozen(retainedFinal), true);
+  assert.equal(retainedFinal.startReceipt.result, "refused");
+  assert.equal(retainedFinal.startReceipt.effectiveFrame, null);
+  assert.equal(retainedFinal.cancelReceipt.effectiveFrame, null);
+  assert.deepEqual(retainedFinal.error, final.error);
+  await assert.rejects(f.session.inspectPatternCountIn(countInPublicTicket(), true), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.count-in.request").length, 1);
+  assert.equal(f.retained.some((e) => e.operation === "pattern.transport.count-in.request"), false);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.releaseTerminal();
+  await f.tick();
+  assert.ok(f.nodes.some((node) => node.disconnected.length > 0), "only the positive full receipt released SDK output");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+test("held input original consumers and physical release remain independent of count caller debt after fatality", async () => {
+  const f = retainedConsumerFixture();
+  await activateInputProfile(f);
+  await f.session.requestPatternCountIn(countInRequest());
+  const press = f.session.trigger(0, 100, "pointer").then((value) => ({value}), (error) => ({error}));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 1);
+  const originalInput = structuredClone(f.inputEntries.get("1"));
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.seal();
+  assert.equal((await press).error, f.originalError, "the original caller rejects before independent completion");
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2 && f.state.terminalStarts === 1);
+  assert.equal(f.inputEntries.get("2").payload.held_press_sequence, "1");
+  assert.deepEqual(f.inputEntries.get("1"), originalInput, "fatal observation rewrote no original input evidence");
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.physicalOwners.size, 1);
+  assert.equal(f.state.countConsumed, false);
+  assert.equal(await f.session.trigger(1, 100, "pointer"), false, "fatal state admits no new press");
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2 && f.physicalOwners.size === 0);
+  assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"]);
+  assert.equal(f.state.countConsumed, false, "input complete+consume and real release do not stand in for Native owner ACK");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  assert.deepEqual(f.retained.filter((e) => e.operation === "pattern.transport.input.request")
+    .map((e) => [e.payload.input_serial, e.payload.kind, e.payload.held_press_sequence]), [["2", "release", "1"]]);
+  assert.deepEqual(f.retained.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+    .map((e) => e.payload.ticket).sort(), ["1", "2"]);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("no optional retained capability preserves genuine unknown owner debt without synthetic consumes", async () => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss", retainedAvailable: false});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await f.tick();
+  await f.tick();
+  assert.equal(f.state.countAccepted, true);
+  assert.equal(f.state.countConsumed, false);
+  assert.equal(f.state.countInspects, 0);
+  assert.equal(f.retained.length, 0);
+  assert.equal(f.state.terminalStarts, 1, "a mock terminator's resolved value is no full owner receipt");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(await f.session.close(), false);
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.nativeOwnerAcknowledged = true;
+  f.state.retainedAvailable = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("unknown unaccepted count-in requires a positive full terminal receipt without manufacturing acceptance", async () => {
+  const f = retainedConsumerFixture({countMode: "unknown-unaccepted"});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.state.countInspects >= 2);
+  assert.equal(f.state.countAccepted, false);
+  assert.equal(f.state.countConsumes, 0, "generic HOST_STATE_INVALID inspection is no accepted status or consumer ACK");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+  const inspections = f.state.countInspects;
+  await f.tick();
+  assert.equal(f.state.countInspects, inspections, "positive full release ended uncertainty for the original unaccepted identity");
+  assert.equal(f.state.countAccepted, false);
+  assert.equal(f.state.countConsumed, false);
+  assert.equal(f.state.countConsumes, 0);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+test("known pending:false count-in refusal retains no synthetic original caller ticket", async () => {
+  const f = retainedConsumerFixture({countMode: "pre-refusal"});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()),
+    (error) => error.code === "HOST_TIMEOUT" && error.details.pending === false);
+  await f.tick();
+  assert.equal(f.state.countAccepted, false);
+  assert.equal(f.state.countInspects, 0);
+  assert.equal(f.state.countConsumes, 0);
+  assert.equal(f.retained.length, 0);
+  assert.equal(f.session.diagnostics().state, "running");
+  await f.session.close();
+});
+
+test("healthy known count-in keeps ordinary public inspect and exact explicit consume", async () => {
+  const f = retainedConsumerFixture();
+  await activateInputProfile(f);
+  const admission = await f.session.requestPatternCountIn(countInRequest());
+  await f.tick(12_000);
+  assert.equal(f.state.countInspects, 0, "known successful admission owns no private healthy consumer");
+  assert.equal(f.retained.length, 0);
+  assert.equal((await f.session.inspectPatternCountIn(admission.ticket)).startReceipt, null);
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.nativeOwnerAcknowledged = true;
+  const consumed = await f.session.inspectPatternCountIn(admission.ticket, true);
+  assert.equal(consumed.error.code, "IO_ERROR");
+  assert.equal(f.state.countConsumed, true);
+  assert.equal(f.state.countConsumes, 1);
+  assert.equal(f.retained.length, 0, "ordinary public consumers retain the normal send lane");
+  await f.session.close();
+});
+
+for (const stopAlreadyObserved of [true, false]) {
+  test(`count-in opening deadline settles the original error with ${stopAlreadyObserved ? "retained" : "new"} Stop F`, async () => {
+    const f = retainedConsumerFixture();
+    await activateInputProfile(f);
+    const admitted = await f.session.requestPatternCountIn(countInRequest());
+    f.state.countStatus = expiredOpeningCountInEvidence();
+    if (!stopAlreadyObserved) f.state.countStatus.cancel_receipt = null;
+    const pending = await f.session.inspectPatternCountIn(admitted.ticket);
+    assert.equal(pending.openingPending, true);
+    assert.equal(pending.error.details.reason, "pattern_transport_opening_expired");
+    await f.tick(12_000);
+    assert.equal(f.state.countConsumes, 0, "elapsed observer time does not spend caller debt");
+    const final = expiredOpeningCountInEvidence(false);
+    f.state.countStatus = final;
+    const settled = await f.session.inspectPatternCountIn(admitted.ticket);
+    assert.deepEqual(settled.startReceipt, pending.startReceipt);
+    if (stopAlreadyObserved) assert.deepEqual(settled.cancelReceipt, pending.cancelReceipt);
+    assert.equal(settled.cancelReceipt.result, "applied");
+    assert.equal(settled.cancelReceipt.playing, false);
+    assert.equal(settled.openingPending, false);
+    assert.equal(settled.openingComplete, false);
+    assert.deepEqual(settled.error, final.error);
+    f.state.nativeOwnerAcknowledged = true;
+    const consumed = await f.session.inspectPatternCountIn(admitted.ticket, true);
+    assert.deepEqual(consumed.error, final.error);
+    assert.deepEqual(consumed.startReceipt, settled.startReceipt);
+    assert.deepEqual(consumed.cancelReceipt, settled.cancelReceipt);
+    assert.equal(f.state.countConsumes, 1);
+    assert.equal(f.state.countConsumed, true);
+    assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.count-in.request").length, 1);
+    assert.equal(f.normal.some((e) => e.operation === "pattern.transport.count-in.cancel"), false);
+    assert.equal(f.retained.length, 0);
+    await assert.rejects(f.session.inspectPatternCountIn(admitted.ticket, true), {code: "HOST_STATE_INVALID"});
+    await f.session.close();
+  });
+}
+
+test("count-in opening deadline retains the original observer failure through private final consumption", async () => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  await activateInputProfile(f);
+  f.state.countStatus = expiredOpeningCountInEvidence();
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.state.countInspects > 0 && f.state.terminalStarts === 1);
+  const pending = await f.session.inspectPatternCountIn(countInPublicTicket());
+  assert.equal(pending.openingPending, true);
+  assert.equal(f.state.countConsumes, 0);
+  const final = expiredOpeningCountInEvidence(false);
+  f.state.countStatus = final;
+  await f.tick();
+  assert.equal(f.state.countConsumed, false, "final refusal cannot manufacture the independent physical ACK");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  const consumed = await f.session.inspectPatternCountIn(countInPublicTicket());
+  assert.deepEqual(consumed.startReceipt, pending.startReceipt);
+  assert.deepEqual(consumed.cancelReceipt, pending.cancelReceipt);
+  assert.deepEqual(consumed.error, final.error);
+  assert.equal(consumed.openingComplete, false);
+  await assert.rejects(f.session.inspectPatternCountIn(countInPublicTicket(), true), {code: "HOST_STATE_INVALID"});
+  assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.count-in.request").length, 1);
+  assert.equal(f.retained.some((e) => e.operation === "pattern.transport.count-in.request"), false);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.releaseTerminal();
+  await f.tick();
+  assert.ok(f.nodes.some((node) => node.disconnected.length > 0));
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+for (const [name, corrupt] of [
+  ["changed e1", (_before, after) => {
+    after.start_receipt.effective_frame += 1;
+    after.start_receipt.origin_frame += 1;
+    after.count_in.count_in_frame += 1;
+    after.count_in.start_frame += 1;
+    after.cancel_receipt.origin_frame += 1;
+    after.cancel_receipt.effective_frame += 1;
+  }],
+  ["changed F", (_before, after) => { after.cancel_receipt.effective_frame += 1; }],
+  ["unobserved original e1", (before) => { before.start_receipt = null; before.cancel_receipt = null; }],
+  ["missing Stop F", (before, after) => { before.cancel_receipt = null; after.cancel_receipt = null; }],
+  ["refused Stop F", (before, after) => {
+    before.cancel_receipt = null;
+    Object.assign(after.cancel_receipt, {result: "refused", effective_frame: null, origin_frame: null});
+  }],
+  ["playing Stop F", (before, after) => { before.cancel_receipt = null; after.cancel_receipt.playing = true; }],
+  ["wrong provisional reason", (before) => { before.error.details.reason = "another_pending_error"; }],
+  ["wrong provisional code", (before) => { before.error.code = "INVALID_ARGUMENT"; }],
+  ["already final provisional error", (before) => { before.opening_pending = false; }],
+  ["wrong final reason", (_before, after) => { after.error.details.reason = "another_final_error"; }],
+  ["wrong final code", (_before, after) => { after.error.code = "IO_ERROR"; }],
+  ["redacted reasons", (before, after) => { before.error.details = {}; after.error.details = {}; }],
+  ["retryable final error", (_before, after) => { after.error.details.retryable = true; }],
+  ["unresolved final journal", (_before, after) => { after.error.details.closure_unresolved = true; }],
+  ["missing final journal retention", (_before, after) => { delete after.error.details.journal_retained; }],
+  ["still pending opening", (_before, after) => { after.opening_pending = true; }],
+  ["false opening success", (_before, after) => { after.opening_complete = true; }],
+  ["cleared pending error", (_before, after) => { after.error = null; }],
+]) {
+  test(`count-in opening deadline rejects ${name}`, async () => {
+    const f = retainedConsumerFixture();
+    await activateInputProfile(f);
+    const before = expiredOpeningCountInEvidence();
+    const after = expiredOpeningCountInEvidence(false);
+    corrupt(before, after);
+    f.state.countStatus = before;
+    const admitted = await f.session.requestPatternCountIn(countInRequest());
+    f.state.countStatus = after;
+    await assert.rejects(f.session.inspectPatternCountIn(admitted.ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+    assert.equal(f.state.countConsumed, false);
+    assert.equal(f.state.countConsumes, 0, "rejected inspection cannot spend caller debt");
+    // Restore the actual original evidence; an unchanged error may settle as
+    // a failure after the real Stop, but may not be replaced by this reply.
+    f.state.countStatus = {...before, opening_pending: false,
+      start_receipt: before.start_receipt ?? expiredOpeningCountInEvidence().start_receipt,
+      cancel_receipt: before.cancel_receipt ?? expiredOpeningCountInEvidence().cancel_receipt};
+    f.state.nativeOwnerAcknowledged = true;
+    const consumed = await f.session.inspectPatternCountIn(admitted.ticket, true);
+    assert.deepEqual(consumed.error, before.error);
+    assert.equal(f.state.countConsumes, 1);
+    await f.session.close();
+  });
+}
+
+for (const [name, mutate] of [
+  ["cleared final error", (status) => { status.error = null; }],
+  ["replaced final error", (status) => { status.error.details.reason = "another_final_error"; }],
+  ["reversed provisional error", (status) => {
+    status.opening_pending = true;
+    status.error = expiredOpeningCountInEvidence().error;
+  }],
+]) {
+  test(`count-in opening deadline rejects ${name} after settlement`, async () => {
+    const f = retainedConsumerFixture();
+    await activateInputProfile(f);
+    f.state.countStatus = expiredOpeningCountInEvidence();
+    const admitted = await f.session.requestPatternCountIn(countInRequest());
+    const final = expiredOpeningCountInEvidence(false);
+    f.state.countStatus = final;
+    await f.session.inspectPatternCountIn(admitted.ticket);
+    f.state.countStatus = structuredClone(final);
+    mutate(f.state.countStatus);
+    await assert.rejects(f.session.inspectPatternCountIn(admitted.ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+    assert.equal(f.state.countConsumes, 0);
+    f.state.countStatus = final;
+    f.state.nativeOwnerAcknowledged = true;
+    assert.deepEqual((await f.session.inspectPatternCountIn(admitted.ticket, true)).error, final.error);
+    assert.equal(f.state.countConsumes, 1);
+    await f.session.close();
+  });
+}
+
+test("retained count consume cannot replace original e1 identity or erase its original failure", async () => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.nativeOwnerAcknowledged = true;
+  f.state.corruptConsume = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  await f.tick();
+  const final = await f.session.inspectPatternCountIn(countInPublicTicket()).then(
+    (value) => ({value}), (error) => ({error}));
+  assert.equal(final.error?.code, "HOST_STATE_INVALID", "corrupt consumer result is never exposed as a local successful final ACK");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0), "a remote consume boolean alone supplies no SDK/physical ACK");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("accepted input response loss preserves its original identity and correlated release on the retained lane", async () => {
+  const f = retainedConsumerFixture({loseInputAdmission: true});
+  await activateInputProfile(f);
+  const press = f.session.trigger(0, 100, "pointer").then((value) => ({value}), (error) => ({error}));
+  assert.equal((await press).error, f.originalError);
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  const original = f.inputEntries.get("1");
+  const release = f.inputEntries.get("2");
+  assert.equal(release.payload.held_press_sequence, original.status.admission.sequence);
+  assert.equal(release.payload.runtime_generation, original.payload.runtime_generation);
+  assert.equal(release.payload.frame_epoch, original.payload.frame_epoch);
+  assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(f.retained.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(f.inputConsumed.size, 0);
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2);
+  assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"]);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("real correlated release consumption cannot retire an independently unconsumed press ticket", async () => {
+  const f = retainedConsumerFixture();
+  await activateInputProfile(f);
+  const press = f.session.trigger(0, 100, "pointer").then((value) => ({value}), (error) => ({error}));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 1);
+  f.seal();
+  assert.equal((await press).error, f.originalError);
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  f.state.completeInput = (payload) => payload.kind === "release";
+  await tickRetainedUntil(f, () => f.inputConsumed.has("2"));
+  assert.equal(f.inputConsumed.has("1"), false, "the separate press consumer remains owed after physical release");
+  assert.equal(f.physicalOwners.size, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.completeInput = () => true;
+  await tickRetainedUntil(f, () => f.inputConsumed.has("1"));
+  assert.deepEqual(f.retained.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+    .map((e) => e.payload.ticket), ["2", "1"], "both original tickets actually reached their own consumer in release-first order");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("sealed SDK permits only existing count continuation and blocks foreign inspection and new admission", async () => {
+  const f = retainedConsumerFixture();
+  await activateInputProfile(f);
+  const admission = await f.session.requestPatternCountIn(countInRequest());
+  f.seal();
+  const foreign = {...admission.ticket, commandId: "00000000-0000-4000-8000-0000000000de"};
+  assert.notEqual(foreign.commandId, admission.ticket.commandId);
+  await assert.rejects(f.session.inspectPatternCountIn(foreign), (error) => error === f.originalError);
+  await assert.rejects(f.session.requestPatternCountIn({...countInRequest(), commandId: foreign.commandId}),
+    (error) => error.code === "HOST_STATE_INVALID" && error.details.pending === false);
+  await assert.rejects(f.session.requestPatternInput({commandId: foreign.commandId,
+    runtimeGeneration: admission.ticket.runtimeGeneration, frameEpoch: admission.ticket.frameEpoch,
+    inputSerial: "1", slot: 0, velocity: 100, kind: "press", held: true, heldPressSequence: null}),
+    (error) => error.code === "HOST_STATE_INVALID" && error.details.pending === false);
+  const cancelled = await f.session.cancelPatternCountIn({ticket: admission.ticket,
+    projectId: TRANSPORT_PROJECT_ID, commandId: foreign.commandId, expectedEpoch: "2", intent: "play_stop"});
+  assert.equal(cancelled.submit, "accepted");
+  assert.equal(cancelled.status.startReceipt, null, "admitted cancellation is no invented terminal evidence");
+  assert.equal((await f.session.inspectPatternTransport(TRANSPORT_SESSION_ID)).phase, "idle");
+  assert.equal(f.retained.some((e) => e.operation === "pattern.transport.count-in.request" ||
+    (e.operation === "pattern.transport.input.request" && e.payload.kind !== "release")), false);
+  assert.equal(f.retained.some((e) => e.operation === "pattern.transport.count-in.inspect" &&
+    e.payload.command_id === foreign.commandId), false);
+  assert.equal(f.inputEntries.size, 0);
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  f.releaseTerminal();
+  await f.tick();
+});
+
+function deliberateTerminationSeal() {
+  return Object.assign(new Error("formal Web Host transport is terminated"), {
+    code: "HOST_STATE_INVALID", details: Object.freeze({}),
+  });
+}
+
+test("repeated fatal close without Pattern debt waits the original Native and backend cleanup", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  const actualClose = f.context.close.bind(f.context);
+  let backendStarted = 0;
+  f.context.close = async () => {
+    backendStarted += 1;
+    await backendPending;
+    return actualClose();
+  };
+  await activateInputProfile(f);
+  assert.equal(f.context.state, "running");
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.state.countAccepted, false);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.transport.terminated, true);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  let first = null;
+  const replacementBoundaries = [];
+  const firstClose = f.session.close().then((value) => {
+    first = {value};
+    // Model the unchanged Creator then(factory) boundary using actual
+    // fixture owner/backend evidence, not the close boolean as an ACK.
+    replacementBoundaries.push({owner: f.transport.terminalOwnerReleased,
+      backend: f.context.state});
+  }, (error) => { first = {error}; });
+  await f.tick();
+  assert.equal(first, null, "sealed Native still owes its real full owner receipt");
+  assert.equal(replacementBoundaries.length, 0);
+  assert.equal(backendStarted, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => backendStarted === 1);
+  assert.equal(f.transport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running", "full Native retirement is not backend closure");
+  assert.equal(first, null);
+  assert.equal(replacementBoundaries.length, 0);
+  let second = null;
+  const secondClose = f.session.close().then(
+    (value) => { second = {value}; }, (error) => { second = {error}; });
+  await f.tick();
+  assert.equal(second, null, "a late repeated caller waits the same outstanding backend close");
+  assert.equal(f.state.terminalStarts, 1);
+  assert.equal(backendStarted, 1);
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+
+  releaseBackend();
+  await tickRetainedUntil(f, () => first !== null && second !== null);
+  await Promise.all([firstClose, secondClose]);
+  assert.deepEqual(first, {value: false}, "fatal closure must not be relabeled clean close");
+  assert.deepEqual(second, {value: false});
+  assert.deepEqual(replacementBoundaries, [{owner: true, backend: "closed"}]);
+  assert.equal(f.state.backendCloses, 1);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 1));
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(await f.session.close(), false);
+  assert.equal(f.state.terminalStarts, 1, "a completed repeated call does not restart cleanup");
+});
+
+test("repeated fatal close waits actual termination rejection and retains original failure and resources", async (t) => {
+  let releaseTermination;
+  const terminationPending = new Promise((resolve) => { releaseTermination = resolve; });
+  const backendFailure = Object.assign(new Error("actual terminal backend rejected"), {
+    code: "IO_ERROR", details: {resource: "audio_backend", pending: true},
+  });
+  const f = retainedConsumerFixture({terminate: async () => {
+    await terminationPending;
+    throw backendFailure;
+  }});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(f.physicalOwners.size, 0);
+  let outcome = null;
+  const closing = f.session.close().then(
+    (value) => { outcome = {value}; }, (error) => { outcome = {error}; });
+  await f.tick();
+  assert.equal(outcome, null, "the actual terminator has not settled its original Promise");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  releaseTermination();
+  await tickRetainedUntil(f, () => outcome !== null);
+  await closing;
+  assert.deepEqual(outcome, {value: false});
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT", "later cleanup rejection cannot replace the first fatal error");
+  assert.deepEqual(f.session.diagnostics().error_details, {
+    resource: "pattern_input", terminal_state: "sealed",
+  });
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(await f.session.close(), false);
+  assert.equal(f.state.terminalStarts, 1);
+});
+
+test("repeated fatal close cannot turn resolved termination into Native retirement or backend closure", async (t) => {
+  const f = retainedConsumerFixture({terminate: async () => {}});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(f.physicalOwners.size, 0);
+  let outcome = null;
+  const closing = f.session.close().then(
+    (value) => { outcome = {value}; }, (error) => { outcome = {error}; });
+  await f.tick();
+  assert.equal(outcome, null, "a resolved custom terminator is not the Native full owner receipt");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => outcome !== null);
+  await closing;
+  assert.deepEqual(outcome, {value: false}, "a still-open backend is not successful fatal cleanup");
+  assert.equal(f.transport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running");
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(await f.session.close(), false);
+  assert.equal(f.state.terminalStarts, 1);
+});
+
+test("normal close reports actual termination rejection without closing or detaching SDK ownership", async () => {
+  const backendFailure = Object.assign(new Error("formal backend termination failed"), {
+    code: "IO_ERROR", details: {resource: "audio_backend", pending: true},
+  });
+  const f = retainedConsumerFixture({terminate: () => { throw backendFailure; }});
+  await activateInputProfile(f);
+  assert.equal(await f.session.close(), false);
+  await drainTasks();
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+  assert.deepEqual(f.session.diagnostics().error_details, {resource: "audio_backend"});
+  assert.equal(f.context.state, "running");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(await f.session.close(), false);
+});
+
+test("normal close preserves real AudioContext close failure after its deliberate production seal", async () => {
+  const backendFailure = Object.assign(new Error("AudioContext.close rejected"), {
+    code: "IO_ERROR", details: {resource: "audio_context", pending: true},
+  });
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => {
+    f.seal(deliberateTerminationSeal());
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    await audioContext.close();
+  }});
+  f.context.close = async () => { throw backendFailure; };
+  await activateInputProfile(f);
+  assert.equal(await f.session.close(), false);
+  await drainTasks();
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.equal(f.session.diagnostics().error_code, "IO_ERROR", "the deliberate seal cannot replace the actual backend error");
+  assert.deepEqual(f.session.diagnostics().error_details, {resource: "audio_context"});
+  assert.equal(f.transport.terminalOwnerReleased, true, "full Native owner release is separate from backend closure");
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+});
+
+test("normal close cannot infer backend closure from an arbitrary resolved terminator", async () => {
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => {
+    f.seal(deliberateTerminationSeal());
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    await audioContext.close();
+  }});
+  let closeCalls = 0;
+  f.context.close = async () => { closeCalls += 1; };
+  await activateInputProfile(f);
+  assert.equal(await f.session.close(), false);
+  await drainTasks();
+  assert.equal(closeCalls, 1);
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.equal(f.session.diagnostics().error_code, "HOST_STATE_INVALID");
+  assert.deepEqual(f.session.diagnostics().error_details, {});
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+});
+
+test("normal close cannot infer owner release from a resolved terminator with an advertised false receipt", async () => {
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => { audioContext.state = "closed"; }});
+  f.context.close = async () => { f.context.state = "closed"; };
+  await activateInputProfile(f);
+  assert.equal(await f.session.close(), false);
+  await drainTasks();
+  assert.equal(f.transport.terminated, false, "a false advertised receipt matters even without a seal notification");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.equal(f.session.diagnostics().error_code, "HOST_STATE_INVALID");
+  assert.deepEqual(f.session.diagnostics().error_details, {});
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+});
+
+test("normal close accepts its own production seal only after real owner and backend closure", async () => {
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => {
+    f.seal(deliberateTerminationSeal());
+    await backendPending;
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    await audioContext.close();
+  }});
+  let closeCalls = 0;
+  f.context.close = async () => { closeCalls += 1; f.context.state = "closed"; };
+  await activateInputProfile(f);
+  const closing = f.session.close();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.equal(f.session.diagnostics().state, "running", "closed is not published before termination settles");
+  assert.equal(f.session.diagnostics().error_code, null, "this exact deliberate local seal is expected");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  releaseBackend();
+  await drainTasks();
+  await f.tick();
+  assert.equal(await closing, true);
+  assert.equal(closeCalls, 1);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.transport.terminalOwnerReleased, true);
+  assert.equal(f.session.diagnostics().state, "closed");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 1));
+});
+
+test("normal close does not suppress an unrelated transport failure during terminator invocation", async () => {
+  const actualFailure = Object.assign(new Error("actual owner transport failed during close"), {
+    code: "HOST_STATE_INVALID", details: {resource: "owner", pending: true},
+  });
+  const f = retainedConsumerFixture({terminate: ({audioContext}) => {
+    f.seal(actualFailure);
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    audioContext.state = "closed";
+  }});
+  await activateInputProfile(f);
+  assert.equal(await f.session.close(), false);
+  await drainTasks();
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.deepEqual(f.session.diagnostics().error_details, {resource: "owner"});
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+});
+
+test("normal close does not suppress a matching seal message outside its synchronous invocation", async () => {
+  const actualFailure = deliberateTerminationSeal();
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => {
+    await Promise.resolve();
+    f.seal(actualFailure);
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    audioContext.state = "closed";
+  }});
+  await activateInputProfile(f);
+  assert.equal(await f.session.close(), false);
+  await drainTasks();
+  assert.equal(f.session.diagnostics().state, "failed");
+  assert.equal(f.session.diagnostics().error_code, "HOST_STATE_INVALID");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+});
+
+test("later termination rejection preserves the original fatal response loss and retained backend references", async () => {
+  const laterFailure = Object.assign(new Error("later backend termination failed"), {code: "IO_ERROR", details: {pending: true}});
+  const f = retainedConsumerFixture({terminate: () => { throw laterFailure; }});
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.deepEqual(f.session.diagnostics().error_details, {resource: "pattern_input", terminal_state: "sealed"});
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(await f.session.close(), false);
+});
+
+function directInputRequest(overrides = {}) {
+  const identity = countInPublicTicket();
+  return {commandId: TRANSPORT_COMMAND_ID, runtimeGeneration: identity.runtimeGeneration,
+    frameEpoch: identity.frameEpoch, inputSerial: "1", slot: 0, velocity: 100, kind: "press",
+    held: true, heldPressSequence: null, ...overrides};
+}
+
+for (const expireObserver of [false, true]) {
+  test(`transient input I/O error recovers the same physical owner ${expireObserver ? "after original observer expiry" : "within the original deadline"}`, async () => {
+    const f = retainedConsumerFixture();
+    await activateInputProfile(f);
+    let observed = null;
+    const press = f.session.trigger(0, 100, "pointer").then(
+      (value) => { observed = {value}; },
+      (error) => { observed = {error}; });
+    await tickRetainedUntil(f, () => f.inputEntries.has("1"));
+    const original = f.inputEntries.get("1");
+    const identity = structuredClone(original.status);
+    const ticket = {commandId: original.payload.command_id,
+      runtimeGeneration: original.payload.runtime_generation,
+      frameEpoch: original.payload.frame_epoch, ticket: "1"};
+    const unknownError = {code: "IO_ERROR", message: "Original candidate flush outcome is unknown",
+      details: {reason: "sequence_append_unknown"}};
+    original.status.error = unknownError;
+    const pending = await f.session.inspectPatternInput(ticket);
+    assert.equal(pending.complete, false);
+    assert.equal(pending.durableSettled, false);
+    assert.deepEqual(pending.error, unknownError);
+    assert.equal(observed, null, "a pending worker error is not a final public input result");
+    let originalObserverError = null;
+    if (expireObserver) {
+      await f.tick(1000); // Fire the actual original SDK observer timer.
+      await press;
+      originalObserverError = observed.error;
+      assert.equal(originalObserverError.code, "HOST_TIMEOUT");
+      assert.equal(originalObserverError.details.pending, true);
+      assert.equal(f.inputConsumed.size, 0, "observer expiry is not durable consumption");
+    }
+    // The same retained work reconciles; no new request or Native effect is sent.
+    original.status.error = null;
+    f.state.inputComplete = true;
+    await tickRetainedUntil(f, () => f.inputConsumed.has("1"));
+    await press;
+    if (expireObserver) assert.equal(observed.error, originalObserverError,
+      "late reconciliation preserves the exact original observer failure");
+    else assert.deepEqual(observed, {value: {sequence: 1, slot: 0, velocity: 100, source: "pointer"}});
+    assert.deepEqual(original.status.admission, identity.admission);
+    assert.deepEqual(original.status.native_result, identity.native_result);
+    assert.equal(f.physicalOwners.size, 1, "press consumption retains its future physical release");
+    const release = f.session.release(0, "pointer");
+    await tickRetainedUntil(f, () => f.inputConsumed.has("2"));
+    assert.equal(await release, true);
+    assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.request")
+      .map((e) => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+      [["press", "1", null], ["release", "2", "1"]]);
+    assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+      .map((e) => e.payload.ticket), ["1", "2"]);
+    assert.equal(f.physicalOwners.size, 0);
+    assert.equal(await f.session.release(0, "pointer"), false, "the actual release retired its one SDK hold");
+    assert.equal(f.retained.length, 0, "healthy worker reconciliation does not seal or borrow the terminal lane");
+    assert.equal(await f.session.close(), true, "the exact input consumers and physical owners left no terminal debt");
+    assert.equal(f.state.backendCloses, 1);
+  });
+}
+
+for (const changed of ["admission", "native result", "final error", "final success"]) {
+  test(`input reconciliation still refuses a changed ${changed}`, async () => {
+    const finalError = {code: "IO_ERROR", message: "Original final candidate refusal", details: {reason: "append_refused"}};
+    const f = retainedConsumerFixture({admissionReply: (_envelope, response) => {
+      if (changed === "final error") response.result.status.error = finalError;
+      return response;
+    }});
+    await activateInputProfile(f);
+    f.state.inputComplete = true;
+    const admission = await f.session.requestPatternInput(directInputRequest({held: false}));
+    const input = f.inputEntries.get("1");
+    const original = structuredClone(input.status);
+    if (changed === "admission") {
+      input.status.admission = {...input.status.admission, acceptance_ordinal: "2"};
+      input.status.native_result = {...input.status.native_result, acceptance_ordinal: "2"};
+    } else if (changed === "native result") {
+      input.status.native_result = {...input.status.native_result, runtime_frame: 124};
+    } else input.status.error = changed === "final error" ? null : finalError;
+    await assert.rejects(f.session.inspectPatternInput(admission.ticket), {code: "HOST_PROTOCOL_MISMATCH"});
+    assert.equal(f.inputConsumed.size, 0, "corrupt evidence cannot consume the retained original ticket");
+    input.status = original;
+    const consumed = await f.session.inspectPatternInput(admission.ticket, true);
+    assert.equal(consumed.complete, true);
+    assert.deepEqual(consumed.error, changed === "final error" ? finalError : null);
+    assert.deepEqual([...f.inputConsumed], ["1"]);
+    assert.equal(await f.session.close(), true);
+  });
+}
+
+test("direct public input response loss consumes the exact original complete ticket while retaining its held owner", async () => {
+  const f = retainedConsumerFixture({loseInputAdmission: true});
+  await activateInputProfile(f);
+  const request = directInputRequest();
+  await assert.rejects(f.session.requestPatternInput(request), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.retained.some((e) => e.operation === "pattern.transport.input.inspect"));
+  assert.equal(f.inputEntries.size, 1);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.physicalOwners.size, 1);
+  assert.equal(f.retained.some((e) => e.operation === "pattern.transport.input.request"), false,
+    "the direct consumer neither re-enqueues its press nor manufactures a physical release");
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.has("1"));
+  const consumed = f.retained.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume);
+  assert.equal(consumed.length, 1);
+  assert.deepEqual(consumed[0].payload, {command_id: request.commandId, runtime_generation: request.runtimeGeneration,
+    frame_epoch: request.frameEpoch, ticket: "1", consume: true});
+  assert.equal(f.physicalOwners.size, 1, "the caller-ticket consumer is no physical owner release");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  const release = await f.session.requestPatternInput(directInputRequest({
+    commandId: "00000000-0000-4000-8000-0000000000ee", inputSerial: "2", velocity: 0,
+    kind: "release", heldPressSequence: f.inputEntries.get("1").status.admission.sequence,
+  }));
+  await f.tick();
+  assert.equal(f.inputConsumed.has("2"), false, "a known direct release keeps its explicit public consumer");
+  assert.equal((await f.session.inspectPatternInput(release.ticket, true)).nativeResult.disposition, "release_no_voice");
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(f.retained.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"]);
+  assert.equal(f.session.diagnostics().state, "restart-required");
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("direct response-loss input without a retained capability stays pending without synthetic consumption", async () => {
+  const f = retainedConsumerFixture({loseInputAdmission: true, retainedAvailable: false});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternInput(directInputRequest({held: false})), (error) => error === f.originalError);
+  f.state.inputComplete = true;
+  await f.tick(12_000);
+  assert.equal(f.inputEntries.size, 1);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.retained.length, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(await f.session.close(), false);
+  f.state.retainedAvailable = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.has("1"));
+  assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(f.retained.filter((e) => e.operation === "pattern.transport.input.request").length, 0);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("healthy known direct public input keeps its original explicit inspect and consume semantics", async () => {
+  const f = retainedConsumerFixture();
+  await activateInputProfile(f);
+  const admission = await f.session.requestPatternInput(directInputRequest({held: false}));
+  f.state.inputComplete = true;
+  await f.tick(12_000);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.normal.some((e) => e.operation === "pattern.transport.input.inspect"), false);
+  assert.equal(f.retained.length, 0);
+  assert.equal((await f.session.inspectPatternInput(admission.ticket)).complete, true);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal((await f.session.inspectPatternInput(admission.ticket, true)).complete, true);
+  assert.deepEqual([...f.inputConsumed], ["1"]);
+  assert.equal(f.retained.length, 0);
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  assert.equal(await f.session.close(), true);
+});
+
+test("retained fixture zero turns observe actual resume settlement without moving production deadlines", async () => {
+  const f = retainedConsumerFixture();
+  let releaseResume;
+  const resumePending = new Promise((resolve) => { releaseResume = resolve; });
+  let resumeStarted;
+  const started = new Promise((resolve) => { resumeStarted = resolve; });
+  f.context.resume = async () => {
+    resumeStarted();
+    await resumePending;
+    f.context.state = "running";
+  };
+  assert.equal(await f.session.start(), true);
+  let settled = false;
+  const activating = f.session.activateAudio(createUserGestureToken({isTrusted: true})).then((result) => {
+    settled = true;
+    return result;
+  });
+  try {
+    await started;
+    await drainTasks();
+    await drainTasks();
+    assert.ok(f.state.zeroTimersServiced > 0);
+    assert.equal(settled, false, "servicing a zero timer cannot replace the actual resume outcome");
+    assert.equal(f.context.state, "suspended");
+    assert.equal(f.clockMilliseconds(), 0);
+    releaseResume();
+    assert.equal(await activating, true);
+    assert.equal(f.context.state, "running");
+    assert.equal(f.clockMilliseconds(), 0, "activation spent no fabricated monotonic budget");
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    assert.equal(await f.session.close(), true);
+    assert.equal(f.state.backendCloses, 1);
+  } finally {
+    releaseResume();
+    await activating;
+  }
+});
+
+test("default retained terminator requires full owner release and actual backend closure independently", async () => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  await f.tick(5_000);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.state.backendCloses, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0), "count consume, physical ACK and elapsed time are no full receipt");
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  const closeBackend = f.context.close;
+  let backendStarted = false;
+  f.context.close = async () => {
+    backendStarted = true;
+    await backendPending;
+    await closeBackend();
+  };
+  try {
+    f.releaseTerminal();
+    await f.tick();
+    assert.equal(backendStarted, true);
+    assert.equal(f.context.state, "running");
+    assert.ok(f.nodes.every((node) => node.disconnected.length === 0), "full owner release cannot stand in for actual backend close");
+    releaseBackend();
+    await drainTasks();
+    await f.tick();
+    assert.equal(f.state.backendCloses, 1);
+    assert.equal(f.context.state, "closed");
+    assert.ok(f.nodes.every((node) => node.disconnected.length === 1));
+    assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  } finally {
+    releaseBackend();
+  }
+});
+
+test("raw unsealed protocol admission rejection preserves direct input identity and explicit healthy consumption", async () => {
+  const rawFailure = Object.freeze(Object.assign(new Error("known raw admission rejection"), {
+    code: "HOST_PROTOCOL_MISMATCH", details: Object.freeze({resource: "pattern_input"}),
+  }));
+  let rejectAdmission = true;
+  const f = retainedConsumerFixture({beforeAdmission: (e) => {
+    if (rejectAdmission && e.operation === "pattern.transport.input.request") throw rawFailure;
+  }});
+  await activateInputProfile(f);
+  const request = directInputRequest({held: false});
+  await assert.rejects(f.session.requestPatternInput(request), (error) => error === rawFailure);
+  await f.tick(12_000);
+  assert.equal(f.transport.terminated, false);
+  assert.equal(f.inputEntries.size, 0, "the strict Host never enqueued the rejected request");
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.normal.some((e) => e.operation === "pattern.transport.input.inspect"), false);
+  assert.equal(f.state.terminalStarts, 0);
+  assert.deepEqual(Object.keys(rawFailure).sort(), ["code", "details"]);
+  rejectAdmission = false;
+  const known = await f.session.requestPatternInput(request);
+  assert.equal(known.ticket.ticket, "1", "a known raw rejection did not spend or retain the fresh identity");
+  f.state.inputComplete = true;
+  await f.tick();
+  assert.equal(f.inputConsumed.size, 0, "a later healthy known ticket remains explicitly consumed");
+  assert.equal((await f.session.inspectPatternInput(known.ticket, true)).complete, true);
+  assert.equal(f.inputEntries.size, 1);
+  assert.deepEqual([...f.inputConsumed], ["1"]);
+  assert.equal(await f.session.close(), true);
+});
+
+test("raw unsealed count protocol rejection creates no unknown caller debt or synthetic consume", async () => {
+  const rawFailure = Object.freeze(Object.assign(new Error("known raw count admission rejection"), {
+    code: "HOST_PROTOCOL_MISMATCH", details: Object.freeze({resource: "count_in"}),
+  }));
+  const f = retainedConsumerFixture({beforeAdmission: (e) => {
+    if (e.operation === "pattern.transport.count-in.request") throw rawFailure;
+  }});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === rawFailure);
+  await f.tick(12_000);
+  assert.equal(f.transport.terminated, false);
+  assert.equal(f.state.countAccepted, false);
+  assert.equal(f.state.countInspects, 0);
+  assert.equal(f.state.countConsumes, 0);
+  assert.equal(f.state.terminalStarts, 0);
+  assert.equal(f.retained.length, 0);
+  assert.deepEqual(Object.keys(rawFailure).sort(), ["code", "details"]);
+  assert.equal(await f.session.close(), true);
+});
+
+for (const fault of ["envelope", "request-id", "positive-dto", "sealed-raw"]) {
+  test(`accepted direct input ${fault} corruption retains its exact original private consumer`, async () => {
+    let originalStatus;
+    const rawFailure = Object.freeze(Object.assign(new Error("sealed accepted input reply failed"), {
+      code: "HOST_PROTOCOL_MISMATCH", details: Object.freeze({resource: "pattern_input"}),
+    }));
+    const f = retainedConsumerFixture({admissionReply: (e, response) => {
+      assert.equal(e.operation, "pattern.transport.input.request");
+      assert.equal(f.transport.terminated, false, "the local validation evidence precedes producer sealing");
+      originalStatus = structuredClone(response.result.status);
+      if (fault === "sealed-raw") { f.seal(rawFailure); throw rawFailure; }
+      const bad = structuredClone(response);
+      if (fault === "envelope") bad.unexpected = true;
+      else if (fault === "request-id") bad.request_id = "00000000-0000-4000-8000-0000000000ff";
+      else bad.result.status.native_result.runtime_frame = -1;
+      return bad;
+    }});
+    await activateInputProfile(f);
+    const request = directInputRequest({held: false});
+    let primaryFailure;
+    await assert.rejects(f.session.requestPatternInput(request), (error) => {
+      primaryFailure = error;
+      return error.code === "HOST_PROTOCOL_MISMATCH";
+    });
+    if (fault === "sealed-raw") assert.equal(primaryFailure, rawFailure);
+    assert.deepEqual(Object.keys(primaryFailure).sort(), fault === "sealed-raw" ? ["code", "details"] : ["code", "details", "name"],
+      "private validation evidence adds no error fields");
+    await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+    assert.equal(f.inputEntries.size, 1);
+    assert.deepEqual(f.inputEntries.get("1").status, originalStatus, "a corrupt reply did not rewrite the actual original owner");
+    assert.equal(f.inputConsumed.size, 0);
+    await assert.rejects(f.session.requestPatternInput(request), {code: "HOST_STATE_INVALID"});
+    f.state.inputComplete = true;
+    await tickRetainedUntil(f, () => f.inputConsumed.has("1"));
+    assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.input.request").length, 1);
+    assert.equal(f.retained.filter((e) => e.operation === "pattern.transport.input.request").length, 0);
+    assert.equal(f.retained.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 1);
+    assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+    assert.equal(f.session.diagnostics().error_code, primaryFailure.code);
+    f.state.nativeOwnerAcknowledged = true;
+    f.releaseTerminal();
+    await f.tick();
+    assert.equal(f.context.state, "closed");
+    assert.equal(f.session.diagnostics().error_code, primaryFailure.code);
+  });
+}
+
+for (const fault of ["request-id", "positive-dto", "explicit-pending"]) {
+  test(`accepted count ${fault} failure retains original admission and final exact caller consume`, async () => {
+    const rawFailure = Object.freeze(Object.assign(new Error("accepted count reply is unknown"), {
+      code: "HOST_PROTOCOL_MISMATCH", details: Object.freeze({pending: true, resource: "count_in"}),
+    }));
+    const f = retainedConsumerFixture({admissionReply: (e, response) => {
+      assert.equal(e.operation, "pattern.transport.count-in.request");
+      assert.equal(f.state.countAccepted, true);
+      assert.equal(f.transport.terminated, false);
+      if (fault === "explicit-pending") throw rawFailure;
+      const bad = structuredClone(response);
+      if (fault === "request-id") bad.request_id = "00000000-0000-4000-8000-0000000000ff";
+      else bad.result.ticket.command_id = "00000000-0000-4000-8000-0000000000ff";
+      return bad;
+    }});
+    await activateInputProfile(f);
+    let primaryFailure;
+    await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => {
+      primaryFailure = error;
+      return error.code === "HOST_PROTOCOL_MISMATCH";
+    });
+    if (fault === "explicit-pending") {
+      assert.equal(primaryFailure, rawFailure);
+      assert.deepEqual(Object.keys(rawFailure).sort(), ["code", "details"]);
+    }
+    await tickRetainedUntil(f, () => f.state.countInspects > 0 && f.state.terminalStarts === 1);
+    await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === primaryFailure);
+    assert.equal(f.state.countConsumes, 0);
+    assert.equal(f.normal.filter((e) => e.operation === "pattern.transport.count-in.request").length, 1);
+    f.state.countStatus = failedOriginalCountInEvidence();
+    f.state.nativeOwnerAcknowledged = true;
+    await tickRetainedUntil(f, () => f.state.countConsumed);
+    const final = await f.session.inspectPatternCountIn(countInPublicTicket());
+    assert.equal(final.startReceipt.result, "refused");
+    assert.equal(final.cancelReceipt.result, "refused");
+    assert.equal(final.error.code, "IO_ERROR");
+    assert.equal(f.state.countConsumes, 1);
+    assert.equal(f.retained.some((e) => e.operation === "pattern.transport.count-in.request"), false);
+    assert.equal(f.session.diagnostics().error_code, primaryFailure.code);
+    f.releaseTerminal();
+    await f.tick();
+    assert.equal(f.context.state, "closed");
+    assert.equal(f.session.diagnostics().error_code, primaryFailure.code);
+  });
+}
+
+test("accepted profile positive DTO corruption keeps its existing consumer and original release without duplicate admission", async () => {
+  const f = retainedConsumerFixture({admissionReply: (e, response) => {
+    if (e.payload.kind !== "press") return response;
+    const bad = structuredClone(response);
+    bad.result.status.native_result.slot = 7;
+    return bad;
+  }});
+  await activateInputProfile(f);
+  await assert.rejects(f.session.trigger(0, 100, "pointer"), {code: "HOST_PROTOCOL_MISMATCH"});
+  assert.equal(f.inputEntries.size, 1);
+  assert.equal(f.inputConsumed.size, 0);
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.has("1"));
+  assert.equal(f.physicalOwners.size, 1, "the original profile consumer cannot erase physical escrow");
+  assert.equal(await f.session.release(0, "pointer"), true);
+  assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.request")
+    .map((e) => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["release", "2", "1"]]);
+  assert.deepEqual(f.normal.filter((e) => e.operation === "pattern.transport.input.inspect" && e.payload.consume)
+    .map((e) => e.payload.ticket), ["1", "2"]);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.retained.length, 0);
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  assert.equal(await f.session.close(), true);
+});
+
+for (const countOwner of [false, true]) {
+  test(`ordinary ${countOwner ? "count owner" : "unnegotiated legacy"} transport inspection retains its original project deadline`, async () => {
+    const inspections = [];
+    const admissions = [];
+    let handle = 10;
+    const f = fixture({patternTransport: true,
+      registerAudioNode: () => ++handle,
+      startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+      send: async (envelope, options) => {
+        if (envelope.operation === "pattern.transport.count-in.request") {
+          admissions.push(envelope);
+          return success(envelope, {submit: "accepted", ticket: countInWireTicket(), status: countInWireStatus()});
+        }
+        if (envelope.operation === "pattern.transport.inspect") {
+          inspections.push({payload: envelope.payload, deadlineMs: options.deadlineMs});
+          return success(envelope, transportStatus({phase: "idle"}));
+        }
+        if (envelope.operation === "pattern.transport.count-in.inspect")
+          return success(envelope, failedOriginalCountInEvidence());
+        return success(envelope, defaultResult(envelope.operation));
+      }});
+    if (countOwner) await activateInputProfile(f);
+    else assert.equal(await f.session.start(), true);
+    const admission = countOwner ? await f.session.requestPatternCountIn(countInRequest()) : null;
+    assert.equal((await f.session.inspectPatternTransport(TRANSPORT_SESSION_ID)).phase, "idle");
+    assert.deepEqual(inspections, [{payload: {session_id: TRANSPORT_SESSION_ID}, deadlineMs: 30_000}],
+      "a healthy owner or unnegotiated legacy query never inherits the sealed continuation budget");
+    assert.equal(admissions.length, countOwner ? 1 : 0);
+    if (admission) await f.session.inspectPatternCountIn(admission.ticket, true);
+    assert.equal(await f.session.close(), true);
+  });
+}
+
+
+// Exact local gesture ownership; Native requests and caller consumption remain real.
+test("local gesture key releases two same-slot/source holds in original key order", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.inputComplete = true;
+  const first = Object.freeze({});
+  const second = Object.freeze({});
+  assert.equal((await f.session.trigger(0, 100, "pointer", first)).sequence, 1);
+  assert.equal((await f.session.trigger(0, 100, "pointer", second)).sequence, 2);
+  assert.deepEqual([...f.physicalOwners.keys()], ["1", "2"]);
+  assert.equal(await f.session.release(0, "pointer", first), true);
+  assert.deepEqual([...f.physicalOwners.keys()], ["2"], "keyup pays its own original physical owner");
+  assert.equal(await f.session.release(0, "pointer", second), true);
+  assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+    .map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["press", "2", null], ["release", "3", "1"], ["release", "4", "2"]]);
+  assert.deepEqual([...f.inputConsumed], ["1", "2", "3", "4"]);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture key rejects active reuse and never falls back on key/slot/source mismatch", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.inputComplete = true;
+  const key = {};
+  assert.equal((await f.session.trigger(0, 100, "keyboard", key)).sequence, 1);
+  assert.equal(await f.session.trigger(1, 100, "keyboard", key), false);
+  assert.equal(await f.session.release(1, "keyboard", key), false);
+  assert.equal(await f.session.release(0, "pointer", key), false);
+  assert.equal(await f.session.release(0, "keyboard", {}), false);
+  assert.equal(f.inputEntries.size, 1, "none of the refused calls dispatches Native input");
+  assert.equal(await f.session.release(0, "keyboard", key), true);
+  assert.equal((await f.session.trigger(1, 100, "keyboard", key)).sequence, 3,
+    "the same reference is reusable only after real physical and caller settlement");
+  assert.equal(await f.session.release(1, "keyboard", key), true);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture key refuses null and primitive identity before Native effects", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.inputComplete = true;
+  for (const invalid of [null, 1, "key", true, Symbol("key")]) {
+    await assert.rejects(Promise.resolve().then(() => f.session.trigger(0, 100, "pointer", invalid)), TypeError);
+    await assert.rejects(f.session.release(0, "pointer", invalid), TypeError);
+  }
+  assert.equal(f.inputEntries.size, 0);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture early release joins one original intent while durable input remains held", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  const key = {};
+  const press = f.session.trigger(0, 100, "pointer", key);
+  const release = f.session.release(0, "pointer", key);
+  const repeated = f.session.release(0, "pointer", key);
+  const legacy = f.session.release(0, "pointer");
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+    .map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["release", "2", "1"]]);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.physicalOwners.size, 1);
+  f.state.inputComplete = true;
+  assert.equal((await settleRetainedCall(f, press)).sequence, 1);
+  for (const observation of [release, repeated, legacy])
+    assert.equal(await settleRetainedCall(f, observation), true, "all observers join the actual same release");
+  assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(await f.session.close(), true);
+});
+
+test("local gesture unknown admission reserves one release before keyup/cancel/safety race", async (t) => {
+  let resolveInspection;
+  const inspection = new Promise(resolve => { resolveInspection = resolve; });
+  const f = retainedConsumerFixture({loseInputAdmission: true,
+    beforeInputInspect: (e) => e.payload.ticket === "1" ? inspection : undefined});
+  t.after(() => { resolveInspection(); f.cancelTimers(); });
+  await activateInputProfile(f);
+  const key = {};
+  await assert.rejects(f.session.trigger(0, 100, "pointer", key), error => error === f.originalError);
+  const release = f.session.release(0, "pointer", key).then(value => ({value}), error => ({error}));
+  const repeated = f.session.release(0, "pointer", key).then(value => ({value}), error => ({error}));
+  const legacy = f.session.release(0, "pointer").then(value => ({value}), error => ({error}));
+  await drainTasks();
+  assert.equal(f.inputEntries.size, 1);
+  assert.equal(f.physicalOwners.size, 1);
+  resolveInspection();
+  await tickRetainedUntil(f, () => f.inputEntries.size >= 2);
+  await f.tick();
+  const actual = [...f.normal, ...f.retained].filter(e => e.operation === "pattern.transport.input.request");
+  assert.deepEqual(actual.map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+    [["press", "1", null], ["release", "2", "1"]]);
+  assert.equal(f.inputConsumed.size, 0);
+  f.state.inputComplete = true;
+  for (const observation of [release, repeated, legacy])
+    assert.deepEqual(await settleRetainedCall(f, observation), {value: true});
+  await tickRetainedUntil(f, () => f.inputConsumed.has("1") && f.inputConsumed.has("2"));
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT", "the original press observer stays failed");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await f.tick();
+});
+
+test("local gesture repeated release keeps its first deadline and retained consume debt", async (t) => {
+  const f = retainedConsumerFixture();
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.state.completeInput = p => p.kind === "press" || f.state.inputComplete;
+  const key = {};
+  assert.equal((await f.session.trigger(0, 100, "keyboard", key)).sequence, 1);
+  const first = f.session.release(0, "keyboard", key).then(value => ({value}), error => ({error}));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  await f.tick(700);
+  const second = f.session.release(0, "keyboard", key).then(value => ({value}), error => ({error}));
+  await drainTasks();
+  await f.tick(300);
+  for (const observation of [first, second]) {
+    const outcome = await settleRetainedCall(f, observation);
+    assert.equal(outcome.error?.code, "HOST_TIMEOUT");
+    assert.equal(outcome.error.details.pending, true);
+  }
+  assert.equal(f.inputEntries.size, 2, "observer expiry does not enqueue another release");
+  assert.deepEqual([...f.inputConsumed], ["1"]);
+  assert.equal(f.physicalOwners.size, 1);
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.has("2"));
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(await f.session.close(), true);
+});
+
+
+for (const operation of ["host.close", "audio.suspend"]) {
+  test(`local gesture unsealed unknown release joins explicit ${operation} safety and exact consumes`, async (t) => {
+    let resolveInspection;
+    const inspection = new Promise(resolve => { resolveInspection = resolve; });
+    const loss = Object.assign(new Error("actual admitted press response lost on healthy lane"), {
+      code: "HOST_TIMEOUT", details: {pending: true},
+    });
+    const f = retainedConsumerFixture({retainLifecycleUntilInputConsumed: true,
+      admissionReply: (e, response) => {
+        if (e.operation === "pattern.transport.input.request" && e.payload.kind === "press") throw loss;
+        return response;
+      }, beforeInputInspect: e => e.payload.ticket === "1" ? inspection : undefined});
+    t.after(() => { resolveInspection(); f.cancelTimers(); });
+    await activateInputProfile(f);
+    const key = {};
+    await assert.rejects(f.session.trigger(0, 100, "pointer", key), error => error === loss);
+    assert.equal(f.transport.terminated, false);
+    assert.equal(f.session.diagnostics().state, "running", "unknown original caller is independent of lifecycle");
+    const release = f.session.release(0, "pointer", key);
+    const repeated = f.session.release(0, "pointer", key);
+    let lifecycleResult = null;
+    const lifecycle = (operation === "host.close" ? f.session.close() : f.session.suspendAudio())
+      .then(value => { lifecycleResult = value; return value; });
+    await tickRetainedUntil(f, () => f.state.lifecyclePending.length === 1);
+    assert.deepEqual(f.state.lifecyclePending[0].tickets, ["1"]);
+    assert.equal(lifecycleResult, null);
+    assert.equal(f.inputConsumed.size, 0);
+    resolveInspection();
+    await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+    assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+      .map(e => [e.payload.kind, e.payload.input_serial, e.payload.held_press_sequence]),
+      [["press", "1", null], ["release", "2", "1"]]);
+    assert.equal(f.physicalOwners.size, 1);
+    f.state.inputComplete = true;
+    assert.equal(await settleRetainedCall(f, release), true);
+    assert.equal(await settleRetainedCall(f, repeated), true);
+    assert.equal(await settleRetainedCall(f, lifecycle), true);
+    assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"], "both original caller debts settle independently");
+    assert.equal(f.physicalOwners.size, 0);
+    assert.equal(f.state.lifecyclePending.length, 0);
+    if (operation === "audio.suspend") {
+      assert.equal(f.session.diagnostics().state, "audio-suspended");
+      assert.equal(await settleRetainedCall(f, f.session.close()), true);
+    }
+    assert.equal(f.state.backendCloses, 1);
+  });
+}
+
+
+// Recovery is owned by an exact SDK epoch, not by the fixture's reported state.
+function profileRecoveryFixture(t, options = {}) {
+  const browserWindow = new EventTarget();
+  const browserDocument = new EventTarget();
+  browserDocument.visibilityState = "visible";
+  const f = retainedConsumerFixture({browserWindow, browserDocument,
+    inputDisposition: p => p.kind === "press" ? "voice_started" : "release_no_voice", ...options});
+  t.after(() => f.cancelTimers());
+  return {...f, browserWindow, setVisibility(hidden) {
+    browserDocument.visibilityState = hidden ? "hidden" : "visible";
+    browserDocument.dispatchEvent(new Event("visibilitychange"));
+  }};
+}
+async function armProfileRecovery(f) {
+  f.browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  f.browserWindow.dispatchEvent(browserEvent("pageshow", {persisted: true}));
+  await tickRetainedUntil(f, () => f.session.diagnostics().recovery_probe_ready === true);
+  assert.equal(f.session.diagnostics().state, "recovering");
+}
+const observeProfileCall = promise => promise.then(value => ({value}), error => ({error}));
+async function finishFailedProfileOwner(f) {
+  await tickRetainedUntil(f, () => f.physicalOwners.size === 0 &&
+    [...f.inputEntries.keys()].every(key => f.inputConsumed.has(key)));
+  // The fixture's independent backend receipt checks every real modeled debt.
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => f.state.backendCloses === 1);
+}
+
+for (const delayedTimer of [false, true]) {
+  test(`profile recovery original deadline prevents late success with ${delayedTimer ? "delayed" : "dispatched"} timer`, async t => {
+    let releaseReply;
+    let heldReply = null;
+    const held = new Promise(resolve => { releaseReply = resolve; });
+    const f = profileRecoveryFixture(t, {inputReply: (e, response) => {
+      if (e.payload.consume && e.payload.ticket === "1") {
+        heldReply = response;
+        return held.then(() => response); // Genuine consumed bytes, never synthetic status.
+      }
+      return response;
+    }});
+    t.after(() => releaseReply());
+    await activateInputProfile(f);
+    await armProfileRecovery(f);
+    f.state.inputComplete = true;
+    const outcomes = [];
+    f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+    const key = {};
+    const press = observeProfileCall(f.session.trigger(0, 100, "pointer", key));
+    await tickRetainedUntil(f, () => heldReply !== null);
+    assert.equal(f.inputConsumed.has("1"), true, "Native consumed; SDK still has not observed its reply");
+    assert.equal(f.physicalOwners.size, 1, "press consumption cannot repay physical release");
+    if (delayedTimer) f.advanceClock(1000);
+    else {
+      await f.tick(1000);
+      await tickRetainedUntil(f, () => f.session.diagnostics().state === "restart-required");
+      assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT",
+        "SDK fails before the original consuming response is delivered");
+    }
+    releaseReply();
+    const result = await settleRetainedCall(f, press);
+    assert.equal(result.error?.code, "HOST_TIMEOUT");
+    await tickRetainedUntil(f, () => f.session.diagnostics().state === "restart-required");
+    assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+    assert.deepEqual(outcomes, [], "expired probe cannot publish old recovery success");
+    assert.equal(f.normal.filter(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "press").length, 1);
+    await finishFailedProfileOwner(f);
+    assert.deepEqual([...f.inputConsumed].sort(), ["1", "2"]);
+    const release = f.normal.find(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "release");
+    assert.equal(release.payload.held_press_sequence, "1");
+    assert.equal(f.session.diagnostics().state, "restart-required");
+  });
+}
+
+for (const unknown of [false, true]) {
+  test(`profile recovery ${unknown ? "unknown admitted" : "known pre-enqueue"} error fails only its original probe`, async t => {
+    const error = Object.assign(new Error("original probe admission failure"), {
+      code: unknown ? "HOST_TIMEOUT" : "HOST_STATE_INVALID", details: {pending: unknown},
+    });
+    const f = profileRecoveryFixture(t, {
+      beforeInputAdmission: e => !unknown && e.payload.kind === "press" ? {
+        protocol_version: 1, request_id: e.request_id, ok: false,
+        error: {code: error.code, message: error.message, details: error.details},
+      } : undefined,
+      admissionReply: (e, response) => {
+        if (unknown && e.operation === "pattern.transport.input.request" && e.payload.kind === "press") throw error;
+        return response;
+      },
+    });
+    await activateInputProfile(f);
+    await armProfileRecovery(f);
+    f.state.inputComplete = true;
+    const press = observeProfileCall(f.session.trigger(0, 100, "pointer", {}));
+    const result = await settleRetainedCall(f, press);
+    assert.equal(result.error?.code, error.code);
+    await tickRetainedUntil(f, () => f.session.diagnostics().state === (unknown ? "restart-required" : "failed"));
+    assert.equal(f.session.diagnostics().error_code, error.code);
+    await finishFailedProfileOwner(f);
+    assert.equal(f.inputEntries.size, unknown ? 2 : 0);
+    assert.equal(f.normal.filter(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "press").length, 1);
+    const releases = [...f.normal, ...f.retained].filter(e =>
+      e.operation === "pattern.transport.input.request" && e.payload.kind === "release");
+    assert.deepEqual(releases.map(e => [e.payload.input_serial, e.payload.held_press_sequence]),
+      unknown ? [["2", "1"]] : [], "ordinary and retained lanes together submit exactly one original Release");
+  });
+}
+
+test("profile recovery late accepted admission after foreground invalidation owes an exact release", async t => {
+  let deliverAdmission;
+  let originalReply = null;
+  const gate = new Promise(resolve => { deliverAdmission = resolve; });
+  const f = profileRecoveryFixture(t, {admissionReply: (e, response) => {
+    if (e.operation === "pattern.transport.input.request" && e.payload.kind === "press") {
+      originalReply = response;
+      return gate.then(() => response);
+    }
+    return response;
+  }});
+  t.after(() => deliverAdmission());
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const first = observeProfileCall(f.session.trigger(0, 100, "pointer", {}));
+  await tickRetainedUntil(f, () => originalReply !== null);
+  // A real visibility edge invalidates ownership before admission returns.
+  f.setVisibility(true);
+  deliverAdmission();
+  await settleRetainedCall(f, first);
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2 && f.physicalOwners.size === 0);
+  assert.deepEqual(outcomes, [], "late old epoch cannot publish success");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.notEqual(f.session.diagnostics().state, "running");
+  assert.deepEqual(f.normal.filter(e => e.operation === "pattern.transport.input.request")
+    .map(e => [e.payload.kind, e.payload.held_press_sequence]), [["press", null], ["release", "1"]]);
+  f.setVisibility(false);
+  await tickRetainedUntil(f, () => f.session.diagnostics().recovery_probe_ready);
+  // The original Release consumed during recovery must not become a probe.
+  assert.equal(f.session.diagnostics().state, "recovering");
+  assert.equal(await settleRetainedCall(f, f.session.close()), true);
+});
+
+test("profile recovery reserves one pending Press and only healthy exact success completes it", async t => {
+  let deliverAdmission;
+  let originalReply = null;
+  const gate = new Promise(resolve => { deliverAdmission = resolve; });
+  const f = profileRecoveryFixture(t, {admissionReply: (e, response) => {
+    if (e.operation === "pattern.transport.input.request" && e.payload.kind === "press") {
+      originalReply = response;
+      return gate.then(() => response);
+    }
+    return response;
+  }});
+  t.after(() => deliverAdmission());
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const key = {};
+  const first = observeProfileCall(f.session.trigger(0, 100, "pointer", key));
+  await tickRetainedUntil(f, () => originalReply !== null);
+  const duplicate = observeProfileCall(f.session.trigger(1, 100, "pointer", {}));
+  assert.equal(f.inputEntries.size, 1, "one genuine admission owns the pending recovery window");
+  assert.equal(f.session.diagnostics().recovery_probe_ready, false);
+  deliverAdmission();
+  assert.equal((await settleRetainedCall(f, first)).value.sequence, 1);
+  // Once the first succeeds the queued second is an ordinary real Pad; it
+  // must not be classified as a second recovery probe while admission waits.
+  const second = await settleRetainedCall(f, duplicate);
+  assert.equal(f.session.diagnostics().state, "running");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.equal(outcomes[0].sequence, 1);
+  assert.equal(await settleRetainedCall(f, f.session.release(0, "pointer", key)), true);
+  if (second.value !== false) assert.equal(await settleRetainedCall(f, f.session.release(1, "pointer")), true);
+  assert.equal(await settleRetainedCall(f, f.session.close()), true);
+});
+
+test("ordinary profile Pad deadline remains nonfatal with genuine later consume and release", async t => {
+  const f = profileRecoveryFixture(t);
+  await activateInputProfile(f);
+  const key = {};
+  const press = observeProfileCall(f.session.trigger(0, 100, "pointer", key));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 1);
+  await f.tick(1000);
+  assert.equal((await settleRetainedCall(f, press)).error?.code, "HOST_TIMEOUT");
+  assert.equal(f.session.diagnostics().state, "running");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.equal(f.inputConsumed.size, 0);
+  assert.equal(f.physicalOwners.size, 1);
+  const release = observeProfileCall(f.session.release(0, "pointer", key));
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2);
+  f.state.inputComplete = true;
+  assert.equal((await settleRetainedCall(f, release)).value, true);
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.session.diagnostics().state, "running");
+  assert.equal(await settleRetainedCall(f, f.session.close()), true);
+});
+
+
+test("profile recovery real close invalidates a held consuming reply without successful resurrection", async t => {
+  let deliverConsume;
+  let actualConsumedReply = null;
+  const gate = new Promise(resolve => { deliverConsume = resolve; });
+  const f = profileRecoveryFixture(t, {inputReply: (e, response) => {
+    if (e.payload.consume && e.payload.ticket === "1") {
+      actualConsumedReply = response;
+      return gate.then(() => response);
+    }
+    return response;
+  }});
+  t.after(() => deliverConsume());
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const press = observeProfileCall(f.session.trigger(0, 100, "pointer", {}));
+  await tickRetainedUntil(f, () => actualConsumedReply !== null);
+  assert.equal(f.inputConsumed.has("1"), true);
+  const close = observeProfileCall(f.session.close());
+  await tickRetainedUntil(f, () => f.physicalOwners.size === 0 && f.inputConsumed.has("2"));
+  deliverConsume();
+  await settleRetainedCall(f, press);
+  assert.equal((await settleRetainedCall(f, close)).value, true);
+  assert.deepEqual(outcomes, []);
+  assert.equal(f.session.diagnostics().state, "closed");
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.equal(f.state.backendCloses, 1);
+});
+
+
+test("profile recovery actual voice capacity fails with its original code and consumed evidence", async t => {
+  const f = profileRecoveryFixture(t, {inputDisposition: p => p.kind === "press" ? "voice_capacity" : "release_no_voice"});
+  await activateInputProfile(f);
+  await armProfileRecovery(f);
+  f.state.inputComplete = true;
+  const outcomes = [];
+  f.session.subscribeRuntimeOutcome(value => outcomes.push(value));
+  const result = await settleRetainedCall(f, observeProfileCall(f.session.trigger(0, 100, "pointer", {})));
+  assert.equal(result.error?.code, "HOST_STATE_INVALID");
+  await tickRetainedUntil(f, () => f.session.diagnostics().state === "failed");
+  assert.equal(f.session.diagnostics().error_code, "HOST_STATE_INVALID");
+  assert.deepEqual(outcomes.map(value => value.outcome), ["voice_capacity"], "actual failure outcome is not recovery success");
+  await finishFailedProfileOwner(f);
+  assert.equal(f.inputConsumed.size, 2);
+});
+
+// Replacement eligibility is a local observation of the original cleanup,
+// independent of the public fatal close(false) result and of Native tickets.
+test("terminal cleanup waiter before initiation is false and starts no work", async () => {
+  const sent = [];
+  const f = fixture({send: async (envelope) => {
+    sent.push(envelope); return success(envelope, defaultResult(envelope.operation));
+  }});
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(f.terminated(), 0);
+  assert.equal(sent.length, 0);
+  assert.equal(await f.session.start(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(f.terminated(), 0);
+  assert.equal(sent.length, 0);
+  assert.equal(await f.session.close(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true,
+    "the separately supported older normal-close contract remains compatible");
+});
+
+for (const phase of ["manifest", "capability", "preflight"]) {
+  test(`closing while ${phase} is pending cannot load or publish a late owner`, async () => {
+    let releasePhase;
+    const phasePending = new Promise((resolve) => { releasePhase = resolve; });
+    let entered = false;
+    let loads = 0;
+    const browserWindow = {};
+    const hold = async () => { entered = true; await phasePending; };
+    const f = fixture({browserWindow, publishRuntime: true,
+      ...(phase === "manifest" ? {beforeManifest: hold} :
+        phase === "capability" ? {capabilities: {secureContext: hold}} : {preflight: hold}),
+      beforeRuntimeLoad: () => { loads += 1; }});
+    const starting = f.session.start();
+    for (let turn = 0; turn < 40 && !entered; ++turn) await drainTasks();
+    assert.equal(entered, true);
+    assert.equal(await f.session.close(), true);
+    assert.equal(await f.session.waitForTerminalCleanup(), true);
+    assert.equal(loads, 0);
+    assert.equal(browserWindow.lmdjWebRuntimeHost, undefined);
+    releasePhase();
+    assert.equal(await starting, false, "the original closed bootstrap cannot resume into a new owner");
+    assert.equal(loads, 0, "far-side original loader was never invoked");
+    assert.equal(browserWindow.lmdjWebRuntimeHost, undefined);
+    assert.equal(f.session.diagnostics().state, "closed");
+    assert.equal(f.terminated(), 1);
+  });
+}
+
+test("cleanup waits an already invoked loader and retires its actual late published owner", async () => {
+  let releaseLoad;
+  const loadPending = new Promise((resolve) => { releaseLoad = resolve; });
+  let entered = false;
+  let releaseOwner;
+  const ownerPending = new Promise((resolve) => { releaseOwner = resolve; });
+  let sealed = false;
+  let fullReceipt = false;
+  const ownerTransport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return fullReceipt; },
+    async send(envelope) { return success(envelope, defaultResult(envelope.operation)); },
+  };
+  const browserWindow = {};
+  let terminatedRuntime = null;
+  const f = fixture({browserWindow, publishRuntime: true, sessionTransport: ownerTransport,
+    runtimeTransport: ownerTransport,
+    beforeRuntimeLoad: async () => { entered = true; await loadPending; },
+    runtimeTerminator: async ({runtime}) => {
+      terminatedRuntime = runtime;
+      sealed = true;
+      await ownerPending;
+      fullReceipt = true;
+    }});
+  const starting = f.session.start();
+  for (let turn = 0; turn < 40 && !entered; ++turn) await drainTasks();
+  assert.equal(entered, true);
+  let closed = null;
+  const closing = f.session.close().then((value) => { closed = value; });
+  await drainTasks();
+  await drainTasks();
+  let eligible = null;
+  const waiting = f.session.waitForTerminalCleanup().then((value) => { eligible = value; });
+  await drainTasks();
+  assert.equal(closed, null);
+  assert.equal(eligible, null, "an invoked loader's null result is not never-loaded evidence");
+  assert.equal(f.terminated(), 0, "the actual late owner has not been handed back yet");
+  releaseLoad();
+  assert.equal(await starting, false);
+  for (let turn = 0; turn < 40 && terminatedRuntime === null; ++turn) await drainTasks();
+  assert.equal(terminatedRuntime, browserWindow.lmdjWebRuntimeHost);
+  assert.ok(terminatedRuntime);
+  assert.equal(terminatedRuntime.session, undefined, "the retired bootstrap must not publish a live SDK namespace");
+  assert.equal(fullReceipt, false);
+  assert.equal(eligible, null);
+  releaseOwner();
+  for (let turn = 0; turn < 40 && (closed === null || eligible === null); ++turn) await drainTasks();
+  assert.notEqual(closed, null);
+  assert.notEqual(eligible, null);
+  await Promise.all([closing, waiting]);
+  assert.equal(closed, true);
+  assert.equal(eligible, true);
+  assert.equal(f.terminated(), 1);
+});
+
+test("attempted loader rejection cannot obtain replacement permission from absent runtime", async () => {
+  const loaderError = Object.assign(new Error("actual loader failed"), {code: "IO_ERROR"});
+  const f = fixture({beforeRuntimeLoad: () => { throw loaderError; }});
+  assert.equal(await f.session.start(), false);
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1, "original safety and actual cleanup have begun before observing its result");
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+});
+
+test("fatal waiter retains physical input and count debt through genuine consume then Native and backend closure", async (t) => {
+  const f = retainedConsumerFixture({countMode: "accepted-response-loss"});
+  t.after(() => f.cancelTimers());
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  let backendStarted = 0;
+  const actualClose = f.context.close.bind(f.context);
+  f.context.close = async () => { backendStarted += 1; await backendPending; return actualClose(); };
+  await activateInputProfile(f);
+  f.state.completeInput = (payload) => payload.kind === "press" || f.state.inputComplete;
+  assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, 1);
+  assert.deepEqual([...f.inputConsumed], ["1"]);
+  assert.equal(f.physicalOwners.size, 1);
+  await assert.rejects(f.session.requestPatternCountIn(countInRequest()), (error) => error === f.originalError);
+  await tickRetainedUntil(f, () => f.inputEntries.size === 2 && f.state.terminalStarts === 1);
+  assert.equal(await f.session.close(), false, "retained caller debt still returns prompt fatal false");
+  const originalWait = f.session.waitForTerminalCleanup();
+  assert.equal(f.session.waitForTerminalCleanup(), originalWait, "duplicate callers observe one actual cleanup");
+  let outcome = null;
+  void originalWait.then((value) => { outcome = value; });
+  await f.tick();
+  assert.equal(outcome, null);
+  assert.equal(f.physicalOwners.size, 1);
+  assert.equal(f.state.countConsumed, false);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(backendStarted, 0);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  f.state.countStatus = failedOriginalCountInEvidence();
+  f.state.inputComplete = true;
+  await tickRetainedUntil(f, () => f.inputConsumed.size === 2);
+  assert.equal(f.physicalOwners.size, 0);
+  assert.equal(f.state.countConsumed, false, "physical Release does not consume the separate count caller");
+  assert.equal(outcome, null);
+  f.state.nativeOwnerAcknowledged = true;
+  await tickRetainedUntil(f, () => f.state.countConsumed);
+  assert.equal(f.transport.terminalOwnerReleased, false, "all genuine consumers are not the separate full owner receipt");
+  assert.equal(outcome, null);
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => backendStarted === 1);
+  assert.equal(f.context.state, "running");
+  assert.equal(outcome, null, "full Native receipt is not an AudioContext close receipt");
+  releaseBackend();
+  await tickRetainedUntil(f, () => outcome !== null);
+  assert.equal(await originalWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.state.backendCloses, 1);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 1));
+  assert.deepEqual([...f.inputConsumed], ["1", "2"]);
+  const original = f.inputEntries.get("1");
+  const release = f.inputEntries.get("2");
+  assert.deepEqual([release.payload.slot, release.payload.runtime_generation, release.payload.frame_epoch,
+    release.payload.held_press_sequence], [original.payload.slot, original.payload.runtime_generation,
+      original.payload.frame_epoch, original.status.admission.sequence]);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(await f.session.close(), false);
+});
+
+for (const failure of ["termination", "backend"]) {
+  test(`fatal waiter is false after actual ${failure} rejection and keeps the first error`, async (t) => {
+    const cleanupError = Object.assign(new Error("actual cleanup rejected"), {code: "IO_ERROR"});
+    const f = retainedConsumerFixture(failure === "termination"
+      ? {terminate: () => { throw cleanupError; }} : {});
+    t.after(() => f.cancelTimers());
+    await activateInputProfile(f);
+    if (failure === "backend") f.context.close = async () => { throw cleanupError; };
+    f.seal();
+    await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+    const waiting = f.session.waitForTerminalCleanup();
+    if (failure === "backend") { f.state.nativeOwnerAcknowledged = true; f.releaseTerminal(); }
+    assert.equal(await settleRetainedCall(f, waiting), false);
+    assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+    assert.equal(f.context.state, "running");
+    assert.equal(f.state.backendCloses, 0);
+    assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+    assert.equal(f.state.terminalStarts, 1);
+  });
+}
+
+test("resolved terminator waiter stays pending without Native ACK and false with a still open backend", async (t) => {
+  const f = retainedConsumerFixture({terminate: async () => {}});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  let outcome = null;
+  const waiting = f.session.waitForTerminalCleanup().then((value) => { outcome = value; });
+  await f.tick();
+  assert.equal(outcome, null);
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  await tickRetainedUntil(f, () => outcome !== null);
+  await waiting;
+  assert.equal(outcome, false);
+  assert.equal(f.context.state, "running");
+  assert.ok(f.nodes.every((node) => node.disconnected.length === 0));
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+test("synchronous terminator reentry sees the same bound pending cleanup waiter", async (t) => {
+  let reentrantWait;
+  let outcome = null;
+  let releaseTermination;
+  const terminationPending = new Promise((resolve) => { releaseTermination = resolve; });
+  const f = retainedConsumerFixture({terminate: async ({audioContext}) => {
+    reentrantWait = f.session.waitForTerminalCleanup();
+    void reentrantWait.then((value) => { outcome = value; });
+    await terminationPending;
+    await audioContext.close();
+  }});
+  t.after(() => f.cancelTimers());
+  await activateInputProfile(f);
+  f.seal();
+  await tickRetainedUntil(f, () => f.state.terminalStarts === 1);
+  assert.ok(reentrantWait, "the real terminator synchronously entered the local observer");
+  assert.equal(f.session.waitForTerminalCleanup(), reentrantWait);
+  await f.tick();
+  assert.equal(outcome, null, "reentrant null/unbound Promise cannot mean completed cleanup");
+  assert.equal(f.transport.terminalOwnerReleased, false);
+  assert.equal(f.context.state, "running");
+  f.state.nativeOwnerAcknowledged = true;
+  f.releaseTerminal();
+  assert.equal(outcome, null);
+  releaseTermination();
+  await tickRetainedUntil(f, () => outcome !== null);
+  assert.equal(await reentrantWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.state.backendCloses, 1);
+  assert.equal(f.state.terminalStarts, 1);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+});
+
+
+test("late rejected load retires its actually published partial owner without granting success", async () => {
+  const browserWindow = {};
+  const loaderError = Object.assign(new Error("partial actual loader failed"), {code: "IO_ERROR"});
+  let releaseOwner;
+  const ownerPending = new Promise((resolve) => { releaseOwner = resolve; });
+  let fullReceipt = false;
+  let sealed = false;
+  const ownerTransport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return fullReceipt; },
+    async send(envelope) { return success(envelope, defaultResult(envelope.operation)); },
+  };
+  const partialOwner = {transport: ownerTransport, workers: []};
+  let terminatedRuntime;
+  const f = fixture({browserWindow, sessionTransport: ownerTransport,
+    beforeRuntimeLoad: (invocation) => {
+      invocation.onRuntimeOwnerCreated(partialOwner);
+      browserWindow.lmdjWebRuntimeHost = partialOwner;
+      throw loaderError;
+    },
+    runtimeTerminator: async ({runtime}) => {
+      terminatedRuntime = runtime;
+      sealed = true;
+      await ownerPending;
+      fullReceipt = true;
+    }});
+  assert.equal(await f.session.start(), false);
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1, "the original fatal safety has reached actual terminal cleanup");
+  let outcome = null;
+  const waiting = f.session.waitForTerminalCleanup().then((value) => { outcome = value; });
+  await drainTasks();
+  assert.equal(terminatedRuntime, partialOwner, "the real partial published owner was not discarded on rejection");
+  assert.equal(fullReceipt, false);
+  assert.equal(outcome, null, "published resources still require their original termination");
+  releaseOwner();
+  for (let turn = 0; turn < 40 && outcome === null; ++turn) await drainTasks();
+  assert.notEqual(outcome, null);
+  await waiting;
+  assert.equal(fullReceipt, true);
+  assert.equal(outcome, false, "actual loader failure is not a successful closure eligibility result");
+  assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+  assert.equal(f.terminated(), 1);
+});
+
+test("healthy older normal closure observes actual backend closure without inventing a Native getter", async () => {
+  let backendCloses = 0;
+  const f = fixture({runtimeTerminator: async ({audioContext}) => { await audioContext.close(); }});
+  f.context.close = async () => { backendCloses += 1; f.context.state = "closed"; };
+  await activateInputProfile(f);
+  assert.equal(f.context.state, "running");
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(await f.session.close(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(backendCloses, 1);
+  assert.equal(f.terminated(), 1);
+  assert.equal(f.session.diagnostics().error_code, null);
+});
+
+for (const publication of ["prior", "other-session"]) {
+  test(`failed custom loader never terminates or borrows ${publication} global Host`, async () => {
+    let foreignTerminations = 0;
+    const foreign = {transport: {
+      get terminalOwnerReleased() { return true; },
+      terminate() { foreignTerminations += 1; },
+    }, workers: [{terminate() { foreignTerminations += 1; }}]};
+    const browserWindow = publication === "prior" ? {lmdjWebRuntimeHost: foreign} : {};
+    const loaderError = Object.assign(new Error("this invocation actually rejected"), {code: "IO_ERROR"});
+    let actualTerminatorRuntime;
+    const f = fixture({browserWindow,
+      beforeRuntimeLoad: () => {
+        if (publication === "other-session") browserWindow.lmdjWebRuntimeHost = foreign;
+        throw loaderError; // No producer registration means no identity claim.
+      },
+      runtimeTerminator: ({runtime}) => {
+        actualTerminatorRuntime = runtime;
+        runtime?.transport?.terminate?.();
+        for (const worker of runtime?.workers ?? []) worker.terminate();
+      }});
+    assert.equal(await f.session.start(), false);
+    for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+    assert.equal(f.terminated(), 1);
+    assert.equal(await f.session.waitForTerminalCleanup(), false);
+    assert.equal(actualTerminatorRuntime, null, "global identity is not this invocation's owned partial runtime");
+    assert.equal(foreignTerminations, 0, "no direct or formal termination of an unrelated Host");
+    assert.equal(browserWindow.lmdjWebRuntimeHost, foreign);
+    assert.equal(f.session.diagnostics().error_code, "IO_ERROR");
+  });
+}
+
+test("pressed-state reentry observes the bound original cleanup before actual terminator entry", async () => {
+  let latestWait;
+  let outcome = null;
+  let releaseBackend;
+  const backendPending = new Promise((resolve) => { releaseBackend = resolve; });
+  const f = fixture({
+    onPressedChange: () => { latestWait = f.session.waitForTerminalCleanup(); },
+    runtimeTerminator: async ({audioContext}) => { await backendPending; await audioContext.close(); },
+  });
+  f.context.close = async () => { f.context.state = "closed"; };
+  await activateInputProfile(f);
+  const closing = f.session.close();
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1);
+  assert.equal(latestWait, f.session.waitForTerminalCleanup(),
+    "clearPressed external callback cannot observe an initiated cleanup as unbound false");
+  void latestWait.then((value) => { outcome = value; });
+  await drainTasks();
+  assert.equal(outcome, null);
+  assert.equal(f.context.state, "running");
+  releaseBackend();
+  assert.equal(await closing, true);
+  assert.equal(await latestWait, true);
+  assert.equal(f.context.state, "closed");
+});
+
+async function packagedLoaderFixture() {
+  const wasmBytes = new Uint8Array([0]);
+  const wasmDigest = [...new Uint8Array(await webcrypto.subtle.digest("SHA-256", wasmBytes))]
+    .map((value) => value.toString(16).padStart(2, "0")).join("");
+  const manifest = {
+    host_id: "web-runtime-host", host_version: "1.2.15", platform_version: "0.3.6",
+    product_build: TEST_PRODUCT_BUILD, protocol_version: 1,
+    canonical_bytes: new Uint8Array([1]), manifest_sha256: "0".repeat(64),
+    assets: [
+      {role: "runtime_script", path: "runtime.js", bytes: 1, sha256: "0".repeat(64)},
+      {role: "runtime_wasm", path: "runtime.wasm", bytes: wasmBytes.length, sha256: wasmDigest},
+    ],
+  };
+  const scripts = [];
+  const browserWindow = {
+    fetch: async () => new Response(wasmBytes), btoa: globalThis.btoa,
+    performance: globalThis.performance, setTimeout, clearTimeout,
+  };
+  const browserDocument = {
+    baseURI: "https://example.test/index.html",
+    createElement: () => new EventTarget(),
+    head: {append(script) { scripts.push({script, configuration: browserWindow.Module}); }},
+  };
+  const newOwner = () => ({
+    runtimeInitialized: true, registerAudioContext: () => 1,
+    audioCallbackHeartbeat: () => 1, startAudioWorklet: async () => ({ok: true}),
+    workers: [], transport: {send: async (envelope) => success(envelope, defaultResult(envelope.operation))},
+  });
+  return {browserWindow, browserDocument, scripts, newOwner,
+    makeSession(runtimeTerminator) {
+      return fixture({browserWindow, browserDocument, useDefaultRuntimeLoader: true,
+        verifiedManifest: manifest, runtimeTerminator});
+    },
+    publish(index, owner = newOwner()) {
+      const {script, configuration} = scripts[index];
+      configuration.lmdjRuntimeOwnerCreated(owner, configuration);
+      browserWindow.lmdjWebRuntimeHost = owner;
+      script.dispatchEvent(new Event("load"));
+      return owner;
+    }};
+}
+
+test("two default packaged loaders cannot overwrite one in-flight producer Module and release the real load reservation", async () => {
+  const p = await packagedLoaderFixture();
+  let retiredFirst;
+  const first = p.makeSession(({runtime}) => { retiredFirst = runtime; });
+  const firstStart = first.session.start();
+  for (let turn = 0; turn < 40 && p.scripts.length === 0; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 1);
+  const firstConfiguration = p.scripts[0].configuration;
+  let retiredOther;
+  const other = p.makeSession(({runtime}) => { retiredOther = runtime; });
+  let otherOutcome = null;
+  const otherStart = other.session.start().then((value) => { otherOutcome = {value}; },
+    (error) => { otherOutcome = {error}; });
+  for (let turn = 0; turn < 40 && otherOutcome === null && p.scripts.length === 1; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 1, "the second loader is refused before another script can own shared Module");
+  assert.deepEqual(otherOutcome, {value: false});
+  await otherStart;
+  for (let turn = 0; turn < 40 && other.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(other.terminated(), 1);
+  assert.equal(await other.session.waitForTerminalCleanup(), false);
+  assert.equal(retiredOther, null);
+  assert.equal(p.browserWindow.Module, firstConfiguration,
+    "a second loader cannot redirect the original script into a foreign configuration");
+  assert.equal(p.scripts.length, 1);
+  assert.equal(retiredFirst, undefined);
+  const firstOwner = p.publish(0);
+  assert.equal(await firstStart, true);
+  assert.equal(p.browserWindow.lmdjWebRuntimeHost, firstOwner);
+  assert.equal(firstOwner.session, first.session);
+  assert.equal(await first.session.close(), true);
+  assert.equal(retiredFirst, firstOwner);
+  const later = p.makeSession();
+  const laterStart = later.session.start();
+  for (let turn = 0; turn < 40 && p.scripts.length < 2; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 2, "completed original invocation releases its actual single-flight reservation");
+  const laterOwner = p.publish(1);
+  assert.notEqual(laterOwner, firstOwner);
+  assert.equal(await laterStart, true);
+  assert.equal(await later.session.close(), true);
+});
+
+test("default packaged load rejects a foreign Module callback and never adopts a global foreign owner", async () => {
+  const p = await packagedLoaderFixture();
+  let actualTerminatorRuntime;
+  const f = p.makeSession(({runtime}) => { actualTerminatorRuntime = runtime; });
+  const starting = f.session.start();
+  for (let turn = 0; turn < 40 && p.scripts.length === 0; ++turn) await drainTasks();
+  assert.equal(p.scripts.length, 1);
+  const foreign = p.newOwner();
+  p.browserWindow.lmdjWebRuntimeHost = foreign;
+  assert.throws(() => p.scripts[0].configuration.lmdjRuntimeOwnerCreated(foreign, {}),
+    (error) => error.code === "HOST_STATE_INVALID");
+  p.scripts[0].script.dispatchEvent(new Event("error"));
+  assert.equal(await starting, false);
+  for (let turn = 0; turn < 40 && f.terminated() === 0; ++turn) await drainTasks();
+  assert.equal(f.terminated(), 1);
+  assert.equal(await f.session.waitForTerminalCleanup(), false);
+  assert.equal(actualTerminatorRuntime, null);
+  assert.equal(p.browserWindow.lmdjWebRuntimeHost, foreign);
+  assert.equal(foreign.session, undefined);
+});
 
 // ---------------------------------------------------------------------------
 // D0/W1 typed live-control producer oracles.
@@ -8435,6 +11801,1473 @@ test("legacy and no-sink headered begins retain exact result shapes and initial 
 });
 
 
+// Integration regression: Native capacity only applies once admission runs;
+// queued calls need their own reservation before either SDK promise tail.
+// This injected short-admission gate proves SDK bounds and exact wire/caller
+// retirement, not physical device hearing or native callback performance.
+test("profile queued Press capacity is bounded before admission and real Release retires each original owner", async () => {
+  let releaseShort;
+  let shortStarted;
+  const shortReady = new Promise(resolve => { shortStarted = resolve; });
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation !== "pattern.transport.request") return null;
+    shortStarted();
+    return new Promise(resolve => { releaseShort = () => resolve(success(e, {
+      session_id: e.payload.session_id, command_id: e.payload.command_id, submit: "accepted",
+      status: transportStatus({phase: "idle"}),
+    })); });
+  }});
+  await activateInputProfile(f);
+  const stop = f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  await shortReady;
+  const keys = Array.from({length: 64}, () => ({}));
+  const presses = keys.map((key, slot) => f.session.trigger(slot, 100, "pointer", key));
+  assert.equal(await f.session.trigger(0, 100, "pointer", {}), false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0,
+    "the 65th queued Press never acquired a Native ticket");
+  releaseShort();
+  assert.equal((await stop).submit, "accepted");
+  const accepted = await Promise.all(presses);
+  assert.deepEqual(accepted.map(x => x.sequence), Array.from({length: 64}, (_, i) => i + 1));
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 64);
+  for (let slot = 0; slot < 64; slot += 1) {
+    assert.equal(await f.session.release(slot, "pointer", keys[slot]), true);
+  }
+  const requests = f.sent.filter(e => e.operation === "pattern.transport.input.request");
+  assert.equal(requests.length, 128);
+  assert.deepEqual(requests.slice(64).map(e => e.payload.held_press_sequence),
+    Array.from({length: 64}, (_, i) => String(i + 1)));
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 128);
+  // Capacity returns only after these real matching release consumes.
+  assert.equal((await f.session.trigger(0, 100, "pointer", keys[0])).sequence, 129);
+  assert.equal(await f.session.release(0, "pointer", keys[0]), true);
+  await f.session.close();
+});
+
+test("Performance queued Pad admission counts toward 64 before the first receipt", async () => {
+  let releaseFirst;
+  let firstStarted;
+  const ready = new Promise(resolve => { firstStarted = resolve; });
+  const events = [];
+  const {session} = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      events.push(e.payload.event);
+      if (events.length === 1) {
+        firstStarted();
+        await new Promise(resolve => { releaseFirst = resolve; });
+      }
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: 1,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await session.start();
+  const sessionId = "40000000-0000-4000-8000-000000000050";
+  const id = (prefix, i) => `40000000-0000-4000-${prefix}-${String(i + 1).padStart(12, "0")}`;
+  const presses = Array.from({length: 64}, (_, slot) => session.recordPerformanceEvent({
+    sessionId, eventId: id("8100", slot),
+    event: {kind: "pad_press", gestureId: id("8200", slot), slot, velocity: 100},
+  }));
+  await ready;
+  await assert.rejects(session.recordPerformanceEvent({sessionId, eventId: id("8100", 64),
+    event: {kind: "pad_press", gestureId: id("8200", 64), slot: 0, velocity: 100},
+  }), /Too many open Pad gestures/);
+  assert.equal(events.length, 1, "the pending 64 reservations bound the unsent queue");
+  releaseFirst();
+  await Promise.all(presses);
+  assert.equal(events.length, 64);
+  for (let slot = 0; slot < 64; slot += 1) {
+    await session.recordPerformanceEvent({sessionId, eventId: id("8300", slot),
+      event: {kind: "pad_release", gestureId: id("8200", slot), slot},
+    });
+  }
+  assert.deepEqual(events.slice(64).map(e => e.gesture_id),
+    Array.from({length: 64}, (_, slot) => id("8200", slot)));
+  await session.recordPerformanceEvent({sessionId, eventId: id("8400", 0),
+    event: {kind: "pad_press", gestureId: id("8500", 0), slot: 0, velocity: 100},
+  });
+  await session.recordPerformanceEvent({sessionId, eventId: id("8600", 0),
+    event: {kind: "pad_release", gestureId: id("8500", 0), slot: 0},
+  });
+  assert.equal(events.length, 130, "matching accepted release returned admission capacity");
+  await session.close();
+});
+
+
+test("direct companion requests reserve actual known capacity before the Host tail", async () => {
+  let releaseQuery;
+  let queryStarted;
+  const ready = new Promise(resolve => { queryStarted = resolve; });
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation === "pattern.transport.count-in.capabilities")
+      return success(e, {...defaultResult(e.operation), input_capacity: 2});
+    if (e.operation === "project.inspect") {
+      queryStarted();
+      return new Promise(resolve => { releaseQuery = () => resolve(success(e, defaultResult(e.operation))); });
+    }
+    return null;
+  }});
+  await activateInputProfile(f);
+  const query = f.session.inspectProject();
+  await ready;
+  const request = i => ({commandId: `40000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    runtimeGeneration: "1", frameEpoch: "1", inputSerial: String(i), slot: i - 1, velocity: 100,
+    kind: "press", held: false, heldPressSequence: null});
+  const first = f.session.requestPatternInput(request(1));
+  const second = f.session.requestPatternInput(request(2));
+  await assert.rejects(f.session.requestPatternInput(request(3)),
+    error => error.code === "HOST_STATE_INVALID" && error.details.pending === false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0);
+  releaseQuery();
+  await query;
+  for (const admitted of await Promise.all([first, second])) {
+    const consumed = await f.session.inspectPatternInput(admitted.ticket, true);
+    assert.equal(consumed.complete, true);
+    assert.equal(consumed.nativeResult.disposition, "muted_no_voice");
+  }
+  const third = await f.session.requestPatternInput(request(3));
+  assert.equal((await f.session.inspectPatternInput(third.ticket, true)).complete, true);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 3);
+  await f.session.close();
+});
+
+test("queued profile keyup observers share one original matching Release", async () => {
+  let releaseStop;
+  let stopStarted;
+  const ready = new Promise(resolve => { stopStarted = resolve; });
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation !== "pattern.transport.request") return null;
+    stopStarted();
+    return new Promise(resolve => { releaseStop = () => resolve(success(e, {
+      session_id: e.payload.session_id, command_id: e.payload.command_id, submit: "accepted",
+      status: transportStatus({phase: "idle"}),
+    })); });
+  }});
+  await activateInputProfile(f);
+  const stop = f.session.requestPatternTransport({sessionId: TRANSPORT_SESSION_ID,
+    projectId: TRANSPORT_PROJECT_ID, commandId: TRANSPORT_COMMAND_ID, expectedEpoch: 2,
+    intent: "play_stop", expectedRevision: null});
+  await ready;
+  const key = {};
+  const press = f.session.trigger(0, 100, "pointer", key);
+  const released = f.session.release(0, "pointer", key);
+  const joined = f.session.release(0, "pointer", key);
+  releaseStop();
+  await stop;
+  assert.equal((await press).sequence, 1);
+  assert.equal(await released, true);
+  assert.equal(await joined, true);
+  const requests = f.sent.filter(e => e.operation === "pattern.transport.input.request");
+  assert.deepEqual(requests.map(e => [e.payload.kind, e.payload.held_press_sequence]),
+    [["press", null], ["release", "1"]]);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 2);
+  await f.session.close();
+});
+
+test("a capture started ACK arriving during close cannot arm before the physical cleanup fence", async () => {
+  let acknowledge;
+  let releaseBackend;
+  let backendStarted;
+  const backendReady = new Promise(resolve => { backendStarted = resolve; });
+  let tapClosed = 0;
+  let captureStops = 0;
+  let backendClosed = false;
+  const tap = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    start(sink) {
+      return new Promise(resolve => { acknowledge = () => resolve({stop: async () => {
+        captureStops += 1;
+        sink.onStopped();
+      }}); });
+    },
+    failProcessor() {},
+    async close() {
+      assert.equal(backendClosed, true, "SDK tap detach follows the actual backend closure");
+      tapClosed += 1;
+    },
+  };
+  const f = fixture({browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {resourceLimits: {perform_recording_frames: 86_400_000,
+      perform_recording_queue_batches: 32}, performanceMasterTapUrl: "./assets/perform-master-tap.js"},
+    createPerformanceMasterTap: async () => tap,
+    runtimeTerminator: async () => {
+      backendStarted();
+      await new Promise(resolve => { releaseBackend = resolve; });
+      f.context.state = "closed";
+      backendClosed = true;
+    },
+  });
+  await f.session.start();
+  assert.equal(await f.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const starting = f.session.startPerformanceMasterCapture({onBatch() {}, onStopped() {}, onFailure() {}});
+  const rejected = assert.rejects(starting, {code: "HOST_STATE_INVALID"});
+  const closing = f.session.close();
+  await backendReady;
+  assert.equal(tapClosed, 0);
+  acknowledge();
+  await rejected;
+  assert.equal(captureStops, 1);
+  assert.equal(tapClosed, 0, "a cancelled ACK cannot detach the original tap early");
+  releaseBackend();
+  assert.equal(await closing, true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
+  assert.equal(tapClosed, 1);
+  await assert.rejects(f.session.startPerformanceMasterCapture({onBatch() {}, onStopped() {}, onFailure() {}}),
+    {code: "HOST_STATE_INVALID"});
+});
+
+
+// Injected legacy owner fixture: a real invocation-bound owner receipt and
+// backend close are separate producers. Neither terminator entry/completion
+// nor public close is a full-owner or backend receipt.
+function legacyOwnerClosureFixture({send, beforeSeal = async () => {}}) {
+  let sealed = false;
+  let fullReceipt = false;
+  let actualRuntime = null;
+  let actualAudioContext = null;
+  let nativeStops = 0;
+  let backendCloses = 0;
+  let ownerConfirmation;
+  const ownerPending = new Promise(resolve => {ownerConfirmation = resolve;});
+  let beginTermination;
+  const terminationStarted = new Promise(resolve => {beginTermination = resolve;});
+  let beginBackend;
+  const backendStarted = new Promise(resolve => {beginBackend = resolve;});
+  let closeBackend;
+  const backendPending = new Promise(resolve => {closeBackend = resolve;});
+  const ownerTransport = {
+    get terminated() { return sealed; },
+    get terminalOwnerReleased() { return fullReceipt; },
+    async send(envelope) {
+      assert.equal(sealed, false, "a sealed owner accepts no new ordinary request");
+      return send(envelope);
+    },
+    subscribe() { return () => {}; },
+    subscribeFailure() { return () => {}; },
+  };
+  const f = fixture({browserWindow: {}, publishRuntime: true,
+    sessionTransport: ownerTransport, runtimeTransport: ownerTransport,
+    runtimeTerminator: async ({runtime, audioContext}) => {
+      assert.equal(runtime.transport, ownerTransport, "terminate this invocation's actual loaded owner");
+      assert.equal(audioContext, f.context, "backend belongs to the same original Session");
+      actualRuntime = runtime;
+      actualAudioContext = audioContext;
+      nativeStops += 1;
+      beginTermination();
+      // A genuine queued legacy Release is allowed to finish before sealing;
+      // this is an explicit input-owner gate, not a fabricated Release ACK.
+      await beforeSeal();
+      sealed = true;
+      await ownerPending;
+      await audioContext.close();
+    }});
+  f.context.close = async () => {
+    assert.equal(actualAudioContext, f.context);
+    backendCloses += 1;
+    beginBackend();
+    await backendPending;
+    f.context.state = "closed";
+  };
+  return Object.assign(f, {
+    ownerTransport, terminationStarted, backendStarted,
+    deliverOwnerReceipt() {
+      assert.equal(actualRuntime?.transport, ownerTransport);
+      assert.equal(nativeStops, 1, "only the original owner produces its closure receipt");
+      assert.equal(sealed, true, "the original owner was actually sealed before its receipt");
+      assert.equal(fullReceipt, false);
+      fullReceipt = true;
+      ownerConfirmation();
+    },
+    releaseBackend() { closeBackend(); },
+    nativeStops: () => nativeStops,
+    backendCloses: () => backendCloses,
+  });
+}
+
+// F1/F2/F3 repair witnesses use public APIs and original wire/receipt IDs.
+// Source delivery only: these component models do not prove physical hearing.
+test("legacy known-unsubmitted refusals never acquire a matching Release capacity slot", async () => {
+  const wire = [];
+  let sequence = 0;
+  const f = fixture({send: async e => {
+    if (e.operation === "trigger") {
+      wire.push(e.payload);
+      return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  for (let i = 0; i < 64; i += 1)
+    assert.equal(await f.session.trigger(0, 100, "pointer", {}), false);
+  assert.equal(wire.length, 0, "non-running refusals have no Native handoff");
+  assert.equal(await f.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  for (let i = 0; i < 64; i += 1)
+    assert.equal(await f.session.trigger(0, 0, "pointer", {}), false);
+  assert.equal(wire.length, 0, "invalid velocity also has no Native handoff");
+  const key = {};
+  assert.equal((await f.session.trigger(0, 100, "pointer", key)).sequence, 1);
+  assert.equal(await f.session.release(0, "pointer", key), true);
+  assert.deepEqual(wire, [{slot: 0, velocity: 100}, {slot: 0, kind: "release"}]);
+  const next = {};
+  assert.equal((await f.session.trigger(1, 100, "pointer", next)).sequence, 2);
+  assert.equal(await f.session.release(1, "pointer", next), true);
+  assert.equal(await f.session.close(), true);
+});
+
+test("a swallowed submitted-unknown legacy false retains its original capacity until real matching Release", async () => {
+  let sequence = 0;
+  const wire = [];
+  let releaseUnknown;
+  let unknownStarted;
+  const ready = new Promise(resolve => {unknownStarted = resolve;});
+  let releaseObserved;
+  const genuineRelease = new Promise(resolve => {releaseObserved = resolve;});
+  const f = legacyOwnerClosureFixture({beforeSeal: () => genuineRelease, send: async e => {
+    if (e.operation === "trigger") {
+      wire.push(e.payload);
+      if (e.payload.kind === "release") {
+        releaseObserved();
+        return success(e, {accepted: true});
+      }
+      sequence += 1;
+      if (sequence === 64) {
+        unknownStarted();
+        await new Promise(resolve => {releaseUnknown = resolve;});
+        throw Object.assign(new Error("original admission response lost"),
+          {code: "HOST_TIMEOUT", details: {pending: true}});
+      }
+      return success(e, {sequence});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "no cleanup initiated");
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "activation is not cleanup initiation");
+  const keys = Array.from({length: 64}, () => ({}));
+  for (let slot = 0; slot < 63; slot += 1)
+    assert.equal((await f.session.trigger(slot, 100, "pointer", keys[slot])).sequence, slot + 1);
+  const unknown = f.session.trigger(63, 100, "pointer", keys[63]);
+  await ready;
+  const matchingRelease = f.session.release(63, "pointer", keys[63]);
+  await assert.rejects(f.session.trigger(0, 100, "pointer", {}), /Too many open Pad gestures/);
+  releaseUnknown();
+  assert.equal(await unknown, false);
+  assert.equal(wire.filter(x => x.kind !== "release").length, 64,
+    "unknown false is not evidence that the original handoff never happened");
+  assert.equal(await matchingRelease, true);
+  // Fatal failure seals new admission. Do not turn that seal into a false
+  // capacity-reuse claim: retirement must follow real cleanup in this model.
+  await assert.rejects(f.session.trigger(0, 100, "pointer", {}), /Runtime session is closed/);
+  assert.deepEqual(wire.at(-1), {slot: 63, kind: "release"});
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  await f.terminationStarted;
+  const originalWait = f.session.waitForTerminalCleanup();
+  assert.equal(f.session.waitForTerminalCleanup(), originalWait);
+  let eligible = null;
+  void originalWait.then(value => {eligible = value;});
+  await drainTasks();
+  assert.equal(f.ownerTransport.terminalOwnerReleased, false);
+  assert.equal(eligible, null, "fatal cleanup cannot borrow legacy normal-close eligibility");
+  assert.equal(f.backendCloses(), 0);
+  f.deliverOwnerReceipt();
+  await f.backendStarted;
+  assert.equal(f.ownerTransport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running");
+  assert.equal(eligible, null, "full owner receipt is not backend closure");
+  f.releaseBackend();
+  assert.equal(await originalWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.backendCloses(), 1);
+  assert.equal(f.nativeStops(), 1);
+  assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.deepEqual(wire.at(-1), {slot: 63, kind: "release"});
+});
+
+test("legacy Release stays after its parked Press across the original dual-ready capture gate", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000090";
+  const performanceId = "40000000-0000-4000-8000-000000000091";
+  let acknowledge;
+  let tapStarting;
+  const tapReady = new Promise(resolve => {tapStarting = resolve;});
+  const wire = [];
+  let sequence = 0;
+  const tap = {destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    start(sink, binding) {
+      tapStarting();
+      return new Promise(resolve => {acknowledge = () => resolve({binding, generation: 1,
+        stop: async () => {sink.onStopped();}});});
+    }, failProcessor() {}, async close() {}};
+  const f = fixture({browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS, performanceMasterTapUrl: "./assets/perform-master-tap.js"},
+    createPerformanceMasterTap: async () => tap,
+    send: async e => {
+      if (e.operation === "performance.record.begin") return success(e, {
+        performance_id: performanceId, committed_revision: 1, replayed: false,
+        profile: "header_input_sequence", control_epoch: LIVE_EPOCH, core_control_ready: true,
+        next_recording_sequence: "0", fx_bindings: [], project_revision: 1});
+      if (e.operation === "trigger") {
+        wire.push(e.payload);
+        return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+      }
+      return success(e, defaultResult(e.operation));
+    }});
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const begin = f.session.beginPerformanceRecording({sessionId, performanceId, expectedRevision: 0,
+    controlEpoch: LIVE_EPOCH, captureSink: {onBatch() {}, onStopped() {}, onFailure() {}}});
+  await tapReady;
+  const key = {};
+  const press = f.session.trigger(2, 100, "pointer", key);
+  const release = f.session.release(2, "pointer", key);
+  await drainTasks();
+  assert.deepEqual(wire, [], "neither the parked Press nor its Release overtakes readiness");
+  acknowledge();
+  assert.equal((await begin).coreControlReady, true);
+  assert.equal((await press).sequence, 1);
+  assert.equal(await release, true);
+  assert.deepEqual(wire, [{slot: 2, velocity: 100}, {slot: 2, kind: "release"}]);
+  const fresh = {};
+  assert.equal((await f.session.trigger(3, 100, "pointer", fresh)).sequence, 2);
+  assert.equal(await f.session.release(3, "pointer", fresh), true);
+  assert.equal(await f.session.close(), true);
+});
+
+test("legacy Release waits for its original first admission including a submitted-unknown response", async () => {
+  for (const unknown of [false, true]) {
+    let releaseAdmission;
+    let admissionStarted;
+    const ready = new Promise(resolve => {admissionStarted = resolve;});
+    const wire = [];
+    const f = fixture({send: async e => {
+      if (e.operation !== "trigger") return success(e, defaultResult(e.operation));
+      wire.push(e.payload);
+      if (e.payload.kind === "release") return success(e, {accepted: true});
+      admissionStarted();
+      await new Promise(resolve => {releaseAdmission = resolve;});
+      if (unknown) throw Object.assign(new Error("original response lost"),
+        {code: "HOST_TIMEOUT", details: {pending: true}});
+      return success(e, {sequence: 1});
+    }});
+    await f.session.start();
+    await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+    const key = {};
+    const press = f.session.trigger(4, 100, "keyboard", key);
+    await ready;
+    const release = f.session.release(4, "keyboard", key);
+    await drainTasks();
+    assert.deepEqual(wire, [{slot: 4, velocity: 100}]);
+    releaseAdmission();
+    const admitted = await press;
+    assert.equal(unknown ? admitted : admitted.sequence, unknown ? false : 1);
+    assert.equal(await release, true);
+    assert.deepEqual(wire, [{slot: 4, velocity: 100}, {slot: 4, kind: "release"}]);
+    if (unknown) {
+      assert.equal(f.session.diagnostics().error_code, "HOST_TIMEOUT");
+      await f.session.waitForTerminalCleanup();
+    } else assert.equal(await f.session.close(), true);
+  }
+});
+
+test("Performance matching Release reservations are bounded while foreign and duplicate events cannot borrow them", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000092";
+  const id = (prefix, i) => `40000000-0000-4000-${prefix}-${String(i + 1).padStart(12, "0")}`;
+  let releaseFirst;
+  let firstStarted;
+  const ready = new Promise(resolve => {firstStarted = resolve;});
+  const wire = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      wire.push(e.payload);
+      if (wire.length === 1) {firstStarted(); await new Promise(resolve => {releaseFirst = resolve;});}
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: wire.length,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const presses = Array.from({length: 64}, (_, slot) => f.session.recordPerformanceEvent({sessionId,
+    eventId: id("9100", slot), event: {kind: "pad_press", gestureId: id("9200", slot), slot, velocity: 100}}));
+  await ready;
+  const releases = Array.from({length: 64}, (_, slot) => f.session.recordPerformanceEvent({sessionId,
+    eventId: id("9300", slot), event: {kind: "pad_release", gestureId: id("9200", slot), slot}}));
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9400", 64),
+    event: {kind: "pad_press", gestureId: id("9200", 0), slot: 0, velocity: 100}}), /already owns a Press position/);
+  for (let i = 0; i < 64; i += 1) {
+    await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9400", i),
+      event: {kind: "pad_release", gestureId: id("9200", 0), slot: 0}}), /Release is already reserved/);
+  }
+  // Preserve the original foreign/replay API within the ordinary 1+1 window.
+  const foreign = f.session.recordPerformanceEvent({sessionId, eventId: id("9500", 0),
+    event: {kind: "pad_release", gestureId: id("9600", 0), slot: 0}});
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9500", 65),
+    event: {kind: "pad_release", gestureId: id("9200", 0), slot: 1}}), /Live input window is full/,
+    "a wrong-slot UUID Release has no original owner reservation to borrow");
+  for (let i = 1; i <= 64; i += 1) {
+    await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id("9500", i),
+      event: {kind: "pad_release", gestureId: id("9600", i), slot: 0}}), /Live input window is full/);
+  }
+  assert.equal(wire.length, 1, "no matching or foreign Release bypasses the original receipt");
+  releaseFirst();
+  await Promise.all(presses);
+  await Promise.all(releases);
+  await foreign;
+  assert.deepEqual(wire.slice(64, 128).map(x => [x.event.gesture_id, x.event.slot]),
+    Array.from({length: 64}, (_, slot) => [id("9200", slot), slot]));
+  const fresh = {sessionId, eventId: id("9700", 0),
+    event: {kind: "pad_press", gestureId: id("9800", 0), slot: 0, velocity: 100}};
+  await f.session.recordPerformanceEvent(fresh);
+  await f.session.recordPerformanceEvent({sessionId, eventId: id("9900", 0),
+    event: {kind: "pad_release", gestureId: fresh.event.gestureId, slot: 0}});
+  assert.equal(wire.length, 131, "all 64 original Releases complete and return their owner capacity");
+  assert.equal(await f.session.close(), true);
+});
+
+test("Performance cleanup owns one token while a received gesture still completes before stop", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000093";
+  const performanceId = "40000000-0000-4000-8000-000000000094";
+  const id = i => `40000000-0000-4000-8000-${String(i + 100).padStart(12, "0")}`;
+  let releaseFirst;
+  let firstStarted;
+  const ready = new Promise(resolve => {firstStarted = resolve;});
+  const wire = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      wire.push([e.operation, e.payload.event.kind]);
+      if (wire.length === 1) {firstStarted(); await new Promise(resolve => {releaseFirst = resolve;});}
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: wire.length,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    if (e.operation === "performance.record.stop") {
+      wire.push([e.operation, e.payload.request_id]);
+      return success(e, {request_id: e.payload.request_id, session_id: sessionId, performance_id: performanceId,
+        state: "stopped", pending_event_count: 0, replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const press = f.session.recordPerformanceEvent({sessionId, eventId: id(1),
+    event: {kind: "pad_press", gestureId: id(2), slot: 0, velocity: 100}});
+  await ready;
+  const release = f.session.recordPerformanceEvent({sessionId, eventId: id(3),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}});
+  const ordinary = f.session.recordPerformanceEvent({sessionId, eventId: id(4), event: {kind: "hold_on"}});
+  const cancelled = assert.rejects(ordinary, /cancelled before Core admission/);
+  const stop = f.session.stopPerformanceRecording({sessionId, requestId: id(5)});
+  for (let i = 6; i < 70; i += 1)
+    await assert.rejects(f.session.stopPerformanceRecording({sessionId, requestId: id(i)}), /cleanup token is already reserved/);
+  assert.deepEqual(wire, [["performance.record.event", "pad_press"]]);
+  await cancelled;
+  releaseFirst();
+  await press;
+  await release;
+  assert.equal((await stop).requestId, id(5));
+  assert.deepEqual(wire, [["performance.record.event", "pad_press"],
+    ["performance.record.event", "pad_release"], ["performance.record.stop", id(5)]]);
+  const next = await f.session.stopPerformanceRecording({sessionId, requestId: id(70)});
+  assert.equal(next.requestId, id(70), "the token is reusable after its original successful receipt");
+  assert.equal(await f.session.close(), true);
+});
+
+
+test("close truthfully cancels a never-admitted legacy Press and its queued real Release", async () => {
+  let releaseAdmission;
+  let admissionStarted;
+  const ready = new Promise(resolve => {admissionStarted = resolve;});
+  const wire = [];
+  const f = legacyOwnerClosureFixture({send: async e => {
+    if (e.operation !== "trigger") return success(e, defaultResult(e.operation));
+    wire.push(e.payload);
+    admissionStarted();
+    await new Promise(resolve => {releaseAdmission = resolve;});
+    return success(e, {sequence: 1});
+  }});
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "no cleanup initiated");
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(await f.session.waitForTerminalCleanup(), false, "activation is not cleanup initiation");
+  const admitted = f.session.trigger(0, 100, "pointer", {});
+  await ready;
+  const key = {};
+  const queued = f.session.trigger(1, 100, "pointer", key);
+  const release = f.session.release(1, "pointer", key);
+  const pressRejected = assert.rejects(queued, /cancelled before Core admission/);
+  const releaseRejected = assert.rejects(release, /cancelled before Core admission/);
+  const closing = f.session.close();
+  await pressRejected;
+  await releaseRejected;
+  assert.deepEqual(wire, [{slot: 0, velocity: 100}], "no fabricated Release or cancelled Press reached Native");
+  releaseAdmission();
+  assert.equal(await admitted, false);
+  await f.terminationStarted;
+  const originalWait = f.session.waitForTerminalCleanup();
+  assert.equal(f.session.waitForTerminalCleanup(), originalWait);
+  let eligible = null;
+  let closed = null;
+  void originalWait.then(value => {eligible = value;});
+  void closing.then(value => {closed = value;});
+  await drainTasks();
+  assert.equal(f.ownerTransport.terminalOwnerReleased, false);
+  assert.equal(eligible, null);
+  assert.equal(closed, null, "public close waits the original owner resources");
+  assert.equal(f.backendCloses(), 0);
+  f.deliverOwnerReceipt();
+  await f.backendStarted;
+  assert.equal(f.ownerTransport.terminalOwnerReleased, true);
+  assert.equal(f.context.state, "running");
+  assert.equal(eligible, null, "normal close still needs independent backend closure");
+  assert.equal(closed, null);
+  f.releaseBackend();
+  assert.equal(await closing, true);
+  assert.equal(await originalWait, true);
+  assert.equal(f.context.state, "closed");
+  assert.equal(f.backendCloses(), 1);
+  assert.equal(f.nativeStops(), 1);
+  assert.equal(f.session.diagnostics().error_code, null);
+  assert.deepEqual(wire, [{slot: 0, velocity: 100}]);
+});
+
+test("unknown Performance Release retains the original reserved position until actual cleanup", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000095";
+  const performanceId = "40000000-0000-4000-8000-000000000096";
+  const id = i => `40000000-0000-4000-8000-${String(i + 200).padStart(12, "0")}`;
+  let loseRelease = true;
+  const wire = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.event") {
+      wire.push(e.payload);
+      if (e.payload.event.kind === "pad_release" && loseRelease)
+        throw Object.assign(new Error("matching Release receipt lost"), {code: "HOST_TIMEOUT", details: {pending: true}});
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0, input_sequence: wire.length,
+        coalesced: false, replayed: false, project_revision: null});
+    }
+    if (e.operation === "performance.record.stop") return success(e, {
+      request_id: e.payload.request_id, session_id: sessionId, performance_id: performanceId,
+      state: "stopped", pending_event_count: 0, replayed: false, project_revision: null});
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  await f.session.recordPerformanceEvent({sessionId, eventId: id(1),
+    event: {kind: "pad_press", gestureId: id(2), slot: 0, velocity: 100}});
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id(3),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}}), {code: "HOST_TIMEOUT"});
+  await assert.rejects(f.session.recordPerformanceEvent({sessionId, eventId: id(4),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}}), /Release is already reserved/);
+  assert.equal(wire.length, 2, "caller rejection did not retire or redispatch the unknown Release");
+  assert.equal((await f.session.stopPerformanceRecording({sessionId, requestId: id(5)})).state, "stopped");
+  loseRelease = false;
+  await f.session.recordPerformanceEvent({sessionId, eventId: id(6),
+    event: {kind: "pad_press", gestureId: id(2), slot: 0, velocity: 100}});
+  await f.session.recordPerformanceEvent({sessionId, eventId: id(7),
+    event: {kind: "pad_release", gestureId: id(2), slot: 0}});
+  assert.deepEqual(wire.slice(2).map(x => x.event.kind), ["pad_press", "pad_release"]);
+  assert.equal(await f.session.close(), true);
+});
+
+test("unknown Performance cleanup keeps the singleton token after its caller rejects", async () => {
+  const sessionId = "40000000-0000-4000-8000-000000000097";
+  const requestId = "40000000-0000-4000-8000-000000000098";
+  const stops = [];
+  const f = fixture({send: async e => {
+    if (e.operation === "performance.record.stop") {
+      stops.push(e.payload);
+      throw Object.assign(new Error("original cleanup receipt lost"), {code: "HOST_TIMEOUT", details: {pending: true}});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  await assert.rejects(f.session.stopPerformanceRecording({sessionId, requestId}), {code: "HOST_TIMEOUT"});
+  await assert.rejects(f.session.stopPerformanceRecording({sessionId,
+    requestId: "40000000-0000-4000-8000-000000000099"}), /cleanup token is already reserved/);
+  assert.deepEqual(stops, [{session_id: sessionId, request_id: requestId}]);
+  assert.equal(await f.session.close(), true);
+  assert.equal(await f.session.waitForTerminalCleanup(), true);
+});
+
+
+// Shared physical capacity witnesses use original public APIs and actual
+// producer/consumer IDs. Injected transports prove SDK ownership, not hearing.
+const SHARED_SESSION = "51000000-0000-4000-8000-000000000001";
+function sharedId(group, index) {
+  return `51000000-0000-4000-${group}-${String(index + 1).padStart(12, "0")}`;
+}
+function sharedPerformanceReply(e) {
+  if (e.operation === "performance.record.event") return success(e, {
+    event_id: e.payload.event_id, accepted_tick: 0, input_sequence: 1,
+    coalesced: false, replayed: false, project_revision: null});
+  if (e.operation === "performance.record.stop") return success(e, {
+    request_id: e.payload.request_id, session_id: e.payload.session_id,
+    performance_id: sharedId("8800", 0), state: "stopped", pending_event_count: 0,
+    replayed: false, project_revision: null});
+  return null;
+}
+function sharedPad(index, kind = "pad_press", slot = 0) {
+  return {sessionId: SHARED_SESSION, eventId: sharedId(kind === "pad_press" ? "8100" : "8300", index),
+    event: {kind, gestureId: sharedId("8200", index), slot,
+      ...(kind === "pad_press" ? {velocity: 100} : {})}};
+}
+
+test("64 physical presses share Pattern and Performance positions and both actual domains must retire", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const keys = Array.from({length: 64}, () => ({}));
+  const leases = keys.map(key => f.session.reserveInputGesture(key, 0, "pointer"));
+  assert.ok(leases.every(lease => lease !== null));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  // Distinct physical keys on the SAME Pad remain distinct retained presses.
+  const bothDomains = keys.flatMap((key, index) => index % 2 === 0
+    // Creator's real observer enters Performance BEFORE deferred Pattern work.
+    ? [f.session.recordPerformanceEvent(sharedPad(index), key), f.session.trigger(0, 100, "pointer", key)]
+    : [f.session.trigger(0, 100, "pointer", key), f.session.recordPerformanceEvent(sharedPad(index), key)]);
+  await Promise.all(bothDomains);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 64);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 64);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(64), {}), {code: "HOST_STATE_INVALID"});
+  assert.equal(await f.session.trigger(0, 100, "pointer", {}), false);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 64);
+  // Neither a duplicate domain nor a foreign local key can borrow a position.
+  await assert.rejects(f.session.recordPerformanceEvent({...sharedPad(0), eventId: sharedId("8400", 0)}, keys[0]),
+    /already owns a Press/);
+  for (let index = 0; index < 64; index += 1) {
+    leases[index].releasePhysical();
+    await f.session.recordPerformanceEvent(sharedPad(index, "pad_release"), keys[index]);
+  }
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "Performance Release alone is not Pattern caller/physical retirement");
+  assert.equal(await f.session.release(0, "pointer", keys[0]), true);
+  const freshKey = {};
+  const freshLease = f.session.reserveInputGesture(freshKey, 0, "pointer");
+  assert.notEqual(freshLease, null);
+  freshLease.cancelUnsubmittedPattern();
+  for (let index = 1; index < 64; index += 1)
+    assert.equal(await f.session.release(0, "pointer", keys[index]), true);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 128);
+  const finalKey = {};
+  const finalLease = f.session.reserveInputGesture(finalKey, 0, "pointer");
+  assert.notEqual(finalLease, null);
+  await f.session.trigger(0, 100, "pointer", finalKey);
+  finalLease.releasePhysical();
+  assert.equal(await f.session.release(0, "pointer", finalKey), true);
+  await f.session.close();
+});
+
+test("uncorrelated direct callers share the combined 64 cap without guessing UUID or Pad equivalence", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  for (let index = 0; index < 32; index += 1)
+    assert.notEqual(await f.session.trigger(0, 100, "pointer"), false);
+  for (let index = 0; index < 32; index += 1)
+    await f.session.recordPerformanceEvent(sharedPad(index));
+  assert.equal(await f.session.trigger(0, 100, "pointer"), false);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(32)),
+    error => error.code === "HOST_STATE_INVALID" && error.details.pending === false);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 32);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 32);
+  await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"));
+  await f.session.recordPerformanceEvent(sharedPad(32));
+  for (let index = 0; index < 32; index += 1)
+    assert.equal(await f.session.release(0, "pointer"), true);
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 0)});
+  assert.notEqual(await f.session.trigger(0, 100, "pointer"), false);
+  assert.equal(await f.session.release(0, "pointer"), true);
+  await f.session.close();
+});
+
+test("definite unsubmitted preparation frees capacity and its stale leased key cannot resurrect", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  lease.cancelUnsubmittedPattern();
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  assert.equal(f.session.reserveInputGesture(key, 0, "pointer"), null);
+  assert.equal(await f.session.trigger(0, 100, "pointer", key), false);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(0), key), {code: "HOST_STATE_INVALID"});
+  lease.releasePhysical();
+  assert.equal(f.sent.filter(e => /input.request|record.event/.test(e.operation)).length, 0);
+  for (const other of others) other.cancelUnsubmittedPattern();
+  // A known local trigger refusal transfers no physical/caller debt.
+  for (let index = 0; index < 64; index += 1) {
+    const refusedKey = {};
+    const refused = f.session.reserveInputGesture(refusedKey, 0, "pointer");
+    assert.notEqual(refused, null);
+    assert.equal(await f.session.trigger(0, 0, "pointer", refusedKey), false);
+    refused.cancelUnsubmittedPattern();
+  }
+  const fresh = {};
+  const accepted = f.session.reserveInputGesture(fresh, 0, "pointer");
+  assert.notEqual(accepted, null);
+  assert.notEqual(await f.session.trigger(0, 100, "pointer", fresh), false);
+  accepted.releasePhysical();
+  assert.equal(await f.session.release(0, "pointer", fresh), true);
+  await f.session.close();
+});
+
+test("unknown Performance Press retains its shared place after physical and Pattern release until real Stop", async () => {
+  let losePress = true;
+  const f = inputProfileFixture({extraSend: e => {
+    if (e.operation === "performance.record.event" && losePress) {
+      losePress = false;
+      throw Object.assign(new Error("original journal Press receipt lost"),
+        {code: "HOST_TIMEOUT", details: {pending: true}});
+    }
+    return sharedPerformanceReply(e);
+  }});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.trigger(0, 100, "pointer", key);
+  await assert.rejects(f.session.recordPerformanceEvent(sharedPad(0), key), {code: "HOST_TIMEOUT"});
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  lease.releasePhysical();
+  assert.equal(await f.session.release(0, "pointer", key), true);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "observer rejection and one-sided real release do not retire unknown journal ownership");
+  assert.equal((await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION,
+    requestId: sharedId("8700", 1)})).state, "stopped");
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+test("a cancelled Pattern preparation cannot be reattached while the same physical journal owner lives", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), key);
+  lease.cancelUnsubmittedPattern();
+  assert.equal(await f.session.trigger(0, 100, "pointer", key), false);
+  lease.releasePhysical();
+  await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"), key);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 0);
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+test("synthetic journal Release and Stop reuse the exact UUID owner without ending its physical lease", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), key);
+  lease.cancelUnsubmittedPattern(); // Only the journal received this physical press.
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  // The Host closes journal gestures with the genuine original UUID. That
+  // does not attest that the pointer is physically up.
+  await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"));
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 2)});
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  lease.releasePhysical();
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+test("Creator preparation time before the SDK trigger does not spend the Pattern input budget", async () => {
+  let now = 0;
+  const f = inputProfileFixture({now: () => now});
+  await activateInputProfile(f);
+  const key = {};
+  assert.notEqual(f.session.reserveInputGesture(key, 0, "pointer"), null);
+  now = 1001;
+  assert.equal((await f.session.trigger(0, 100, "pointer", key)).sequence, 1);
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 1);
+  assert.equal(await f.session.release(0, "pointer", key), true);
+  await f.session.close();
+});
+
+test("a sixteen-Pad burst queued in the SDK charges each Press and Release only from its own admission turn", async () => {
+  let now = 0;
+  // Each Native admission costs 125 ms, so the ninth queued Press would be
+  // dispatched after one second if queue time were charged.
+  const f = inputProfileFixture({now: () => now, onRequest: () => { now += 125; }});
+  await activateInputProfile(f);
+  const keys = Array.from({length: 16}, () => ({}));
+  const admissions = await Promise.all(keys.map((key, slot) => f.session.trigger(slot, 100, "pointer", key)));
+  assert.deepEqual(admissions.map(a => a.sequence), Array.from({length: 16}, (_, i) => i + 1));
+  assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.request").length, 16);
+  // Sixteen queued Releases follow the same rule.
+  assert.deepEqual(await Promise.all(keys.map((key, slot) => f.session.release(slot, "pointer", key))),
+    Array(16).fill(true));
+  await f.session.close();
+});
+
+test("a sixteen-Pad legacy burst charges each trigger and Release only from its own turn", async () => {
+  let now = 0;
+  let sequence = 0;
+  // Each legacy trigger round trip costs 125 ms, so the ninth queued input
+  // would expire before dispatch if queue time were charged.
+  const f = fixture({now: () => now, send: async (e) => {
+    if (e.operation !== "trigger") return success(e, defaultResult(e.operation));
+    now += 125;
+    return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+  }});
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const keys = Array.from({length: 16}, () => ({}));
+  const presses = keys.map((key, slot) => f.session.trigger(slot, 100, "keyboard", key));
+  const releases = keys.map((key, slot) => f.session.release(slot, "keyboard", key));
+  assert.deepEqual((await Promise.all(presses)).map(value => value.sequence),
+    Array.from({length: 16}, (_, i) => i + 1));
+  assert.deepEqual(await Promise.all(releases), Array(16).fill(true));
+  await f.session.close();
+});
+
+test("keyless legacy retriggers of one Pad hold one position, as on main", async () => {
+  let sequence = 0;
+  const f = fixture({send: async (e) => e.operation === "trigger"
+    ? success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence})
+    : success(e, defaultResult(e.operation))});
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  // A one-shot caller that never releases must not exhaust the 64 positions.
+  for (let index = 0; index < 200; index += 1)
+    assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, index + 1);
+  const keys = Array.from({length: 63}, () => ({}));
+  for (const [index, key] of keys.entries())
+    assert.notEqual(await f.session.trigger(index + 1, 100, "pointer", key), false);
+  // Slot 0's keyless position plus 63 keyed gestures fill the window.
+  await assert.rejects(f.session.trigger(1, 100, "pointer", {}),
+    error => error.code === "HOST_STATE_INVALID");
+  // The keyless Release frees slot 0's position for a new keyed gesture.
+  assert.equal(await f.session.release(0, "pointer"), true);
+  assert.notEqual(await f.session.trigger(0, 100, "pointer", {}), false);
+  await f.session.close();
+});
+
+
+for (const elapsed of [650, 1001]) {
+  test(`legacy queued Release spends its original one-second budget at the real Host handoff (${elapsed}ms)`, async () => {
+    let now = 0;
+    let resolveQuery;
+    let startedQuery;
+    const queryStarted = new Promise(resolve => {startedQuery = resolve;});
+    const releaseOptions = [];
+    let sequence = 0;
+    const f = fixture({now: () => now, send: async (e, options) => {
+      if (e.operation === "project.inspect") {
+        startedQuery();
+        return new Promise(resolve => {resolveQuery = () => resolve(success(e, defaultResult(e.operation)));});
+      }
+      if (e.operation === "trigger") {
+        if (e.payload.kind === "release") {
+          releaseOptions.push(options.deadlineMs);
+          return success(e, {accepted: true});
+        }
+        return success(e, {sequence: ++sequence});
+      }
+      return success(e, defaultResult(e.operation));
+    }});
+    await f.session.start();
+    await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+    const key = {};
+    assert.equal((await f.session.trigger(0, 100, "pointer", key)).sequence, 1);
+    const query = f.session.inspectProject();
+    await queryStarted;
+    const release = f.session.release(0, "pointer", key);
+    // Observe the original rejection immediately while its actual dispatch
+    // remains parked; no timeout is widened or reset by query completion.
+    const result = release.then(value => ({value}), error => ({error}));
+    await drainTasks();
+    assert.deepEqual(releaseOptions, []);
+    now = elapsed;
+    resolveQuery();
+    await query;
+    const observed = await result;
+    if (elapsed < 1000) {
+      assert.equal(observed.value, true);
+      assert.deepEqual(releaseOptions, [1000 - elapsed]);
+    } else {
+      assert.equal(observed.error.code, "HOST_TIMEOUT");
+      assert.equal(observed.error.details.pending, false);
+      assert.deepEqual(releaseOptions, [], "expired original Release never reaches Native");
+      // Only a fresh explicit retry after definite non-submission may use a
+      // new budget, matching the still-retained original Press owner.
+      assert.equal(await f.session.release(0, "pointer", key), true);
+      assert.deepEqual(releaseOptions, [1000]);
+    }
+    assert.equal((await f.session.trigger(0, 100, "pointer", {})).sequence, 2);
+    assert.equal(await f.session.release(0, "pointer"), true);
+    await f.session.close();
+  });
+}
+
+
+test("foreign Pattern Release cannot end a journal-only or differently-addressed original physical lease", async () => {
+  const f = inputProfileFixture({extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const journalKey = {};
+  const journalLease = f.session.reserveInputGesture(journalKey, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), journalKey);
+  journalLease.cancelUnsubmittedPattern();
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  assert.equal(await f.session.release(1, "pointer", journalKey), false);
+  assert.equal(await f.session.release(0, "keyboard", journalKey), false);
+  assert.equal(await f.session.release(0, "pointer", journalKey), false,
+    "journal-only owner has no Pattern Press whose Release can attest keyup");
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 3)});
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "foreign false and genuine journal Stop cannot retire a still-held physical lease");
+  journalLease.releasePhysical();
+  const patternKey = {};
+  const patternLease = f.session.reserveInputGesture(patternKey, 0, "pointer");
+  assert.notEqual(patternLease, null);
+  assert.notEqual(await f.session.trigger(0, 100, "pointer", patternKey), false);
+  assert.equal(await f.session.release(1, "pointer", patternKey), false);
+  assert.equal(await f.session.release(0, "keyboard", patternKey), false);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  assert.equal(await f.session.release(0, "pointer", patternKey), true,
+    "only the exact original Pattern owner is actual matching Release authority");
+  const finalLease = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(finalLease, null);
+  finalLease.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+test("foreign legacy Release success is not the journal-only physical owner's matching keyup", async () => {
+  const f = fixture({send: async e => {
+    const performance = sharedPerformanceReply(e);
+    if (performance !== null) return performance;
+    if (e.operation === "trigger") return success(e, {accepted: true});
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.recordPerformanceEvent(sharedPad(0), key);
+  lease.cancelUnsubmittedPattern();
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(x => x !== null));
+  // Preserve the old foreign wire API: a Native no-owner Release may return
+  // true. Only a matching original local Press could attest physical end.
+  assert.equal(await f.session.release(1, "pointer", key), true);
+  assert.equal(await f.session.release(0, "keyboard", key), true);
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 4)});
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  lease.releasePhysical();
+  const next = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(next, null);
+  next.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+for (const receipt of ["foreign-session", "foreign-request", "original-owner"]) {
+  test(`shared journal capacity requires the original Stop session and request receipt (${receipt})`, async () => {
+    let losePress = true;
+    const stopRequestId = sharedId("8700", 5);
+    const stops = [];
+    const f = inputProfileFixture({extraSend: e => {
+      if (e.operation === "performance.record.event" && losePress) {
+        losePress = false;
+        throw Object.assign(new Error("original Press receipt lost"),
+          {code: "HOST_TIMEOUT", details: {pending: true}});
+      }
+      if (e.operation === "performance.record.stop") {
+        stops.push(e.payload);
+        return success(e, {
+          request_id: receipt === "foreign-request" ? sharedId("8700", 6) : e.payload.request_id,
+          session_id: receipt === "foreign-session" ? sharedId("8900", 0) : e.payload.session_id,
+          performance_id: sharedId("8800", 0), state: "stopped", pending_event_count: 0,
+          replayed: false, project_revision: null});
+      }
+      return sharedPerformanceReply(e);
+    }});
+    await activateInputProfile(f);
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "pointer");
+    await assert.rejects(f.session.recordPerformanceEvent(sharedPad(0), key), {code: "HOST_TIMEOUT"});
+    lease.cancelUnsubmittedPattern();
+    lease.releasePhysical();
+    const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+    assert.ok(others.every(x => x !== null));
+    assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+    const stop = f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: stopRequestId});
+    if (receipt === "original-owner") {
+      const result = await stop;
+      assert.equal(result.requestId, stopRequestId);
+      assert.equal(result.sessionId, SHARED_SESSION);
+      const next = f.session.reserveInputGesture({}, 0, "pointer");
+      assert.notEqual(next, null, "only this original genuine Stop can retire its unknown journal owner");
+      next.cancelUnsubmittedPattern();
+    } else {
+      await assert.rejects(stop, {code: "HOST_PROTOCOL_MISMATCH"});
+      assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+        "a valid outer envelope with a foreign nested receipt is no refund authority");
+      await assert.rejects(f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: stopRequestId}),
+        /cleanup token is already reserved/);
+    }
+    assert.deepEqual(stops, [{session_id: SHARED_SESSION, request_id: stopRequestId}]);
+    for (const other of others) other.cancelUnsubmittedPattern();
+    await f.session.close();
+    if (receipt !== "original-owner") assert.equal(await f.session.waitForTerminalCleanup(), false,
+      "a Pattern/backend close cannot substitute for the unknown journal Stop receipt");
+  });
+}
+
+
+for (const profile of [true, false]) {
+  test(`${profile ? "profile" : "legacy"} keyless Native Release preserves a still-held leased physical place after journal cleanup`, async () => {
+    const legacyInputs = [];
+    let sequence = 0;
+    const f = profile ? inputProfileFixture({extraSend: sharedPerformanceReply})
+      : fixture({send: async e => {
+        const performance = sharedPerformanceReply(e);
+        if (performance !== null) return performance;
+        if (e.operation === "trigger") {
+          legacyInputs.push(e.payload);
+          return success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence});
+        }
+        return success(e, defaultResult(e.operation));
+      }});
+    if (profile) await activateInputProfile(f);
+    else {
+      await f.session.start();
+      await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+    }
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "keyboard");
+    await f.session.recordPerformanceEvent(sharedPad(0), key);
+    assert.notEqual(await f.session.trigger(0, 100, "keyboard", key), false);
+    lease.cancelUnsubmittedPattern(); // Already transferred; this is not a refund.
+    const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+    assert.ok(others.every(x => x !== null));
+    // Preserve actual old slot/source selection and native consume while the
+    // physical keyboard is still down. This caller supplied NO physical key.
+    assert.equal(await f.session.release(0, "keyboard"), true);
+    if (profile) {
+      const releases = f.sent.filter(e => e.operation === "pattern.transport.input.request" && e.payload.kind === "release");
+      assert.equal(releases.length, 1);
+      assert.equal(releases[0].payload.held_press_sequence, "1");
+      assert.equal(f.sent.filter(e => e.operation === "pattern.transport.input.inspect" && e.payload.consume).length, 2);
+    } else {
+      assert.deepEqual(legacyInputs, [{slot: 0, velocity: 100}, {slot: 0, kind: "release"}]);
+    }
+    // Synthetic journal Release reuses the original UUID owner without a
+    // physical key. Neither it nor a real matching journal Stop is keyup.
+    await f.session.recordPerformanceEvent(sharedPad(0, "pad_release"));
+    assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+    await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 7)});
+    assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+      "both actual domains settled but their real physical lease is still held");
+    lease.releasePhysical();
+    const nextKey = {};
+    const nextLease = f.session.reserveInputGesture(nextKey, 0, "keyboard");
+    assert.notEqual(nextLease, null, "only actual physical end returned the shared place");
+    assert.notEqual(await f.session.trigger(0, 100, "keyboard", nextKey), false);
+    assert.equal(await f.session.release(0, "keyboard", nextKey), true,
+      "explicit original key still ends the fresh physical gesture and consumes its Native owner");
+    const finalLease = f.session.reserveInputGesture({}, 0, "pointer");
+    assert.notEqual(finalLease, null);
+    finalLease.cancelUnsubmittedPattern();
+    for (const other of others) other.cancelUnsubmittedPattern();
+    await f.session.close();
+  });
+}
+
+
+test("prepared Performance Pad keeps its shared place after Pattern retirement and submits its snapshot once", async () => {
+  const f = inputProfileFixture({now: () => 0, extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const request = sharedPad(0);
+  const prepared = f.session.preparePerformancePadEvent(request, key);
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  await f.session.trigger(0, 100, "pointer", key);
+  lease.releasePhysical();
+  await f.session.release(0, "pointer", key);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "actual Pattern consumption and keyup cannot retire a prepared Performance claim");
+  request.event.slot = 1;
+  const first = prepared.submit();
+  assert.equal(prepared.submit(), first);
+  await first;
+  assert.equal(prepared.cancelBeforeSubmit(), false);
+  assert.deepEqual(f.sent.filter(e => e.operation === "performance.record.event").map(e => e.payload.event),
+    [{kind: "pad_press", gesture_id: sharedId("8200", 0), slot: 0, velocity: 100}]);
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  await release.submit();
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+test("prepared matching Release cannot run ahead of its Press or borrow a foreign physical owner", async () => {
+  const f = fixture({now: () => 0, send: e => sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation))});
+  await f.session.start();
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  assert.throws(() => f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), {}),
+    /different physical owner/);
+  assert.throws(() => f.session.preparePerformancePadEvent(sharedPad(1, "pad_release"), key),
+    /different physical owner/);
+  const premature = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  await assert.rejects(premature.submit(), /Submit the original Pad Press/);
+  assert.equal(premature.cancelBeforeSubmit(), false);
+  await press.submit();
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  assert.throws(() => f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key), /already reserved/);
+  await release.submit();
+  lease.cancelUnsubmittedPattern();
+  assert.notEqual(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.close();
+});
+
+test("cancelling a prepared Press settles its unsubmitted Release pair without cancelling Pattern ownership", async () => {
+  const f = inputProfileFixture({now: () => 0, extraSend: sharedPerformanceReply});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  await f.session.trigger(0, 100, "pointer", key);
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  assert.equal(press.cancelBeforeSubmit(), true);
+  assert.equal(press.cancelBeforeSubmit(), false);
+  await assert.rejects(press.submit(), /cancelled before submission/);
+  await assert.rejects(release.submit(), /cancelled before submission/);
+  assert.equal(f.sent.filter(e => e.operation === "performance.record.event").length, 0);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null,
+    "cancelled Performance preparation is not a Pattern retirement receipt");
+  lease.releasePhysical();
+  await f.session.release(0, "pointer", key);
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+for (const boundary of ["stop", "close"]) {
+  test(`prepared Pad descriptors are invalidated by actual ${boundary} without reaching the wire`, async () => {
+    const wire = [];
+    const f = fixture({now: () => 0, send: e => {
+      if (e.operation === "performance.record.event") wire.push(e.payload);
+      return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+    }});
+    await f.session.start();
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "pointer");
+    const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+    const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+    lease.cancelUnsubmittedPattern();
+    lease.releasePhysical();
+    if (boundary === "stop") await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 9)});
+    else assert.equal(await f.session.close(), true);
+    await assert.rejects(press.submit(), /cancelled before Core admission/);
+    await assert.rejects(release.submit(), /cancelled before Core admission/);
+    assert.deepEqual(wire, []);
+    if (boundary === "stop") {
+      const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+      assert.notEqual(fresh, null);
+      fresh.cancelUnsubmittedPattern();
+      await f.session.close();
+    }
+  });
+}
+
+for (const kind of ["pad_press", "pad_release"]) {
+  test(`prepared ${kind} spends its budget only from its own turn, not across the Host wait`, async () => {
+    let clock = 0;
+    const wire = [];
+    const f = fixture({now: () => clock, send: e => {
+      if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
+      return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+    }});
+    await f.session.start();
+    const key = {};
+    const lease = f.session.reserveInputGesture(key, 0, "pointer");
+    const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+    let operation = press;
+    if (kind === "pad_release") {
+      await press.submit();
+      clock = 100;
+      lease.releasePhysical();
+      operation = f.session.preparePerformancePadEvent(sharedPad(0, kind), key);
+      clock = 1101;
+    } else clock = 1001;
+    await operation.submit();
+    assert.deepEqual(wire, kind === "pad_release" ? ["pad_press", "pad_release"] : ["pad_press"]);
+    lease.cancelUnsubmittedPattern();
+    lease.releasePhysical();
+    await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 10)});
+    await f.session.close();
+  });
+}
+
+test("prepared submitted-unknown Performance ownership cannot be cancelled by its observer", async () => {
+  let lose = true;
+  const f = inputProfileFixture({now: () => 0, extraSend: e => {
+    if (e.operation === "performance.record.event" && lose) {
+      lose = false;
+      throw Object.assign(new Error("original prepared Press receipt lost"), {code: "HOST_TIMEOUT", details: {pending: true}});
+    }
+    return sharedPerformanceReply(e);
+  }});
+  await activateInputProfile(f);
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  await assert.rejects(press.submit(), /original prepared Press receipt lost/);
+  assert.equal(press.cancelBeforeSubmit(), false);
+  lease.cancelUnsubmittedPattern();
+  lease.releasePhysical();
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.stopPerformanceRecording({sessionId: SHARED_SESSION, requestId: sharedId("8700", 11)});
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
+
+
+test("a prepared Press that expires in the Host queue cancels its queued Release without an orphan wire event", async () => {
+  let clock = 0;
+  const wire = [];
+  let queryStarted;
+  let releaseQuery;
+  const started = new Promise(resolve => { queryStarted = resolve; });
+  const gate = new Promise(resolve => { releaseQuery = resolve; });
+  const f = fixture({now: () => clock, send: e => {
+    if (e.operation === "project.inspect") {
+      queryStarted();
+      return gate.then(() => success(e, {project_revision: 7}));
+    }
+    if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
+    return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const press = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  const release = f.session.preparePerformancePadEvent(sharedPad(0, "pad_release"), key);
+  const query = f.session.inspectProject();
+  await started;
+  // The Press takes its turn, then waits behind the independent Host query
+  // until its own one-second budget is spent.
+  const results = Promise.allSettled([press.submit(), release.submit()]);
+  await drainTasks();
+  clock = 1001;
+  releaseQuery();
+  assert.equal((await query).project_revision, 7);
+  assert.deepEqual(wire, [], "a definitely never-submitted Press owns no wire Release");
+  assert.ok((await results).every(result => result.status === "rejected" &&
+    result.reason.code === "HOST_TIMEOUT" && result.reason.details.pending === false));
+  lease.cancelUnsubmittedPattern();
+  lease.releasePhysical();
+  assert.notEqual(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.close();
+});
+
+
+test("a held headered Pad reply remains bound to its original recording after close", async () => {
+  let enter, finish;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const gate = new Promise(resolve => { finish = resolve; });
+  const f = fixture({now: () => 0, send: async e => {
+    if (e.operation === "performance.record.begin") return success(e, {
+      performance_id: sharedId("8800", 0), committed_revision: 1, replayed: false,
+      profile: "header_input_sequence", control_epoch: LIVE_EPOCH, core_control_ready: true,
+      next_recording_sequence: "0", fx_bindings: [], project_revision: 1});
+    if (e.operation === "performance.record.event") {
+      assert.equal(e.payload.control_epoch, LIVE_EPOCH);
+      assert.equal(e.payload.expected_recording_sequence, "0");
+      enter();
+      await gate;
+      return success(e, {event_id: e.payload.event_id, accepted_tick: 0,
+        input_sequence: "1", next_recording_sequence: "1", result: "no_audio",
+        coalesced: false, gesture_generation: null, recording_gesture_id: null,
+        replayed: false, project_revision: null});
+    }
+    return success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  await f.session.beginPerformanceRecording({sessionId: SHARED_SESSION,
+    performanceId: sharedId("8800", 0), expectedRevision: 0, controlEpoch: LIVE_EPOCH});
+  const key = {};
+  const lease = f.session.reserveInputGesture(key, 0, "pointer");
+  const prepared = f.session.preparePerformancePadEvent(sharedPad(0), key);
+  const press = prepared.submit();
+  // Attach before close so the real rejected receipt is observed in RED.
+  const result = press.then(value => ({ok: true, value}), error => ({ok: false, error}));
+  await entered;
+  lease.cancelUnsubmittedPattern();
+  lease.releasePhysical();
+  const closing = f.session.close();
+  finish();
+  const actual = await result;
+  assert.equal(actual.ok, true, `original headered response lost: ${actual.error?.message}`);
+  assert.equal(actual.value.eventId, sharedPad(0).eventId);
+  assert.equal(actual.value.nextRecordingSequence, "1");
+  assert.equal(prepared.cancelBeforeSubmit(), false);
+  await closing;
+  assert.equal(await f.session.waitForTerminalCleanup(), false,
+    "Host closure does not prove this original Performance journal Press retired");
+});
+
+
+test("direct exact replay cannot submit a still-prepared Press outside its token", async () => {
+  const wire = [];
+  const f = fixture({now: () => 0, send: e => {
+    if (e.operation === "performance.record.event") wire.push(e.payload.event.kind);
+    return sharedPerformanceReply(e) ?? success(e, defaultResult(e.operation));
+  }});
+  await f.session.start();
+  const request = sharedPad(0);
+  const prepared = f.session.preparePerformancePadEvent(request);
+  const direct = await f.session.recordPerformanceEvent(request).then(() => null, error => error);
+  assert.deepEqual(wire, [], "the exact replay cannot bypass a never-submitted token's ownership");
+  assert.equal(direct.code, "HOST_STATE_INVALID");
+  assert.equal(prepared.cancelBeforeSubmit(), true);
+  await assert.rejects(prepared.submit(), /cancelled before submission/);
+  const nextRequest = sharedPad(1);
+  const next = f.session.preparePerformancePadEvent(nextRequest);
+  const others = Array.from({length: 63}, () => f.session.reserveInputGesture({}, 0, "pointer"));
+  assert.ok(others.every(Boolean));
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await next.submit();
+  assert.equal(next.cancelBeforeSubmit(), false);
+  // Once the original token handed off, exact replay keeps the old bounded
+  // ordinary API and cannot allocate a second shared position.
+  await f.session.recordPerformanceEvent(nextRequest);
+  assert.equal(f.session.reserveInputGesture({}, 0, "pointer"), null);
+  await f.session.recordPerformanceEvent(sharedPad(1, "pad_release"));
+  assert.deepEqual(wire, ["pad_press", "pad_press", "pad_release"]);
+  const fresh = f.session.reserveInputGesture({}, 0, "pointer");
+  assert.notEqual(fresh, null);
+  fresh.cancelUnsubmittedPattern();
+  for (const other of others) other.cancelUnsubmittedPattern();
+  await f.session.close();
+});
 function headeredFxShapeFixture() {
   const sessionId = "40000000-0000-4000-8000-000000000201";
   const performanceId = "40000000-0000-4000-8000-000000000202";

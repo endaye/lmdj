@@ -1,4 +1,6 @@
 #include "pattern_admission_controller.hpp"
+#include "pattern_transport_io_owner.hpp"
+#include "pattern_opening_test_seam.hpp"
 
 #include <chrono>
 #include <utility>
@@ -368,29 +370,125 @@ PatternAdmissionOwner::PatternAdmissionOwner(
 
 foundation::Result<void> PatternAdmissionOwner::prepare(
     const project_io::SequenceAdmissionPreparation& preparation) {
-  const auto prepared = journals_.prepare_admission(bundle_, session_, preparation);
-  if (!prepared.has_value()) return prepared;
-  identity_ = preparation.identity;
-  prepared_at_ = clock_();
-  return foundation::Result<void>::success();
+  // Capture the first invocation before durable IO, including an unknown
+  // response whose exact retry must not restart this opening's budget.
+  return prepare(preparation, clock_());
 }
 
 foundation::Result<void> PatternAdmissionOwner::activate(
-    const project_io::SequenceAdmissionFence& fence) {
+    const project_io::SequenceAdmissionFence& fence,
+    PatternTransportOpeningCommit* commit) {
   if (!identity_) return owner_error("admission_identity_missing");
   if (fence.kind != project_io::SequenceFenceKind::admission) {
     return owner_error("admission_fence_unresolved");
   }
-  return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
+  }
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_) {
+    return owner_error("admission_identity_mismatch");
+  }
+  const auto& admission = *journal.value().admission;
+  if (admission.admission_fence && *admission.admission_fence != fence) {
+    // Preserve the journal's exact immutable collision validation.
+    return journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
+  }
+  if (opening_failure_) return expire_opening();
+  const auto earlier = opening_completed_at(fence);
+  // A readable fence can be an append whose sync failed. It supplies identity,
+  // not durability or evidence of opening before this deadline.
+  if (!earlier && deadline_elapsed(admission.preparation)) return expire_opening();
+  // The synchronous/null-context path retains its injected Clock. Production
+  // supplies preallocated typed evidence and never calls that callback while
+  // holding the shared publication guard.
+  auto pending = commit ? commit->pending_owner :
+      std::make_shared<PatternAdmissionOpeningEvidence>(
+          PatternAdmissionOpeningEvidence{fence, {}});
+  std::shared_ptr<const PatternAdmissionOpeningEvidence> sealed = pending;
+  const auto durable = journals_.retain_admission_fence(bundle_, session_, *identity_, fence);
+  if (!durable.has_value()) return durable;
+  bool late = false;
+  if (commit) {
+    {
+      std::lock_guard lock(commit->publication.guard);
+      // This is the logical opening point, after the actual durable API's
+      // positive result. Capture, deadline check, local evidence and full
+      // request publication all share this one short critical section.
+      const auto completed_at = earlier ? *earlier : std::chrono::steady_clock::now();
+      late = prepared_at_ && completed_at - *prepared_at_ >= opening_timeout_;
+      if (!late) {
+        if (!earlier) {
+          pending->completed_at = completed_at;
+          opening_evidence_.swap(sealed);
+        }
+        commit->pending_transport->completed_at = completed_at;
+#if defined(LMDJ_PATTERN_OPENING_TESTING) && LMDJ_PATTERN_OPENING_TESTING
+        if (!earlier) testing::pause_opening_before_publication(completed_at);
+#endif
+        commit->publication.successful.swap(commit->sealed_transport);
+      }
+    }
+  } else if (!earlier) {
+    const auto completed_at = clock_();
+    late = prepared_at_ && completed_at - *prepared_at_ >= opening_timeout_;
+    if (!late) {
+      pending->completed_at = completed_at;
+      opening_evidence_.swap(sealed);
+    }
+  }
+  // Error construction, closure I/O and destruction of swapped-out shared
+  // evidence all occur outside the guard. Late success never publishes open.
+  if (late) return expire_opening();
+  return foundation::Result<void>::success();
+}
+
+std::optional<std::chrono::steady_clock::time_point>
+PatternAdmissionOwner::opening_completed_at(
+    const project_io::SequenceAdmissionFence& fence) const {
+  if (opening_failure_ || !opening_evidence_ || opening_evidence_->fence != fence ||
+      !prepared_at_ || opening_evidence_->completed_at - *prepared_at_ >= opening_timeout_)
+    return std::nullopt;
+  return opening_evidence_->completed_at;
+}
+
+foundation::Result<void> PatternAdmissionOwner::expire_opening() {
+  if (!opening_failure_) opening_failure_ = owner_error("admission_opening_deadline_elapsed").error();
+  const auto closed = close_at(project_io::SequenceAdmissionCloseReason::deadline);
+  if (!closed.has_value()) {
+    auto error = closed.error();
+    error.details["opening_deadline_elapsed"] = true;
+    error.details["closure_unresolved"] = true;
+    return foundation::Result<void>::failure(std::move(error));
+  }
+  return foundation::Result<void>::failure(*opening_failure_);
 }
 
 foundation::Result<void> PatternAdmissionOwner::prepare(
     const project_io::SequenceAdmissionPreparation& preparation,
     std::chrono::steady_clock::time_point started_at) {
+  const bool same_identity = identity_ && *identity_ == preparation.identity;
+  const bool same_attempt = preparation_attempt_identity_ &&
+      *preparation_attempt_identity_ == preparation.identity;
+  if (!same_attempt || !preparation_attempt_started_at_) {
+    preparation_attempt_identity_ = preparation.identity;
+    preparation_attempt_started_at_ = started_at;
+  } else {
+    preparation_attempt_started_at_ = std::min(*preparation_attempt_started_at_, started_at);
+  }
+  if (same_identity && prepared_at_)
+    preparation_attempt_started_at_ = std::min(*preparation_attempt_started_at_, *prepared_at_);
   const auto prepared = journals_.prepare_admission(bundle_, session_, preparation);
   if (!prepared.has_value()) return prepared;
+  if (!same_identity) {
+    opening_evidence_.reset();
+    opening_failure_.reset();
+  }
   identity_ = preparation.identity;
-  prepared_at_ = started_at;
+  settled_close_.reset();
+  prepared_at_ = preparation_attempt_started_at_;
+  opening_timeout_ = std::chrono::milliseconds{preparation.fence_timeout_ms};
   return foundation::Result<void>::success();
 }
 
@@ -580,7 +678,9 @@ foundation::Result<void> PatternAdmissionOwner::close_at(
     return owner_error("admission_identity_mismatch");
   }
   const auto& admission = *journal.value().admission;
-  if (admission.closure) return foundation::Result<void>::success();
+  // Exact closure replay also finishes a prior unknown sync response; readable
+  // closure bytes alone cannot retire the retained failure operation.
+  if (admission.closure) return close(*admission.closure);
   return close({last_retained_watermark(admission), reason});
 }
 
@@ -594,13 +694,23 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
   if (!journal.has_value()) {
     return foundation::Result<PatternAdmissionAdmit>::failure(journal.error());
   }
-  if (journal.value().session_id != session_ || !journal.value().admission) {
+  return admit(candidate, journal.value());
+}
+
+foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
+    const project_io::SequenceAdmissionCandidate& candidate,
+    const project_io::ActiveSequenceJournal& journal) {
+  if (!identity_) {
+    return foundation::Result<PatternAdmissionAdmit>::failure(
+        conversion_error("admission_identity_missing").error());
+  }
+  if (journal.session_id != session_ || !journal.admission) {
     return foundation::Result<PatternAdmissionAdmit>::failure(
         conversion_error("admission_identity_mismatch").error());
   }
-  const auto& admission = *journal.value().admission;
-  if (journal.value().state == project_io::SequenceSessionState::owner_lost ||
-      journal.value().state == project_io::SequenceSessionState::abandoned ||
+  const auto& admission = *journal.admission;
+  if (journal.state == project_io::SequenceSessionState::owner_lost ||
+      journal.state == project_io::SequenceSessionState::abandoned ||
       admission.completed) {
     return foundation::Result<PatternAdmissionAdmit>::success(
         PatternAdmissionAdmit::live_only);
@@ -609,7 +719,9 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
     return foundation::Result<PatternAdmissionAdmit>::success(
         PatternAdmissionAdmit::live_only);
   }
-  if (deadline_elapsed(admission.preparation)) {
+  const bool known_opening = admission.admission_fence &&
+      opening_completed_at(*admission.admission_fence).has_value();
+  if (!known_opening && deadline_elapsed(admission.preparation)) {
     const auto closed =
         close_at(project_io::SequenceAdmissionCloseReason::deadline);
     if (!closed.has_value()) {
@@ -618,7 +730,7 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
     return foundation::Result<PatternAdmissionAdmit>::success(
         PatternAdmissionAdmit::live_only);
   }
-  if (!admission.admission_fence ||
+  if (!known_opening ||
       candidate.runtime_frame < admission.admission_fence->effective_frame) {
     return foundation::Result<PatternAdmissionAdmit>::success(
         PatternAdmissionAdmit::live_only);
@@ -648,6 +760,18 @@ foundation::Result<PatternAdmissionAdmit> PatternAdmissionOwner::admit(
   }
   return foundation::Result<PatternAdmissionAdmit>::success(
       PatternAdmissionAdmit::retained);
+}
+
+foundation::Result<void> PatternAdmissionOwner::checkpoint_prefix(foundation::CommandId transfer_id) {
+  const auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) return foundation::Result<void>::failure(journal.error());
+  if (!journal.value().admission || journal.value().session_id != session_)
+    return owner_error("admission_identity_mismatch");
+  const auto& candidates = journal.value().admission->candidates;
+  if (candidates.empty()) return foundation::Result<void>::success();
+  const auto transferred = drain(std::move(transfer_id), candidates.back().watermark, false);
+  return transferred.has_value() ? foundation::Result<void>::success()
+                                 : foundation::Result<void>::failure(transferred.error());
 }
 
 foundation::Result<void> PatternAdmissionOwner::close(
@@ -709,7 +833,15 @@ foundation::Result<void> PatternAdmissionOwner::settle_close(
   const auto completed =
       journals_.complete_admission(bundle_, session_, *identity_);
   if (!completed.has_value()) return completed;
+  // This proof precedes removal and survives its unknown response. Project
+  // Truth and terminal admission were durably settled under these exact IDs.
+  settled_close_ = std::pair{terminal_id, flush_id};
   return journals_.remove_active_if_complete(bundle_, session_);
+}
+
+bool PatternAdmissionOwner::has_settled_close(const foundation::CommandId& terminal_id,
+                                              const foundation::CommandId& flush_id) const {
+  return settled_close_ && settled_close_->first == terminal_id && settled_close_->second == flush_id;
 }
 
 foundation::Result<project_io::SequenceAdmissionTransfer>
