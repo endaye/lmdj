@@ -46,11 +46,13 @@ function(lmdj_add_test)
     # The instrumented binary this test runs must also be named by the root
     # lmdj_coverage_targets list whenever the coverage test preset selects this
     # test; the coverage configure gate reads this property to name a target
-    # that list has not learned yet.
+    # that list has not learned yet. The labels travel with the name because
+    # the preset excludes by label as well as by name.
+    string(REPLACE ";" "," lmdj_test_label_field "${lmdj_test_labels}")
     set_property(
       GLOBAL APPEND
       PROPERTY lmdj_native_test_registrations
-      "${TEST_NAME}|${lmdj_test_executable}"
+      "${TEST_NAME}|${lmdj_test_executable}|${lmdj_test_label_field}"
     )
   endif()
   set(lmdj_test_working_directory_property)

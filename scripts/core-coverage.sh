@@ -194,7 +194,8 @@ if [[ "$signature_count" -ne "${#objects[@]}" ]]; then
       "why: a listed coverage object did not run, so its module signature is " \
       "absent from this run. remedy: check whether the coverage test preset " \
       "now excludes every test that runs it (CMakePresets.json, " \
-      "filter.exclude.name), and whether another coverage run deleted " \
+      "filter.exclude.name or filter.exclude.label), and whether another " \
+      "coverage run deleted " \
       "${profiles_root} mid-flight." \
       >&2
   fi

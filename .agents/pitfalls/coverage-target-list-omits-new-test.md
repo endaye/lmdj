@@ -54,13 +54,14 @@ properties kept that drift invisible rather than merely unlucky:
 
 - Adding a C++ test target needs no second edit any more. The coverage
   configure records every native test target `lmdj_add_test` registers, reads
-  the coverage test preset's own `filter.exclude.name`, and fails closed naming
+  the coverage test preset's own `filter.exclude.name` and
+  `filter.exclude.label`, and fails closed naming
   each selected target the root `lmdj_coverage_targets` list has not learned.
   Read its `why:` message: it lists the exact targets to add, in the remedy.
 - A test the coverage preset excludes is not demanded, and no second exclusion
-  list exists to maintain: when a new stress test joins the preset's exclusion
-  ([`stress-tier-in-coverage-preset`](stress-tier-in-coverage-preset.md)), the
-  gate follows the preset.
+  list exists to maintain: the preset excludes the whole stress tier by label
+  ([`stress-tier-in-coverage-preset`](stress-tier-in-coverage-preset.md)), and
+  the gate follows the preset.
 - Read the count's *direction* before editing anything. The lane's message now
   names the direction and its remedy, and it fires both ways: one module
   more than the list means a target the list has not learned, which is the case

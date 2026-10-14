@@ -128,6 +128,32 @@ class CoreScriptTest(unittest.TestCase):
         self.assertIsNone(excluded.match("build.release"))
         self.assertIsNone(excluded.match("facade.candidate_store"))
 
+    def test_coverage_preset_excludes_the_stress_tier_by_label(self) -> None:
+        # A hand list of stress test names drifted to 7 of 15; the tier label
+        # is the only selector that cannot fall behind a new registration.
+        presets = json.loads(
+            (REPO_ROOT / "CMakePresets.json").read_text(encoding="utf-8")
+        )
+        coverage = next(
+            preset
+            for preset in presets["testPresets"]
+            if preset["name"] == "coverage"
+        )
+        self.assertEqual(coverage["filter"]["exclude"].get("label"), "^stress$")
+
+    def test_coverage_preset_name_exclusion_names_no_stress_test(self) -> None:
+        # A stress name left in the name list is a second, drifting copy of
+        # the label exclusion; its presence would make the next one look owed.
+        presets = json.loads(
+            (REPO_ROOT / "CMakePresets.json").read_text(encoding="utf-8")
+        )
+        coverage = next(
+            preset
+            for preset in presets["testPresets"]
+            if preset["name"] == "coverage"
+        )
+        self.assertNotIn("stress", coverage["filter"]["exclude"]["name"])
+
     def test_proof_release_ctest_excludes_stress_label_and_release_tooling(self) -> None:
         script_source = CORE_SCRIPT.read_text(encoding="utf-8")
         proof_source = script_source.split("  proof)\n", maxsplit=1)[1].split(
