@@ -747,8 +747,6 @@ class ChangeScopeTest(unittest.TestCase):
         "tools/needle-spike/tests/router_smoke_test.py": (
             "spike, not product: needs a downloaded native engine and is run by "
             "hand per tools/needle-spike/README.md"),
-        "tools/needle-spike/tests/tool_surface_test.py": (
-            "spike, not product: run by hand per tools/needle-spike/README.md"),
     }
     TEST_OWNERSHIP_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/pr-contract.yml")
     TEST_MODULE_CONTENT = re.compile(r"\bunittest\b|^\s*def test_|^\s*import pytest\b", re.MULTILINE)
