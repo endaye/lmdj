@@ -2576,6 +2576,13 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function supersedeKeylessOpenPad(flatSlot) {
+    const owner = liveLaneOpenPads.get(`slot:${flatSlot}`);
+    if (owner === undefined || liveLaneReleaseReservations.has(owner)) return;
+    liveLaneOpenPads.delete(owner.gestureKey);
+    settleSharedGesture(owner.sharedClaim);
+  }
+
   function retireLiveLaneRelease(entry) {
     for (const owner of entry.releaseOwners) {
       liveLanePendingPresses.delete(owner);
@@ -3011,8 +3018,11 @@ function createRuntimeSessionController(options = {}) {
             velocity: result.velocity, source: result.source});
         });
     }
+    // A keyless legacy caller retriggers a Pad without a Release, as on main:
+    // it holds one position per Pad, and a new Press supersedes a settled one.
+    if (gestureKey === undefined) supersedeKeylessOpenPad(flatSlot);
     return submitLiveInput(entry => dispatchTrigger(flatSlot, velocity, source, entry),
-      "pad_press", {slot: flatSlot, source, gestureKey},
+      "pad_press", gestureKey === undefined ? `slot:${flatSlot}` : {slot: flatSlot, source, gestureKey},
       {legacy: true, slot: flatSlot, source, physicalKey: gestureKey});
 
   }
@@ -7444,7 +7454,11 @@ function createRuntimeSessionController(options = {}) {
     }
     // Same FIFO as the original Press, including a parked header/receipt.
     // Profile Release above continues independently through its reserved lane.
-    const key = owners.length === 1 ? owners[0].gestureKey : owners.length > 1
+    const keyless = gestureKey === undefined && owners.length === 0 &&
+      liveLaneOpenPads.has(`slot:${flatSlot}`) &&
+      ![...liveLaneOpenPads.keys(), ...[...liveLanePendingPresses].map(owner => owner.gestureKey)]
+        .some(key => typeof key === "object" && key.slot === flatSlot);
+    const key = owners.length === 1 ? owners[0].gestureKey : owners.length > 1 || keyless
       ? `slot:${flatSlot}` : {slot: flatSlot, source, gestureKey};
     return submitLiveInput(async entry => {
       const turnStartedAt = monotonicNow();

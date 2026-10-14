@@ -87,7 +87,8 @@ opening 预算保持，pending legacy admission 继续原候选而不重新 enqu
 按 2026-10-13 用户决定，S6 的共享接纳规则要求 Pattern 与 Performance
 合计最多保留 64 个真实 Pad 手势，同一次按下进入两域只占一个名额。
 Creator 延迟队列之前同步预留，原 opaque physical key 沿 App/Perform 传到同一
-SDK Session；它不进入 wire 或 Project Truth。无 key 的直接调用独立计数。
+SDK Session；它不进入 wire 或 Project Truth。无 key 的直接调用独立计数；其中旧 `trigger` 路径
+与 main 一致，同一 Pad 的无 key 重复按下只占一个名额，新的按下顶替已结算的旧名额，无 key 的 Release 释放它。
 已提交、结果未知或未松开的 owner 仍保留责任；观察者超时不能释放容量，
 满额时已有手势的 matching Release 仍保留入口。没有原 physical key 的域内
 Release 可以结算对应录音责任，但不能代替真实松键结束仍被按住的显式 physical lease owner；

@@ -2267,6 +2267,15 @@ or queue time are inverted or re-anchored to Host-queue expiry, and a
 sixteen-Pad legacy burst test is added. Verified with the session tests and
 `scripts/web-runtime-host.sh proof`.
 
+The same journey then retriggers Pad 0 five hundred times through the keyless
+legacy `trigger` without Releases. S6 gave every keyless call its own shared
+position, so the 65th Press was refused. By owner decision on 2026-10-14,
+only the legacy `trigger` path returns to main's rule: keyless Presses of one
+Pad hold one `slot:N` position, a new Press supersedes a settled one, and a
+keyless Release frees it. The Pattern input profile keeps one position per
+keyless call. A unit test covers 200 retriggers, the full window and the
+keyless Release.
+
 ### Version Management
 
 Version impact: none for this followup. It is a behavior correction inside

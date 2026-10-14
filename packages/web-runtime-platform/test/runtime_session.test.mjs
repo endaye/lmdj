@@ -12729,6 +12729,28 @@ test("a sixteen-Pad legacy burst charges each trigger and Release only from its 
   await f.session.close();
 });
 
+test("keyless legacy retriggers of one Pad hold one position, as on main", async () => {
+  let sequence = 0;
+  const f = fixture({send: async (e) => e.operation === "trigger"
+    ? success(e, e.payload.kind === "release" ? {accepted: true} : {sequence: ++sequence})
+    : success(e, defaultResult(e.operation))});
+  await f.session.start();
+  await f.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  // A one-shot caller that never releases must not exhaust the 64 positions.
+  for (let index = 0; index < 200; index += 1)
+    assert.equal((await f.session.trigger(0, 100, "pointer")).sequence, index + 1);
+  const keys = Array.from({length: 63}, () => ({}));
+  for (const [index, key] of keys.entries())
+    assert.notEqual(await f.session.trigger(index + 1, 100, "pointer", key), false);
+  // Slot 0's keyless position plus 63 keyed gestures fill the window.
+  await assert.rejects(f.session.trigger(1, 100, "pointer", {}),
+    error => error.code === "HOST_STATE_INVALID");
+  // The keyless Release frees slot 0's position for a new keyed gesture.
+  assert.equal(await f.session.release(0, "pointer"), true);
+  assert.notEqual(await f.session.trigger(0, 100, "pointer", {}), false);
+  await f.session.close();
+});
+
 
 for (const elapsed of [650, 1001]) {
   test(`legacy queued Release spends its original one-second budget at the real Host handoff (${elapsed}ms)`, async () => {
