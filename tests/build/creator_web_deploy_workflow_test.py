@@ -218,17 +218,6 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
     def job_block(self, source: str, name: str) -> str:
         return self.mapping_block(self.mapping_block(source, "jobs", 0), name, 2)
 
-    def shell_function(self, script: str, name: str) -> str:
-        lines = script.splitlines()
-        try:
-            start = lines.index(f"{name}() {{")
-        except ValueError:
-            self.fail(f"shell function is missing: {name}")
-        for index in range(start + 1, len(lines)):
-            if lines[index] == "}":
-                return "\n".join(lines[start + 1 : index])
-        self.fail(f"shell function is unterminated: {name}")
-
     def test_deployment_requires_manual_exact_tag(self) -> None:
         source = self.workflow_source()
         triggers = self.mapping_block(source, "on", 0)
@@ -408,10 +397,14 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
             "tag selection belongs to preflight only",
         )
 
-        self.assertIn(
-            'verify_release "$tag"',
-            self.shell_function(DEPLOY_SCRIPT.read_text(encoding="utf-8"), "deploy_release"),
-            "the deploy job must re-verify the same Release before mutating Netlify",
+        # The deploy job's adapter stages through this script's `stage` verb,
+        # which re-verifies the same Release before it stages anything.
+        dispatch = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        dispatch = dispatch[dispatch.index('case "$command_name" in'):]
+        self.assertLess(
+            dispatch.index('verify_release "$tag"'),
+            dispatch.index("cloudflare_release_stage.py"),
+            "the stage the deploy job consumes must re-verify the same Release first",
         )
 
     def test_workflow_installs_only_deployment_dependencies(self) -> None:
@@ -577,24 +570,6 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
             preflight_budgets["Verify signed Creator Web Host release"] * 60,
         )
 
-        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-        recovery_api = 30
-        recovery_http = 180
-        recovery_browser = 180
-        recovery_evidence = 30
-        for name, seconds in (
-            ("recovery_api_timeout_seconds", recovery_api),
-            ("recovery_http_timeout_seconds", recovery_http),
-            ("recovery_browser_timeout_seconds", recovery_browser),
-            ("recovery_evidence_timeout_seconds", recovery_evidence),
-        ):
-            self.assertIn(f"{name}={seconds}", script)
-        recovery_worst = (
-            3 * recovery_api
-            + 2 * recovery_http
-            + 2 * recovery_browser
-            + recovery_evidence
-        )
         recovery_kill_budget = 900
         main_budget = 1080
         deploy_step_budget = step_budgets["Deploy signed Creator Web Host release to Cloudflare"] * 60
@@ -612,7 +587,6 @@ class CreatorWebDeployWorkflowTest(unittest.TestCase):
             + step_budgets["Upload adapter failure diagnostics"]
         ) * 60
         job_budget = 80 * 60
-        self.assertLessEqual(recovery_worst + 60, recovery_kill_budget)
         self.assertLessEqual(main_budget + recovery_kill_budget, deploy_step_budget)
         self.assertLessEqual(
             setup_budget + deploy_step_budget + upload_budget + 60,

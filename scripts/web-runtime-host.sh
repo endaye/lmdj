@@ -307,7 +307,6 @@ run_nonbrowser_tests() {
   activate_toolchain
   python3 "$repo_root/apps/web-runtime-host/test/package_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/release_bundle_test.py"
-  python3 "$repo_root/apps/web-runtime-host/test/netlify_api_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_api_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_deployment_evidence_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_deploy_test.py"

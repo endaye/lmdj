@@ -2,17 +2,16 @@
 
 `tools/release/deployment_evidence.py` verifies a Host deployment run by
 reading `evidence.json` out of its artifact and matching the document's
-`contract` against that Host's prefix in `tools/release/policy.json`. The two
-Netlify orchestrators own every document behind those prefixes today, and both
-of their field sets are closed around a Netlify `site_id` and `publication`
-record. A Cloudflare deployment has no such identity, so each Host gets one new
-version behind the same prefix rather than a loosened shape; the driver keeps
-matching on the prefix and needs no change.
+`contract` against that Host's prefix in `tools/release/policy.json`. The
+retired Netlify documents behind those prefixes were closed around a Netlify
+`site_id` and `publication` record. A Cloudflare deployment has no such
+identity, so each Host got one new version behind the same prefix rather than a
+loosened shape; the driver keeps matching on the prefix.
 
 This module owns the shape, its validation and its atomic write. Running the
 immutable and production checks stays with the existing smoke tooling the
-deployment workflow invokes, exactly as the Netlify path splits it today: the
-caller composes the document, and this module is the judge of it.
+deployment workflow invokes: the caller composes the document, and this
+module is the judge of it.
 
 Validation binds every check result to the exact identity being deployed. A
 `passed` status is not enough on its own: a smoke result carrying another
@@ -197,7 +196,7 @@ def validate_document(document, *, host):
     # `None` is the first deployment of a Worker, which has no prior version;
     # `tools/release/deployment_effect.py` already branches on exactly that.
     # When a prior exists it must carry everything that consumer projects, so
-    # the Cloudflare document is a drop-in for the Netlify one it replaces.
+    # the projection keeps the shape the retired Netlify document had.
     prior = document["prior_good"]
     if prior is not None:
         if (not isinstance(prior, dict)
@@ -298,8 +297,8 @@ def main(argv=None):
     The release driver's deployment effect verifier runs one trusted validator
     per contract as a subprocess, so the document it compares against the frozen
     projection is one a validator accepted rather than one it parsed itself.
-    This is that validator for the Cloudflare contracts; the Netlify ones keep
-    their own in each Host's `deploy_orchestrator`. `urls` is the same module
+    This is that validator for every deployment contract the driver accepts;
+    the retired Netlify validators were removed with their deploy path. `urls` is the same module
     answering where a Host is served, for callers that must name an origin
     before any document exists to validate.
     """

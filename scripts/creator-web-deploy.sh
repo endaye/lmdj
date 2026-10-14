@@ -3,10 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/.." && pwd -P)"
-deploy_root="$repo_root/build/deploy/creator-web"
 orchestrator_tool="$repo_root/apps/creator-web/tools/deploy_orchestrator.py"
 tag_pattern='^lmdj-v([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$'
-production_url='https://lmdj-creator.netlify.app'
 trusted_tag_fingerprint='2B5EE362F058800036AD4FB5116ECE156F954D29'
 trusted_checksum_fingerprint='CB928A6E89DE498851688EF1AAC3E7019FC1478B'
 initial_tag='lmdj-v1.0.15.2'
@@ -18,36 +16,6 @@ python_bin='python3'
 owned_temp=''
 owned_temp_parent=''
 tag_checkout=''
-publication_attempted=0
-deployment_complete=0
-recovery_running=0
-recovery_api_timeout_seconds=30
-recovery_http_timeout_seconds=180
-recovery_browser_timeout_seconds=180
-recovery_evidence_timeout_seconds=30
-prior_deploy_id=''
-prior_deploy_url=''
-prior_product_build=''
-prior_host_version=''
-prior_index_sha256=''
-prior_manifest_sha256=''
-staged_index_sha256=''
-staged_manifest_sha256=''
-current_site_json='{}'
-preflight_site_json=''
-current_site_file_count=0
-prior_immutable_http_result='{}'
-prior_immutable_browser_result='{}'
-prior_production_http_result='{}'
-prior_production_browser_result='{}'
-reconcile_site_json='{}'
-post_recovery_site_json='{}'
-recovery_response_json='null'
-recovery_action='not-started'
-recovery_immutable_http_result='{}'
-recovery_immutable_browser_result='{}'
-recovery_production_http_result='{}'
-recovery_production_browser_result='{}'
 release_asset_inventory=''
 
 usage() {
@@ -55,8 +23,6 @@ usage() {
 usage:
   scripts/creator-web-deploy.sh verify TAG
   scripts/creator-web-deploy.sh stage TAG ABSOLUTE_OUTPUT_DIRECTORY
-  scripts/creator-web-deploy.sh deploy TAG
-  scripts/creator-web-deploy.sh smoke BASE_URL PRODUCT_BUILD HOST_VERSION
 EOF
 }
 
@@ -77,8 +43,8 @@ with_gh_environment_removed() {
   done < <(compgen -e)
   # bash 3.2 treats "${array[@]}" on an empty array as an unbound variable
   # under set -u, so an environment with no GH* variable must expand to
-  # nothing rather than to an error. GitHub runners always export GITHUB_*,
-  # which matches GH*, so only operator machines reach the empty case.
+  # nothing rather than to an error. GITHUB_* does not match GH*: callers
+  # that must not pass GITHUB_TOKEN remove it with an explicit -u.
   env ${unset_arguments[@]+"${unset_arguments[@]}"} "$@"
 }
 
@@ -86,18 +52,14 @@ without_deploy_secrets() {
   with_gh_environment_removed \
     -u GITHUB_TOKEN \
     -u GITHUB_ENTERPRISE_TOKEN \
-    -u NETLIFY_AUTH_TOKEN \
     -u CLOUDFLARE_API_TOKEN \
-    -u NETLIFY_CREATOR_SITE_ID \
     "$@"
 }
 
 with_pinned_github() {
   with_gh_environment_removed \
     -u GITHUB_ENTERPRISE_TOKEN \
-    -u NETLIFY_AUTH_TOKEN \
     -u CLOUDFLARE_API_TOKEN \
-    -u NETLIFY_CREATOR_SITE_ID \
     "$@"
 }
 
@@ -105,13 +67,6 @@ with_pinned_github_git() {
   GIT_TERMINAL_PROMPT=0 with_pinned_github git \
     -c credential.username=x-access-token \
     -c 'credential.helper=!f() { if test "$1" = get && test -n "${GITHUB_TOKEN:-}"; then printf "%s\n" "username=x-access-token" "password=$GITHUB_TOKEN"; fi; }; f' \
-    "$@"
-}
-
-with_netlify_credential() {
-  with_gh_environment_removed \
-    -u GITHUB_TOKEN \
-    -u GITHUB_ENTERPRISE_TOKEN \
     "$@"
 }
 
@@ -130,20 +85,6 @@ remove_tag_checkout_path() {
 cleanup_all() {
   local status=$?
   trap - EXIT INT TERM
-  if (( status != 0 && publication_attempted == 1 && deployment_complete == 0 && recovery_running == 0 )); then
-    recovery_running=1
-    local original_status="$status"
-    local recovery_status='passed'
-    if ! reconcile_publication_failure "$original_status"; then
-      echo "Creator Web deployment error: publication recovery failed" >&2
-      recovery_status='failed'
-      status=2
-    fi
-    if ! write_recovery_evidence "$original_status" "$recovery_status"; then
-      echo "Creator Web deployment error: recovery evidence write failed" >&2
-      status=2
-    fi
-  fi
   if [[ -n "$remote_tag_ref" ]]; then
     without_deploy_secrets git update-ref -d "$remote_tag_ref" >/dev/null 2>&1 || status=2
     remote_tag_ref=''
@@ -534,481 +475,6 @@ verify_release() {
   remove_tag_checkout
 }
 
-create_draft_deploy() {
-  local headers_path="$repo_root/apps/creator-web/deploy/_headers"
-  local fields=''
-  fields="$(
-    with_netlify_credential \
-      "$python_bin" "$orchestrator_tool" create-draft \
-        "$dist_root" "$headers_path" "$product_build" "$host_version" "$tag"
-  )" || {
-    fail "Netlify draft deploy creation failed"
-    return
-  }
-  IFS=$'\t' read -r deploy_id deploy_url <<<"$fields"
-  [[ -n "$deploy_id" && -n "$deploy_url" ]] || {
-    fail "Netlify draft deploy identity output is invalid"
-    return
-  }
-}
-
-parse_site_fields() {
-  without_deploy_secrets "$python_bin" -c '
-import json,sys
-value=json.load(sys.stdin)
-prior=value.get("published_deploy")
-if prior is None:
-    print(value["state"] + "\t\t")
-else:
-    print(value["state"] + "\t" + prior["id"] + "\t" + prior["deploy_ssl_url"])
-'
-}
-
-get_current_site() {
-  local timeout_seconds="${1:-}"
-  local -a command=("$python_bin" "$orchestrator_tool" site-current "$NETLIFY_CREATOR_SITE_ID")
-  if [[ -n "$timeout_seconds" ]]; then
-    command=(timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" "${command[@]}")
-  fi
-  current_site_json="$(
-    with_netlify_credential "${command[@]}"
-  )" || {
-    fail "Netlify current published deploy lookup failed"
-    return
-  }
-  local fields=''
-  fields="$(parse_site_fields <<<"$current_site_json")" || {
-    fail "Netlify current published deploy output is invalid"
-    return
-  }
-  IFS=$'\t' read -r current_site_state current_deploy_id current_deploy_url <<<"$fields"
-}
-
-get_current_site_preflight() {
-  local preflight_json=''
-  local fields=''
-  preflight_json="$(
-    with_netlify_credential \
-      "$python_bin" "$orchestrator_tool" site-preflight \
-        "$NETLIFY_CREATOR_SITE_ID"
-  )" || {
-    fail "Netlify current published deploy preflight failed"
-    return
-  }
-  current_site_json="$(
-    without_deploy_secrets "$python_bin" -c '
-import json,sys
-value=json.load(sys.stdin)
-print(json.dumps(value["site"], sort_keys=True, separators=(",", ":")))
-' <<<"$preflight_json"
-  )" || {
-    fail "Netlify current published deploy preflight output is invalid"
-    return
-  }
-  fields="$(
-    without_deploy_secrets "$python_bin" -c '
-import json,sys
-value=json.load(sys.stdin)
-site=value["site"]
-prior=site.get("published_deploy")
-if prior is None:
-    print(site["state"] + "|||" + str(value["file_count"]))
-else:
-    print(site["state"] + "|" + prior["id"] + "|" + prior["deploy_ssl_url"] + "|" + str(value["file_count"]))
-' <<<"$preflight_json"
-  )" || {
-    fail "Netlify current published deploy preflight output is invalid"
-    return
-  }
-  IFS='|' read -r current_site_state current_deploy_id current_deploy_url current_site_file_count <<<"$fields"
-}
-
-preflight_prior_good() {
-  local identity_json=''
-  local fields=''
-  get_current_site_preflight
-  preflight_site_json="$current_site_json"
-  if [[ -n "${LMDJ_PRIOR_SITE_SHA256:-}" ]]; then
-    local observed_site_sha256=''
-    observed_site_sha256="$(
-      without_deploy_secrets "$python_bin" -c '
-import hashlib,json,sys
-site=json.load(sys.stdin)
-raw=(json.dumps(site,ensure_ascii=False,sort_keys=True,separators=(",", ":"))+"\n").encode("utf-8")
-print(hashlib.sha256(raw).hexdigest())
-' <<<"$preflight_site_json"
-    )"
-    [[ "$observed_site_sha256" == "$LMDJ_PRIOR_SITE_SHA256" ]] || {
-      fail "why: Site differs from original request; remedy: reconcile the frozen request and current Site without replacing its prior or deploying"
-      return
-    }
-  fi
-  [[ "$current_site_state" != 'disabled' ]] || {
-    fail "Netlify site is already disabled; refusing automatic enable or publication"
-    return
-  }
-  prior_deploy_id="$current_deploy_id"
-  prior_deploy_url="$current_deploy_url"
-  if [[ -z "$prior_deploy_id" ]]; then
-    [[ "$current_site_file_count" == '0' ]] || {
-      fail "Netlify site file inventory has no published deploy identity"
-      return
-    }
-    return
-  fi
-  if [[ "$current_site_file_count" == '0' ]]; then
-    prior_deploy_id=''
-    prior_deploy_url=''
-    return
-  fi
-  identity_json="$(
-    without_deploy_secrets "$python_bin" \
-      "$repo_root/apps/creator-web/tools/deployment_smoke.py" \
-      discover-identity "$prior_deploy_url"
-  )" || {
-    fail "prior published deploy identity discovery failed"
-    return
-  }
-  fields="$(
-    without_deploy_secrets "$python_bin" -c '
-import json,sys
-value=json.load(sys.stdin)
-print(value["product_build"] + "\t" + value["host_version"])
-' <<<"$identity_json"
-  )" || {
-    fail "prior published deploy identity output is invalid"
-    return
-  }
-  IFS=$'\t' read -r prior_product_build prior_host_version <<<"$fields"
-  run_http_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id"
-  prior_immutable_http_result="$http_smoke_result"
-  read -r prior_index_sha256 prior_manifest_sha256 < <(extract_http_digests "$http_smoke_result")
-  run_browser_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id"
-  prior_immutable_browser_result="$browser_smoke_result"
-  run_http_smoke "$production_url" "$prior_product_build" "$prior_host_version" '' "$prior_index_sha256" "$prior_manifest_sha256"
-  prior_production_http_result="$http_smoke_result"
-  run_browser_smoke "$production_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id"
-  prior_production_browser_result="$browser_smoke_result"
-}
-
-restore_exact_deploy() {
-  local restore_id="$1"
-  with_netlify_credential timeout --signal=TERM --kill-after=5s "${recovery_api_timeout_seconds}s" \
-    "$python_bin" "$orchestrator_tool" publish \
-    "$NETLIFY_CREATOR_SITE_ID" "$restore_id"
-}
-
-reconcile_publication_failure() {
-  local original_status="$1"
-  get_current_site "$recovery_api_timeout_seconds" || return 2
-  reconcile_site_json="$current_site_json"
-  if [[ "$current_deploy_id" == "$prior_deploy_id" && -n "$prior_deploy_id" ]]; then
-    recovery_action='prior-still-current'
-    post_recovery_site_json="$reconcile_site_json"
-    recovery_immutable_http_result="$prior_immutable_http_result"
-    recovery_immutable_browser_result="$prior_immutable_browser_result"
-    recovery_production_http_result="$prior_production_http_result"
-    recovery_production_browser_result="$prior_production_browser_result"
-    return 0
-  fi
-  if [[ -z "$current_deploy_id" && -z "$prior_deploy_id" ]]; then
-    recovery_action='no-publication'
-    post_recovery_site_json="$reconcile_site_json"
-    return 0
-  fi
-  if [[ "$current_deploy_id" != "${deploy_id:-}" ]]; then
-    recovery_action='unsafe-unknown-alias'
-    return 2
-  fi
-  if [[ -n "$prior_deploy_id" ]]; then
-    recovery_response_json="$(restore_exact_deploy "$prior_deploy_id")" || return 2
-    recovery_action='restored-prior'
-    get_current_site "$recovery_api_timeout_seconds" || return 2
-    post_recovery_site_json="$current_site_json"
-    [[ "$current_site_state" == 'current' && "$current_deploy_id" == "$prior_deploy_id" && "$current_deploy_url" == "$prior_deploy_url" ]] || return 2
-    run_http_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id" "$prior_index_sha256" "$prior_manifest_sha256" "$recovery_http_timeout_seconds" || return 2
-    recovery_immutable_http_result="$http_smoke_result"
-    run_browser_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id" "$recovery_browser_timeout_seconds" || return 2
-    recovery_immutable_browser_result="$browser_smoke_result"
-    run_http_smoke "$production_url" "$prior_product_build" "$prior_host_version" '' "$prior_index_sha256" "$prior_manifest_sha256" "$recovery_http_timeout_seconds" || return 2
-    recovery_production_http_result="$http_smoke_result"
-    run_browser_smoke "$production_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id" "$recovery_browser_timeout_seconds" || return 2
-    recovery_production_browser_result="$browser_smoke_result"
-  else
-    recovery_response_json="$(
-      with_netlify_credential timeout --signal=TERM --kill-after=5s "${recovery_api_timeout_seconds}s" \
-        "$python_bin" "$orchestrator_tool" disable-site \
-        "$NETLIFY_CREATOR_SITE_ID" "failed first publication; original status $original_status"
-    )" || return 2
-    recovery_action='disabled-first-publication'
-    get_current_site "$recovery_api_timeout_seconds" || return 2
-    post_recovery_site_json="$current_site_json"
-    [[ "$current_site_state" == 'disabled' ]] || return 2
-  fi
-  return 0
-}
-
-write_recovery_evidence() {
-  local original_status="$1"
-  local recovery_status="$2"
-  local recorded_at=''
-  recorded_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  without_deploy_secrets "$python_bin" -c '
-import json,sys
-(
- original_status,recorded_at,action,recovery_status,attempted_id,attempted_url,
- prior_id,prior_url,prior_product,prior_host,prior_index,prior_manifest,
- reconcile,post_recovery,response,immutable_http,immutable_browser,
- production_http,production_browser,
-)=sys.argv[1:]
-prior=None if not prior_id else {
- "host_version":prior_host,"id":prior_id,"index_sha256":prior_index,
- "manifest_sha256":prior_manifest,"product_build":prior_product,"url":prior_url,
-}
-document={
- "action":action,
- "attempted_deploy":{"id":attempted_id,"url":attempted_url},
- "contract":"lmdj.creator-web.deployment-recovery-evidence.v1",
- "original_status":int(original_status),
- "post_recovery_site":json.loads(post_recovery),
- "prior_deploy":prior,
- "reconcile":json.loads(reconcile),
- "recorded_at":recorded_at,
- "recovery_response":json.loads(response),
- "status":recovery_status,
- "validation":{
-   "immutable_browser":json.loads(immutable_browser),
-   "immutable_http":json.loads(immutable_http),
-   "production_browser":json.loads(production_browser),
-   "production_http":json.loads(production_http),
-   "status":recovery_status,
- },
-}
-print(json.dumps(document,sort_keys=True,separators=(",",":")))
-' "$original_status" "$recorded_at" "$recovery_action" "$recovery_status" \
-    "${deploy_id:-}" "${deploy_url:-}" "$prior_deploy_id" "$prior_deploy_url" \
-    "$prior_product_build" "$prior_host_version" "$prior_index_sha256" "$prior_manifest_sha256" \
-    "$reconcile_site_json" "$post_recovery_site_json" "$recovery_response_json" \
-    "$recovery_immutable_http_result" "$recovery_immutable_browser_result" \
-    "$recovery_production_http_result" "$recovery_production_browser_result" |
-    without_deploy_secrets timeout --signal=TERM --kill-after=5s "${recovery_evidence_timeout_seconds}s" \
-      "$python_bin" "$orchestrator_tool" \
-      evidence-write-document "$deploy_root/recovery-evidence.json" \
-      lmdj.creator-web.deployment-recovery-evidence.v1
-}
-
-run_http_smoke() {
-  local base_url="$1"
-  local expected_product="${2:-$product_build}"
-  local expected_host="${3:-$host_version}"
-  local expected_deploy_id="${4:-}"
-  local expected_index_sha256="${5:-}"
-  local expected_manifest_sha256="${6:-}"
-  local timeout_seconds="${7:-}"
-  local arguments=(
-    "$repo_root/apps/creator-web/tools/deployment_smoke.py"
-    "$base_url"
-    "$expected_product"
-    "$expected_host"
-  )
-  local started_at=''
-  local ended_at=''
-  local raw_result=''
-  if [[ -n "$expected_deploy_id" ]]; then
-    arguments+=(--expected-deploy-id "$expected_deploy_id")
-  fi
-  started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  local -a command=("$python_bin" "${arguments[@]}")
-  if [[ -n "$timeout_seconds" ]]; then
-    command=(timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" "${command[@]}")
-  fi
-  raw_result="$({ without_deploy_secrets "${command[@]}"; })"
-  without_deploy_secrets "$python_bin" -c '
-import json,re,sys
-value=json.loads(sys.stdin.read())
-expected_index,expected_manifest=sys.argv[1:]
-for key,expected in (("index_sha256",expected_index),("manifest_sha256",expected_manifest)):
-    actual=value.get(key)
-    if not isinstance(actual,str) or re.fullmatch(r"[0-9a-f]{64}",actual) is None:
-        raise SystemExit("HTTP smoke digest is invalid")
-    if expected and actual != expected:
-        raise SystemExit("HTTP smoke bytes do not match the trusted source")
-' "$expected_index_sha256" "$expected_manifest_sha256" <<<"$raw_result"
-  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  http_smoke_result="{\"ended_at\":\"$ended_at\",\"result\":$raw_result,\"started_at\":\"$started_at\",\"status\":\"passed\"}"
-}
-
-extract_http_digests() {
-  without_deploy_secrets "$python_bin" -c '
-import json,sys
-value=json.load(sys.stdin)["result"]
-print(value["index_sha256"] + " " + value["manifest_sha256"])
-' <<<"$1"
-}
-
-run_browser_smoke() {
-  local base_url="$1"
-  local expected_product="${2:-$product_build}"
-  local expected_host="${3:-$host_version}"
-  local expected_deploy_id="${4:-}"
-  local timeout_seconds="${5:-}"
-  local started_at=''
-  local ended_at=''
-  started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  local -a command=(npm --prefix "$repo_root/tests/platform/web" test -- \
-      --project=creator-deployment deployment/creator_web_deployment.spec.mjs)
-  if [[ -n "$timeout_seconds" ]]; then
-    command=(timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" "${command[@]}")
-  fi
-  without_deploy_secrets \
-    LMDJ_WEB_HOST_CLEAN_ROOM=1 \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
-    LMDJ_CREATOR_WEB_EXPECTED_PRODUCT_BUILD="$expected_product" \
-    LMDJ_CREATOR_WEB_EXPECTED_VERSION="$expected_host" \
-    "${command[@]}"
-  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  browser_smoke_result="{\"base_url\":\"$base_url\",\"deploy_id\":\"$expected_deploy_id\",\"ended_at\":\"$ended_at\",\"host_version\":\"$expected_host\",\"product_build\":\"$expected_product\",\"started_at\":\"$started_at\",\"status\":\"passed\"}"
-}
-
-publish_deploy() {
-  # Compare the actual Site projection immediately before any public write.
-  # Refusal is not a publication attempt: recovery must not touch another
-  # operator's pointer. This observation is not an atomic Netlify CAS.
-  [[ -n "$preflight_site_json" ]] || {
-    fail "why: Netlify publication has no frozen preflight Site; remedy: restore verified preflight evidence before starting a new deployment"
-    return
-  }
-  get_current_site 30
-  [[ "$current_site_json" == "$preflight_site_json" ]] || {
-    fail "why: Netlify Site changed since preflight; refusing publication; remedy: reconcile the current Site with the original deployment request without restoring or disabling it"
-    return
-  }
-  publication_attempted=1
-  publish_response_json="$(
-    with_netlify_credential \
-      "$python_bin" "$orchestrator_tool" publish \
-        "$NETLIFY_CREATOR_SITE_ID" "$deploy_id"
-  )" || {
-    fail "Netlify same-ID publication failed"
-    return
-  }
-}
-
-initialize_evidence_target() {
-  without_deploy_secrets "$python_bin" "$orchestrator_tool" evidence-init \
-    "$repo_root" "$deploy_root"
-}
-
-write_evidence() {
-  local ended_at=''
-  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  without_deploy_secrets "$python_bin" -c '
-import json,sys
-(
- archive_name,archive_sha,revision,host,product,release_url,site_id,tag,
- run_id,started_at,ended_at,deploy_id,deploy_url,immutable_http,
- immutable_browser,publish_response,production_http,production_browser,
- prior_id,prior_url,prior_product,prior_host,prior_site,prior_immutable_http,
- prior_immutable_browser,prior_production_http,prior_production_browser,
- index_sha,manifest_sha,
-)=sys.argv[1:]
-prior_good=None
-if prior_id:
-    prior_good={
-        "deploy_id":prior_id,
-        "deploy_url":prior_url,
-        "host_version":prior_host,
-        "immutable":{"browser":json.loads(prior_immutable_browser),"http":json.loads(prior_immutable_http)},
-        "product_build":prior_product,
-        "production":{"browser":json.loads(prior_production_browser),"http":json.loads(prior_production_http)},
-        "site_response":json.loads(prior_site),
-    }
-document={
- "archive":{"filename":archive_name,"sha256":archive_sha},
- "channel":"canary",
- "contract":"lmdj.creator-web.deployment-evidence.v1",
- "ended_at":ended_at,
- "git_revision":revision,
- "github_actions":{"run_id":run_id,"run_url":f"https://github.com/endaye/lmdj/actions/runs/{run_id}"},
- "host_version":host,
- "immutable":{"browser":json.loads(immutable_browser),"deploy_id":deploy_id,"deploy_url":deploy_url,"http":json.loads(immutable_http)},
- "prior_good":prior_good,
- "product_build":product,
- "production":{"browser":json.loads(production_browser),"http":json.loads(production_http),"url":"https://lmdj-creator.netlify.app"},
- "publication":{"response":json.loads(publish_response),"same_deploy_id":deploy_id},
- "release_files":{"index_sha256":index_sha,"manifest_sha256":manifest_sha},
- "release_url":release_url,
- "site_id":site_id,
- "started_at":started_at,
- "tag":tag,
-}
-print(json.dumps(document,sort_keys=True,separators=(",",":")))
-' \
-    "$archive_name" "$archive_sha256" "$tag_target" "$host_version" \
-    "$product_build" "$release_url" "$NETLIFY_CREATOR_SITE_ID" "$tag" \
-    "$GITHUB_RUN_ID" "$deployment_started_at" "$ended_at" "$deploy_id" \
-    "$deploy_url" "$immutable_http_result" "$immutable_browser_result" \
-    "$publish_response_json" "$production_http_result" "$production_browser_result" \
-    "$prior_deploy_id" "$prior_deploy_url" "$prior_product_build" \
-    "$prior_host_version" "$current_site_json" \
-    "$prior_immutable_http_result" "$prior_immutable_browser_result" \
-    "$prior_production_http_result" "$prior_production_browser_result" \
-    "$staged_index_sha256" "$staged_manifest_sha256" |
-    without_deploy_secrets "$python_bin" "$orchestrator_tool" \
-      evidence-write-document "$deploy_root/evidence.json" \
-      lmdj.creator-web.deployment-evidence.v1
-}
-
-deploy_release() {
-  local selected_tag="$1"
-  tag="$selected_tag"
-  if [[ -n "${LMDJ_RELEASE_REQUEST_ID:-}" ]]; then
-    [[ "$LMDJ_RELEASE_REQUEST_ID" =~ ^[0-9a-f]{64}$ && "${LMDJ_PRIOR_SITE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || {
-      fail "why: managed deployment has no valid original Site binding; remedy: restore the original request ID and frozen Site digest, never redispatch with a new prior"
-      return
-    }
-  fi
-  if [[ -n "${LMDJ_PRIOR_SITE_SHA256:-}" && ! "$LMDJ_PRIOR_SITE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-    fail "why: frozen Site digest is malformed; remedy: restore its original canonical SHA256 before deployment"
-    return
-  fi
-  require_secret GITHUB_TOKEN
-  require_secret NETLIFY_CREATOR_SITE_ID
-  require_secret NETLIFY_AUTH_TOKEN
-  require_secret GITHUB_RUN_ID
-  require_command timeout
-  [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || fail "GitHub Actions run ID is invalid"
-  [[ "${GITHUB_REPOSITORY:-}" == "$canonical_repository" ]] || fail "GitHub Actions repository is not canonical"
-  [[ "${GITHUB_SERVER_URL:-}" == 'https://github.com' ]] || fail "GitHub Actions server URL is not canonical"
-  deployment_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  initialize_evidence_target
-  verify_release "$tag"
-  preflight_prior_good
-  create_draft_deploy
-  run_http_smoke "$deploy_url" "$product_build" "$host_version" "$deploy_id" "$staged_index_sha256" "$staged_manifest_sha256"
-  immutable_http_result="$http_smoke_result"
-  run_browser_smoke "$deploy_url" "$product_build" "$host_version" "$deploy_id"
-  immutable_browser_result="$browser_smoke_result"
-  publish_deploy
-  run_http_smoke "$production_url" "$product_build" "$host_version" '' "$staged_index_sha256" "$staged_manifest_sha256"
-  production_http_result="$http_smoke_result"
-  run_browser_smoke "$production_url" "$product_build" "$host_version" "$deploy_id"
-  production_browser_result="$browser_smoke_result"
-  write_evidence
-  deployment_complete=1
-  echo "Creator Web Host deployment: PASS ($deploy_id)"
-}
-
-smoke_target() {
-  local base_url="$1"
-  product_build="$2"
-  host_version="$3"
-  run_http_smoke "$base_url" "$product_build" "$host_version"
-  run_browser_smoke "$base_url"
-  echo "Creator Web Host deployment smoke: PASS"
-}
-
 [[ $# -ge 1 ]] || {
   usage
   exit 64
@@ -1046,29 +512,6 @@ case "$command_name" in
         --output "$stage_output"
     fi
     echo "Creator Web Host release verification: PASS ($tag)"
-    ;;
-  deploy)
-    [[ $# -eq 1 ]] || { usage; exit 64; }
-    # Retired. The Netlify site this path publishes to was deleted on
-    # 2026-09-08, so it can only fail, and both deployment workflows now run
-    # the Cloudflare adapter instead. The source is retained as historical
-    # tooling per #927; the explicit opt-in exists for that and for its own
-    # tests, not for deploying anything.
-    [[ "${LMDJ_ALLOW_RETIRED_NETLIFY_DEPLOY:-}" == "1" ]] || fail \
-      "this Netlify deployment path is retired and its site is deleted; remedy: use scripts/cloudflare-host-deploy.sh TAG --target creator-web"
-    validate_tag "$1"
-    for command in git gpg gh "$python_bin" npm; do
-      require_command "$command"
-    done
-    [[ -f "$orchestrator_tool" ]] || fail "deployment orchestrator is unavailable"
-    deploy_release "$1"
-    ;;
-  smoke)
-    [[ $# -eq 3 ]] || { usage; exit 64; }
-    for command in "$python_bin" npm; do
-      require_command "$command"
-    done
-    smoke_target "$1" "$2" "$3"
     ;;
   *)
     usage
