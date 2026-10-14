@@ -213,6 +213,7 @@
     {"match": {"kind": "exact", "value": "tests/build/web_host_release_selection_test.py"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/web_runtime_deploy_"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/creator_web_deploy_"}, "lanes": ["deploy_contract"]},
+    {"match": {"kind": "exact", "value": "tests/build/web_host_deploy_workflow_parity_test.py"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/default_assets_deploy_"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/web_runtime_public_deployment_docs_test.py"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/creator_web_public_deployment_docs_test.py"}, "lanes": ["deploy_contract"]},
