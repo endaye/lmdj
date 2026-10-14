@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import json
 import importlib.util
@@ -6,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 repo_root = Path(__file__).resolve().parents[2]
@@ -189,6 +191,136 @@ assert cardputer_project_version and cardputer_project_version.group(1) == curre
     "why: apps/cardputer-host/CMakeLists.txt PROJECT_VER copies the Product "
     "Build by hand and disagrees with products/lmdj/version.json; remedy: set "
     f'it to "{current}"'
+)
+
+# Every other hand copy of a module version. No step of the version cascade
+# rewrites these, so a settle that bumps a manifest leaves them behind and a
+# lane that does not own the fact goes red hours later: #2247 left the Creator
+# npm identity at 6.0.0 (Deploy contract) and two foundation 0.5.0 pins in the
+# provider conformance tests (core_ubuntu). The expected value is read from the
+# manifest, never restated here; the table only names where each copy sits.
+# The PR-time ci-contract job runs this file, and scripts/ci/scope_policy.json
+# routes every manifest and every file below to that lane (#2260).
+manifest_versions = {}
+for parent in ("packages", "apps", "providers"):
+    for path in sorted((repo_root / parent).glob("*/module.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        manifest_versions[document["module"]] = document["version"]
+creator_npm = json.loads(
+    (repo_root / "apps/creator-web/package.json").read_text(encoding="utf-8")
+)
+creator_lock = json.loads(
+    (repo_root / "apps/creator-web/package-lock.json").read_text(encoding="utf-8")
+)
+mcp_project = tomllib.loads(
+    (repo_root / "apps/core-mcp/pyproject.toml").read_text(encoding="utf-8")
+)
+mcp_runtime = [
+    statement.value.value
+    for statement in ast.parse(
+        (repo_root / "apps/core-mcp/lmdj_core_mcp/__init__.py").read_text(
+            encoding="utf-8"
+        )
+    ).body
+    if isinstance(statement, ast.Assign)
+    and [getattr(target, "id", None) for target in statement.targets]
+    == ["__version__"]
+    and isinstance(statement.value, ast.Constant)
+]
+identity_copies = [
+    ("apps/creator-web/package.json version", creator_npm.get("version"),
+     ("creator-web",)),
+    ("apps/creator-web/package-lock.json version", creator_lock.get("version"),
+     ("creator-web",)),
+    ('apps/creator-web/package-lock.json packages[""].version',
+     creator_lock.get("packages", {}).get("", {}).get("version"),
+     ("creator-web",)),
+    ("apps/core-mcp/pyproject.toml project.version",
+     mcp_project.get("project", {}).get("version"), ("core-mcp",)),
+    ("apps/core-mcp/lmdj_core_mcp/__init__.py __version__",
+     mcp_runtime[0] if len(mcp_runtime) == 1 else None, ("core-mcp",)),
+]
+# (file, pattern, modules, matches). The last capture group is the copied
+# version; a pattern with two groups names its module in the first group.
+proof_providers = ("local.proof.success", "local.proof.failure")
+identity_pin_sites = [
+    ("tests/conformance/schema_contract_test.py",
+     r'"module": "foundation",\s*"version": "([^"]+)"', ("foundation",), 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'\{"dependencies", \{\{"foundation", "([^"]+)"\}\}\}', ("foundation",), 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'\{"module", "provider-sdk"\},\s*\{"version", "([^"]+)"\}',
+     ("provider-sdk",), 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'\{\{"provider-sdk", "([^"]+)"\}\}', ("provider-sdk",), 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'manifest\.at\("version"\) == "([^"]+)"', proof_providers, 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'descriptor->version == "([^"]+)"', proof_providers, 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'\{"id", "local\.proof\.success"\},\s*\{"version", "([^"]+)"\}',
+     ("local.proof.success",), 1),
+    ("tests/core/provider/conformance_test.cpp",
+     r'attempt\.at\("provider"\)\.at\("version"\) == "([^"]+)"',
+     ("local.proof.success",), 1),
+    ("tests/core/provider/spec_regression_test.cpp",
+     r'manifest\.at\("provider_version"\) == "([^"]+)"', proof_providers, 1),
+    ("tests/core/provider/sample_slice_test.cpp",
+     r'registration\.version == "([^"]+)"', ("local.sample.slice",), 1),
+    ("tests/core/provider/stem_split_test.cpp",
+     r'record\.provider\.id == "local\.proof\.stem" && '
+     r'record\.provider\.version == "([^"]+)"', ("local.proof.stem",), 1),
+    ("tests/core/facade/assembly_loader_test.cpp",
+     r'std::make_shared<ProofProvider>\(std::move\(id\)\),\s*"([^"]+)"',
+     proof_providers, 1),
+    ("tests/core/facade/assembly_loader_test.cpp",
+     r'CompiledProvider\{\s*"([a-z.]+)",\s*"([^"]+)"', (), 4),
+    ("providers/local-proof-success/src/provider.cpp",
+     r'std::make_shared<LocalProofSuccessProvider>\(\),\s*"([^"]+)"',
+     ("local.proof.success",), 1),
+    ("providers/local-proof-failure/src/provider.cpp",
+     r'std::make_shared<LocalProofFailureProvider>\(\),\s*"([^"]+)"',
+     ("local.proof.failure",), 1),
+    ("providers/local-sample-slice/src/provider.cpp",
+     r'std::make_shared<SliceProvider>\(\),\s*"([^"]+)"',
+     ("local.sample.slice",), 1),
+    ("providers/local-proof-stem/src/provider.cpp",
+     r'std::make_shared<StemProof>\(\),\s*"([^"]+)"', ("local.proof.stem",), 1),
+]
+identity_pin_drift = []
+for relative, pattern, modules, expected_count in identity_pin_sites:
+    found = re.findall(
+        pattern, (repo_root / relative).read_text(encoding="utf-8")
+    )
+    if len(found) != expected_count:
+        identity_pin_drift.append(
+            f"{relative}: /{pattern}/ matched {len(found)} times, expected "
+            f"{expected_count}; the copy moved or was removed, so update or "
+            "delete its row in identity_pin_sites"
+        )
+        continue
+    for match in found:
+        names, copied = ((match[0],), match[1]) if modules == () else (
+            modules, match)
+        identity_copies.append((f"{relative} /{pattern}/", copied, names))
+for location, copied, names in identity_copies:
+    for name in names:
+        if name not in manifest_versions:
+            identity_pin_drift.append(
+                f"{location}: no module.json declares module {name!r}"
+            )
+        elif copied != manifest_versions[name]:
+            identity_pin_drift.append(
+                f"{location}: copies {copied!r}, but the {name} module.json "
+                f"declares {manifest_versions[name]!r}"
+            )
+assert not identity_pin_drift, (
+    "why: these hand copies of a module version disagree with the module.json "
+    "they copy; no step of the version cascade rewrites them, and the drift "
+    "otherwise surfaces only in a main batch lane that does not own the fact "
+    "(#2260):\n  " + "\n  ".join(identity_pin_drift) + "\nremedy: set each "
+    "copy to the version its module.json declares, in the same change that "
+    "bumps the manifest"
 )
 
 for invalid in (

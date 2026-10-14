@@ -332,6 +332,11 @@ jobs:
       # it reads apps/core-mcp's tool table, so both routes select this lane.
       - name: Run the Needle spike tool surface check
         run: python3 tools/needle-spike/tests/tool_surface_test.py
+      # The version identity contract needs no Core build; it runs here, at
+      # Pull Request time, so a module bump that leaves a hand copy of the
+      # version behind fails before merge rather than in a batch lane (#2260).
+      - name: Run the version identity contract
+        run: python3 tests/build/version_test.py
       - uses: actions/setup-python@v6
         if: ${{ steps.quick-contracts.outputs.seam != 'false' }}
         with:

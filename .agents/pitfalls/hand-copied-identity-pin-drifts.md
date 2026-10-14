@@ -1,7 +1,7 @@
 ---
 id: hand-copied-identity-pin-drifts
 area: core
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-16
     occurrence: https://github.com/endaye/lmdj/issues/1073
@@ -62,9 +62,7 @@ version from `apps/creator-web/module.json`. The #2247 settle bumped the
 manifest to `6.0.1` and left the npm copy at `6.0.0`. `version.py verify` and
 `version_test.py` read neither file and stayed green. The drift surfaced only
 in the main batch Deploy contract lane, where the P1 candidate renderer
-(`_p1_identity_material` in `scripts/version.py`) refused the baseline. The
-exit is reopened until https://github.com/endaye/lmdj/issues/2260 extends
-`version_test.py` to cover this copy.
+(`_p1_identity_material` in `scripts/version.py`) refused the baseline.
 
 The fifth occurrence is the same settle in the same batch, back in test
 binaries. #2247 bumped `packages/foundation/module.json` to `0.5.1` and
@@ -75,6 +73,18 @@ still pinned the provider-sdk edge to `0.5.0`, and
 manifest at `0.5.0`. The C++ copy took `provider.conformance` red in the macOS
 gates and `core_ubuntu`; neither copy was named by any bump step.
 
+Both escaped for a second reason: `version_test.py` ran only in batch lanes
+(`core_ubuntu`, `package`), so even a copy it did check failed after merge.
+https://github.com/endaye/lmdj/issues/2260 repaired the exit.
+`tests/build/version_test.py` now reads every `module.json` and fails, with
+`why` and `remedy`, when a known copy disagrees: the Creator npm identity, the
+MCP `pyproject.toml` and `__version__`, the version literals in the provider,
+assembly-loader and schema conformance tests, and the registration versions
+in `providers/*/src/provider.cpp`. The `ci-contract` job of `pr-contract.yml`
+and `ci.yml` runs it, and `scripts/ci/scope_policy.json` routes every
+manifest and every listed copy to `ci_contract`, so a settle that forgets a
+copy fails on its own Pull Request.
+
 ## How to apply
 
 - Never restate a module manifest's identity, version or dependency pins as a
@@ -82,16 +92,13 @@ gates and `core_ubuntu`; neither copy was named by any bump step.
   is the single owner of that fact; a second copy is a defect, not extra
   coverage, and it fails in whichever lane happens to run it.
 - Before adding an assertion, ask which lane executes it and whether that lane
-  owns the fact. Identity pins belong to the `contract` tier, which
-  `scripts/core.sh test dev full` and `core_ubuntu` run -- not to `package`,
-  which deliberately runs only unit and component.
-- When a settle changes a module version or dependency edge, `git grep` the
-  old version literal across `tests/` and `scripts/` and fix or delete every
-  remaining copy in the same settle; the manifest diff alone does not list
-  them.
-- When a settle bumps `apps/creator-web/module.json`, set the same version in
-  `apps/creator-web/package.json` and in both `version` fields of
-  `apps/creator-web/package-lock.json` (top level and `packages[""]`).
+  owns the fact. Identity pins belong to `tests/build/version_test.py`, which
+  the PR-time `ci-contract` job runs -- not to `package`, which deliberately
+  runs only unit and component.
+- If a new hand copy of a module version cannot be deleted, add its location
+  to `identity_pin_sites` (or `identity_copies`) in `version_test.py` and route
+  the file to `ci_contract` in `scripts/ci/scope_policy.json` in the same
+  change; the gate checks only the copies it lists.
 - When a bump forgets a copy, prefer deleting the duplicate over re-binding it:
   a literal that must be hand-edited in lockstep with a generated identity is
   forgotten again. See

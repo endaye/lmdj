@@ -144,6 +144,11 @@ jobs:
       # Engine-free; ci.yml's ci-contract job runs the same step.
       - name: Run the Needle spike tool surface check
         run: python3 tools/needle-spike/tests/tool_surface_test.py
+      # Build-free and sub-second; ci.yml's ci-contract job runs the same step.
+      # Module manifests and every hand copy of their versions route here, so
+      # a settle that forgets a copy fails on its own Pull Request (#2260).
+      - name: Run the version identity contract
+        run: python3 tests/build/version_test.py
       - uses: actions/setup-python@v6
         if: ${{ steps.contracts.outputs.seam != 'false' }}
         with:
