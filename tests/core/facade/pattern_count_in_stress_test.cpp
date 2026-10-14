@@ -2382,13 +2382,15 @@ std::size_t run_rounds(Rounds rounds) {
 // Every round must run and pass in some worker: a worker that exits nonzero,
 // is signalled or cannot be started fails the whole registration.
 bool run_rounds_in_workers() {
-  const auto workers = std::clamp(std::thread::hardware_concurrency(), 1U, 8U);
+  // No more workers than rounds, so every worker's slice is non-empty and the
+  // slices partition 1..kStressRounds exactly.
+  const auto workers = std::min(
+      std::clamp(std::thread::hardware_concurrency(), 1U, 8U), kStressRounds);
   std::vector<std::pair<Rounds, pid_t>> children;
   bool passed = true;
   for (unsigned worker = 0; worker != workers; ++worker) {
     const Rounds rounds{worker * kStressRounds / workers + 1,
                         (worker + 1) * kStressRounds / workers};
-    if (rounds.first > rounds.last) continue;
     try {
       children.emplace_back(rounds, lmdj::test::process::spawn(
           {std::string{kRoundsFlag} + std::to_string(rounds.first) + "-" + std::to_string(rounds.last)}));
@@ -2426,6 +2428,10 @@ int main(int argc, char** argv) {
     std::cout << "all " << total << '\n';
     return 0;
   }
+  // Internal worker mode for --stress only: it runs a slice of the journey
+  // rounds and none of the other shards. It is deliberately absent from the
+  // usage text, and the Facade sharding gate rejects any CTest registration
+  // that uses it.
   if (selected.starts_with(kRoundsFlag)) {
     const auto rounds = parse_rounds(selected.substr(kRoundsFlag.size()));
     if (!rounds) {
@@ -2439,7 +2445,7 @@ int main(int argc, char** argv) {
   const std::string_view prefix{"--shard="};
   const bool stress = selected == "--stress";
   if (argc > 2 || (argc == 2 && !stress && !selected.starts_with(prefix))) {
-    std::cerr << "usage: lmdj_pattern_count_in_tests [--list-shards|--shard=<name>|--stress|--stress-rounds=<first>-<last>]\n";
+    std::cerr << "usage: lmdj_pattern_count_in_tests [--list-shards|--shard=<name>|--stress]\n";
     return 2;
   }
   const auto shard_name = selected.starts_with(prefix) ? selected.substr(prefix.size()) : std::string_view{};
