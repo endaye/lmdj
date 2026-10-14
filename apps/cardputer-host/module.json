@@ -1,1 +1,1 @@
-{"api_version":1,"contract":"lmdj.module.v1","dependencies":{"application-facade":"6.7.0","audio-runtime":"5.2.0"},"module":"cardputer-host","version":"1.0.9"}
+{"api_version":1,"contract":"lmdj.module.v1","dependencies":{"application-facade":"6.8.0","audio-runtime":"6.0.0"},"module":"cardputer-host","version":"1.0.9"}
