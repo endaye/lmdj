@@ -178,12 +178,17 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         nothing about whether the host can execute the TSan runtime, which is
         the only question it exists to answer.
         """
-        for job_name in ("core-tsan", "core-stress"):
+        # Each job queues on the host it runs on (#2277): TSan on the Linux
+        # `ci-core` host, Release stress on the bare-metal Mac.
+        for job_name, group in (
+            ("core-tsan", "lmdj-native-heavy-linux"),
+            ("core-stress", "lmdj-native-heavy-macos"),
+        ):
             with self.subTest(job=job_name):
                 self.assertRegex(
                     self.job(job_name),
                     r"(?m)^    concurrency:\n"
-                    r"      group: lmdj-native-heavy\n"
+                    rf"      group: {group}\n"
                     r"      queue: max\n"
                     r"      cancel-in-progress: false$",
                     msg=(
@@ -191,7 +196,7 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
                         "sibling heavy job on the same host runs beside it rather "
                         "than after it and consumes the CPU its tests were "
                         "budgeted for; "
-                        "remedy: keep the lmdj-native-heavy block with queue: "
+                        f"remedy: keep the {group} block with queue: "
                         "max before cancel-in-progress: false, the same one "
                         "ci.yml puts on every admitted shared-host lane"
                     ),
