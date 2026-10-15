@@ -21,6 +21,11 @@ WEB_HOST = REPO_ROOT / "scripts/web-runtime-host.sh"
 GITIGNORE = REPO_ROOT / ".gitignore"
 LOCAL_LANES = REPO_ROOT / "scripts/ci/local_lanes.json"
 WORKFLOW_ROOT = REPO_ROOT / ".github/workflows"
+# One capacity queue per physical host that runs native-heavy work (#2277).
+# The Linux host carries `ci-core`, `ci-web-heavy` and the Portal's heavy
+# build; the trusted bare-metal Mac carries Release stress and macOS gates.
+LINUX_HEAVY_QUEUE = "lmdj-native-heavy-linux"
+MACOS_HEAVY_QUEUE = "lmdj-native-heavy-macos"
 ACTION_ROOT = REPO_ROOT / ".github/actions"
 REFERENCE_RENDER = "python3 tests/fixtures/golden/reference_render.py"
 CORE_PACKAGE = "scripts/core.sh package"
@@ -210,41 +215,41 @@ class CiBuildAccelerationTest(unittest.TestCase):
 
     def test_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
-        capacity_jobs = (
-            "portal",
-            "core-ubuntu",
-            "package",
-            "core-asan",
-            "core-coverage",
+        capacity_jobs = {
+            "portal": LINUX_HEAVY_QUEUE,
+            "core-ubuntu": LINUX_HEAVY_QUEUE,
+            "package": LINUX_HEAVY_QUEUE,
+            "core-asan": LINUX_HEAVY_QUEUE,
+            "core-coverage": LINUX_HEAVY_QUEUE,
             # #1558 moved Release stress to the bare-metal macOS runner because
             # its 2.67 ms thread-CPU deadline cannot survive a hypervisor. The
-            # gates build Core twice on that same machine, so they join the
-            # queue rather than supply the contention that move removed.
-            "macos-primary",
+            # gates build Core twice on that same machine, so they join that
+            # host's queue rather than supply the contention that move removed.
+            "macos-primary": MACOS_HEAVY_QUEUE,
             # The four Web lanes run on the same netcup host as every
             # native-heavy suite; unqueued, a full candidate batch's own
             # concurrency flaked their fixed browser budgets three runs in a
             # row (37019332485, 37037025368, 37071379300).
-            "web-toolchain-conformance",
-            "web-runtime-host",
-            "creator-web",
-            "web-runtime-lab",
-        )
+            "web-toolchain-conformance": LINUX_HEAVY_QUEUE,
+            "web-runtime-host": LINUX_HEAVY_QUEUE,
+            "creator-web": LINUX_HEAVY_QUEUE,
+            "web-runtime-lab": LINUX_HEAVY_QUEUE,
+        }
         self.assertEqual(
             source.count("group: lmdj-native-heavy"),
             len(capacity_jobs),
             "why: every job that can contend with timing-sensitive native work "
-            "on a shared machine must join one capacity queue; remedy: keep the "
-            "lmdj-native-heavy concurrency block on "
+            "on a shared machine must join that host's capacity queue; remedy: "
+            "keep the per-host lmdj-native-heavy concurrency block on "
             + ", ".join(capacity_jobs),
         )
-        for job_name in capacity_jobs:
+        for job_name, group in capacity_jobs.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertRegex(
                     job,
                     r"(?m)^    concurrency:\n"
-                    r"      group: lmdj-native-heavy\n"
+                    rf"      group: {re.escape(group)}\n"
                     r"      queue: max\n"
                     r"      cancel-in-progress: false$",
                     msg=(
@@ -275,6 +280,60 @@ class CiBuildAccelerationTest(unittest.TestCase):
                         "          ccache --show-log-stats",
                         job,
                     )
+
+    def test_every_heavy_queue_member_queues_on_the_host_it_runs_on(self) -> None:
+        """A heavy queue serialises one physical host, never two (#2277).
+
+        Until #2277 one repository-wide group serialised the Linux host and the
+        bare-metal Mac, so macOS gates waited 129-169 min behind Linux lanes
+        they share no CPU with (self-test runs 38588990296, 38619404365).
+        Defect caught in either direction: a job queued on one host's group
+        but routed to the other host runs beside that host's timing-sensitive
+        work, and a revived host-agnostic group re-serialises both hosts. It
+        reads every workflow, because a member outside `ci.yml` is a member.
+        """
+        allowed = {LINUX_HEAVY_QUEUE, MACOS_HEAVY_QUEUE}
+        members = 0
+        for workflow in sorted(WORKFLOW_ROOT.glob("*.yml")):
+            source = workflow.read_text(encoding="utf-8")
+            if "\njobs:\n" not in source:
+                continue
+            jobs = re.split(
+                r"(?m)^  ([A-Za-z0-9_-]+):\n", source.split("\njobs:\n", 1)[1]
+            )
+            for job_name, body in zip(jobs[1::2], jobs[2::2]):
+                groups = re.findall(r"(?m)^      group: (lmdj-native-heavy\S*)$", body)
+                if not groups:
+                    continue
+                members += 1
+                with self.subTest(workflow=workflow.name, job=job_name):
+                    self.assertEqual(len(groups), 1)
+                    self.assertIn(
+                        groups[0],
+                        allowed,
+                        "why: a host-agnostic heavy group serialises hosts that "
+                        "share no CPU; remedy: use the queue of the host the job "
+                        "is routed to",
+                    )
+                    routing = re.search(r"(?m)^    (?:runs-on|uses): (.*)$", body)
+                    self.assertIsNotNone(routing)
+                    on_mac = (
+                        "macOS" in routing.group(1)
+                        or "select-macos-runner" in routing.group(1)
+                    )
+                    self.assertEqual(
+                        groups[0],
+                        MACOS_HEAVY_QUEUE if on_mac else LINUX_HEAVY_QUEUE,
+                        "why: a job queued on one host's group but routed to the "
+                        "other host runs beside that host's timing-sensitive "
+                        "work; remedy: move the queue with the routing",
+                    )
+        self.assertEqual(
+            members,
+            13,
+            "why: the heavy queue membership changed without this pin; remedy: "
+            "confirm the new member's host and update the count",
+        )
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")

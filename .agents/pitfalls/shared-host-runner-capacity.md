@@ -93,10 +93,13 @@ are involved.
 
 ## How to apply
 
-Put every material job eligible for a shared host in the same
-repository-wide capacity queue, including Architecture Portal, ordinary Core
-proof and package jobs, ASan, coverage, and the four Web lanes on the netcup
-host (`ci-web-heavy` shares the machine with `ci-core` there). Retain every
+Put every material job eligible for a shared host in that host's capacity
+queue: `lmdj-native-heavy-linux` for Architecture Portal, ordinary Core proof
+and package jobs, ASan, coverage, TSan, the Core benchmark and the four Web
+lanes on the netcup host (`ci-web-heavy` shares the machine with `ci-core`
+there); `lmdj-native-heavy-macos` for Release stress and the macOS gates on
+the bare-metal Mac. The queue is per physical host, not repository-wide: one
+group across hosts that share no CPU only adds waiting (#2277). Retain every
 waiter with `queue: max`, keep `cancel-in-progress: false`, and gate the
 complete admitted job set. Do not widen product test budgets to absorb
 sibling-runner contention.

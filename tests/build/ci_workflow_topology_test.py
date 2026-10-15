@@ -927,20 +927,20 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
         #1558 moved the stress suite off the KVM hosts because its 2.67 ms
         thread-CPU deadline cannot tolerate time it did not consume. The gates
-        build Core twice on the same runner, so without the repository queue a
+        build Core twice on the same runner, so without the macOS host queue a
         gate would supply the contention the move was made to remove.
         """
         self.assertRegex(
             self.workflow_job("macos-primary"),
             r"(?m)^    concurrency:\n"
-            r"      group: lmdj-native-heavy\n"
+            r"      group: lmdj-native-heavy-macos\n"
             r"      queue: max\n"
             r"      cancel-in-progress: false$",
             msg=(
                 "why: the macOS gates share the bare-metal runner with the "
                 "relocated Release stress suite, whose gate measures thread CPU "
                 "time against a 2.67 ms deadline; remedy: keep macos-primary in "
-                "the lmdj-native-heavy queue beside core-stress and core-tsan"
+                "the lmdj-native-heavy-macos queue beside core-stress"
             ),
         )
 
@@ -980,7 +980,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             # exactly 45, against 16-19 min hosted).
             "web-runtime-host": 75,
             "creator-web": 35,
-            # Holds lmdj-native-heavy; at most 18 s over 214 runs.
+            # Holds lmdj-native-heavy-linux; at most 18 s over 214 runs.
             "web-runtime-lab": 10,
             "macos-primary": 30,
             # Thin selection/adjudication jobs; each observed under 30 s.

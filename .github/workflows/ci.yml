@@ -244,7 +244,7 @@ jobs:
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     uses: ./.github/workflows/architecture-portal.yml
@@ -466,7 +466,7 @@ jobs:
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
       }}
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
@@ -527,9 +527,9 @@ jobs:
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join the repository capacity queue.
+    # 37071379300). Join that host's capacity queue.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
@@ -566,9 +566,9 @@ jobs:
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join the repository capacity queue.
+    # 37071379300). Join that host's capacity queue.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
@@ -617,9 +617,9 @@ jobs:
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join the repository capacity queue.
+    # 37071379300). Join that host's capacity queue.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
@@ -658,13 +658,13 @@ jobs:
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join the repository capacity queue.
+    # 37071379300). Join that host's capacity queue.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
-    # Hang detector while holding lmdj-native-heavy: 214 successful runs
+    # Hang detector while holding lmdj-native-heavy-linux: 214 successful runs
     # (2026-09-03..10-14) took at most 18 seconds.
     timeout-minutes: 10
     steps:
@@ -704,7 +704,7 @@ jobs:
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
       }}
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
@@ -901,10 +901,12 @@ jobs:
     # Release stress moved to this same bare-metal runner in #1558 because its
     # 2.67 ms thread-CPU deadline cannot survive a hypervisor; a gate compiling
     # beside it would reintroduce exactly the overruns that move eliminated.
-    # The repository queue is what makes "one heavy native job at a time" true.
-    # On the hosted fallback path the group costs only a queue slot.
+    # The macOS host queue is what makes "one heavy native job at a time" true
+    # on that machine; it is separate from the Linux host queue because the
+    # two hosts share no CPU (#2277). On the hosted fallback path the group
+    # costs only a queue slot.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-macos
       queue: max
       cancel-in-progress: false
     # Infrastructure failure is adjudicated by the fallback and final gate
@@ -1062,7 +1064,7 @@ jobs:
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || needs.core-coverage.result == 'success')
       }}
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
@@ -1117,7 +1119,7 @@ jobs:
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
       }}
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-linux
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
@@ -1187,7 +1189,7 @@ jobs:
   # The two stress workloads Core Nightly defines, run inside a self-test
   # batch against its target so the batch's verdict covers them. Each caller
   # reports one result for the workflow it called, so the callers are one per
-  # suite; the called jobs keep their own native-heavy capacity queue.
+  # suite; the called jobs keep their own per-host native-heavy queue.
   nightly-tsan:
     name: Self-test TSan stress
     needs: change-scope

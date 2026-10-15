@@ -508,7 +508,9 @@ hosts, not a defect. Routing splits two ways:
   declares its role inside the called `architecture-portal.yml`, because GitHub
   does not allow a `uses:` job to carry `runs-on`. In the complete self-test batch,
   TSan names `ci-core` since #693, and Release stress names the trusted
-  bare-metal macOS runner since #1558; both join the `lmdj-native-heavy` queue.
+  bare-metal macOS runner since #1558. Each joins the capacity queue of the host
+  it runs on: TSan `lmdj-native-heavy-linux`, Release stress
+  `lmdj-native-heavy-macos` (#2277).
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
@@ -537,8 +539,8 @@ to be 40-hex and exactly equal to the dispatch's trusted `github.sha`, keep
 `permissions: contents: read`, target one role literally, and report
 `runner_name`, elapsed seconds and host capacity separately. Neither is release
 evidence and neither creates a required check. The Core benchmark carries two
-properties the Web benchmark does not need. It joins the repository-wide
-`lmdj-native-heavy` capacity queue, because separate runner services on the
+properties the Web benchmark does not need. It joins the Linux host's
+`lmdj-native-heavy-linux` capacity queue, because separate runner services on the
 shared host are not independent CPU capacity and an unqueued measurement would
 both corrupt itself and consume a concurrent formal lane's test budgets. And its
 job name prefix is registered in `core_job_names`.
@@ -628,13 +630,26 @@ instead of counting them; the deadline and the zero-unattributed-overruns
 bound are unchanged
 ([decision](../prd/decisions/2026-09-16-master-fx-stress-attribute-guest-stolen-time.md)).
 
-Both native Nightly jobs join the repository-wide `lmdj-native-heavy` queue.
-Naming the `ci-core` role is not enough to serialise them: the role spans
-several runner services on one physical host, so a TSan job and the release
-stress suite would start in the same second and run beside each other. Run
-33838737018 did exactly that on 2026-09-04 and both failed, which made the
-probe's result unusable -- it measured contention rather than whether the host
-can execute the TSan runtime. A TSan result is only evidence when it runs alone.
+Both native Nightly jobs join the capacity queue of the physical host they
+run on. Naming a role is not enough to serialise heavy work: a role spans
+several runner services on one physical host, so two heavy jobs would start in
+the same second and run beside each other. Run 33838737018 did exactly that on
+2026-09-04 (TSan and Release stress, then both on `ci-core`) and both failed,
+which made the probe's result unusable -- it measured contention rather than
+whether the host can execute the TSan runtime. A TSan result is only evidence
+when it runs alone on its host.
+
+The queue is per physical host, not repository-wide (#2277): every heavy job on
+the Linux host (`ci-core`, `ci-web-heavy`, the Architecture Portal build, TSan
+and the Core benchmark) joins `lmdj-native-heavy-linux`; Release stress and the
+macOS gates, which share the bare-metal Mac, join `lmdj-native-heavy-macos`.
+The two hosts share no CPU, so one repository-wide group only added waiting:
+macOS gates queued 129-169 minutes behind Linux lanes (self-test runs
+38588990296 and 38619404365). A new host that takes heavy work needs its own
+queue; giving it an existing host's role or group would either serialise two
+hosts again or share host state such as the `ci-core` ccache.
+`tests/build/ci_build_acceleration_test.py` pins every member, across all
+workflows, to the queue of the host its routing names.
 
 The nightly Release stress lane is trusted native workload on the bare-metal
 macOS runner (`self-hosted, macOS, ARM64, lmdj`), not on `ci-core`: it runs at

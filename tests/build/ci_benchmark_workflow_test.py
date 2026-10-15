@@ -141,14 +141,14 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
     def test_core_benchmark_joins_the_shared_host_capacity_queue(self) -> None:
         """Separate runner services on one host are not independent capacity.
 
-        A benchmark outside `lmdj-native-heavy` would land on the sibling
+        A benchmark outside `lmdj-native-heavy-linux` would land on the sibling
         `ci-core` service while a formal lane runs, corrupting its own
         measurement and consuming that lane's test budgets.
         """
         self.assertRegex(
             self.source,
             r"(?m)^    concurrency:\n"
-            r"      group: lmdj-native-heavy\n"
+            r"      group: lmdj-native-heavy-linux\n"
             r"      queue: max\n"
             r"      cancel-in-progress: false$",
             msg=(
