@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -91,7 +93,13 @@ REGISTERED_RUNNER_LABELS = (
     "ci-web-heavy",
     "ci-general",
     "ci-core",
+    "lmdj-mac-m1",
+    "lmdj-mac-m4",
+    "ci-macos-gates",
 )
+# Labels a Mac carries once admitted for the macOS gates (#2278).
+M1_ADMITTED = ["self-hosted", "macOS", "ARM64", "lmdj", "lmdj-mac-m1", "ci-macos-gates"]
+M4_ADMITTED = ["self-hosted", "macOS", "ARM64", "lmdj-mac-m4", "ci-macos-gates"]
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
     "batch-verdict",
@@ -153,7 +161,9 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertNotIn("github.event.pull_request.head.repo.full_name", source)
         self.assertEqual(source.count("Runner selection candidates:"), 1)
         self.assertEqual(source.count("Runner selection inventory:"), 1)
-        self.assertEqual(source.count("TARGET_RUNNER_NAME:"), 1)
+        self.assertIn("endaye-mbp-m4-pro", source)
+        self.assertEqual(source.count("PRIMARY_RUNNER_NAME:"), 1)
+        self.assertEqual(source.count("OVERFLOW_RUNNER_NAME:"), 1)
         self.assertNotRegex(source, r"(?m)^\s+RUNNER_NAME:")
         self.assertNotIn('"$RUNNER_NAME"', source)
 
@@ -378,27 +388,108 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("timing-sensitive", creator)
         self.assertIn("bounded test budgets", creator)
 
+    def select_mac(self, *runners: dict) -> dict[str, str]:
+        """Run the real selector script against a stubbed Runner API reply."""
+        selector = self.workflow_job("select-macos-runner")
+        script = re.search(r"        run: \|\n(?P<body>.*)\Z", selector, flags=re.DOTALL)
+        self.assertIsNotNone(script, "select-macos-runner has no run script")
+        assert script is not None
+        body = "\n".join(
+            line[10:] if line.startswith(" " * 10) else line
+            for line in script.group("body").splitlines()
+        )
+        names = dict(re.findall(r"(?m)^          ((?:PRIMARY|OVERFLOW)_RUNNER_NAME): (\S+)$", selector))
+        with tempfile.TemporaryDirectory() as temporary:
+            stub = Path(temporary) / "curl"
+            stub.write_text('#!/usr/bin/env bash\nprintf %s "$RUNNER_REPLY"\n', encoding="utf-8")
+            stub.chmod(0o755)
+            output = Path(temporary) / "output"
+            output.write_text("", encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(names)
+            environment.update(
+                PATH=f"{temporary}{os.pathsep}{environment['PATH']}",
+                REPOSITORY="endaye/lmdj",
+                RUNNER_READ_TOKEN="token",
+                GITHUB_OUTPUT=str(output),
+                RUNNER_REPLY=json.dumps(
+                    {"total_count": len(runners),
+                     "runners": [{"name": r["name"], "status": r["status"], "busy": r["busy"],
+                                  "labels": [{"name": label} for label in r["labels"]]}
+                                 for r in runners]}
+                ),
+            )
+            result = subprocess.run(
+                ["bash", "-c", body], env=environment, check=False,
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return dict(
+                line.split("=", 1)
+                for line in output.read_text(encoding="utf-8").splitlines()
+                if line
+            )
+
+    @staticmethod
+    def mac(name: str, status: str, busy: bool, labels: list[str]) -> dict:
+        return {"name": name, "status": status, "busy": busy, "labels": labels}
+
     def test_macos_selector_queues_on_a_busy_mac_instead_of_paying_for_hosted(self) -> None:
         """A loaded trusted Mac must queue, never divert to paid runners.
 
         `select-macos-runner` resolves once, before its workload starts.
         Treating a momentarily busy runner as unavailable is what made
-        concurrent retries expensive rather than merely slow, and macOS is the
-        one lane where that selector still exists at all.
+        concurrent retries expensive rather than merely slow.
         """
-        selector = self.workflow_job("select-macos-runner")
-        eligibility = re.search(
-            r'eligible_count="\$\(\n(?P<body>.*?)\n          \)"',
-            selector,
-            flags=re.DOTALL,
+        selected = self.select_mac(self.mac("endaye-mbp-m1", "online", True, M1_ADMITTED))
+        self.assertEqual(selected["runner"], '["self-hosted","macOS","ARM64","lmdj-mac-m1"]')
+        self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
+        self.assertEqual(selected["self-hosted"], "true")
+
+    def test_macos_selector_prefers_the_overflow_mac_only_while_idle(self) -> None:
+        """The M4 Pro takes the gates when idle, on its own queue (#2278).
+
+        It is not always on, so it is preferred only while idle, when the job
+        starts seconds after selection. Busy, it yields to the M1, which
+        queues; with the M1 unavailable a busy M4 still beats paying hosted.
+        """
+        m1 = self.mac("endaye-mbp-m1", "online", True, M1_ADMITTED)
+        cases = (
+            ("idle overflow", [m1, self.mac("endaye-mbp-m4-pro", "online", False, M4_ADMITTED)], "m4"),
+            ("busy overflow", [m1, self.mac("endaye-mbp-m4-pro", "online", True, M4_ADMITTED)], "m1"),
+            ("primary offline", [self.mac("endaye-mbp-m1", "offline", False, M1_ADMITTED),
+                                 self.mac("endaye-mbp-m4-pro", "online", True, M4_ADMITTED)], "m4"),
         )
-        self.assertIsNotNone(
-            eligibility, "select-macos-runner has no eligibility expression"
+        for name, runners, host in cases:
+            with self.subTest(case=name):
+                selected = self.select_mac(*runners)
+                self.assertEqual(
+                    selected["runner"], f'["self-hosted","macOS","ARM64","lmdj-mac-{host}"]'
+                )
+                self.assertEqual(selected["queue"], f"lmdj-native-heavy-macos-{host}")
+
+    def test_macos_selector_admits_a_mac_only_with_its_gates_role(self) -> None:
+        """A registered but unaccepted Mac takes no gate.
+
+        The M4 Pro joins without `ci-macos-gates` until its benchmark passes.
+        Labels compare exactly: `lmdj-mac-m1` must not satisfy `lmdj`-style
+        substring matching, which jq's `contains` would do.
+        """
+        unaccepted = [label for label in M4_ADMITTED if label != "ci-macos-gates"]
+        selected = self.select_mac(
+            self.mac("endaye-mbp-m1", "online", True, M1_ADMITTED),
+            self.mac("endaye-mbp-m4-pro", "online", False, unaccepted),
         )
-        assert eligibility is not None
-        body = eligibility.group("body")
-        self.assertNotIn(".busy == false", body)
-        self.assertIn('.status == "online"', body)
+        self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
+        prefix_only = [label.replace("ci-macos-gates", "ci-macos-gates-pending") for label in M1_ADMITTED]
+        selected = self.select_mac(self.mac("endaye-mbp-m1", "online", False, prefix_only))
+        self.assertEqual(selected["runner"], '["macos-latest"]')
+
+    def test_macos_selector_hosted_path_keeps_the_primary_queue_slot(self) -> None:
+        selected = self.select_mac(self.mac("endaye-mbp-m1", "offline", False, M1_ADMITTED))
+        self.assertEqual(selected["runner"], '["macos-latest"]')
+        self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
+        self.assertEqual(selected["self-hosted"], "false")
 
     def test_macos_selector_still_falls_back_when_no_trusted_runner_is_online(self) -> None:
         """The surviving fallback is macOS-only and deliberately so.

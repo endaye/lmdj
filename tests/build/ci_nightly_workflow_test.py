@@ -24,7 +24,7 @@ CORE_ROLE = (
 # deadline gate reads thread CPU time, which a KVM guest without paravirt
 # accounting bills hypervisor steal into, and the 10 ms /proc/stat attribution
 # cannot see the 4.7-9 ms stalls that failed four consecutive batches.
-MACOS_TRUSTED_RUNNER = "runs-on: [self-hosted, macOS, ARM64, lmdj]"
+MACOS_TRUSTED_RUNNER = "runs-on: [self-hosted, macOS, ARM64, lmdj, lmdj-mac-m1]"
 TSAN_COMMANDS = (
     "python3 tests/fixtures/audio/make_fixtures.py",
     "python3 tests/fixtures/golden/reference_render.py",
@@ -182,7 +182,7 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         # `ci-core` host, Release stress on the bare-metal Mac.
         for job_name, group in (
             ("core-tsan", "lmdj-native-heavy-linux"),
-            ("core-stress", "lmdj-native-heavy-macos"),
+            ("core-stress", "lmdj-native-heavy-macos-m1"),
         ):
             with self.subTest(job=job_name):
                 self.assertRegex(

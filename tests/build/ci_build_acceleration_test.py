@@ -23,9 +23,14 @@ LOCAL_LANES = REPO_ROOT / "scripts/ci/local_lanes.json"
 WORKFLOW_ROOT = REPO_ROOT / ".github/workflows"
 # One capacity queue per physical host that runs native-heavy work (#2277).
 # The Linux host carries `ci-core`, `ci-web-heavy` and the Portal's heavy
-# build; the trusted bare-metal Mac carries Release stress and macOS gates.
+# build; the M1 carries Release stress and the gates, the overflow M4 Pro only
+# the gates (#2278). The gates' queue follows the selector's choice of Mac.
 LINUX_HEAVY_QUEUE = "lmdj-native-heavy-linux"
-MACOS_HEAVY_QUEUE = "lmdj-native-heavy-macos"
+MACOS_M1_HEAVY_QUEUE = "lmdj-native-heavy-macos-m1"
+MACOS_M4_HEAVY_QUEUE = "lmdj-native-heavy-macos-m4"
+SELECTED_MAC_QUEUE = (
+    "${{ needs.select-macos-runner.outputs.queue || 'lmdj-native-heavy-macos-m1' }}"
+)
 ACTION_ROOT = REPO_ROOT / ".github/actions"
 REFERENCE_RENDER = "python3 tests/fixtures/golden/reference_render.py"
 CORE_PACKAGE = "scripts/core.sh package"
@@ -225,7 +230,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
             # its 2.67 ms thread-CPU deadline cannot survive a hypervisor. The
             # gates build Core twice on that same machine, so they join that
             # host's queue rather than supply the contention that move removed.
-            "macos-primary": MACOS_HEAVY_QUEUE,
+            "macos-primary": SELECTED_MAC_QUEUE,
             # The four Web lanes run on the same netcup host as every
             # native-heavy suite; unqueued, a full candidate batch's own
             # concurrency flaked their fixed browser budgets three runs in a
@@ -236,7 +241,8 @@ class CiBuildAccelerationTest(unittest.TestCase):
             "web-runtime-lab": LINUX_HEAVY_QUEUE,
         }
         self.assertEqual(
-            source.count("group: lmdj-native-heavy"),
+            source.count("group: lmdj-native-heavy")
+            + source.count(f"group: {SELECTED_MAC_QUEUE}"),
             len(capacity_jobs),
             "why: every job that can contend with timing-sensitive native work "
             "on a shared machine must join that host's capacity queue; remedy: "
@@ -292,7 +298,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
         work, and a revived host-agnostic group re-serialises both hosts. It
         reads every workflow, because a member outside `ci.yml` is a member.
         """
-        allowed = {LINUX_HEAVY_QUEUE, MACOS_HEAVY_QUEUE}
+        allowed = {LINUX_HEAVY_QUEUE, MACOS_M1_HEAVY_QUEUE, SELECTED_MAC_QUEUE}
         members = 0
         for workflow in sorted(WORKFLOW_ROOT.glob("*.yml")):
             source = workflow.read_text(encoding="utf-8")
@@ -302,7 +308,10 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 r"(?m)^  ([A-Za-z0-9_-]+):\n", source.split("\njobs:\n", 1)[1]
             )
             for job_name, body in zip(jobs[1::2], jobs[2::2]):
-                groups = re.findall(r"(?m)^      group: (lmdj-native-heavy\S*)$", body)
+                groups = re.findall(
+                    r"(?m)^      group: (lmdj-native-heavy\S*|\$\{\{ needs\.select-macos-runner.*)$",
+                    body,
+                )
                 if not groups:
                     continue
                 members += 1
@@ -317,13 +326,17 @@ class CiBuildAccelerationTest(unittest.TestCase):
                     )
                     routing = re.search(r"(?m)^    (?:runs-on|uses): (.*)$", body)
                     self.assertIsNotNone(routing)
-                    on_mac = (
-                        "macOS" in routing.group(1)
-                        or "select-macos-runner" in routing.group(1)
-                    )
+                    route = routing.group(1)
+                    if "select-macos-runner" in route:
+                        expected = SELECTED_MAC_QUEUE
+                    elif "lmdj-mac-m1" in route:
+                        expected = MACOS_M1_HEAVY_QUEUE
+                    else:
+                        self.assertNotIn("macOS", route, "a Mac job must name its host label")
+                        expected = LINUX_HEAVY_QUEUE
                     self.assertEqual(
                         groups[0],
-                        MACOS_HEAVY_QUEUE if on_mac else LINUX_HEAVY_QUEUE,
+                        expected,
                         "why: a job queued on one host's group but routed to the "
                         "other host runs beside that host's timing-sensitive "
                         "work; remedy: move the queue with the routing",

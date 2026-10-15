@@ -77,6 +77,48 @@ Acceptance after merge: in the next complete self-test batch, macOS gates or
 Release stress start while a Linux member is still running, and no two Linux
 members overlap. Report the run ID; this is observation, not a merge gate.
 
+## Q2 — Pin Release stress to the M1 and route gates per Mac (#2278)
+
+Status: in execution; owner approved on 2026-10-15 ("同意，先做第 1 步").
+Recorded at `origin/main` `0cce10576a774b988f162d7bf15e674e3b9cd5af`.
+
+Premise: `select-macos-runner` checked the M1 by name but emitted the generic
+labels `self-hosted, macOS, ARM64, lmdj`, and `core-stress` named the same
+set. A second Mac registered with `lmdj` would therefore take Release stress
+and the gates without a benchmark and outside its own queue.
+
+1. Runner labels (Runner API, done before the PR): the M1 gains
+   `lmdj-mac-m1` and `ci-macos-gates`. The M4 Pro registers later as
+   `endaye-mbp-m4-pro` with `self-hosted, macOS, ARM64, lmdj-mac-m4` only.
+2. `core-stress` routes to `lmdj-mac-m1` and queues on
+   `lmdj-native-heavy-macos-m1`.
+3. `select-macos-runner` admits a Mac only while online with its host label
+   and `ci-macos-gates`, compared exactly. Order: idle M4 → online M1 → busy
+   M4 → hosted. It outputs the runner labels and the queue
+   (`lmdj-native-heavy-macos-m1`/`-m4`; hosted keeps the M1 slot), and
+   `macos-primary` uses that queue.
+4. Register the three labels with actionlint; update the tests that pin the
+   old labels and group; replace the selector's text-shape test with tests
+   that execute the selector against stubbed Runner API replies.
+5. Record the decision and update policy, portal page and pitfall.
+
+Declared files: `.github/workflows/ci.yml`, `.github/workflows/core-nightly.yml`,
+`.github/actionlint.yaml`, `tests/build/ci_runner_fallback_test.py`,
+`tests/build/ci_build_acceleration_test.py`,
+`tests/build/ci_workflow_topology_test.py`,
+`tests/build/ci_nightly_workflow_test.py`,
+`docs/prd/decisions/2026-10-15-two-mac-runner-routing.md`, this plan,
+`docs/quality/core-test-policy.md`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`,
+`.agents/pitfalls/shared-host-runner-capacity.md`.
+
+Defects the new selector tests catch: a substring label match admitting the
+wrong Mac or an unaccepted one; a busy overflow Mac preferred over the M1;
+a hosted selection without a queue. Each was mutation-proven.
+
+Out of this Task: installing the M4 Pro runner (done on that machine), its
+benchmark acceptance, and adding `ci-macos-gates` to it afterwards.
+
 ## Completion criteria
 
 - No workflow carries the host-agnostic `lmdj-native-heavy` group.

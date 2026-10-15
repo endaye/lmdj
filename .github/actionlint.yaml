@@ -10,6 +10,10 @@ self-hosted-runner:
     # moved Release stress onto bare metal.
     - ci-only-host
     - lmdj
+    # Per-Mac host labels and the gates admission role (#2278).
+    - lmdj-mac-m1
+    - lmdj-mac-m4
+    - ci-macos-gates
     - contabo
     - netcup
     - lmdj-ai-isolated

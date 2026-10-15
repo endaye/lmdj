@@ -510,7 +510,7 @@ hosts, not a defect. Routing splits two ways:
   TSan names `ci-core` since #693, and Release stress names the trusted
   bare-metal macOS runner since #1558. Each joins the capacity queue of the host
   it runs on: TSan `lmdj-native-heavy-linux`, Release stress
-  `lmdj-native-heavy-macos` (#2277).
+  `lmdj-native-heavy-macos-m1` (#2277, #2278).
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
@@ -641,8 +641,9 @@ when it runs alone on its host.
 
 The queue is per physical host, not repository-wide (#2277): every heavy job on
 the Linux host (`ci-core`, `ci-web-heavy`, the Architecture Portal build, TSan
-and the Core benchmark) joins `lmdj-native-heavy-linux`; Release stress and the
-macOS gates, which share the bare-metal Mac, join `lmdj-native-heavy-macos`.
+and the Core benchmark) joins `lmdj-native-heavy-linux`; Release stress joins
+`lmdj-native-heavy-macos-m1`, and the macOS gates join the queue of the Mac
+`select-macos-runner` chose (`-m1` or `-m4`).
 The two hosts share no CPU, so one repository-wide group only added waiting:
 macOS gates queued 129-169 minutes behind Linux lanes (self-test runs
 38588990296 and 38619404365). A new host that takes heavy work needs its own
@@ -651,8 +652,23 @@ hosts again or share host state such as the `ci-core` ccache.
 `tests/build/ci_build_acceleration_test.py` pins every member, across all
 workflows, to the queue of the host its routing names.
 
+Two trusted Macs exist since #2278. Each carries a host label, `lmdj-mac-m1` or
+`lmdj-mac-m4`, and a Mac takes the gates only while it also carries the role
+label `ci-macos-gates`. Release stress names `lmdj-mac-m1` literally: its 2.67
+ms deadline was verified only on the M1, so the M4 Pro never takes it. The M4
+Pro is overflow for the gates. `select-macos-runner` prefers it only while it
+is online, admitted and idle, because it is not always on and an idle runner
+starts the job seconds after selection; otherwise an online M1 is chosen and
+queues when busy, then a busy admitted M4 Pro, and only then hosted macOS,
+which keeps the M1 queue slot. The M4 Pro registers without `lmdj` and without
+`ci-macos-gates`, so nothing routes to it until its benchmark passes and the
+role label is added through the Runner API. Labels compare exactly; jq's
+`contains` would let `lmdj-mac-m1` satisfy `lmdj`. The selector's branches are
+executed against stubbed Runner API replies in
+`tests/build/ci_runner_fallback_test.py`.
+
 The nightly Release stress lane is trusted native workload on the bare-metal
-macOS runner (`self-hosted, macOS, ARM64, lmdj`), not on `ci-core`: it runs at
+macOS M1 runner (`self-hosted, macOS, ARM64, lmdj, lmdj-mac-m1`), not on `ci-core`: it runs at
 most 20 consecutive successful repetitions and stops on the first failure, and
 it does not retry a failed execution. It left the KVM hosts on 2026-09-19
 ([decision](../prd/decisions/2026-09-19-release-stress-on-bare-metal.md)): the

@@ -164,16 +164,18 @@ jobs:
     # Release build passed 20/20 repetitions there while it failed every
     # batch on netcup. Decision: docs/prd/decisions/2026-09-19-release-stress-on-bare-metal.md.
     #
-    # The macOS host capacity queue still applies: twenty consecutive stress
+    # The M1 capacity queue still applies: twenty consecutive stress
     # repetitions are the least tolerant workload in the repository, and this
     # runner also hosts the macOS gates. It does not share the Linux host
-    # queue, because the two hosts share no CPU (#2277).
+    # queue, because the two hosts share no CPU (#2277). `lmdj-mac-m1` pins
+    # the suite to the M1, the only Mac its deadline was verified on; the
+    # overflow M4 Pro never takes it (#2278).
     if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'stress' }}
     concurrency:
-      group: lmdj-native-heavy-macos
+      group: lmdj-native-heavy-macos-m1
       queue: max
       cancel-in-progress: false
-    runs-on: [self-hosted, macOS, ARM64, lmdj]
+    runs-on: [self-hosted, macOS, ARM64, lmdj, lmdj-mac-m1]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
