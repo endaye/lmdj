@@ -202,12 +202,18 @@ class CreatorFixtureWorkloads(unittest.TestCase):
 
 
 class CreatorBrowserWorkloads(unittest.TestCase):
-    def invoke(self, mode, status=0):
-        body = shell_function((REPO_ROOT / "scripts/creator-web.sh").read_text(), "run_browser_gate")
+    SERIAL_SLOTS = ["catalog-chromium", "sample-chromium", "webkit",
+                    "capture-chromium", "capture-denied-chromium", "sample-webkit"]
+
+    def invoke(self, mode, fail_slot=""):
+        text = (REPO_ROOT / "scripts/creator-web.sh").read_text()
+        functions = "".join(
+            f"{name}() {{\n{shell_function(text, name)}\n}}\n"
+            for name in ("start_proof_server", "run_serial_browser_groups", "run_browser_gate"))
         with tempfile.TemporaryDirectory() as directory:
             trace = Path(directory) / "trace"
             program = r"""
-set -eu
+set -euo pipefail
 repo_root="$ROOT"
 creator_root="$ROOT/apps/creator-web"
 web_test_root="$ROOT/tests/platform/web"
@@ -216,57 +222,154 @@ dist_root="$WORK"
 required_sample_editor_spec="$web_test_root/creator/creator_web_sample_editor.spec.mjs"
 required_capture_spec="$web_test_root/creator/creator_web_capture.spec.mjs"
 proof_server_pid=''
+proof_server_ready_root=''
+serial_server_pid=''
+serial_server_ready_root=''
+serial_groups_pid=''
+started_server_port=''
 cleanup_server() {
-  if [[ -n "$proof_server_pid" ]]; then
-    kill "$proof_server_pid" 2>/dev/null || true
-    wait "$proof_server_pid" 2>/dev/null || true
-    proof_server_pid=''
-  fi
+  local pid
+  for pid in "$serial_groups_pid" "$serial_server_pid" "$proof_server_pid"; do
+    [[ -z "$pid" ]] || { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
+  done
+  serial_groups_pid=''
+  serial_server_pid=''
+  proof_server_pid=''
 }
 trap cleanup_server EXIT
-mktemp() { printf '%s\n' "$WORK"; }
+mktemp() { command mktemp -d "$WORK/server.XXXXXX"; }
 python3() {
   case "$1" in
-    */serve_distribution.py) touch "$WORK/ready.json"; exec sleep 30 ;;
+    */serve_distribution.py)
+      while [[ $# -gt 0 && "$1" != --ready-file ]]; do shift; done
+      echo server >> "$WORK/servers"
+      touch "$2"; exec sleep 30 ;;
     -c) printf '%s\n' fixture-nonce ;;
     -)
       cat >/dev/null
       if [[ "$2" == */host-manifest.json ]]; then
         printf '%s\n' '1.0.0.0 1.0.0'
       else
-        printf '%s\n' 12345
+        printf '%s\n' "$((12344 + $(wc -l < "$WORK/servers")))"
       fi
       ;;
     *) return 64 ;;
   esac
 }
 npm() {
-  printf '%s|%s|%s\n' "$LMDJ_CREATOR_WEB_BASE_URL" "$LMDJ_WEB_RESULTS_SLOT" "$*" >> "$TRACE"
-  return "$STATUS"
+  # The pool and the first serial group each wait, bounded, to observe the
+  # other in flight. Either order of a one-after-the-other run is recorded
+  # as running alone instead of overlapped.
+  local overlap=''
+  case "$LMDJ_WEB_RESULTS_SLOT" in
+    catalog-chromium)
+      overlap=serial-alone
+      for _ in $(seq 1 100); do
+        [[ -f "$WORK/pool-running" ]] && { overlap=overlapped; break; }
+        sleep 0.05
+      done
+      touch "$WORK/serial-started"
+      ;;
+    chromium)
+      touch "$WORK/pool-running"
+      overlap=pool-alone
+      for _ in $(seq 1 100); do
+        [[ -f "$WORK/serial-started" ]] && { overlap=overlapped; break; }
+        sleep 0.05
+      done
+      rm -f "$WORK/pool-running"
+      ;;
+  esac
+  local sigint
+  sigint="$(command python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) is signal.SIG_IGN and "ignored" or "default")')"
+  printf '%s|%s|%s|%s|%s|%s\n' "$LMDJ_CREATOR_WEB_BASE_URL" "$LMDJ_WEB_RESULTS_SLOT" \
+    "${LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE:-}" "$overlap" "$sigint" "$*" >> "$TRACE"
+  [[ "$LMDJ_WEB_RESULTS_SLOT" != "$FAIL_SLOT" ]] || return 17
 }
 """
-            program += "run_browser_gate() {\n" + body + '\n}\nrun_browser_gate /main /sample /candidate "$MODE"\n'
+            program += functions + 'run_browser_gate /main /sample /candidate "$MODE"\n'
             result = subprocess.run(["bash", "-c", program], capture_output=True, text=True,
-                                    timeout=10, env={**os.environ, "ROOT": str(REPO_ROOT),
-                                        "WORK": directory, "TRACE": str(trace), "MODE": mode, "STATUS": str(status)})
-            return result, trace.read_text().splitlines()
+                                    timeout=30, env={**os.environ, "ROOT": str(REPO_ROOT),
+                                        "WORK": directory, "TRACE": str(trace), "MODE": mode,
+                                        "FAIL_SLOT": fail_slot})
+            calls = [dict(zip(("url", "slot", "upstream", "overlap", "sigint", "args"),
+                              line.split("|", 5)))
+                     for line in trace.read_text().splitlines()]
+            return result, calls
 
     def test_smoke_executes_only_the_complete_deployment_journey(self):
         result, calls = self.invoke("smoke")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn("http://127.0.0.1:12345|deployment-chromium|", calls[0])
-        self.assertIn("--project=creator-deployment deployment/creator_web_deployment.spec.mjs", calls[0])
+        self.assertEqual(calls[0]["url"], "http://127.0.0.1:12345")
+        self.assertEqual(calls[0]["slot"], "deployment-chromium")
+        self.assertIn("--project=creator-deployment deployment/creator_web_deployment.spec.mjs",
+                      calls[0]["args"])
 
     def test_complete_browser_inventory_is_retained_independently(self):
         result, calls = self.invoke("journey")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call.split("|")[1] for call in calls], [
-            "chromium", "catalog-chromium", "sample-chromium", "webkit",
-            "capture-chromium", "capture-denied-chromium", "sample-webkit", "deployment-chromium"])
+        self.assertEqual(sorted(call["slot"] for call in calls), sorted(
+            ["chromium", "deployment-chromium"] + self.SERIAL_SLOTS))
+        self.assertEqual(calls[-1]["slot"], "deployment-chromium")
+
+    def test_serial_groups_keep_their_order(self):
+        result, calls = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call["slot"] for call in calls if call["slot"] in self.SERIAL_SLOTS],
+                         self.SERIAL_SLOTS)
+
+    def test_serial_groups_overlap_the_independent_pool(self):
+        # #2286: run one after the other, the groups exceed the 35-minute job.
+        result, calls = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        first = [call for call in calls if call["slot"] in ("chromium", "catalog-chromium")]
+        self.assertEqual(sorted(call["overlap"] for call in first), ["overlapped", "overlapped"])
+
+    def test_serial_groups_keep_a_default_sigint_disposition(self):
+        # An asynchronous command started without job control ignores SIGINT
+        # (.agents/pitfalls/background-proof-inherits-ignored-signals.md).
+        result, calls = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({call["sigint"] for call in calls if call["slot"] in self.SERIAL_SLOTS},
+                         {"default"})
+
+    def test_independent_pool_runs_three_workers(self):
+        result, calls = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pool = [call for call in calls if call["slot"] == "chromium"]
+        self.assertEqual(len(pool), 1)
+        self.assertIn("--project=chromium --workers=3 ", pool[0]["args"])
+
+    def test_serial_groups_drive_their_own_server_and_catalog_file(self):
+        result, calls = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        by_slot = {call["slot"]: call for call in calls}
+        pool_url = by_slot["chromium"]["url"]
+        self.assertEqual(by_slot["deployment-chromium"]["url"], pool_url)
+        serial_urls = {by_slot[slot]["url"] for slot in self.SERIAL_SLOTS}
+        self.assertEqual(len(serial_urls), 1)
+        self.assertNotIn(pool_url, serial_urls)
+        pool_upstream = Path(by_slot["chromium"]["upstream"])
+        serial_upstreams = {by_slot[slot]["upstream"] for slot in self.SERIAL_SLOTS}
+        self.assertEqual(len(serial_upstreams), 1)
+        serial_upstream = Path(serial_upstreams.pop())
+        self.assertEqual(pool_upstream.name, "catalog-upstream")
+        self.assertEqual(serial_upstream.name, "catalog-upstream")
+        self.assertNotEqual(serial_upstream.parent, pool_upstream.parent)
+
+    def test_failure_of_the_independent_pool_propagates(self):
+        result, _ = self.invoke("journey", fail_slot="chromium")
+        self.assertEqual(result.returncode, 17, result.stderr)
+
+    def test_failure_of_a_serial_group_propagates_and_later_groups_still_run(self):
+        result, calls = self.invoke("journey", fail_slot="capture-chromium")
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assertEqual([call["slot"] for call in calls if call["slot"] in self.SERIAL_SLOTS],
+                         self.SERIAL_SLOTS)
 
     def test_failure_of_the_durable_smoke_propagates(self):
-        result, calls = self.invoke("smoke", status=17)
+        result, calls = self.invoke("smoke", fail_slot="deployment-chromium")
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual(len(calls), 1)
 

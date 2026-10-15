@@ -24,6 +24,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/issues/2261
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-15
+    occurrence: https://github.com/endaye/lmdj/issues/2286
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -83,7 +86,12 @@ main batch Creator job grew from 33.6 to 35.3 minutes against its fixed 35
 over one day and was then cancelled on every batch (#1965). Before
 touching the budget, read the job's phase timings and remove work the
 proof never consumes: that job compiled the whole native dev tree for one
-fixture binary.
+fixture binary. The same job was cancelled again from 2026-10-13 when its
+independent Chromium journeys grew from 94 to 133 while the remaining browser
+groups still waited for them (#2286). Read the phase timings from the log of
+the last run that passed and of a cancelled one; work that only waits on
+real-time audio can overlap other such work on a separately owned server
+instead of queueing behind it.
 
 Splitting into more registrations only helps a runner that executes them
 concurrently, and the stress jobs do not: `scripts/core.sh test tsan stress`

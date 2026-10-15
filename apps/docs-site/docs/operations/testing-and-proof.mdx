@@ -552,9 +552,13 @@ exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证�
 测试也不自动证明 Creator 或 Runtime 已部署、promoted 或完成物理验收。
 `scripts/creator-web.sh configure|build|test|quick|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
-Creator 的普通 Chromium 打包旅程使用两个隔离的 Playwright worker，各 spec 内仍串行。
-Sound Set 与默认流式下载 spec 会改写 Proof server 共用的 Catalog upstream 文件，
-因此单独串行执行；Sample Editor、Capture、拒绝权限与 WebKit 组继续使用一个 worker。
+Creator 的普通 Chromium 打包旅程使用三个隔离的 Playwright worker，各 spec 内仍串行。
+Sound Set 与默认流式下载 spec 会改写其 Proof server 的 Catalog upstream 文件，
+因此与 Sample Editor、Capture、拒绝权限与 WebKit 组一起按原顺序、各用一个 worker
+串行执行；这组串行调用驱动自己独立的第二个 Proof server（独立 Catalog upstream 文件），
+与普通 Chromium worker 池同时运行，输出带 `[serial]` 前缀。浏览器旅程主要等待实时音频与
+Runtime 转换而非 CPU，这样把 2026-10-14 起已超出 35 分钟 job 上限的完整 Proof 拉回预算内，
+不删除、不放宽任何旅程、断言或超时。
 浏览器调用各自保留独立的结果目录，覆盖同一份 Git tracked spec 清单。最后一腿以
 `creator-deployment` project 对同一份隔离 dist 运行 deployment journey（冻结 fixture
 导入、手势激活、System 报告导出、Sample 替换、Sequence 就绪与 durable reload）：

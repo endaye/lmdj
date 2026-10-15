@@ -23,6 +23,10 @@ required_capture_spec="$repo_root/tests/platform/web/creator/creator_web_capture
 proof_root=""
 proof_server_pid=""
 proof_server_ready_root=""
+serial_server_pid=""
+serial_server_ready_root=""
+serial_groups_pid=""
+started_server_port=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -39,24 +43,39 @@ usage:
 EOF
 }
 
-cleanup_server() {
-  if [[ -n "$proof_server_pid" ]]; then
-    kill "$proof_server_pid" 2>/dev/null || true
-    wait "$proof_server_pid" 2>/dev/null || true
-    proof_server_pid=""
+stop_proof_server() {
+  local pid="$1" ready_root="$2"
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
   fi
-  if [[ -n "$proof_server_ready_root" ]]; then
-    case "$proof_server_ready_root" in
+  if [[ -n "$ready_root" ]]; then
+    case "$ready_root" in
       "${TMPDIR:-/tmp}"/lmdj-creator-server.*)
-        cmake -E remove_directory "$proof_server_ready_root"
+        cmake -E remove_directory "$ready_root"
         ;;
       *)
-        echo "Creator Web error: unsafe server cleanup: $proof_server_ready_root" >&2
+        echo "Creator Web error: unsafe server cleanup: $ready_root" >&2
         return 2
         ;;
     esac
-    proof_server_ready_root=""
   fi
+}
+
+cleanup_server() {
+  if [[ -n "$serial_groups_pid" ]]; then
+    # The serial groups lead their own process group (see run_browser_gate),
+    # so this also stops their npm, Playwright and browser processes.
+    kill -TERM -- "-$serial_groups_pid" 2>/dev/null || true
+    wait "$serial_groups_pid" 2>/dev/null || true
+    serial_groups_pid=""
+  fi
+  stop_proof_server "$serial_server_pid" "$serial_server_ready_root" || return 2
+  serial_server_pid=""
+  serial_server_ready_root=""
+  stop_proof_server "$proof_server_pid" "$proof_server_ready_root" || return 2
+  proof_server_pid=""
+  proof_server_ready_root=""
 }
 
 cleanup_proof() {
@@ -369,6 +388,116 @@ PY
   echo "Creator Web Sample Project fixture reproducibility: PASS"
 }
 
+# Start one owned distribution server for SLOT (proof or serial), each with
+# its own ready root and Catalog upstream file, and publish its port in
+# started_server_port. The slot's pid and ready root are recorded before the
+# readiness wait so cleanup_server reaches a server that never became ready.
+start_proof_server() {
+  local slot="$1" requested_port="$2" log_path="$3"
+  local ready_root ready_file ready_nonce server_pid
+  started_server_port=""
+  ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-server.XXXXXX")"
+  printf -v "${slot}_server_ready_root" '%s' "$ready_root"
+  ready_file="$ready_root/ready.json"
+  ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
+    --root "$dist_root" \
+    --verifier "$creator_root/tools/package.py" \
+    --repo-root "$repo_root" \
+    --port "$requested_port" \
+    --catalog-upstream-file "$ready_root/catalog-upstream" \
+    --test-audio-observer-file "$web_test_root/audio/count_in_pcm_probe.js" \
+    --ready-file "$ready_file" \
+    --ready-nonce "$ready_nonce" >"$log_path" 2>&1 &
+  server_pid=$!
+  printf -v "${slot}_server_pid" '%s' "$server_pid"
+  for _ in {1..100}; do
+    if [[ -f "$ready_file" ]]; then
+      started_server_port="$(python3 - "$ready_file" "$server_pid" "$ready_nonce" <<'PY'
+import json, pathlib, sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if (set(value) != {"host", "nonce", "pid", "port"}
+        or value["host"] != "127.0.0.1"
+        or value["pid"] != int(sys.argv[2]) or value["nonce"] != sys.argv[3]
+        or type(value["port"]) is not int or not 1 <= value["port"] <= 65535):
+    raise SystemExit(1)
+print(value["port"])
+PY
+)" && break
+    fi
+    kill -0 "$server_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  [[ -n "$started_server_port" ]] || {
+    sed -n '1,120p' "$log_path" >&2 || true
+    echo "Creator Web error: proof server did not become ready" >&2
+    return 2
+  }
+}
+
+# The groups that must not share the independent worker pool: the Catalog
+# specs replace their server's one Catalog upstream file, and the Sample,
+# WebKit and Capture projects keep their serial order. They run in this order
+# against their own server, concurrently with the pool (#2286).
+run_serial_browser_groups() {
+  local base_url="$1" bundle="$2" sample_bundle="$3"
+  local status=0
+  export LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE="$serial_server_ready_root/catalog-upstream"
+  # Each invocation owns a separate result directory, including on failure.
+  LMDJ_WEB_RESULTS_SLOT=catalog-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=chromium --workers=1 "${catalog_specs[@]}" || status=$?
+  LMDJ_WEB_RESULTS_SLOT=sample-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-sample-chromium "$required_relative" || status=$?
+  LMDJ_WEB_RESULTS_SLOT=webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=webkit "${specs[@]}" --grep "capability boundary" || status=$?
+  # S8B-D8: the fake-device projects are the automated acceptance gate for Pad
+  # Capture. Both must run here, or capture ships with no browser evidence at
+  # all: the granted project proves record/trim/commit and the interruption
+  # contract, the denied project proves the permission path is explained and
+  # retryable rather than a silent no-op.
+  LMDJ_WEB_RESULTS_SLOT=capture-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-capture-chromium "$capture_relative" || status=$?
+  LMDJ_WEB_RESULTS_SLOT=capture-denied-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-capture-denied-chromium "$capture_relative" || status=$?
+
+  LMDJ_WEB_RESULTS_SLOT=sample-webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="$base_url" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-sample-webkit "$required_relative" \
+      --grep "capability boundary" || status=$?
+  return "$status"
+}
+
 run_browser_gate() {
   local bundle="$1"
   local sample_bundle="$2"
@@ -376,7 +505,7 @@ run_browser_gate() {
   local mode="${4:-journey}"
   export LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE="$candidate_bundle"
   local requested_port="${LMDJ_CREATOR_WEB_PORT:-0}"
-  local ready_file ready_nonce port="" status=0
+  local port="" status=0
   local specs=() chromium_specs=() catalog_specs=()
   local tracked
   local required_relative="${required_sample_editor_spec#"$repo_root/tests/platform/web/"}"
@@ -417,110 +546,42 @@ run_browser_gate() {
     return 2
   }
   cleanup_server
-  proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-server.XXXXXX")"
-  ready_file="$proof_server_ready_root/ready.json"
-  ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
   # #901: the Creator reaches its Catalog through a same-origin prefix, so the
   # proof server forwards the way the deployed Worker does. The Sound Set lane
   # owns its Catalog fixture on a kernel-assigned port and stops it mid-run on
-  # purpose, so it writes the upstream here after this server is listening
-  # rather than the server being told it up front.
+  # purpose, so it writes the upstream into its server's file after that
+  # server is listening rather than the server being told it up front.
+  start_proof_server proof "$requested_port" "$build_root/proof-server.log" || return 2
+  port="$started_server_port"
   LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE="$proof_server_ready_root/catalog-upstream"
   export LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE
-  python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
-    --root "$dist_root" \
-    --verifier "$creator_root/tools/package.py" \
-    --repo-root "$repo_root" \
-    --port "$requested_port" \
-    --catalog-upstream-file "$LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE" \
-    --test-audio-observer-file "$web_test_root/audio/count_in_pcm_probe.js" \
-    --ready-file "$ready_file" \
-    --ready-nonce "$ready_nonce" >"$build_root/proof-server.log" 2>&1 &
-  proof_server_pid=$!
-  for _ in {1..100}; do
-    if [[ -f "$ready_file" ]]; then
-      port="$(python3 - "$ready_file" "$proof_server_pid" "$ready_nonce" <<'PY'
-import json, pathlib, sys
-value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-if (set(value) != {"host", "nonce", "pid", "port"}
-        or value["host"] != "127.0.0.1"
-        or value["pid"] != int(sys.argv[2]) or value["nonce"] != sys.argv[3]
-        or type(value["port"]) is not int or not 1 <= value["port"] <= 65535):
-    raise SystemExit(1)
-print(value["port"])
-PY
-)" && break
-    fi
-    kill -0 "$proof_server_pid" 2>/dev/null || break
-    sleep 0.05
-  done
-  [[ -n "$port" ]] || {
-    sed -n '1,120p' "$build_root/proof-server.log" >&2 || true
-    echo "Creator Web error: proof server did not become ready" >&2
-    return 2
-  }
   if [[ "$mode" != smoke ]]; then
+  # Browser journeys mostly wait on real-time audio and Runtime transitions,
+  # not CPU. The independent pool and the serial groups therefore run at the
+  # same time on two owned servers, so the serial groups' Catalog upstream
+  # writes never reach the pool's server. The serial groups' output carries a
+  # [serial] prefix so interleaved failures stay attributable. Job control is
+  # on only for the launch: without it an asynchronous command ignores SIGINT
+  # (.agents/pitfalls/background-proof-inherits-ignored-signals.md); with it
+  # the groups lead their own process group, which cleanup_server stops.
+  local serial_status=0
+  start_proof_server serial 0 "$build_root/proof-server-serial.log" || return 2
+  set -m
+  run_serial_browser_groups "http://127.0.0.1:$started_server_port" \
+    "$bundle" "$sample_bundle" \
+    > >(awk '{ print "[serial] " $0; fflush() }') 2>&1 &
+  serial_groups_pid=$!
+  set +m
   LMDJ_WEB_RESULTS_SLOT=chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
-      --project=chromium --workers=2 "${chromium_specs[@]}" || status=$?
-  # These specs replace the owned server's one Catalog upstream file. Keep
-  # them serial and outside the independent browser-context worker pool.
-  # Each invocation owns a separate result directory, including on failure.
-  LMDJ_WEB_RESULTS_SLOT=catalog-chromium \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
-    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
-    npm --prefix "$web_test_root" test -- \
-      --project=chromium --workers=1 "${catalog_specs[@]}" || status=$?
-  LMDJ_WEB_RESULTS_SLOT=sample-chromium \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
-    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
-    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
-    npm --prefix "$web_test_root" test -- \
-      --project=creator-sample-chromium "$required_relative" || status=$?
-  LMDJ_WEB_RESULTS_SLOT=webkit \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
-    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
-    npm --prefix "$web_test_root" test -- \
-      --project=webkit "${specs[@]}" --grep "capability boundary" || status=$?
-  # S8B-D8: the fake-device projects are the automated acceptance gate for Pad
-  # Capture. Both must run here, or capture ships with no browser evidence at
-  # all: the granted project proves record/trim/commit and the interruption
-  # contract, the denied project proves the permission path is explained and
-  # retryable rather than a silent no-op.
-  LMDJ_WEB_RESULTS_SLOT=capture-chromium \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
-    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
-    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
-    npm --prefix "$web_test_root" test -- \
-      --project=creator-capture-chromium "$capture_relative" || status=$?
-  LMDJ_WEB_RESULTS_SLOT=capture-denied-chromium \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
-    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
-    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
-    npm --prefix "$web_test_root" test -- \
-      --project=creator-capture-denied-chromium "$capture_relative" || status=$?
-
-  LMDJ_WEB_RESULTS_SLOT=sample-webkit \
-    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
-    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
-    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
-    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
-    npm --prefix "$web_test_root" test -- \
-      --project=creator-sample-webkit "$required_relative" \
-      --grep "capability boundary" || status=$?
+      --project=chromium --workers=3 "${chromium_specs[@]}" || status=$?
+  wait "$serial_groups_pid" || serial_status=$?
+  serial_groups_pid=""
+  [[ $serial_status -eq 0 ]] || status=$serial_status
   fi
   # The deployment journey's frozen import bundle and UI locators must stay
   # fresh against this build's writer and surface. Before this leg existed,
