@@ -709,6 +709,12 @@ Product Proof, but never host a TSan-instrumented library in their own process.
 ASan registrations receive twice the normal tier timeout and TSan
 registrations receive four times the normal tier timeout to account for
 instrumentation overhead; the underlying tier and workload remain unchanged.
+The Linux `core-asan` CI job runs `full` and then the serial `stress` tier
+under one 55-minute job limit (owner budget decision, 2026-10-15): `full` took
+1145.7 s and the stress tier about 13 min, dominated by
+`facade.candidate_store_stress` (580.8 s) and `facade.pattern_count_in_stress`
+(201.8 s). The limit is a hang detector, not a target; reducing that stress
+time without weakening it is tracked by #2306.
 
 The two sanitizer presets do not choose a compiler; the lane does. `asan`
 inherits the platform default — GCC 13's shared `libasan` on Linux, AppleClang

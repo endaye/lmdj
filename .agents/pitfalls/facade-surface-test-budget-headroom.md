@@ -27,6 +27,9 @@ recurrences:
   - date: 2026-10-15
     occurrence: https://github.com/endaye/lmdj/issues/2286
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-15
+    occurrence: https://github.com/endaye/lmdj/actions/runs/38776156275
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -93,6 +96,13 @@ on the 8-core M1 saved under a minute and multiplied timeouts: these
 Wasm/AudioWorklet journeys are CPU-bound. Measure before assuming a browser
 suite waits on real time; when no work can honestly be removed, the limit is
 an owner budget decision (here 55 minutes), not an agent's.
+The Linux `core-asan` job hit the same wall on 2026-10-15: ASan `full` took
+1145.7 s, then the serial stress tier was cancelled at 16/17 with
+`facade.candidate_store_stress` at 580.8 s and `facade.pattern_count_in_stress`
+at 201.8 s (run 38776156275). The owner raised that limit from 35 to 55
+minutes; making the dominant stress registration cheaper without weakening it
+is #2306. Under a sanitizer, read each stress registration's own duration, not
+only its Release time.
 
 Splitting into more registrations only helps a runner that executes them
 concurrently, and the stress jobs do not: `scripts/core.sh test tsan stress`
