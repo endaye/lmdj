@@ -330,27 +330,38 @@ class CiBuildAccelerationTest(unittest.TestCase):
                     )
                     routing = re.search(r"(?m)^    (?:runs-on|uses): (.*)$", body)
                     self.assertIsNotNone(routing)
-                    route = routing.group(1)
+                    route = routing.group(1).strip()
+                    called = re.fullmatch(r"\./(\.github/workflows/\S+\.ya?ml)", route)
+                    if called:
+                        # A reusable workflow routes in its own job; it must
+                        # have exactly one, so that job is the one this
+                        # member's queue slot is held for.
+                        callee_routes = re.findall(
+                            r"(?m)^    runs-on: (.*)$",
+                            (REPO_ROOT / called.group(1)).read_text(encoding="utf-8"),
+                        )
+                        self.assertEqual(len(callee_routes), 1, called.group(1))
+                        route = callee_routes[0].strip()
                     if "select-macos-runner" in route:
                         expected = SELECTED_MAC_QUEUE
-                    elif "lmdj-mac-m1" in route:
-                        expected = MACOS_M1_HEAVY_QUEUE
                     else:
-                        self.assertNotIn("macOS", route, "a Mac job must name its host label")
-                        expected = LINUX_HEAVY_QUEUE
-                        called = re.fullmatch(r"\./(\.github/workflows/\S+\.ya?ml)", route.strip())
-                        if called:
-                            route = " ".join(re.findall(
-                                r"(?m)^    runs-on: (.*)$",
-                                (REPO_ROOT / called.group(1)).read_text(encoding="utf-8"),
-                            ))
-                        self.assertTrue(
-                            any(role in route for role in LINUX_HEAVY_HOST_ROLES),
-                            "why: a Linux heavy-queue member routed by a role another "
-                            "host also carries can run there while holding the Linux "
-                            "host's slot; remedy: route it by a role only that host "
-                            f"carries ({', '.join(LINUX_HEAVY_HOST_ROLES)})",
-                        )
+                        # Exact labels: a substring test would let a label
+                        # such as `ci-only-host-staging` satisfy `ci-only-host`.
+                        listed = re.fullmatch(r"\[(.*)\]", route)
+                        self.assertIsNotNone(listed, f"runs-on is not a literal label list: {route}")
+                        labels = {label.strip() for label in listed.group(1).split(",")}
+                        if "lmdj-mac-m1" in labels:
+                            expected = MACOS_M1_HEAVY_QUEUE
+                        else:
+                            expected = LINUX_HEAVY_QUEUE
+                            self.assertTrue(
+                                labels & set(LINUX_HEAVY_HOST_ROLES),
+                                "why: a Linux heavy-queue member routed by a role another "
+                                "host also carries can run there while holding the Linux "
+                                "host's slot; remedy: route it by a role only that host "
+                                f"carries ({', '.join(LINUX_HEAVY_HOST_ROLES)})",
+                            )
+                            self.assertNotIn("macOS", labels, "a Mac job must name its host label")
                     self.assertEqual(
                         groups[0],
                         expected,
