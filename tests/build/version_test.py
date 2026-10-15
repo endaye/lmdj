@@ -237,9 +237,12 @@ identity_copies = [
      ("creator-web",)),
     ("apps/core-mcp/pyproject.toml project.version",
      mcp_project.get("project", {}).get("version"), ("core-mcp",)),
-    ("apps/core-mcp/lmdj_core_mcp/__init__.py __version__",
-     mcp_runtime[0] if len(mcp_runtime) == 1 else None, ("core-mcp",)),
 ]
+if len(mcp_runtime) == 1:
+    identity_copies.append(
+        ("apps/core-mcp/lmdj_core_mcp/__init__.py __version__",
+         mcp_runtime[0], ("core-mcp",))
+    )
 # (file, pattern, modules, matches). The last capture group is the copied
 # version; a pattern with two groups names its module in the first group.
 proof_providers = ("local.proof.success", "local.proof.failure")
@@ -287,7 +290,11 @@ identity_pin_sites = [
     ("providers/local-proof-stem/src/provider.cpp",
      r'std::make_shared<StemProof>\(\),\s*"([^"]+)"', ("local.proof.stem",), 1),
 ]
-identity_pin_drift = []
+identity_pin_drift = [] if len(mcp_runtime) == 1 else [
+    "apps/core-mcp/lmdj_core_mcp/__init__.py: found "
+    f"{len(mcp_runtime)} plain `__version__ = \"...\"` assignments, expected 1; "
+    "the P1 renderer rewrites only that form, so restore it"
+]
 for relative, pattern, modules, expected_count in identity_pin_sites:
     found = re.findall(
         pattern, (repo_root / relative).read_text(encoding="utf-8")
