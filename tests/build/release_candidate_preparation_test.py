@@ -324,7 +324,22 @@ class CoordinatedPreparationFixture(PreparationFixture):
         "apps/native-host/src/main.cpp", "apps/native-host/CMakeLists.txt",
         "apps/creator-web/src/main.tsx", "apps/creator-web/tools/package.py",
         "apps/web-runtime-host/src/main.mjs", "apps/web-runtime-host/tools/package.py",
-        "packages/web-runtime-platform/CMakeLists.txt")
+        "packages/web-runtime-platform/CMakeLists.txt",
+        # #2273 gates every hand-copied module version at PR time: the
+        # identity_pin_sites reads these next to the manifests, and the P1
+        # renderer rewrites apps/core-mcp/lmdj_core_mcp/__init__.py, so the
+        # fixture must materialize them for the scoped version_test run.
+        "apps/core-mcp/lmdj_core_mcp/__init__.py",
+        "providers/local-proof-failure/src/provider.cpp",
+        "providers/local-proof-success/src/provider.cpp",
+        "providers/local-sample-slice/src/provider.cpp",
+        "providers/local-proof-stem/src/provider.cpp",
+        "tests/conformance/schema_contract_test.py",
+        "tests/core/facade/assembly_loader_test.cpp",
+        "tests/core/provider/conformance_test.cpp",
+        "tests/core/provider/sample_slice_test.cpp",
+        "tests/core/provider/spec_regression_test.cpp",
+        "tests/core/provider/stem_split_test.cpp")
 
     def setUp(self):
         self.material_authorized = []
