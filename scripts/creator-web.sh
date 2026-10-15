@@ -26,6 +26,7 @@ proof_server_ready_root=""
 serial_server_pid=""
 serial_server_ready_root=""
 serial_groups_pid=""
+serial_groups_pgid=""
 started_server_port=""
 
 usage() {
@@ -63,10 +64,13 @@ stop_proof_server() {
 }
 
 cleanup_server() {
-  if [[ -n "$serial_groups_pid" ]]; then
-    # The serial groups lead their own process group (see run_browser_gate),
+  if [[ -n "$serial_groups_pgid" ]]; then
+    # The serial groups run in their own process group (see run_browser_gate),
     # so this also stops their npm, Playwright and browser processes.
-    kill -TERM -- "-$serial_groups_pid" 2>/dev/null || true
+    kill -TERM -- "-$serial_groups_pgid" 2>/dev/null || true
+    serial_groups_pgid=""
+  fi
+  if [[ -n "$serial_groups_pid" ]]; then
     wait "$serial_groups_pid" 2>/dev/null || true
     serial_groups_pid=""
   fi
@@ -560,18 +564,25 @@ run_browser_gate() {
   # not CPU. The independent pool and the serial groups therefore run at the
   # same time on two owned servers, so the serial groups' Catalog upstream
   # writes never reach the pool's server. The serial groups' output carries a
-  # [serial] prefix so interleaved failures stay attributable. Job control is
-  # on only for the launch: without it an asynchronous command ignores SIGINT
-  # (.agents/pitfalls/background-proof-inherits-ignored-signals.md); with it
-  # the groups lead their own process group, which cleanup_server stops.
-  local serial_status=0
+  # [serial] prefix so interleaved failures stay attributable; waiting for
+  # the prefixing awk drains that output before the deployment leg. Job
+  # control is on only for the launch: without it an asynchronous command
+  # ignores SIGINT (.agents/pitfalls/background-proof-inherits-ignored-signals.md);
+  # with it the groups and their awk form one process group, which
+  # cleanup_server stops.
+  local serial_status=0 serial_status_file
   start_proof_server serial 0 "$build_root/proof-server-serial.log" || return 2
+  serial_status_file="$serial_server_ready_root/serial-status"
   set -m
-  run_serial_browser_groups "http://127.0.0.1:$started_server_port" \
-    "$bundle" "$sample_bundle" \
-    > >(awk '{ print "[serial] " $0; fflush() }') 2>&1 &
+  {
+    serial_status=0
+    run_serial_browser_groups "http://127.0.0.1:$started_server_port" \
+      "$bundle" "$sample_bundle" || serial_status=$?
+    printf '%s\n' "$serial_status" >"$serial_status_file"
+  } 2>&1 | awk '{ print "[serial] " $0; fflush() }' &
   serial_groups_pid=$!
   set +m
+  serial_groups_pgid="$(ps -o pgid= -p "$serial_groups_pid" | tr -d ' ')"
   LMDJ_WEB_RESULTS_SLOT=chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
@@ -579,9 +590,17 @@ run_browser_gate() {
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium --workers=3 "${chromium_specs[@]}" || status=$?
-  wait "$serial_groups_pid" || serial_status=$?
+  wait "$serial_groups_pid" || true
   serial_groups_pid=""
-  [[ $serial_status -eq 0 ]] || status=$serial_status
+  serial_groups_pgid=""
+  # A missing or malformed status means the serial groups never finished.
+  serial_status="$(cat "$serial_status_file" 2>/dev/null || true)"
+  [[ "$serial_status" =~ ^[0-9]+$ ]] || {
+    echo "Creator Web error: the serial browser groups did not report a status" >&2
+    serial_status=2
+  }
+  # Keep the first failure: the pool's status when both fail.
+  [[ $status -ne 0 || $serial_status -eq 0 ]] || status=$serial_status
   fi
   # The deployment journey's frozen import bundle and UI locators must stay
   # fresh against this build's writer and surface. Before this leg existed,

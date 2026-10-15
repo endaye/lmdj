@@ -205,7 +205,7 @@ class CreatorBrowserWorkloads(unittest.TestCase):
     SERIAL_SLOTS = ["catalog-chromium", "sample-chromium", "webkit",
                     "capture-chromium", "capture-denied-chromium", "sample-webkit"]
 
-    def invoke(self, mode, fail_slot=""):
+    def invoke(self, mode, fail_slot="", second_fail_slot=""):
         text = (REPO_ROOT / "scripts/creator-web.sh").read_text()
         functions = "".join(
             f"{name}() {{\n{shell_function(text, name)}\n}}\n"
@@ -226,6 +226,7 @@ proof_server_ready_root=''
 serial_server_pid=''
 serial_server_ready_root=''
 serial_groups_pid=''
+serial_groups_pgid=''
 started_server_port=''
 cleanup_server() {
   local pid
@@ -284,14 +285,17 @@ npm() {
   sigint="$(command python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) is signal.SIG_IGN and "ignored" or "default")')"
   printf '%s|%s|%s|%s|%s|%s\n' "$LMDJ_CREATOR_WEB_BASE_URL" "$LMDJ_WEB_RESULTS_SLOT" \
     "${LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE:-}" "$overlap" "$sigint" "$*" >> "$TRACE"
+  echo "out:$LMDJ_WEB_RESULTS_SLOT"
   [[ "$LMDJ_WEB_RESULTS_SLOT" != "$FAIL_SLOT" ]] || return 17
+  [[ "$LMDJ_WEB_RESULTS_SLOT" != "$SECOND_FAIL_SLOT" ]] || return 19
 }
 """
             program += functions + 'run_browser_gate /main /sample /candidate "$MODE"\n'
             result = subprocess.run(["bash", "-c", program], capture_output=True, text=True,
                                     timeout=30, env={**os.environ, "ROOT": str(REPO_ROOT),
                                         "WORK": directory, "TRACE": str(trace), "MODE": mode,
-                                        "FAIL_SLOT": fail_slot})
+                                        "FAIL_SLOT": fail_slot,
+                                        "SECOND_FAIL_SLOT": second_fail_slot})
             calls = [dict(zip(("url", "slot", "upstream", "overlap", "sigint", "args"),
                               line.split("|", 5)))
                      for line in trace.read_text().splitlines()]
@@ -367,6 +371,19 @@ npm() {
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual([call["slot"] for call in calls if call["slot"] in self.SERIAL_SLOTS],
                          self.SERIAL_SLOTS)
+
+    def test_pool_failure_is_kept_when_a_serial_group_also_fails(self):
+        result, _ = self.invoke("journey", fail_slot="chromium",
+                                second_fail_slot="capture-chromium")
+        self.assertEqual(result.returncode, 17, result.stderr)
+
+    def test_serial_output_is_prefixed_and_drained_before_the_deployment_leg(self):
+        result, _ = self.invoke("journey")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual([line for line in lines if line.startswith("[serial] ")],
+                         [f"[serial] out:{slot}" for slot in self.SERIAL_SLOTS])
+        self.assertEqual(lines[-1], "out:deployment-chromium")
 
     def test_failure_of_the_durable_smoke_propagates(self):
         result, calls = self.invoke("smoke", fail_slot="deployment-chromium")
