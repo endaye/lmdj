@@ -623,7 +623,11 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
-    timeout-minutes: 35
+    # Owner budget decision 2026-10-15 (#2286): the complete Proof is ~44 min
+    # of work (last pass 34.0 min on 2026-10-12; Vitest 1305 -> 1688, Chromium
+    # journeys 94 -> 133), and its CPU-bound browser groups slow and fail when
+    # overlapped. The limit is a hang detector with headroom, not a target.
+    timeout-minutes: 55
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8

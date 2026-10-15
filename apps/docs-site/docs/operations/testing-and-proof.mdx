@@ -555,6 +555,10 @@ exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证�
 Creator 的普通 Chromium 打包旅程使用两个隔离的 Playwright worker，各 spec 内仍串行。
 Sound Set 与默认流式下载 spec 会改写 Proof server 共用的 Catalog upstream 文件，
 因此单独串行执行；Sample Editor、Capture、拒绝权限与 WebKit 组继续使用一个 worker。
+CI `creator-web` job 上限自 2026-10-15 起为 55 分钟（owner 预算决定，[#2286](https://github.com/endaye/lmdj/issues/2286)）：
+完整 Proof 已约 44 分钟（2026-10-12 最后一次通过为 34.0 分钟；Vitest 1305 → 1688，
+Chromium 旅程 94 → 133），而这些浏览器旅程受 CPU 约束，与独立组重叠执行既不省时又引入超时失败。
+该上限是带余量的 hang 检测，不是性能目标。
 浏览器调用各自保留独立的结果目录，覆盖同一份 Git tracked spec 清单。最后一腿以
 `creator-deployment` project 对同一份隔离 dist 运行 deployment journey（冻结 fixture
 导入、手势激活、System 报告导出、Sample 替换、Sequence 就绪与 durable reload）：
