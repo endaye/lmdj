@@ -933,14 +933,15 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertRegex(
             self.workflow_job("macos-primary"),
             r"(?m)^    concurrency:\n"
-            r"      group: lmdj-native-heavy-macos\n"
+            r"      group: \$\{\{ needs\.select-macos-runner\.outputs\.queue "
+            r"\|\| 'lmdj-native-heavy-macos-m1' \}\}\n"
             r"      queue: max\n"
             r"      cancel-in-progress: false$",
             msg=(
                 "why: the macOS gates share the bare-metal runner with the "
                 "relocated Release stress suite, whose gate measures thread CPU "
                 "time against a 2.67 ms deadline; remedy: keep macos-primary in "
-                "the lmdj-native-heavy-macos queue beside core-stress"
+                "the selected Mac's queue, which is core-stress's on the M1"
             ),
         )
 

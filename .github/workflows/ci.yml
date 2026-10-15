@@ -784,6 +784,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       runner: ${{ steps.select.outputs.runner }}
+      queue: ${{ steps.select.outputs.queue }}
       self-hosted: ${{ steps.select.outputs.self-hosted }}
       reason: ${{ steps.select.outputs.reason }}
     steps:
@@ -792,14 +793,20 @@ jobs:
         shell: bash
         env:
           REPOSITORY: ${{ github.repository }}
-          TARGET_RUNNER_NAME: endaye-mbp-m1
+          # Two trusted Macs (#2278). The M1 is always on and is the only
+          # Mac Release stress may use; the M4 Pro is overflow for the gates.
+          PRIMARY_RUNNER_NAME: endaye-mbp-m1
+          OVERFLOW_RUNNER_NAME: endaye-mbp-m4-pro
           RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
         run: |
           set -euo pipefail
 
+          # The hosted path keeps the primary Mac's queue slot, as before
+          # #2278: it is taken only when that Mac is unavailable anyway.
           select_hosted() {
             {
               echo 'runner=["macos-latest"]'
+              echo 'queue=lmdj-native-heavy-macos-m1'
               echo 'self-hosted=false'
               echo "reason=$1"
             } >>"$GITHUB_OUTPUT"
@@ -844,53 +851,59 @@ jobs:
           )"
           echo "Runner selection inventory: $runner_inventory"
 
-          runner_candidates="$(
+          # A Mac is admitted for the gates only while online and carrying
+          # its host label plus `ci-macos-gates`; array difference compares
+          # labels exactly. A newly registered Mac therefore takes no gate
+          # until its benchmark passes and the role label is added (#2278).
+          admission() {
             jq \
-              --compact-output \
-              --arg runner_name "$TARGET_RUNNER_NAME" \
+              --raw-output \
+              --arg runner_name "$1" \
+              --arg host_label "$2" \
               '[
                 .runners[]?
-                | select(.name == $runner_name)
-                | {
-                    name,
-                    status,
-                    busy,
-                    labels: [.labels[].name]
-                  }
-              ]' \
+                | select(.name == $runner_name and .status == "online")
+                | select(
+                    (["self-hosted", "macOS", "ARM64", $host_label, "ci-macos-gates"]
+                      - [.labels[].name]) == []
+                  )
+                | .busy
+              ]
+              | if length != 1 then "absent"
+                elif .[0] then "busy"
+                else "idle" end' \
               <<<"$runner_response"
-          )"
-          echo "Runner selection candidates: $runner_candidates"
+          }
+          primary_state="$(admission "$PRIMARY_RUNNER_NAME" lmdj-mac-m1)"
+          overflow_state="$(admission "$OVERFLOW_RUNNER_NAME" lmdj-mac-m4)"
+          echo "Runner selection candidates: primary=$primary_state overflow=$overflow_state"
+
+          # Each Mac has its own heavy queue, named after its host label, so
+          # gates on one Mac never wait for Release stress on the other.
+          select_self_hosted() {
+            {
+              echo "runner=[\"self-hosted\",\"macOS\",\"ARM64\",\"$1\"]"
+              echo "queue=lmdj-native-heavy-macos-${1#lmdj-mac-}"
+              echo 'self-hosted=true'
+              echo "reason=$2"
+            } >>"$GITHUB_OUTPUT"
+            echo "Using self-hosted runner: $1 ($2)"
+          }
 
           # As with the Linux pool, a busy trusted Mac is a latency condition
           # and queues; only an offline, missing, or mislabeled runner is an
-          # availability condition worth paying 10.3x the Linux rate for.
-          eligible_count="$(
-            jq \
-              --arg runner_name "$TARGET_RUNNER_NAME" \
-              '[
-                .runners[]?
-                | select(
-                    .name == $runner_name
-                    and .status == "online"
-                  )
-                | [.labels[].name]
-                | select(contains(["self-hosted", "macOS", "ARM64", "lmdj"]))
-              ] | length' \
-              <<<"$runner_response"
-          )"
-
-          if [[ "$eligible_count" != "1" ]]; then
+          # availability condition worth paying 10.3x the Linux rate for. The
+          # overflow Mac is preferred only while idle: it is not always on,
+          # and an idle runner starts the job seconds after this selection.
+          if [[ "$overflow_state" == "idle" ]]; then
+            select_self_hosted lmdj-mac-m4 'idle admitted overflow Mac'
+          elif [[ "$primary_state" != "absent" ]]; then
+            select_self_hosted lmdj-mac-m1 'online admitted primary Mac'
+          elif [[ "$overflow_state" == "busy" ]]; then
+            select_self_hosted lmdj-mac-m4 'primary Mac unavailable; overflow Mac busy'
+          else
             select_hosted 'self-hosted runner is offline, missing, or mislabeled'
-            exit 0
           fi
-
-          {
-            echo 'runner=["self-hosted","macOS","ARM64","lmdj"]'
-            echo 'self-hosted=true'
-            echo 'reason=online trusted self-hosted runner'
-          } >>"$GITHUB_OUTPUT"
-          echo "Using self-hosted runner: $TARGET_RUNNER_NAME"
 
   macos-primary:
     name: macOS gates (primary)
@@ -901,12 +914,12 @@ jobs:
     # Release stress moved to this same bare-metal runner in #1558 because its
     # 2.67 ms thread-CPU deadline cannot survive a hypervisor; a gate compiling
     # beside it would reintroduce exactly the overruns that move eliminated.
-    # The macOS host queue is what makes "one heavy native job at a time" true
-    # on that machine; it is separate from the Linux host queue because the
-    # two hosts share no CPU (#2277). On the hosted fallback path the group
-    # costs only a queue slot.
+    # The selected Mac's own queue is what makes "one heavy native job at a
+    # time" true on that machine; it is separate from the Linux host queue and
+    # from the other Mac's queue because they share no CPU (#2277, #2278). On
+    # the hosted fallback path the group costs only the M1 queue slot.
     concurrency:
-      group: lmdj-native-heavy-macos
+      group: ${{ needs.select-macos-runner.outputs.queue || 'lmdj-native-heavy-macos-m1' }}
       queue: max
       cancel-in-progress: false
     # Infrastructure failure is adjudicated by the fallback and final gate
