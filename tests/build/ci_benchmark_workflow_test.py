@@ -141,20 +141,22 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
     def test_core_benchmark_joins_the_shared_host_capacity_queue(self) -> None:
         """Separate runner services on one host are not independent capacity.
 
-        A benchmark outside `lmdj-native-heavy` would land on the sibling
-        `ci-core` service while a formal lane runs, corrupting its own
-        measurement and consuming that lane's test budgets.
+        A benchmark outside `lmdj-native-heavy-netcup` would land on the
+        sibling `ci-core` service while a formal lane runs, corrupting its own
+        measurement and consuming that lane's test budgets. `ci-core` exists
+        only on netcup, so that host's queue is the one to join.
         """
         self.assertRegex(
             self.source,
             r"(?m)^    concurrency:\n"
-            r"      group: lmdj-native-heavy\n"
+            r"      group: lmdj-native-heavy-netcup\n"
             r"      queue: max\n"
             r"      cancel-in-progress: false$",
             msg=(
-                "why: a benchmark on the shared Contabo host contends with formal "
-                "native Core work; remedy: keep queue: max before "
-                "cancel-in-progress: false on the benchmark job"
+                "why: a benchmark on the shared netcup host contends with formal "
+                "native Core work; remedy: keep the lmdj-native-heavy-netcup "
+                "group with queue: max before cancel-in-progress: false on the "
+                "benchmark job"
             ),
         )
 

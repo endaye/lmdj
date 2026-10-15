@@ -45,7 +45,9 @@ jobs:
     # queues this job instead of diverting it to paid runners. The caller
     # holds the closed trust condition, and this workflow has no trigger but
     # `workflow_call` and no other caller, so it cannot run untrusted.
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    # `ci-only-host` pins netcup: the caller holds `lmdj-native-heavy-netcup`,
+    # a per-physical-host queue, so the job must run on the host it queues on.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, ci-only-host]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6

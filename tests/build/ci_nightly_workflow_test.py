@@ -162,7 +162,7 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         """Naming a role is not enough to make a native job run alone.
 
         Release stress now runs on the bare-metal macOS runner, which also
-        hosts the macOS gates; it keeps the queue so twenty repetitions never
+        hosts the macOS gates; it keeps that host's queue so twenty repetitions never
         start beside another admitted heavy lane.
 
         The role spans two runner services on one physical host, so without the
@@ -178,12 +178,14 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         nothing about whether the host can execute the TSan runtime, which is
         the only question it exists to answer.
         """
-        for job_name in ("core-tsan", "core-stress"):
+        # Queues are per physical host: TSan runs on `ci-core` (netcup only),
+        # Release stress on the bare-metal Mac beside the macOS gates.
+        for job_name, host in (("core-tsan", "netcup"), ("core-stress", "m1")):
             with self.subTest(job=job_name):
                 self.assertRegex(
                     self.job(job_name),
                     r"(?m)^    concurrency:\n"
-                    r"      group: lmdj-native-heavy\n"
+                    rf"      group: lmdj-native-heavy-{host}\n"
                     r"      queue: max\n"
                     r"      cancel-in-progress: false$",
                     msg=(
@@ -191,9 +193,9 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
                         "sibling heavy job on the same host runs beside it rather "
                         "than after it and consumes the CPU its tests were "
                         "budgeted for; "
-                        "remedy: keep the lmdj-native-heavy block with queue: "
-                        "max before cancel-in-progress: false, the same one "
-                        "ci.yml puts on every admitted shared-host lane"
+                        f"remedy: keep the lmdj-native-heavy-{host} block with "
+                        "queue: max before cancel-in-progress: false, the same "
+                        "host queue ci.yml puts on that host's admitted lanes"
                     ),
                 )
 

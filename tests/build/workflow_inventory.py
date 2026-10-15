@@ -4,7 +4,8 @@
 A line scan rather than a YAML load: no test or script in this repository
 depends on PyYAML, and the CI contract lane's interpreter is not guaranteed to
 provide it. The scan reads only what the routing contracts need — the job's id,
-its display name, and its `runs-on` — so it stays small enough to be obviously
+its display name, its `runs-on`, its reusable-workflow `uses` and its
+job-level concurrency group — so it stays small enough to be obviously
 correct.
 """
 
@@ -22,6 +23,9 @@ _JOBS_KEY = re.compile(r"^jobs:\s*$")
 _JOB_START = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 _JOB_NAME = re.compile(r"^    name: (.+?)\s*$")
 _RUNS_ON = re.compile(r"^    runs-on: (.+?)\s*$")
+_USES = re.compile(r"^    uses: (.+?)\s*$")
+_CONCURRENCY = re.compile(r"^    concurrency:\s*$")
+_GROUP = re.compile(r"^      group: (.+?)\s*$")
 _TOP_LEVEL = re.compile(r"^[A-Za-z]")
 
 
@@ -33,6 +37,8 @@ class WorkflowJob:
     job_id: str
     name: str | None
     runs_on: str | None
+    uses: str | None = None
+    concurrency_group: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -75,10 +81,13 @@ def jobs_in(workflow: Path) -> list[WorkflowJob]:
     job_id: str | None = None
     name: str | None = None
     runs_on: str | None = None
+    uses: str | None = None
+    group: str | None = None
+    in_concurrency = False
 
     def flush() -> None:
         if job_id is not None:
-            found.append(WorkflowJob(workflow.name, job_id, name, runs_on))
+            found.append(WorkflowJob(workflow.name, job_id, name, runs_on, uses, group))
 
     for line in workflow.read_text(encoding="utf-8").splitlines():
         if _JOBS_KEY.match(line):
@@ -91,9 +100,23 @@ def jobs_in(workflow: Path) -> list[WorkflowJob]:
         start = _JOB_START.match(line)
         if start:
             flush()
-            job_id, name, runs_on = start.group(1), None, None
+            job_id, name, runs_on, uses, group = start.group(1), None, None, None, None
+            in_concurrency = False
             continue
         if job_id is None:
+            continue
+        if _CONCURRENCY.match(line):
+            in_concurrency = True
+            continue
+        group_match = _GROUP.match(line)
+        if in_concurrency and group_match:
+            group = group_match.group(1)
+            continue
+        if not line.startswith("      "):
+            in_concurrency = False
+        uses_match = _USES.match(line)
+        if uses_match:
+            uses = uses_match.group(1)
             continue
         name_match = _JOB_NAME.match(line)
         if name_match:

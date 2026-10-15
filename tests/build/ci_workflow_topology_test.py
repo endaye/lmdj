@@ -700,7 +700,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertIn(TRUST_CONDITION, caller)
                 self.assertNotIn("runs-on:", caller)
         called = self.workflow_job("portal", portal=True)
-        self.assertIn(GENERAL_ROLE, called)
+        # The caller holds the per-host lmdj-native-heavy-netcup queue, so the
+        # callee pins the CI-only (netcup) host the queue is named for.
+        self.assertIn(GENERAL_CI_ONLY_ROLE, called)
         self.assertNotIn("ubuntu-24.04", self.portal_source)
         self.assertEqual(self.portal_source.count("ci-general"), 1)
         events = self.event_block(self.portal_source)
@@ -927,20 +929,20 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
         #1558 moved the stress suite off the KVM hosts because its 2.67 ms
         thread-CPU deadline cannot tolerate time it did not consume. The gates
-        build Core twice on the same runner, so without the repository queue a
+        build Core twice on the same runner, so without the M1 host queue a
         gate would supply the contention the move was made to remove.
         """
         self.assertRegex(
             self.workflow_job("macos-primary"),
             r"(?m)^    concurrency:\n"
-            r"      group: lmdj-native-heavy\n"
+            r"      group: lmdj-native-heavy-m1\n"
             r"      queue: max\n"
             r"      cancel-in-progress: false$",
             msg=(
                 "why: the macOS gates share the bare-metal runner with the "
                 "relocated Release stress suite, whose gate measures thread CPU "
                 "time against a 2.67 ms deadline; remedy: keep macos-primary in "
-                "the lmdj-native-heavy queue beside core-stress and core-tsan"
+                "the lmdj-native-heavy-m1 queue beside core-stress"
             ),
         )
 
@@ -980,7 +982,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             # exactly 45, against 16-19 min hosted).
             "web-runtime-host": 75,
             "creator-web": 35,
-            # Holds lmdj-native-heavy; at most 18 s over 214 runs.
+            # Holds lmdj-native-heavy-netcup; at most 18 s over 214 runs.
             "web-runtime-lab": 10,
             "macos-primary": 30,
             # Thin selection/adjudication jobs; each observed under 30 s.

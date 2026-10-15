@@ -284,7 +284,9 @@ class CiRunnerFallbackTest(unittest.TestCase):
             "needs.change-scope.outputs.trusted-head == 'true'", caller
         )
         called = PORTAL_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(GENERAL_ROLE, called)
+        # The caller holds the per-host lmdj-native-heavy-netcup queue, so the
+        # callee pins the CI-only (netcup) host the queue is named for.
+        self.assertIn(GENERAL_CI_ONLY_ROLE, called)
         self.assertNotIn("ubuntu-24.04", called)
         self.assertEqual(called.count("ci-general"), 1)
 

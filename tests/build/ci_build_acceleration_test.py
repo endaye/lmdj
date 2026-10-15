@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import unittest
 
+from workflow_inventory import WorkflowJob, all_jobs
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
@@ -60,6 +62,34 @@ WEB_HEAVY_DIRECT_PROOFS = {
 HEAVY_JOBS = (
     "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
 )
+# Capacity queues are per physical host: runner services on one machine share
+# its CPU, runners on different machines do not. A group is resolved before
+# GitHub assigns a runner, so each queued job must be pinned to the host its
+# group names.
+HEAVY_GROUP_PREFIX = "lmdj-native-heavy-"
+ELASTIC_HOST_CONFIGS = REPO_ROOT / "scripts/ci/elastic-runner"
+# Roles whose jobs are material host consumers; their host is the single
+# elastic-runner config that registers the role.
+HEAVY_ROLES = ("ci-core", "ci-web-heavy")
+# The trusted bare-metal Mac `endaye-mbp-m1` has no elastic-runner config. Its
+# literal label set, and the macOS selector that names it, both mean "m1".
+M1_LABELS = frozenset({"self-hosted", "macOS", "ARM64", "lmdj"})
+M1_SELECTOR_RUNS_ON = "${{ fromJSON(needs.select-macos-runner.outputs.runner) }}"
+# Linux labels that pin one physical host regardless of role (applied by
+# scripts/ci/elastic-runner/provision-runner.sh at registration).
+HOST_PIN_LABELS = {
+    "netcup": "netcup",
+    "ci-only-host": "netcup",
+    "contabo": "contabo",
+    "shared-with-staging": "contabo",
+}
+# Heavy-role jobs deliberately outside every capacity queue, with the reason.
+UNQUEUED_HEAVY_ROLE_JOBS = {
+    ("ci-self-hosted-benchmark.yml", "benchmark"): (
+        "dispatch-only Web measurement that has never joined a capacity "
+        "queue; queuing it is a separate decision"
+    ),
+}
 
 
 class CiBuildAccelerationTest(unittest.TestCase):
@@ -210,41 +240,41 @@ class CiBuildAccelerationTest(unittest.TestCase):
 
     def test_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
-        capacity_jobs = (
-            "portal",
-            "core-ubuntu",
-            "package",
-            "core-asan",
-            "core-coverage",
+        capacity_jobs = {
+            "portal": "netcup",
+            "core-ubuntu": "netcup",
+            "package": "netcup",
+            "core-asan": "netcup",
+            "core-coverage": "netcup",
             # #1558 moved Release stress to the bare-metal macOS runner because
             # its 2.67 ms thread-CPU deadline cannot survive a hypervisor. The
-            # gates build Core twice on that same machine, so they join the
+            # gates build Core twice on that same machine, so they join its
             # queue rather than supply the contention that move removed.
-            "macos-primary",
+            "macos-primary": "m1",
             # The four Web lanes run on the same netcup host as every
             # native-heavy suite; unqueued, a full candidate batch's own
             # concurrency flaked their fixed browser budgets three runs in a
             # row (37019332485, 37037025368, 37071379300).
-            "web-toolchain-conformance",
-            "web-runtime-host",
-            "creator-web",
-            "web-runtime-lab",
-        )
+            "web-toolchain-conformance": "netcup",
+            "web-runtime-host": "netcup",
+            "creator-web": "netcup",
+            "web-runtime-lab": "netcup",
+        }
         self.assertEqual(
-            source.count("group: lmdj-native-heavy"),
+            source.count(f"group: {HEAVY_GROUP_PREFIX}"),
             len(capacity_jobs),
             "why: every job that can contend with timing-sensitive native work "
-            "on a shared machine must join one capacity queue; remedy: keep the "
-            "lmdj-native-heavy concurrency block on "
+            "on a shared machine must join that machine's capacity queue; "
+            "remedy: keep the lmdj-native-heavy-<host> concurrency block on "
             + ", ".join(capacity_jobs),
         )
-        for job_name in capacity_jobs:
+        for job_name, host in capacity_jobs.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertRegex(
                     job,
                     r"(?m)^    concurrency:\n"
-                    r"      group: lmdj-native-heavy\n"
+                    rf"      group: {HEAVY_GROUP_PREFIX}{host}\n"
                     r"      queue: max\n"
                     r"      cancel-in-progress: false$",
                     msg=(
@@ -275,6 +305,110 @@ class CiBuildAccelerationTest(unittest.TestCase):
                         "          ccache --show-log-stats",
                         job,
                     )
+
+    @staticmethod
+    def _role_hosts() -> dict[str, set[str]]:
+        hosts: dict[str, set[str]] = {}
+        for path in sorted(ELASTIC_HOST_CONFIGS.glob("*.json")):
+            config = json.loads(path.read_text(encoding="utf-8"))
+            for service in config["baseline"] + config["elastic"]:
+                for role in service["roles"]:
+                    hosts.setdefault(role, set()).add(config["host"])
+        return hosts
+
+    def _host_of(self, job: WorkflowJob, jobs: dict[tuple[str, str], WorkflowJob]) -> str | None:
+        """The one physical host `job` can run on, or None when not decidable."""
+        if job.uses is not None:
+            callee = job.uses.removeprefix("./.github/workflows/")
+            hosts = {
+                self._host_of(called, jobs)
+                for (workflow, _), called in jobs.items()
+                if workflow == callee
+            }
+            return hosts.pop() if len(hosts) == 1 else None
+        if job.runs_on == M1_SELECTOR_RUNS_ON:
+            # The selector emits the M1 label set or hosted macOS, never
+            # another self-hosted machine; the hosted path costs a queue slot.
+            selector = self.workflow_job("select-macos-runner")
+            self.assertIn("TARGET_RUNNER_NAME: endaye-mbp-m1", selector)
+            self.assertIn(
+                """echo 'runner=["self-hosted","macOS","ARM64","lmdj"]'""",
+                selector,
+            )
+            return "m1"
+        if job.runs_on is None or job.is_dynamic:
+            return None
+        labels = {label.strip() for label in job.runs_on.strip("[]").split(",")}
+        if M1_LABELS <= labels:
+            return "m1"
+        candidates: set[str] | None = None
+        role_hosts = self._role_hosts()
+        for label in labels:
+            if label in HOST_PIN_LABELS:
+                hosts = {HOST_PIN_LABELS[label]}
+            elif label in role_hosts:
+                hosts = role_hosts[label]
+            else:
+                continue
+            candidates = hosts if candidates is None else candidates & hosts
+        if candidates is not None and len(candidates) == 1:
+            return candidates.pop()
+        return None
+
+    def test_every_heavy_job_queues_on_the_physical_host_it_runs_on(self) -> None:
+        """Capacity queues are per physical host, so group must equal host.
+
+        GitHub resolves a concurrency group before it assigns a runner. A
+        heavy job that names one host's queue but can land on another host
+        either loses its serialization against the work beside it (the
+        shared-host-runner-capacity pitfall) or blocks an unrelated host. The
+        oracle is independent of the workflows: role-to-host comes from the
+        elastic-runner host configs, and the Mac from the selector's target.
+        """
+        jobs = {(job.workflow, job.job_id): job for job in all_jobs()}
+        role_hosts = self._role_hosts()
+        for role in HEAVY_ROLES:
+            self.assertEqual(
+                role_hosts.get(role), {"netcup"},
+                f"why: {role} must live on exactly one host for its jobs to share "
+                "one host queue; remedy: if the role moves or spans hosts, "
+                "re-pin its jobs and update this oracle in the same change",
+            )
+        heavy: list[WorkflowJob] = []
+        for key, job in jobs.items():
+            queued = (job.concurrency_group or "").startswith("lmdj-native-heavy")
+            on_heavy_role = any(job.has_role(role) for role in HEAVY_ROLES)
+            on_m1 = job.runs_on == M1_SELECTOR_RUNS_ON or (
+                job.runs_on is not None
+                and not job.is_dynamic
+                and M1_LABELS
+                <= {label.strip() for label in job.runs_on.strip("[]").split(",")}
+            )
+            if queued or ((on_heavy_role or on_m1) and key not in UNQUEUED_HEAVY_ROLE_JOBS):
+                heavy.append(job)
+        self.assertGreaterEqual(
+            len(heavy), 13,
+            "why: the scan must see every queued heavy job, or it proves nothing "
+            "about the ones it missed; remedy: fix workflow_inventory's parser",
+        )
+        for job in heavy:
+            with self.subTest(workflow=job.workflow, job=job.job_id):
+                host = self._host_of(job, jobs)
+                self.assertIsNotNone(
+                    host,
+                    f"why: {job.workflow}:{job.job_id} is heavy but its runners span "
+                    "more than one physical host, so no per-host queue can "
+                    "serialize it; remedy: add a host-pinning label (e.g. "
+                    "ci-only-host) to its runs-on",
+                )
+                self.assertEqual(
+                    job.concurrency_group,
+                    f"{HEAVY_GROUP_PREFIX}{host}",
+                    f"why: {job.workflow}:{job.job_id} runs on {host} and must queue "
+                    "behind that host's other heavy jobs, not another host's; "
+                    f"remedy: set its concurrency group to {HEAVY_GROUP_PREFIX}{host} "
+                    "with queue: max and cancel-in-progress: false",
+                )
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")

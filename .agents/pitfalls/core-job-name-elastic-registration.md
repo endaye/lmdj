@@ -35,8 +35,8 @@ test that missed its budget, which reads as a flake.
 This is the same host-capacity truth as
 [`shared-host-runner-capacity`](shared-host-runner-capacity.md), reached through
 a different mechanism: that entry covers jobs contending inside the
-`lmdj-native-heavy` queue, this one covers load the controller admits from
-outside it.
+`lmdj-native-heavy-<host>` queues, this one covers load the controller admits from
+outside them.
 
 ## How to apply
 

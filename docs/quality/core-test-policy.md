@@ -506,9 +506,24 @@ hosts, not a defect. Routing splits two ways:
   `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub
-  does not allow a `uses:` job to carry `runs-on`. In the complete self-test batch,
+  does not allow a `uses:` job to carry `runs-on`; it also names
+  `ci-only-host`, pinning it to netcup. In the complete self-test batch,
   TSan names `ci-core` since #693, and Release stress names the trusted
-  bare-metal macOS runner since #1558; both join the `lmdj-native-heavy` queue.
+  bare-metal macOS runner since #1558.
+
+Heavy jobs queue per physical host, not repository-wide. Every job that runs
+on netcup (Architecture Portal, the four Web lanes, the four native Core jobs,
+TSan and the Core benchmark) joins `lmdj-native-heavy-netcup`; Release stress
+and the macOS gates (`macos-primary`) join `lmdj-native-heavy-m1` on the
+bare-metal Mac. Each uses `queue: max` and `cancel-in-progress: false`, so one
+host runs one heavy job at a time while the two hosts run in parallel; they
+share no CPU, cache or runner service. GitHub resolves a concurrency group
+before it assigns a runner, so every heavy job is pinned to the host its group
+names: `ci-core` and `ci-web-heavy` are registered only on netcup, and Portal
+adds `ci-only-host` because `ci-general` alone could also land on Contabo.
+`tests/build/ci_build_acceleration_test.py` derives each heavy job's host from
+`scripts/ci/elastic-runner/*.json` and the macOS selector's target, and fails
+when a heavy job has no host group, spans hosts, or names another host's queue.
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
@@ -537,8 +552,8 @@ to be 40-hex and exactly equal to the dispatch's trusted `github.sha`, keep
 `permissions: contents: read`, target one role literally, and report
 `runner_name`, elapsed seconds and host capacity separately. Neither is release
 evidence and neither creates a required check. The Core benchmark carries two
-properties the Web benchmark does not need. It joins the repository-wide
-`lmdj-native-heavy` capacity queue, because separate runner services on the
+properties the Web benchmark does not need. It joins the netcup host's
+`lmdj-native-heavy-netcup` capacity queue, because separate runner services on the
 shared host are not independent CPU capacity and an unqueued measurement would
 both corrupt itself and consume a concurrent formal lane's test budgets. And its
 job name prefix is registered in `core_job_names`.
@@ -628,8 +643,9 @@ instead of counting them; the deadline and the zero-unattributed-overruns
 bound are unchanged
 ([decision](../prd/decisions/2026-09-16-master-fx-stress-attribute-guest-stolen-time.md)).
 
-Both native Nightly jobs join the repository-wide `lmdj-native-heavy` queue.
-Naming the `ci-core` role is not enough to serialise them: the role spans
+Both native Nightly jobs join their host's capacity queue: TSan
+`lmdj-native-heavy-netcup`, Release stress `lmdj-native-heavy-m1` beside the
+macOS gates. Naming the `ci-core` role is not enough to serialise them: the role spans
 several runner services on one physical host, so a TSan job and the release
 stress suite would start in the same second and run beside each other. Run
 33838737018 did exactly that on 2026-09-04 and both failed, which made the

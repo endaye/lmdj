@@ -54,8 +54,9 @@ jobs:
     # user cannot read the root-only entropy sysctl. A failed startup keeps
     # infrastructure debt and never reaches the product tests.
     if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'tsan' }}
+    # `ci-core` exists only on netcup, so TSan joins that host's queue.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-netcup
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
@@ -164,12 +165,13 @@ jobs:
     # Release build passed 20/20 repetitions there while it failed every
     # batch on netcup. Decision: docs/prd/decisions/2026-09-19-release-stress-on-bare-metal.md.
     #
-    # The repository capacity queue still applies: twenty consecutive stress
+    # The M1 host capacity queue still applies: twenty consecutive stress
     # repetitions are the least tolerant workload in the repository, and this
-    # runner also hosts the macOS gates.
+    # runner also hosts the macOS gates. Netcup work queues separately; it
+    # never shares this machine's CPU.
     if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'stress' }}
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-m1
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, macOS, ARM64, lmdj]

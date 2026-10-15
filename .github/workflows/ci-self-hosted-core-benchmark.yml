@@ -58,13 +58,13 @@ jobs:
     # elastic controller classifies this job as non-core and keeps scaling out
     # while a timing-sensitive Core measurement is running.
     name: Core benchmark (${{ inputs.lane }})
-    # Same repository-wide capacity queue as the formal native-heavy chain.
-    # Separate runner services on one host do not provide independent CPU
-    # capacity, so a benchmark outside this queue would both
-    # corrupt its own measurement and blow a concurrent formal lane's test
-    # budgets.
+    # Same netcup host capacity queue as the formal native-heavy chain
+    # (`ci-core` exists only on netcup). Separate runner services on one host
+    # do not provide independent CPU capacity, so a benchmark outside this
+    # queue would both corrupt its own measurement and blow a concurrent
+    # formal lane's test budgets.
     concurrency:
-      group: lmdj-native-heavy
+      group: lmdj-native-heavy-netcup
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]

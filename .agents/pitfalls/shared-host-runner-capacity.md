@@ -93,13 +93,19 @@ are involved.
 
 ## How to apply
 
-Put every material job eligible for a shared host in the same
-repository-wide capacity queue, including Architecture Portal, ordinary Core
-proof and package jobs, ASan, coverage, and the four Web lanes on the netcup
-host (`ci-web-heavy` shares the machine with `ci-core` there). Retain every
-waiter with `queue: max`, keep `cancel-in-progress: false`, and gate the
-complete admitted job set. Do not widen product test budgets to absorb
-sibling-runner contention.
+Put every material job eligible for a shared host in that host's capacity
+queue, `lmdj-native-heavy-<host>`: on netcup that includes Architecture
+Portal, ordinary Core proof and package jobs, ASan, coverage, TSan and the
+four Web lanes (`ci-web-heavy` shares the machine with `ci-core` there); on the
+bare-metal Mac, Release stress and the macOS gates. The unit of isolation is
+the physical machine, so the queue is per machine: jobs on different machines
+contend for nothing and need not wait for each other. Because GitHub resolves
+the group before it assigns a runner, pin each job to the host its group names
+(a role registered on one host only, or a host label such as `ci-only-host`);
+a role that spans hosts makes the group a guess. Retain every waiter with
+`queue: max`, keep `cancel-in-progress: false`, and gate the complete admitted
+job set. Do not widen product test budgets to absorb sibling-runner
+contention.
 
 Every workflow, not only `ci.yml`. `core-nightly.yml` is in scope and its two
 native jobs are pinned by
