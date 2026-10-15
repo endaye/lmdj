@@ -31,6 +31,21 @@ async function consoleGeometry(page) {
   return {raw, scale, box, compact, width};
 }
 
+// Playwright's setViewportSize resolves once Chromium accepts the new
+// metrics. It does not wait for the page's resulting `resize` event, and the
+// console refits only in that handler (main.tsx fitStage). Reading geometry
+// straight after it raced the refit on the CI hosts (#2268). The failures read
+// the previous viewport's fit, or a stage and a console measured on opposite
+// sides of the refit. Wait for the new inner size, then for one rendering
+// frame: HTML's resize steps run before animation-frame callbacks in the same
+// update, so the measurement sees the refitted console.
+async function resizeViewport(page, viewport) {
+  await page.setViewportSize(viewport);
+  await page.waitForFunction(({width, height}) =>
+    window.innerWidth === width && window.innerHeight === height, viewport);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
+}
+
 async function expectConsoleFitsStage(page) {
   const stage = await page.locator("#root").boundingBox();
   const {raw, scale, compact, width} = await consoleGeometry(page);
@@ -374,7 +389,7 @@ test("Project arrows follow the single list and only Open changes Project", asyn
     expect(visible).toBe(true);
   };
   for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600}, {width: 768, height: 600}]) {
-    await page.setViewportSize(viewport);
+    await resizeViewport(page, viewport);
     await expectConsoleFitsStage(page);
     await cards.nth(0).click();
     await expectSelection(0);
