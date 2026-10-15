@@ -700,7 +700,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertIn(TRUST_CONDITION, caller)
                 self.assertNotIn("runs-on:", caller)
         called = self.workflow_job("portal", portal=True)
-        self.assertIn(GENERAL_ROLE, called)
+        # Pinned to netcup (#2277 follow-up): the caller queues Portal on that
+        # host's heavy queue, so running it on Contabo would hold an unused slot.
+        self.assertIn(GENERAL_CI_ONLY_ROLE, called)
         self.assertNotIn("ubuntu-24.04", self.portal_source)
         self.assertEqual(self.portal_source.count("ci-general"), 1)
         events = self.event_block(self.portal_source)

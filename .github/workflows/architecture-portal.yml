@@ -38,14 +38,17 @@ permissions:
 
 jobs:
   portal:
-    # Portal's share of the general Linux workload on the dual-node trusted
-    # role. The role is declared here because the caller in `ci.yml` is a
+    # Portal's share of the general Linux workload, pinned to the CI-only
+    # netcup node by `ci-only-host`. The caller queues it on
+    # `lmdj-native-heavy-linux`, the netcup host's queue; on the dual-node
+    # role it could run on Contabo while holding netcup's slot (#2277).
+    # The role is declared here because the caller in `ci.yml` is a
     # `uses:` job, which GitHub does not allow to carry `runs-on`. The label
     # set is literal rather than selector-resolved, so a busy or absent role
     # queues this job instead of diverting it to paid runners. The caller
     # holds the closed trust condition, and this workflow has no trigger but
     # `workflow_call` and no other caller, so it cannot run untrusted.
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, ci-only-host]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6

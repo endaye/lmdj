@@ -506,7 +506,9 @@ hosts, not a defect. Routing splits two ways:
   `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub
-  does not allow a `uses:` job to carry `runs-on`. In the complete self-test batch,
+  does not allow a `uses:` job to carry `runs-on`; it also names `ci-only-host`,
+  because it queues on the netcup host's `lmdj-native-heavy-linux` and must run
+  there rather than on Contabo. In the complete self-test batch,
   TSan names `ci-core` since #693, and Release stress names the trusted
   bare-metal macOS runner since #1558. Each joins the capacity queue of the host
   it runs on: TSan `lmdj-native-heavy-linux`, Release stress
@@ -650,7 +652,9 @@ macOS gates queued 129-169 minutes behind Linux lanes (self-test runs
 queue; giving it an existing host's role or group would either serialise two
 hosts again or share host state such as the `ci-core` ccache.
 `tests/build/ci_build_acceleration_test.py` pins every member, across all
-workflows, to the queue of the host its routing names.
+workflows, to the queue of the host its routing names, and requires every Linux
+member, including the Portal's called workflow, to route by a role only that
+host carries (`ci-core`, `ci-web-heavy` or `ci-only-host`).
 
 Two trusted Macs exist since #2278. Each carries a host label, `lmdj-mac-m1` or
 `lmdj-mac-m4`, and a Mac takes the gates only while it also carries the role
