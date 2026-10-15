@@ -26,6 +26,10 @@ WORKFLOW_ROOT = REPO_ROOT / ".github/workflows"
 # build; the M1 carries Release stress and the gates, the overflow M4 Pro only
 # the gates (#2278). The gates' queue follows the selector's choice of Mac.
 LINUX_HEAVY_QUEUE = "lmdj-native-heavy-linux"
+# Roles registered only on that Linux host (netcup). `ci-general` is not one:
+# Contabo carries it too, so a member routed by it alone could run on Contabo
+# while holding netcup's queue slot.
+LINUX_HEAVY_HOST_ROLES = ("ci-core", "ci-web-heavy", "ci-only-host")
 MACOS_M1_HEAVY_QUEUE = "lmdj-native-heavy-macos-m1"
 MACOS_M4_HEAVY_QUEUE = "lmdj-native-heavy-macos-m4"
 SELECTED_MAC_QUEUE = (
@@ -334,6 +338,19 @@ class CiBuildAccelerationTest(unittest.TestCase):
                     else:
                         self.assertNotIn("macOS", route, "a Mac job must name its host label")
                         expected = LINUX_HEAVY_QUEUE
+                        called = re.fullmatch(r"\./(\.github/workflows/\S+\.ya?ml)", route.strip())
+                        if called:
+                            route = " ".join(re.findall(
+                                r"(?m)^    runs-on: (.*)$",
+                                (REPO_ROOT / called.group(1)).read_text(encoding="utf-8"),
+                            ))
+                        self.assertTrue(
+                            any(role in route for role in LINUX_HEAVY_HOST_ROLES),
+                            "why: a Linux heavy-queue member routed by a role another "
+                            "host also carries can run there while holding the Linux "
+                            "host's slot; remedy: route it by a role only that host "
+                            f"carries ({', '.join(LINUX_HEAVY_HOST_ROLES)})",
+                        )
                     self.assertEqual(
                         groups[0],
                         expected,

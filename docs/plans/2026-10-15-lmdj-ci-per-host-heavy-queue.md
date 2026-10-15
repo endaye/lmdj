@@ -119,6 +119,32 @@ a hosted selection without a queue. Each was mutation-proven.
 Out of this Task: installing the M4 Pro runner (done on that machine), its
 benchmark acceptance, and adding `ci-macos-gates` to it afterwards.
 
+## Q3 — Pin the Portal to the Linux heavy host (#2277 follow-up)
+
+Found on 2026-10-15 by the M1 session reviewing the post-#2280 batches and
+confirmed here: the `portal` caller in `ci.yml` queues on
+`lmdj-native-heavy-linux`, but `architecture-portal.yml` routed by the
+dual-node `ci-general` role, so the Portal could run on Contabo (run
+38662185311 ran it on `contabo-lmdj-linux-02`) while holding netcup's queue
+slot. Q1's cross-workflow test treated every `uses:` member as Linux without
+reading the called workflow, so it could not see this.
+
+1. Add `ci-only-host` (registered only on netcup) to the Portal's `runs-on`.
+2. Extend `test_every_heavy_queue_member_queues_on_the_host_it_runs_on` to
+   resolve a member's called workflow and require every Linux member to route
+   by a role only that host carries: `ci-core`, `ci-web-heavy` or
+   `ci-only-host`.
+3. Update the Portal routing test, the test policy and the portal page.
+
+Declared files: `.github/workflows/architecture-portal.yml`,
+`tests/build/ci_build_acceleration_test.py`,
+`tests/build/ci_runner_fallback_test.py`, `docs/quality/core-test-policy.md`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`, this plan.
+
+Defect the extended test catches: a Linux heavy-queue member, direct or via a
+called workflow, routed by a role another host also carries. Mutation-proven by
+reverting the Portal's `runs-on`.
+
 ## Completion criteria
 
 - No workflow carries the host-agnostic `lmdj-native-heavy` group.

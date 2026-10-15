@@ -294,7 +294,9 @@ class CiRunnerFallbackTest(unittest.TestCase):
             "needs.change-scope.outputs.trusted-head == 'true'", caller
         )
         called = PORTAL_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(GENERAL_ROLE, called)
+        # Pinned to netcup: the caller queues Portal on that host's heavy
+        # queue, so running it on Contabo would hold a slot it does not use.
+        self.assertIn(GENERAL_CI_ONLY_ROLE, called)
         self.assertNotIn("ubuntu-24.04", called)
         self.assertEqual(called.count("ci-general"), 1)
 
