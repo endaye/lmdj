@@ -1085,7 +1085,13 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
-    timeout-minutes: 35
+    # Owner budget decision 2026-10-15: every main batch since 06:46Z was
+    # cancelled at 35 min. ASan `full` passes 262/262 in 1145.7 s, then the
+    # serial stress tier needs ~13 min more (facade.candidate_store_stress
+    # 580.8 s, facade.pattern_count_in_stress 201.8 s; run 38776156275), about
+    # 42 min of work with the build. The limit is a hang detector with
+    # headroom, not a target.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v6
         with:

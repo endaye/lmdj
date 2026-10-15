@@ -975,7 +975,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "deploy-contract": 30,
             "package": 35,
             "core-ubuntu": 30,
-            "core-asan": 35,
+            # Owner budget decision (2026-10-15): ASan full 1145.7 s plus a
+            # serial stress tier of ~13 min; ~42 min of work with the build.
+            "core-asan": 55,
             "core-coverage": 35,
             "web-toolchain-conformance": 35,
             # Calibrated to the trusted pool, which runs this lane about 2.2x
