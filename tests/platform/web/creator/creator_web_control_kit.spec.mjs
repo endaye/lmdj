@@ -1,6 +1,11 @@
 import {writeFile} from "node:fs/promises";
 import {expect, test} from "@playwright/test";
-import {overviewProjectId, waitForBootProject, waitForProjectReopen} from "./fixtures/creator_boot.mjs";
+import {
+  overviewProjectId,
+  PROJECT_OPEN_TIMEOUT_MS,
+  waitForBootProject,
+  waitForProjectReopen,
+} from "./fixtures/creator_boot.mjs";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -155,7 +160,13 @@ test("ordinary touch actions preserve a usable unpainted inset and keyboard focu
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj", exact: true}).click();
   await (await chooser).setFiles(bundle);
-  await expect(page.getByRole("heading", {name: "Project 00000000", exact: true})).toBeVisible();
+  // Importing the 64-Pad proof bundle is a Project open: it takes ~5.5 s on
+  // the M1 and longer on the CI hosts, so the 5 s default expect timeout
+  // failed this test on every batch since #2132 introduced it. Every other
+  // import of this bundle waits for the Project-open bound
+  // (creator_web_browser.spec.mjs); use the same named bound here.
+  await expect(page.getByRole("heading", {name: "Project 00000000", exact: true}))
+    .toBeVisible({timeout: PROJECT_OPEN_TIMEOUT_MS});
   await page.getByTestId("physical-controls").getByRole("button", {name: "Sample", exact: true}).click();
   await expect(page.getByRole("button", {name: /^Pad A01 — assigned/})).toBeVisible();
   const pages = page.getByRole("navigation", {name: "Sample pages"});
