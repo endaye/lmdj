@@ -980,7 +980,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             # exactly 45, against 16-19 min hosted).
             "web-runtime-host": 75,
             "creator-web": 35,
-            # Holds lmdj-native-heavy; at most 18 s over 214 runs.
+            # Holds lmdj-native-heavy-linux; at most 18 s over 214 runs.
             "web-runtime-lab": 10,
             "macos-primary": 30,
             # Thin selection/adjudication jobs; each observed under 30 s.

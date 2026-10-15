@@ -664,7 +664,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
-    # Hang detector while holding lmdj-native-heavy: 214 successful runs
+    # Hang detector while holding lmdj-native-heavy-linux: 214 successful runs
     # (2026-09-03..10-14) took at most 18 seconds.
     timeout-minutes: 10
     steps:
