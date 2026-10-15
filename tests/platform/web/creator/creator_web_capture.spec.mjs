@@ -207,6 +207,24 @@ const captureViewports = [
   {width: 768, height: 600}, {width: 768, height: 1024},
 ];
 
+// Playwright's setViewportSize resolves once Chromium accepts the new
+// metrics, not after the page handles the resulting `resize` event. The
+// console refits only in that handler (main.tsx fitStage), and the panel
+// re-anchors from it (ModalDialog placement="touch-workspace"). Reading
+// geometry straight after the call measured the previous viewport's layout on
+// the CI hosts: batch 38776156275 recorded trim-1280x720 with the 1440x900
+// panel (bottom 809.7 in a 720 px viewport), so every Commit/Discard hit point
+// below y=720 missed. The same race was fixed for the Project list in #2299.
+// Wait for the new inner size, then for one rendering frame: HTML's resize
+// steps run before animation-frame callbacks in the same update, so the next
+// measurement sees the refitted console and the re-anchored panel.
+async function resizeViewport(page, viewport) {
+  await page.setViewportSize(viewport);
+  await page.waitForFunction(({width, height}) =>
+    window.innerWidth === width && window.innerHeight === height, viewport);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+}
+
 async function expectCaptureGeometry(page, panel, testInfo, name) {
   await expect.poll(() => panel.evaluate((dialog) => {
     const a = dialog.getBoundingClientRect();
@@ -315,10 +333,10 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
     page, panel.getByRole("button", {name: "Record into Pad A01"}),
   );
   for (const viewport of captureViewports) {
-    await page.setViewportSize(viewport);
+    await resizeViewport(page, viewport);
     await expectCaptureGeometry(page, panel, testInfo, `idle-${viewport.width}x${viewport.height}`);
   }
-  await page.setViewportSize({width: 1280, height: 720});
+  await resizeViewport(page, {width: 1280, height: 720});
 
   // recording: entering the phase must not change the outer geometry, and
   // Stop must sit inside the viewport without any scrolling.
@@ -328,11 +346,11 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
   await expectWithinViewport(page, panel);
   await expectWithinViewport(page, stop);
   for (const viewport of captureViewports) {
-    await page.setViewportSize(viewport);
+    await resizeViewport(page, viewport);
     await expectCaptureGeometry(page, panel, testInfo, `recording-${viewport.width}x${viewport.height}`);
     await expect(stop).toBeFocused();
   }
-  await page.setViewportSize({width: 1280, height: 720});
+  await resizeViewport(page, {width: 1280, height: 720});
 
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
@@ -378,7 +396,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   // do not claim that their pointer targets are 44px.
   const retainedSelection = {start: await start.inputValue(), end: await end.inputValue()};
   for (const viewport of captureViewports) {
-    await page.setViewportSize(viewport);
+    await resizeViewport(page, viewport);
     const size = `${viewport.width}x${viewport.height}`;
     await expectCaptureGeometry(page, panel, testInfo, `trim-${size}`);
     await expectFocusedTrimHandleGeometry(page, start, testInfo, `trim-start-focused-${size}`);
@@ -388,7 +406,7 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   }
   // Restore the original portrait/focus context before every original real
   // pointer trim, inert-middle, commit, saved-waveform, frame/byte and revision leg below.
-  await page.setViewportSize({width: 768, height: 1024});
+  await resizeViewport(page, {width: 768, height: 1024});
   await discardAction.focus();
   await expect(discardAction).toBeFocused();
   const initialStart = Number(await start.inputValue());
@@ -453,6 +471,20 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   // intentionally inert while the dialog remains open.
   await expect(panel.getByRole("button", {name: "Record into Pad A01"}))
     .toBeVisible({timeout: 180_000});
+  // The panel reaches idle as soon as the commit returns, but the committed
+  // Project projection settles later (sample pendingAction). Until then the
+  // opener stays disabled after Close, and P2-D2 (2026-08-24 capture-panel
+  // decision) restores focus to the opener only while it is a valid target,
+  // otherwise to the first focusable element outside the backdrop. Batch
+  // 38800878861 clicked Close inside that window: Record Sample was still
+  // disabled and focus took the decided fallback. The sibling "Replace
+  // Sample" is disabled by the same session, Project and pendingAction
+  // conditions but not by the open panel, and its label proves Pad A01 is now
+  // assigned. It sits behind the modal (inert and aria-hidden, hence
+  // includeHidden). Once it is enabled, this leg proves the restore to the
+  // opener rather than the fallback.
+  await expect(page.getByRole("button", {name: "Replace Sample", exact: true, includeHidden: true}))
+    .toBeEnabled({timeout: 30_000});
   await panel.getByRole("button", {name: "Close"}).click();
   await expect(panel).toBeHidden();
   await expect(page.getByRole("button", {name: "Record Sample"})).toBeFocused();
