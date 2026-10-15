@@ -24,6 +24,9 @@ recurrences:
   - date: 2026-10-14
     occurrence: https://github.com/endaye/lmdj/issues/2261
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-15
+    occurrence: https://github.com/endaye/lmdj/issues/2286
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -84,6 +87,12 @@ over one day and was then cancelled on every batch (#1965). Before
 touching the budget, read the job's phase timings and remove work the
 proof never consumes: that job compiled the whole native dev tree for one
 fixture binary.
+The same job was cancelled again from 2026-10-13 when its Chromium journeys
+grew from 94 to 133 (~44 min of Proof, #2286). Overlapping its browser groups
+on the 8-core M1 saved under a minute and multiplied timeouts: these
+Wasm/AudioWorklet journeys are CPU-bound. Measure before assuming a browser
+suite waits on real time; when no work can honestly be removed, the limit is
+an owner budget decision (here 55 minutes), not an agent's.
 
 Splitting into more registrations only helps a runner that executes them
 concurrently, and the stress jobs do not: `scripts/core.sh test tsan stress`
