@@ -81,9 +81,14 @@ async function files(page, corrupt = false) {
     return result;
   }, {projectId, corrupt});
 }
-async function setup(page, silent = false, host) {
+// The standalone Web Host enables audio activation only after its diagnostic
+// project is ready, so only a journey that activates audio loads it. Loading
+// assigns all 64 Pads, each publishing a Runtime Bank (#2107); that cost is
+// owned by the Host's diagnostic journeys, not by Candidate facts that never
+// play audio (#2289).
+async function setup(page, silent = false, host, {activatesAudio = false} = {}) {
   await start(page, host);
-  if (host === "Web Runtime Host") {
+  if (host === "Web Runtime Host" && activatesAudio) {
     expect(await page.evaluate(() => window.lmdjWebRuntimeController.loadDiagnosticProject())).toBe(true);
     await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
   }
@@ -139,7 +144,7 @@ const CANDIDATE_JOURNEY_TIMEOUT_MS = 60_000;
 export function registerCandidateJourneys(host, {wakeCreatorAudio} = {}) {
   test(`${host}: real Candidate preview, explicit adoption and restart preserve source and Pattern`, async ({page}) => {
     test.setTimeout(CANDIDATE_JOURNEY_TIMEOUT_MS);
-    const {bytes, imported, truth} = await setup(page, false, host);
+    const {bytes, imported, truth} = await setup(page, false, host, {activatesAudio: true});
     const before = await files(page);
     const job = success(await candidate(page, "runCandidateJob", runRequest()));
     expect(success(await candidate(page, "inspectCandidateJob", "browser-slice"))).toEqual(job);
