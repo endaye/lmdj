@@ -568,7 +568,9 @@ jobs:
           # Admitted only while online and idle with its host label and
           # `ci-web-overflow`, compared exactly. A busy workstation is not
           # waited for: netcup is always there and the lanes are long.
-          overflow_state="$(
+          # An unreadable inventory falls back to netcup rather than failing
+          # the selector and with it every Web lane.
+          if ! overflow_state="$(
             jq --raw-output --arg runner_name "$WEB_OVERFLOW_RUNNER_NAME" '
               [ .runners[]?
                 | select(.name == $runner_name and .status == "online")
@@ -577,7 +579,10 @@ jobs:
                 | .busy ]
               | if length != 1 then "absent" elif .[0] then "busy" else "idle" end' \
               <<<"$web_runners"
-          )"
+          )"; then
+            select_netcup 'runner inventory is unreadable'
+            exit 0
+          fi
           echo "Web runner selection: overflow=$overflow_state"
 
           if [[ "$overflow_state" == "idle" ]]; then
@@ -1331,7 +1336,7 @@ jobs:
   # ci-scope: neither focused nor a new-source full is legacy release evidence.
   batch-verdict:
     name: Scoped batch verdict
-    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, package, nightly-tsan, nightly-stress]
+    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, select-web-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, package, nightly-tsan, nightly-stress]
     if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
@@ -1376,6 +1381,9 @@ jobs:
           dependencies['macos-fallback'] = ['change-scope', 'select-macos-runner', 'macos-primary']
           dependencies['core-macos'] = ['change-scope', 'select-macos-runner']
           dependencies['core-asan-macos'] = ['change-scope', 'select-macos-runner']
+          # #2279: a failed Web selector skips the Web lanes as a common cause.
+          for web_job in ('web-toolchain-conformance', 'web-runtime-host', 'creator-web', 'web-runtime-lab'):
+              dependencies[web_job] = ['change-scope', 'select-web-runner']
           document = batch_execution.from_needs(policy, execution['identity'], execution['selection'], needs,
                                                 aliases=aliases, dependencies=dependencies, verification=execution.get('verification'))
           for name, value in [('execution.json', execution), ('needs.json', needs), ('verdict.json', document)]:

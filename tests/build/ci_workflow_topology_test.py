@@ -40,6 +40,8 @@ FORMAL_LANE_JOBS = (
 SUPPORT_JOBS = (
     "select-macos-runner",
     "macos-primary",
+    # #2279: the Web lanes' route; its failure explains their skip.
+    "select-web-runner",
 )
 # Every job a self-hosted role may ever execute. Each one must already carry
 # the closed trust condition, including while it is still Hosted, so that a
@@ -192,6 +194,7 @@ FORMAL_RESULT_LANE_GUARDS = {
     "package": {"portal", "core_ubuntu", "package"},
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
+    "select-web-runner": {"web_toolchain", "web_runtime_host", "creator", "web_runtime_lab"},
 }
 
 
@@ -848,6 +851,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("always()", job)
         self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", job)
         self.assertIn("batch_execution.from_needs", job)
+        # A failed Web selector must explain the Web lanes' skip (#2279), or
+        # the verdict reports a common-cause routing failure as four lane failures.
+        self.assertIn(
+            "for web_job in ('web-toolchain-conformance', 'web-runtime-host', 'creator-web', 'web-runtime-lab'):\n"
+            "              dependencies[web_job] = ['change-scope', 'select-web-runner']",
+            job,
+        )
 
     def test_no_job_depends_on_an_always_false_admission_gate(self) -> None:
         """Heavy lanes must not depend on a dead batch-mode admission job.

@@ -108,6 +108,8 @@ REGISTERED_RUNNER_LABELS = (
     "lmdj-mac-m1",
     "lmdj-mac-m4",
     "ci-macos-gates",
+    "lmdj-wsl-enhome",
+    "ci-web-overflow",
 )
 # Labels a Mac carries once admitted for the macOS gates (#2278).
 M1_ADMITTED = ["self-hosted", "macOS", "ARM64", "lmdj", "lmdj-mac-m1", "ci-macos-gates"]
@@ -523,7 +525,8 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
         self.assertEqual(selected["self-hosted"], "false")
 
-    def select_web(self, *runners: dict, token: str = "token", api_ok: bool = True) -> dict[str, str]:
+    def select_web(self, *runners: dict, token: str = "token", api_ok: bool = True,
+                   reply: str | None = None) -> dict[str, str]:
         """Run the real Web selector against a stubbed Runner API reply."""
         selector = self.workflow_job("select-web-runner")
         script = re.search(r"        run: \|\n(?P<body>.*)\Z", selector, flags=re.DOTALL)
@@ -553,7 +556,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
                 WEB_RUNNER_READ_TOKEN=token,
                 GITHUB_OUTPUT=str(output),
                 API_OK="1" if api_ok else "0",
-                RUNNER_REPLY=json.dumps(
+                RUNNER_REPLY=reply if reply is not None else json.dumps(
                     {"total_count": len(runners),
                      "runners": [{"name": r["name"], "status": r["status"], "busy": r["busy"],
                                   "labels": [{"name": label} for label in r["labels"]]}
@@ -602,6 +605,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
             "absent": self.select_web(),
             "no token": self.select_web(token=""),
             "api down": self.select_web(api_ok=False),
+            "garbled": self.select_web(reply="not json"),
         }
         for case, selected in cases.items():
             with self.subTest(case=case):
