@@ -14,6 +14,9 @@ self-hosted-runner:
     - lmdj-mac-m1
     - lmdj-mac-m4
     - ci-macos-gates
+    # en-home WSL overflow host label and its Web admission role (#2279).
+    - lmdj-wsl-enhome
+    - ci-web-overflow
     - contabo
     - netcup
     - lmdj-ai-isolated

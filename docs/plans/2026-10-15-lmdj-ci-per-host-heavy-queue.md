@@ -145,6 +145,54 @@ Defect the extended test catches: a Linux heavy-queue member, direct or via a
 called workflow, routed by a role another host also carries. Mutation-proven by
 reverting the Portal's `runs-on`.
 
+## Q4 — Web lanes overflow to the en-home WSL runner (#2279)
+
+Owner decision 2026-10-16: the en-home workstation takes the four Web lanes,
+selected while idle and otherwise falling back to netcup ("4 条 Web lane").
+Recorded at `origin/main` `f608cd14`.
+
+Premises: `win11-wsl-lmdj-linux` was registered but offline, with no role
+label, so no job could reach it. The Web lanes named the netcup
+`ci-web-heavy` role literally. A second host cannot share that role, because
+GitHub chooses the runner after the queue group is fixed: it would either
+re-serialise two hosts or let a lane hold the wrong host's slot (Q1, Q3).
+
+Host side, done before the PR. The `LMDJ-Runner-Ubuntu` WSL2 distribution
+(Ubuntu 24.04, systemd, runner service as `lmdj-runner`) gained git-lfs, the
+Playwright 1.62.1 Chromium/WebKit system libraries, and persistent
+`/var/cache/lmdj-emsdk`, `/var/cache/lmdj-playwright` and `/var/cache/lmdj-npm`
+named in the runner `.env`. `vm.mmap_rnd_bits` is already 28.
+
+1. Add `select-web-runner`. It admits `win11-wsl-lmdj-linux` only while
+   online, idle and carrying exactly `lmdj-wsl-enhome` and `ci-web-overflow`,
+   and emits the en-home label set with `lmdj-native-heavy-enhome`. Every
+   other case emits the netcup `ci-web-heavy` set with
+   `lmdj-native-heavy-linux`; there is no hosted branch.
+2. The four Web lanes need the selector and use its runner and queue. The
+   netcup set and queue are the literal defaults.
+3. Register `lmdj-wsl-enhome` and `ci-web-overflow` with actionlint, and
+   update the tests that pinned the static route. Add tests that execute the
+   selector against stubbed Runner API replies. Allow the Web lanes' dynamic
+   `runs-on` in the hosted-spend policy only because the selector emits no
+   hosted label set.
+4. After merge, add `lmdj-wsl-enhome` and then `ci-web-overflow` through the
+   Runner API, and verify with one explicit node batch whose Web lanes run on
+   en-home.
+
+Declared files: `.github/workflows/ci.yml`, `.github/actionlint.yaml`,
+`tests/build/ci_runner_fallback_test.py`,
+`tests/build/ci_build_acceleration_test.py`,
+`tests/build/ci_workflow_topology_test.py`,
+`tests/build/ci_hosted_runner_policy_test.py`,
+`docs/prd/decisions/2026-10-16-web-lanes-enhome-overflow.md`, this plan,
+`docs/quality/core-test-policy.md`,
+`apps/docs-site/docs/operations/testing-and-proof.mdx`,
+`.agents/pitfalls/shared-host-runner-capacity.md`.
+
+Defects the new tests catch: a busy workstation chosen; en-home chosen
+without its own queue; a hosted label set emitted by the Web selector.
+Each was mutation-proven.
+
 ## Completion criteria
 
 - No workflow carries the host-agnostic `lmdj-native-heavy` group.

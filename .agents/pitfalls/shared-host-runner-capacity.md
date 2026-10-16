@@ -98,7 +98,9 @@ queue: `lmdj-native-heavy-linux` for Architecture Portal, ordinary Core proof
 and package jobs, ASan, coverage, TSan, the Core benchmark and the four Web
 lanes on the netcup host (`ci-web-heavy` shares the machine with `ci-core`
 there); `lmdj-native-heavy-macos-m1` for Release stress and the gates on the
-M1, `lmdj-native-heavy-macos-m4` for gates on the overflow M4 Pro (#2278).
+M1, `lmdj-native-heavy-macos-m4` for gates on the overflow M4 Pro (#2278);
+`lmdj-native-heavy-enhome` for the Web lanes when `select-web-runner` sends
+them to the en-home overflow runner (#2279).
 The queue is per physical host, not repository-wide: one
 group across hosts that share no CPU only adds waiting (#2277). Retain every
 waiter with `queue: max`, keep `cancel-in-progress: false`, and gate the

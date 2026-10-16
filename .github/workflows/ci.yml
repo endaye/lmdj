@@ -513,6 +513,90 @@ jobs:
           overwrite: true
           retention-days: 14
 
+  select-web-runner:
+    # The four Web lanes overflow to the en-home workstation's WSL runner
+    # (#2279) while it is online, idle and admitted, and otherwise run on the
+    # dedicated netcup Web role. There is no hosted Linux fallback: an
+    # unreachable Runner API or an absent workstation selects netcup. The
+    # chosen host's queue travels with the labels, so Web lanes on en-home run
+    # beside netcup's native-heavy lanes instead of after them.
+    name: Select Web runner
+    needs: change-scope
+    if: ${{ !cancelled() && needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.trusted-head == 'true' && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.creator || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    # One runner-inventory read and jq.
+    timeout-minutes: 5
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      queue: ${{ steps.select.outputs.queue }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - name: Select the Web host
+        id: select
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          WEB_OVERFLOW_RUNNER_NAME: win11-wsl-lmdj-linux
+          WEB_RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          select_netcup() {
+            {
+              echo 'runner=["self-hosted","Linux","X64","lmdj-linux","lmdj-linux-pool","ci-web-heavy"]'
+              echo 'queue=lmdj-native-heavy-linux'
+              echo "reason=$1"
+            } >>"$GITHUB_OUTPUT"
+            echo "Using the netcup Web role: $1"
+          }
+
+          if [[ -z "$WEB_RUNNER_READ_TOKEN" ]]; then
+            select_netcup 'runner status token is unavailable'
+            exit 0
+          fi
+          if ! web_runners="$(
+            curl --silent --show-error --fail-with-body \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $WEB_RUNNER_READ_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$REPOSITORY/actions/runners"
+          )"; then
+            select_netcup 'runner status API is unavailable'
+            exit 0
+          fi
+
+          # Admitted only while online and idle with its host label and
+          # `ci-web-overflow`, compared exactly. A busy workstation is not
+          # waited for: netcup is always there and the lanes are long. One
+          # list is both what admission checks and what the lanes route to.
+          enhome_labels='["self-hosted","Linux","X64","lmdj-wsl-enhome","ci-web-overflow"]'
+          # An unreadable inventory falls back to netcup rather than failing
+          # the selector and with it every Web lane.
+          if ! overflow_state="$(
+            jq --raw-output --arg runner_name "$WEB_OVERFLOW_RUNNER_NAME" --argjson required "$enhome_labels" '
+              [ .runners[]?
+                | select(.name == $runner_name and .status == "online")
+                | select(($required - [.labels[].name]) == [])
+                | .busy ]
+              | if length != 1 then "absent" elif .[0] then "busy" else "idle" end' \
+              <<<"$web_runners"
+          )"; then
+            select_netcup 'runner inventory is unreadable'
+            exit 0
+          fi
+          echo "Web runner selection: overflow=$overflow_state"
+
+          if [[ "$overflow_state" == "idle" ]]; then
+            {
+              echo "runner=$enhome_labels"
+              echo 'queue=lmdj-native-heavy-enhome'
+              echo 'reason=idle admitted en-home overflow'
+            } >>"$GITHUB_OUTPUT"
+            echo 'Using the en-home overflow runner'
+          else
+            select_netcup "en-home overflow is $overflow_state"
+          fi
+
   web-toolchain-conformance:
     # First lane cut over to the dedicated CI-only netcup node. The earlier
     # hosted pinning answered heterogeneity on the shared Linux pool, not
@@ -522,17 +606,18 @@ jobs:
     # this job instead of diverting it to paid runners. System dependencies
     # are provisioned with the role, so Playwright must not apt-install them
     # into state shared by both runner services on every run.
-    needs: change-scope
+    needs: [change-scope, select-web-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain && needs.change-scope.outputs.trusted-head == 'true' }}
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join that host's capacity queue.
+    # 37071379300). Join the capacity queue of the host the selector chose:
+    # netcup's, or en-home's when the overflow runner takes the Web lanes.
     concurrency:
-      group: lmdj-native-heavy-linux
+      group: ${{ needs.select-web-runner.outputs.queue || 'lmdj-native-heavy-linux' }}
       queue: max
       cancel-in-progress: false
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
+    runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || '["self-hosted","Linux","X64","lmdj-linux","lmdj-linux-pool","ci-web-heavy"]') }}
     timeout-minutes: 35
     env:
       LANG: C.UTF-8
@@ -561,17 +646,18 @@ jobs:
     # this lane back to hosted Ubuntu. System dependencies are provisioned
     # with the role, so Playwright must not apt-install them into state
     # shared by both runner services on every run.
-    needs: change-scope
+    needs: [change-scope, select-web-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host && needs.change-scope.outputs.trusted-head == 'true' }}
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join that host's capacity queue.
+    # 37071379300). Join the capacity queue of the host the selector chose:
+    # netcup's, or en-home's when the overflow runner takes the Web lanes.
     concurrency:
-      group: lmdj-native-heavy-linux
+      group: ${{ needs.select-web-runner.outputs.queue || 'lmdj-native-heavy-linux' }}
       queue: max
       cancel-in-progress: false
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
+    runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || '["self-hosted","Linux","X64","lmdj-linux","lmdj-linux-pool","ci-web-heavy"]') }}
     # 45 was calibrated to GitHub-hosted speed (16-19 min observed). The
     # shared trusted pool ran this lane about 2.2x slower: one success at 40
     # min and one cancellation at exactly 45. The limit is a hang detector, not
@@ -612,17 +698,18 @@ jobs:
     # instead of diverting it to paid runners. System dependencies are
     # provisioned with the role, so Playwright must not apt-install them into
     # state shared by both runner services on every run.
-    needs: change-scope
+    needs: [change-scope, select-web-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.creator && needs.change-scope.outputs.trusted-head == 'true' }}
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join that host's capacity queue.
+    # 37071379300). Join the capacity queue of the host the selector chose:
+    # netcup's, or en-home's when the overflow runner takes the Web lanes.
     concurrency:
-      group: lmdj-native-heavy-linux
+      group: ${{ needs.select-web-runner.outputs.queue || 'lmdj-native-heavy-linux' }}
       queue: max
       cancel-in-progress: false
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
+    runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || '["self-hosted","Linux","X64","lmdj-linux","lmdj-linux-pool","ci-web-heavy"]') }}
     # Owner budget decision 2026-10-15 (#2286): the complete Proof is ~44 min
     # of work (last pass 34.0 min on 2026-10-12; Vitest 1305 -> 1688, Chromium
     # journeys 94 -> 133), and its CPU-bound browser groups slow and fail when
@@ -657,17 +744,18 @@ jobs:
     # selector now has no Web consumer left at all. This lane keeps its own
     # proof path: it never shared the emsdk/Playwright setup contract, so the
     # cutover changes where it runs and nothing about what it runs.
-    needs: change-scope
+    needs: [change-scope, select-web-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab && needs.change-scope.outputs.trusted-head == 'true' }}
     # The Web lanes share the one netcup host with every native-heavy suite;
     # unqueued, a full batch runs them beside Core/ASan/coverage and their
     # fixed browser budgets flake (candidate runs 37019332485, 37037025368,
-    # 37071379300). Join that host's capacity queue.
+    # 37071379300). Join the capacity queue of the host the selector chose:
+    # netcup's, or en-home's when the overflow runner takes the Web lanes.
     concurrency:
-      group: lmdj-native-heavy-linux
+      group: ${{ needs.select-web-runner.outputs.queue || 'lmdj-native-heavy-linux' }}
       queue: max
       cancel-in-progress: false
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
+    runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || '["self-hosted","Linux","X64","lmdj-linux","lmdj-linux-pool","ci-web-heavy"]') }}
     # Hang detector while holding lmdj-native-heavy-linux: 214 successful runs
     # (2026-09-03..10-14) took at most 18 seconds.
     timeout-minutes: 10
@@ -1249,7 +1337,7 @@ jobs:
   # ci-scope: neither focused nor a new-source full is legacy release evidence.
   batch-verdict:
     name: Scoped batch verdict
-    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, package, nightly-tsan, nightly-stress]
+    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, select-web-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, package, nightly-tsan, nightly-stress]
     if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
@@ -1294,6 +1382,9 @@ jobs:
           dependencies['macos-fallback'] = ['change-scope', 'select-macos-runner', 'macos-primary']
           dependencies['core-macos'] = ['change-scope', 'select-macos-runner']
           dependencies['core-asan-macos'] = ['change-scope', 'select-macos-runner']
+          # #2279: a failed Web selector skips the Web lanes as a common cause.
+          for web_job in ('web-toolchain-conformance', 'web-runtime-host', 'creator-web', 'web-runtime-lab'):
+              dependencies[web_job] = ['change-scope', 'select-web-runner']
           document = batch_execution.from_needs(policy, execution['identity'], execution['selection'], needs,
                                                 aliases=aliases, dependencies=dependencies, verification=execution.get('verification'))
           for name, value in [('execution.json', execution), ('needs.json', needs), ('verdict.json', document)]:
