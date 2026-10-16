@@ -522,7 +522,7 @@ jobs:
     # beside netcup's native-heavy lanes instead of after them.
     name: Select Web runner
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.trusted-head == 'true' && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.creator || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab) }}
+    if: ${{ !cancelled() && needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.trusted-head == 'true' && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.creator || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab) }}
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     # One runner-inventory read and jq.
     timeout-minutes: 5
