@@ -124,7 +124,8 @@ class ComposedReferenceTest(unittest.TestCase):
     def result(self, *, identity=None, status="passed", terminal=True):
         from scripts.ci.batch_runtime import encode_reference
         verdict = {"identity": identity or {"target_sha": WITNESS, "request_id": "batch-request",
-                                            "run_id": self.EXECUTOR, "run_attempt": 1},
+                                            "run_id": self.EXECUTOR, "run_attempt": 1,
+                                            "request_kind": "candidate"},
                    "evidence_digest": "5" * 64, "status": status}
         return {"id": "result-1", "epoch": "one", "generation": 2, "type": "result",
                 "data": {"request_id": "batch-request", "run": {"run_id": self.EXECUTOR, "attempt": 1},
@@ -190,6 +191,58 @@ class ComposedReferenceTest(unittest.TestCase):
         self.assertIsNone(terminal_result([event], WITNESS))
         self.assertEqual(terminal_result([self.result()], WITNESS)["target"], WITNESS)
 
+    def test_a_node_diagnostic_result_never_collides_with_the_candidate_result(self):
+        from tools.release.verification import terminal_result, VerificationError
+        # complete-test-v2 admits exactly one passed candidate source; a
+        # kind=node diagnostic acceptance for the same revision (observed
+        # live: m4-macos-gates-acceptance beside t1-full-candidate) is not an
+        # admissible source and must not make the target ambiguous.
+        from tools.release.verification import terminal_result, VerificationError
+        node = self.result(identity={"target_sha": WITNESS, "request_id": "m4-acceptance",
+                                     "run_id": 3333, "run_attempt": 1, "request_kind": "node"})
+        self.assertIsNone(terminal_result([node], WITNESS))
+        self.assertEqual(terminal_result([node, self.result()], WITNESS)["request_id"], "batch-request")
+        # Two candidate-kind results for one target remain a hard conflict.
+        with self.assertRaises(VerificationError):
+            terminal_result([self.result(), self.result()], WITNESS)
+
+    def test_a_non_terminal_candidate_result_alongside_a_passed_one_still_refuses(self):
+        # The kind filter must not silently skip a candidate result that has
+        # not proven terminal: the observe path refuses it (multiplicity or
+        # not-proven-terminal), exactly as the target-only selector did.
+        unfinished = self.result(terminal=False)
+        finished = self.result()
+        finished["id"], finished["generation"] = "result-2", 3
+        self.journal.append(self.admit())
+        self.journal.append(unfinished)
+        self.journal.append(finished)
+        self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
+    def test_a_kindless_legacy_verdict_is_inadmissible_and_conflicts(self):
+        # A verdict shape older than the request-kind field can never prove
+        # it was a candidate request; it conflicts rather than being selected
+        # or silently skipped, and the refusal names the missing kind.
+        from tools.release.verification import terminal_result, VerificationError
+        legacy = self.result(identity={"target_sha": WITNESS, "request_id": "legacy",
+                                       "run_id": self.EXECUTOR, "run_attempt": 1})
+        with self.assertRaises(VerificationError):
+            terminal_result([legacy], WITNESS)
+        self.journal.append(self.admit())
+        self.journal.append(legacy)
+        self.assertEqual(self.observe().status, "conflict")
+
+    def test_only_node_results_remain_pending_not_conflict(self):
+        # A node diagnostic result for the witness is not admissible evidence
+        # and never satisfies verification; with no candidate result yet the
+        # honest status is pending work, exactly like no result at all.
+        node = self.result(identity={"target_sha": WITNESS, "request_id": "m4-acceptance",
+                                     "run_id": 3333, "run_attempt": 1, "request_kind": "node"})
+        self.journal.append(self.admit())
+        self.journal.append(node)
+        self.assertEqual(self.observe().status, "pending")
+        self.assertIsNone(self.consumer.reference)
+
     def test_a_result_without_its_unique_admission_conflicts(self):
         self.journal.append(self.result())
         self.assertEqual(self.observe().status, "conflict")
@@ -204,7 +257,8 @@ class ComposedReferenceTest(unittest.TestCase):
         self.journal._verified = None
         self.journal.append(self.admit())
         self.journal.append(self.result(identity={"target_sha": "f" * 40, "request_id": "batch-request",
-                                                  "run_id": self.EXECUTOR, "run_attempt": 1}))
+                                                  "run_id": self.EXECUTOR, "run_attempt": 1,
+                                                  "request_kind": "candidate"}))
         self.assertEqual(self.observe().status, "conflict")
         self.assertIsNone(self.consumer.reference)
 

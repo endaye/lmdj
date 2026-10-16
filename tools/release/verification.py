@@ -39,12 +39,62 @@ def _decode(reference):
     return document
 
 
+def _result_kind(result):
+    """The frozen request kind inside a journal result's closed reference.
+
+    Returns "unreadable" when the reference does not decode, and "unknown"
+    when a decoded document names no request kind at all (a verdict shape
+    older than the kind field). Both are inadmissible as candidate evidence:
+    a verdict that cannot prove it was a candidate request is never selected.
+    """
+    from scripts.ci.batch_runtime import decode_reference
+    try:
+        document = decode_reference(result.get("reference"))
+    except Exception:
+        return "unreadable"
+    if not isinstance(document, dict):
+        return "unreadable"
+    identity = document.get("identity")
+    if isinstance(identity, dict) and identity.get("request_kind") is not None:
+        return identity.get("request_kind")
+    request = document.get("request")
+    if isinstance(request, dict) and request.get("kind") is not None:
+        return request.get("kind")
+    return "unknown"
+
+
+def _candidate_results(events, witness, *, terminal_only):
+    """Candidate-kind results for the target; terminal_only preserves the
+    caller's own terminal semantics.
+
+    The complete-test-v2 policy admits exactly one passed, complete candidate
+    source per target; a kind=node diagnostic result for the same revision is
+    not an admissible source and must not collide with it. A result whose
+    reference does not decode fails closed instead of being skipped. Selection
+    never filters by terminal state on its own: a non-terminal candidate
+    result for the same target must still count for the caller's multiplicity
+    and not-proven-terminal refusals.
+    """
+    selected = []
+    for event in events:
+        if not (isinstance(event, dict) and event.get("type") == "result"
+                and isinstance(event.get("data"), dict) and event["data"].get("target") == witness):
+            continue
+        if terminal_only and event["data"].get("terminal") is not True:
+            continue
+        kind = _result_kind(event["data"])
+        if kind == "unreadable":
+            _fail("a batch result for the candidate target has an unreadable reference")
+        if kind == "unknown":
+            _fail("a batch result for the candidate target names no request kind")
+        if kind == "candidate":
+            selected.append(event["data"])
+    return selected
+
+
 def terminal_result(events, witness):
-    """The unique terminal batch result for the candidate witness, or None."""
-    results = [event["data"] for event in events
-               if isinstance(event, dict) and event.get("type") == "result"
-               and isinstance(event.get("data"), dict) and event["data"].get("target") == witness
-               and event["data"].get("terminal") is True]
+    """The unique terminal candidate batch result for the witness, or None."""
+    results = _candidate_results(events, witness, terminal_only=True)
     if not results:
         return None
     if len(results) > 1:
@@ -139,10 +189,12 @@ class BatchVerification:
         self.fresh_receipts = fresh_receipts
 
     def _result_for(self, events, witness):
-        # The terminal check lives in terminal_result so both selections agree.
-        results = [event["data"] for event in events
-                   if isinstance(event, dict) and event.get("type") == "result"
-                   and isinstance(event.get("data"), dict) and event["data"].get("target") == witness]
+        # The terminal check lives in terminal_result so both selections agree;
+        # only candidate-kind results are admissible sources, per policy, an
+        # unreadable authenticated reference fails closed, and the terminal
+        # filter stays with terminal_result so a non-terminal candidate result
+        # for the same target still refuses rather than being skipped.
+        results = _candidate_results(events, witness, terminal_only=False)
         if not results:
             return None
         if len(results) > 1:
