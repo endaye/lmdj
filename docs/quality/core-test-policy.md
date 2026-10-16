@@ -500,8 +500,10 @@ hosts, not a defect. Routing splits two ways:
   Retired Pre-heavy/PR Gate jobs are not PR admission or merge authority.
   The hosted policy retains macOS recovery and separately privileged exceptions.
 - **Self-hosted workload, addressed by role.** The four Web lanes — Web
-  Toolchain, Web Runtime Host, Creator and Web Runtime Lab — name
-  `ci-web-heavy` literally. The four general Linux jobs — Docs / static,
+  Toolchain, Web Runtime Host, Creator and Web Runtime Lab — run on the netcup
+  `ci-web-heavy` role unless `select-web-runner` hands them to the en-home
+  overflow runner (#2279, below); the netcup label set stays their literal
+  default. The four general Linux jobs — Docs / static,
   Architecture Portal, CI contract and Deploy contract — name
   `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
   Coverage and Core package — name `ci-core` literally. Architecture Portal
@@ -670,6 +672,24 @@ role label is added through the Runner API. Labels compare exactly; jq's
 `contains` would let `lmdj-mac-m1` satisfy `lmdj`. The selector's branches are
 executed against stubbed Runner API replies in
 `tests/build/ci_runner_fallback_test.py`.
+
+The four Web lanes overflow to the owner's en-home workstation since #2279. Its
+WSL2 runner (`win11-wsl-lmdj-linux`, Ubuntu 24.04 in the `LMDJ-Runner-Ubuntu`
+distribution) carries the host label `lmdj-wsl-enhome` and takes the Web lanes
+only while it also carries the role label `ci-web-overflow`.
+`select-web-runner` chooses it only while it is online, idle and admitted, with
+labels compared exactly; it then emits the en-home label set and the queue
+`lmdj-native-heavy-enhome`, so the Web lanes run in sequence there while netcup
+runs its native-heavy lanes. Every other case selects the netcup `ci-web-heavy`
+role and `lmdj-native-heavy-linux`: a busy, offline or unadmitted workstation, a
+missing token or a failed Runner API read. There is no hosted Linux fallback. A
+workstation is not always on, so the role label is the switch. Remove
+`ci-web-overflow` before taking it offline for long, because lanes already
+routed to it wait for it rather than moving. Its host state mirrors netcup's
+Web role: Playwright system libraries are installed once by root
+(`playwright install-deps chromium webkit`), and the runner environment names
+the persistent `LMDJ_EMSDK_CACHE_ROOT`, `LMDJ_BROWSER_CACHE_ROOT` and
+`npm_config_cache` directories, so `install-system-deps` stays `"false"`.
 
 The nightly Release stress lane is trusted native workload on the bare-metal
 macOS M1 runner (`self-hosted, macOS, ARM64, lmdj, lmdj-mac-m1`), not on `ci-core`: it runs at

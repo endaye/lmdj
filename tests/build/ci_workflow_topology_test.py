@@ -77,6 +77,13 @@ TRUST_CONDITION = "needs.change-scope.outputs.trusted-head == 'true'"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
+# Since #2279 the four Web lanes are routed by `select-web-runner`: the
+# en-home WSL overflow runner while it is online, idle and admitted, otherwise
+# the netcup `ci-web-heavy` role, whose label set is also the literal default.
+WEB_SELECTED_ROUTE = (
+    "runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || "
+    "'[\"self-hosted\",\"Linux\",\"X64\",\"lmdj-linux\",\"lmdj-linux-pool\",\"ci-web-heavy\"]') }}"
+)
 # Lanes cut over to the dedicated netcup `ci-web-heavy` role so far, mapped to
 # the lane each one runs. The migration is proven one lane at a time, so this
 # stays an exact set: an unreviewed extra `ci-web-heavy` route is a topology
@@ -156,6 +163,7 @@ RELEASE_NODE_CONSUMERS = (
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
 # Review is exclusively in pr-review.yml; Core CI has no non-lane reviewers.
 GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "select-macos-runner",
+                              "select-web-runner",
                               "core-macos", "core-asan-macos", "batch-verdict")
 HEAVY_JOBS = (
     "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
@@ -603,7 +611,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 )
 
     def test_cut_over_lanes_use_the_static_netcup_role_not_the_selector(self) -> None:
-        """All four Web lanes are cut over, by role and not by selector.
+        """All four Web lanes are cut over; #2279 routes them by `select-web-runner`.
+
+        The selector chooses between self-hosted Linux hosts only, and the
+        netcup `ci-web-heavy` set stays the literal default.
 
         `select-ubuntu-runner` resolves once per run and can fall back to paid
         Ubuntu. The dedicated role must queue instead, so each cut-over lane
@@ -614,8 +625,8 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         for job_name, lane in WEB_HEAVY_JOBS.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertEqual(self.job_needs(job_name), {"change-scope"})
-                self.assertIn(WEB_HEAVY_ROLE, job)
+                self.assertEqual(self.job_needs(job_name), {"change-scope", "select-web-runner"})
+                self.assertIn(WEB_SELECTED_ROUTE, job)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(TRUST_CONDITION, job)
@@ -626,8 +637,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 else:
                     self.assertIn(f"lane: {lane}", job)
                     self.assertIn('install-system-deps: "false"', job)
+        # Each lane's default route plus the selector's netcup branch.
         self.assertEqual(
-            self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
+            self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS) + 1
         )
 
     def test_general_workload_lanes_use_the_dual_node_role_not_the_selector(self) -> None:
@@ -772,10 +784,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_creator_no_longer_needs_web_toolchain_or_core(self) -> None:
         job = self.workflow_job("creator-web")
-        self.assertEqual(self.job_needs("creator-web"), {"change-scope"})
+        self.assertEqual(self.job_needs("creator-web"), {"change-scope", "select-web-runner"})
         self.assertNotIn("web-toolchain-conformance", job)
         self.assertNotIn("core-ubuntu", job)
-        self.assertIn(WEB_HEAVY_ROLE, job)
+        self.assertIn(WEB_SELECTED_ROUTE, job)
 
     def test_the_linux_runner_selector_no_longer_exists(self) -> None:
         """The guard shrank to nothing, so the job goes rather than idles.

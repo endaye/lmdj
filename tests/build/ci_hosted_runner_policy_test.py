@@ -74,9 +74,18 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
         routine = {"ci.yml", "pr-contract.yml", "self-test-report.yml",
                    "incremental-completion.yml", "release-audit.yml"}
         macos = {("ci.yml", "macos-primary"), ("ci.yml", "macos-fallback")}
+        # The Web lanes are dynamic since #2279, but `select-web-runner` only
+        # ever emits self-hosted label sets; that is pinned by executing it in
+        # ci_runner_fallback_test.py, so dynamic here is not hosted spend.
+        web_selected = {("ci.yml", job_id) for job_id in (
+            "web-toolchain-conformance", "web-runtime-host", "creator-web", "web-runtime-lab")}
         for job in all_jobs():
             key = (job.workflow, job.job_id)
             if job.workflow not in routine or job.is_reusable_call or key in macos:
+                continue
+            if key in web_selected:
+                with self.subTest(workflow=job.workflow, job=job.job_id):
+                    self.assertTrue(job.is_dynamic)
                 continue
             with self.subTest(workflow=job.workflow, job=job.job_id):
                 self.assertTrue(job.is_self_hosted and not job.is_dynamic,

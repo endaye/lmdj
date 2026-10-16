@@ -21,6 +21,17 @@ ASSERT_GATE = REPO_ROOT / ".github/scripts/assert-macos-gate-result.sh"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
+# Since #2279 the four Web lanes are routed by `select-web-runner`: the
+# en-home WSL overflow runner while it is online, idle and admitted, otherwise
+# the netcup `ci-web-heavy` role, whose label set is also the literal default.
+WEB_SELECTED_ROUTE = (
+    "runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || "
+    "'[\"self-hosted\",\"Linux\",\"X64\",\"lmdj-linux\",\"lmdj-linux-pool\",\"ci-web-heavy\"]') }}"
+)
+# Labels the en-home WSL runner carries once admitted for the Web lanes.
+ENHOME_ADMITTED = ["self-hosted", "Linux", "X64", "lmdj-linux", "lmdj-linux-pool",
+                   "wsl", "win11-host", "lmdj-wsl-enhome", "ci-web-overflow"]
+NETCUP_WEB_LABELS = '["self-hosted","Linux","X64","lmdj-linux","lmdj-linux-pool","ci-web-heavy"]'
 # Lanes cut over to the dedicated netcup role, mapped to the lane each one
 # runs. Cutting over must not silently reroute a lane's workload.
 WEB_HEAVY_LANES = {
@@ -62,6 +73,7 @@ GENERAL_CI_ONLY_JOBS = ("ci-contract", "deploy-contract")
 # where they run and not of what they run.
 # Reviews use a separate workflow and are not product jobs on this role.
 GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "select-macos-runner",
+                              "select-web-runner",
                               "core-macos", "core-asan-macos", "batch-verdict")
 GENERAL_PROOFS = {
     "docs-static": 'run: git diff --check "$BASE_SHA...$HEAD_SHA"',
@@ -163,7 +175,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertEqual(source.count("Runner selection inventory:"), 1)
         self.assertIn("endaye-mbp-m4-pro", source)
         self.assertEqual(source.count("PRIMARY_RUNNER_NAME:"), 1)
-        self.assertEqual(source.count("OVERFLOW_RUNNER_NAME:"), 1)
+        self.assertEqual(len(re.findall(r"(?m)^\s+OVERFLOW_RUNNER_NAME:", source)), 1)
         self.assertNotRegex(source, r"(?m)^\s+RUNNER_NAME:")
         self.assertNotIn('"$RUNNER_NAME"', source)
 
@@ -204,10 +216,24 @@ class CiRunnerFallbackTest(unittest.TestCase):
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn("select-ubuntu-runner", source)
         self.assertNotIn("Select Ubuntu runner", source)
-        self.assertEqual(source.count("api.github.com/repos"), 1)
+        # Two selectors read the Runner API: macOS, whose hosted fallback is
+        # the Owner-accepted one, and Web (#2279), which may only choose
+        # between self-hosted Linux hosts.
+        self.assertEqual(source.count("api.github.com/repos"), 2)
         self.assertEqual(
-            source.count("secrets.SELF_HOSTED_RUNNER_READ_TOKEN"), 1
+            source.count("secrets.SELF_HOSTED_RUNNER_READ_TOKEN"), 2
         )
+        web_selector = self.workflow_job("select-web-runner")
+        self.assertIn(
+            "WEB_RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}",
+            web_selector,
+        )
+        for hosted in ("ubuntu-", "macos-", "windows-", "select_hosted"):
+            self.assertNotIn(
+                hosted, web_selector,
+                "why: the Web selector may only choose self-hosted Linux hosts; "
+                "remedy: fall back to the netcup ci-web-heavy role",
+            )
         macos_selector = self.workflow_job("select-macos-runner")
         self.assertIn("actions/runners", macos_selector)
         self.assertIn(
@@ -216,7 +242,11 @@ class CiRunnerFallbackTest(unittest.TestCase):
         )
 
     def test_cut_over_web_lanes_are_pinned_to_the_netcup_web_heavy_role(self) -> None:
-        """All four Web lanes now use the CI-only netcup node.
+        """All four Web lanes use the netcup node unless en-home takes them.
+
+        Since #2279 `select-web-runner` resolves the route; netcup's literal
+        `ci-web-heavy` label set is both its fallback and the expression's
+        default, so the lanes still never divert to paid runners.
 
         The role label set is static, not selector-resolved. `ci-web-heavy`
         exists only on the dedicated node, so a busy or absent role queues a
@@ -228,8 +258,8 @@ class CiRunnerFallbackTest(unittest.TestCase):
         for job_name, lane in WEB_HEAVY_LANES.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn(WEB_HEAVY_ROLE, job)
-                self.assertIn("needs: change-scope", job)
+                self.assertIn(WEB_SELECTED_ROUTE, job)
+                self.assertIn("needs: [change-scope, select-web-runner]", job)
                 self.assertNotIn("needs: select-ubuntu-runner", job)
                 self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
@@ -492,6 +522,91 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertEqual(selected["runner"], '["macos-latest"]')
         self.assertEqual(selected["queue"], "lmdj-native-heavy-macos-m1")
         self.assertEqual(selected["self-hosted"], "false")
+
+    def select_web(self, *runners: dict, token: str = "token", api_ok: bool = True) -> dict[str, str]:
+        """Run the real Web selector against a stubbed Runner API reply."""
+        selector = self.workflow_job("select-web-runner")
+        script = re.search(r"        run: \|\n(?P<body>.*)\Z", selector, flags=re.DOTALL)
+        self.assertIsNotNone(script, "select-web-runner has no run script")
+        assert script is not None
+        body = "\n".join(
+            line[10:] if line.startswith(" " * 10) else line
+            for line in script.group("body").splitlines()
+        )
+        name = re.search(r"(?m)^          WEB_OVERFLOW_RUNNER_NAME: (\S+)$", selector)
+        self.assertIsNotNone(name)
+        assert name is not None
+        with tempfile.TemporaryDirectory() as temporary:
+            stub = Path(temporary) / "curl"
+            stub.write_text(
+                '#!/usr/bin/env bash\n[ "$API_OK" = 1 ] || exit 22\nprintf %s "$RUNNER_REPLY"\n',
+                encoding="utf-8",
+            )
+            stub.chmod(0o755)
+            output = Path(temporary) / "output"
+            output.write_text("", encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                PATH=f"{temporary}{os.pathsep}{environment['PATH']}",
+                REPOSITORY="endaye/lmdj",
+                WEB_OVERFLOW_RUNNER_NAME=name.group(1),
+                WEB_RUNNER_READ_TOKEN=token,
+                GITHUB_OUTPUT=str(output),
+                API_OK="1" if api_ok else "0",
+                RUNNER_REPLY=json.dumps(
+                    {"total_count": len(runners),
+                     "runners": [{"name": r["name"], "status": r["status"], "busy": r["busy"],
+                                  "labels": [{"name": label} for label in r["labels"]]}
+                                 for r in runners]}
+                ),
+            )
+            result = subprocess.run(
+                ["bash", "-c", body], env=environment, check=False,
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return dict(
+                line.split("=", 1)
+                for line in output.read_text(encoding="utf-8").splitlines()
+                if line
+            )
+
+    def test_web_selector_prefers_an_idle_admitted_enhome_runner(self) -> None:
+        """en-home takes the Web lanes only while online, idle and admitted (#2279).
+
+        Its route and queue travel together: the en-home label set and
+        `lmdj-native-heavy-enhome`, so the lanes run beside netcup's
+        native-heavy queue rather than in it.
+        """
+        selected = self.select_web(
+            self.mac("win11-wsl-lmdj-linux", "online", False, ENHOME_ADMITTED))
+        self.assertEqual(
+            selected["runner"],
+            '["self-hosted","Linux","X64","lmdj-wsl-enhome","ci-web-overflow"]')
+        self.assertEqual(selected["queue"], "lmdj-native-heavy-enhome")
+
+    def test_web_selector_falls_back_to_netcup_never_to_hosted(self) -> None:
+        """Every unavailable branch selects the netcup Web role and its queue.
+
+        A busy, offline or unadmitted workstation, a missing token or a
+        failed Runner API read all fall back to netcup. Labels compare
+        exactly, so `ci-web-overflow-pending` does not admit en-home.
+        """
+        unadmitted = [label for label in ENHOME_ADMITTED if label != "ci-web-overflow"]
+        cases = {
+            "busy": self.select_web(self.mac("win11-wsl-lmdj-linux", "online", True, ENHOME_ADMITTED)),
+            "offline": self.select_web(self.mac("win11-wsl-lmdj-linux", "offline", False, ENHOME_ADMITTED)),
+            "unadmitted": self.select_web(self.mac("win11-wsl-lmdj-linux", "online", False, unadmitted)),
+            "substring": self.select_web(self.mac(
+                "win11-wsl-lmdj-linux", "online", False, unadmitted + ["ci-web-overflow-pending"])),
+            "absent": self.select_web(),
+            "no token": self.select_web(token=""),
+            "api down": self.select_web(api_ok=False),
+        }
+        for case, selected in cases.items():
+            with self.subTest(case=case):
+                self.assertEqual(selected["runner"], NETCUP_WEB_LABELS)
+                self.assertEqual(selected["queue"], "lmdj-native-heavy-linux")
 
     def test_macos_selector_still_falls_back_when_no_trusted_runner_is_online(self) -> None:
         """The surviving fallback is macOS-only and deliberately so.

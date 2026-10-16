@@ -35,6 +35,11 @@ MACOS_M4_HEAVY_QUEUE = "lmdj-native-heavy-macos-m4"
 SELECTED_MAC_QUEUE = (
     "${{ needs.select-macos-runner.outputs.queue || 'lmdj-native-heavy-macos-m1' }}"
 )
+# The Web lanes queue on the host `select-web-runner` chose (#2279): netcup's
+# `lmdj-native-heavy-linux`, or en-home's `lmdj-native-heavy-enhome`.
+SELECTED_WEB_QUEUE = (
+    "${{ needs.select-web-runner.outputs.queue || 'lmdj-native-heavy-linux' }}"
+)
 ACTION_ROOT = REPO_ROOT / ".github/actions"
 REFERENCE_RENDER = "python3 tests/fixtures/golden/reference_render.py"
 CORE_PACKAGE = "scripts/core.sh package"
@@ -52,6 +57,13 @@ FIXTURE_REHYDRATION_NOTE = (
 )
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
+)
+# Since #2279 the four Web lanes are routed by `select-web-runner`: the
+# en-home WSL overflow runner while it is online, idle and admitted, otherwise
+# the netcup `ci-web-heavy` role, whose label set is also the literal default.
+WEB_SELECTED_ROUTE = (
+    "runs-on: ${{ fromJSON(needs.select-web-runner.outputs.runner || "
+    "'[\"self-hosted\",\"Linux\",\"X64\",\"lmdj-linux\",\"lmdj-linux-pool\",\"ci-web-heavy\"]') }}"
 )
 CORE_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
@@ -239,14 +251,15 @@ class CiBuildAccelerationTest(unittest.TestCase):
             # native-heavy suite; unqueued, a full candidate batch's own
             # concurrency flaked their fixed browser budgets three runs in a
             # row (37019332485, 37037025368, 37071379300).
-            "web-toolchain-conformance": LINUX_HEAVY_QUEUE,
-            "web-runtime-host": LINUX_HEAVY_QUEUE,
-            "creator-web": LINUX_HEAVY_QUEUE,
-            "web-runtime-lab": LINUX_HEAVY_QUEUE,
+            "web-toolchain-conformance": SELECTED_WEB_QUEUE,
+            "web-runtime-host": SELECTED_WEB_QUEUE,
+            "creator-web": SELECTED_WEB_QUEUE,
+            "web-runtime-lab": SELECTED_WEB_QUEUE,
         }
         self.assertEqual(
             source.count("group: lmdj-native-heavy")
-            + source.count(f"group: {SELECTED_MAC_QUEUE}"),
+            + source.count(f"group: {SELECTED_MAC_QUEUE}")
+            + source.count(f"group: {SELECTED_WEB_QUEUE}"),
             len(capacity_jobs),
             "why: every job that can contend with timing-sensitive native work "
             "on a shared machine must join that host's capacity queue; remedy: "
@@ -302,7 +315,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
         work, and a revived host-agnostic group re-serialises both hosts. It
         reads every workflow, because a member outside `ci.yml` is a member.
         """
-        allowed = {LINUX_HEAVY_QUEUE, MACOS_M1_HEAVY_QUEUE, SELECTED_MAC_QUEUE}
+        allowed = {LINUX_HEAVY_QUEUE, MACOS_M1_HEAVY_QUEUE, SELECTED_MAC_QUEUE, SELECTED_WEB_QUEUE}
         members = 0
         for workflow in sorted(WORKFLOW_ROOT.glob("*.yml")):
             source = workflow.read_text(encoding="utf-8")
@@ -313,7 +326,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
             )
             for job_name, body in zip(jobs[1::2], jobs[2::2]):
                 groups = re.findall(
-                    r"(?m)^      group: (lmdj-native-heavy\S*|\$\{\{ needs\.select-macos-runner.*)$",
+                    r"(?m)^      group: (lmdj-native-heavy\S*|\$\{\{ needs\.select-(?:macos|web)-runner.*)$",
                     body,
                 )
                 if not groups:
@@ -344,6 +357,10 @@ class CiBuildAccelerationTest(unittest.TestCase):
                         route = callee_routes[0].strip()
                     if "select-macos-runner" in route:
                         expected = SELECTED_MAC_QUEUE
+                    elif "select-web-runner" in route:
+                        # The selector pairs each route with its host's queue;
+                        # tests/build/ci_runner_fallback_test.py executes it.
+                        expected = SELECTED_WEB_QUEUE
                     else:
                         # Exact labels: a substring test would let a label
                         # such as `ci-only-host-staging` satisfy `ci-only-host`.
@@ -452,7 +469,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
         for job_name, lane in WEB_HEAVY_LANES.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn(WEB_HEAVY_ROLE, job)
+                self.assertIn(WEB_SELECTED_ROUTE, job)
                 self.assertNotIn('install-system-deps: "true"', job)
                 if job_name in WEB_HEAVY_DIRECT_PROOFS:
                     self.assertIn(WEB_HEAVY_DIRECT_PROOFS[job_name], job)
