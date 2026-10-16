@@ -1011,7 +1011,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "creator-web": 55,
             # Holds lmdj-native-heavy-linux; at most 18 s over 214 runs.
             "web-runtime-lab": 10,
-            "macos-primary": 30,
+            # Owner budget decision (#2283, 2026-10-16): M1 native ASan
+            # CTest reached 1497 s; a hot-cache whole job took 29m34s.
+            "macos-primary": 40,
             # Thin selection/adjudication jobs; each observed under 30 s.
             "select-macos-runner": 5,
             "core-macos": 5,
@@ -1020,7 +1022,12 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         for job_name, minutes in expected.items():
             with self.subTest(job=job_name):
                 self.assertIn(
-                    f"timeout-minutes: {minutes}", self.workflow_job(job_name)
+                    f"timeout-minutes: {minutes}", self.workflow_job(job_name),
+                    msg=(
+                        f"why: {job_name} differs from its recorded hang-detection "
+                        f"budget; remedy: restore timeout-minutes: {minutes}, or "
+                        "record a measured owner budget decision before changing the pin"
+                    ),
                 )
         self.assertIn("timeout-minutes: 15", self.workflow_job("portal", portal=True))
 
