@@ -108,7 +108,7 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
 
     def test_control_jobs_use_the_pool_separate_from_heavy_executors(self) -> None:
         control = {
-            "ci.yml": {"change-scope", "select-macos-runner", "core-macos", "core-asan-macos", "batch-verdict"},
+            "ci.yml": {"change-scope", "select-macos-runner", "select-web-runner", "core-macos", "core-asan-macos", "batch-verdict"},
             "self-test-report.yml": {"controller"},
             "incremental-completion.yml": {"relay"},
             "release-audit.yml": {"audit"},
