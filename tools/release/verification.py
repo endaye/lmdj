@@ -62,23 +62,28 @@ def _result_kind(result):
     return None
 
 
-def _candidate_results(events, witness):
-    """Terminal results whose closed reference names a candidate request.
+def _candidate_results(events, witness, *, terminal_only):
+    """Candidate-kind results for the target; terminal_only preserves the
+    caller's own terminal semantics.
 
     The complete-test-v2 policy admits exactly one passed, complete candidate
     source per target; a kind=node diagnostic result for the same revision is
     not an admissible source and must not collide with it. A result whose
-    reference does not decode fails closed instead of being skipped.
+    reference does not decode fails closed instead of being skipped. Selection
+    never filters by terminal state on its own: a non-terminal candidate
+    result for the same target must still count for the caller's multiplicity
+    and not-proven-terminal refusals.
     """
     selected = []
     for event in events:
         if not (isinstance(event, dict) and event.get("type") == "result"
-                and isinstance(event.get("data"), dict) and event["data"].get("target") == witness
-                and event["data"].get("terminal") is True):
+                and isinstance(event.get("data"), dict) and event["data"].get("target") == witness):
+            continue
+        if terminal_only and event["data"].get("terminal") is not True:
             continue
         kind = _result_kind(event["data"])
         if kind is None:
-            _fail("a terminal batch result for the candidate target has an unreadable reference")
+            _fail("a batch result for the candidate target has an unreadable reference")
         if kind == "candidate":
             selected.append(event["data"])
     return selected
@@ -86,7 +91,7 @@ def _candidate_results(events, witness):
 
 def terminal_result(events, witness):
     """The unique terminal candidate batch result for the witness, or None."""
-    results = _candidate_results(events, witness)
+    results = _candidate_results(events, witness, terminal_only=True)
     if not results:
         return None
     if len(results) > 1:
@@ -182,9 +187,11 @@ class BatchVerification:
 
     def _result_for(self, events, witness):
         # The terminal check lives in terminal_result so both selections agree;
-        # only candidate-kind results are admissible sources, per policy, and
-        # an unreadable authenticated reference fails closed.
-        results = _candidate_results(events, witness)
+        # only candidate-kind results are admissible sources, per policy, an
+        # unreadable authenticated reference fails closed, and the terminal
+        # filter stays with terminal_result so a non-terminal candidate result
+        # for the same target still refuses rather than being skipped.
+        results = _candidate_results(events, witness, terminal_only=False)
         if not results:
             return None
         if len(results) > 1:

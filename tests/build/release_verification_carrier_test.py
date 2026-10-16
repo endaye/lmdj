@@ -205,6 +205,17 @@ class ComposedReferenceTest(unittest.TestCase):
         with self.assertRaises(VerificationError):
             terminal_result([self.result(), self.result()], WITNESS)
 
+    def test_a_non_terminal_candidate_result_alongside_a_passed_one_still_refuses(self):
+        # The kind filter must not silently skip a candidate result that has
+        # not proven terminal: the observe path refuses it (multiplicity or
+        # not-proven-terminal), exactly as the target-only selector did.
+        unfinished = self.result(terminal=False)
+        self.journal.append(self.admit())
+        self.journal.append(unfinished)
+        self.journal.append(self.result())
+        self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
     def test_a_result_without_its_unique_admission_conflicts(self):
         self.journal.append(self.result())
         self.assertEqual(self.observe().status, "conflict")
