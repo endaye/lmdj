@@ -124,7 +124,8 @@ class ComposedReferenceTest(unittest.TestCase):
     def result(self, *, identity=None, status="passed", terminal=True):
         from scripts.ci.batch_runtime import encode_reference
         verdict = {"identity": identity or {"target_sha": WITNESS, "request_id": "batch-request",
-                                            "run_id": self.EXECUTOR, "run_attempt": 1},
+                                            "run_id": self.EXECUTOR, "run_attempt": 1,
+                                            "request_kind": "candidate"},
                    "evidence_digest": "5" * 64, "status": status}
         return {"id": "result-1", "epoch": "one", "generation": 2, "type": "result",
                 "data": {"request_id": "batch-request", "run": {"run_id": self.EXECUTOR, "attempt": 1},
@@ -190,6 +191,20 @@ class ComposedReferenceTest(unittest.TestCase):
         self.assertIsNone(terminal_result([event], WITNESS))
         self.assertEqual(terminal_result([self.result()], WITNESS)["target"], WITNESS)
 
+    def test_a_node_diagnostic_result_never_collides_with_the_candidate_result(self):
+        # complete-test-v2 admits exactly one passed candidate source; a
+        # kind=node diagnostic acceptance for the same revision (observed
+        # live: m4-macos-gates-acceptance beside t1-full-candidate) is not an
+        # admissible source and must not make the target ambiguous.
+        from tools.release.verification import terminal_result, VerificationError
+        node = self.result(identity={"target_sha": WITNESS, "request_id": "m4-acceptance",
+                                     "run_id": 3333, "run_attempt": 1, "request_kind": "node"})
+        self.assertIsNone(terminal_result([node], WITNESS))
+        self.assertEqual(terminal_result([node, self.result()], WITNESS)["request_id"], "batch-request")
+        # Two candidate-kind results for one target remain a hard conflict.
+        with self.assertRaises(VerificationError):
+            terminal_result([self.result(), self.result()], WITNESS)
+
     def test_a_result_without_its_unique_admission_conflicts(self):
         self.journal.append(self.result())
         self.assertEqual(self.observe().status, "conflict")
@@ -204,7 +219,8 @@ class ComposedReferenceTest(unittest.TestCase):
         self.journal._verified = None
         self.journal.append(self.admit())
         self.journal.append(self.result(identity={"target_sha": "f" * 40, "request_id": "batch-request",
-                                                  "run_id": self.EXECUTOR, "run_attempt": 1}))
+                                                  "run_id": self.EXECUTOR, "run_attempt": 1,
+                                                  "request_kind": "candidate"}))
         self.assertEqual(self.observe().status, "conflict")
         self.assertIsNone(self.consumer.reference)
 

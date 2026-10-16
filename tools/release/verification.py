@@ -39,12 +39,54 @@ def _decode(reference):
     return document
 
 
+def _result_kind(result):
+    """The frozen request kind inside a journal result's closed reference.
+
+    Returns None when the reference does not decode: that is an
+    authenticated-but-malformed payload, which callers must fail closed on
+    rather than silently skip.
+    """
+    from scripts.ci.batch_runtime import decode_reference
+    try:
+        document = decode_reference(result.get("reference"))
+    except Exception:
+        return None
+    if not isinstance(document, dict):
+        return None
+    identity = document.get("identity")
+    if isinstance(identity, dict) and identity.get("request_kind") is not None:
+        return identity.get("request_kind")
+    request = document.get("request")
+    if isinstance(request, dict):
+        return request.get("kind")
+    return None
+
+
+def _candidate_results(events, witness):
+    """Terminal results whose closed reference names a candidate request.
+
+    The complete-test-v2 policy admits exactly one passed, complete candidate
+    source per target; a kind=node diagnostic result for the same revision is
+    not an admissible source and must not collide with it. A result whose
+    reference does not decode fails closed instead of being skipped.
+    """
+    selected = []
+    for event in events:
+        if not (isinstance(event, dict) and event.get("type") == "result"
+                and isinstance(event.get("data"), dict) and event["data"].get("target") == witness
+                and event["data"].get("terminal") is True):
+            continue
+        kind = _result_kind(event["data"])
+        if kind is None:
+            _fail("a terminal batch result for the candidate target has an unreadable reference")
+        if kind == "candidate":
+            selected.append(event["data"])
+    return selected
+
+
 def terminal_result(events, witness):
-    """The unique terminal batch result for the candidate witness, or None."""
-    results = [event["data"] for event in events
-               if isinstance(event, dict) and event.get("type") == "result"
-               and isinstance(event.get("data"), dict) and event["data"].get("target") == witness
-               and event["data"].get("terminal") is True]
+    """The unique terminal candidate batch result for the witness, or None."""
+    results = _candidate_results(events, witness)
     if not results:
         return None
     if len(results) > 1:
@@ -139,10 +181,10 @@ class BatchVerification:
         self.fresh_receipts = fresh_receipts
 
     def _result_for(self, events, witness):
-        # The terminal check lives in terminal_result so both selections agree.
-        results = [event["data"] for event in events
-                   if isinstance(event, dict) and event.get("type") == "result"
-                   and isinstance(event.get("data"), dict) and event["data"].get("target") == witness]
+        # The terminal check lives in terminal_result so both selections agree;
+        # only candidate-kind results are admissible sources, per policy, and
+        # an unreadable authenticated reference fails closed.
+        results = _candidate_results(events, witness)
         if not results:
             return None
         if len(results) > 1:
