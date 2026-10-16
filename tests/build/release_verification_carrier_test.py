@@ -210,9 +210,11 @@ class ComposedReferenceTest(unittest.TestCase):
         # not proven terminal: the observe path refuses it (multiplicity or
         # not-proven-terminal), exactly as the target-only selector did.
         unfinished = self.result(terminal=False)
+        finished = self.result()
+        finished["id"], finished["generation"] = "result-2", 3
         self.journal.append(self.admit())
         self.journal.append(unfinished)
-        self.journal.append(self.result())
+        self.journal.append(finished)
         self.assertEqual(self.observe().status, "conflict")
         self.assertIsNone(self.consumer.reference)
 
