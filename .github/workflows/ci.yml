@@ -567,15 +567,16 @@ jobs:
 
           # Admitted only while online and idle with its host label and
           # `ci-web-overflow`, compared exactly. A busy workstation is not
-          # waited for: netcup is always there and the lanes are long.
+          # waited for: netcup is always there and the lanes are long. One
+          # list is both what admission checks and what the lanes route to.
+          enhome_labels='["self-hosted","Linux","X64","lmdj-wsl-enhome","ci-web-overflow"]'
           # An unreadable inventory falls back to netcup rather than failing
           # the selector and with it every Web lane.
           if ! overflow_state="$(
-            jq --raw-output --arg runner_name "$WEB_OVERFLOW_RUNNER_NAME" '
+            jq --raw-output --arg runner_name "$WEB_OVERFLOW_RUNNER_NAME" --argjson required "$enhome_labels" '
               [ .runners[]?
                 | select(.name == $runner_name and .status == "online")
-                | select((["self-hosted", "Linux", "X64", "lmdj-wsl-enhome", "ci-web-overflow"]
-                          - [.labels[].name]) == [])
+                | select(($required - [.labels[].name]) == [])
                 | .busy ]
               | if length != 1 then "absent" elif .[0] then "busy" else "idle" end' \
               <<<"$web_runners"
@@ -587,7 +588,7 @@ jobs:
 
           if [[ "$overflow_state" == "idle" ]]; then
             {
-              echo 'runner=["self-hosted","Linux","X64","lmdj-wsl-enhome","ci-web-overflow"]'
+              echo "runner=$enhome_labels"
               echo 'queue=lmdj-native-heavy-enhome'
               echo 'reason=idle admitted en-home overflow'
             } >>"$GITHUB_OUTPUT"
