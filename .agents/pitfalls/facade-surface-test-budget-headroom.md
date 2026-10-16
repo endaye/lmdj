@@ -30,6 +30,9 @@ recurrences:
   - date: 2026-10-15
     occurrence: https://github.com/endaye/lmdj/actions/runs/38776156275
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-16
+    occurrence: https://github.com/endaye/lmdj/issues/2283
+    observed_by: Codex (GPT-6)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -103,6 +106,15 @@ at 201.8 s (run 38776156275). The owner raised that limit from 35 to 55
 minutes; making the dominant stress registration cheaper without weakening it
 is #2306. Under a sanitizer, read each stress registration's own duration, not
 only its Release time.
+
+The macOS primary job repeated this shape in #2283: after #2272 had already
+parallelized count-in rounds, M1 job `116906584110` still took 29m34s of its
+30-minute budget with 100% ccache hits. Native ASan CTest consumed 1497.37 s;
+both configure/build phases together took only 51.38 s. Faster compilation
+cannot remove that test work. The owner calibrated this job to 40 minutes on
+2026-10-16, retaining every test deadline and selection. Re-evaluate when any
+M1 `Run macOS Core gates` step exceeds 35 minutes: optimize the tests next,
+not the job limit. The remaining cost work belongs to #2306 and #2284.
 
 Splitting into more registrations only helps a runner that executes them
 concurrently, and the stress jobs do not: `scripts/core.sh test tsan stress`

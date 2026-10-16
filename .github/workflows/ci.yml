@@ -914,7 +914,7 @@ jobs:
     needs: [change-scope, select-macos-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
     runs-on: ${{ fromJSON(needs.select-macos-runner.outputs.runner) }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     # Release stress moved to this same bare-metal runner in #1558 because its
     # 2.67 ms thread-CPU deadline cannot survive a hypervisor; a gate compiling
     # beside it would reintroduce exactly the overruns that move eliminated.

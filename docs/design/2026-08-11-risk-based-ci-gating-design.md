@@ -436,7 +436,7 @@ smoke 和 Netlify Preview 继续保持独立事件边界；main push 的 Portal 
 
 - 编译、Proof、测试、sanitizer 和 Coverage 失败是最终语义结果，不自动 retry；
 - selector 在开始前选择现有 self-hosted 或既有 hosted fallback；
-- macOS self-hosted checkout/setup/通信/30 分钟 job limit 若未发布终态，可运行现有一次 hosted
+- macOS self-hosted checkout/setup/通信/40 分钟 primary job limit 若未发布终态，可运行现有一次 hosted
   fallback；
 - macOS 已发布准备、Core Proof 或 sanitizer failure 不触发 fallback；
 - 本设计不增加 Linux hosted retry。Linux job timeout 阻断当前 PR，由人工诊断或显式 rerun；
@@ -458,7 +458,7 @@ SLO 只用于衡量与容量决策，不阻断 merge，也不作为测试 assert
 | Web Toolchain | 15 分钟 | 35 分钟 |
 | Web Runtime Host | 15 分钟 | 45 分钟 |
 | Creator | 15 分钟 | 35 分钟 |
-| macOS primary | 10 分钟 | 保持 30 分钟 |
+| macOS primary | 10 分钟 | 40 分钟（[2026-10-16 预算决定](../prd/decisions/2026-10-16-macos-gates-job-budget.md)） |
 
 docs-only Ready PR 的端到端非阻断 SLO 是五分钟，明确包含 Change Scope、job dispatch、
 Docs/static 和 PR Gate，不把表内各 job SLO 简单相加当作新的硬锁。
