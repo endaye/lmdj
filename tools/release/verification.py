@@ -42,24 +42,25 @@ def _decode(reference):
 def _result_kind(result):
     """The frozen request kind inside a journal result's closed reference.
 
-    Returns None when the reference does not decode: that is an
-    authenticated-but-malformed payload, which callers must fail closed on
-    rather than silently skip.
+    Returns "unreadable" when the reference does not decode, and "unknown"
+    when a decoded document names no request kind at all (a verdict shape
+    older than the kind field). Both are inadmissible as candidate evidence:
+    a verdict that cannot prove it was a candidate request is never selected.
     """
     from scripts.ci.batch_runtime import decode_reference
     try:
         document = decode_reference(result.get("reference"))
     except Exception:
-        return None
+        return "unreadable"
     if not isinstance(document, dict):
-        return None
+        return "unreadable"
     identity = document.get("identity")
     if isinstance(identity, dict) and identity.get("request_kind") is not None:
         return identity.get("request_kind")
     request = document.get("request")
-    if isinstance(request, dict):
+    if isinstance(request, dict) and request.get("kind") is not None:
         return request.get("kind")
-    return None
+    return "unknown"
 
 
 def _candidate_results(events, witness, *, terminal_only):
@@ -82,8 +83,10 @@ def _candidate_results(events, witness, *, terminal_only):
         if terminal_only and event["data"].get("terminal") is not True:
             continue
         kind = _result_kind(event["data"])
-        if kind is None:
+        if kind == "unreadable":
             _fail("a batch result for the candidate target has an unreadable reference")
+        if kind == "unknown":
+            _fail("a batch result for the candidate target names no request kind")
         if kind == "candidate":
             selected.append(event["data"])
     return selected

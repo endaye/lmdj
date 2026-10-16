@@ -192,6 +192,7 @@ class ComposedReferenceTest(unittest.TestCase):
         self.assertEqual(terminal_result([self.result()], WITNESS)["target"], WITNESS)
 
     def test_a_node_diagnostic_result_never_collides_with_the_candidate_result(self):
+        from tools.release.verification import terminal_result, VerificationError
         # complete-test-v2 admits exactly one passed candidate source; a
         # kind=node diagnostic acceptance for the same revision (observed
         # live: m4-macos-gates-acceptance beside t1-full-candidate) is not an
@@ -216,6 +217,30 @@ class ComposedReferenceTest(unittest.TestCase):
         self.journal.append(unfinished)
         self.journal.append(finished)
         self.assertEqual(self.observe().status, "conflict")
+        self.assertIsNone(self.consumer.reference)
+
+    def test_a_kindless_legacy_verdict_is_inadmissible_and_conflicts(self):
+        # A verdict shape older than the request-kind field can never prove
+        # it was a candidate request; it conflicts rather than being selected
+        # or silently skipped, and the refusal names the missing kind.
+        from tools.release.verification import terminal_result, VerificationError
+        legacy = self.result(identity={"target_sha": WITNESS, "request_id": "legacy",
+                                       "run_id": self.EXECUTOR, "run_attempt": 1})
+        with self.assertRaises(VerificationError):
+            terminal_result([legacy], WITNESS)
+        self.journal.append(self.admit())
+        self.journal.append(legacy)
+        self.assertEqual(self.observe().status, "conflict")
+
+    def test_only_node_results_remain_pending_not_conflict(self):
+        # A node diagnostic result for the witness is not admissible evidence
+        # and never satisfies verification; with no candidate result yet the
+        # honest status is pending work, exactly like no result at all.
+        node = self.result(identity={"target_sha": WITNESS, "request_id": "m4-acceptance",
+                                     "run_id": 3333, "run_attempt": 1, "request_kind": "node"})
+        self.journal.append(self.admit())
+        self.journal.append(node)
+        self.assertEqual(self.observe().status, "pending")
         self.assertIsNone(self.consumer.reference)
 
     def test_a_result_without_its_unique_admission_conflicts(self):
