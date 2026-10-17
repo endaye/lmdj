@@ -2390,10 +2390,15 @@ function createRuntimeSessionController(options = {}) {
         requestOptions.originalStartedAt !== undefined) {
       // Both SDK tails spend the same Pad budget. Compute it at the actual
       // transport handoff, not before waiting behind an independent query.
-      transportOptions.deadlineMs = (requestOptions.originalBudgetMs ?? deadlineForOperation(operation)) -
+      const remainingMs = (requestOptions.originalBudgetMs ?? deadlineForOperation(operation)) -
         (monotonicNow() - requestOptions.originalStartedAt);
-      if (transportOptions.deadlineMs <= 0)
+      if (remainingMs <= 0)
         throw typedError("HOST_TIMEOUT", "Original Pad input deadline expired", {pending: false});
+      // A Performance event has no retained continuation: its transport
+      // deadline is the Host liveness watchdog, and its expiry seals the
+      // Runtime as unresponsive. Host queue residence already spent above
+      // must not shrink that watchdog to a sliver no Native turn can meet.
+      if (operation !== "performance.record.event") transportOptions.deadlineMs = remainingMs;
     }
     const retainedOwner = typeof requestOptions.retainedOwner === "function" &&
       requestOptions.retainedOwner();

@@ -11564,6 +11564,79 @@ test("bounded live-input window rejects overflow, never drops releases, and clea
   await session.close();
 });
 
+function performanceEventQueueFixture() {
+  const sessionId = "40000000-0000-4000-8000-000000000090";
+  const performanceId = "40000000-0000-4000-8000-000000000091";
+  const state = {clock: 0, events: [], queryStarted: null, releaseQuery: null};
+  const started = new Promise((resolve) => { state.queryStarted = resolve; });
+  const gate = new Promise((resolve) => { state.releaseQuery = resolve; });
+  const {session} = fixture({
+    now: () => state.clock,
+    send: async (envelope, options) => {
+      switch (envelope.operation) {
+        case "project.inspect":
+          state.queryStarted();
+          await gate;
+          return success(envelope, {project_revision: 7});
+        case "performance.record.begin":
+          return success(envelope, {performance_id: performanceId,
+            committed_revision: 1, replayed: false, project_revision: 1});
+        case "performance.record.event":
+          state.events.push({submittedAt: state.clock, deadlineMs: options.deadlineMs});
+          return success(envelope, {event_id: envelope.payload.event_id,
+            accepted_tick: 0, input_sequence: 1, coalesced: false,
+            replayed: false, project_revision: null});
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  const press = () => session.recordPerformanceEvent({sessionId,
+    eventId: "40000000-0000-4000-8000-000000000092",
+    event: {kind: "pad_press", gestureId: "40000000-0000-4000-8000-000000000093",
+      slot: 1, velocity: 100}});
+  return {session, state, sessionId, performanceId, press, started};
+}
+
+test("a Performance event submitted late in its Pad budget keeps the full Host liveness deadline", async () => {
+  const f = performanceEventQueueFixture();
+  await f.session.start();
+  await f.session.beginPerformanceRecording({sessionId: f.sessionId,
+    performanceId: f.performanceId, expectedRevision: 0});
+  const query = f.session.inspectProject();
+  await f.started;
+  const press = f.press();
+  await drainTasks();
+  assert.equal(f.state.events.length, 0, "the Pad waited behind the independent Host query");
+  f.state.clock = 980;
+  f.state.releaseQuery();
+  assert.equal((await query).project_revision, 7);
+  await press;
+  // An expired event deadline seals the Runtime, so 20 ms left of the Pad
+  // budget must not become the Native watchdog for this event.
+  assert.deepEqual(f.state.events, [{submittedAt: 980, deadlineMs: 1_000}]);
+  await f.session.close();
+});
+
+test("a Performance event whose Pad budget expired in the Host queue is refused before submission", async () => {
+  const f = performanceEventQueueFixture();
+  await f.session.start();
+  await f.session.beginPerformanceRecording({sessionId: f.sessionId,
+    performanceId: f.performanceId, expectedRevision: 0});
+  const query = f.session.inspectProject();
+  await f.started;
+  const press = f.press().then((value) => ({value}), (error) => ({error}));
+  await drainTasks();
+  f.state.clock = 1_001;
+  f.state.releaseQuery();
+  assert.equal((await query).project_revision, 7);
+  const expired = await press;
+  assert.equal(expired.error?.code, "HOST_TIMEOUT");
+  assert.equal(expired.error.details.pending, false, "nothing was submitted to Native");
+  assert.equal(f.state.events.length, 0);
+  await f.session.close();
+});
+
 test("the 65th open Pad gesture is refused without an admission report", async () => {
   const sessionId = "40000000-0000-4000-8000-000000000030";
   const performanceId = "40000000-0000-4000-8000-000000000031";

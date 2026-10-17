@@ -87,6 +87,12 @@ cutoff 只能收紧它。Bridge 交给 Control 的是同一 absolute effective d
 不会在 dequeue 时重新获得完整窗口。`audio.activate` 的一秒 Control 预算和现有
 输出设备启动阶段保持各自的起算边界；测试 helper 也使用原来的一秒激活预算。
 
+`performance.record.event` 的一秒 Pad 预算从其 live-input admission turn 起算，
+等待 Host 请求队列的时间同样消耗它；预算在提交前耗尽时以 `HOST_TIMEOUT`
+（`pending: false`）拒绝且不提交。该事件没有 retained continuation，其 transport
+deadline 到期会把 Runtime 判为无响应并 seal，因此已提交事件的 transport deadline
+始终是完整的一秒 Host liveness watchdog，不会被队列已消耗的预算缩成剩余片段。
+
 Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe，默认等待预算为 15 秒。明确缺少 Worker/Blob、Worker 返回 negative 或 Worker error 继续 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`；纯调度预算耗尽精确进入 `HOST_TIMEOUT`，不能伪造 `opfs`、`opfsSyncAccessHandle` 或 `opfsWritableReplace` 缺失。message、error 与 timeout 三条 settlement 路径都由同一 `finally` terminate Worker 并 revoke Blob URL。显式暂停期间 Project 操作保持禁用，Host suspend 响应与浏览器 Context suspend 严格串行。
 ## 7. 产品使用方
 Creator Web 与诊断 Web Runtime Host 共用此 Platform；实际身份由 Build Identity 派生。历史 Platform `4.0.0` 把 `MAX_ASSET_BYTES` 保持为 1 MiB sidecar/chunk 边界，并以 `MAX_SAMPLE_IMPORT_BYTES` 接受 manifest 锁定的完整选区 WAV 总量；协议创建失败不再被误当成 quota/snapshot truth。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。master tap 采集到的 PCM 批次同样只是瞬态 Host 资源：Runtime Session 的 capture 配置由 manifest 锁定的 `perform_recording_frames` 与 `perform_recording_queue_batches` 派生，两者缺失或不是正整数时状态停留在 `unconfigured`；这些批次在被 Facade 提交为 Artifact 之前都不是创作真相。
