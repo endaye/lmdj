@@ -3039,6 +3039,16 @@ test("Host-state failures expose only allowlisted structured details", async () 
   assert.deepEqual(session.diagnostics().error_details, states.at(-1).errorDetails);
 });
 
+test("internal failure diagnostics retain a bounded Native reason (#2345)", async () => {
+  const {emitFailure, session} = fixture();
+  await session.start();
+  emitFailure(Object.assign(new Error("private path"), {code: "INTERNAL_ERROR",
+    details: {reason: "audio_activation_begin_refused", path: "/private"}}));
+  await drainTasks();
+  assert.deepEqual(session.diagnostics().error_details,
+    {reason: "audio_activation_begin_refused"});
+});
+
 for (const code of ["HOST_TIMEOUT", "HOST_RESTART_REQUIRED"]) {
 test(`timeout diagnostics retain bounded original request provenance (${code})`, async () => {
   const {emitFailure, session} = fixture();

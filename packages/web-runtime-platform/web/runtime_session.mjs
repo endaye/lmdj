@@ -62,6 +62,7 @@ const SAFETY_INTERRUPTIBLE_HOST_OPERATIONS = new Set([
 const TRIGGER_SOURCES = new Set(["pointer", "keyboard", "midi"]);
 const SAFE_ERROR_DETAIL_NAMES = new Set([
   "mutation_outcome",
+  "reason",
   "resource",
   "storage_condition",
   "terminal_state",
