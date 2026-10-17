@@ -101,8 +101,13 @@ class DailyEvidenceTest(unittest.TestCase):
                      requests={"daily": self.request})
         reports = report_runtime.plan_batch_reports("endaye/lmdj", state,
                                                     SimpleNamespace(policy_at=lambda _, **kwargs: self.policy))
-        self.assertEqual(len(reports), 2)
-        self.assertEqual({report.management["suite"] for report in reports}, {"creator", "docs_static"})
+        self.assertEqual(len(reports), 1)
+        self.assertIn("- Missing selected execution evidence: creator, docs_static", reports[0].summary)
+        self.assertEqual({key for key, _ in reports[0].supersedes},
+                         {key for suite in ("creator", "docs_static")
+                          for key in (report_runtime.reporting.managed_bucket_key(
+                              "daily-test", self.request["policy"], suite, "missing"),
+                                      f"self-test-{suite}-missing".replace("_", "-"))})
 
     def test_unpaused_full_debt_requires_full_recovery_workload(self):
         outcomes = {suite: "passed" for suite in self.policy.suite_ids}

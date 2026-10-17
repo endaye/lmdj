@@ -134,6 +134,61 @@ class CommonInfrastructureReport(reporting.Report):
             self.comment_body(first=True)])
 
 
+class BatchMissingReport(reporting.Report):
+    """One observation for one batch whose selected execution evidence is missing.
+
+    ``supersedes`` names the per-suite (key, observation) pairs the planner
+    emitted for the same batch before this projection existed. It is a plain
+    attribute, not a dataclass field, so it never enters the frozen payload.
+    """
+
+    def issue_body(self, assignee):
+        return "\n".join([self.key_marker, "## " + self.title, "",
+            "Filed from an authenticated incremental batch journal result, not full-release evidence.",
+            "Each observation is one batch whose selected execution evidence is missing as a whole:",
+            "it has no product verdict, so no suite passed or failed and every selected suite keeps its debt.",
+            "Suite failures and partial missing jobs inside a verdict stay in their suite/class buckets.",
+            "This bucket is not machine-managed; it is never closed automatically.",
+            f"Default assignee `@{assignee}`. Severity **{self.severity}**.", "",
+            self.comment_body(first=True)])
+
+
+def _batch_missing_report(repository, request, run, identity, reference, outcomes, policy, *, epoch, order):
+    missing = sorted(suite for suite, outcome in outcomes.items() if outcome == "missing")
+    deferred = sorted(suite for suite, outcome in outcomes.items() if outcome != "missing")
+    selection = request["selection"]
+    evidence_digest = batch.digest({"identity": identity, "reference": reference})
+    superseded = []
+    for suite in missing:
+        # Exactly the observation and keys the per-suite projection produced.
+        observation = "batch/" + batch.digest({"epoch": epoch, "identity": identity,
+            "suite": suite, "class": "missing", "evidence_digest": evidence_digest})
+        management = _managed_identity(request, suite, "missing", order, epoch=epoch, run=run)
+        legacy = f"self-test-{suite}-missing".replace("_", "-")
+        for key in dict.fromkeys([management["key"] if management is not None else legacy, legacy]):
+            superseded.append((key, observation))
+    summary = [f"- Request: `{reporting.sanitize(request['id'], 200)}` ({request['kind']})",
+        f"- Base: `{request['base']}`; target: `{request['target']}`; control: `{request['control']}`",
+        f"- Run: https://github.com/{repository}/actions/runs/{run['run_id']}/attempts/{run['attempt']}",
+        f"- Scope: **{selection['kind']}**; selected: {', '.join(selection['suites'])}",
+        "- Not selected (not passes): " + (", ".join(sorted(set(policy.suite_ids) - set(selection['suites']))) or "none"),
+        f"- Policy: `{request['policy']}`; evidence: `{evidence_digest}`",
+        "- Missing selected execution evidence: " + ", ".join(missing),
+        "- Deferred to complete verification (not passes): " + (", ".join(deferred) or "none"),
+        "- Product verdict: none; no suite passed or failed.",
+        "- Next step: find why the batch produced no execution evidence (controller timeout, cancellation or startup failure) and rerun the exact target; every listed suite keeps its uncovered work."]
+    detail = "\n".join(["```text", reporting.sanitize(json.dumps({"missing": missing, "deferred": deferred,
+        "diagnostics": ["Selected execution evidence was confirmed missing; no product verdict is available."]},
+        sort_keys=True), 1800), "```"])
+    report = BatchMissingReport(key=reporting.BATCH_MISSING_KEY, title="self-test: batch execution missing",
+        observation="batch/" + batch.digest({"epoch": epoch, "identity": identity, "reference": reference,
+                                             "class": "batch-missing"}),
+        severity="medium", labels=(reporting.REPORT_LABEL, "type:bug", "area:ci-release"),
+        summary="\n".join(summary), detail=detail)
+    object.__setattr__(report, "supersedes", tuple(superseded))
+    return report
+
+
 def _managed_identity(request, suite, failure_class, order, *, epoch, run):
     """Machine management is opt-in for automatic/bootstrap suite reports."""
     if request["kind"] not in {"auto", "bootstrap"}:
@@ -169,27 +224,23 @@ def plan_batch_reports(repository, state, inputs):
             require(not selection["suites"] and not result["outcomes"], "not-required receipt claims selected work")
             continue
         if reference == f"missing:{request_id}":
-            require(bool(selection["suites"]) and result["outcomes"] == batch.missing_outcomes(request), "missing receipt has non-missing outcomes")
-            suites = [dict(id=suite, selected=True, failures=[], verification_debt=(outcome == "missing"),
-                           scheduler_outcome=outcome, jobs={}, diagnostics=[
-                               "Selected execution evidence was confirmed missing; no product verdict is available."
-                               if outcome == "missing" else "Deferred to complete verification; not a pass."])
-                      for suite, outcome in batch.missing_outcomes(request).items()]
-            evidence_digest = batch.digest({"identity": identity, "reference": reference})
-        else:
-            require(bool(selection["suites"]), "empty selection must use its exact not-required receipt")
-            verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, selection, verification=request.get("verification"))
-            require(result["outcomes"] == batch_verdict.scheduler_outcomes(verdict, policy, identity, selection, verification=request.get("verification")),
-                    "journal outcomes differ from the durable scoped verdict")
-            suites, evidence_digest = verdict["suites"], verdict["evidence_digest"]
-            common_events = verdict.get("common_events", [])
-        if reference == f"missing:{request_id}":
-            common_events = []
+            outcomes = batch.missing_outcomes(request)
+            require(bool(selection["suites"]) and result["outcomes"] == outcomes, "missing receipt has non-missing outcomes")
+            # One batch-level failure is one observation, not one per suite.
+            if "missing" in outcomes.values():
+                reports.append(_batch_missing_report(repository, request, run, identity, reference,
+                                                     outcomes, policy, epoch=state["epoch"], order=order))
+            continue
+        require(bool(selection["suites"]), "empty selection must use its exact not-required receipt")
+        verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, selection, verification=request.get("verification"))
+        require(result["outcomes"] == batch_verdict.scheduler_outcomes(verdict, policy, identity, selection, verification=request.get("verification")),
+                "journal outcomes differ from the durable scoped verdict")
+        suites, evidence_digest = verdict["suites"], verdict["evidence_digest"]
+        common_events = verdict.get("common_events", [])
         by_suite = {suite["id"]: suite for suite in suites}
         observations_by_suite = {}
-        if reference != f"missing:{request_id}":
-            for observation in verdict["observations"]:
-                observations_by_suite.setdefault(observation["suite"], []).append(observation)
+        for observation in verdict["observations"]:
+            observations_by_suite.setdefault(observation["suite"], []).append(observation)
         event_suites = set()
         for event in common_events:
             affected = set(event["blocked_suites"])
@@ -403,6 +454,12 @@ class ReportRuntime:
         # new-observation budget, including ambiguous claims.
         missing = []
         for report in effective_planned:
+            # Full replay revisits every historical batch. A missing batch already
+            # journaled under its old per-suite projection is reported; posting it
+            # again under the batch bucket would duplicate the observation.
+            if any(batch.digest({"key": old_key, "observation": old_observation}) in state["deliveries"]
+                   for old_key, old_observation in getattr(report, "supersedes", ())):
+                continue
             key = batch.digest({"key": report.key, "observation": report.observation})
             payload = report_outbox.freeze(report, reporting.DEFAULT_ASSIGNEE)
             if key in state["deliveries"]:

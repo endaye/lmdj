@@ -90,6 +90,10 @@ DEFAULT_ASSIGNEE = "endaye"
 FAILURE_CLASSES = ("test_failure", "infrastructure_failure", "blocked", "missing")
 #: Batch-level keys that are not a suite.
 BATCH_INVALID_KEY = "self-test-batch-invalid"
+#: A whole incremental batch whose selected execution evidence is missing has no
+#: product verdict, so no suite passed or failed. All such batches share this
+#: one unmanaged bucket instead of fanning out into a missing bucket per suite.
+BATCH_MISSING_KEY = "self-test-batch-execution-missing"
 MISSING_KEY = "self-test-missing"
 #: Common infrastructure reports are keyed by the source event, not by a
 #: suite or a coincident run timestamp.

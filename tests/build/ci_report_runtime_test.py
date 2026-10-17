@@ -260,11 +260,60 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(self.planned(), ())
 
     def test_missing_terminal_receipt_is_not_fabricated_verdict(self):
-        result(self.scheduler, special="missing")
+        request, _ = result(self.scheduler, special="missing")
         planned = self.planned()
-        self.assertEqual(len(planned), 15)
-        self.assertTrue(all(r.key.endswith("-missing") for r in planned))
-        self.assertTrue(all("no product verdict" in r.detail for r in planned))
+        self.assertEqual(len(planned), 1)
+        report = planned[0]
+        self.assertIn("no product verdict", report.detail)
+        self.assertIn("- Missing selected execution evidence: "
+                      + ", ".join(sorted(request["selection"]["suites"])), report.summary)
+
+    def test_missing_batch_is_one_unmanaged_batch_bucket(self):
+        # One batch with no execution evidence is one failure, not one per suite.
+        result(self.scheduler, kind="bootstrap", special="missing")
+        report, = self.planned()
+        self.assertEqual(report.key, module.reporting.BATCH_MISSING_KEY)
+        self.assertIsNone(report.management)
+        self.assertIsNone(report.causal_order)
+
+    def test_missing_batches_share_one_issue(self):
+        result(self.scheduler, kind="bootstrap", special="missing", advance=True)
+        self.adapter.deliver(self.planned(), 32)
+        result(self.scheduler, kind="auto", base=B, target=C, special="missing")
+        self.adapter.deliver(self.planned(), 32)
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertEqual(len([call for call in self.api.calls if call[0] == "create_comment"]), 1)
+
+    def test_replayed_missing_batch_is_delivered_once(self):
+        result(self.scheduler, special="missing")
+        self.assertEqual(len(self.adapter.deliver(self.planned(), 32)["outcomes"]), 1)
+        self.assertEqual(self.adapter.deliver(self.planned(), 32)["outcomes"], [])
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_missing_batch_already_reported_per_suite_is_not_reported_again(self):
+        # Historical outboxes hold this batch under the per-suite projection,
+        # keyed by its managed bucket or, before T8b, the legacy suite key.
+        request, _ = result(self.scheduler, kind="bootstrap", special="missing")
+        state = module.report_scheduler_state(self.runtime)
+        suite = request["selection"]["suites"][0]
+        run = state["results"][request["id"]]["run"]
+        identity = dict(request_id=request["id"], request_kind="bootstrap", base_sha=None, target_sha=B,
+            control_sha=A, policy_digest=POLICY.digest, run_id=run["run_id"], run_attempt=run["attempt"])
+        old_observation = "batch/" + batch.digest({"epoch": "scheduler", "identity": identity, "suite": suite,
+            "class": "missing", "evidence_digest": batch.digest({"identity": identity,
+                                                                  "reference": "missing:" + request["id"]})})
+        old_keys = {"managed": module.reporting.managed_bucket_key("scheduler", POLICY.digest, suite, "missing"),
+                    "legacy": f"self-test-{suite}-missing".replace("_", "-")}
+        for name, old_key in old_keys.items():
+            with self.subTest(old=name):
+                self.setUp()
+                result(self.scheduler, kind="bootstrap", special="missing")
+                old = module.ScopedReport(key=old_key, title="self-test: old missing", observation=old_observation,
+                    severity="low", labels=("self-test",), summary="old", detail="old")
+                self.adapter.deliver((old,), 32)
+                answer = self.adapter.deliver(self.planned(), 32)
+                self.assertEqual(answer["outcomes"], [])
+                self.assertEqual(len(self.posts()), 1)
 
     def test_authenticated_shared_event_reaches_one_durable_report_with_all_suite_debt(self):
         request, verdict = common_result(self.scheduler)
@@ -409,7 +458,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(len(self.posts()), 2)
 
     def test_unresolved_claim_does_not_starve_later_queue_records(self):
-        result(self.scheduler, special="missing")
+        result(self.scheduler, failed=tuple(s.jobs[0] for s in POLICY.inventory.suites[:3]))
         reports = self.planned()
         self.outbox.fail = ("claim", "after")
         with self.assertRaises(Exception):
