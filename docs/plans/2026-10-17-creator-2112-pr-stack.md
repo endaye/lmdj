@@ -89,6 +89,98 @@ No new required gate is added. The new tests catch a wrong persisted choice,
 setting-key collision, failed-write queue poisoning or an early durability claim.
 No Core/Wasm/browser/device result is claimed for this unconsumed utility.
 
+## Layer 2 — native metronome downbeat capability
+
+Branch: `feat/count-in-metronome-bridge`; PR base:
+`feat/creator-count-in-preference` at
+`101b7a46de9673fb86d9b1b4b03c9dfb891723b9` (#2342).
+One Task / one Conventional Commit. This is the S7 prerequisite exposed during
+the consumer audit, not completion of the Creator interaction.
+
+Main refreshed to `27480057a33ca40615da8d72c2b9a54134d15ea4`: intervening product
+identities, CI and a workspace test fix do not deliver this capability. The stack
+retains its existing base and isolated source/build roots.
+
+At the stack base, `RealtimeEngine::set_count_in_metronome` already publishes an
+atomic flag read at actual scheduled S. Its existing native tests exercise the
+optional accented downbeat, and the design explicitly assigns its direct
+capability to S7. The authoritative adapter declaration, Bridge exports, CMake
+export inventory, pre-JS Host object, frozen Session and SDK declaration expose
+the two-output startup but no metronome setter. Therefore a Creator toggle cannot
+yet select the native S downbeat. Preserve the existing native clock/ownership;
+add a synchronous monitoring capability rather than a queued RPC or JS-timed cue.
+
+Declared files:
+
+- `packages/audio-runtime/include/lmdj/audio/web/realtime_audio_worklet.hpp`
+- `packages/audio-runtime/src/web/realtime_audio_worklet.cpp`
+- `packages/web-runtime-platform/CMakeLists.txt`
+- `packages/web-runtime-platform/src/bridge.cpp`
+- `packages/web-runtime-platform/src/web-runtime-pre.js`
+- `packages/web-runtime-platform/web/runtime_session.mjs`
+- `packages/web-runtime-platform/web/runtime_types.d.ts`
+- `packages/web-runtime-platform/test/runtime_loader.test.mjs`
+- `packages/web-runtime-platform/test/runtime_session.test.mjs`
+- `tests/platform/web/creator/creator_web_count_in.spec.mjs`
+- `apps/docs-site/docs/core/modules/audio-runtime.mdx`
+- `apps/docs-site/docs/core/modules/web-runtime-platform.mdx`
+- `apps/docs-site/docs/platform/web-runtime.mdx`
+- `docs/plans/2026-10-17-creator-2112-pr-stack.md`
+
+Public SDK: `setCountInMetronome(enabled: boolean): void`. It synchronously
+publishes through the Runtime's direct native export. Invalid arguments are
+rejected before Native; unsupported/legacy output, inactive/closing Session and
+unavailable Native owner are explicit refusals. It never dispatches a Host RPC,
+opens authoring state or replaces the ordinary metronome scheduler. The adapter
+accepts only the browser main thread, a ready two-output graph and a paused/open
+gate; Native owns the actual S sampling and audio envelope.
+
+Lowest-tier verification and defect oracles:
+
+- Full existing runtime loader/Session Node selections as baseline and after the
+  change; direct-call tests cover boolean encoding, unsupported/refused owner,
+  lifecycle and synchronous completion while an unrelated RPC remains pending.
+- Existing real packaged count-in PCM scenarios retain every leg. Add an On
+  scenario through the public setter: four/eight forced cues plus exactly one
+  analytic accented cue at S; Off scenarios retain silence at S on cue output.
+  Native/output PCM is the independent oracle, not a setter return or UI value.
+- Rebuild the ordinary Creator Wasm/UI package with the pinned toolchain before
+  running its unchanged count-in selection plus the On scenario. Keep actual
+  start/cancel/Stop, Truth/reopen, capture and failure assertions intact.
+- The package entry point requires a clean source commit. First pass the owning
+  Node, TypeScript, Wasm compile/link, Portal and staged-path checks; freeze the
+  local Task commit, then package and run the real browser selection on that
+  exact clean head before pushing or creating its Draft PR. A failed packaged
+  journey remains a finding; fix and reverify the unpublished head before push.
+- Full owning Portal check, SDK/Creator TypeScript and staged ownership/diff
+  checks. The committed stack range and this layer's parent range are classified
+  separately before push. PR lint/declaration validate the real Draft body.
+
+Version impact: additive API debt for Web Runtime Platform and Audio Runtime
+(new nonvirtual adapter method; no layout/vtable or persisted Contract change).
+Record MINOR debt; manifests/Product allocation remain for #2237.
+Documentation impact: required — `/core/modules/audio-runtime/`,
+`/core/modules/web-runtime-platform/`, `/platform/web-runtime/`.
+No new gate, budget increase or concurrency protocol is introduced. Complete
+Creator S7 controls/handoff and physical listening acceptance remain outstanding.
+
+### Layer 2 source verification
+
+- Live main rechecked before the local source commit: still `27480057a33ca40615da8d72c2b9a54134d15ea4`.
+- Runtime loader/Session baseline: 419/419 PASS. Final owning selection:
+  424/424 PASS. The first new loader test lacked a browser timer in its fixture;
+  it failed at `window.clearTimeout`, then passed using the existing complete
+  deadline-transport fixture. No product branch or assertion was weakened.
+- Creator TypeScript PASS; ordinary Wasm/UI compile and link PASS with pinned
+  Emscripten 6.0.5 and Node 26. Native Core CLI target compiled for the exact
+  proof fixture generator; its two packed Project outputs compare identically.
+- Full Portal check: 179/179 PASS, 50 routes/internal links valid. Staged path
+  ownership: 76/76 PASS; all 14 files match the declared scope.
+- The initial package command refused the dirty source as designed. It produced
+  no packaged/browser PASS. Freeze the verified source locally, then package
+  and retain the actual PCM/recording/cancellation results before any push.
+  Those exact-head results belong to the PR evidence, not a predicted receipt.
+
 ## Subsequent layers
 
 1. Complete S7 over Layer 1: wire late-hydration protection, SETUP Off/1/2,

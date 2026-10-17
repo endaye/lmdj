@@ -173,6 +173,13 @@ if (typeof globalThis.window !== "undefined") {
       contextHandle, outputDestinationHandle, cueDestinationHandle);
   }
 
+  function setCountInMetronome(enabled) {
+    if (typeof enabled !== "boolean") throw new TypeError("Count-in metronome must be boolean");
+    if (!host.runtimeInitialized || !host.manifestReady || transport.terminated ||
+        typeof Module["_lmdj_web_audio_set_count_in_metronome"] !== "function") return false;
+    return Module["_lmdj_web_audio_set_count_in_metronome"](enabled ? 1 : 0) === 1;
+  }
+
   function startAudioWorkletOutputs(
     contextHandle, outputDestinationHandle, cueDestinationHandle,
   ) {
@@ -1057,6 +1064,7 @@ if (typeof globalThis.window !== "undefined") {
     audioCallbackHeartbeat,
     startAudioWorklet,
     startAudioWorkletWithCountIn,
+    setCountInMetronome,
     connectAudioWorkletDirect,
     transport,
     ...(deadlineProof === undefined ? {} : {deadlineProof}),
