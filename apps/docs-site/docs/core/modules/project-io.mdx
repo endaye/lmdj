@@ -194,7 +194,9 @@ WebKit、Apple Safari 或真实设备验收。标准 proof 自动解析独立安
 未安装隔离浏览器时，proof 在构建前报告安装指令，不退回缺失能力的浏览器或跳过 S2。
 
 安装器依赖和完整性摘要独立锁定于 `tests/platform/web/opfs-browser/`，浏览器缓存位于
-工作区 `build/toolchains/opfs-webkit/`，不覆盖共享缓存。CI 仅为 web_toolchain lane
+工作区 `build/toolchains/opfs-webkit/`，不覆盖共享缓存。设置了 `LMDJ_BROWSER_CACHE_ROOT`
+的 self-hosted runner 把它装进该根目录下独立的 `opfs-webkit-<版本>` 目录并加锁，
+工作区路径改为指向它的链接，避免每次 checkout 清理后重新下载约 100 MB（#2279）。CI 仅为 web_toolchain lane
 执行同一安装入口；系统依赖安装仍服从 runner 原有授权配置。Linux 本地示例：
 
 ```bash
