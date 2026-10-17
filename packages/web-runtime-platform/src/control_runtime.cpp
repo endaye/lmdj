@@ -1036,8 +1036,9 @@ Json timeout_error() {
   return host_error("HOST_TIMEOUT", "host request timed out");
 }
 
-Json internal_error() {
-  return host_error("INTERNAL_ERROR", "unexpected Web Host failure");
+Json internal_error(Json details = Json::object()) {
+  return host_error(
+      "INTERNAL_ERROR", "unexpected Web Host failure", std::move(details));
 }
 
 Json sanitize_details(const Json& value) {
@@ -6003,11 +6004,13 @@ Json ControlRuntime::dispatch(
           bank.pending_publications != 0) {
         return state_error("runtime Bank is not current");
       }
-      const auto rollback = [this]() {
+      // Each rollback names its branch so a sealed activation is
+      // diagnosable from the SDK's bounded error details (#2345).
+      const auto rollback = [this](std::string_view reason) {
         impl_->trigger_admission = false;
         static_cast<void>(impl_->quiesce_and_stop_audio());
         fail_and_seal("audio_activation_failed");
-        return internal_error();
+        return internal_error({{"reason", std::string(reason)}});
       };
       if (impl_->cancel_if_expired()) {
         return timeout_error();
@@ -6030,21 +6033,21 @@ Json ControlRuntime::dispatch(
         impl_->enable_pattern_transport_quiescent();
         if (impl_->count_in_input_negotiated &&
             !impl_->count_in_input_enabled) {
-          return rollback();
+          return rollback("audio_activation_count_in_not_enabled");
         }
       }
       const auto prepared_fx =
           impl_->engine.prepare_master_fx(*impl_->project_bpm);
       if (!prepared_fx.has_value()) {
-        return rollback();
+        return rollback("audio_activation_master_fx_failed");
       }
       impl_->terminal_legacy_quiescent = false;
       const auto started = impl_->engine.start();
       if (!started.has_value()) {
-        return rollback();
+        return rollback("audio_activation_engine_start_failed");
       }
       if (impl_->coordinator->begin_rendering == nullptr) {
-        return rollback();
+        return rollback("audio_activation_begin_unavailable");
       }
       const auto begun = impl_->coordinator->begin_rendering(
           impl_->coordinator->context);
@@ -6056,7 +6059,7 @@ Json ControlRuntime::dispatch(
         return timeout_error();
       }
       if (!begun.has_value()) {
-        const auto failed = rollback();
+        const auto failed = rollback("audio_activation_begin_refused");
         return impl_->request_cancelled() ? timeout_error() : failed;
       }
       const auto deadline = *impl_->request_deadline;
@@ -6074,7 +6077,8 @@ Json ControlRuntime::dispatch(
           fail_and_seal("audio_activation_timeout");
           return timeout_error();
         }
-        const auto failed = rollback();
+        const auto failed = rollback(
+            "audio_activation_generation_mismatch");
         return impl_->request_cancelled() ? timeout_error() : failed;
       }
       if (impl_->request_cancelled()) {
@@ -7371,7 +7375,7 @@ Json ControlRuntime::dispatch(
     return protocol_error();
   } catch (...) {
     fail_and_seal("unexpected_exception");
-    return internal_error();
+    return internal_error({{"reason", "unexpected_exception"}});
   }
 }
 

@@ -2977,14 +2977,14 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_callback_heartbeat() {
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_fence_arm(std::uint32_t stages) {
   auto* adapter = web_audio.load(std::memory_order_acquire);
-  if (adapter == nullptr || stages == 0 || (stages & ~3U) != 0) return 0;
+  if (adapter == nullptr || stages == 0 || (stages & ~7U) != 0) return 0;
   adapter->arm_physical_fence_barrier_for_conformance(stages);
   return 1;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_fence_release(std::uint32_t stages) {
   auto* adapter = web_audio.load(std::memory_order_acquire);
-  if (adapter == nullptr || stages == 0 || (stages & ~3U) != 0) return 0;
+  if (adapter == nullptr || stages == 0 || (stages & ~7U) != 0) return 0;
   adapter->release_physical_fence_barrier_for_conformance(stages);
   return 1;
 }

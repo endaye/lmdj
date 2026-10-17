@@ -1813,6 +1813,36 @@ if (typeof globalThis.window !== "undefined") {
           secondAcknowledgement,
         };
       },
+
+      // #2345: a running context keeps admitting paused callbacks. Hold one,
+      // borrow included, and prove activation waits for it instead of
+      // refusing while it is in flight.
+      async runPausedBorrowActivationProof() {
+        await prepareProject();
+        if (Module["_lmdj_web_audio_test_physical_fence_arm"](4) !== 1) {
+          throw new Error("paused callback fence could not be armed");
+        }
+        const heldDeadline = performance.now() + 5_000;
+        while ((Module["_lmdj_web_audio_test_physical_fence_stage"]() & 4) === 0) {
+          if (performance.now() >= heldDeadline) {
+            throw new Error("no paused callback was held");
+          }
+          await delay(1);
+        }
+        const held = {
+          gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
+          callbackInFlight: Module["_lmdj_web_audio_test_in_flight"](),
+        };
+        let settledWhileHeld = false;
+        let released = false;
+        const activation = submit("audio.activate", {}).finally(() => {
+          if (!released) settledWhileHeld = true;
+        });
+        await delay(20);
+        released = true;
+        Module["_lmdj_web_audio_test_physical_fence_release"](4);
+        return {held, settledWhileHeld, activation: await activation};
+      },
     });
   }
   /* LMDJ_WEB_AUDIO_CONFORMANCE_API_END */

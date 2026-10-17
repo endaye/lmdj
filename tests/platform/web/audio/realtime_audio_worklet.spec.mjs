@@ -1240,6 +1240,22 @@ for (const fatal of [
 }
 
 
+test("activation waits for an in-flight paused callback instead of refusing it", async ({page}) => {
+  // #2345: once the context is resumed every paused-gate callback briefly
+  // holds a borrow. Activation racing that borrow failed the Host.
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+  const proof = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.runPausedBorrowActivationProof());
+  expect(proof.held).toEqual({gate: "paused", callbackInFlight: 1});
+  expect(proof.settledWhileHeld).toBe(false);
+  expect(proof.activation).toMatchObject({
+    ok: true,
+    result: {state: "running", changed: true},
+  });
+});
+
+
 test("a stale Bank generation never masquerades as the current acknowledgement", async ({page}) => {
   await waitForFormalHost(page);
   expect((await activateFromClick(page, 48_000)).ok).toBe(true);
