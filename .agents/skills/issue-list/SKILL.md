@@ -142,6 +142,17 @@ diagnostics but alone do not prove whole-patch retention after squash.
 Verify the actual merged PR and compare the complete local change with its
 landed patch; protect post-merge local commits not covered by that evidence.
 
+Release-owned state is never a cleanup target, however merged or stale it looks:
+anything under `.local/release-worktrees/`, any `.git/worktrees/candidate-*`
+registration, and `.git/lmdj-release-requests/`. They hold the release driver's
+live per-request state; only `scripts/release.sh` (its settle path or
+`retire`) removes them. Do not `git worktree remove`, delete or prune them; list
+them as "release-owned, kept". While any non-retired request exists
+(`ls .git/lmdj-release-requests/*.json`), do not run `git worktree prune`.
+Before removing any `.worktrees/*` worktree, check for running processes in it
+(for example `lsof +D <path>` or `pgrep -fl <path>`); another agent's live
+worktree is active, not abandoned.
+
 | Observed resource | Response |
 | --- | --- |
 | Merged PR, complete local patch retained, clean and inactive worktree | Cleanup candidate only within explicit cleanup authorization |
@@ -149,6 +160,7 @@ landed patch; protect post-merge local commits not covered by that evidence.
 | Open PR | Report current-head review/findings, conflicts and applicable protection; no automatic merge |
 | Unpushed commits or no PR | Report exact missing transition; offer shipping, do not execute it from an audit |
 | Dirty, divergent, locked, active or uncertain | Keep and name the unresolved safety condition |
+| Release-owned path (`.local/release-worktrees/`, `candidate-*`, release requests) | Keep as "release-owned, kept"; only `scripts/release.sh` removes it |
 
 Being behind main without conflict, or having red/in-flight incremental or
 explicit full self-tests, does not make a PR abandoned or unmergeable under
