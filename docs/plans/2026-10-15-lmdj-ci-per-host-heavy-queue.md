@@ -193,6 +193,33 @@ Defects the new tests catch: a busy workstation chosen; en-home chosen
 without its own queue; a hosted label set emitted by the Web selector.
 Each was mutation-proven.
 
+## Q5 — Keep the OPFS WebKit across jobs on self-hosted runners (#2279)
+
+Owner request 2026-10-17: keep en-home and the M4 Pro instead of dropping
+them for network trouble, starting by reducing what each job downloads.
+
+Premise (run 39007862259, job 117331172260): en-home's web_toolchain job spent
+26 minutes of its 35-minute budget in `scripts/prepare-opfs-webkit.sh`,
+downloading the 102.5 MB Playwright WebKit at about 45 KiB/s, and was
+cancelled before the proof started. The browser installs into
+`build/toolchains/opfs-webkit`, which checkout cleans, so every job downloads
+it again; netcup's fast link hid this.
+
+1. With `LMDJ_BROWSER_CACHE_ROOT` set (every self-hosted Web runner), install
+   into `$LMDJ_BROWSER_CACHE_ROOT/opfs-webkit-<installer Playwright version>`
+   under a lock, and link the workspace path to it. Consumers keep reading
+   `build/toolchains/opfs-webkit`; without the variable nothing changes.
+2. `tests/build/ci_opfs_webkit_cache_test.py` runs the real script against a
+   stubbed installer in both modes.
+3. Update the Project IO portal page's cache sentence.
+
+Declared files: `scripts/prepare-opfs-webkit.sh`,
+`tests/build/ci_opfs_webkit_cache_test.py`,
+`apps/docs-site/docs/core/modules/project-io.mdx`, this plan.
+
+Defects the new test catches: the workspace path is not linked to the cache;
+the browser is installed into the shared cache root. Both are mutation-proven.
+
 ## Completion criteria
 
 - No workflow carries the host-agnostic `lmdj-native-heavy` group.
