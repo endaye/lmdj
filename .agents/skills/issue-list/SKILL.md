@@ -147,8 +147,9 @@ anything under `.local/release-worktrees/`, any `.git/worktrees/candidate-*`
 registration, and `.git/lmdj-release-requests/`. They hold the release driver's
 live per-request state; only `scripts/release.sh` (its settle path or
 `retire`) removes them. Do not `git worktree remove`, delete or prune them; list
-them as "release-owned, kept". While any non-retired request exists
-(`ls .git/lmdj-release-requests/*.json`), do not run `git worktree prune`.
+them as "release-owned, kept". Retiring a request renames its journal file to
+`<id>.retired`, so `ls .git/lmdj-release-requests/*.json` lists only live
+requests; while it lists any, do not run `git worktree prune`.
 Before removing any `.worktrees/*` worktree, check for running processes in it
 (for example `lsof +D <path>` or `pgrep -fl <path>`); another agent's live
 worktree is active, not abandoned.
