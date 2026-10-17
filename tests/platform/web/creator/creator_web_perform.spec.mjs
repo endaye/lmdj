@@ -1135,6 +1135,15 @@ test("Perform Launch selects while stopped and queues, withdraws and applies wit
     expect(secondPattern).toBeTruthy();
     await expect(sequencePattern(page)).toHaveAttribute("data-pattern-id", secondPattern);
     await selectSequencePattern(page, PATTERN_ID);
+    // The queued and withdrawal legs must act before the next Bar boundary.
+    // At the default 120 BPM an early-bar start leaves only 1.6 s, which a
+    // loaded CI host spent between the early-bar sample and the queued
+    // inspect (run 39061188678). The slowest musical tempo leaves 4.8 s;
+    // no deadline or phase window is widened.
+    await showSequenceLayer(page, "SETUP");
+    await page.getByRole("slider", {name: "BPM", exact: true}).press("Home");
+    await expect.poll(async () => (await inspectProjectTruth(page)).project.bpm).toBe(40);
+    await showSequenceLayer(page, "EDIT");
     await openPerform(page);
     await showPerformPage(page, "Slots");
     for (const [slot, patternId] of [[0, PATTERN_ID], [1, secondPattern]]) {
