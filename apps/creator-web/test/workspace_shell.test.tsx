@@ -3932,18 +3932,23 @@ test("a Stop landing after an unseen applied switch follows the applied Pattern"
   await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
   const reloadsBefore = fixture.calls.filter((call) => call === "reloadSnapshot").length;
 
-  // Queue B and observe the pending switch with the current Pattern still A.
-  await userEvent.click(forward);
-  await waitFor(() => expect(switchRequests).toHaveLength(1));
-  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
-    .textContent).toContain("→ 02"));
-  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
-    .toBe(listedSummary.patternId);
-
-  // B applies with the observation interval frozen: no inspection observes it
-  // playing before Stop's ticket arrives.
+  // Freeze the observation loop before the switch arms it. The click below
+  // creates the pending-switch interval, and an interval created under real
+  // timers keeps firing after vi.useFakeTimers(): under load a real tick
+  // could observe B playing before Stop. The queued target is still shown
+  // by the switch's own immediate reconciliation.
   vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
   try {
+    // Queue B and observe the pending switch with the current Pattern still A.
+    await userEvent.click(forward);
+    await waitFor(() => expect(switchRequests).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+      .textContent).toContain("→ 02"));
+    expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+      .toBe(listedSummary.patternId);
+
+    // B applies with the observation interval frozen: no inspection observes it
+    // playing before Stop's ticket arrives.
     await act(async () => {
       currentPattern = secondSwitchPattern;
       queued = null;
@@ -4048,20 +4053,25 @@ test("a Stop cancelling a newer switch after an unseen applied one follows the a
   await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
   const reloadsBefore = fixture.calls.filter((call) => call === "reloadSnapshot").length;
 
-  // Queue B and observe the pending switch with the current Pattern still A.
-  await userEvent.click(forward);
-  await waitFor(() => expect(switchRequests).toHaveLength(1));
-  await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
-    .textContent).toContain("→ 02"));
-  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
-    .toBe(listedSummary.patternId);
-
-  // B applies unseen under the frozen observation loop, then C is queued from
-  // the still-playing transport, and the Stop submission lands before any
-  // inspection can observe B playing. The runtime stays the authority: the
-  // fixture state each call reads is the state the FIFO of calls produced.
+  // Freeze the observation loop before the switch arms it. The click below
+  // creates the pending-switch interval, and an interval created under real
+  // timers keeps firing after vi.useFakeTimers(): under load a real tick
+  // could observe B playing before Stop. The queued target is still shown
+  // by the switch's own immediate reconciliation.
   vi.useFakeTimers({toFake: ["setInterval", "clearInterval"]});
   try {
+    // Queue B and observe the pending switch with the current Pattern still A.
+    await userEvent.click(forward);
+    await waitFor(() => expect(switchRequests).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole("button", {name: "Choose Pattern"})
+      .textContent).toContain("→ 02"));
+    expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+      .toBe(listedSummary.patternId);
+
+    // B applies unseen under the frozen observation loop, then C is queued from
+    // the still-playing transport, and the Stop submission lands before any
+    // inspection can observe B playing. The runtime stays the authority: the
+    // fixture state each call reads is the state the FIFO of calls produced.
     await act(async () => {
       currentPattern = secondSwitchPattern;
       queued = null;
