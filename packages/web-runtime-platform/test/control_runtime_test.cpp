@@ -5174,9 +5174,11 @@ void test_audio_activation_rolls_back_begin_and_ack_failures() {
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
-    check_error(
+    const auto& refused = check_error(
         runtime->dispatch("audio.activate", Json::object(), {}),
         "INTERNAL_ERROR");
+    LMDJ_CHECK(refused.at("details") ==
+        Json({{"reason", "audio_activation_begin_refused"}}));
     LMDJ_CHECK(coordinator.called);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
@@ -5200,9 +5202,11 @@ void test_audio_activation_rolls_back_begin_and_ack_failures() {
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
-    check_error(
+    const auto& mismatched = check_error(
         runtime->dispatch("audio.activate", Json::object(), {}),
         "INTERNAL_ERROR");
+    LMDJ_CHECK(mismatched.at("details") ==
+        Json({{"reason", "audio_activation_generation_mismatch"}}));
     LMDJ_CHECK(coordinator.called);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==

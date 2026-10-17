@@ -374,15 +374,22 @@ async function installPackagedRecoveryProbe(page) {
               releaseHeldOutcome("observed-sdk-host-timeout");
             }
             const last = runtimeHistory.at(-1);
+            // Error details and activation refusal name the failing branch of
+            // a refused or sealed activation (#2345).
             const next = {
               error_code: value.error_code,
+              error_details: structuredClone(value.error_details ?? {}),
+              activation_refusal: value.activation_refusal ?? null,
               generation,
               state: value.state,
             };
             if (
               last?.error_code !== next.error_code ||
               last?.generation !== next.generation ||
-              last?.state !== next.state
+              last?.state !== next.state ||
+              last?.activation_refusal !== next.activation_refusal ||
+              JSON.stringify(last?.error_details) !==
+                JSON.stringify(next.error_details)
             ) {
               runtimeHistory.push(next);
             }

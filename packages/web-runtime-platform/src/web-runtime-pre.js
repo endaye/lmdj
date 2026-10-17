@@ -1813,6 +1813,50 @@ if (typeof globalThis.window !== "undefined") {
           secondAcknowledgement,
         };
       },
+
+      // #2345: a running context keeps admitting paused callbacks. Hold one,
+      // borrow included, and prove activation waits for it instead of
+      // refusing while it is in flight.
+      async runPausedBorrowActivationProof() {
+        await prepareProject();
+        if (Module["_lmdj_web_audio_test_physical_fence_arm"](4) !== 1) {
+          throw new Error("paused callback fence could not be armed");
+        }
+        const heldDeadline = performance.now() + 5_000;
+        while ((Module["_lmdj_web_audio_test_physical_fence_stage"]() & 4) === 0) {
+          if (performance.now() >= heldDeadline) {
+            throw new Error("no paused callback was held");
+          }
+          await delay(1);
+        }
+        const held = {
+          gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
+          callbackInFlight: Module["_lmdj_web_audio_test_in_flight"](),
+        };
+        const waitsBefore =
+          Module["_lmdj_web_audio_test_begin_rendering_borrow_waits"]() >>> 0;
+        let settledWhileHeld = false;
+        let released = false;
+        const activation = submit("audio.activate", {}).finally(() => {
+          if (!released) settledWhileHeld = true;
+        });
+        // Release only once begin_rendering has met the held borrow, so the
+        // proof covers its wait and not merely the readiness precheck.
+        const waitDeadline = performance.now() + 2_000;
+        let beginMetHeldBorrow = false;
+        while (!settledWhileHeld && performance.now() < waitDeadline) {
+          if ((Module["_lmdj_web_audio_test_begin_rendering_borrow_waits"]() >>> 0) !==
+              waitsBefore) {
+            beginMetHeldBorrow = true;
+            break;
+          }
+          await delay(1);
+        }
+        released = true;
+        Module["_lmdj_web_audio_test_physical_fence_release"](4);
+        return {held, beginMetHeldBorrow, settledWhileHeld,
+          activation: await activation};
+      },
     });
   }
   /* LMDJ_WEB_AUDIO_CONFORMANCE_API_END */

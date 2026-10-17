@@ -38,6 +38,11 @@ constexpr std::int32_t kRequiredSampleRate = 48'000;
 constexpr std::int32_t kRequiredFrames = 128;
 constexpr std::size_t kWorkletStackBytes = 64U * 1024U;
 constexpr auto kQuiescenceRecheckInterval = std::chrono::milliseconds{10};
+// A paused-admitted callback only zeroes its outputs, so its borrow lasts
+// microseconds and a release gap follows within one render quantum. This bound
+// is reached only when the AudioWorklet thread itself has stalled (#2345).
+constexpr auto kBeginRenderingGapBound = std::chrono::milliseconds{200};
+constexpr auto kBeginRenderingGapRecheck = std::chrono::milliseconds{1};
 constexpr std::uint32_t kCallbackGateMask = 3U;
 constexpr std::uint32_t kCallbackBorrow = 4U;
 constexpr std::uint32_t kCallbackSaturated = 0x8000'0000U;
@@ -54,8 +59,11 @@ static_assert(std::atomic<RealtimeAudioWorkletFatal>::is_always_lock_free);
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 constexpr std::uint32_t kPhysicalFenceCueStage = 1U;
 constexpr std::uint32_t kPhysicalFenceEpilogueStage = 2U;
-constexpr std::uint32_t kPhysicalFenceStages =
-    kPhysicalFenceCueStage | kPhysicalFenceEpilogueStage;
+// Holds one paused-admitted callback, borrow included, before it zeroes its
+// outputs. It proves activation waits for that borrow instead of refusing.
+constexpr std::uint32_t kPhysicalFencePausedStage = 4U;
+constexpr std::uint32_t kPhysicalFenceStages = kPhysicalFenceCueStage |
+    kPhysicalFenceEpilogueStage | kPhysicalFencePausedStage;
 constexpr std::uint32_t kPhysicalFenceExpired = 0x8000'0000U;
 constexpr std::uint32_t kPhysicalFenceWaitSlices = 1'000U;
 constexpr double kPhysicalFenceWaitMilliseconds = 10.0;
@@ -319,6 +327,19 @@ struct RealtimeAudioWorklet::Impl {
         gate == RealtimeAudioWorkletGate::paused) {
       // A paused admission NEVER accesses Engine, even if control eventually
       // opens admission. Future paused Engine work needs a new exclusion proof.
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+      auto paused_only = kPhysicalFencePausedStage;
+      if (self.physical_fence_armed.compare_exchange_strong(
+              paused_only, 0, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        physical_fence_stages = kPhysicalFencePausedStage;
+      }
+      if (!self.wait_physical_fence_barrier(
+              kPhysicalFencePausedStage, physical_fence_stages)) {
+        zero_outputs(num_outputs, outputs);
+        return finish(false);
+      }
+#endif
       zero_outputs(num_outputs, outputs);
       return finish(true);
     }
@@ -578,6 +599,8 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<std::uint32_t> physical_fence_released{0};
   std::atomic<std::uint32_t> physical_fence_entered{0};
   std::atomic<std::uint64_t> physical_fence_cue_batch{0};
+  // Counts begin_rendering attempts that met an in-flight callback borrow.
+  std::atomic<std::uint32_t> begin_rendering_borrow_waits{0};
   std::atomic<std::uint32_t> observed_quantum{0};
   std::atomic<std::uint32_t> render_count{0};
   std::atomic<std::uint32_t> energy_microunits{0};
@@ -743,11 +766,16 @@ void RealtimeAudioWorklet::complete_control_install(bool installed) noexcept {
 }
 
 foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
+  // A running context keeps admitting paused callbacks, each holding a borrow
+  // while it zeroes its outputs. Such a borrow never touches Engine, so it is
+  // not a refusal reason; the gate still opens only from an exact zero-borrow
+  // paused state, after waiting for the release gap below (#2345).
   if (impl_->worklet_state.load(std::memory_order_acquire) !=
           RealtimeAudioWorkletState::ready ||
       impl_->fatal_code.load(std::memory_order_acquire) !=
           RealtimeAudioWorkletFatal::none ||
-      !impl_->callback_resources_quiescent()) {
+      Impl::callback_gate(impl_->callback_state.load(
+          std::memory_order_acquire)) != RealtimeAudioWorkletGate::paused) {
     return foundation::Result<void>::failure(
         worklet_error("Wasm AudioWorklet is not ready to render"));
   }
@@ -758,21 +786,52 @@ foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
     return foundation::Result<void>::failure(
         worklet_error("Wasm AudioWorklet Bank is not current"));
   }
-  auto expected =
-      static_cast<std::uint32_t>(RealtimeAudioWorkletGate::paused);
-  impl_->activation_generation.store(
-      bank.current_generation, std::memory_order_release);
-  impl_->acknowledged.store(0, std::memory_order_release);
-  if (!impl_->callback_state.compare_exchange_strong(
-          expected,
-          static_cast<std::uint32_t>(RealtimeAudioWorkletGate::open),
-          std::memory_order_acq_rel,
-          std::memory_order_acquire)) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + kBeginRenderingGapBound;
+  while (true) {
+    auto expected =
+        static_cast<std::uint32_t>(RealtimeAudioWorkletGate::paused);
+    impl_->activation_generation.store(
+        bank.current_generation, std::memory_order_release);
+    impl_->acknowledged.store(0, std::memory_order_release);
+    if (impl_->callback_state.compare_exchange_strong(
+            expected,
+            static_cast<std::uint32_t>(RealtimeAudioWorkletGate::open),
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      return foundation::Result<void>::success();
+    }
     impl_->activation_generation.store(0, std::memory_order_release);
-    return foundation::Result<void>::failure(
-        worklet_error("Wasm AudioWorklet gate is not paused"));
+    if (Impl::callback_gate(expected) != RealtimeAudioWorkletGate::paused ||
+        impl_->fatal_code.load(std::memory_order_acquire) !=
+            RealtimeAudioWorkletFatal::none) {
+      return foundation::Result<void>::failure(
+          worklet_error("Wasm AudioWorklet gate is not paused"));
+    }
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+    impl_->begin_rendering_borrow_waits.fetch_add(
+        1, std::memory_order_acq_rel);
+#endif
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      return foundation::Result<void>::failure(worklet_error(
+          "Wasm AudioWorklet paused callback did not release its borrow"));
+    }
+    // A paused-gate release signals quiescence waiters before it drops its
+    // borrow, so a short recheck bounds a wake that lands before the release.
+    const auto observed_signal =
+        impl_->quiescence_signal.load(std::memory_order_acquire);
+    if (impl_->callback_state.load(std::memory_order_acquire) ==
+        static_cast<std::uint32_t>(RealtimeAudioWorkletGate::paused)) {
+      continue;
+    }
+    const auto wait_ms = std::min(
+        std::chrono::duration<double, std::milli>(deadline - now).count(),
+        std::chrono::duration<double, std::milli>(
+            kBeginRenderingGapRecheck).count());
+    static_cast<void>(emscripten_futex_wait(
+        &impl_->quiescence_signal, observed_signal, wait_ms));
   }
-  return foundation::Result<void>::success();
 }
 
 foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
@@ -868,10 +927,13 @@ bool RealtimeAudioWorklet::physically_quiescent() const noexcept {
 }
 
 bool RealtimeAudioWorklet::ready() const noexcept {
+  // Readiness is the paused gate, not a zero borrow count: a running context
+  // keeps admitting paused callbacks that never touch Engine. begin_rendering
+  // opens the gate only from the exact zero-borrow paused state (#2345).
   return impl_->worklet_state.load(std::memory_order_acquire) ==
              RealtimeAudioWorkletState::ready &&
-         impl_->callback_state.load(std::memory_order_acquire) ==
-             static_cast<std::uint32_t>(RealtimeAudioWorkletGate::paused);
+         Impl::callback_gate(impl_->callback_state.load(
+             std::memory_order_acquire)) == RealtimeAudioWorkletGate::paused;
 }
 
 std::uint64_t RealtimeAudioWorklet::acknowledged_generation() const noexcept {
@@ -1039,6 +1101,12 @@ std::uint64_t
 RealtimeAudioWorklet::physical_fence_pending_cue_batch_for_conformance() const noexcept {
   return lmdj::audio::detail::RealtimeEngineAudioAccess::pending_cue_batch_for_conformance(
       impl_->engine);
+}
+
+std::uint32_t
+RealtimeAudioWorklet::begin_rendering_borrow_waits_for_conformance()
+    const noexcept {
+  return impl_->begin_rendering_borrow_waits.load(std::memory_order_acquire);
 }
 
 std::uint32_t

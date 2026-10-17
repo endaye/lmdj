@@ -135,6 +135,7 @@ class RealtimeAudioWorklet final {
   std::uint64_t physical_fence_cue_batch_for_conformance() const noexcept;
   std::uint64_t physical_fence_pending_cue_batch_for_conformance() const noexcept;
   std::uint32_t physical_fence_borrow_count_for_conformance() const noexcept;
+  std::uint32_t begin_rendering_borrow_waits_for_conformance() const noexcept;
 #endif
 
  private:
