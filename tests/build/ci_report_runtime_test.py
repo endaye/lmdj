@@ -290,6 +290,22 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(self.adapter.deliver(self.planned(), 32)["outcomes"], [])
         self.assertEqual(len(self.posts()), 1)
 
+    def test_journaled_batch_report_with_changed_identity_fails_closed_despite_superseded_pair(self):
+        # Supersession must not hide a protected-identity conflict on the
+        # batch bucket's own journaled delivery.
+        result(self.scheduler, kind="bootstrap", special="missing")
+        report, = self.planned()
+        self.adapter.deliver((report,), 32)
+        old_key, old_observation = report.supersedes[0]
+        self.adapter.deliver((module.ScopedReport(key=old_key, title="self-test: old missing",
+            observation=old_observation, severity="low", labels=("self-test",),
+            summary="old", detail="old"),), 32)
+        from dataclasses import replace
+        changed = replace(report, title="self-test: renamed batch bucket")
+        object.__setattr__(changed, "supersedes", report.supersedes)
+        with self.assertRaises(module.ReportConflictError):
+            self.adapter.deliver((changed,), 32)
+
     def test_missing_batch_already_reported_per_suite_is_not_reported_again(self):
         # Historical outboxes hold this batch under the per-suite projection,
         # keyed by its managed bucket or, before T8b, the legacy suite key.

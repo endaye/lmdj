@@ -454,17 +454,16 @@ class ReportRuntime:
         # new-observation budget, including ambiguous claims.
         missing = []
         for report in effective_planned:
-            # Full replay revisits every historical batch. A missing batch already
-            # journaled under its old per-suite projection is reported; posting it
-            # again under the batch bucket would duplicate the observation.
-            if any(batch.digest({"key": old_key, "observation": old_observation}) in state["deliveries"]
-                   for old_key, old_observation in getattr(report, "supersedes", ())):
-                continue
             key = batch.digest({"key": report.key, "observation": report.observation})
             payload = report_outbox.freeze(report, reporting.DEFAULT_ASSIGNEE)
             if key in state["deliveries"]:
                 _require_replan_compatible(state["deliveries"][key]["payload"], payload)
-            else:
+            elif not any(batch.digest({"key": old_key, "observation": old_observation}) in state["deliveries"]
+                         for old_key, old_observation in getattr(report, "supersedes", ())):
+                # Full replay revisits every historical batch. A missing batch
+                # already journaled under its old per-suite projection is
+                # reported; posting it again under the batch bucket would
+                # duplicate the observation.
                 missing.append(report)
         outcomes = [outbox.deliver(self.api, report) for report in missing[:limit]]
         # Resume one previously queued payload even if its source artifact has

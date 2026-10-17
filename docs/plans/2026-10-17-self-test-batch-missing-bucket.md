@@ -65,7 +65,10 @@ timeouts and lane selection are unchanged. Existing buckets are not closed.
     replay and supersession tests fail;
   - delivery stops consulting superseded pairs → both supersession subtests
     (managed and legacy key) fail at the no-redelivery assertion;
-  - superseded pairs drop the legacy suite key → only the legacy subtest fails.
+  - superseded pairs drop the legacy suite key → only the legacy subtest fails;
+  - supersession consulted before the protected-identity comparison → a
+    journaled batch report replanned with a changed title is silently skipped
+    instead of raising `ReportConflictError` (review finding on the first head).
   The supersession test derives the old keys and observation independently of
   the planner, so a planner omission cannot also hide from the test.
 - `scripts/docs-site.sh check` for the Portal page.
