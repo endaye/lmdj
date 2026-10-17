@@ -72,6 +72,17 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         self.assertIn('rm -rf -- "$python_shim_dir"', stress, message)
         self.assertIn("--repeat until-fail:20", stress, message)
 
+    def test_release_stress_job_keeps_its_owner_budget(self) -> None:
+        # Owner budget decision (2026-10-16): twenty repetitions took 52.7 min
+        # on an idle M1 and were cancelled at 60 min on a loaded one.
+        self.assertIn(
+            "timeout-minutes: 80",
+            self.job("core-stress"),
+            "why: core-stress differs from its recorded hang-detection budget; "
+            "remedy: restore timeout-minutes: 80, or record a measured owner "
+            "budget decision before changing the pin",
+        )
+
     def test_scheduled_tsan_runs_on_the_core_role(self) -> None:
         """Routing was accepted on same-revision evidence, and stays pinned.
 

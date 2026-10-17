@@ -33,6 +33,9 @@ recurrences:
   - date: 2026-10-16
     occurrence: https://github.com/endaye/lmdj/issues/2283
     observed_by: Codex (GPT-6)
+  - date: 2026-10-17
+    occurrence: https://github.com/endaye/lmdj/actions/runs/38984377212
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -115,6 +118,14 @@ cannot remove that test work. The owner calibrated this job to 40 minutes on
 2026-10-16, retaining every test deadline and selection. Re-evaluate when any
 M1 `Run macOS Core gates` step exceeds 35 minutes: optimize the tests next,
 not the job limit. The remaining cost work belongs to #2306 and #2284.
+The M1 Release stress job followed on 2026-10-16/17: twenty repetitions took
+52.7 min on an idle M1 (run 38662185311), and runs 38962992372 and
+38984377212 (the 2.0.112.0 candidate batch) were cancelled at 60 min while the
+M1 also served other work (`facade.pattern_count_in_stress` 131 s vs 106 s,
+`facade.candidate_store_stress` 57 s vs 47 s per repetition). The owner raised
+that limit to 80 minutes with the repeat count unchanged; on a shared runner,
+size a repeated job against its loaded per-repetition time. The cost work
+remains #2284 and #2306.
 
 Splitting into more registrations only helps a runner that executes them
 concurrently, and the stress jobs do not: `scripts/core.sh test tsan stress`

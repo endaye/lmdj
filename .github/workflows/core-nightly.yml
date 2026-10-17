@@ -176,7 +176,13 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, macOS, ARM64, lmdj, lmdj-mac-m1]
-    timeout-minutes: 60
+    # Owner budget decision 2026-10-16: twenty repetitions took 52.7 min
+    # (3138 s of tests, run 38662185311) on an idle M1, and runs 38962992372
+    # and 38984377212 were cancelled at 60 min while the M1 was loaded
+    # (facade.pattern_count_in_stress 131 s vs 106 s per repetition,
+    # facade.candidate_store_stress 57 s vs 47 s). The limit is a hang
+    # detector with headroom, not a target; the repeat count is unchanged.
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v6
         with:
