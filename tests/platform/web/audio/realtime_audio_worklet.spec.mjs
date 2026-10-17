@@ -1249,6 +1249,7 @@ test("activation waits for an in-flight paused callback instead of refusing it",
     window.lmdjWebRuntimeHostTest.runPausedBorrowActivationProof());
   expect(proof.held).toEqual({gate: "paused", callbackInFlight: 1});
   expect(proof.settledWhileHeld).toBe(false);
+  expect(proof.beginMetHeldBorrow).toBe(true);
   expect(proof.activation).toMatchObject({
     ok: true,
     result: {state: "running", changed: true},

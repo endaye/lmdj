@@ -599,6 +599,8 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<std::uint32_t> physical_fence_released{0};
   std::atomic<std::uint32_t> physical_fence_entered{0};
   std::atomic<std::uint64_t> physical_fence_cue_batch{0};
+  // Counts begin_rendering attempts that met an in-flight callback borrow.
+  std::atomic<std::uint32_t> begin_rendering_borrow_waits{0};
   std::atomic<std::uint32_t> observed_quantum{0};
   std::atomic<std::uint32_t> render_count{0};
   std::atomic<std::uint32_t> energy_microunits{0};
@@ -806,6 +808,15 @@ foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet gate is not paused"));
     }
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+    impl_->begin_rendering_borrow_waits.fetch_add(
+        1, std::memory_order_acq_rel);
+#endif
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      return foundation::Result<void>::failure(worklet_error(
+          "Wasm AudioWorklet paused callback did not release its borrow"));
+    }
     // A paused-gate release signals quiescence waiters before it drops its
     // borrow, so a short recheck bounds a wake that lands before the release.
     const auto observed_signal =
@@ -813,11 +824,6 @@ foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
     if (impl_->callback_state.load(std::memory_order_acquire) ==
         static_cast<std::uint32_t>(RealtimeAudioWorkletGate::paused)) {
       continue;
-    }
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= deadline) {
-      return foundation::Result<void>::failure(worklet_error(
-          "Wasm AudioWorklet paused callback did not release its borrow"));
     }
     const auto wait_ms = std::min(
         std::chrono::duration<double, std::milli>(deadline - now).count(),
@@ -1095,6 +1101,12 @@ std::uint64_t
 RealtimeAudioWorklet::physical_fence_pending_cue_batch_for_conformance() const noexcept {
   return lmdj::audio::detail::RealtimeEngineAudioAccess::pending_cue_batch_for_conformance(
       impl_->engine);
+}
+
+std::uint32_t
+RealtimeAudioWorklet::begin_rendering_borrow_waits_for_conformance()
+    const noexcept {
+  return impl_->begin_rendering_borrow_waits.load(std::memory_order_acquire);
 }
 
 std::uint32_t

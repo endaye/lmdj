@@ -2977,7 +2977,9 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_callback_heartbeat() {
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_fence_arm(std::uint32_t stages) {
   auto* adapter = web_audio.load(std::memory_order_acquire);
-  if (adapter == nullptr || stages == 0 || (stages & ~7U) != 0) return 0;
+  // The paused stage (4) holds a paused callback and arms only on its own.
+  if (adapter == nullptr || stages == 0 || (stages & ~7U) != 0 ||
+      ((stages & 4U) != 0 && stages != 4U)) return 0;
   adapter->arm_physical_fence_barrier_for_conformance(stages);
   return 1;
 }
@@ -3005,6 +3007,11 @@ EMSCRIPTEN_KEEPALIVE double lmdj_web_audio_test_physical_fence_pending_cue_batch
   auto* adapter = web_audio.load(std::memory_order_acquire);
   return adapter == nullptr ? 0 : static_cast<double>(
       adapter->physical_fence_pending_cue_batch_for_conformance());
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_begin_rendering_borrow_waits() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : adapter->begin_rendering_borrow_waits_for_conformance();
 }
 
 EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_physical_fence_borrows() {
