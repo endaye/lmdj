@@ -215,6 +215,8 @@ export interface PatternTransportRuntimeSession {
   requestPatternInput(request: PatternInputRequest): Promise<PatternInputAdmission>;
   inspectPatternInput(ticket: PatternInputTicket, consume?: boolean): Promise<PatternInputStatus>;
   queryPatternCountInCapabilities(): Promise<PatternCountInCapabilities>;
+  /** Direct monitoring preference for Native's optional downbeat at scheduled S. */
+  setCountInMetronome(enabled: boolean): void;
   /** Returns admission promptly; inspect observes native and durable progress. */
   requestPatternCountIn(request: PatternCountInRequest): Promise<PatternCountInAdmission>;
   inspectPatternCountIn(ticket: PatternCountInTicket, consume?: boolean): Promise<PatternCountInStatus>;

@@ -81,6 +81,9 @@ class RealtimeAudioWorklet final {
       std::int32_t output_destination_handle,
       std::int32_t cue_destination_handle) noexcept;
   bool has_count_in_output() const noexcept;
+  // Browser-main monitoring preference, sampled by Native at scheduled S.
+  // Direct atomic publication; it never waits on the control/I/O dispatcher.
+  bool set_count_in_metronome_on_browser_main(bool enabled) noexcept;
   bool connect_direct_output_on_browser_main(
       std::int32_t audio_context_handle,
       std::int32_t output_destination_handle = 0) noexcept;

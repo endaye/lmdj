@@ -2874,6 +2874,19 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_has_count_in_output() {
   return adapter != nullptr && adapter->has_count_in_output() ? 1 : 0;
 }
 
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_set_count_in_metronome(int enabled) {
+  if (!emscripten_is_main_browser_thread() ||
+      web_manifest_terminal_failure.load(std::memory_order_acquire) ||
+      (enabled != 0 && enabled != 1)) {
+    return 0;
+  }
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter != nullptr &&
+                 adapter->set_count_in_metronome_on_browser_main(enabled == 1)
+             ? 1
+             : 0;
+}
+
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_connect_direct(
     std::int32_t audio_context_handle,
     std::int32_t output_destination_handle) {

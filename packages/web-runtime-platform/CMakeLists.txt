@@ -157,6 +157,7 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_start
     _lmdj_web_audio_start_with_count_in
     _lmdj_web_audio_has_count_in_output
+    _lmdj_web_audio_set_count_in_metronome
     _lmdj_web_audio_connect_direct
     _lmdj_web_audio_state
     _lmdj_web_audio_fatal

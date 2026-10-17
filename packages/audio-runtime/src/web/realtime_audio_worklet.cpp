@@ -690,6 +690,25 @@ bool RealtimeAudioWorklet::has_count_in_output() const noexcept {
   return impl_->count_in_output.load(std::memory_order_acquire);
 }
 
+bool RealtimeAudioWorklet::set_count_in_metronome_on_browser_main(
+    bool enabled) noexcept {
+  if (!emscripten_is_main_browser_thread() ||
+      state() != RealtimeAudioWorkletState::ready ||
+      fatal() != RealtimeAudioWorkletFatal::none || !has_count_in_output()) {
+    return false;
+  }
+  const auto gate = gate_state();
+  if (gate != RealtimeAudioWorkletGate::paused &&
+      gate != RealtimeAudioWorkletGate::open) {
+    return false;
+  }
+  // The adapter retains its Engine for its complete published lifetime, as
+  // for the other browser-main entry points. This is the Engine's existing
+  // atomic monitoring flag; no Project/control state or audio payload is read.
+  impl_->engine.set_count_in_metronome(enabled);
+  return true;
+}
+
 bool RealtimeAudioWorklet::connect_direct_output_on_browser_main(
     std::int32_t audio_context_handle,
     std::int32_t output_destination_handle) noexcept {
