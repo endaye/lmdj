@@ -286,7 +286,7 @@ head／policy 绑定的 AI 建议取并集，标签仅展示；合入后不再�
 共享重型锁继续保护真实资源容量；短控制器锁不得跨重型执行持有。
 processed 只是处理进度：none／focused 成功不能清除历史失败或未覆盖债务。
 
-增量批次的 Scoped batch verdict 只在实际 `needs` 证明某个非产品控制依赖失败、且选中的 suite job 因该精确依赖被阻断时，生成带 exact request/run/attempt/cause 身份的 source-bound common event；它不从同时发生的产品失败或时间相关性推断 quota 或其他根因。artifact 校验器从保留的 raw `needs` 重建该事件；历史 v1 verdict 仍按 v1 模式重放，不因新事件协议被改写。报告 planner 对同一事件生成一个 durable common-infrastructure report，并列出所有受影响 suite 的未执行债务；同一 suite 中独立的 test failure、cancellation、missing 或 infrastructure debt 仍分别报告，不被共有原因吞并。该行为和报告链的测试通过不等于当前远端 CI、runner 或完整 Product Proof 已验收。
+增量批次的 Scoped batch verdict 只在实际 `needs` 证明某个非产品控制依赖失败、且选中的 suite job 因该精确依赖被阻断时，生成带 exact request/run/attempt/cause 身份的 source-bound common event；它不从同时发生的产品失败或时间相关性推断 quota 或其他根因。artifact 校验器从保留的 raw `needs` 重建该事件；历史 v1 verdict 仍按 v1 模式重放，不因新事件协议被改写。报告 planner 对同一事件生成一个 durable common-infrastructure report，并列出所有受影响 suite 的未执行债务；同一 suite 中独立的 test failure、cancellation、missing 或 infrastructure debt 仍分别报告，不被共有原因吞并。整批没有任何执行证据的 missing receipt 没有产品 verdict，不代表任何 suite 通过或失败，因此只作为一次观测报告到固定的非 managed `self-test-batch-execution-missing` bucket，并列出全部缺证据与 deferred 的 suite，不再按 suite 拆成多个 missing bucket，也不会被自动关闭；历史上已按 suite 投递过的同一 receipt 不会重复报告。该行为和报告链的测试通过不等于当前远端 CI、runner 或完整 Product Proof 已验收。
 
 自动恢复只处理由同一 report runtime 以 scheduler epoch、policy、suite、class 稳定身份创建、并保留独立创建 provenance 的新 managed bucket；历史同键 Issue、人工评论或编辑过的 bucket，以及显式 candidate／node 结果，都不会被采用。后续结果必须来自完整认证的 scheduler journal 顺序，并在相同 policy 下实际覆盖该 suite 的 required jobs／dependencies、selected PASS 且无 verification debt；selection digest 仅作 provenance，不阻断合法扩展 scope。恢复先持久化并确认 success comment，再持久化并确认 close PATCH；未知写入只读协调、不重放，新的失败按 journal 因果顺序重新打开 bucket。绿色但 skipped、missing 或有 debt 的 suite 不会 discharge debt。
 
