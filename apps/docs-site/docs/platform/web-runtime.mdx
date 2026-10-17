@@ -74,6 +74,12 @@ completion 与必要 durable admission，held begin/append 时 Stop、inspect、
 reserved release 仍能进入。`runtime.session` 是同一个 frozen public SDK Session，
 不是第二个控制/I/O owner。精确 wire key/状态见 [Web Runtime Platform 模块](../core/modules/web-runtime-platform.mdx)。
 
+S7 的原生下拍前置接口 `setCountInMetronome(boolean)` 已提供：运行中同步发布 device
+monitoring 偏好到 Native；原生在实际 S 读取它，On 时发出一个普通 accented downbeat，
+Off 时只保留 `[C,S)` 内的四/八个强制 cue。该调用不经过排队 RPC，不改变 Project 或
+录制状态。它尚不代表 Creator 控件、倒计时/灯和 JS scheduler 的 S 排除已经完成；
+后续 consumer 必须避免 native S 与 JS S 重复。浏览器 PCM 的精确边界证据不替代实机听感。
+
 Profile 在 stopped/quiescent、任何 live Pad 之前协商，每次 activation/recovery 更新
 真实 generation/frame epoch。canonical whole decimal uint64 input/epoch 与 uint60
 schedule serial 拒绝换行、leading zero、overflow；frame Number 超安全域 typed refuse。

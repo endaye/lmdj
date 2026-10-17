@@ -5327,6 +5327,22 @@ function createRuntimeSessionController(options = {}) {
     return serializeRuntimeAction(() => readCountInCapabilities(false));
   }
 
+  function setCountInMetronome(enabled) {
+    if (typeof enabled !== "boolean") throw new TypeError("Count-in metronome must be boolean");
+    requirePatternTransportOptIn();
+    if (closing || machine.state !== "running") {
+      throw typedError("HOST_STATE_INVALID", "Count-in metronome needs an active audio owner");
+    }
+    if (!countInOutputActive || typeof runtime?.setCountInMetronome !== "function") {
+      throw typedError("UNSUPPORTED_AUDIO", "Native count-in metronome is unavailable");
+    }
+    // S may arrive while the control thread is opening the Journal. Publish
+    // directly to Native's existing atomic flag; do not join either RPC tail.
+    if (runtime.setCountInMetronome(enabled) !== true) {
+      throw typedError("HOST_STATE_INVALID", "Native count-in metronome owner refused the preference");
+    }
+  }
+
   function requestPatternCountIn(request) {
     if (!exactKeys(request, ["sessionId", "projectId", "commandId", "runtimeGeneration", "frameEpoch",
         "scheduleSerial", "expectedEpoch", "bars", "expectedRevision"]) ||
@@ -7867,7 +7883,7 @@ function createRuntimeSessionController(options = {}) {
         });
         Object.defineProperty(runtime, "patternTransport", {
           value: Object.freeze({requestPatternTransport, inspectPatternTransport,
-            requestTransportPatternSwitch, queryPatternCountInCapabilities, requestPatternCountIn,
+            requestTransportPatternSwitch, queryPatternCountInCapabilities, setCountInMetronome, requestPatternCountIn,
             inspectPatternCountIn, cancelPatternCountIn, requestPatternInput, inspectPatternInput,
             trigger, release}), configurable: false, writable: false,
         });
@@ -8501,6 +8517,7 @@ function createRuntimeSessionController(options = {}) {
     requestPatternTransport,
     inspectPatternTransport,
     queryPatternCountInCapabilities,
+    setCountInMetronome,
     requestPatternCountIn,
     inspectPatternCountIn,
     cancelPatternCountIn,

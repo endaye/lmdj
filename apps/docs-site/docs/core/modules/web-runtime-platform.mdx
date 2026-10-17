@@ -209,6 +209,7 @@ quiescent activation、任何 live Pad 前协商 Native input profile；running 
 | 公共方法 | Host operation / 结果 |
 | --- | --- |
 | `queryPatternCountInCapabilities()` | `pattern.transport.count-in.capabilities`，wire `{negotiate: boolean}`；公开查询使用 false，activation 的内部协商使用 true。 |
+| `setCountInMetronome(enabled)` | 同步调用 Native monitoring capability；无 wire RPC，设置实际 scheduled S 是否发出普通重拍。 |
 | `requestPatternCountIn(request)` | `pattern.transport.count-in.request` → `{submit, ticket, status}`，只作短 admission。 |
 | `inspectPatternCountIn(ticket, consume=false)` | `pattern.transport.count-in.inspect` → retained status。 |
 | `cancelPatternCountIn(request)` | `pattern.transport.count-in.cancel` → `{submit, ticket, status}`，ticket 仍指向原 start。 |
@@ -218,6 +219,12 @@ quiescent activation、任何 live Pad 前协商 Native input profile；running 
 capability wire result 恰含 `supported, negotiated, output_ready, runtime_generation,
 frame_epoch, next_serial, input_capacity`。legacy 单输出不具备 cue capability 时明确不支持
 count-in；正常普通 transport 仍可用。public `outputReady` 同时要求 Host 与 Session 图已就绪。
+
+`setCountInMetronome(boolean)` 只在当前 Session audio running 且真实双输出已建立时可用。
+它经 browser-main export 直接发布既有原生 atomic flag，不等待 control/I/O request tail，
+不写 Project/history。非 boolean、legacy 缺少入口、非 running/closing Session 和 Native
+拒绝分别明确报告；拒绝不将普通音频封闭。adapter 要求 ready、非 fatal、双输出及
+paused/open gate。返回只证明监控偏好已发布，不是 Record admission、Applied 或 durable receipt。
 
 count-in request wire 恰含 `session_id, project_id, command_id, runtime_generation,
 frame_epoch, schedule_serial, expected_epoch, bars, expected_revision`；bars 仅 1/2，revision

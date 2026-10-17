@@ -100,6 +100,7 @@ const API = [
   "inspectPatternInput",
   "inspectPatternTransport",
   "queryPatternCountInCapabilities",
+  "setCountInMetronome",
   "requestPatternCountIn",
   "inspectPatternCountIn",
   "cancelPatternCountIn",
@@ -287,6 +288,7 @@ function fixture({
   audioCallbackHeartbeat,
   startAudioWorklet,
   startAudioWorkletWithCountIn,
+  setCountInMetronome,
   registerAudioNode,
   createPerformanceMasterTap,
   connectAudioWorkletDirect,
@@ -403,6 +405,7 @@ function fixture({
         ...(startAudioWorkletWithCountIn === undefined ? {} : {
           startAudioWorkletWithCountIn,
         }),
+        ...(setCountInMetronome === undefined ? {} : {setCountInMetronome}),
         connectAudioWorkletDirect:
           connectAudioWorkletDirect ?? (() => true),
         workers: [],
@@ -7003,6 +7006,93 @@ test("count-in capability probing never downgrades a malformed Host envelope to 
   await session.start();
   await assert.rejects(session.queryPatternCountInCapabilities(), {code: "HOST_PROTOCOL_MISMATCH"});
   await session.close();
+});
+
+function metronomeCapabilityFixture(overrides = {}) {
+  let handle = 10;
+  return fixture({patternTransport: true,
+    registerAudioNode: () => ++handle,
+    startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+    ...overrides});
+}
+
+test("count-in metronome publishes boolean choices synchronously without a Host RPC", async () => {
+  const choices = [], sent = [];
+  const {session} = metronomeCapabilityFixture({
+    setCountInMetronome(enabled) { choices.push(enabled); return true; },
+    send: async envelope => {
+      sent.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  const before = [...sent];
+  assert.equal(session.setCountInMetronome(true), undefined);
+  assert.deepEqual(choices, [true], "the atomic publication happened before returning");
+  session.setCountInMetronome(false);
+  assert.deepEqual(choices, [true, false]);
+  assert.deepEqual(sent, before, "neither preference enters the Host dispatcher");
+  for (const value of [0, 1, "true", null, undefined])
+    assert.throws(() => session.setCountInMetronome(value), TypeError);
+  assert.deepEqual(choices, [true, false], "invalid values never reach Native");
+  await session.close();
+  assert.throws(() => session.setCountInMetronome(true), {code: "HOST_STATE_INVALID"});
+  assert.deepEqual(choices, [true, false]);
+});
+
+test("count-in metronome refuses inactive, legacy and unavailable Native owners explicitly", async () => {
+  let calls = 0;
+  const {session} = metronomeCapabilityFixture({
+    setCountInMetronome() { calls++; return false; },
+  });
+  assert.throws(() => session.setCountInMetronome(true), {code: "HOST_STATE_INVALID"});
+  await session.start();
+  assert.throws(() => session.setCountInMetronome(true), {code: "HOST_STATE_INVALID"});
+  assert.equal(calls, 0);
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.throws(() => session.setCountInMetronome(true), {code: "HOST_STATE_INVALID"});
+  assert.equal(calls, 1);
+  assert.equal(session.diagnostics().state, "running", "a refusal does not seal ordinary audio");
+  await session.close();
+
+  const legacy = metronomeCapabilityFixture();
+  await legacy.session.start();
+  await legacy.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.throws(() => legacy.session.setCountInMetronome(true), {code: "UNSUPPORTED_AUDIO"});
+  assert.equal(legacy.session.diagnostics().state, "running");
+  await legacy.session.close();
+});
+
+test("count-in metronome does not wait behind an outstanding Runtime query", async () => {
+  let release, entered = false;
+  const held = new Promise(resolve => { release = resolve; });
+  const choices = [];
+  const {session} = metronomeCapabilityFixture({
+    setCountInMetronome(enabled) { choices.push(enabled); return true; },
+    send: async envelope => {
+      if (envelope.operation === "project.inspect") {
+        entered = true;
+        await held;
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const pending = session.inspectProject();
+  try {
+    const deadline = performance.now() + 1_000;
+    while (!entered && performance.now() < deadline)
+      await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(entered, true, "the original query reached the held transport");
+    session.setCountInMetronome(true);
+    assert.deepEqual(choices, [true], "Native has the choice while the original query is still held");
+  } finally {
+    release();
+    await pending;
+    await session.close();
+  }
 });
 
 test("count-in pending admission releases SDK tails through the full twelve-second control interval", async () => {

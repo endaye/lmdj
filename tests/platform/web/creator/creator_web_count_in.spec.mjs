@@ -60,8 +60,9 @@ for (const scenario of [
   {bpm: 120, bars: 1, barFrames: 96_000, monitor: 100, stall: false},
   {bpm: 129, bars: 2, barFrames: 89_303, monitor: 0, stall: false},
   {bpm: 40, bars: 2, barFrames: 288_000, monitor: 60, stall: true},
+  {bpm: 120, bars: 1, barFrames: 96_000, monitor: 100, stall: false, metronome: true},
 ]) {
-  test(`packaged count-in ${scenario.bpm} BPM/${scenario.bars} bar uses native PCM boundaries and excludes cues from Master`,
+  test(`packaged count-in ${scenario.bpm} BPM/${scenario.bars} bar uses native PCM boundaries and excludes cues from Master${scenario.metronome ? " with native S downbeat" : ""}`,
     async ({page}) => {
       // This includes the existing bounded Project import, a real 12-second
       // count-in at 40 BPM, and the original 5-second opening/closure budgets.
@@ -71,6 +72,11 @@ for (const scenario of [
       const setup = await prepareCountInProject(page, scenario.bpm);
       await attachCountInPcmObserver(page);
       const clock = await ensureCountInClock(page);
+      // Public synchronous capability; the optional ordinary downbeat at S
+      // comes from Native, not the observing page's clock or JS oscillator.
+      await page.evaluate(enabled =>
+        window.lmdjWebRuntimeHost.session.setCountInMetronome(enabled),
+      scenario.metronome === true);
       await setCountInMonitor(page, scenario.monitor);
       await startCountInMasterCapture(page);
       await armCountInPcm(page);
@@ -128,7 +134,8 @@ for (const scenario of [
       } else await waitForObservedFrame(page, start + 9_600, 2_000);
       // Freeze the fixed 16-second cell as soon as the required post-S PCM
       // exists. I/O opening may use its original remaining five seconds.
-      const pcm = await readCountInPcm(page, [...markers, start], {cueMarkers: markers});
+      const expectedCues = scenario.metronome ? [...markers, start] : markers;
+      const pcm = await readCountInPcm(page, [...markers, start], {cueMarkers: expectedCues});
       const applied = await waitForCountInOpening(page, admitted.ticket, clock, count.startFrame);
       if (scenario.stall) {
         const proof = await page.evaluate(() => window.__countInRpcProof);
@@ -156,11 +163,15 @@ for (const scenario of [
         }
       }
       expect(applied.startReceipt.patternId).toBe(setup.patternId);
-      expectForcedCountInPcm(pcm, markers, {monitorLevel: scenario.monitor / 100});
+      // The independent analytic envelope/absolute onset oracle covers all
+      // forced cues and, when enabled, exactly one additional accented S cue.
+      // Its aligned monitor assertion includes product + cue at that S.
+      expectForcedCountInPcm(pcm, expectedCues, {monitorLevel: scenario.monitor / 100});
       expect(pcm.planes[0].onsets).toEqual([start + 1]);
       expect(pcm.planes[1].onsets).toEqual([start + 1]);
       expect(pcm.planes[0].energy).toBeGreaterThan(0);
-      expectCountInProductMonitor(pcm, start, scenario.monitor / 100);
+      if (!scenario.metronome)
+        expectCountInProductMonitor(pcm, start, scenario.monitor / 100);
       if (scenario.monitor === 0) {
         expect(pcm.planes[4].energy).toBe(0);
         expect(pcm.planes[5].energy).toBe(0);

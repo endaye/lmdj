@@ -442,6 +442,42 @@ function actualBrowserRuntimePublication({Module, window, crypto, globals = {}})
   return channels;
 }
 
+test("actual count-in metronome entry point encodes a boolean and reports Native refusal", () => {
+  const choices = [];
+  let accepted = 1;
+  const f = deadlineTransportFixture();
+  f.Module._lmdj_web_audio_set_count_in_metronome = value => {
+    choices.push(value); return accepted;
+  };
+  const host = f.host;
+  host.runtimeInitialized = false;
+  assert.equal(host.setCountInMetronome(true), false);
+  assert.deepEqual(choices, [], "an uninitialized Runtime never reaches Native");
+  host.runtimeInitialized = true;
+  host.manifestReady = true;
+  assert.equal(host.setCountInMetronome(true), true);
+  assert.equal(host.setCountInMetronome(false), true);
+  assert.deepEqual(choices, [1, 0]);
+  accepted = 0;
+  assert.equal(host.setCountInMetronome(true), false);
+  assert.deepEqual(choices, [1, 0, 1]);
+  assert.throws(() => host.setCountInMetronome(1), {name: "TypeError"});
+  assert.deepEqual(choices, [1, 0, 1]);
+  void host.transport.terminate();
+  assert.equal(host.setCountInMetronome(false), false);
+  assert.deepEqual(choices, [1, 0, 1], "a terminated owner cannot publish a later choice");
+});
+
+test("actual count-in metronome entry point refuses a Runtime without the native export", () => {
+  const window = {Worker: class {}};
+  actualBrowserRuntimePublication({Module: {}, window,
+    crypto: {randomUUID: () => "00000000-0000-4000-8000-000000000001"}});
+  const host = window.lmdjWebRuntimeHost;
+  host.runtimeInitialized = true;
+  host.manifestReady = true;
+  assert.equal(host.setCountInMetronome(true), false);
+});
+
 test("actual Host publisher reports its local owner to its original Module before global publication", () => {
   const priorHost = {prior: true};
   const foreignHost = {foreign: true};
@@ -545,7 +581,7 @@ function deadlineTransportFixture({cancel = () => 1, queryCancel = () => 1,
   });
   const host = window.lmdjWebRuntimeHost;
   host.runtimeInitialized = true;
-  return {transport: host.transport, submissions, cancellations, responses, diagnosticLines,
+  return {host, Module, transport: host.transport, submissions, cancellations, responses, diagnosticLines,
     releaseRequests: () => channels.flatMap((channel) => channel.posted)
       .filter((message) => message.type === "release-and-close").length,
     advance(to) {
