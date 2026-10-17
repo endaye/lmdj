@@ -701,6 +701,13 @@ observed since 2026-09-18 -- four consecutive batches, worst 4.7-9.0 ms, never
 a pass -- was a sub-tick stall the counters cannot see, while the identical
 Release build passed 20/20 repetitions on the M1. The deadline and the
 zero-unattributed-overruns bound are unchanged; only the host is.
+The job runs under an 80-minute limit (owner budget decision, 2026-10-16):
+twenty repetitions took 52.7 min (3138 s of tests, run 38662185311) on an idle
+M1, and two batches on a loaded M1 were cancelled at the former 60 minutes
+(`facade.pattern_count_in_stress` 131 s instead of 106 s per repetition,
+`facade.candidate_store_stress` 57 s instead of 47 s). The repeat count is
+unchanged; the limit is a hang detector, not a target, and reducing the stress
+cost without weakening it is tracked by #2284 and #2306.
 
 `master_fx_stress` times its two Sample parity scenarios differently. The
 #1666 scenario, 128 kernel voices with every #1666 stage under all eight master
