@@ -142,6 +142,22 @@ if(BUILD_TESTING)
   lmdj_target_sanitizers(lmdj_pattern_transport_segment_tests)
   lmdj_add_test(NAME facade.pattern_transport_segment TIER component
     COMMAND lmdj_pattern_transport_segment_tests)
+  add_executable(lmdj_pattern_transport_switch_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_switch_test.cpp")
+  target_include_directories(lmdj_pattern_transport_switch_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  if(NOT EMSCRIPTEN)
+    # Only this native proof can move the quiescent callback clock to expose
+    # a late actual apply. Product/Host targets retain the ordinary library.
+    target_link_libraries(lmdj_pattern_transport_switch_tests PRIVATE lmdj_audio_runtime_testable)
+    target_compile_definitions(lmdj_pattern_transport_switch_tests PRIVATE LMDJ_AUDIO_RUNTIME_TESTING=1)
+  endif()
+  target_link_libraries(lmdj_pattern_transport_switch_tests PRIVATE lmdj::application Threads::Threads)
+  lmdj_target_warnings(lmdj_pattern_transport_switch_tests)
+  lmdj_target_sanitizers(lmdj_pattern_transport_switch_tests)
+  lmdj_add_test(NAME facade.pattern_transport_switch TIER component
+    COMMAND lmdj_pattern_transport_switch_tests)
+  lmdj_add_test(NAME facade.pattern_transport_switch_stress TIER stress
+    COMMAND lmdj_pattern_transport_switch_tests --stress LABELS concurrency)
   add_executable(lmdj_pattern_transport_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_test.cpp")
   target_include_directories(lmdj_pattern_transport_tests PRIVATE "${CMAKE_SOURCE_DIR}")

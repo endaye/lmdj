@@ -94,6 +94,16 @@ class PatternTransportCoordinator {
   void request_shutdown();
   bool shutdown_complete() const;
   PatternTransportExecutorStatus inspect_io() const;
+  foundation::Result<PatternTransportSwitchTicket> reserve_pattern_switch(
+      const PatternTransportSwitchRequest&);
+  bool bind_pattern_switch(const PatternTransportSwitchTicket&,
+      const audio::PatternReplacementAuthority&, std::uint16_t bpm);
+  bool complete_pattern_switch(const PatternTransportSwitchTicket&,
+      const audio::PatternPublicationObservation&);
+  std::optional<PatternTransportSwitchStatus> inspect_pattern_switch(
+      const PatternTransportSwitchTicket&) const;
+  bool consume_pattern_switch(const PatternTransportSwitchTicket&);
+  bool abandon_pattern_switch(const PatternTransportSwitchTicket&);
 
   PatternTransportSubmit request(const PatternTransportRequest& request);
   bool retains_command_id(const foundation::CommandId& command_id) const;

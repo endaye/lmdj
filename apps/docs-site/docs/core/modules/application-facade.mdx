@@ -142,9 +142,36 @@ A→B→A 的新 generation 使用新的零点而保留之前 A 的完整 Truth�
 稳定 work 派生的 transfer/flush/profile ID 使部分 append、manifest、switch 或
 profile 回应丢失仍可经实际 durable writer 精确重放；历史重试不倒退当前段。
 重建 I/O owner 可结算原耐久操作，但不会从可读 opening bytes 伪造原始正向
-opening completion，也不据此授权新的 live input。控制层仍须按真实 Native
-保留事实排序，并在 segment ACK 前暂存 S 起的输入；当前 Host/Creator 的录音中
-切换门禁尚未接线，此 primitive 和文件级回归不代表完整 S3 或设备验收。
+opening completion，也不据此授权新的 live input。
+
+公共 `PatternTransportController` 现在提供录音切换的 reserve/bind/complete/
+inspect/consume/abandon capability。它仍是 Pimpl 的 nonvirtual 方法，已有 class
+布局与 audio port vtable 不变。最多两张切换票据绑定 Native control lease 的
+不可变 queued authority、prepared BPM 与真实 Applied S，控制侧按次序交给同一
+I/O owner，Journal 仍一次只协调一个未完成段。票据从原录音 operation/runtime/
+epoch 与单调 serial 派生稳定内部 command；wire request_id 仍是原有 trace 字段。
+Host 在准备 Snapshot 与发布 Native 前先 reserve；I/O 忙或目标可能遗漏尚未提交
+的自有音符时先拒绝准备，因此 A→B→A 的返回视图只能包含已确认 A 数据。
+reserve、Facade Snapshot 准备、Native 发布与 bind 同属一次 serialized control
+turn，准备失败即 abandon，不能在异步准备期间另行推进 I/O。
+当前 Pattern 点击的撤回继续归 Host，接口不创建同 Pattern 的 Journal 段。
+
+queued 边界先阻挡其下界起的原始输入，真实 S 到达后只放行 S 之前的源输入；
+S 起的 Pad 继续走 Native live 路径，录音元数据等目标 clock 耐久 ACK 后才进入。
+两个 Native 事实可在 worker 阻塞期间先后落地，不能只看 latest current；第三个
+必须在任何 Native 发布之前拒绝。S 的 ACK 只结清旧段 authoring hold，Native
+实际按键和未来 release 仍独立持有并经真实消费者释放。pending switch 期间
+旧段 overlay/query 不再发布，ACK 更新 projection 内容且保留单调 generation。
+普通状态的 origin 跟随实际 S；原 COUNT-IN e1/e2 继续绑定原 Pattern/S0。
+Stop 可先捕获真实 F，随后按序提交全部 `S<F`；`S=F` 的 Native 取消不创建目标段。
+
+Host 独占真实 lease。正常切换需要 Native 最终处置与耐久 ACK，再 reset pin、
+consume 票据；取消的 publication 无目标 authoring effect。失败切换保留失败状态，
+显式 shutdown 经原 I/O owner 的真实 owner_lost ACK 才置 owner_disposed；这个资源
+事实不冒充成功录音。它不等待会扫描这些 pin 的 Native quiescence，Host 随后
+消费实际 Native 结果、撤销真实物理 hold、释放 pin 并完成最终 quiescence。
+当前 Host/Creator 的录音中切换门禁尚未接入上述 capability，C3/C4 与完整 S3
+packaged/设备验收仍独立待交付。
 
 cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
 opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产

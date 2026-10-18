@@ -751,3 +751,208 @@ After exact receipt validation, all six original/new selections pass again:
 0.14 s, admission 2.22 s and transport 1.64 s. No Portal/diagram input changed
 from its complete passing check. Preserve reviewed 70c0b0fd before amending
 this Task; refresh unchanged main and request a new exact-head review.
+
+### S3 C2c — bounded control reservations and ordered segment delivery
+
+Premise refresh before implementation: intended main and this worktree both
+start at `b679b5f5453186d519f2a4f7225c5c4c8c68f3cd`. Live #2233 remains open;
+no open successor supplies the control wiring. #2364 is actually integrated,
+its ten files match verified 5bd1d452, and its exact-receipt/retry semantics
+must not be repeated or relaxed. Native C1 retained leases/observations, the
+single I/O `segment` primitive, original six transport journeys and S7 exact
+caller/input protocols are positive controls. Missing at this revision:
+
+- The public Pimpl controller has no bounded reservation/bind/observation/
+  consume capability for recording switches. Native actual facts cannot feed
+  ongoing I/O except terminal close. Add nonvirtual methods/types; existing
+  public class layouts and port vtables stay frozen.
+- `drive_inputs` writes every eligible original frame without a pending-switch
+  barrier; `publish` can still project the old authoring Pattern. Park target
+  input with its original ticket/frame until actual S and durable target clock.
+- Existing Native Stop/F capture works while I/O is held. Keep it prompt, but
+  order all retained S<F segment work before submitting epoch-F cutoff/close.
+- Applied COUNT-IN keeps writing its original S0 into ordinary status origin.
+  Keep its original receipts/identity; ordinary phase follows actual switch S.
+- Source logical held metadata currently settles only at cutoff. A segment
+  ACK must settle that old authoring obligation while Native physical holds,
+  their real consumers and future release remain independently owned.
+
+Declared files (fourteen, no wildcard; each extension below was declared before its edit):
+
+- `packages/application-facade/include/lmdj/facade/pattern_transport_controller.hpp`;
+- `packages/application-facade/src/pattern_transport_controller.hpp`;
+- `packages/application-facade/src/pattern_transport_controller.cpp`;
+- `packages/application-facade/src/pattern_transport_controller_factory.cpp`;
+- `packages/application-facade/CMakeLists.txt`;
+- `tests/core/facade/pattern_transport_switch_test.cpp`;
+- `apps/docs-site/docs/core/modules/application-facade.mdx`;
+- `apps/docs-site/diagrams/application-facade.architecture.json`;
+- `apps/docs-site/static/diagrams/application-facade.svg`;
+- `apps/docs-site/static/diagrams/application-facade.html`;
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md`;
+- `.agents/pitfalls/rspack-cache-stalls-corrected-mdx-build.md` (one factual recurrence, existing exit unchanged);
+- `CMakeLists.txt` (register this product test binary in the existing coverage object inventory);
+- `.agents/pitfalls/coverage-target-list-omits-new-test.md` (actual configure-gate recurrence, existing exit unchanged).
+
+Reserve at most two typed records on serialized control before any Native
+publication. Bind exact queued authority and prepared BPM, then accept actual
+lease observations. A monotone ticket derives the stable internal work UUID
+from the original recording operation/runtime/epoch; no new unbounded command
+retry map and no meaning change to the wire's advisory request_id. An abandoned
+reservation has no Native binding. Consumed tickets never bind again. Snapshot
+preparation requires idle I/O and a target whose acknowledged prior notes can
+be cooked from Truth: refuse before Native for returning/unsettled authoring
+material. Host remains sole lease owner; no lease/Engine/PCM enters the worker.
+
+An unresolved queued boundary parks input at its queued lower bound until real
+Applied S or real cancelled disposition. Drain original pre-S candidates and
+known Native outcomes first; retain actual boundaries in order, not latest-only
+telemetry. Two may apply while I/O is held; the third is refused before audio.
+Use #2364's original immutable segment work, then release only the source's
+logical metadata. Target input stays active/live and enters recording only
+after the exact durable ACK. Old-source projection cannot publish while a
+reservation is unsettled, and a segment ACK invalidates chunks/availability
+without reusing a projection generation. Actual S updates ordinary origin
+without replacing original S0/e1/e2 COUNT-IN evidence.
+
+Normal resource completion needs actual Native final disposition plus durable
+segment ACK (or final cancellation with no segment). Host resets the real pin
+and then consumes its ticket. A terminal segment refusal stays failed; explicit
+shutdown obtains independent actual I/O owner_lost disposition before failed
+switch resources can retire. Do not require Native scheduled quiescence for
+that I/O disposition: it scans these same pins. Native consumers, physical hold
+revocation and final quiescence remain separate Host obligations. Preserve
+unknown work cells and original ingress/opening budgets; no timeout fabricates
+completion, F, successful recording or absence of durable effects.
+
+Lowest-tier owning verification: dedicated component and stress registrations
+for real Native Engine + production controller + real worker/Store/Journal,
+covering A→B→A, two retained Native boundaries during held I/O, third refusal,
+pre-S/at-S/post-S input, held physical release, cancellation/claim, exact durable
+retry, prompt F and S=F cancellation, COUNT-IN original receipts/new origin,
+source overlay exclusion, failure/disposition/shutdown and complete Truth/
+reopen. Use deterministic callback coordination rather than free-running frame
+counts for musical assertions. Keep every far-side journey assertion. Existing
+admission, transport/controller, segment, all count-in shards, Native Engine
+component/stress and Journal component/stress retain their original budgets.
+Run dependency/ownership, official diagram generation and complete Portal check.
+A rebuilt removed-barrier/ordering perturbation must fail the owning source/
+target assertion and the saved producer must be restored/recompiled. Full
+candidate/sanitizer/coverage and complete S3 Host/Creator/physical acceptance
+remain separate; no new CI gate or control-plane file is declared here.
+
+#### Version Management
+
+Version impact: Application Facade additive MINOR debt in #2237. New nonvirtual
+Pimpl methods and standalone typed DTOs keep existing layouts/vtables, wire
+Contracts and Journal grammar unchanged. Include prior Facade feature/PATCH
+debt without reducing a higher domain impact. No Product/Assembly/manifest
+allocation or snapshot.
+
+#### Documentation impact
+
+Documentation impact: required. Update `/core/modules/application-facade/`
+and its source/official diagram for the bounded control/IO capability and its
+still-unwired Host/Creator gates. Their integration remains C3/C4.
+
+C2c verification refinements (same declared files): the existing Native test
+library/seam is linked only to the native switch proof, so a quiescent callback
+clock jump proves queued 24001 versus actual S=32000 with original source input
+at 30000. C1 still produces the actual observation; neither a forged fact nor
+a new product clock API is added. The source note at tick 1199 commits to A;
+B begins at its real zero and later target input/reopen is asserted. Existing
+product/Host links retain the ordinary Native library. The new stress
+registration uses the unchanged standard stress budget: a bounded callback
+request runs on a real audio thread while serialized control and actual I/O
+settle 48 segments and 48 notes. Expected full A/B vectors use the independent
+120-BPM/48-kHz scalar relation (one tick per 25 frames), not the admission
+converter. Add a targeted native ASan run of this new component/stress pair to
+catch lifetime errors during concurrent retirement/reclaim; this is a scoped
+instrumented check, not a complete sanitizer/candidate lane.
+
+Initial component evidence: 7 production-controller/Native/I/O journeys pass;
+all 14 existing declared selections pass (55.53 s). The first fixture expected
+zero active voices immediately at a positive release consumer; real voices
+still render the canonical 96-frame declick. Retain that negative result and
+render exactly `kRealtimeRampFrames` before the physical voice assertion.
+The held-I/O Stop fixture also first read the ordinary F cell after its actual
+consumer had already copied/acknowledged it. Move the Native-F assertion before
+that real consumer, then assert the independent retained COUNT-IN receipt and
+full authoring close afterward. Do not replace either leg or weaken a budget.
+The next 9-case component and 48-segment stress pass (2.93/5.02 s); boundary,
+legacy-DTO and own-overlay regressions are added before final freeze.
+
+The Snapshot preparation guard is a control-turn contract: reserve, Facade
+Snapshot preparation, Native publication and bind remain within one serialized
+Host control turn, with abandon on preparation refusal. Do not insert separate
+continuations/async preparation in that sequence, which could submit worker I/O
+behind a synchronous History read. Public/Portal documentation now names this
+existing serialization requirement explicitly; no new mutex, worker queue or
+Product concurrency decision is introduced.
+
+The rebuilt removed target-input barrier fails at the actual no-I/O-ticket
+assertion (line 366), after Native B and its real input completion but before
+S is delivered to control. Saved working producer bytes are restored with
+fresh mtime, confirmed recompiled, and all 16 declared selections pass in
+61.53 s. The scoped native ASan component/stress pair also passes (6.14/13.09 s,
+19.24 s total). This is not the complete Core/sanitizer/candidate lane.
+Official diagrams generate successfully. The first complete Portal build
+rejects bare `S<F` as MDX JSX at line 164; escape the comparison as inline code
+and retain that failed result before a complete corrected rerun.
+
+
+After the MDX correction, the owned docusaurus PID 61995 remains at 0% CPU with
+no bundling progress (1m22s observation, later stopped). Apply the existing
+absorbed `rspack-cache-stalls-corrected-mdx-build` / issue-done procedure: stop
+only that verified worktree process, preserve its ignored cache and failed
+logs, and rerun the original complete check cold. The stopped run is not PASS.
+The canonical pitfall ledger requires later occurrences even after absorption;
+declare its record-only twelfth file before that edit, attributing this actual
+occurrence to Codex/#2233. Its existing skill exit and escalation remain intact;
+no CI workflow, gate, budget, routing or skill instruction changes.
+
+C2c final precommit evidence: refreshed origin/main remains
+`b679b5f5453186d519f2a4f7225c5c4c8c68f3cd`; live #2233 is OPEN with zero comments
+and no open successor. The complete original cold Portal check exits 0:
+179 tests, production build and 50 routes/internal links. The retained warm
+stall and initial MDX failure remain negative evidence. Dependency verification
+and all 76 ownership checks pass; the new staged test's ownership is checked
+before commit. The pitfall frontmatter parses with exactly the three attributed
+occurrences and unchanged absorbed skill exit. All declared product results
+remain as recorded above; C3/C4, complete lanes and physical acceptance remain.
+
+Premerge refresh advances main to `616b1db47d4331e534afd572ff708ed85d55fd61`.
+Its #2367 fixes the older segment binary's missing root coverage registration;
+#2368/#2369 preserve packaged fixture journeys and #2370 bounds sanitizer
+worker overlap without reducing rounds/deadlines. Governance bytes remain
+unchanged. Preserve original head `60024596` and rebase this clean Task onto
+that actual main. The unchanged coverage configure gate now independently
+rejects `lmdj_pattern_transport_switch_tests` as unlisted (exit 1); declare root
+`CMakeLists.txt` as the thirteenth file before registering the new product test
+binary in its actual registration order. This is owning build inventory, not
+a new gate, lane/routing/threshold/control change. Re-run the original coverage
+configure and new instrumented component, plus affected owning selections.
+The original exact-head GLM review had zero inline findings; its two awareness
+notes match explicit terminal failure and Native-origin/durable-ACK separation
+contracts. A new exact-head review is required after this amendment.
+
+The existing absorbed coverage-registration entry is also applicable: its
+unchanged configure gate caught this exact new binary. Declare its factual
+third recurrence before editing, attributed to Codex/PR #2365. Its existing
+root CMake gate remains intact. Follow the entry's complete coverage procedure
+before amended push; no coverage floor/exclusion is reduced. The initial targeted
+instrumented component run is not a complete coverage report. No default
+profile exists at this Task root on inspection. Use the stable coverage
+script's scoped LLVM_PROFILE_FILE for the complete run and retain its actual
+terminal result and floors.
+
+Final amended verification: stable `scripts/core.sh coverage check` exits 0.
+All 266 selected CTests pass (352.20 s), followed by the script's original
+module/profile reconciliation and all unchanged floors: overall lines 87.02%,
+branches 72.37%; Application Facade lines 86.10%, branches 71.41%. All seven
+module floors pass. Root build-script tests pass 17/17; both factual pitfall
+records parse with three attributed occurrences and unchanged absorbed exits.
+The rebased original 16 owning selections pass again (64.74 s). Prior ASan,
+mutation and complete Portal evidence remains as recorded; product producer
+bytes/Portal source are unchanged by the inventory-only repair and rebase.
+No additional CI control, threshold, budget or exemption is introduced.

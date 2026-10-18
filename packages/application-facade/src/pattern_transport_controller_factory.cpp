@@ -205,5 +205,11 @@ bool PatternTransportController::acknowledge_input_owner(std::uint64_t generatio
 void PatternTransportController::request_shutdown() { impl_->coordinator.request_shutdown(); }
 bool PatternTransportController::shutdown_complete() const { return impl_->coordinator.shutdown_complete(); }
 PatternTransportExecutorStatus PatternTransportController::inspect_io() const { return impl_->coordinator.inspect_io(); }
+foundation::Result<PatternTransportSwitchTicket> PatternTransportController::reserve_pattern_switch(const PatternTransportSwitchRequest& r) { return impl_->coordinator.reserve_pattern_switch(r); }
+bool PatternTransportController::bind_pattern_switch(const PatternTransportSwitchTicket& t, const audio::PatternReplacementAuthority& a, std::uint16_t bpm) { return impl_->coordinator.bind_pattern_switch(t, a, bpm); }
+bool PatternTransportController::complete_pattern_switch(const PatternTransportSwitchTicket& t, const audio::PatternPublicationObservation& o) { return impl_->coordinator.complete_pattern_switch(t, o); }
+std::optional<PatternTransportSwitchStatus> PatternTransportController::inspect_pattern_switch(const PatternTransportSwitchTicket& t) const { return impl_->coordinator.inspect_pattern_switch(t); }
+bool PatternTransportController::consume_pattern_switch(const PatternTransportSwitchTicket& t) { return impl_->coordinator.consume_pattern_switch(t); }
+bool PatternTransportController::abandon_pattern_switch(const PatternTransportSwitchTicket& t) { return impl_->coordinator.abandon_pattern_switch(t); }
 
 }  // namespace lmdj::facade

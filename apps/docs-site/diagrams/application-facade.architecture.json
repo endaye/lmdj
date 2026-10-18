@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Application Facade Module",
-    "summary": "唯一 Core 入口；serialized control + 单一 I/O owner，实际 S 的耐久分段能力待接线"
+    "summary": "唯一 Core 入口；两张切换票据按真实 S 连接 serialized control 与单一 I/O owner"
   },
   "boundaries": [],
   "components": [
@@ -99,7 +99,7 @@
     {
       "id": "controller",
       "label": "Transport Control",
-      "detail": "e1/e2 · N ordinary / N release",
+      "detail": "2 switch tickets · ordered input",
       "kind": "core",
       "x": 680,
       "y": 430,
@@ -180,7 +180,7 @@
     {
       "from": "controller",
       "to": "io",
-      "label": "async turns; actual S opens"
+      "label": "actual S · ordered segments"
     },
     {
       "from": "io",
@@ -191,11 +191,11 @@
   "cards": [
     {
       "title": "Facade / I/O owner",
-      "body": "Host 只用 Facade；worker 独占 Store/Journal。实际 S 提交旧段、转目标、建立零点；持续切换控制接线待完成。"
+      "body": "Facade 保留两张切换票据；真 S 和旧段提交后收录目标输入。worker 独占 Store/Journal；Host/UI 待接线。"
     },
     {
       "title": "独立录音 release",
-      "body": "Native + durable 才 complete。press ticket 消费后保留 release correlation；真 S/F、exact readback。"
+      "body": "Native 与 durable 分开。S 只结算旧段元数据；真实按键 release 票据仍需实际 Native 消费者。"
     },
     {
       "title": "Performance authority",
@@ -203,7 +203,7 @@
     },
     {
       "title": "shutdown 与验收",
-      "body": "request_shutdown 后等 I/O stopped；Native/cue/hold 独立静止。原旅程保留；S6 执行 UNVERIFIED。"
+      "body": "先 I/O owner disposition，后 Native pin/voice quiescence。失败保留 error；S3 Host/Creator 与候选/设备待验收。"
     }
   ]
 }

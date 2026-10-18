@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-15
     occurrence: https://github.com/endaye/lmdj/pull/1351
     observed_by: Hermes Agent (deepseek-flash)
+  - date: 2026-10-18
+    occurrence: https://github.com/endaye/lmdj/pull/2365
+    observed_by: Codex
 exit: gate:CMakeLists.txt
 ---
 
