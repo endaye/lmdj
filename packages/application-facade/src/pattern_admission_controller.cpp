@@ -549,7 +549,8 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
   if (!journal.has_value()) {
     return foundation::Result<void>::failure(journal.error());
   }
-  if (journal.value().session_id != session_ || !journal.value().admission) {
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_) {
     return owner_error("admission_identity_mismatch");
   }
   const auto pending = pending_applied_switch(*journal.value().admission);
@@ -566,7 +567,8 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
   if (!journal.has_value()) {
     return foundation::Result<void>::failure(journal.error());
   }
-  if (journal.value().session_id != session_ || !journal.value().admission) {
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_) {
     return owner_error("admission_identity_mismatch");
   }
   std::optional<std::uint64_t> last_watermark;
@@ -575,21 +577,28 @@ foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(
       last_watermark = candidate.watermark;
     }
   }
-  if (!last_watermark) return foundation::Result<void>::success();
-  const auto transfer = drain(transfer_id, *last_watermark, false);
-  if (!transfer.has_value()) {
-    return foundation::Result<void>::failure(transfer.error());
+  if (last_watermark) {
+    const auto transfer = drain(transfer_id, *last_watermark, false);
+    if (!transfer.has_value()) {
+      return foundation::Result<void>::failure(transfer.error());
+    }
   }
-  if (!transfer.value().journal_input_sequence) {
-    return foundation::Result<void>::success();
-  }
+  // A prior checkpoint can consume every source candidate while retaining its
+  // tail. An excluded new prefix likewise need not advance the input sequence.
+  // Flush the fresh durable tail, not only a newly created transfer's output.
   journal = journals_.read_active(bundle_);
   if (!journal.has_value()) {
     return foundation::Result<void>::failure(journal.error());
   }
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_) {
+    return owner_error("admission_identity_mismatch");
+  }
+  if (journal.value().pending_events.empty())
+    return foundation::Result<void>::success();
   const auto flush = journals_.append_flush(
       bundle_, session_, flush_id, journal.value().pattern_id,
-      journal.value().expected_revision, transfer.value().recoverable_tail);
+      journal.value().expected_revision, journal.value().pending_events);
   if (!flush.has_value()) {
     return foundation::Result<void>::failure(flush.error());
   }

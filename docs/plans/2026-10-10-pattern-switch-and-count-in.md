@@ -232,6 +232,106 @@ Portal check also passes again (179 tests, 50 routes/internal links). No Native,
 test or Portal source bytes change during rebase; only this plan records the
 new main/source dispositions. Final commit/PR review remain head-bound.
 
+### S3 C2a — flush an already-checkpointed source prefix
+
+Refreshed integration main is `61f877fe100ec48533243aa7efa5e40042636a5b`;
+C1 #2362 is now actually merged and its complete tree matches the former stack
+parent 52627901. Preserve the two owned WIP files byte-for-byte while moving to
+that exact integration tree. C1 changes no Facade/Journal source. At this base `checkpoint_prefix` already persists a
+candidate transfer with pending events/correlation checkpoint, and ordinary
+source draining flushes a newly transferred prefix. But `drain_source_prefix`
+returns immediately when no source candidate remains, or the new transfer has
+no new input sequence. That skips an already-retained pending tail; Journal
+`blocks_switch` correctly refuses reconciliation while those events remain.
+The codec already supports one unreconciled boundary plus serial history: do
+not change its grammar or reinterpret an empty candidate queue as no data.
+
+This reduced prerequisite owns exactly:
+
+- `packages/application-facade/src/pattern_admission_controller.cpp`;
+- `tests/core/facade/pattern_admission_test.cpp`;
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md`.
+
+Drain any actual remaining pre-S prefix first, then read the same owner's
+fresh Journal and flush its complete retained pending tail under the existing
+stable flush identity, even if a prior checkpoint consumed every candidate.
+Retain all original refusal/retry/manifest/fingerprint/revision checks and the
+strict `[source_start,S)` partition. Do not invent a target press from a late
+held release, append an empty flush, alter completed source Truth on retry, or
+start a new transfer merely to recreate already-durable events.
+
+Lowest verification: reduced OwnerFixture red tests before the fix; build/run
+existing `facade.pattern_admission`, with far-side assertions for checkpoint,
+source Truth flush, switch reconciliation, same-ID retry and a reconstructed
+owner/Journal readback. Cover already-checkpointed held fallback and completed
+release, plus a genuinely empty source. Preserve every existing assertion and
+registration/deadline. Production I/O orchestration, multiple-boundary ingress,
+Host wiring and complete S3 restart/stress/UI journeys remain C2b/C3/C4, not
+claimed by this three-file prerequisite.
+
+Version impact: required — internal Application Facade bug fix carries PATCH
+debt in #2237, subsumed by any later higher debt for S3; no public layout/API,
+Journal shape, identity allocation or current Product Assembly changes.
+Documentation impact: none — this restores the existing source-prefix flush
+contract within the private admission owner; current Portal product/source
+boundaries and production recording-switch gate are unchanged.
+
+The first rebuilt reduction passes the fresh-source positive control then fails
+at checkpointed-hold source Truth (pattern_admission_test.cpp:1198), exit 8.
+The Journal still retains the tail; no setup/compile failure is treated as the
+bug. Also cover an excluded/unmatched release that yields no new input sequence
+while an older checkpoint tail remains. Keep both cases under the same source
+flush contract. Run existing Facade transport/controller integration plus
+Sequence Journal component/stress (durable append, replay and recovery), in
+addition to the admission owner component, before shipping this persistence fix.
+No registration, budget, lock discipline or Journal grammar changes.
+
+The five owning selections pass after the fix: admission 1.95 s, transport
+1.72 s, controller integration 10.71 s, Sequence Journal 9.37 s and Journal stress
+0.14 s. Before shipping, extend the same declared admission test with before-
+append refusal and lost-after-durable-append response cases. Each must retain
+the original source tail/error, reconstruct an owner, retry the same transfer /
+flush identities exactly once, reconcile the target and settle/reopen unchanged
+per-Pattern Truth. Re-run the affected admission selection; the other four
+product/test input sets are unchanged. Complete production S3 remains separate.
+
+Both new recovery cases pass after correcting one fixture premise: a lost
+post-append response has already moved the complete tail into a pending flush,
+not left it in pending_events. The initial failure at that assumption is kept;
+the final test checks the complete canonical/recovery events, command/Pattern
+identity and incomplete disposition in that pending flush. Before-append refusal
+instead retains the full pending tail and no flush. Each reconstructed owner
+then commits exactly once, reconciles, closes and reopens the same A/B Truth.
+The affected admission component passes again in 2.24 s. The four other owning
+selections remain input-identical to their preceding PASS. Fresh main is still
+61f877fe; this Task changes only its declared three files. No new process pitfall
+is introduced: the product contract is expressed by these regressions.
+
+Pre-push source audit: the direct checkpoint-tail path must validate the exact
+admission preparation identity as well as the Session. A later recording can
+reuse the engagement Session with a new command/epoch; bypassing drain must not
+let an older private owner flush that new recording's tail. Add a reduced
+same-Session/new-preparation red test before tightening the three source-prefix
+readbacks. Keep all files in the same declared Task; no public API/format or
+new owner policy is introduced.
+
+The rebuilt same-Session reduction reaches the actual stale-owner call and
+fails its refusal assertion at pattern_admission_test.cpp:1335 (exit 8); an
+initial fixture field spelling error was corrected before this red run and is
+not counted as proof. Require the exact operation/runtime-generation/transport-
+epoch identity on all three source-prefix readbacks, before processing retained
+flushes or creating a flush from a checkpoint tail. Re-run all five owning
+selections after this product change; prior results alone cannot verify it.
+
+Final C2a owning results after exact-identity guards: admission component 2.28 s,
+transport 1.68 s, controller integration 10.42 s, Sequence Journal 8.26 s and
+Journal stress 0.14 s all PASS (22.78 s total). The stale owner rejects before
+any new recording's Journal/Truth mutation; the actual owner can then use those
+unspent command IDs. This final three-file input supersedes the earlier local
+5435a91b freeze for shipping; no earlier receipt is silently reused for changed
+product logic. No registration, CI control, deadline or recovery validation
+changes. Source/Native production continuation and final S3 acceptance remain.
+
 ## S4 — SEQ SNAP 1 BEAT and SEQ END
 
 **Behaviour.**
