@@ -1629,9 +1629,9 @@ function createRuntimeSessionController(options = {}) {
   let foregroundLossEpoch = 0;
   const activeAdverseConditions = new Set();
   let lastContextState = null;
-  // Callback heartbeat sampled immediately after the last audio.activate
-  // resolved; the engine frame counter reset to zero at that moment, so this
-  // is the anchor of the current engine epoch.
+  // Native publishes the heartbeat preceding its first open-gate render.
+  // Pin that original epoch after activation ACK, before any profile RPC.
+  // Older runtimes retain their activation-return approximation.
   let engineEpochHeartbeat = null;
   let recoveryEpoch = null;
   let nextRecoveryEpoch = 1;
@@ -3094,11 +3094,16 @@ function createRuntimeSessionController(options = {}) {
       await boundedRequest("audio.activate", {}, {
         deadlineMs: remainingActivationBudget(controlDeadline),
       });
+      if (recoveryEpoch !== epoch || machine.state !== "recovering") {
+        return;
+      }
+      // The engine already renders after activation. Profile RPC latency must
+      // not become a permanent offset in this epoch's audio clock.
+      engineEpochHeartbeat = readEngineEpochHeartbeat();
       await refreshPatternInputProfile();
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
       }
-      engineEpochHeartbeat = readAudioCallbackHeartbeat();
       const status = await boundedRequest("host.status", {});
       if (recoveryEpoch === epoch) {
         completeRecovery(status);
@@ -3592,6 +3597,18 @@ function createRuntimeSessionController(options = {}) {
     return heartbeat;
   }
 
+  function readEngineEpochHeartbeat() {
+    const heartbeat = typeof runtime?.audioEngineEpochHeartbeat === "function"
+      ? runtime.audioEngineEpochHeartbeat() : null;
+    // Older runtimes retain their activation-return approximation. Current
+    // packages expose the actual first-render epoch, independent of RPC delay.
+    if (heartbeat === null) return readAudioCallbackHeartbeat();
+    if (!Number.isInteger(heartbeat) || heartbeat < 0 || heartbeat > 0xffff_ffff) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "AudioWorklet engine epoch heartbeat is invalid");
+    }
+    return heartbeat;
+  }
+
   async function parkContextAfterRefusedStart() {
     const state = audioContext?.state;
     if (state !== "running" && state !== "suspended") return;
@@ -3817,11 +3834,15 @@ function createRuntimeSessionController(options = {}) {
       await boundedRequest("audio.activate", {}, {
         deadlineMs: remainingActivationBudget(activationDeadline),
       });
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
+      // Pin the successful activation edge before any additional async RPC.
+      engineEpochHeartbeat = readEngineEpochHeartbeat();
       await refreshPatternInputProfile();
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
-      engineEpochHeartbeat = readAudioCallbackHeartbeat();
       const status = await boundedRequest("host.status", {});
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;

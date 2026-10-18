@@ -102,6 +102,9 @@ class RealtimeAudioWorklet final {
   bool ready() const noexcept;
   std::uint64_t acknowledged_generation() const noexcept;
   std::uint32_t callback_heartbeat() const noexcept;
+  // Heartbeat immediately before the first rendered callback of the latest
+  // acknowledged activation. Paused callbacks and reply latency do not move it.
+  std::uint32_t engine_epoch_heartbeat() const noexcept;
   RealtimeAudioWorkletState state() const noexcept;
   RealtimeAudioWorkletFatal fatal() const noexcept;
   void latch_processor_error() noexcept;

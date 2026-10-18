@@ -442,6 +442,21 @@ function actualBrowserRuntimePublication({Module, window, crypto, globals = {}})
   return channels;
 }
 
+test("actual clock getters preserve the Native epoch and unsigned callback wrap", () => {
+  const f = deadlineTransportFixture();
+  let heartbeat = -1;
+  f.Module._lmdj_web_audio_callback_heartbeat = () => heartbeat;
+  f.Module._lmdj_web_audio_engine_epoch_heartbeat = () => -128;
+  assert.equal(f.host.audioCallbackHeartbeat(), 0xffff_ffff);
+  assert.equal(f.host.audioEngineEpochHeartbeat(), 0xffff_ff80);
+  heartbeat = 3;
+  assert.equal(f.host.audioCallbackHeartbeat(), 3);
+  assert.equal(f.host.audioEngineEpochHeartbeat(), 0xffff_ff80);
+  delete f.Module._lmdj_web_audio_engine_epoch_heartbeat;
+  assert.equal(f.host.audioEngineEpochHeartbeat(), null, "old Native export remains explicitly unavailable");
+  void f.host.transport.terminate();
+});
+
 test("actual count-in metronome entry point encodes a boolean and reports Native refusal", () => {
   const choices = [];
   let accepted = 1;

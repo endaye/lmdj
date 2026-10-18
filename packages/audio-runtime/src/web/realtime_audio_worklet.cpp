@@ -311,7 +311,8 @@ struct RealtimeAudioWorklet::Impl {
       return finish(false);
     }
 
-    self.callback_heartbeat.fetch_add(1, std::memory_order_release);
+    const auto heartbeat_before_callback =
+        self.callback_heartbeat.fetch_add(1, std::memory_order_release);
 
     const auto admitted_state =
         self.callback_state.load(std::memory_order_acquire);
@@ -427,7 +428,13 @@ struct RealtimeAudioWorklet::Impl {
 #endif
     auto acknowledged_generation = self.activation_generation.exchange(
         0, std::memory_order_acq_rel);
-    if (acknowledged_generation == 0) {
+    if (acknowledged_generation != 0) {
+      // Only the actual first open-gate render owns frame zero. Publish its
+      // original heartbeat before the positive ACK; neither control/main
+      // scheduling nor later callbacks can shift this activation's epoch.
+      self.engine_epoch_heartbeat.store(
+          heartbeat_before_callback, std::memory_order_release);
+    } else {
       acknowledged_generation = render_status.bank_generation;
     }
     self.acknowledged.store(
@@ -583,6 +590,7 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<std::uint64_t> acknowledged{0};
   std::atomic<std::uint64_t> activation_generation{0};
   std::atomic<std::uint32_t> callback_heartbeat{0};
+  std::atomic<std::uint32_t> engine_epoch_heartbeat{0};
   std::atomic<std::int32_t> node{0};
   std::atomic<std::int32_t> sample_rate{0};
   std::atomic<std::int32_t> render_quantum{0};
@@ -961,6 +969,10 @@ std::uint64_t RealtimeAudioWorklet::acknowledged_generation() const noexcept {
 
 std::uint32_t RealtimeAudioWorklet::callback_heartbeat() const noexcept {
   return impl_->callback_heartbeat.load(std::memory_order_acquire);
+}
+
+std::uint32_t RealtimeAudioWorklet::engine_epoch_heartbeat() const noexcept {
+  return impl_->engine_epoch_heartbeat.load(std::memory_order_acquire);
 }
 
 RealtimeAudioWorkletState RealtimeAudioWorklet::state() const noexcept {

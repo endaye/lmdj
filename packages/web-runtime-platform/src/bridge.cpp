@@ -2987,6 +2987,11 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_callback_heartbeat() {
   return adapter == nullptr ? 0 : adapter->callback_heartbeat();
 }
 
+EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_engine_epoch_heartbeat() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : adapter->engine_epoch_heartbeat();
+}
+
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_physical_fence_arm(std::uint32_t stages) {
   auto* adapter = web_audio.load(std::memory_order_acquire);

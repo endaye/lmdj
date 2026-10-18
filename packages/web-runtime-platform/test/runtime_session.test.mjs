@@ -286,6 +286,7 @@ function fixture({
   publishRuntime = false,
   runtimeTerminator,
   audioCallbackHeartbeat,
+  audioEngineEpochHeartbeat,
   startAudioWorklet,
   startAudioWorkletWithCountIn,
   setCountInMetronome,
@@ -400,6 +401,7 @@ function fixture({
         audioCallbackHeartbeat:
           audioCallbackHeartbeat ??
           (() => ++defaultAudioCallbackHeartbeat),
+        ...(audioEngineEpochHeartbeat === undefined ? {} : {audioEngineEpochHeartbeat}),
         startAudioWorklet:
           startAudioWorklet ?? (async () => ({ok: true})),
         ...(startAudioWorkletWithCountIn === undefined ? {} : {
@@ -2176,6 +2178,68 @@ test("audio clock epoch re-anchors on every activation", async () => {
   assert.equal(resampled.engineEpochHeartbeat, 12);
   assert.equal(resampled.callbackHeartbeat, 12);
 });
+
+for (const resumed of [false, true]) for (const nativeEpoch of [false, true]) {
+  test(`audio clock excludes asynchronous delays from its ${resumed ? "resumed" : "initial"} ${nativeEpoch ? "Native" : "legacy"} epoch`, {timeout: 5_000}, async () => {
+    let heartbeat = 0;
+    let epoch = 0;
+    let active = false;
+    let activations = 0;
+    const target = resumed ? 2 : 1;
+    let releaseReply, replyStarted, releaseRefresh, refreshStarted;
+    const reply = new Promise(resolve => {releaseReply = resolve;});
+    const originalApplied = new Promise(resolve => {replyStarted = resolve;});
+    const refresh = new Promise(resolve => {releaseRefresh = resolve;});
+    const started = new Promise(resolve => {refreshStarted = resolve;});
+    let handle = 1;
+    const {context, session} = fixture({patternTransport: true,
+      registerAudioNode: () => ++handle,
+      audioCallbackHeartbeat: () => active ? heartbeat : ++heartbeat,
+      ...(nativeEpoch ? {audioEngineEpochHeartbeat: () => epoch} : {}),
+      startAudioWorkletWithCountIn: async () => ({ok: true, outputs: 2}),
+      send: async envelope => {
+        if (envelope.operation === "audio.activate") {
+          activations++;
+          active = true;
+          epoch = heartbeat = activations * 100;
+          if (nativeEpoch && activations === target) {
+            replyStarted();
+            await reply; // Native already rendered; Browser has no reply yet.
+          }
+        }
+        if (envelope.operation === "pattern.transport.count-in.capabilities" &&
+            !envelope.payload.negotiate && activations === target) {
+          refreshStarted();
+          await refresh;
+        }
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    if (resumed) {
+      assert.equal(await session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+      assert.equal(await session.suspendAudio(), true);
+      active = false;
+    }
+    const activation = session.activateAudio(createUserGestureToken({isTrusted: true}));
+    if (nativeEpoch) {
+      await originalApplied;
+      heartbeat += 6;
+      releaseReply();
+    }
+    await Promise.race([started, activation.then(value => {
+      throw new Error(`activation settled before refresh: ${value} ${JSON.stringify(session.diagnostics())}`);
+    })]);
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    heartbeat += 10;
+    context.currentTime = 3;
+    releaseRefresh();
+    assert.equal(await activation, true);
+    assert.deepEqual(session.sampleAudioClock(), {contextTimeSeconds: 3,
+      callbackHeartbeat: target * 100 + (nativeEpoch ? 16 : 10), engineEpochHeartbeat: target * 100});
+    await session.close();
+  });
+}
 
 test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {
   let heartbeat = 7;

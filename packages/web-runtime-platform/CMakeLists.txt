@@ -167,6 +167,7 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_commit_failure
     _lmdj_web_audio_bootstrap_timeout
     _lmdj_web_audio_callback_heartbeat
+    _lmdj_web_audio_engine_epoch_heartbeat
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     target_sources(lmdj_web_runtime_host PRIVATE test/pattern_transport_opfs_probe.cpp)

@@ -525,16 +525,18 @@ export interface MonitorOutputSession {
  *
  * The engine frame counter resets to zero inside `audio.activate` and then
  * advances exactly 128 frames per audio callback while the gate is open.
- * `engineEpochHeartbeat` is the callback heartbeat sampled immediately after
- * the activating `audio.activate` resolved, so within one engine epoch:
+ * `engineEpochHeartbeat` is the heartbeat immediately preceding Native's first
+ * open-gate render for the acknowledged activation. Current runtimes publish it
+ * before that callback's positive ACK, so activation/profile RPC latency cannot
+ * move the epoch. Within that epoch (using uint32 modular heartbeat subtraction):
  *
- *   engineFrame ≈ (callbackHeartbeat − engineEpochHeartbeat) × 128
+ *   engineFrame = (callbackHeartbeat − engineEpochHeartbeat) × 128
  *
- * at `contextTimeSeconds` (the AudioContext clock). The mapping advances 1:1
- * at the render rate (48 000 frames per second) with a constant error of at
- * most a couple of render quanta — the callbacks that ran between the gate
- * opening and the epoch sample. A manual suspend/activate and an interruption
- * recovery both re-run `audio.activate` and start a new epoch.
+ * The AudioContext/current-heartbeat pair is sampled on Browser Main, so its
+ * conversion can differ by a render quantum at the sample edge. A manual
+ * suspend/activate or interruption recovery establishes a new Native epoch.
+ * Legacy runtimes without the additive Native getter retain their approximate
+ * heartbeat sample after the activation reply, with no Native phase guarantee.
  */
 export interface AudioClockSample {
   readonly contextTimeSeconds: number;
