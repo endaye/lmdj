@@ -238,6 +238,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_runtime_facade_concurrency_tests
     lmdj_application_facade_tests
     lmdj_pattern_admission_tests
+    lmdj_pattern_transport_segment_tests
     lmdj_pattern_transport_tests
     lmdj_pattern_transport_controller_tests
     lmdj_pattern_count_in_tests
