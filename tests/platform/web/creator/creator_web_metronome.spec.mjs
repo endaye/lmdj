@@ -48,6 +48,33 @@ async function metronomeClicks(page) {
   return page.evaluate(() => window.__metronomeClicks ?? []);
 }
 
+async function observedFrame(page) {
+  return page.evaluate(() => {
+    const {header} = window.__countInPcm;
+    return Atomics.load(header, 1) + Atomics.load(header, 2);
+  });
+}
+
+// First observed frame from which both product planes stay exactly zero for
+// at least 100 ms. A Gate that never stops times out here instead of passing.
+async function waitForProductSilence(page, fromFrame, timeout) {
+  let silentFrom;
+  await expect.poll(async () => {
+    const observed = await page.evaluate(fromFrame => {
+      const {header, samples, capacity} = window.__countInPcm;
+      const first = Atomics.load(header, 1);
+      const frames = Atomics.load(header, 2);
+      let quietFrom = Math.max(fromFrame, first);
+      for (let frame = Math.max(0, fromFrame - first); frame < frames; ++frame)
+        if (samples[frame] !== 0 || samples[capacity + frame] !== 0) quietFrom = first + frame + 1;
+      return {quietFrom, end: first + frames};
+    }, fromFrame);
+    silentFrom = observed.quietFrom;
+    return observed.end - observed.quietFrom >= 4_800;
+  }, {timeout, intervals: [10], message: "held pre-S Gate release reaches the product output"}).toBe(true);
+  return silentFrom;
+}
+
 async function importProject(page) {
   await openProjectPageAfterBoot(page);
   const chooserPromise = page.waitForEvent("filechooser");
@@ -572,6 +599,7 @@ for (const scenario of [
       await expect(recordKey(page)).toHaveClass(/is-active/);
       await expect(recordKey(page)).not.toHaveClass(/is-counting-in/);
       await expect(page.getByLabel("Count-in status")).toHaveCount(0);
+      const releasedFrame = await observedFrame(page);
       await page.keyboard.up("z");
       if (!scenario.onAtS) await metronomeToggle(page).click();
       await expect.poll(async () => (await metronomeClicks(page)).length,
@@ -579,9 +607,19 @@ for (const scenario of [
       const clicks = await metronomeClicks(page);
       expect(clicks[0].beat, "JS begins at beat 1 and never duplicates native S").toBe(1);
       expect(clicks.every(click => click.beat > 0)).toBe(true);
-      const jsFrame = Math.round(clicks[0].contextTime * 48_000);
-      expect(Math.abs(jsFrame - (start + 2_880_000 / scenario.bpm))).toBeLessThanOrEqual(256);
-      await waitForObservedFrame(page, jsFrame + 2016, 2_000);
+      const beatFrames = 2_880_000 / scenario.bpm;
+      expect(Math.abs(Math.round(clicks[0].contextTime * 48_000) - (start + beatFrames))).toBeLessThanOrEqual(256);
+      // The real post-S Gate release reaches the product output at a
+      // load-dependent frame, which can follow beat 1. Inspect the first JS
+      // click after that observed silence; its product/cue planes stay exact.
+      const silentFrom = await waitForProductSilence(page, releasedFrame, beatFrames / 48 + 2_000);
+      let jsFrame;
+      await expect.poll(async () => {
+        jsFrame = (await metronomeClicks(page)).map(click => Math.round(click.contextTime * 48_000))
+          .find(frame => frame - 96 > silentFrom);
+        return jsFrame !== undefined;
+      }, {timeout: beatFrames / 48 + 2_000, intervals: [10]}).toBe(true);
+      await waitForObservedFrame(page, jsFrame + 2016, beatFrames / 48 + 2_000);
       await stopCountInMasterCapture(page, {silent: false});
       const pcm = await readCountInPcm(page, [...markers, jsFrame], {cueMarkers: markers});
       expectForcedCountInPcm(pcm, markers);
