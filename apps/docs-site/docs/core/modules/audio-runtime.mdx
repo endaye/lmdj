@@ -293,6 +293,14 @@ output 0 经真实 product master tap 供 capture/resample，再接 monitor gain
 直接接 monitor gain。cue 不进入 master capture、resample 或 Project Artifact，监听音量
 影响两路。callback in-flight fence 覆盖 Engine render、两路消费与 generation ACK。
 
+`set_count_in_metronome_on_browser_main(bool)` 是上述 adapter 的同步 monitoring
+入口：仅 browser main、ready/非 fatal、双输出且 paused/open gate 时发布 Engine
+既有的 atomic metronome flag；不访问 mutable Project、I/O queue 或音频 payload。
+Engine 在真正的 scheduled S 读取 flag；On 时在 S 多输出一个普通 accented downbeat，
+Off 时没有 S cue，四/八个 pre-S 强制 cue 不受该选择影响。此返回值只确认偏好发布，
+不是 scheduled start 或 durable Journal 的回执。后续 JS metronome consumer 必须排除
+Native 已拥有的 S 下拍。
+
 适配器预初始化 immutable sine kernel：normal 1200 Hz、accent 1800 Hz，gain 0.2，
 1920 帧（40 ms）指数衰减到 0.0001 的边界后归零。f=0 的值为零，marker C/S 的
 第一非零 PCM 为 C+1/S+1。四/八个 cues 强制发出，保留现有节奏：每 Bar 首拍
