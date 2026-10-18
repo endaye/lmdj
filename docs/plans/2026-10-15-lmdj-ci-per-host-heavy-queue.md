@@ -220,6 +220,32 @@ Declared files: `scripts/prepare-opfs-webkit.sh`,
 Defects the new test catches: the workspace path is not linked to the cache;
 the browser is installed into the shared cache root. Both are mutation-proven.
 
+## Q6 — Admit the overflow runners by measured egress (#2278, #2279)
+
+Owner request 2026-10-18: put the network admission scripts deployed on
+2026-10-17 into the repository.
+
+Premise: the M4 Pro and en-home share a Tailscale exit node. Two acceptance
+batches failed on its throughput (runs 38743432320 and 39007862259), and
+manual label removal left the hosts idle even when the link recovered.
+
+1. `scripts/ci/host/runner-network-admission.sh` (M4 Pro, launchd) and
+   `runner-network-admission.ps1` (en-home, scheduled task) probe a fixed
+   10 MiB GitHub range every 10 minutes. They admit after two samples of at
+   least 2 MiB/s, withdraw after one under 500 KiB/s or a failed probe, and
+   change nothing when the Runner API cannot be read.
+2. `scripts/ci/host/com.lmdj.runner-network-admission.plist` installs the
+   M4 Pro job.
+3. `tests/build/ci_runner_network_admission_test.py` runs the bash script
+   against stubbed `curl` and `gh`, and pins the twin's probe and thresholds.
+4. Document the controller in `docs/quality/core-test-policy.md`.
+
+Declared files: the three host files, the test, the policy, this plan.
+
+Defects the test catches: admission on a single fast sample; an admitted
+runner kept through a slow or failed sample; label writes after a failed
+Runner API read. Each was mutation-proven.
+
 ## Completion criteria
 
 - No workflow carries the host-agnostic `lmdj-native-heavy` group.
