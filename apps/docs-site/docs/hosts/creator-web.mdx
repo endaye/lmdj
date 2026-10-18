@@ -227,16 +227,16 @@ Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页
 - 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
 - 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
 
-Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。Pattern 槽与 Filter/Delay 并排，HOLD 和 More FX 位于推子下方。
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。三根主推子与 HOLD 保留在首屏；四槽横排和一处 MASTER 使用横向滑杆，在同一外层滚动区内可达。
 
-- **Live**：16 个 Pattern 启动槽、Filter/Delay、FX / MORE、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
+- **Live**：四组各四个横排 Pattern 启动槽、PRIMARY／FILTER／MORE、横向 FX 与 MASTER、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
 - **Slots**：Pattern Assign/Clear/Move 和 revision；选项在切页后保留。
 - **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
 - **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
 
-子页切换保留录制 session、回放轮询、HOLD、名称草稿和 FX / MORE 展开状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
+子页切换保留录制 session、回放轮询、HOLD、名称草稿和 参数组和 Mute/Solo 面板状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
 
-FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。折叠 FX / MORE 或卸载时强制释放未闭合手势。HOLD 是链路级开关，同样随时可切换。
+FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。切换参数组、打开 Mute/Solo 或卸载输入时释放该输入拥有的触摸手势；旋钮手势不由触摸组件释放。再次点击 MORE 收起仍回到 PRIMARY 并释放被移除的五根推子。HOLD 是链路级开关，同样随时可切换。
 C1（2026-10-11 起）把 Perform 的实时控制接到 W1 的 typed producer：八段 FX 与 HOLD 在 Core epoch 可用时改走 `applyPerformanceLiveControl`（fx_parameter/fx_release 意图按 Core receipt 的 runtime generation 配对，过期或伪造的 generation 由 Core 远端拒绝，Host 不自行编造），producer 不可用（headless 或旧 Core）时原样保留上述 legacy 手势路径。Filter 从此成为独立参数组：LP/HP/BP 类型、20 Hz–20 kHz 对数 Cutoff（滑杆为 0..1000 对数位置，端点精确）、0–100% Resonance，初值 OFF/LP/20 kHz/0% 且只从 `queryPerformanceLiveStatus` 的 Core 读回取得，绝不从旧百分比反推 Hz；读回区分 core/pending/unavailable 与 frozen。主组首推子保持 Filter 槽位与可访问名，读数改为 Hz；FILTER 按钮打开 FILTER 面板（type 三段 + Cutoff + Resonance），进入该组是纯 UI 状态、不调用任何 producer；旋钮组相应扩为 main/more/filter 三枚（主组 ENC1 Cutoff，FILTER 组 ENC1 type、ENC2 同一 Cutoff、ENC3 Resonance，ENC4 仍是 #2000 的监听）。旋钮停转与切组不 release（D04 批准语义），触摸的 pointer-up/cancel/blur 保持既有 release 语义，HOLD 下的 release 由 Core 冻结并经读回显示 frozen。录制改用 headered begin：先取 live status 的 epoch，begin 返回 Core 的 gesture mapping 后直接配对后续 move/release，不再补记 synthetic engage 起点（旧 profile 的 seed 分支原样保留）；begin 的 Core fence 与 capture started ACK 两道 ready 门之前首个 Pad 被 gated。录音中的 release 之后同样以 Core 读回显示 frozen。控制 ACK 只证明接收，界面在实际 applied 状态读回前保持 pending，旧 epoch 的回执和晚到查询不能覆盖新操作。Host 共用有界 FIFO（一个执行中、一个普通等待项），begin 期间的控制等待 Core mapping 与 capture started ACK，再按实际绑定执行；溢出在修改本地手势前明确报错，最多 64 个 Pad 保留到 matching release 完成；Stop 取消尚未送达 Core 的普通等待输入并明确拒绝，已接收手势的 release 先完成。
 
 
@@ -833,7 +833,7 @@ The 2026-10-09 contextual encoder decision also binds the other pages:
 | Perform more FX | Crush | Stutter | Gate | Output Volume |
 | System | Unassigned | Unassigned | Unassigned | Output Volume |
 
-Touch buttons switch Sample groups; FX / MORE switches Perform groups.
+Touch buttons switch Sample groups; PRIMARY / FILTER / MORE and the physical left/right keys switch Perform groups. SHIFT retains Undo/Redo; System suspends the Perform direction bindings.
 SHIFT + ENC1–3 uses fine steps (one source frame, 0.1 semitone, 0.1 dB,
 1 Pan/Tone unit or 1/1000 FX unit); ordinary steps are 10 ms, one semitone,
 one dB, 10 Pan/Tone units or 10/1000 FX units. Navigation and integer BPM
@@ -857,14 +857,23 @@ activation. Other page and authoring controls keep their usual availability.
 Output Volume changes only monitoring:
 captured, resampled and exported PCM and authoring history are unchanged.
 
-Perform Live 的右侧第四个 **MASTER** 推子与 ENC4 的 **Output Volume** 共用
+Perform 三个效果组共用的一处横向 **MASTER** 推子与 ENC4 的 **Output Volume** 共用
 同一设备监听值和 `monitor-volume.v1` 偏好，范围均为 0–100%。移动任一控件
 会同步另一个控件及上屏读数；两者均在当前 Session 完成偏好恢复后才可用。
 Session 拒绝更新时，保留最后已接受的读数和偏好。MASTER 保留 44 个设计单位的
 输入命中宽度，不参与 FX engage/move/release、HOLD 或 Performance 事件录制；
-切 FX / MORE 或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
+切参数组或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
 Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍器，但录音、
 重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费。
+
+### Perform 参数组与 Live Mute/Solo
+
+窄屏竖向 Perform 将触摸屏放在 Pad 矩阵下方，保留独立物理栏和一处触摸滚动；组按钮、三根主推子与所有 Pad／方向键保持实际至少44px命中。进入／离开窄屏 Perform 时重新适配；System／返回保留已挂载的布局，实时数值更新不反复触发布局计算。390px 上屏旋钮读数用两行两列保留四组完整标签和值。该布局不代表其它工作区或真实移动设备已完成最终验收。
+
+
+PRIMARY、FILTER、MORE 互斥显示对应触摸参数；←／→ 按此顺序切换，到首尾停止，SHIFT 和 System 保留原优先级。组切换不主动创建声音控制，只有被移除输入尚未结束的 touch token 需要配对释放；旋钮接管、HOLD、实时 masks 与录制 session 不重置。Filter 状态为只读的 Off／Engaged／Frozen／Pending／Unavailable，没有旁路开关；Core provenance 保留在状态投影中。
+
+Live Mute / Solo 打开当前 Pad 面板，Mute 与 Solo 沿用同一 Core 状态和既有禁用条件；Muted Pads、Soloed Pads 列出 A01–D16 的真实地址，pending/unavailable 时不把旧列表冒充当前空 masks。Back to Filter 返回独立滤波组。多个 Solo 可以并存，Mute 始终优先。切页、停止、保存、重开和回放沿用既有行为。普通触摸 controls 的实际输入区域至少为 44 CSS px；标题、真实 meter、transport、保留 footer 与旋钮读数使用同一上屏。
 
 ### Measured stereo output level
 

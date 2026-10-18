@@ -7468,6 +7468,7 @@ test("Perform live Pad gates retain current identity across Bank and Pattern, th
   try {
     await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
     fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
     await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
     fireEvent.click(screen.getByRole("button", {name: "Next Pad — ↓"}));
     fireEvent.click(screen.getByRole("button", {name: "Previous Pad — ↑"}));
@@ -7499,6 +7500,7 @@ test("Perform live Pad gates retain current identity across Bank and Pattern, th
     await waitFor(() => expect(screen.queryByRole("main", {name: "Perform"})).toBeNull());
     expect(mutedSlots).toEqual([]); expect(soloSlots).toEqual([]);
     fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
     await waitFor(() => expect(screen.getByRole("button", {name: "Mute D16"}).getAttribute("aria-pressed")).toBe("false"));
     expect(update).not.toHaveBeenCalled();
     expect(await inspectProject()).toEqual(truth);
@@ -7554,6 +7556,7 @@ test("Project replacement isolates late live-mask ACK and cleanup from the new A
   try {
     await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
     fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
     await waitFor(() => expect(screen.getByRole("button", {name: "Mute A01"})).toHaveProperty("disabled", false));
     fireEvent.click(screen.getByRole("button", {name: "Mute A01"}));
     await waitFor(() => expect(oldApply).toHaveBeenCalledTimes(1));
@@ -7563,6 +7566,7 @@ test("Project replacement isolates late live-mask ACK and cleanup from the new A
     view.rerender(<App key="new" initialState={replacement} runtimeFactory={() => second.session} />);
     await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
     fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
     await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
     fireEvent.click(screen.getByRole("button", {name: "Solo A01"}));
     await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true"));
@@ -7913,4 +7917,53 @@ test("COUNT-IN terminal projection keeps Record and Play closed after consume, t
   await waitFor(() => expect(f.session.requestPatternTransport).toHaveBeenCalledOnce());
   expect(f.session.requestPatternTransport.mock.calls[0]![0]).toMatchObject({intent: "play_stop", expectedEpoch: 3});
   expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
+});
+
+
+test("Perform physical group arrows bind touch and encoders with SHIFT and System priority", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  const trigger = vi.spyOn(fixture.session, "trigger");
+  const update = vi.spyOn(fixture.session, "updatePad");
+  const apply = vi.fn();
+  const fx = vi.fn(async () => ({applied: true as const}));
+  const captureStatus = {state: "configured" as const, error: null,
+    config: {performRecordingFrames: 86_400_000, performRecordingQueueBatches: 32}};
+  Object.assign(fixture.session, sequenceSessionStubs(), performanceSessionStubs([]).stubs, {
+    applyPerformanceLiveControl: apply, applyFxGesture: fx,
+    performanceMasterCaptureStatus: () => captureStatus,
+    subscribePerformanceMasterCaptureStatus: (listener: (status: typeof captureStatus) => void) => {
+      listener(captureStatus); return () => {};
+    },
+  });
+  setRunningAudioFixture(fixture.session);
+  const view = render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  try {
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    fireEvent.click(screen.getByRole("button", {name: "Perform"}));
+    const back = () => screen.getByRole("button", {name: "Previous FX group — ←"});
+    const next = () => screen.getByRole("button", {name: "Next FX group — →"});
+    await waitFor(() => expect(back()).toHaveProperty("disabled", true));
+    fireEvent.click(next());
+    expect(screen.getByRole("button", {name: "FILTER"}).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", {name: "Encoder 1 — Type"})).toBeTruthy();
+    fireEvent.click(next());
+    expect(next()).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", {name: "Encoder 1 — Crush"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "PRIMARY"}));
+    expect(back()).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"}));
+    expect(screen.queryByRole("button", {name: "Next FX group — →"})).toBeNull();
+    expect(screen.getByRole("button", {name: "Redo — SHIFT + →"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "SHIFT — engage the Undo/Redo layer"}));
+    fireEvent.click(next());
+    fireEvent.click(screen.getByRole("button", {name: "System"}));
+    expect(screen.queryByRole("button", {name: "Next FX group — →"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "Back to music"}));
+    expect(screen.getByRole("button", {name: "FILTER"}).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", {name: "Next Pad — ↓"})).toBeTruthy();
+    expect(trigger).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(fx).not.toHaveBeenCalled();
+  } finally {view.unmount();}
 });

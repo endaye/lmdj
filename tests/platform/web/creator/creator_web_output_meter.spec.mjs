@@ -459,8 +459,9 @@ test("real stereo meter excludes monitor and click, survives capture and require
     .toBeVisible({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await openPerform(page);
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
-  await expect(page.getByRole("status", {name: "Filter status"})).toHaveText("OFF · core",
+  await expect(page.getByRole("status", {name: "Filter status"})).toHaveText("Filter · Off",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(page.getByRole("status", {name: "Filter status"})).toHaveAttribute("data-provenance", "core");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   await silence(page);
   await monitorVolume(page, 0);

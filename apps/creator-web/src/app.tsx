@@ -443,6 +443,8 @@ function Workspace({
   const [sampleEncoders, setSampleEncoders] = useState<ContextualEncoders | null>(null);
   const [performEncoders, setPerformEncoders] = useState<ContextualEncoders | null>(null);
   const [projectNavigation, setProjectNavigation] = useState<ContextualNavigation | null>(null);
+  const [performNavigation, setPerformNavigation] = useState<ContextualNavigation | null>(null);
+  const bindPerformNavigation = useCallback((value: ContextualNavigation | null) => setPerformNavigation(value), []);
   const [sampleNavigation, setSampleNavigation] = useState<ContextualNavigation | null>(null);
   const bindProjectNavigation = useCallback((value: ContextualNavigation | null) => setProjectNavigation(value), []);
   const bindSampleNavigation = useCallback((value: ContextualNavigation | null) => setSampleNavigation(value), []);
@@ -3298,6 +3300,7 @@ function Workspace({
                 },
               } : {})}
               {...(activeMode === "perform" && !systemOpen && !railShift && sequenceProject !== null ? {
+                directionStep: performNavigation?.directionStep,
                 padStep: {
                   backLabel: "Previous Pad — ↑",
                   forwardLabel: "Next Pad — ↓",
@@ -3632,6 +3635,7 @@ function Workspace({
                 performController !== null ? (
                   <PerformSurface
                     onEncodersReady={bindPerformEncoders}
+                    onNavigationReady={bindPerformNavigation}
                     monitorVolume={{value: monitorVolume, disabled: monitorVolumeDisabled,
                       onChange: changeMonitorVolume}}
                     controller={performController}

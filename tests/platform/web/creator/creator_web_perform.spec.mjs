@@ -987,18 +987,21 @@ async function recordShortPerformance(
   await expect(recordingStatus).toContainText(/open Pads\s*[:·]\s*0/i,
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   if (withFx) {
-    const filter = page.getByRole("slider", {name: "Filter", exact: true});
     await page.getByRole("button", {name: "FILTER", exact: true}).click();
+    const filter = page.getByRole("slider", {name: "Cutoff", exact: true});
     const filterStatus = page.getByRole("status", {name: "Filter status"});
     await filter.dispatchEvent("pointerdown", {pointerId: 72});
-    await expect(filterStatus).toHaveText("engaged · core",
+    await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
       {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await filter.fill("630");
-    await expect(filterStatus).toHaveText("engaged · core",
+    await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
       {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await expect(filter).toHaveValue("630");
     await filter.dispatchEvent("pointerup", {pointerId: 72});
-    await expect(filterStatus).toHaveText("OFF · core",
+    await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+    await expect(filterStatus).toHaveText("Filter · Off",
       {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await page.getByRole("button", {name: "FILTER", exact: true}).click();
     await page.getByRole("button", {name: "HOLD"}).click();
@@ -1718,10 +1721,10 @@ test("a recorded rotary FX survives touch takeover and closes the same Core gest
   await knob.focus();
   await page.keyboard.press("ArrowUp");
   await expect.poll(async () => (await authority()).open_fx_gestures).toBe(1);
-  await page.getByRole("button", {name: "FX / MORE"}).click();
+  await page.getByRole("button", {name: "MORE"}).click();
   await expect(page.getByRole("button", {name: "Encoder 3 — Gate", exact: true})).toBeEnabled();
   expect((await authority()).open_fx_gestures).toBe(1);
-  await page.getByRole("button", {name: "FX / MORE"}).click();
+  await page.getByRole("button", {name: "MORE"}).click();
   const reverb = page.getByRole("slider", {name: "Reverb", exact: true});
   await expect(reverb).toHaveValue("10");
   await reverb.dispatchEvent("pointerdown", {pointerId: 91});
@@ -2068,7 +2071,8 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     .toHaveValue("630");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   await expect(page.getByRole("status", {name: "Filter status"}))
-    .toHaveText("OFF · core");
+    .toHaveText("Filter · Off");
+  await expect(page.getByRole("status", {name: "Filter status"})).toHaveAttribute("data-provenance", "core");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   for (const name of ["Delay", "Reverb"]) {
     await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("0");
@@ -2232,7 +2236,7 @@ test("native FX drag-off releases before paging without stopping the recording",
   const box = await fader.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 3);
+  await page.mouse.move(box.x + box.width * 2 / 3, box.y + box.height / 2);
   await expect(fader).toHaveAttribute("data-proof-captured", "true");
   const pages = page.getByRole("navigation", {name: "Perform pages"});
   for (const button of await pages.getByRole("button").all()) await expect(button).toBeDisabled();
@@ -2266,9 +2270,10 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   await assignThenMovePattern(page);
 
   // The main group's first fader is the typed Filter with a Core Hz readback.
-  const cutoff = page.getByRole("slider", {name: "Filter", exact: true});
-  await expect(cutoff).toBeVisible();
-  await expect(cutoff).toHaveValue("1000");
+  const primaryCutoff = page.getByRole("slider", {name: "Filter", exact: true});
+  await expect(primaryCutoff).toBeVisible();
+  await expect(primaryCutoff).toHaveValue("1000");
+  const cutoff = page.getByRole("slider", {name: "Cutoff", exact: true});
   await expect(page.getByTestId("touch-workspace")
     .getByText("20.0 kHz", {exact: true})).toBeVisible();
   await expect(page.getByRole("button",
@@ -2277,8 +2282,8 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   // Entering the FILTER group is pure UI: still OFF, no enable.
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   const filterStatus = page.getByRole("status", {name: "Filter status"});
-  await expect(filterStatus).toContainText("OFF");
-  await expect(filterStatus).toContainText("core");
+  await expect(filterStatus).toContainText("Off");
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
   await expect(page.getByRole("button", {name: "LP", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("slider", {name: "Resonance", exact: true}))
@@ -2290,14 +2295,17 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
     {name: "Encoder 3 — Resonance", exact: true})).toBeEnabled();
   // A type segment change is an actual control: engage + readback.
   await page.getByRole("button", {name: "HP", exact: true}).click();
-  await expect(filterStatus).toContainText("engaged");
-  await expect(filterStatus).toContainText("core");
+  await expect(filterStatus).toContainText("Engaged");
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
   await page.getByRole("button", {name: "LP", exact: true}).click();
-  await expect(filterStatus).toHaveText("engaged · core",
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   // Leaving the group must not release the gesture (D04 rest semantics).
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
-  await expect(page.getByRole("status", {name: "Filter status"})).toHaveCount(0);
+  await expect(page.getByRole("group", {name: "Filter", exact: true})).toHaveCount(0);
+  await expect(filterStatus).toHaveText("Filter · Engaged");
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
 
   const recordingStatus = await beginRecording(page);
   const pad = page.getByRole("button", {name: /^Pad A01\b/});
@@ -2322,12 +2330,14 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   // low, and hold it over hit 2.
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   await cutoff.dispatchEvent("pointerdown", {pointerId: 32});
-  await expect(filterStatus).toHaveText("engaged · core",
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await cutoff.fill("100");
   // The next audible Pad witnesses the applied tuple. Core readback also
   // keeps this journey within the bounded ordinary-input admission window.
-  await expect(filterStatus).toHaveText("engaged · core",
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(cutoff).toHaveValue("100");
   await strike(33);
@@ -2344,17 +2354,19 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await cutoff.dispatchEvent("pointerdown", {pointerId: 34});
-  await expect(filterStatus).toHaveText("engaged · core",
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await cutoff.fill("300");
-  await expect(filterStatus).toHaveText("engaged · core",
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toHaveText("Filter · Engaged",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(cutoff).toHaveValue("300");
   await cutoff.dispatchEvent("pointerup", {pointerId: 34});
   // HOLD is a journaled far-side fact while the recording runs.
   await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(filterStatus).toContainText("frozen",
+  await expect(filterStatus).toContainText("Frozen",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   // A last hit while frozen keeps the recording span long enough for the
@@ -2411,9 +2423,9 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   // returns to OFF from Core, never from a Host default.
   await showPerformPage(page, "Live");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
-  await expect(filterStatus).toContainText("OFF",
+  await expect(filterStatus).toContainText("Off",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(filterStatus).toContainText("core");
+  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
 });
@@ -2451,6 +2463,8 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
   await openPerform(page);
   await assignThenMovePattern(page);
   const selectPad = async (slot) => {
+    const entry = page.getByRole("button", {name: "Live Mute / Solo", exact: true});
+    if (await entry.count()) await entry.click();
     // A Bank change may hide the current Pad. The explicit control label still
     // names the one current selection and is the navigation starting point.
     const label = await page.getByRole("region", {name: "Current Pad live controls"}).locator("strong").textContent();
@@ -2537,12 +2551,14 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
   await selectPad(63);
   const mute = page.getByRole("button", {name: "Mute D16"});
   if (await mute.getAttribute("aria-pressed") === "false") await gate("Mute", 63, true);
+  await page.getByRole("button", {name: "Back to Filter", exact: true}).click();
   const hold = page.getByRole("button", {name: "HOLD", exact: true});
   if (await hold.getAttribute("aria-pressed") === "false") await hold.click();
   await expect(hold).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("main", {name: "Perform", exact: true})).toHaveCount(0);
   await openPerform(page);
+  await page.getByRole("button", {name: "Live Mute / Solo", exact: true}).click();
   await expect(page.getByRole("button", {name: "Mute D16"})).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Solo D16"})).toHaveAttribute("aria-pressed", "false");
   await selectPad(0);
@@ -2582,4 +2598,187 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
   const replayed = signature(await page.evaluate(() => window.__gateReplayPcm.flat().map(value => value * 32768)));
   expect(replayed).toHaveLength(4);
   for (let index = 0; index < 4; index += 1) expect(replayed[index] / captured[index]).toBeCloseTo(1, 1);
+});
+
+
+test("Perform groups, four slots and horizontal controls fit six viewports with real readbacks", async ({page, browserName}, info) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await importActivateAndPerform(page);
+  const truth = await inspectProjectTruth(page);
+  const surface = page.getByRole("main", {name: "Perform", exact: true});
+  const measureHeader = () => page.getByTestId("overview-display").evaluate(root => {
+        const rect=node=>{const b=node.getBoundingClientRect(); return {x:b.x,y:b.y,width:b.width,height:b.height};};
+        const context=root.querySelector('.overview-context'), transport=root.querySelector('.overview-transport');
+        const a=rect(context), b=rect(transport), outer=rect(root);
+        return {context:a,transport:b,outer,primary:rect(root.querySelector(".overview-primary")),contextScroll:context.scrollWidth,contextWidth:context.clientWidth,
+          transportScroll:transport.scrollWidth,transportWidth:transport.clientWidth,
+          overlap:Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>0.5 && Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>0.5};
+      });
+  const measureConsole = () => page.getByTestId("hardware-console").evaluate(root => {
+    const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};};
+    const overlaps=(a,b)=>Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>0.5 && Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>0.5;
+    const regions=[...root.children].filter(node=>node.matches('aside,section')).map(node=>({name:node.getAttribute('aria-label'),...rect(node)}));
+    const conflicts=[];
+    for(let i=0;i<regions.length;i++)for(let j=i+1;j<regions.length;j++)if(overlaps(regions[i],regions[j]))conflicts.push([regions[i].name,regions[j].name]);
+    const keys=[...root.querySelectorAll('[data-testid="physical-controls"] button,[data-testid="pad-matrix"] button')].map(node=>({name:node.getAttribute('aria-label'),...rect(node)}));
+    return {regions,conflicts,keys,outer:rect(root),viewport:{width:innerWidth,height:innerHeight},workspaceLocalHeight:root.parentElement.offsetHeight,scale:root.parentElement.style.getPropertyValue('--creator-stage-scale')};
+  });
+  const observations = [];
+  for (const viewport of [{width:1440,height:900}, {width:1280,height:720},
+    {width:1024,height:768}, {width:820,height:1180}, {width:768,height:1024}, {width:390,height:844}]) {
+    await page.setViewportSize(viewport);
+    for (const group of ["PRIMARY", "FILTER", "MORE"]) {
+      const button = surface.getByRole("button", {name:group, exact:true});
+      if (await button.getAttribute("aria-pressed") !== "true") await button.click();
+      await expect(button).toHaveAttribute("aria-pressed", "true");
+      const firstBinding={PRIMARY:"Cutoff",FILTER:"Type",MORE:"Crush"}[group];
+      await expect(page.getByTestId("physical-controls").getByRole("button",{
+        name:`Encoder 1 — ${firstBinding}`,exact:true})).toBeVisible();
+      await expect(page.getByTestId("overview-display").locator('.encoder-readbacks dt').first()).toHaveText(`ENC1 ${firstBinding}`);
+      const controls = await surface.locator("button,input,select,summary").evaluateAll(nodes => nodes.map(node => {
+        const box = node.getBoundingClientRect();
+        return {name:node.getAttribute("aria-label") || node.textContent.trim(),
+          width:box.width, height:box.height, scroll:node.scrollWidth, client:node.clientWidth};
+      }));
+      for (const control of controls) {
+        expect(control.width, JSON.stringify({viewport,group,control})).toBeGreaterThanOrEqual(44);
+        expect(control.height, JSON.stringify({viewport,group,control})).toBeGreaterThanOrEqual(44);
+        expect(control.scroll, JSON.stringify({viewport,group,control})).toBeLessThanOrEqual(control.client + 1);
+      }
+      const rails = await surface.locator('input[type="range"]').evaluateAll(nodes => nodes.map(node => {
+        const box=node.getBoundingClientRect(); return {name:node.getAttribute("aria-label"), width:box.width, height:box.height,localWidth:node.offsetWidth,localHeight:node.offsetHeight,writingMode:getComputedStyle(node).writingMode};
+      }));
+      for (const rail of rails) {
+        expect(rail.writingMode).toBe("horizontal-tb");
+        expect(rail.localWidth, JSON.stringify({viewport,group,rail})).toBeGreaterThan(rail.localHeight);
+      }
+      await expect(surface.getByRole("slider", {name:"MASTER",exact:true})).toHaveCount(1);
+      await expect(surface.getByRole("button", {name:"HOLD",exact:true})).toHaveCount(1);
+      const slots = await surface.getByRole("button", {name:/^Launch Pattern /}).evaluateAll(nodes => nodes.map(node => {
+        const b=node.getBoundingClientRect(); return {x:b.x,y:b.y,width:b.width,height:b.height,localX:node.offsetLeft,localY:node.offsetTop,localWidth:node.offsetWidth,id:node.dataset.patternId,state:node.dataset.launch};
+      }));
+      expect(slots).toHaveLength(4);
+      expect(new Set(slots.map(slot => slot.localY)).size).toBe(1);
+      for (let index=1;index<4;index++) expect(slots[index-1].localX + slots[index-1].localWidth).toBeLessThanOrEqual(slots[index].localX + 0.5);
+      const text = await surface.locator('button,output,.perform-fader-name,.perform-fader-value,.perform-slot-state').evaluateAll(nodes => nodes
+        .filter(node => !node.closest('.visually-hidden') && node.clientWidth > 0)
+        .map(node => ({text:node.textContent.trim(),width:node.clientWidth,scroll:node.scrollWidth})));
+      for (const value of text) expect(value.scroll, JSON.stringify({viewport,group,value})).toBeLessThanOrEqual(value.width+1);
+      const encoderGeometry=await page.getByTestId("overview-display").locator('.encoder-readbacks > div').evaluateAll(nodes=>nodes.map(node=>({
+        text:node.textContent,scroll:node.scrollWidth,width:node.clientWidth,
+        children:[...node.children].map(child=>({text:child.textContent,scroll:child.scrollWidth,width:child.clientWidth}))
+      })));
+      expect(encoderGeometry).toHaveLength(4);
+      for(const cell of encoderGeometry){
+        expect(cell.scroll,JSON.stringify({viewport,group,cell})).toBeLessThanOrEqual(cell.width+1);
+        for(const child of cell.children)expect(child.scroll,JSON.stringify({viewport,group,child})).toBeLessThanOrEqual(child.width+1);
+      }
+      const header = await measureHeader();
+      expect(header.overlap, JSON.stringify({viewport,header})).toBe(false);
+      expect(header.contextScroll, JSON.stringify({viewport,header})).toBeLessThanOrEqual(header.contextWidth+1);
+      expect(header.transportScroll, JSON.stringify({viewport,header})).toBeLessThanOrEqual(header.transportWidth+1);
+      expect(header.transport.y+header.transport.height).toBeLessThanOrEqual(header.primary.y+header.primary.height+1);
+      const touch = page.getByTestId("touch-workspace");
+      await expect.poll(() => touch.evaluate(node=>node.scrollWidth-node.clientWidth)).toBeLessThanOrEqual(1);
+      const consoleGeometry = await measureConsole();
+      expect(consoleGeometry.conflicts,JSON.stringify({viewport,consoleGeometry})).toEqual([]);
+      for (const key of consoleGeometry.keys) {
+        expect(key.width,JSON.stringify({viewport,key})).toBeGreaterThanOrEqual(44);
+        expect(key.height,JSON.stringify({viewport,key})).toBeGreaterThanOrEqual(44);
+      }
+      for (const region of consoleGeometry.regions) {
+        expect(region.x,JSON.stringify({viewport,region})).toBeGreaterThanOrEqual(0);
+        expect(region.y,JSON.stringify({viewport,region})).toBeGreaterThanOrEqual(0);
+        expect(region.x+region.width,JSON.stringify({viewport,region})).toBeLessThanOrEqual(viewport.width+0.5);
+        expect(region.y+region.height,JSON.stringify({viewport,region})).toBeLessThanOrEqual(viewport.height+0.5);
+      }
+      observations.push({viewport,group,controls,rails,slots,text,header,encoderGeometry,consoleGeometry});
+    }
+    await surface.getByRole("button", {name:"PRIMARY",exact:true}).click();
+    await expect(page.getByTestId("physical-controls").getByRole("button",{name:"Encoder 1 — Cutoff",exact:true})).toBeVisible();
+    await expect(page.getByTestId("overview-display").locator('.encoder-readbacks dt').first()).toHaveText('ENC1 Cutoff');
+    await expect(page.getByRole("button",{name:"Previous FX group — ←",exact:true})).toBeDisabled();
+    await page.getByTestId("touch-workspace").evaluate(node=>{node.scrollTop=0;});
+    const screenshot=info.outputPath(`perform-${viewport.width}x${viewport.height}.png`);
+    await page.screenshot({path:screenshot});
+    await info.attach(`perform-${viewport.width}x${viewport.height}`,{path:screenshot,contentType:"image/png"});
+  }
+  // Navigation above does not engage a producer, change masks or author Truth.
+  const before = await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
+  expect(before.available).toBe(true);
+  expect(before.applied.filter.engaged).toBe(false);
+  expect(before.applied.mutedSlots).toEqual([]); expect(before.applied.soloSlots).toEqual([]);
+  await surface.getByRole("button", {name:"FILTER",exact:true}).click();
+  const cutoff=surface.getByRole("slider", {name:"Cutoff",exact:true});
+  await cutoff.dispatchEvent("pointerdown",{pointerId:111});
+  await cutoff.fill("700");
+  await expect(cutoff).toHaveValue("700");
+  await expect.poll(async()=>{
+    const status=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
+    return status.available && status.applied.filter.engaged && status.applied.filter.cutoffHz < 20000;
+  },{timeout:LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+  await surface.getByRole("button", {name:"MORE",exact:true}).click();
+  await expect.poll(async()=>{
+    const status=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
+    return status.available && !status.applied.filter.engaged && !status.applied.filter.frozen;
+  },{timeout:LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
+  await surface.getByRole("button", {name:"Live Mute / Solo",exact:true}).click();
+  await surface.getByRole("button", {name:"Solo A01",exact:true}).click();
+  await expect(surface.locator('.perform-pad-gate-summary')).toHaveAttribute('data-provenance','core', {timeout:LAUNCH_TRANSITION_TIMEOUT_MS});
+  await expect(surface.locator('.perform-pad-gate-summary dd').nth(1)).toHaveText('A01');
+  const masks=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
+  expect(masks.applied.soloSlots).toEqual([0]);
+  await surface.getByRole("button", {name:"Back to Filter",exact:true}).click();
+  await expect(surface.getByRole("button", {name:"FILTER",exact:true})).toHaveAttribute('aria-pressed','true');
+  expect(await inspectProjectTruth(page)).toEqual(truth);
+  // System retains the mounted Perform composition; returning without a
+  // resize must preserve every region and the one current parameter group.
+  await page.getByTestId("physical-controls").getByRole("button",{name:"System",exact:true}).click();
+  await page.getByRole("button",{name:"Back to music",exact:true}).click();
+  await expect(surface).toBeVisible();
+  const remountedConsole=await measureConsole();
+  expect(remountedConsole.conflicts).toEqual([]);
+  for(const region of remountedConsole.regions) expect(region.y+region.height).toBeLessThanOrEqual(844+0.5);
+  // The physical Sequence exit is a real390px pointer hit. Configure the
+  // existing device preference at1440px; other mode phone layouts belong to
+  // #1221. Arming, active readout and cancellation below are all real390px UI.
+  await page.getByTestId("physical-controls").getByRole("button", {name:"Sequence",exact:true}).click();
+  await expect(surface).toHaveCount(0);
+  const afterModeExit=await measureConsole();
+  expect(afterModeExit.workspaceLocalHeight).toBeLessThan(remountedConsole.workspaceLocalHeight);
+  // Native keyboard entry is available even though the separately owned
+  // Sequence phone layout can overlap its pointer rail (#1221).
+  await page.getByTestId("physical-controls").getByRole("button",{name:"Perform",exact:true}).focus();
+  await page.keyboard.press("Enter");
+  await expect(surface).toBeVisible();
+  const modeReentryConsole=await measureConsole();
+  expect(modeReentryConsole.workspaceLocalHeight).toBeGreaterThan(afterModeExit.workspaceLocalHeight);
+  expect(modeReentryConsole.conflicts).toEqual([]);
+  for(const region of modeReentryConsole.regions) expect(region.y+region.height).toBeLessThanOrEqual(844+0.5);
+  await page.getByTestId("physical-controls").getByRole("button",{name:"Sequence",exact:true}).click();
+  await expect(surface).toHaveCount(0);
+  await page.setViewportSize({width:1440,height:900});
+  await showSequenceLayer(page,"SETUP");
+  await page.getByRole("button", {name:"Count-in 2 bars",exact:true}).click();
+  await expect(page.getByRole("button", {name:"Count-in 2 bars",exact:true})).toHaveAttribute("aria-pressed","true");
+  await page.getByTestId("physical-controls").getByRole("button", {name:"Perform",exact:true}).click();
+  await page.setViewportSize({width:390,height:844});
+  await page.getByTestId("physical-controls").getByRole("button", {name:"Record",exact:true}).click();
+  await expect(page.getByRole("status",{name:"Count-in status"})).toContainText(/\d+ beats? left/);
+  const countInText=await page.getByRole("status",{name:"Count-in status"}).textContent();
+  const countInHeader=await measureHeader();
+  expect(countInHeader.overlap,JSON.stringify(countInHeader)).toBe(false);
+  expect(countInHeader.contextScroll).toBeLessThanOrEqual(countInHeader.contextWidth+1);
+  expect(countInHeader.transportScroll).toBeLessThanOrEqual(countInHeader.transportWidth+1);
+  expect(countInHeader.transport.y+countInHeader.transport.height).toBeLessThanOrEqual(countInHeader.primary.y+countInHeader.primary.height+1);
+  const countInScreenshot=info.outputPath('perform-count-in-390x844.png');
+  await page.screenshot({path:countInScreenshot});
+  await info.attach('perform-count-in-390x844',{path:countInScreenshot,contentType:'image/png'});
+  await page.getByTestId("physical-controls").getByRole("button", {name:"Record — cancel count-in",exact:true}).click();
+  await expect(page.getByRole("status",{name:"Count-in status"})).toHaveCount(0);
+  expect(await inspectProjectTruth(page)).toEqual(truth);
+  const receipt=info.outputPath('perform-layout-and-native-readback.json');
+  await writeFile(receipt,JSON.stringify({observations,before,masks,countInHeader,countInText,remountedConsole,afterModeExit,modeReentryConsole},null,2));
+  await info.attach('perform-layout-and-native-readback',{path:receipt,contentType:'application/json'});
 });
