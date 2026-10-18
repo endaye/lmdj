@@ -39,8 +39,16 @@ switch or retain a receipt. Its future caller must provide N from the actual
 coherent source clock at actual S. Request-time estimates, delayed inspect time
 and current Pattern after a later switch cannot establish historical position.
 
-The Native follow-up must add a distinct cross-Pattern mode and retain actual
-`(S, N, BPM/geometry)` for each pinned publication until its own acknowledgment.
+The [P2 Native producer](../plans/2026-10-19-retained-pattern-publication-clock.md)
+adds a pinned per-publication clock companion and a retained form of the
+existing same-Pattern phase edit. The companion combines acquired actual S/N
+with immutable view BPM/geometry, surviving a different successor and Stop.
+Pending/cancelled has no anchor; unrepresentable applied N remains unavailable.
+It does not enable cross-Pattern OFF or select a Voice policy.
+
+The Native OFF follow-up must add a distinct cross-Pattern mode and feed the
+actual matched target `(S, N, BPM/geometry)` into that retention path until its
+own acknowledgment.
 Do not relax the same-Pattern phase-edit contract, borrow an unrelated
 predecessor's anchor, overwrite an audio-owned predecessor or expose a predicted
 frame as Applied. Check old generation/Pattern/frame authority, supersession,
@@ -114,9 +122,9 @@ candidate, version settlement, device and human acceptance remain separate.
 ## Version Management
 
 P1 adds a function only: Audio Runtime additive API MINOR debt in #2237, no
-existing layout or persisted grammar change. Native retention may enlarge the
-public concrete `RealtimeEngine`; private fields still affect its C++ ABI and
-require MAJOR classification. Deduplicate compatible pending debt only after
+existing layout or persisted grammar change. P2's fixed per-slot numerator
+storage enlarges public concrete `RealtimeEngine`; private fields still affect
+its C++ ABI, so P2 adds MAJOR debt. Deduplicate compatible pending debt only after
 examining actual final domains. No guessed identity or Build allocation.
 
 ## Documentation Impact

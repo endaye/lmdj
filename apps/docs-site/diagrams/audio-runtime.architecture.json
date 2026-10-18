@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Audio Runtime Module",
-    "summary": "Runtime source：连续 tempo/SNAP、retained S、S6 input/cue；OFF 仅提供相位计算"
+    "summary": "Runtime source：连续 tempo/SNAP、retained S/N、S6 input/cue；OFF 尚未接线"
   },
   "boundaries": [],
   "components": [
@@ -129,7 +129,7 @@
     {
       "id": "publication_lease",
       "label": "Publication Lease (opt-in)",
-      "detail": "control pin · retained actual S",
+      "detail": "control pin · retained actual S/N",
       "kind": "core",
       "x": 640,
       "y": 490,
@@ -214,7 +214,7 @@
     {
       "from": "bank",
       "to": "publication_lease",
-      "label": "acquire actual S"
+      "label": "acquire actual clock"
     }
   ],
   "cards": [

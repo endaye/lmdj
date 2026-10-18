@@ -8369,6 +8369,92 @@ PreparedPatternView retained_switch_material(const char* pattern) {
   return std::move(view.value());
 }
 
+void retained_phase_clock_keeps_fractional_apply_after_successor_reclaim_and_stop() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot();
+  snapshot.events.clear();
+  auto source = PreparedPatternView::from_snapshot(snapshot);
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  render_until(f.engine, 17);
+  const auto tempo = f.engine.publish_pattern_tempo_transition(
+      std::move(source.value().with_tempo(97).value()), f.generation);
+  LMDJ_CHECK(tempo.result == PatternPublishResult::accepted);
+  render_until(f.engine, 20);
+  auto phase = f.engine.publish_retained_pattern_view_preserving_phase(
+      std::move(source.value().with_tempo(97).value()), tempo.generation);
+  LMDJ_CHECK(phase.publication.result == PatternPublishResult::accepted && phase.lease);
+  const auto pending = f.engine.observe_pattern_publication_clock(phase.lease);
+  LMDJ_CHECK(pending && pending->publication.disposition == PatternPublicationDisposition::pending);
+  LMDJ_CHECK(!pending->applied_anchor);
+  g_allocations.store(0); g_deallocations.store(0);
+  g_track_allocations.store(true);
+  render_frames(f.engine, 1);
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  const auto check_original = [&] {
+    const auto clock = f.engine.observe_pattern_publication_clock(phase.lease);
+    LMDJ_CHECK(clock && clock->publication.disposition == PatternPublicationDisposition::applied);
+    LMDJ_CHECK(clock->publication.authority.generation == phase.publication.generation);
+    LMDJ_CHECK(clock->publication.authority.pattern_id == PatternId{kPatternA});
+    LMDJ_CHECK(clock->publication.applied_frame == 20);
+    // Absolute oracle: 17 frames at 120 BPM, then 3 at 97 BPM. Reading the
+    // later current clock, truncating ticks, or resetting N must all fail.
+    LMDJ_CHECK(clock->applied_anchor == (TransportAnchor{20, 2'237'760, 97}));
+    LMDJ_CHECK(clock->ppq == 960 && clock->loop_length_ticks == 3840);
+  };
+  check_original();
+  auto target = pattern_snapshot(kPatternB, {0, 0}, 127, 40);
+  target.events.clear(); target.bars = 2; target.loop_length_ticks = 7680;
+  auto next = PreparedPatternView::from_snapshot(target);
+  const auto successor = f.engine.publish_pattern_switch_view(
+      std::move(next.value()), PatternSwitchSnap::beat);
+  LMDJ_CHECK(successor.result == PatternPublishResult::accepted);
+  render_until(f.engine, successor.activation_frame + 1);
+  LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() > 0);
+  check_original();
+  f.engine.stop();
+  check_original();
+  phase.lease.reset();
+  LMDJ_CHECK(!f.engine.observe_pattern_publication_clock(phase.lease));
+}
+
+void retained_phase_clock_does_not_invent_zero_when_applied_position_overflows() {
+  using namespace lmdj::audio;
+  auto snapshot = tempo_quarter_snapshot(); snapshot.events.clear();
+  PatternTransportFixture f(snapshot);
+  f.apply(1, PatternTransportAction::start);
+  const auto frame = std::numeric_limits<std::uint64_t>::max() / (120U * 960U) + 1;
+  f.engine.set_rendered_frames_quiescent_for_testing(frame);
+  auto view = PreparedPatternView::from_snapshot(snapshot);
+  auto phase = f.engine.publish_retained_pattern_view_preserving_phase(
+      std::move(view.value()), f.generation);
+  LMDJ_CHECK(phase.publication.result == PatternPublishResult::accepted);
+  render_frames(f.engine, 1);
+  const auto clock = f.engine.observe_pattern_publication_clock(phase.lease);
+  LMDJ_CHECK(clock && clock->publication.disposition == PatternPublicationDisposition::applied);
+  LMDJ_CHECK(clock->publication.applied_frame == frame);
+  LMDJ_CHECK(!clock->applied_anchor);
+}
+
+void retained_phase_entry_preserves_guards_and_refused_material() {
+  using namespace lmdj::audio;
+  RealtimeEngine stopped;
+  auto material = retained_switch_material(kPatternA);
+  auto refused = stopped.publish_retained_pattern_view_preserving_phase(std::move(material), 1);
+  LMDJ_CHECK(refused.publication.result == PatternPublishResult::phase_mismatch && !refused.lease);
+  LMDJ_CHECK(stopped.publish_pattern_view(std::move(material)).result == PatternPublishResult::accepted);
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  auto changed = f.engine.publish_retained_pattern_view_preserving_phase(
+      retained_switch_material(kPatternB), f.generation);
+  LMDJ_CHECK(changed.publication.result == PatternPublishResult::phase_mismatch && !changed.lease);
+  auto stale = f.engine.publish_retained_pattern_view_preserving_phase(
+      retained_switch_material(kPatternA), f.generation + 1);
+  LMDJ_CHECK(stale.publication.result == PatternPublishResult::phase_mismatch && !stale.lease);
+}
+
 void retained_boundary_survives_successor_and_actual_reclaim() {
   using namespace lmdj::audio;
   PatternTransportFixture f;
@@ -8389,6 +8475,8 @@ void retained_boundary_survives_successor_and_actual_reclaim() {
   LMDJ_CHECK(retained->authority.generation == b.publication.generation);
   LMDJ_CHECK(retained->authority.pattern_id == PatternId{kPatternB});
   LMDJ_CHECK(retained->applied_frame == 24'000); // Actual B remains, despite current A.
+  const auto clock = f.engine.observe_pattern_publication_clock(b.lease);
+  LMDJ_CHECK(clock && clock->applied_anchor == (TransportAnchor{24'000, 0, 120}));
   b.lease.reset();
   LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
   LMDJ_CHECK(!f.engine.observe_pattern_publication(b.lease));
@@ -8410,6 +8498,8 @@ void retained_apply_frame_is_not_its_queued_activation_prediction() {
   const auto applied = f.engine.observe_pattern_publication(b.lease);
   LMDJ_CHECK(applied && applied->disposition == PatternPublicationDisposition::applied);
   LMDJ_CHECK(applied->authority.activation_frame == 24'000 && applied->applied_frame == 32'000);
+  const auto clock = f.engine.observe_pattern_publication_clock(b.lease);
+  LMDJ_CHECK(clock && clock->applied_anchor == (TransportAnchor{32'000, 0, 120}));
 }
 
 void retained_leases_bound_slots_move_once_and_block_restart() {
@@ -8436,8 +8526,10 @@ void retained_leases_bound_slots_move_once_and_block_restart() {
   LMDJ_CHECK(refused.publication.result == PatternPublishResult::pattern_slots_full && !refused.lease);
   RealtimeEngine foreign;
   LMDJ_CHECK(!foreign.observe_pattern_publication(leases[0]));
+  LMDJ_CHECK(!foreign.observe_pattern_publication_clock(leases[0]));
   auto moved = std::move(leases[0]);
   LMDJ_CHECK(!f.engine.observe_pattern_publication(leases[0]));
+  LMDJ_CHECK(!f.engine.observe_pattern_publication_clock(leases[0]));
   moved.reset();
   moved.reset();
   LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
@@ -8476,6 +8568,7 @@ void retained_cancel_waits_for_its_actual_audio_local_disposition() {
     if (claimed) f.engine.render(left.data(), right.data(), 0);
     const auto pending = f.engine.observe_pattern_publication(b.lease);
     LMDJ_CHECK(pending && pending->disposition == PatternPublicationDisposition::pending && !pending->applied_frame);
+    LMDJ_CHECK(!f.engine.observe_pattern_publication_clock(b.lease)->applied_anchor);
     LMDJ_CHECK(f.engine.cancel_pattern_publication(authority));
     if (claimed) {
       LMDJ_CHECK(f.engine.observe_pattern_publication(b.lease)->disposition == PatternPublicationDisposition::pending);
@@ -8483,6 +8576,9 @@ void retained_cancel_waits_for_its_actual_audio_local_disposition() {
     }
     const auto cancelled = f.engine.observe_pattern_publication(b.lease);
     LMDJ_CHECK(cancelled && cancelled->disposition == PatternPublicationDisposition::cancelled && !cancelled->applied_frame);
+    const auto clock = f.engine.observe_pattern_publication_clock(b.lease);
+    LMDJ_CHECK(clock && clock->publication.disposition == PatternPublicationDisposition::cancelled);
+    LMDJ_CHECK(!clock->applied_anchor);
     LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
     b.lease.reset();
     LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
@@ -8568,6 +8664,9 @@ void retained_switch_keeps_original_count_in_receipts_and_separate_current_cutof
 }  // namespace
 
 int main() {
+  retained_phase_clock_keeps_fractional_apply_after_successor_reclaim_and_stop();
+  retained_phase_clock_does_not_invent_zero_when_applied_position_overflows();
+  retained_phase_entry_preserves_guards_and_refused_material();
   retained_boundary_survives_successor_and_actual_reclaim();
   retained_apply_frame_is_not_its_queued_activation_prediction();
   retained_leases_bound_slots_move_once_and_block_restart();

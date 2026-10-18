@@ -641,6 +641,7 @@ void RealtimeEngine::apply_published_pattern(
   auto& next = pattern_slots_[publication.slot];
   pattern_applied_generations_[publication.slot] = publication.generation;
   pattern_applied_frames_[publication.slot] = runtime_frame;
+  pattern_applied_positions_[publication.slot] = position;
   next.state.store(PatternState::current, std::memory_order_release);
   current_pattern_slot_.store(publication.slot, std::memory_order_release);
   if (!preserve_phase) {
@@ -2021,6 +2022,25 @@ RealtimeEngine::observe_pattern_publication(
   return result;
 }
 
+std::optional<PatternPublicationClockObservation>
+RealtimeEngine::observe_pattern_publication_clock(
+    const PatternPublicationLease& lease) const {
+  auto publication = observe_pattern_publication(lease);
+  if (!publication) return std::nullopt;
+  const auto& view = *pattern_slots_[lease.slot_].pattern;
+  PatternPublicationClockObservation result{
+      std::move(*publication), std::nullopt, view.ppq(), view.loop_length_ticks()};
+  // Pending can still be written by audio. Only applied disposition acquired
+  // the slot state publishing its metadata; the lease prevents later reuse.
+  if (result.publication.disposition == PatternPublicationDisposition::applied &&
+      pattern_applied_positions_[lease.slot_]) {
+    result.applied_anchor = TransportAnchor{
+        *result.publication.applied_frame, *pattern_applied_positions_[lease.slot_],
+        view.bpm()};
+  }
+  return result;
+}
+
 void RealtimeEngine::release_pattern_publication_lease(
     std::uint8_t slot, std::uint64_t generation) noexcept {
   if (slot < pattern_slots_.size() && pattern_slots_[slot].generation == generation &&
@@ -2039,6 +2059,20 @@ PatternPublication RealtimeEngine::publish_pattern_view_preserving_phase(
     PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept {
   return publish_pattern_view_impl(std::move(pattern), std::nullopt, std::nullopt,
       PatternPublicationTiming::preserve_phase, expected_generation);
+}
+
+RetainedPatternPublication RealtimeEngine::publish_retained_pattern_view_preserving_phase(
+    PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    ++pattern_publication_rejections_;
+    publish_control_observation();
+    return {{PatternPublishResult::phase_mismatch, 0, 0}, {}};
+  }
+  PatternPublicationLease lease;
+  const auto publication = publish_pattern_view_impl(std::move(pattern),
+      std::nullopt, std::nullopt, PatternPublicationTiming::preserve_phase,
+      expected_generation, PatternSwitchSnap::bar, &lease);
+  return {publication, std::move(lease)};
 }
 
 PatternPublication RealtimeEngine::publish_pattern_tempo_transition(
