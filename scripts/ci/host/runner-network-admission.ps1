@@ -83,9 +83,14 @@ if ($rebootKeys | Where-Object { Test-Path $_ }) { $blockers += "reboot-pending"
 $basePath = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" -ErrorAction SilentlyContinue |
   ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DistributionName -eq $Distribution } |
   Select-Object -First 1 -ExpandProperty BasePath
-$drive = if ($basePath) { ($basePath -replace '^\\\\\?\\', '').Substring(0, 1) } else { $env:SystemDrive.Substring(0, 1) }
-$freeGB = [math]::Floor((Get-PSDrive -Name $drive).Free / 1GB)
-if ($freeGB -lt $DiskMinGB) { $blockers += "disk<${DiskMinGB}GB" }
+# An unregistered distribution blocks rather than measuring another drive.
+if (-not $basePath) {
+  $blockers += "distribution-missing"
+} else {
+  $drive = ($basePath -replace '^\\\\\?\\', '').Substring(0, 1)
+  $freeGB = [math]::Floor((Get-PSDrive -Name $drive).Free / 1GB)
+  if ($freeGB -lt $DiskMinGB) { $blockers += "disk<${DiskMinGB}GB" }
+}
 if ($state.network -ne "fast") { $blockers += "network-$($state.network)" }
 $state | ConvertTo-Json | Set-Content -Path $stateFile
 

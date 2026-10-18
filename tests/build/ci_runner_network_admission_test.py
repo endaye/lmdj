@@ -158,6 +158,15 @@ class RunnerNetworkAdmissionTest(unittest.TestCase):
         self.assertEqual(len(writes), 1, "the next run must retry the revoke")
         self.assertEqual(self.last_action(), "revoke")
 
+    def test_the_state_file_is_read_as_data(self) -> None:
+        self.tick()
+        marker = self.root / "executed"
+        (self.state / "admission-state").write_text(
+            f"streak=5\nnetwork=fast\ntouch {marker}\nac_since=$(touch {marker})\n", encoding="utf-8")
+        writes, _ = self.tick(probe=SLOW, advance=60)
+        self.assertFalse(marker.exists(), "state lines must never run as commands")
+        self.assertEqual(writes, [], "a malformed AC time must not count as a held plug-in")
+
     def test_the_powershell_twin_shares_the_probe_and_thresholds(self) -> None:
         bash = SCRIPT.read_text(encoding="utf-8")
         twin = TWIN.read_text(encoding="utf-8")

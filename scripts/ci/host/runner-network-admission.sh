@@ -39,9 +39,15 @@ mkdir -p "$DIR"
 STATE="$DIR/admission-state"; LOG="$DIR/admission.log"
 
 # State: streak, network verdict (fast|slow|unknown), last probe time, AC-since time.
+# Read as data, never sourced: an unknown key or malformed value is ignored.
 streak=0; network=unknown; probed_at=0; ac_since=0
-# shellcheck disable=SC1090
-[ -f "$STATE" ] && . "$STATE"
+while IFS='=' read -r key value; do
+  case "$key=$value" in
+    streak=[0-9]*|probed_at=[0-9]*|ac_since=[0-9]*)
+      [[ "$value" =~ ^[0-9]+$ ]] && printf -v "$key" '%s' "$value";;
+    network=fast|network=slow|network=unknown) network=$value;;
+  esac
+done < <(cat "$STATE" 2>/dev/null)
 
 if [ $((NOW - probed_at)) -ge "$PROBE_INTERVAL_SECONDS" ]; then
   out=$(curl -sS -L -o /dev/null -r 0-10485759 --max-time 30 \
