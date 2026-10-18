@@ -6,9 +6,9 @@ CardputerConfiguration cardputer_configuration() noexcept {
   // Cardputer ADV / ESP32-S3 wiring and the no-PSRAM admission profile are
   // product facts. They are deliberately absent from the neutral Host.
   return {
-      "2.0.117.0",
+      "2.0.118.0",
       "1.0.9",
-      "bc6eb1ded24d00dae7a018065f1260eb80aa2a0c3d5d32826f78f6aaae0cc52d",
+      "9c042faaca4f99952e0f9f3f11946409a0e65cb702b26424b4f202da040be3d3",
       {{131072, 96000, 19200, 4, 32}, 331176, 32768, 128, 1000, 1000000},
       {4},
       // ES8311 register 0x32 is logarithmic: 0xBF = 0 dB, not maximum
