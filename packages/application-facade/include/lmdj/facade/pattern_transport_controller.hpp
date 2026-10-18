@@ -154,6 +154,30 @@ struct PatternTransportInputOwnerStatus {
   std::size_t held_correlations{};
 };
 
+inline constexpr std::size_t kPatternTransportSwitchCapacity = 2;
+struct PatternTransportSwitchRequest {
+  std::uint64_t runtime_generation{};
+  foundation::PatternId pattern_id;
+};
+struct PatternTransportSwitchTicket {
+  std::uint64_t runtime_generation{};
+  std::uint64_t ticket{};
+  bool operator==(const PatternTransportSwitchTicket&) const = default;
+};
+struct PatternTransportSwitchStatus {
+  PatternTransportSwitchTicket ticket;
+  foundation::PatternId pattern_id;
+  std::optional<audio::PatternReplacementAuthority> publication;
+  std::optional<audio::PatternPublicationObservation> native_result;
+  std::uint16_t bpm{};
+  // Applied needs its exact durable segment ACK. Cancelled has no segment.
+  bool durable_settled{};
+  // Exceptional resource disposition is not a successful recorded segment.
+  bool owner_disposed{};
+  bool complete{};
+  std::optional<foundation::Error> error;
+};
+
 // Host-consumable Pattern transport controller: the public ownership wrapper
 // around the internal coordinator. The Facade compilation unit constructs and
 // self-owns the Sequence Journal and Project Store the coordinator needs, so
@@ -214,6 +238,24 @@ class PatternTransportController {
   // so the exactly-once argument of the projection carries over: the transfer
   // a close commits is unchanged by any number of overlay publications.
   foundation::Result<void> publish_overlay();
+
+  // Reserve before cooking/publishing a recording switch. Refuses while I/O
+  // owns work or the requested material may omit unflushed recorded notes.
+  // The Host owns the Native lease and supplies its exact observations here.
+  // Keep reserve, Facade Snapshot preparation, Native publication and bind
+  // within one serialized control turn; failed preparation abandons the ticket.
+  foundation::Result<PatternTransportSwitchTicket> reserve_pattern_switch(
+      const PatternTransportSwitchRequest&);
+  bool bind_pattern_switch(const PatternTransportSwitchTicket&,
+      const audio::PatternReplacementAuthority&, std::uint16_t bpm);
+  bool complete_pattern_switch(const PatternTransportSwitchTicket&,
+      const audio::PatternPublicationObservation&);
+  std::optional<PatternTransportSwitchStatus> inspect_pattern_switch(
+      const PatternTransportSwitchTicket&) const;
+  // Reset the actual Native lease after complete, then consume its record.
+  bool consume_pattern_switch(const PatternTransportSwitchTicket&);
+  // Only a never-bound reservation can be abandoned after Native refusal.
+  bool abandon_pattern_switch(const PatternTransportSwitchTicket&);
 
   PatternTransportSubmit request_count_in(const ScheduledPatternTransportRequest&);
   ScheduledPatternTransportStatus inspect_count_in() const;

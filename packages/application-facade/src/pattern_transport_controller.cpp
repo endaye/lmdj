@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <array>
 #include <limits>
+#include <algorithm>
+#include <picosha2.h>
 #include "pattern_transport_io_owner.hpp"
 #include <lmdj/domain/project.hpp>
 #include <utility>
@@ -71,6 +73,11 @@ struct PatternTransportCoordinator::Async {
     std::uint64_t ticket{};
     bool release_consumed{};
   };
+  struct Switch {
+    PatternTransportSwitchStatus status;
+    PatternTransportRequest recording;
+    foundation::CommandId command;
+  };
   Async(PatternTransportAudioPort& port, PatternTransportExecutor& worker,
         PatternTransportControllerConfig binding,
         ScheduledPatternTransportAudioPort* capability,
@@ -85,6 +92,188 @@ struct PatternTransportCoordinator::Async {
   static bool valid(const PatternTransportRequest& r, const PatternTransportControllerConfig& c) {
     return r.runtime_generation == c.runtime_generation && r.session == c.session &&
         r.project_id == c.project && r.expected_epoch != 0 && domain::is_valid_uuid(r.command_id.value());
+  }
+  static bool same_publication(const audio::PatternReplacementAuthority& a,
+                               const audio::PatternReplacementAuthority& b) {
+    return a.generation == b.generation && a.pattern_id == b.pattern_id &&
+        a.activation_frame == b.activation_frame;
+  }
+  Switch* find_switch(const PatternTransportSwitchTicket& ticket) {
+    for (auto& s : switches) if (s && s->status.ticket == ticket) return &*s;
+    return nullptr;
+  }
+  const Switch* find_switch(const PatternTransportSwitchTicket& ticket) const {
+    for (const auto& s : switches) if (s && s->status.ticket == ticket) return &*s;
+    return nullptr;
+  }
+  Switch* switch_work() {
+    if (!work_request || work_kind != "segment") return nullptr;
+    for (auto& s : switches)
+      if (s && s->command == work_request->identity.command_id) return &*s;
+    return nullptr;
+  }
+  bool unsettled_switches() const {
+    for (const auto& s : switches)
+      if (s && !s->status.durable_settled && !s->status.owner_disposed) return true;
+    return false;
+  }
+  static void refresh_switch(Switch& s) {
+    const auto& native = s.status.native_result;
+    if (native && native->disposition == audio::PatternPublicationDisposition::cancelled)
+      s.status.durable_settled = true; // Actual final absence has no segment.
+    s.status.complete = native && native->disposition != audio::PatternPublicationDisposition::pending &&
+        (s.status.durable_settled || s.status.owner_disposed);
+  }
+  foundation::Result<PatternTransportSwitchTicket> reserve_switch(
+      const PatternTransportSwitchRequest& request) {
+    using Result = foundation::Result<PatternTransportSwitchTicket>;
+    if (request.runtime_generation != config.runtime_generation ||
+        !domain::is_valid_uuid(request.pattern_id.value()))
+      return Result::failure({foundation::ErrorCode::invalid_argument, "Stale Pattern switch reservation"});
+    if (!recording || !recording_request || !durable_pattern || shutdown || owner_invalidated ||
+        pending || closing || phase != PatternTransportPhase::idle || error || work_request ||
+        executor.inspect().ticket || legacy_candidate || legacy_result || next_switch_ticket == UINT64_MAX)
+      return Result::failure(busy("recording_switch_preparation_pending"));
+    if (std::ranges::all_of(switches, [](const auto& s) { return s.has_value(); }))
+      return Result::failure(busy("recording_switch_capacity"));
+    if (request.pattern_id == *durable_pattern && !unsettled_switches())
+      return Result::failure({foundation::ErrorCode::invalid_argument,
+          "Current Pattern selection has no recording switch",
+          {{"reason", "recording_switch_current_pattern"}}});
+    for (const auto& s : switches) if (s && !s->status.durable_settled) {
+      if (!s->status.publication || request.pattern_id == *durable_pattern ||
+          request.pattern_id == s->status.pattern_id)
+        return Result::failure(busy("recording_switch_material_pending"));
+    }
+    // Withdrawal belongs to the existing overlay owner. A claimed overlay
+    // remains busy until its actual application/Journal record settles.
+    if (unlanded_overlay) {
+      const auto queued = audio.pending_switch();
+      if (!queued || queued->generation != unlanded_overlay || !audio.cancel_overlay(*queued))
+        return Result::failure(busy("recording_switch_overlay_pending"));
+      unlanded_overlay = published_projection = 0;
+    }
+    for (auto& cell : switches) if (!cell) {
+      const auto serial = next_switch_ticket + 1;
+      const auto preimage = "recording-pattern-switch:" + recording_request->command_id.value() + ":" +
+          std::to_string(config.runtime_generation) + ":" +
+          std::to_string(recording_request->expected_epoch) + ":" + std::to_string(serial);
+      auto digest = picosha2::hash256_hex_string(preimage);
+      digest[12] = '4'; digest[16] = '8';
+      const foundation::CommandId command{digest.substr(0,8) + "-" + digest.substr(8,4) + "-" +
+          digest.substr(12,4) + "-" + digest.substr(16,4) + "-" + digest.substr(20,12)};
+      const PatternTransportSwitchTicket ticket{config.runtime_generation, serial};
+      cell.emplace(Switch{{ticket, request.pattern_id, {}, {}, 0, false, false, false, {}},
+                          *recording_request, command});
+      next_switch_ticket = serial;
+      return Result::success(ticket);
+    }
+    return Result::failure(busy("recording_switch_capacity"));
+  }
+  bool bind_switch(const PatternTransportSwitchTicket& ticket,
+      const audio::PatternReplacementAuthority& authority, std::uint16_t bpm) {
+    auto* s = find_switch(ticket);
+    if (!s || authority.pattern_id != s->status.pattern_id || !authority.generation || bpm < 40 || bpm > 240)
+      return false;
+    if (s->status.publication)
+      return same_publication(*s->status.publication, authority) && s->status.bpm == bpm;
+    auto previous = durable_generation;
+    for (const auto& other : switches) if (other && other->status.publication)
+      previous = std::max(previous, other->status.publication->generation);
+    if (authority.generation <= previous || shutdown || owner_invalidated) return false;
+    s->status.publication = authority;
+    s->status.bpm = bpm;
+    return true;
+  }
+  bool complete_switch(const PatternTransportSwitchTicket& ticket,
+      const audio::PatternPublicationObservation& observation) {
+    auto* s = find_switch(ticket);
+    if (!s || !s->status.publication || !same_publication(*s->status.publication, observation.authority))
+      return false;
+    if (observation.disposition != audio::PatternPublicationDisposition::pending &&
+        observation.disposition != audio::PatternPublicationDisposition::applied &&
+        observation.disposition != audio::PatternPublicationDisposition::cancelled) return false;
+    const bool applied = observation.disposition == audio::PatternPublicationDisposition::applied;
+    if (applied != observation.applied_frame.has_value() ||
+        (applied && *observation.applied_frame < observation.authority.activation_frame)) return false;
+    if (s->status.native_result &&
+        s->status.native_result->disposition != audio::PatternPublicationDisposition::pending)
+      return s->status.native_result->disposition == observation.disposition &&
+          s->status.native_result->applied_frame == observation.applied_frame;
+    s->status.native_result = observation;
+    if (applied && observation.authority.generation > observed_switch_generation) {
+      observed_switch_generation = observation.authority.generation;
+      switch_origin = observation.applied_frame;
+      origin = *switch_origin;
+    }
+    refresh_switch(*s);
+    return true;
+  }
+  bool consume_switch(const PatternTransportSwitchTicket& ticket) {
+    for (auto& s : switches) if (s && s->status.ticket == ticket && s->status.complete) {
+      s.reset();
+      return true;
+    }
+    return false;
+  }
+  bool abandon_switch(const PatternTransportSwitchTicket& ticket) {
+    for (auto& s : switches) if (s && s->status.ticket == ticket && !s->status.publication) {
+      s.reset();
+      return true;
+    }
+    return false;
+  }
+  bool switch_blocks_input(std::uint64_t frame) const {
+    const Switch* first = nullptr;
+    for (const auto& s : switches) if (s && !s->status.durable_settled && !s->status.owner_disposed &&
+        (!first || s->status.ticket.ticket < first->status.ticket.ticket)) first = &*s;
+    if (!first) return false;
+    if (!first->status.publication) return true;
+    const auto boundary = first->status.native_result && first->status.native_result->applied_frame
+        ? *first->status.native_result->applied_frame : first->status.publication->activation_frame;
+    return frame >= boundary;
+  }
+  void drive_switches() {
+    if (work_request || owner_invalidated || switch_failure) return;
+    Switch* first = nullptr;
+    for (auto& s : switches) if (s && !s->status.durable_settled &&
+        (!first || s->status.ticket.ticket < first->status.ticket.ticket)) first = &*s;
+    if (!first || !first->status.native_result ||
+        first->status.native_result->disposition != audio::PatternPublicationDisposition::applied) return;
+    const auto frame = *first->status.native_result->applied_frame;
+    if (close_cutoff && frame >= close_cutoff->effective_frame) {
+      first->status.error = foundation::Error{foundation::ErrorCode::invalid_argument,
+          "Applied Pattern switch conflicts with the actual cutoff"};
+      switch_failure = error = first->status.error;
+      phase = PatternTransportPhase::error;
+      return;
+    }
+    for (const auto& input : inputs) if (input && !input->status.durable_settled &&
+        !input->waiting_cutoff && input->request.runtime_frame < frame) return;
+    if (legacy_candidate && !legacy_result && legacy_candidate->runtime_frame < frame) return;
+    auto request = first->recording;
+    request.command_id = first->command;
+    work({{"op", "segment"}, {"recording", first->recording.command_id.value()},
+        {"pattern", first->status.pattern_id.value()}, {"generation", first->status.publication->generation},
+        {"frame", frame}, {"bpm", first->status.bpm}}, request);
+  }
+  void drive_legacy_input() {
+    if (!legacy_candidate || legacy_result || work_request) return;
+    if (owner_invalidated && switch_failure) {
+      legacy_result = foundation::Result<PatternAdmissionAdmit>::failure(*switch_failure);
+      return;
+    }
+    const auto& c = *legacy_candidate;
+    if (close_cutoff && c.runtime_frame >= close_cutoff->effective_frame) {
+      legacy_result = foundation::Result<PatternAdmissionAdmit>::success(PatternAdmissionAdmit::live_only);
+      return;
+    }
+    if (!recording || switch_blocks_input(c.runtime_frame)) return;
+    work({{"op", "admit"}, {"candidate", {
+        {"watermark", c.watermark}, {"frame", c.runtime_frame},
+        {"bank", c.slot.bank}, {"pad", c.slot.pad},
+        {"pressed", c.kind == project_io::SequenceCandidateKind::press},
+        {"velocity", c.velocity}, {"correlation", c.press_sequence}}}}, *recording_request);
   }
   bool retains(const foundation::CommandId& id) const {
     return (pending && pending->command_id == id) || retained.contains(id) ||
@@ -150,6 +339,8 @@ struct PatternTransportCoordinator::Async {
       opening_started = prepare_started;
       opening_done = false;
       opening_failed = false;
+      switch_origin.reset();
+      observed_switch_generation = 0;
       // An asynchronous prepare can span a real Pattern Apply even when no
       // publication was pending at admission. Capability ports always bind
       // the durable opening to their actual receipt, never prior telemetry.
@@ -198,6 +389,8 @@ struct PatternTransportCoordinator::Async {
     opening_failed = false;
     shutdown_recording_cutoff = false;
     owner_invalidated = owner_disposed = false;
+    switch_origin.reset();
+    observed_switch_generation = 0;
     owner_failure.reset();
     error.reset();
     close_cutoff.reset();
@@ -454,6 +647,7 @@ struct PatternTransportCoordinator::Async {
     if (done.outcome == PatternTransportWorkOutcome::unknown) {
       // Unknown write effects retain the one cell. Expiry never frees it.
       error = done.error;
+      if (auto* s = switch_work()) s->status.error = done.error;
       reconciliation_attempted = executor.reconcile(work_request->identity);
       if (work_input) for (auto& i : inputs) if (i && i->status.ticket.ticket == work_input)
         i->status.error = done.error;
@@ -484,6 +678,12 @@ struct PatternTransportCoordinator::Async {
           settle_input(*i, false);
         }
       } else if (work_kind == "open" && active_schedule()) count.error = done.error;
+      if (auto* s = switch_work()) {
+        switch_failure = done.error.value_or(foundation::Error{
+            foundation::ErrorCode::invalid_argument, "Pattern segment was refused"});
+        s->status.error = switch_failure;
+        if (recorded_serial) count.error = switch_failure;
+      }
       // Failed actual opening still needs a real Stop; no successful cancel.
       if (work_kind == "open") {
         opening_failed = true;
@@ -529,11 +729,19 @@ struct PatternTransportCoordinator::Async {
         }
         error = owner_failure;
         phase = PatternTransportPhase::error;
+        for (auto& s : switches) if (s && !s->status.durable_settled) {
+          s->status.owner_disposed = true;
+          s->status.error = owner_failure;
+          refresh_switch(*s);
+        }
       } else if (work_kind == "prepare" || work_kind == "preflight") {
         prepared = true;
         prepared_revision = payload.at("revision").get<std::uint64_t>();
         prepare_needed = false;
       } else if (work_kind == "open") {
+        const auto original = Json::parse(work_request->payload);
+        durable_pattern = foundation::PatternId{original.at("fence").at("pattern").get<std::string>()};
+        durable_generation = original.at("fence").at("generation").get<std::uint64_t>();
         opening_done = true;
         if (active_schedule()) {
           count.opening_pending = false;
@@ -556,6 +764,9 @@ struct PatternTransportCoordinator::Async {
         }
         if (recording) { projection_dirty = true; ++projection_revision; }
       } else if (work_kind == "activate") {
+        const auto original = Json::parse(work_request->payload);
+        durable_pattern = foundation::PatternId{original.at("fence").at("pattern").get<std::string>()};
+        durable_generation = original.at("fence").at("generation").get<std::uint64_t>();
         recording = true;
         projection_dirty = true;
         ++projection_revision;
@@ -565,6 +776,31 @@ struct PatternTransportCoordinator::Async {
         } else {
           if (receipt) acknowledged_pattern_generation = receipt->pattern_generation;
           finish_request();
+        }
+      } else if (work_kind == "segment") {
+        if (auto* s = switch_work()) {
+          s->status.durable_settled = true;
+          s->status.error.reset();
+          durable_pattern = s->status.pattern_id;
+          durable_generation = s->status.publication->generation;
+          refresh_switch(*s);
+          // Every recorded hold still owning metadata is in the departed
+          // source: post-S press authoring was parked behind this exact ACK.
+          for (auto& h : holds) if (h && h->recorded) {
+            h->metadata = false;
+            if (h->release_consumed) h.reset();
+          }
+          for (auto& i : inputs) if (i && i->waiting_cutoff) {
+            i->waiting_cutoff = false;
+            settle_input(*i, false);
+          }
+          projection_available = false;
+          projection_dirty = true;
+          ++projection_revision;
+          projection_offset = 0;
+          projection_chunks.clear();
+          projection_chunk_pattern.reset();
+          published_projection = unlanded_overlay = 0;
         }
       } else if (work_kind == "admit") {
         if (!work_input && legacy_candidate) {
@@ -768,7 +1004,7 @@ struct PatternTransportCoordinator::Async {
       return false;
     }
     if (!owner_invalidated) playing = true;
-    origin = *started.origin_frame;
+    origin = switch_origin.value_or(*started.origin_frame);
     if (!opening_started) {
       closed_owner_request.reset();
       closed_owner_cutoff.reset();
@@ -880,6 +1116,7 @@ struct PatternTransportCoordinator::Async {
       error.reset();
   }
   bool has_unacknowledged_inputs() const {
+    for (const auto& s : switches) if (s) return true;
     if (legacy_candidate || legacy_result) return true;
     for (const auto& i : inputs) if (i) return true;
     // A real native owner-loss disposition settles the authoring owner only;
@@ -911,6 +1148,10 @@ struct PatternTransportCoordinator::Async {
       settle_input(i, false);
       return;
     }
+    if (owner_invalidated && switch_failure) {
+      settle_input(i, false);
+      return;
+    }
     bool eligible = recorded_serial
         ? i.status.admission->authority.recording &&
           i.status.admission->authority.transport_epoch == recorded_epoch &&
@@ -930,6 +1171,7 @@ struct PatternTransportCoordinator::Async {
       return;
     }
     if (!recording || (active_schedule() && !opening_done)) return;
+    if (switch_blocks_input(i.request.runtime_frame)) return;
     const auto& native = *i.status.admission;
     const auto request = count.request && recorded_serial ? count.request->transport
         : recording_request.value();
@@ -999,6 +1241,12 @@ struct PatternTransportCoordinator::Async {
     }
     acquire_receipt();
     if (!poll_work(&opening_guard_busy)) return Void::success();
+    if (shutdown && switch_failure) {
+      owner_invalidated = true;
+      owner_failure = switch_failure;
+      error = switch_failure;
+      phase = PatternTransportPhase::error;
+    }
     if (executor.inspect().startup_error) {
       error = executor.inspect().startup_error;
       phase = PatternTransportPhase::error;
@@ -1074,8 +1322,11 @@ struct PatternTransportCoordinator::Async {
       }
       return Void::success();
     }
+    drive_legacy_input();
     drive_inputs();
-    if (closing && pending && close_cutoff && !work_request && !has_ingress()) {
+    drive_switches();
+    if (closing && pending && close_cutoff && !work_request && !has_ingress() &&
+        (!legacy_candidate || legacy_result) && !unsettled_switches()) {
       if (opening_failed && !opening_done) {
         // A refused opening has no admitted prefix. Preserve failed e1 and
         // actual native e2, and leave any uncertain journal for owner recovery.
@@ -1106,7 +1357,8 @@ struct PatternTransportCoordinator::Async {
     return error ? Void::failure(*error) : Void::success();
   }
   Void publish() {
-    if (!recording || closing || pending || (active_schedule() && !opening_done)) return Void::success();
+    if (!recording || closing || pending || owner_invalidated || unsettled_switches() ||
+        (active_schedule() && !opening_done)) return Void::success();
     if (unlanded_overlay) {
       const auto queued = audio.pending_switch();
       if (queued && queued->generation == unlanded_overlay) return Void::success();
@@ -1257,6 +1509,7 @@ struct PatternTransportCoordinator::Async {
         work_request.has_value() || pending.has_value() || legacy_candidate.has_value() ||
             legacy_result.has_value() || executor.inspect().ticket.has_value() ||
             active_schedule() || (owner_invalidated && !owner_disposed), 0};
+    for (const auto& s : switches) if (s) result.pending = true;
     for (const auto& i : inputs) if (i) result.pending = true;
     for (const auto& h : holds) if (h) ++result.held_correlations;
     return result;
@@ -1339,6 +1592,11 @@ struct PatternTransportCoordinator::Async {
   std::optional<foundation::CommandId> last_command;
   std::optional<foundation::Error> error;
   std::optional<foundation::Error> owner_failure;
+  std::array<std::optional<Switch>, kPatternTransportSwitchCapacity> switches;
+  std::uint64_t next_switch_ticket{}, durable_generation{}, observed_switch_generation{};
+  std::optional<foundation::PatternId> durable_pattern;
+  std::optional<std::uint64_t> switch_origin;
+  std::optional<foundation::Error> switch_failure;
   struct FailedPreparation {
     PatternTransportRequest request;
     foundation::Error error;
@@ -1426,6 +1684,14 @@ bool PatternTransportCoordinator::request_input_owner_disposition(std::uint64_t 
 }
 void PatternTransportCoordinator::request_shutdown() {
   if (!async_ || async_->shutdown) return;
+  if (async_->switch_failure) {
+    // A failed segment cannot manufacture a terminal F or success. Its actual
+    // worker disposition must remain reachable while Native pins are held;
+    // the Host separately stops/revokes Native and consumes real outcomes.
+    async_->owner_invalidated = true;
+    async_->owner_failure = async_->switch_failure;
+    async_->error = async_->switch_failure;
+  }
   if (!async_->pending && (async_->active_schedule() || async_->playing || async_->recording)) {
     auto request = async_->active_schedule() ? async_->count.request->transport
         : async_->recording_request.value_or(PatternTransportRequest{async_->config.session,
@@ -1464,6 +1730,32 @@ void PatternTransportCoordinator::request_shutdown() {
 }
 bool PatternTransportCoordinator::shutdown_complete() const { return !async_ || async_->executor.inspect().stopped; }
 PatternTransportExecutorStatus PatternTransportCoordinator::inspect_io() const { return async_ ? async_->executor.inspect() : PatternTransportExecutorStatus{}; }
+
+foundation::Result<PatternTransportSwitchTicket> PatternTransportCoordinator::reserve_pattern_switch(
+    const PatternTransportSwitchRequest& r) {
+  if (async_) return async_->reserve_switch(r);
+  return foundation::Result<PatternTransportSwitchTicket>::failure(
+      {foundation::ErrorCode::unsupported_audio, "Recording switch reservations require the I/O controller"});
+}
+bool PatternTransportCoordinator::bind_pattern_switch(const PatternTransportSwitchTicket& t,
+    const audio::PatternReplacementAuthority& a, std::uint16_t bpm) {
+  return async_ && async_->bind_switch(t, a, bpm);
+}
+bool PatternTransportCoordinator::complete_pattern_switch(const PatternTransportSwitchTicket& t,
+    const audio::PatternPublicationObservation& o) {
+  return async_ && async_->complete_switch(t, o);
+}
+std::optional<PatternTransportSwitchStatus> PatternTransportCoordinator::inspect_pattern_switch(
+    const PatternTransportSwitchTicket& t) const {
+  const auto* s = async_ ? async_->find_switch(t) : nullptr;
+  return s ? std::optional{s->status} : std::nullopt;
+}
+bool PatternTransportCoordinator::consume_pattern_switch(const PatternTransportSwitchTicket& t) {
+  return async_ && async_->consume_switch(t);
+}
+bool PatternTransportCoordinator::abandon_pattern_switch(const PatternTransportSwitchTicket& t) {
+  return async_ && async_->abandon_switch(t);
+}
 
 PatternTransportCoordinator::PatternTransportCoordinator(
     PatternTransportAudioPort& audio, project_io::SequenceJournal& journals,
@@ -1968,14 +2260,7 @@ foundation::Result<PatternAdmissionAdmit> PatternTransportCoordinator::admit(
     if (!async_->legacy_candidate) {
       async_->legacy_candidate = candidate;
       async_->legacy_result.reset();
-      const auto request = async_->recording_request.value();
-      if (!async_->work({{"op", "admit"}, {"candidate", {
-          {"watermark", candidate.watermark}, {"frame", candidate.runtime_frame},
-          {"bank", candidate.slot.bank}, {"pad", candidate.slot.pad},
-          {"pressed", candidate.kind == project_io::SequenceCandidateKind::press},
-          {"velocity", candidate.velocity}, {"correlation", candidate.press_sequence}}}}, request)) {
-        async_->legacy_candidate.reset();
-      }
+      async_->drive_legacy_input();
     } else if (*async_->legacy_candidate != candidate) {
       return foundation::Result<PatternAdmissionAdmit>::failure(Async::busy("pattern_transport_metadata_full"));
     }
@@ -2203,6 +2488,8 @@ bool PatternTransportCoordinator::withdraw_unlanded_overlay(
 foundation::Result<std::optional<PatternTransportOverlayProjection>>
 PatternTransportCoordinator::project_overlay() {
   if (async_) {
+    if (async_->owner_invalidated || async_->unsettled_switches())
+      return foundation::Result<std::optional<PatternTransportOverlayProjection>>::success(std::nullopt);
     if (async_->recording && !async_->closing && async_->projection_dirty && !async_->work_request)
       {
         if (async_->projection_offset == 0) async_->projecting_revision = async_->projection_revision;

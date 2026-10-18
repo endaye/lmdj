@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-14
     occurrence: https://github.com/endaye/lmdj/pull/1298
     observed_by: Grok 4.6
+  - date: 2026-10-18
+    occurrence: https://github.com/endaye/lmdj/issues/2233
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 escalation: https://github.com/endaye/lmdj/issues/1299
 ---
