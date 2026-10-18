@@ -1605,6 +1605,7 @@ function createRuntimeSessionController(options = {}) {
   let outputMeterOwner = null;
   let outputMeterArmFailed = false;
   let activePerformanceMasterCapture = null;
+  let captureProgressIdentity = null;
   // D0/W1: the session registers its pending capture start before awaiting
   // it, so a second start can never slip through the active=null window.
   let pendingPerformanceMasterCaptureStart = null;
@@ -1976,6 +1977,46 @@ function createRuntimeSessionController(options = {}) {
     };
   }
 
+  function performanceMasterCaptureProgress() {
+    const unavailable = reason => Object.freeze({state: "unavailable", reason});
+    if (closing || terminalCleanupStarted) return unavailable("closed");
+    const identity = captureProgressIdentity;
+    if (identity === null) return unavailable("idle");
+    if (performanceMasterTap !== identity.tap) return unavailable("owner-lost");
+    if (identity.generation === null) return unavailable(identity.failed ? "start-failed" : "starting");
+    if (identity.captureId === null) return unavailable("identity-unavailable");
+    if (typeof identity.tap.captureProgress !== "function" || identity.generation < 0) return unavailable("unsupported");
+    try {
+      const value = identity.tap.captureProgress();
+      if (value?.state === "unavailable") {
+        return ["idle", "starting", "start-failed", "closed", "sample-rate-invalid", "frame-overflow"].includes(value.reason)
+          ? unavailable(value.reason) : unavailable("protocol-error");
+      }
+      const b = identity.binding;
+      const bindingMatches = b === null ? value?.binding === null
+        : value?.binding !== null && typeof value?.binding === "object" &&
+          exactKeys(value.binding, ["control_epoch", "session_id", "begin_command_id"]) &&
+          value.binding.control_epoch === b.controlEpoch && value.binding.session_id === b.sessionId &&
+          value.binding.begin_command_id === b.beginCommandId;
+      if (value?.state !== "available" || !exactKeys(value, ["state", "generation", "sampleRate", "receivedFrames", "binding", "phase", "droppedFrames", "failure"]) ||
+          !Number.isSafeInteger(value.generation) || value.generation < 0 || value.generation !== identity.generation ||
+          !Number.isSafeInteger(value.sampleRate) || value.sampleRate <= 0 || value.sampleRate !== audioContext?.sampleRate ||
+          !Number.isSafeInteger(value.receivedFrames) || value.receivedFrames < 0 || !bindingMatches ||
+          !["recording", "stopping", "stopped", "failed"].includes(value.phase) ||
+          !(value.droppedFrames === null || (Number.isSafeInteger(value.droppedFrames) && value.droppedFrames >= 0)) ||
+          (value.phase === "failed"
+            ? !["tap-failure", "protocol-error", "post-message-failed", "processor-failed", "stop-post-failed", "stop-timeout", "closed"].includes(value.failure) ||
+              (value.failure === "post-message-failed" ? value.droppedFrames === null : value.droppedFrames !== null)
+            : value.failure !== null || value.droppedFrames !== 0)) {
+        return unavailable("protocol-error");
+      }
+      return Object.freeze({state: "available", captureId: identity.captureId,
+        generation: value.generation, binding: identity.binding, sampleRate: value.sampleRate,
+        receivedFrames: value.receivedFrames, phase: value.phase,
+        droppedFrames: value.droppedFrames, failure: value.failure});
+    } catch { return unavailable("protocol-error"); }
+  }
+
   async function startPerformanceMasterCapture(sink, binding = null) {
     requirePerformanceMasterCaptureSink(sink);
     if (binding !== null) requireCaptureBinding(binding);
@@ -2001,6 +2042,15 @@ function createRuntimeSessionController(options = {}) {
     let settled = false;
     const pendingOwner = {cancelled: false};
     const originalTap = performanceMasterTap;
+    // Passive identity only. A telemetry source failure never refuses capture.
+    let captureId = null;
+    try {
+      const id = crypto.randomUUID();
+      if (UUID_PATTERN.test(id)) captureId = id;
+    } catch {}
+    const progressIdentity = {tap: originalTap, generation: null, failed: false,
+      captureId, binding: binding === null ? null : Object.freeze({...binding})};
+    captureProgressIdentity = progressIdentity;
     function releaseOwnership() {
       settled = true;
       if (activePerformanceMasterCapture === capture) {
@@ -2039,6 +2089,7 @@ function createRuntimeSessionController(options = {}) {
             },
       );
     } catch (error) {
+      progressIdentity.failed = true;
       if (pendingPerformanceMasterCaptureStart === pendingOwner) {
         pendingPerformanceMasterCaptureStart = null;
       }
@@ -2054,6 +2105,7 @@ function createRuntimeSessionController(options = {}) {
       releaseOwnership();
       throw typedError("HOST_STATE_INVALID", "Performance master capture start was cancelled by closure");
     }
+    progressIdentity.generation = platformCapture.generation ?? -1;
     let stopping = null;
     capture = Object.freeze({
       stop() {
@@ -2080,7 +2132,10 @@ function createRuntimeSessionController(options = {}) {
     const tap = performanceMasterTap;
     if (tap === null) return;
     await tap.close();
-    if (performanceMasterTap === tap) performanceMasterTap = null;
+    if (performanceMasterTap === tap) {
+      performanceMasterTap = null;
+      captureProgressIdentity = null;
+    }
     activePerformanceMasterCapture = null;
   }
 
@@ -8681,6 +8736,7 @@ function createRuntimeSessionController(options = {}) {
     stopAll,
     requestMidi: enableMidi,
     performanceMasterCaptureStatus,
+    performanceMasterCaptureProgress,
     subscribePerformanceMasterCaptureStatus,
     startPerformanceMasterCapture,
     close,

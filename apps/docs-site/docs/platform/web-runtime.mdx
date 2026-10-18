@@ -282,3 +282,23 @@ Real tap render failures are accepted through both `processorerror` and the
 `error` ErrorEvent used by the pinned Chromium. Both enter the same idempotent
 recovery: revoke the measurement, settle capture and reconnect the existing
 monitor path once. A late meter packet cannot restore the failed tap.
+
+
+## Recording 的真实音频帧读数
+
+已发布的同一 retained Session 上，独立可选能力
+`performanceMasterCaptureProgress()` 返回 validated received frames 与该 tap 实际
+AudioContext sampleRate，以及 capture identity、既有 begin binding 和
+recording／stopping／stopped／failed phase。调用只读本地投影，不产生 Runtime
+请求、I/O、新 timer、authoring 或隐式录音控制。原 `{stop}` 句柄与配置/status
+响应不增加字段，旧 capture provider 仍可工作。
+
+计数只随真实完整校验后的 PCM batch 增长，包含静音和 Stop 的最后 partial batch；
+没有回调的时间不补数。失败的已知 Worklet drop 和未量化 loss 分开，后者为 null；phase/drop/failure
+只描述 tap→SDK，Host queue/writer 的失败和丢帧仍各自保留。
+缺少能力/rate/identity 或尚无 started ACK 时明确 unavailable。正常停止的值只保留到
+下次 start 或关闭；新 tap/Session 不继承旧 capture identity 或帧数。
+
+它不能证明 WAV 已 durable、Artifact 已绑定、保存结果已确定或演出完整。后续 Host
+必须继续区分 received PCM、writer durable prefix 和已验证的保存 WAV；不得把此值
+当作 Performance 总 elapsed、Replay 分母或现有事件回放规则的替代。
