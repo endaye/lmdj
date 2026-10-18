@@ -401,6 +401,15 @@ before shipping the follow-up.
 
 OFF needs the engine to start a different Pattern at the current phase. S5 adds that publish mode to `audio-runtime` with its engine tests, exposes `snap: "off"` in the Host, and adds the option in Creator. It is last because it changes the cross-Pattern publication phase; S6 separately adds the native scheduled-start path.
 
+The [current-loop phase model](../design/2026-10-19-seq-snap-off-phase-model.md)
+refines this into an actual application frame plus exact nonzero musical
+numerator. The [P1 Task](2026-10-19-seq-snap-off-phase-anchor.md) adds only the
+checked phase-mapping primitive: discard completed source loops before wrapping
+to target length. It does not enable OFF publication, recording, Host/SDK or
+Creator. Those follow-ups must retain actual per-publication anchors and settle
+the outstanding target-note chase/concurrency questions before affected work.
+All work remains in a linear Draft stack under the owner's main freeze.
+
 ## S6 — scheduled transport start for count-in (Core)
 
 The [scheduled Record design addendum](../design/2026-10-11-scheduled-pattern-record-count-in.md)

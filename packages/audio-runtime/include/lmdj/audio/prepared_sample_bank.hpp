@@ -76,6 +76,18 @@ foundation::Result<std::uint64_t> tick_boundary_frame(
 std::optional<std::uint64_t> anchored_tick_boundary_frame(
     const TransportAnchor& anchor, std::uint64_t tick) noexcept;
 
+// Allocation-free cross-Pattern position mapping. The caller supplies the
+// coherent source position at the actual application frame. Discard completed
+// source loops before wrapping within the target, preserving fractional ticks
+// and the real frame. Invalid/overflowing geometry or BPM returns unavailable.
+// This computes an anchor only; it neither publishes a Pattern nor starts Voices.
+std::optional<TransportAnchor> phase_matched_pattern_anchor(
+    std::uint64_t runtime_frame,
+    std::uint64_t source_tick_numerator,
+    std::uint64_t source_loop_length_ticks,
+    std::uint64_t target_loop_length_ticks,
+    std::uint16_t target_bpm) noexcept;
+
 struct PreparedSampleMaterialView {
   const std::int16_t* interleaved{};
   std::uint32_t frame_count{};

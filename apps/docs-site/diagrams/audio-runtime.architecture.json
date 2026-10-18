@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Audio Runtime Module",
-    "summary": "Runtime source：连续 tempo/SNAP、retained publication S、S6 scheduled cell、独立 input escrow 与 product/cue 输出"
+    "summary": "Runtime source：连续 tempo/SNAP、retained S、S6 input/cue；OFF 仅提供相位计算"
   },
   "boundaries": [],
   "components": [
