@@ -2754,20 +2754,28 @@ test("Perform groups, four slots and horizontal controls fit six viewports with 
   const remountedConsole=await measureConsole();
   expect(remountedConsole.conflicts).toEqual([]);
   for(const region of remountedConsole.regions) expect(region.y+region.height).toBeLessThanOrEqual(844+0.5);
-  // The physical Sequence exit is a real390px pointer hit. Configure the
-  // existing device preference at1440px; other mode phone layouts belong to
-  // #1221. Arming, active readout and cancellation below are all real390px UI.
+  // Every mode now shares the same390px shell. Configure the existing device
+  // preference at1440px; arming, active readout and cancellation below retain
+  // their original real390px UI journey.
   await page.getByTestId("physical-controls").getByRole("button", {name:"Sequence",exact:true}).click();
   await expect(surface).toHaveCount(0);
   const afterModeExit=await measureConsole();
-  expect(afterModeExit.workspaceLocalHeight).toBeLessThan(remountedConsole.workspaceLocalHeight);
-  // Native keyboard entry is available even though the separately owned
-  // Sequence phone layout can overlap its pointer rail (#1221).
+  expect(afterModeExit.workspaceLocalHeight).toBe(remountedConsole.workspaceLocalHeight);
+  expect(afterModeExit.conflicts).toEqual([]);
+  // Pointer reentry must work from the common Sequence shell. Keep the
+  // original keyboard entry as a separate leg after this added round trip.
+  await page.getByTestId("physical-controls").getByRole("button",{name:"Perform",exact:true}).click();
+  await expect(surface).toBeVisible();
+  const pointerReentryConsole=await measureConsole();
+  expect(pointerReentryConsole.workspaceLocalHeight).toBe(afterModeExit.workspaceLocalHeight);
+  expect(pointerReentryConsole.conflicts).toEqual([]);
+  await page.getByTestId("physical-controls").getByRole("button",{name:"Sequence",exact:true}).click();
+  await expect(surface).toHaveCount(0);
   await page.getByTestId("physical-controls").getByRole("button",{name:"Perform",exact:true}).focus();
   await page.keyboard.press("Enter");
   await expect(surface).toBeVisible();
   const modeReentryConsole=await measureConsole();
-  expect(modeReentryConsole.workspaceLocalHeight).toBeGreaterThan(afterModeExit.workspaceLocalHeight);
+  expect(modeReentryConsole.workspaceLocalHeight).toBe(afterModeExit.workspaceLocalHeight);
   expect(modeReentryConsole.conflicts).toEqual([]);
   for(const region of modeReentryConsole.regions) expect(region.y+region.height).toBeLessThanOrEqual(844+0.5);
   await page.getByTestId("physical-controls").getByRole("button",{name:"Sequence",exact:true}).click();
@@ -2793,7 +2801,7 @@ test("Perform groups, four slots and horizontal controls fit six viewports with 
   await expect(page.getByRole("status",{name:"Count-in status"})).toHaveCount(0);
   expect(await inspectProjectTruth(page)).toEqual(truth);
   const receipt=info.outputPath('perform-layout-and-native-readback.json');
-  await writeFile(receipt,JSON.stringify({observations,before,masks,countInHeader,countInText,remountedConsole,afterModeExit,modeReentryConsole},null,2));
+  await writeFile(receipt,JSON.stringify({observations,before,masks,countInHeader,countInText,remountedConsole,afterModeExit,pointerReentryConsole,modeReentryConsole},null,2));
   await info.attach('perform-layout-and-native-readback',{path:receipt,contentType:'application/json'});
 });
 

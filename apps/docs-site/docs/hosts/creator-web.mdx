@@ -881,7 +881,7 @@ Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍�
 
 ### Perform 参数组与 Live Mute/Solo
 
-窄屏竖向 Perform 将触摸屏放在 Pad 矩阵下方，保留独立物理栏和一处触摸滚动；组按钮、三根主推子与所有 Pad／方向键保持实际至少44px命中。进入／离开窄屏 Perform 时重新适配；System／返回保留已挂载的布局，实时数值更新不反复触发布局计算。390px 上屏旋钮读数用两行两列保留四组完整标签和值。该布局不代表其它工作区或真实移动设备已完成最终验收。
+紧凑竖屏宽度不足708px时，Project／Sample／Sequence／Perform 及 System 共用独立左侧物理栏、上方 Pad 矩阵和下方单一触摸滚动区，触摸区不再盖住实体键。保留实际至少44px的实体键和 Pad 命中区；主模式切换与 System 返回沿用同一分区，挂载及窗口变化继续由原 stage fit 适配，实时数值更新不反复计算布局。Perform 组按钮、三根主推子保持原44px命中；其390px上屏旋钮读数仍用两行两列保留完整标签和值。公共输入几何验证与完整35屏样式、真实移动设备验收分别记录。
 
 
 PRIMARY、FILTER、MORE 互斥显示对应触摸参数；←／→ 按此顺序切换，到首尾停止，SHIFT 和 System 保留原优先级。组切换不主动创建声音控制，只有被移除输入尚未结束的 touch token 需要配对释放；旋钮接管、HOLD、实时 masks 与录制 session 不重置。Filter 状态为只读的 Off／Engaged／Frozen／Pending／Unavailable，没有旁路开关；Core provenance 保留在状态投影中。
