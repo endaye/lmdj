@@ -556,7 +556,7 @@ struct OwnerFixture {
       std::chrono::steady_clock::now()};
   lmdj::facade::detail::PatternAdmissionOwner owner;
 
-  OwnerFixture()
+  explicit OwnerFixture(bool with_switch_target = false)
       : directory("owner"),
         bundle(directory.path() / "project.lmdj"),
         journals(platform),
@@ -565,6 +565,10 @@ struct OwnerFixture {
     LMDJ_CHECK(created.has_value());
     auto state = std::move(created.value());
     state.patterns.emplace(pattern, lmdj::domain::Pattern{pattern, 1, {}});
+    if (with_switch_target) {
+      const lmdj::foundation::PatternId target{uuid(9)};
+      state.patterns.emplace(target, lmdj::domain::Pattern{target, 1, {}});
+    }
     LMDJ_CHECK(store.create(bundle, state).has_value());
     LMDJ_CHECK(journals
                    .begin(bundle, session, pattern, 1,
@@ -1154,9 +1158,196 @@ void prepared_owner_surfaces_a_failed_storage_failure_close() {
   LMDJ_CHECK(!journal.value().admission->closure.has_value());
   LMDJ_CHECK(journal.value().admission->candidates.size() == 1);
 }
+
+void source_switch_flushes_checkpointed_tail_before_reconciling_target() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  struct Case { const char* name; bool checkpoint; bool press; bool release; bool excluded_release{}; };
+  for (const auto& test : {Case{"fresh source", false, true, true},
+                          Case{"checkpointed hold", true, true, false},
+                          Case{"checkpointed release", true, true, true},
+                          Case{"checkpointed tail plus excluded prefix", true, true, false, true},
+                          Case{"genuinely empty source", true, false, false}}) {
+    std::cerr << "source switch prefix: " << test.name << '\n';
+    OwnerFixture f(true);
+    const foundation::PatternId target{uuid(9)};
+    LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+    LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+    if (test.press) LMDJ_CHECK(f.owner.admit({10, 25000, {0, 1},
+        project_io::SequenceCandidateKind::press, 90, 72}).value() == PatternAdmissionAdmit::retained);
+    if (test.release) LMDJ_CHECK(f.owner.admit({11, 37000, {0, 1},
+        project_io::SequenceCandidateKind::release, 0, 72}).value() == PatternAdmissionAdmit::retained);
+    if (test.checkpoint)
+      LMDJ_CHECK(f.owner.checkpoint_prefix(foundation::CommandId{uuid(20)}).has_value());
+    if (test.excluded_release)
+      LMDJ_CHECK(f.owner.admit({11, 37000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 73})
+          .value() == PatternAdmissionAdmit::retained);
+    const auto checkpointed = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+    LMDJ_CHECK(checkpointed.has_value());
+    if (test.checkpoint) LMDJ_CHECK(checkpointed.value().admission->candidates.size() == (test.excluded_release ? 1U : 0U));
+    LMDJ_CHECK(f.store.load(f.bundle).value().patterns.at(f.pattern).events.empty());
+    // Reconstruct the private owner from the real retained Journal. The old
+    // instance no longer participates; no event is offered/enqueued again.
+    PatternAdmissionOwner owner(f.journals, f.bundle, f.session, [&] { return f.now; });
+    LMDJ_CHECK(owner.prepare(f.preparation).has_value());
+    LMDJ_CHECK(owner.activate(f.fence()).has_value());
+    LMDJ_CHECK(owner.retain_switch({target, 22, 40000}).has_value());
+    const foundation::CommandId transfer{uuid(21)}, flush{uuid(22)};
+    LMDJ_CHECK(owner.drain_source_prefix(f.store, transfer, flush).has_value());
+    const auto source = f.store.load(f.bundle);
+    LMDJ_CHECK(source.has_value());
+    const std::vector<PatternEvent> expected = test.press
+        ? std::vector<PatternEvent>{{{0, 1}, 960, test.release ? 480U : 240U, 90}}
+        : std::vector<PatternEvent>{};
+    LMDJ_CHECK(source.value().patterns.at(f.pattern).events == expected);
+    LMDJ_CHECK(source.value().patterns.at(target).events.empty());
+    LMDJ_CHECK(source.value().revision == (test.press ? 1U : 0U));
+    const auto flushed = f.journals.read_active(f.bundle);
+    LMDJ_CHECK(flushed.has_value() && flushed.value().pending_events.empty());
+    LMDJ_CHECK(flushed.value().flushes.size() == (test.press ? 1U : 0U));
+    LMDJ_CHECK(owner.drain_source_prefix(f.store, transfer, flush).has_value());
+    LMDJ_CHECK(f.journals.read_active(f.bundle).value() == flushed.value());
+    LMDJ_CHECK(f.store.load(f.bundle).value().revision == source.value().revision);
+    LMDJ_CHECK(owner.reconcile_switch(f.store).has_value());
+    const auto switched = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+    LMDJ_CHECK(switched.has_value() && switched.value().pattern_id == target);
+    LMDJ_CHECK(switched.value().admission->segment_generation == 22);
+    // The old held press's later release settles no new target press. The
+    // terminal cutoff supplies B's real clock; it cannot rewrite A's flush.
+    if (test.press && !test.release)
+      LMDJ_CHECK(owner.admit({test.excluded_release ? 12U : 11U, 45000, {0, 1}, project_io::SequenceCandidateKind::release, 0, 72})
+          .value() == PatternAdmissionAdmit::retained);
+    auto cutoff = f.cutoff_fence();
+    cutoff.pattern_id = target;
+    cutoff.publication_generation = 22;
+    cutoff.origin_frame = 40000;
+    cutoff.effective_frame = 50000;
+    LMDJ_CHECK(owner.cutoff(cutoff).has_value());
+    LMDJ_CHECK(owner.close_requested().has_value());
+    LMDJ_CHECK(owner.settle_close(f.store, foundation::CommandId{uuid(23)},
+        foundation::CommandId{uuid(24)}, foundation::CommandId{uuid(25)}).has_value());
+    const auto reopened = project_io::ProjectStore{}.load(f.bundle);
+    LMDJ_CHECK(reopened.has_value() && reopened.value().patterns.size() == 2);
+    LMDJ_CHECK(reopened.value().patterns.at(f.pattern).events == expected);
+    LMDJ_CHECK(reopened.value().patterns.at(target).events.empty());
+    LMDJ_CHECK(reopened.value().revision == source.value().revision);
+    LMDJ_CHECK(!project_io::SequenceJournal{f.platform}.read_active(f.bundle).has_value());
+  }
+}
+
+
+void checkpointed_source_flush_retries_its_actual_durable_append_after_owner_reopen() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  for (const bool response_lost : {false, true}) {
+    std::cerr << "source flush recovery: " << (response_lost ? "lost durable reply" : "before append") << '\n';
+    OwnerFixture f(true);
+    const foundation::PatternId target{uuid(9)};
+    LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+    LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+    LMDJ_CHECK(f.owner.admit({10, 25000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+        .value() == PatternAdmissionAdmit::retained);
+    LMDJ_CHECK(f.owner.checkpoint_prefix(foundation::CommandId{uuid(30)}).has_value());
+    LMDJ_CHECK(f.owner.retain_switch({target, 22, 40000}).has_value());
+    const foundation::CommandId transfer{uuid(31)}, flush{uuid(32)};
+    f.platform->fail_appends = response_lost ? 0 : 1;
+    f.platform->lose_append_response = response_lost;
+    const auto refused = f.owner.drain_source_prefix(f.store, transfer, flush);
+    LMDJ_CHECK(!refused.has_value() && refused.error().code == foundation::ErrorCode::io_error);
+    const std::vector<PatternEvent> expected{{{0, 1}, 960, 240, 90}};
+    const auto failed = project_io::SequenceJournal{f.platform}.read_active(f.bundle);
+    LMDJ_CHECK(failed.has_value() && failed.value().pattern_id == f.pattern);
+    LMDJ_CHECK(failed.value().admission->candidates.empty());
+    LMDJ_CHECK(failed.value().flushes.size() == (response_lost ? 1U : 0U));
+    if (response_lost) {
+      LMDJ_CHECK(failed.value().pending_events.empty());
+      const auto& retained = failed.value().flushes[0];
+      LMDJ_CHECK(!retained.completed && retained.command_id == flush && retained.pattern_id == f.pattern);
+      LMDJ_CHECK(retained.canonical_events == expected && retained.recovery_events == expected);
+    } else {
+      LMDJ_CHECK(failed.value().pending_events == expected);
+    }
+    LMDJ_CHECK(f.store.load(f.bundle).value().patterns.at(f.pattern).events.empty());
+    PatternAdmissionOwner restarted(f.journals, f.bundle, f.session, [&] { return f.now; });
+    LMDJ_CHECK(restarted.prepare(f.preparation).has_value());
+    LMDJ_CHECK(restarted.activate(f.fence()).has_value());
+    LMDJ_CHECK(restarted.drain_source_prefix(f.store, transfer, flush).has_value());
+    const auto completed = f.journals.read_active(f.bundle);
+    LMDJ_CHECK(completed.has_value() && completed.value().pending_events.empty());
+    LMDJ_CHECK(completed.value().flushes.size() == 1 && completed.value().flushes[0].completed);
+    LMDJ_CHECK(completed.value().flushes[0].command_id == flush);
+    LMDJ_CHECK(completed.value().flushes[0].canonical_events == expected);
+    LMDJ_CHECK(f.store.load(f.bundle).value().patterns.at(f.pattern).events == expected);
+    LMDJ_CHECK(f.store.load(f.bundle).value().revision == 1);
+    LMDJ_CHECK(restarted.drain_source_prefix(f.store, transfer, flush).has_value());
+    LMDJ_CHECK(f.journals.read_active(f.bundle).value() == completed.value());
+    LMDJ_CHECK(restarted.reconcile_switch(f.store).has_value());
+    LMDJ_CHECK(f.journals.read_active(f.bundle).value().pattern_id == target);
+    auto cutoff = f.cutoff_fence();
+    cutoff.pattern_id = target; cutoff.publication_generation = 22;
+    cutoff.origin_frame = 40000; cutoff.effective_frame = 50000;
+    LMDJ_CHECK(restarted.cutoff(cutoff).has_value());
+    LMDJ_CHECK(restarted.close_requested().has_value());
+    LMDJ_CHECK(restarted.settle_close(f.store, foundation::CommandId{uuid(33)},
+        foundation::CommandId{uuid(34)}, foundation::CommandId{uuid(35)}).has_value());
+    const auto reopened = project_io::ProjectStore{}.load(f.bundle);
+    LMDJ_CHECK(reopened.has_value() && reopened.value().revision == 1);
+    LMDJ_CHECK(reopened.value().patterns.at(f.pattern).events == expected);
+    LMDJ_CHECK(reopened.value().patterns.at(target).events.empty());
+    LMDJ_CHECK(!project_io::SequenceJournal{f.platform}.read_active(f.bundle).has_value());
+  }
+}
+
+
+void stale_admission_owner_cannot_flush_a_new_recording_in_the_same_session() {
+  using namespace lmdj;
+  using namespace facade::detail;
+  OwnerFixture f(true);
+  LMDJ_CHECK(f.owner.prepare(f.preparation).has_value());
+  LMDJ_CHECK(f.owner.activate(f.fence()).has_value());
+  LMDJ_CHECK(f.owner.cutoff(f.cutoff_fence()).has_value());
+  LMDJ_CHECK(f.owner.close_requested().has_value());
+  LMDJ_CHECK(f.owner.settle_close(f.store, foundation::CommandId{uuid(40)},
+      foundation::CommandId{uuid(41)}, foundation::CommandId{uuid(42)}).has_value());
+  const auto project = f.store.load(f.bundle);
+  LMDJ_CHECK(project.has_value() && project.value().revision == 0);
+  LMDJ_CHECK(f.journals.begin(f.bundle, f.session, f.pattern, 1,
+      project_io::sequence_pattern_fingerprint(project.value().patterns.at(f.pattern)), 0).has_value());
+  auto preparation = f.preparation;
+  preparation.identity.operation_id = foundation::CommandId{uuid(50)};
+  preparation.identity.transport_epoch = 13;
+  preparation.publication_generation = 23;
+  PatternAdmissionOwner current(f.journals, f.bundle, f.session, [&] { return f.now; });
+  LMDJ_CHECK(current.prepare(preparation).has_value());
+  auto fence = f.fence();
+  fence.command_id = foundation::CommandId{uuid(51)};
+  fence.transport_epoch = 13; fence.publication_generation = 23;
+  fence.effective_frame = fence.origin_frame = 60000;
+  LMDJ_CHECK(current.activate(fence).has_value());
+  LMDJ_CHECK(current.admit({10, 84000, {0, 1}, project_io::SequenceCandidateKind::press, 90, 72})
+      .value() == PatternAdmissionAdmit::retained);
+  LMDJ_CHECK(current.checkpoint_prefix(foundation::CommandId{uuid(52)}).has_value());
+  LMDJ_CHECK(current.retain_switch({foundation::PatternId{uuid(9)}, 24, 100000}).has_value());
+  const auto before = f.journals.read_active(f.bundle);
+  LMDJ_CHECK(before.has_value() && before.value().admission->candidates.empty());
+  const foundation::CommandId transfer{uuid(53)}, flush{uuid(54)};
+  const auto stale = f.owner.drain_source_prefix(f.store, transfer, flush);
+  LMDJ_CHECK(!stale.has_value() && stale.error().code == foundation::ErrorCode::invalid_argument);
+  LMDJ_CHECK(f.journals.read_active(f.bundle).value() == before.value());
+  LMDJ_CHECK(f.store.load(f.bundle).value().revision == 0);
+  LMDJ_CHECK(current.drain_source_prefix(f.store, transfer, flush).has_value());
+  const auto after = project_io::ProjectStore{}.load(f.bundle);
+  LMDJ_CHECK(after.has_value() && after.value().revision == 1);
+  LMDJ_CHECK(after.value().patterns.at(f.pattern).events ==
+      std::vector<PatternEvent>({{{0, 1}, 960, 240, 90}}));
+}
+
 }  // namespace
 
 int main() {
+  stale_admission_owner_cannot_flush_a_new_recording_in_the_same_session();
+  source_switch_flushes_checkpointed_tail_before_reconciling_target();
+  checkpointed_source_flush_retries_its_actual_durable_append_after_owner_reopen();
   try {
     durable_candidates_use_the_retained_origin();
     preparation_preserves_nondefault_quantization_without_a_profile();
