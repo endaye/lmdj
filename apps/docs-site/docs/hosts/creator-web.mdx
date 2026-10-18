@@ -419,6 +419,48 @@ Automation verifies state and persistence only; no physical-device listening or
 lifecycle acceptance is claimed by this change.
 
 
+## Retained Asset assignment (D03 consumer)
+
+Sample has an **ASSIGN** entry for material already retained by the current
+Project, including material with no assigned Pad. The dialog reads the public
+Facade inspection through `candidateSources`; its catalog revision must match
+the validated 64-Pad view. It offers explicit A01–D16 destinations using the
+same Pad address labels as the workspace. Selecting a source or destination
+changes only the draft and never triggers a sound. An occupied destination
+requires affirmative replacement confirmation; the source material, prior
+material and source Pad remain retained. Different-Asset assignment resets
+destination playback, same-Asset assignment retains it, and colour is preserved.
+
+The independently guarded `assignPad` capability takes an immutable four-field
+request (`commandId`, `expectedRevision`, `slot`, `assetId`). A Host without that
+producer method keeps the existing Sample features working and disables ASSIGN.
+The consumer preserves the complete eight-field receipt, including replay and
+current Project revision separately from committed revision. Authoring commits
+before the producer clears live target controls; this flow never uses the file
+import runner's pre-authoring stop.
+
+Cancel/Escape and context loss retire only unsent catalog reads and drafts.
+Once sent, App retains the originating Project/session/action lease through its
+natural result, even when Sample presentation disappears. A known commit stays
+committed when playback publication or projection refresh fails; the typed
+publication failure remains visible. A lost or malformed receipt stays visibly
+unknown with no automatic resend, replacement command UUID or inference from
+matching Truth. Only a still-current origin updates its Project projection.
+During the initial catalog read both selectors are disabled. A retired session's
+unknown notice keeps its original command identity while a fresh session can
+complete Project recovery/reopen and use ordinary Sample. The same session's
+UNKNOWN fences another assignment. In a fresh session the user can open a new
+draft, which starts without a selected destination; choosing its source and
+target explicitly permits one NEW command. Cancelling sends nothing. The old
+UNKNOWN remains visible with its own identity and is never replayed or resolved
+by the new operation or matching storage.
+
+The original Source5 receipts describe their historical cut. Current owning
+tests, TypeScript, Portal and rebuilt production browser journeys are recorded
+separately in the [ASSIGN Task](https://github.com/endaye/lmdj/issues/2230).
+Consumer fault fixtures do not establish a real producer failure; device,
+listening, complete candidate, release and deployment evidence remain separate.
+
 ## Delete the selected Pad
 
 The Sample editor places Edit and Delete together for the selected Pad. Edit

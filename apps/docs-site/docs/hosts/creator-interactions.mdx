@@ -295,7 +295,7 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 | Pattern 切换与取消 | 播放中 ←/→、GROOVE、未录 Performance 的 Launch 已使用 1 BEAT／1 BAR／SEQ END，默认 1 BAR。GROOVE 有排队时点当前项也请求取消；结果由 transport 回读确认，见 [5.1](#sequence-edit)。 | 录音期切换 consumer 已接线；完整故障组合、同候选与设备验收另记。OFF 匹配当前音乐位置仍待实现。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)。 |
 | Record count-in | SETUP 提供 Off／1／2，默认 Off；停止时按 ● 消费实际预定开录，数拍/取消跟随真实票据，播放中仍是普通叠录。 | 最终同候选、实机触控和听感交 #1221；不把组件或单次浏览器结果当完整物理验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
-| Sample ASSIGN | 有文件导入和 Slice Adopt；尚无浏览工程已有素材并分配的完整入口。 | 从当前工程已有 Asset 选来源，明确目标 A01–D16；复用引用，不移动来源，覆盖前确认。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
+| Sample ASSIGN | 已有当前工程 retained 素材列表、A01–D16 目标、覆盖确认和独立结果保留，见 [ASSIGN](#retained-asset-assign)。 | 同候选与设备验收仍另记；未知结果的新会话操作必须重新明确源和目标，原 UNKNOWN 保留。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
 | 三页普通方向导航 | Project 单列 ↑/↓ 选相邻项、普通 ←/→ 未分配，卡片内 Open 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | Perform 独立滤波 | C1 已接线主组 Cutoff／Delay／Reverb 与 FILTER 的 LP／HP／BP、Cutoff、Resonance；OFF 与已应用状态来自 Core，录制／保存／重新打开／Replay 的 packaged proof 已通过。 | 物理设备与听感验收仍未完成。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | C2 当前 Pad 双开关消费 Core 64 槽 mask，多 Solo／Mute 优先，切 Bank／Pattern 保留；离页等待清空确认。初始 mask 与后续事件经录制／保存／重开／Replay 的双 Pad PCM 旅程验证。 | 物理设备与听感验收仍未完成；已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
@@ -431,6 +431,37 @@ Mute 与 Reverse。每个开关显示真实的 On／Off；辅助技术继续通�
 - 真正替换声音时，播放参数恢复默认，自定义颜色保留。
 - Delete 清除颜色；Reset 保留颜色。
 - 录音中、命令处理中、参数草稿未完成或另一项保存进行中时，不能改颜色。
+
+### 保留素材 ASSIGN \{#retained-asset-assign\}
+
+Sample 的 ASSIGN 入口读取当前 Project 已保留的素材，包含没有 Pad 引用的素材。
+音频会话尚未提供独立 `assignPad` 能力时，ASSIGN 禁用，原有 Sample 功能继续可用。
+初始列表读取期间，源与目标选择均禁用，目标变化不会退役唯一的在途查询。
+旧 session 的 UNKNOWN 保留原命令身份与提示，同 session 不允许再发 ASSIGN。
+新 session 可恢复重开 Project 并开始一个新操作：目标从未选择状态开始，必须重新
+明确源和 A01–D16 目标。只发送一次新命令，原 UNKNOWN 不被重发、替换或推定成功。
+
+| 操作 | 可观察结果 |
+| --- | --- |
+| 打开 ASSIGN | 取消原有数值／旋钮试听草稿；通过公共 Facade 读取素材，列表 revision 必须匹配当前 64-Pad 视图。 |
+| 选择源和 A01–D16 目标 | 只改草稿，不触发声音、不写 Truth 或历史。目标可以不同于当前编辑 Pad。 |
+| Assign Asset 到空目标 | 重读并验证当前 Project、素材、revision 和目标后发送一次命令。 |
+| Assign Asset 到占用目标 | 展示完整源 UUID、目标地址和原素材 UUID；只有 Confirm replacement 才覆盖引用。 |
+| Cancel assignment／Escape | 退役未提交草稿和迟到列表，不调用 assign、stop 或 trigger，不改变 Truth／Undo。 |
+| 确认前改变源／目标或页面、Pad、Project、session、System 上下文 | 原查询与确认失效；新草稿必须重新验证，不继承旧确认。 |
+| 发出后离开 Sample 或改变上下文 | App 保留原始四字段请求与 owner，直到原始结果或未知耐久性；关闭界面不撤销已发出的命令。 |
+| 保存后播放准备失败 | 保留已提交状态与类型化错误，不把保存当作音频 ready。 |
+| 回执丢失／无效或刷新失败 | 未知回执明确显示 unknown；已知保存仍为 committed；不自动重发或换命令 UUID。 |
+| 原 UNKNOWN 后的新 session | 重新选择源和目标后才允许一个新操作；取消不发命令，原 UNKNOWN 提示和身份继续保留。 |
+
+原素材、源 Pad 和被覆盖素材均保留。换成不同 Asset 时目标 playback 重置；
+同 Asset 保留目标 playback，目标 colour 保留。Undo／Redo 和重开按现有 Truth 语义工作。
+迟到结果仅保留原始 Project 身份；不会因新上下文值相等而变成新 Project 或 Pad 的结果。
+模态输入阻挡与 N13 数值编辑取消仍复用既有机制，没有新增快捷键或全局输入层。
+
+当前 Task 的 owning 测试、TypeScript、Portal 与实际重建的 Sample editor 完整
+浏览器旅程分别记录在 #2230；历史 Source5 receipts 不验证后来的整合版本。
+源码或 mock 不代替 Native／PCM、听感、实体输入、发布或部署证据。
 
 ### 4.6 文件导入：长源裁剪 \{#long-source\}
 
