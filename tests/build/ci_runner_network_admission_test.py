@@ -43,11 +43,13 @@ class RunnerNetworkAdmissionTest(unittest.TestCase):
             "#!/usr/bin/env bash\n"
             'echo "$*" >>"$GH_CALLS"\n'
             'if [ "${GH_FAIL:-0}" = 1 ]; then echo "HTTP 502" >&2; exit 1; fi\n'
+            'case "$*" in *"-X "*) [ "${GH_WRITE_FAIL:-0}" = 1 ] && exit 1;; esac\n'
             'case "$*" in *"--jq"*) cat "$LABELS_FILE";; esac\n', encoding="utf-8")
         for tool in ("curl", "gh"):
             (self.bin / tool).chmod(0o755)
 
-    def tick(self, probe: str, labels: str, *, probe_exit: int = 0, gh_fail: bool = False) -> list[str]:
+    def tick(self, probe: str, labels: str, *, probe_exit: int = 0, gh_fail: bool = False,
+             write_fail: bool = False) -> list[str]:
         self.labels.write_text(labels, encoding="utf-8")
         self.calls.write_text("", encoding="utf-8")
         system_path = os.environ["PATH"]
@@ -58,6 +60,7 @@ class RunnerNetworkAdmissionTest(unittest.TestCase):
             "PROBE_OUTPUT": probe, "PROBE_EXIT": str(probe_exit),
             "GH_CALLS": str(self.calls), "LABELS_FILE": str(self.labels),
             "GH_FAIL": "1" if gh_fail else "0",
+            "GH_WRITE_FAIL": "1" if write_fail else "0",
         }
         result = subprocess.run(["bash", str(SCRIPT)], env=environment, check=False,
                                 capture_output=True, text=True, timeout=30)
@@ -94,6 +97,22 @@ class RunnerNetworkAdmissionTest(unittest.TestCase):
         self.tick(FAST, "self-hosted,macOS,ARM64,lmdj-mac-m4")
         self.assertEqual(self.tick(FAST, "", gh_fail=True), [])
         self.assertIn("gh-error", (self.state / "admission.log").read_text(encoding="utf-8"))
+
+    def last_action(self) -> str:
+        return (self.state / "admission.log").read_text(encoding="utf-8").splitlines()[-1].rsplit("action=", 1)[1]
+
+    def test_a_failed_label_write_is_logged_and_retried(self) -> None:
+        admitted = "self-hosted,lmdj-mac-m4,ci-macos-gates"
+        self.assertEqual(len(self.tick(SLOW, admitted, write_fail=True)), 1)
+        self.assertEqual(self.last_action(), "revoke-failed")
+        self.assertEqual(len(self.tick(SLOW, admitted)), 1, "the next run must retry the revoke")
+        self.assertEqual(self.last_action(), "revoke")
+        unadmitted = "self-hosted,lmdj-mac-m4"
+        self.tick(FAST, unadmitted)
+        self.tick(FAST, unadmitted, write_fail=True)
+        self.assertEqual(self.last_action(), "admit-failed")
+        self.assertEqual(len(self.tick(FAST, unadmitted)), 1, "the next fast run must retry the admit")
+        self.assertEqual(self.last_action(), "admit")
 
     def test_the_powershell_twin_uses_the_same_probe_and_thresholds(self) -> None:
         bash = SCRIPT.read_text(encoding="utf-8")

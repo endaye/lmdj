@@ -46,11 +46,16 @@ try {
 }
 $admitted = $labels -contains $Label
 if ($speed -ge $AdmitBytesPerSecond) { $state.goodStreak = [int]$state.goodStreak + 1 } else { $state.goodStreak = 0 }
+# A native command's failure does not throw under "Stop", so each label write
+# checks its exit code. A failed write is logged as such; the next run
+# retries it, because the runner's labels are read afresh and the streak is kept.
 $action = "keep"
 if ($admitted -and $speed -lt $RevokeBytesPerSecond) {
-  & gh api -X DELETE "repos/$Repository/actions/runners/$RunnerId/labels/$Label" --silent; $action = "revoke"
+  & gh api -X DELETE "repos/$Repository/actions/runners/$RunnerId/labels/$Label" --silent
+  $action = if ($LASTEXITCODE -eq 0) { "revoke" } else { "revoke-failed" }
 } elseif (-not $admitted -and $state.goodStreak -ge $AdmitStreak) {
-  & gh api -X POST "repos/$Repository/actions/runners/$RunnerId/labels" -f "labels[]=$Label" --silent; $action = "admit"
+  & gh api -X POST "repos/$Repository/actions/runners/$RunnerId/labels" -f "labels[]=$Label" --silent
+  $action = if ($LASTEXITCODE -eq 0) { "admit" } else { "admit-failed" }
 }
 $state | ConvertTo-Json | Set-Content -Path $stateFile
 Write-AdmissionLog ("speed={0:N0}B/s curl='{1}' admitted={2} streak={3} action={4}" -f $speed, "$out", $admitted, $state.goodStreak, $action)

@@ -40,11 +40,21 @@ if ! labels=$(gh api "repos/$REPOSITORY/actions/runners/$RUNNER_ID" --jq '[.labe
 fi
 admitted=false; [[ ",$labels," == *",$LABEL,"* ]] && admitted=true
 if [ "$speed" -ge "$ADMIT_BYTES_PER_SECOND" ]; then streak=$((streak+1)); else streak=0; fi
+# A failed label write is logged as such; the next run retries it, because
+# the runner's labels are read afresh and the streak is kept.
 action=keep
 if $admitted && [ "$speed" -lt "$REVOKE_BYTES_PER_SECOND" ]; then
-  gh api -X DELETE "repos/$REPOSITORY/actions/runners/$RUNNER_ID/labels/$LABEL" --silent && action=revoke
+  if gh api -X DELETE "repos/$REPOSITORY/actions/runners/$RUNNER_ID/labels/$LABEL" --silent; then
+    action=revoke
+  else
+    action=revoke-failed
+  fi
 elif ! $admitted && [ "$streak" -ge "$ADMIT_STREAK" ]; then
-  gh api -X POST "repos/$REPOSITORY/actions/runners/$RUNNER_ID/labels" -f "labels[]=$LABEL" --silent && action=admit
+  if gh api -X POST "repos/$REPOSITORY/actions/runners/$RUNNER_ID/labels" -f "labels[]=$LABEL" --silent; then
+    action=admit
+  else
+    action=admit-failed
+  fi
 fi
 echo "$streak" >"$STATE"
 echo "$(date -u +%FT%TZ) speed=${speed}B/s curl='$out' admitted=$admitted streak=$streak action=$action" >>"$LOG"
