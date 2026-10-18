@@ -484,9 +484,9 @@ test("Launch without a Performance recording selects the slot's Pattern; empty s
 });
 
 // #1958: outside a Performance recording the slots follow the transport: a
-// settling or recording transport keeps them closed, and so does a missing
-// transport projection.
-test("Launch without a Performance recording stays closed while the transport records or settles", async () => {
+// settling transport keeps them closed, and so does a missing projection.
+// Open global Pattern recording delegates through that same path.
+test("Launch during global Pattern recording selects through transport and stays closed while settling", async () => {
   const fixture = controllerFixture();
   const status = (overrides: Partial<PatternTransportStatus>): PatternTransportState => ({
     ...initialPatternTransportState,
@@ -499,21 +499,23 @@ test("Launch without a Performance recording stays closed while the transport re
       ...overrides,
     },
   });
+  const onSelectPattern = vi.fn();
   const view = render(
     <PerformSurface controller={fixture.controller} project={project} bank={0}
-      transport={status({playing: true, recording: true})} onSelectPattern={vi.fn()} />);
-  for (const name of ["Launch Pattern 1", "Launch Pattern 2", "Launch Pattern 3"]) {
-    expect(screen.getByRole("button", {name: new RegExp(`^${name}$`)})
-      .hasAttribute("disabled")).toBe(true);
-  }
+      transport={status({playing: true, recording: true})} onSelectPattern={onSelectPattern} />);
+  const launch = screen.getByRole("button", {name: /^Launch Pattern 1$/});
+  expect(launch.hasAttribute("disabled")).toBe(false);
+  await userEvent.click(launch);
+  expect(onSelectPattern).toHaveBeenCalledExactlyOnceWith(ids.pattern1);
+  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
   view.rerender(
     <PerformSurface controller={fixture.controller} project={project} bank={0}
-      transport={status({phase: "preparing"})} onSelectPattern={vi.fn()} />);
+      transport={status({phase: "preparing"})} onSelectPattern={onSelectPattern} />);
   expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
     .hasAttribute("disabled")).toBe(true);
   view.rerender(
     <PerformSurface controller={fixture.controller} project={project} bank={0}
-      onSelectPattern={vi.fn()} />);
+      onSelectPattern={onSelectPattern} />);
   expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
     .hasAttribute("disabled")).toBe(true);
   expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();

@@ -39,6 +39,18 @@ export const initialCountInState: CountInState = Object.freeze({
   nativeDownbeatFrame: null, errorCode: null, errorMessage: null,
 });
 
+// Selection can join an opened recording without retiring its original caller.
+// Applied changes the lamp before durable opening completes, so phase alone is
+// insufficient. A cancellation/error closes this gate synchronously.
+export function countInLocksPatternSelection(state: CountInState): boolean {
+  if (!state.active) return false;
+  const status = state.status;
+  return state.phase !== "recording" || !state.recording || state.errorCode !== null ||
+    status === null || status.error !== null || status.openingPending ||
+    !status.openingComplete || status.startReceipt?.result !== "applied" ||
+    status.cancelReceipt !== null;
+}
+
 const ticketMatches = (a: PatternCountInTicket | null, b: PatternCountInTicket) =>
   a !== null && a.sessionId === b.sessionId && a.commandId === b.commandId &&
   a.runtimeGeneration === b.runtimeGeneration && a.frameEpoch === b.frameEpoch &&
@@ -284,7 +296,10 @@ export function createCountInController(options: Readonly<{
     },
     async cancel(intent: PatternTransportIntent) {
       const candidate = owner;
-      if (disposed || candidate === null) return;
+      // A terminal receipt can already have been consumed while the final
+      // ordinary projection is still in flight. Its original cancel identity
+      // cannot be submitted again or turned into another musical command.
+      if (disposed || candidate === null || state.phase === "settling") return;
       candidate.cancelIntent ??= intent;
       publish({phase: "cancelling"});
       // A press before capability/admission settles is retained and sent once

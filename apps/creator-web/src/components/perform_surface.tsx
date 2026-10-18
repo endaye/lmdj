@@ -8,7 +8,6 @@ import type {Bank} from "../state/creator_state";
 import {
   selectTransportBusy,
   selectTransportPlaying,
-  selectTransportRecording,
   type PatternTransportState,
 } from "../state/pattern_transport_state";
 import {transportStatusLabel} from "./transport_status";
@@ -264,14 +263,13 @@ export function PerformSurface(props: PerformSurfaceProps) {
   const performing = ["recording", "flushing"].includes(state.recording.phase);
   // #1958: without a Performance recording, Launch drives the global transport
   // through selection. Unsettled Performance operations still own their
-  // recording/capture transition. The transport fallback also stays closed
-  // while a transport command settles or records (recording switches are S3).
+  // recording/capture transition. Global Pattern recording uses this ordinary
+  // selection path after opening; it never joins the Performance event clock.
   const transportLaunchOpen = ["idle", "stopped"].includes(state.recording.phase) &&
     props.patternSelectionLocked !== true &&
     props.transport !== undefined &&
     props.transport.status !== null &&
-    !selectTransportBusy(props.transport) &&
-    !selectTransportRecording(props.transport);
+    !selectTransportBusy(props.transport);
   const launchDisabled = !performing && !transportLaunchOpen;
   // The transport's slot facts exist only while it plays; stopped, no slot is
   // Playing and a queued switch cannot outlive Stop.

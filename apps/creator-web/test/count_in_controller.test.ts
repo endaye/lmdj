@@ -8,6 +8,9 @@ import type {
 } from "@lmdj/web-runtime-platform/runtime_types";
 import {
   countInBeatsRemaining,
+  countInLocksPatternSelection,
+  initialCountInState,
+  type CountInState,
   createCountInController,
   isCountInSession,
   type CountInController,
@@ -55,7 +58,7 @@ function fixture() {
     diagnostics: vi.fn(() => ({state: "running"})),
     queryPatternCountInCapabilities: vi.fn(async () => capability),
     setCountInMetronome: vi.fn((_enabled: boolean) => {}),
-    inspectPatternTransport: vi.fn(async (_sessionId: string) => ordinary),
+    inspectPatternTransport: vi.fn(async (_sessionId: string): Promise<PatternTransportStatus> => ordinary),
     requestPatternCountIn: vi.fn(async (value: PatternCountInRequest) => {
       request = value;
       status = {ticket: ticket(), countIn: {...ticket(), phase: "armed", bars: value.bars,
@@ -385,4 +388,82 @@ test("127 BPM countdown follows Native's actual cue at 23677, not the ordinary b
   // The ordinary PPQ ceiling is 22,678; a UI sharing that grid is one frame late.
   expect(countInBeatsRemaining(f.status, 23676)).toBe(4);
   expect(countInBeatsRemaining(f.status, 23677)).toBe(3);
+});
+
+test("Pattern selection waits for durable opening while retaining the original COUNT-IN caller", async () => {
+  const f = fixture();
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(false);
+  await f.controller.start(1, 4);
+  const original = structuredClone(f.controller.getState().ticket);
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(true);
+  f.status = {...f.status, startReceipt: f.receipt("applied"), openingPending: true};
+  await f.controller.observe();
+  expect(f.controller.getState().recording).toBe(true);
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(true);
+  f.status = {...f.status, openingPending: false, openingComplete: true};
+  await f.controller.observe();
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(false);
+  expect(f.controller.getState()).toMatchObject({active: true, phase: "recording",
+    ticket: original, nativeDownbeatFrame: 100000});
+  expect(f.session.inspectPatternCountIn.mock.calls.some(([, consume]) => consume)).toBe(false);
+  await f.controller.cancel("record");
+  expect(countInLocksPatternSelection(f.controller.getState())).toBe(true);
+  expect(f.controller.getState().ticket).toEqual(original);
+});
+
+test.each([
+  {phase: "preparing"}, {phase: "counting"}, {phase: "cancelling"}, {phase: "settling"},
+  {recording: false}, {errorCode: "IO_ERROR"}, {status: null},
+] satisfies Partial<CountInState>[])("Pattern selection stays closed for retained $phase $recording $errorCode $status", async (change) => {
+  const f = fixture();
+  await f.controller.start(1, 4);
+  const ready: CountInState = {...initialCountInState, active: true, phase: "recording", recording: true,
+    ticket: f.ticket(), status: {...f.status, openingComplete: true,
+      startReceipt: f.receipt("applied")}};
+  expect(countInLocksPatternSelection(ready)).toBe(false);
+  expect(countInLocksPatternSelection({...ready, ...change})).toBe(true);
+});
+
+test.each(["openingPending", "openingIncomplete", "noReceipt", "refused", "cancelled", "error"] as const)(
+  "Pattern selection rejects $0 even when the COUNT-IN lamp says recording", async (condition) => {
+    const f = fixture(); await f.controller.start(1, 4);
+    const status: PatternCountInStatus = {...f.status, startReceipt: f.receipt("applied"), openingComplete: true};
+    if (condition === "openingPending") Object.assign(status, {openingPending: true});
+    if (condition === "openingIncomplete") Object.assign(status, {openingComplete: false});
+    if (condition === "noReceipt") Object.assign(status, {startReceipt: null});
+    if (condition === "refused") Object.assign(status, {startReceipt: f.receipt("refused")});
+    if (condition === "cancelled") Object.assign(status, {cancelReceipt: f.receipt("applied", true)});
+    if (condition === "error") Object.assign(status, {error: {code: "IO_ERROR", message: "held failure", retryable: false}});
+    expect(countInLocksPatternSelection({...initialCountInState, active: true, phase: "recording",
+      recording: true, status})).toBe(true);
+  },
+);
+
+test("a consumed COUNT-IN caller waiting for its final projection cannot replay cancellation", async () => {
+  const f = fixture();
+  let consumed = false;
+  const projection = deferred<PatternTransportStatus>();
+  f.session.inspectPatternCountIn.mockImplementation(async (_ticket, consume = false) => {
+    if (consume) consumed = true;
+    return f.status;
+  });
+  f.session.inspectPatternTransport.mockImplementation(async () => consumed ? projection.promise : f.ordinary);
+  await f.controller.start(1, 4);
+  f.status = {...f.status, startReceipt: f.receipt("applied"), openingComplete: true};
+  await f.controller.observe();
+  await f.controller.cancel("record");
+  f.status = {...f.status, cancelReceipt: f.receipt("applied", true)};
+  const finishing = f.controller.observe();
+  await vi.waitFor(() => expect(consumed).toBe(true));
+  expect(f.controller.getState()).toMatchObject({active: true, phase: "settling"});
+  try {
+    await f.controller.cancel("play_stop");
+    expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
+    expect(f.controller.getState().phase).toBe("settling");
+  } finally {
+    projection.resolve({...f.ordinary, engaged: true, playing: true, recording: false,
+      transportEpoch: 2, currentPatternId: "terminal-pattern"});
+    await finishing;
+  }
+  expect(f.controller.getState()).toMatchObject({active: false, phase: "idle"});
 });

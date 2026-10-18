@@ -147,7 +147,7 @@ import {
 import {beatsInWindow} from "./runtime/metronome_scheduler";
 import {createMetronomeClickLoop} from "./runtime/metronome_click";
 import {
-  createCountInController, initialCountInState, isCountInSession,
+  countInLocksPatternSelection, createCountInController, initialCountInState, isCountInSession,
   type CountInController,
 } from "./runtime/count_in_controller";
 import {
@@ -2738,18 +2738,15 @@ function Workspace({
   }, [session, reportFailure]);
 
   const selectSequencePattern = async (patternId: string) => {
-    if (!session || countInControllerRef.current?.getState().active) return;
+    if (!session || countInLocksPatternSelection(
+      countInControllerRef.current?.getState() ?? initialCountInState)) return;
     const current = transportRef.current;
     if (isPatternTransportSession(session) && current.sessionId !== null) {
       if (selectTransportBusy(current)) return;
-      // #1958: while the transport plays and does not record (recording is
-      // S3), a selection press queues the transport's Pattern switch at the
-      // device's SEQ SNAP boundary (1 BAR by default) instead of reloading
-      // the snapshot. The Host resolves latest-wins, claim deferral and
-      // pressing-the-playing-Pattern cancellation; a refusal is reported,
-      // never thrown.
+      // Playing and opened recording share the existing SEQ SNAP request.
+      // Native/Host own actual boundaries, durable segments and current-target
+      // withdrawal. A refusal is reported once, never replayed automatically.
       if (selectTransportPlaying(current)) {
-        if (selectTransportRecording(current)) return;
         try {
           await session.requestTransportPatternSwitch(
             createTransportPatternSwitchRequest(patternId, seqSnap));
@@ -2871,9 +2868,12 @@ function Workspace({
   const playing = selectTransportPlaying(transport);
   // Tempo and Swing lock while recording or while a transport command
   // settles, as the touch controls do; a turn in progress is dropped.
-  const sequenceSettingsLocked = countIn.active || transportBusy || recording || state.project.phase !== "ready" ||
+  const sequenceWorkspaceLocked = transportBusy || state.project.phase !== "ready" ||
     state.runtime.phase !== "ready" || state.projectProjectionRefresh !== null ||
     state.transfer.phase !== "idle";
+  const sequenceSettingsLocked = countIn.active || recording || sequenceWorkspaceLocked;
+  const patternSelectionLocked = countInLocksPatternSelection(countIn) ||
+    sequenceWorkspaceLocked || transport.status?.phase === "error" || transport.lastFailed !== null;
   // Core refuses a Pad colour change while recording or while the transport
   // settles; playing is fine. A pending Project change would leave the
   // controls naming a stale revision.
@@ -2924,10 +2924,10 @@ function Workspace({
   const sequencePatternIndex = sequencePatterns.findIndex((item) =>
     item.patternId === (playingStepPatternId ??
       sequence.selectedPatternId ?? sequenceProject?.patternId));
-  // The direction keys and ‹ › queue the transport's switch while playing
-  // (#1958); recording (until S3) and a settling transport still close them.
+  // Selection remains independent of authoring locks while recording. Its
+  // queued/current base always comes from the actual transport projection.
   const patternStepOpen = activeMode === "sequence" && sequenceProject !== null &&
-    !sequenceSettingsLocked && sequencePatternIndex >= 0;
+    !patternSelectionLocked && sequencePatternIndex >= 0;
   const stepPatternBy = (offset: -1 | 1) => {
     const next = sequencePatterns[sequencePatternIndex + offset];
     if (patternStepOpen && next !== undefined) void selectSequencePattern(next.patternId);
@@ -3123,7 +3123,7 @@ function Workspace({
                   }
                 });
               }}
-              recordEnabled={countIn.active || (transportReady && !transportBusy &&
+              recordEnabled={countIn.active ? countIn.phase !== "settling" : (transportReady && !transportBusy &&
                 (padCaptureState === null || padCaptureState.phase === "idle") &&
                 ["idle", "permission-error"].includes(capturePhase) &&
                 ["idle", "saved", "discarded"].includes(historyPerformPhase))}
@@ -3146,7 +3146,7 @@ function Workspace({
                   }
                 });
               }}
-              playEnabled={countIn.active || (transportReady && !transportBusy)}
+              playEnabled={countIn.active ? countIn.phase !== "settling" : (transportReady && !transportBusy)}
               playing={playing}
               onOpenSystem={openSystem}
               systemOpen={systemOpen}
@@ -3426,6 +3426,7 @@ function Workspace({
                 countInBars={countInBars}
                 onCountInBarsChange={onCountInBarsChange}
                 countInLocked={countIn.active}
+                patternSelectionLocked={patternSelectionLocked}
                 onToggleMetronome={onToggleMetronome}
                 seqSnap={seqSnap}
                 onSeqSnapChange={onSeqSnapChange}
@@ -3483,7 +3484,7 @@ function Workspace({
                     bank={state.activeBank}
                     transport={transport}
                     onSelectPattern={(patternId) => { void selectSequencePattern(patternId); }}
-                    patternSelectionLocked={countIn.active}
+                    patternSelectionLocked={patternSelectionLocked}
                     recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                       !["idle", "permission-error"].includes(capturePhase) || recording}
                   />

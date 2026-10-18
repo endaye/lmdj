@@ -64,6 +64,9 @@ interface SequenceTouchWorkspaceProps {
   countInBars?: CountInBars;
   onCountInBarsChange?(bars: CountInBars): void;
   countInLocked?: boolean;
+  // Selection may open after COUNT-IN's durable opening while authoring stays
+  // locked. Omission retains the conservative legacy count-in lock.
+  patternSelectionLocked?: boolean;
   // #1958 S4: the device's SEQ SNAP boundary. A per-device preference like
   // the metronome — never a Transport setting, never Project Truth — so it
   // stays reachable while recording (switches while recording are S3) and is
@@ -114,6 +117,8 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
   // failed commit resyncs the base to the committed truth.
   const requestedBpmRef = useRef<number | null>(null);
   const requestedSwingRef = useRef<number | null>(null);
+  const selectionDisabled = selectTransportBusy(transport) || props.settingsActive === false ||
+    (props.patternSelectionLocked ?? props.countInLocked) === true;
   const disabled = selectTransportBusy(transport) || selectTransportRecording(transport) ||
     props.settingsActive === false || props.countInLocked === true;
   // Grid editing is refused while the transport records (the Core refuses it
@@ -185,11 +190,10 @@ export function SequenceTouchWorkspace(props: SequenceTouchWorkspaceProps) {
     <section className="sequence-touch-workspace" aria-label="Sequence editor"
       data-layer={layer}>
       <header className="sequence-editor-header">
-        {/* #1958: a press while playing queues the transport's Pattern switch
-            at the engine's next Bar; recording (until S3) and a settling
-            transport still lock selection. */}
+        {/* Playing and opened recording queue the same selected SNAP boundary;
+            authoring controls retain their separate recording lock. */}
         <PatternSelector index={patternIndex} patternIds={project.patterns.map((item) => item.patternId)}
-          patternId={headerPatternId} disabled={disabled} queuedIndex={queuedIndex}
+          patternId={headerPatternId} disabled={selectionDisabled} queuedIndex={queuedIndex}
           onSelect={props.onSwitch} />
         <TouchSegment<SequenceLayer> label="Layer" className="sequence-layer" options={LAYER_OPTIONS}
           value={layer} onChange={setLayer} />

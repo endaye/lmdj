@@ -3690,7 +3690,7 @@ test("the GROOVE picker queues a playing switch at the device's SEQ SNAP", async
 // #1958 S4: outside a Performance recording, a Perform Launch slot drives the
 // global transport's queued switch and carries the device's SEQ SNAP; the
 // Performance-recording launch owner stays untouched.
-test("a Perform launch without a Performance recording queues the switch at the device's SEQ SNAP", async () => {
+test.each([false, true])("an ordinary Perform launch with global recording=%s queues the device SEQ SNAP", async (recording) => {
   await writeSeqSnapPreference("beat");
   const fixture = mutableSampleRuntimeFixture();
   const performance = performanceSessionStubs([]);
@@ -3721,7 +3721,7 @@ test("a Perform launch without a Performance recording queues the switch at the 
         throw new Error("no transport command is submitted in this test");
       },
       inspectPatternTransport: async () => engagedTransportStatus({
-        currentPatternId: listedSummary.patternId,
+        recording, currentPatternId: listedSummary.patternId,
       }),
       requestTransportPatternSwitch: async (request: {
         patternId: string; requestId: string; snap: string;
@@ -4126,7 +4126,7 @@ test("a Stop cancelling a newer switch after an unseen applied one follows the a
 
 // #1958: a refused switch is reported through the failure path, not thrown;
 // the selection stays put.
-test("a refused playing Pattern switch is reported and changes nothing", async () => {
+test("a busy recording Pattern switch is reported once and preserves current selection", async () => {
   const fixture = mutableSampleRuntimeFixture();
   const switchRequests: {patternId: string; requestId: string}[] = [];
   const session = Object.assign(fixture.session, sequenceSessionStubs(), {
@@ -4135,20 +4135,20 @@ test("a refused playing Pattern switch is reported and changes nothing", async (
       throw new Error("no transport command is submitted in this test");
     },
     inspectPatternTransport: async () => engagedTransportStatus({
-      currentPatternId: listedSummary.patternId,
+      recording: true, currentPatternId: listedSummary.patternId,
     }),
     requestTransportPatternSwitch: async (request: {patternId: string; requestId: string}) => {
       switchRequests.push({...request});
       throw Object.assign(
-        new Error("Pattern transport is recording"),
-        {code: "HOST_STATE_INVALID", details: {reason: "pattern_transport_recording"}},
+        new Error("The previous Pattern change is still settling"),
+        {code: "HOST_STATE_INVALID", details: {reason: "recording_switch_material_pending", pending: true}},
       );
     },
   });
   render(<App initialState={secondPatternReady} runtimeFactory={() => session} />);
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
   await userEvent.click(screen.getByRole("button", {name: "Sequence"}));
-  await waitFor(() => expect(transportPhase()).toBe("playing"));
+  await waitFor(() => expect(transportPhase()).toBe("recording"));
   // The picker is available while playing; its press is refused by the Host.
   const picker = screen.getByRole("button", {name: "Choose Pattern"});
   await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
@@ -4161,6 +4161,9 @@ test("a refused playing Pattern switch is reported and changes nothing", async (
     .textContent).not.toContain("→"));
   expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
     .toBe(listedSummary.patternId);
+  await refreshPlaybackProjection();
+  await flushAsyncTurns();
+  expect(switchRequests).toHaveLength(1); // No automatic replay of a refused musical choice.
   // The refusal is recorded in Developer diagnostics instead of thrown.
   await userEvent.click(screen.getByRole("button", {name: "System"}));
   const summary = screen.getByText("Developer diagnostics (1)", {selector: "summary"});
@@ -4170,19 +4173,21 @@ test("a refused playing Pattern switch is reported and changes nothing", async (
   expect(within(diagnostics).getByText("HOST_STATE_INVALID")).toBeTruthy();
 });
 
-// #1958: playing opens the switch controls, recording keeps them closed
-// (switching while recording is S3).
-test("recording keeps the Pattern step and picker closed even though playing opens them", async () => {
+// S3 uses the existing switch request, queued readout and actual-current follow.
+test("recording opens Pattern arrows and GROOVE without optimistically changing the current Pattern", async () => {
   const fixture = mutableSampleRuntimeFixture();
   let recording = false;
+  let currentPatternId = listedSummary.patternId;
+  let pendingSwitch: {patternId: string; activationFrame: number} | null = null;
+  const requests: {patternId: string; requestId: string; snap?: string}[] = [];
   const session = Object.assign(fixture.session, sequenceSessionStubs(), {
     inspectProject: withSecondPatternInspect(fixture),
-    requestPatternTransport: async () => {
-      throw new Error("no transport command is submitted in this test");
-    },
-    inspectPatternTransport: async () => engagedTransportStatus({recording}),
-    requestTransportPatternSwitch: async () => {
-      throw new Error("no switch is submitted while recording");
+    requestPatternTransport: async () => {throw new Error("no transport toggle in this test");},
+    inspectPatternTransport: async () => engagedTransportStatus({recording, currentPatternId, pendingSwitch}),
+    requestTransportPatternSwitch: async (request: typeof requests[number]) => {
+      requests.push({...request});
+      pendingSwitch = {patternId: request.patternId, activationFrame: 96000};
+      return {...request, activationFrame: 96000};
     },
   });
   render(<App initialState={secondPatternReady} runtimeFactory={() => session} />);
@@ -4192,14 +4197,31 @@ test("recording keeps the Pattern step and picker closed even though playing ope
   const forward = screen.getByRole("button", {name: "Pattern forward — →"});
   const picker = screen.getByRole("button", {name: "Choose Pattern"});
   await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
-  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
-  await act(async () => {
-    recording = true;
-  });
-  // The recording state becomes observed through the same refresh control.
+  await act(async () => {recording = true;});
   await refreshPlaybackProjection();
-  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(true));
-  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(true));
+  await waitFor(() => expect(screen.getByRole("button", {name: /^Record/})
+    .classList.contains("is-active")).toBe(true));
+  expect(forward.hasAttribute("disabled")).toBe(false);
+  expect(picker.hasAttribute("disabled")).toBe(false);
+  const reloads = fixture.calls.filter(call => call === "reloadSnapshot").length;
+  await userEvent.click(forward);
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0]).toMatchObject({patternId: secondSwitchPattern, snap: "bar"});
+  await waitFor(() => expect(picker.textContent).toContain("→ 02"));
+  expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(listedSummary.patternId);
+  await act(async () => {currentPatternId = secondSwitchPattern; pendingSwitch = null;});
+  await refreshPlaybackProjection();
+  await waitFor(() => expect(screen.getByTestId("sequence-pattern").getAttribute("data-pattern-id"))
+    .toBe(secondSwitchPattern));
+  expect(picker.textContent).not.toContain("→");
+  await userEvent.click(picker);
+  await userEvent.click(within(screen.getByRole("dialog", {name: "Choose Pattern"}))
+    .getByRole("button", {name: "GROOVE / 01"}));
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests[1]).toMatchObject({patternId: listedSummary.patternId, snap: "bar"});
+  expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
+  expect(fixture.calls.filter(call => call === "reloadSnapshot")).toHaveLength(reloads);
 });
 
 test("a settled transport commit shows its revision even when the projection re-read never completes", async () => {
@@ -7392,11 +7414,12 @@ function countInAppFixture({playing = false, outputReady = true} = {}) {
   });
   const publishRunning = controlledSampleAudio(session);
   return {fixture, session, publishRunning,
-    apply() {
-      count = {...count!, startReceipt: receipt("applied"), openingComplete: true};
+    apply({openingComplete = true} = {}) {
+      count = {...count!, startReceipt: receipt("applied"), openingPending: !openingComplete, openingComplete};
       ordinary = {...ordinary, phase: "idle", playing: true, recording: true,
         originFrame: count.countIn!.startFrame!, runtimeFrame: count.countIn!.startFrame!};
     },
+    completeOpening() {count = {...count!, openingPending: false, openingComplete: true};},
     finishCancellation() {
       const applied = count!.startReceipt?.result === "applied";
       count = {...count!, startReceipt: count!.startReceipt ?? receipt("cancelled"),
@@ -7596,4 +7619,82 @@ test("a refused COUNT-IN metronome toggle preserves late saved preference hydrat
     expect(await readMetronomePreference()).toBe(true);
     expect(f.session.requestPatternCountIn).toHaveBeenCalledOnce();
   } finally {stall.released.resolve(); stall.restore();}
+});
+
+test("COUNT-IN Pattern selection opens only after opening ACK, retains S0 and closes before cancellation ACK", async () => {
+  await writeCountInPreference(1);
+  const f = countInAppFixture();
+  const requestSwitch = vi.fn(async (request: {patternId: string; requestId: string}) =>
+    ({...request, activationFrame: 200000}));
+  Object.assign(f.session, {requestTransportPatternSwitch: requestSwitch});
+  await openCountInApp(f);
+  const forward = screen.getByRole("button", {name: "Pattern forward — →"});
+  const picker = screen.getByRole("button", {name: "Choose Pattern"});
+  await userEvent.click(screen.getByRole("button", {name: "Record"}));
+  await screen.findByRole("button", {name: "Record — cancel count-in"});
+  expect(forward.hasAttribute("disabled")).toBe(true);
+  await act(async () => f.apply({openingComplete: false}));
+  await waitFor(() => expect(screen.getByRole("button", {name: /^Record/})
+    .classList.contains("is-active")).toBe(true));
+  // The lamp is Applied while the durable opening remains pending.
+  expect(picker.hasAttribute("disabled")).toBe(true);
+  expect(forward.hasAttribute("disabled")).toBe(true);
+  await act(async () => f.completeOpening());
+  await waitFor(() => expect(forward.hasAttribute("disabled")).toBe(false));
+  expect(picker.hasAttribute("disabled")).toBe(false);
+  const original = structuredClone(f.session.requestPatternCountIn.mock.calls[0]![0]);
+  await userEvent.click(forward);
+  await waitFor(() => expect(requestSwitch).toHaveBeenCalledOnce());
+  expect(requestSwitch).toHaveBeenCalledWith(expect.objectContaining({patternId: secondSwitchPattern, snap: "bar"}));
+  expect(f.session.inspectPatternCountIn.mock.calls.some(([, consume]) => consume)).toBe(false);
+  expect(screen.getByRole("button", {name: "Encoder 3 — Tempo"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("slider", {name: "BPM"}).hasAttribute("disabled")).toBe(true);
+  await userEvent.click(screen.getByRole("button", {name: /^Record/}));
+  await waitFor(() => expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce());
+  expect(forward.hasAttribute("disabled")).toBe(true);
+  expect(picker.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(forward);
+  await flushAsyncTurns();
+  expect(requestSwitch).toHaveBeenCalledOnce();
+  expect(f.session.requestPatternCountIn).toHaveBeenCalledOnce();
+  expect(f.session.cancelPatternCountIn.mock.calls[0]![0].ticket.commandId).toBe(original.commandId);
+  expect(f.session.requestPatternTransport).not.toHaveBeenCalled();
+});
+
+test("COUNT-IN terminal projection keeps Record and Play closed after consume, then sends a new ordinary Stop", async () => {
+  await writeCountInPreference(1);
+  const f = countInAppFixture();
+  let consumed = false;
+  const projection = deferred<PatternTransportStatus>();
+  const originalCount = f.session.inspectPatternCountIn.getMockImplementation()!;
+  const originalTransport = f.session.inspectPatternTransport.getMockImplementation()!;
+  f.session.inspectPatternCountIn.mockImplementation(async (ticket, consume = false) => {
+    const status = await originalCount(ticket, consume);
+    if (consume) consumed = true;
+    return status;
+  });
+  f.session.inspectPatternTransport.mockImplementation(async () => consumed ? projection.promise : originalTransport());
+  await openCountInApp(f);
+  await userEvent.click(screen.getByRole("button", {name: "Record"}));
+  await screen.findByRole("button", {name: "Record — cancel count-in"});
+  await act(async () => f.apply());
+  await waitFor(() => expect(screen.getByRole("button", {name: /^Record/}).classList.contains("is-active")).toBe(true));
+  await userEvent.click(screen.getByRole("button", {name: /^Record/}));
+  await waitFor(() => expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce());
+  await act(async () => f.finishCancellation());
+  await waitFor(() => expect(consumed).toBe(true));
+  try {
+    const play = screen.getByRole("button", {name: /^Play\/Stop/});
+    expect(play.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", {name: /^Record/}).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(play);
+    await flushAsyncTurns();
+    expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
+    expect(f.session.requestPatternTransport).not.toHaveBeenCalled();
+  } finally {await act(async () => projection.resolve(await originalTransport()));}
+  await waitFor(() => expect(screen.getByRole("button", {name: /^Play\/Stop/}).hasAttribute("disabled")).toBe(false));
+  await userEvent.click(screen.getByRole("button", {name: /^Play\/Stop/}));
+  await waitFor(() => expect(f.session.requestPatternTransport).toHaveBeenCalledOnce());
+  expect(f.session.requestPatternTransport.mock.calls[0]![0]).toMatchObject({intent: "play_stop", expectedEpoch: 3});
+  expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce();
 });
