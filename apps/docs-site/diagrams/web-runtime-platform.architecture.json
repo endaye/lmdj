@@ -88,7 +88,7 @@
     {
       "id": "tap",
       "label": "Master Tap Worklet",
-      "detail": "product only · real PCM tap",
+      "detail": "PCM + L/R peaks · no cue",
       "kind": "core",
       "x": 650,
       "y": 490,
@@ -201,6 +201,16 @@
       "from": "session",
       "to": "capture",
       "label": "capture status"
+    },
+    {
+      "from": "tap",
+      "to": "session",
+      "label": "stereo peaks ↔ owner/ACK"
+    },
+    {
+      "from": "session",
+      "to": "tap",
+      "label": ""
     }
   ],
   "cards": [

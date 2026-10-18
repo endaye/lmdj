@@ -99,15 +99,18 @@ async function integratedFixture() {
       };
     }
   }
-  vm.runInNewContext(source, {
+  const clock = {
     AudioWorkletProcessor: StubAudioWorkletProcessor,
     Float32Array,
     Number,
+    sampleRate: 48_000,
+    currentFrame: 0,
     registerProcessor(name, constructor) {
       assert.equal(name, "lmdj-perform-master-tap");
       Processor = constructor;
     },
-  });
+  };
+  vm.runInNewContext(source, clock);
   const processor = new Processor();
   const result = await fixture({
     // The real processor answers the started ACK itself.
@@ -117,8 +120,195 @@ async function integratedFixture() {
     },
   });
   hostNode = result.node;
-  return {...result, processor, processorMessages};
+  return {...result, processor, processorMessages, clock};
 }
+
+const METER_A = "10000000-0000-4000-8000-000000000001";
+const METER_B = "10000000-0000-4000-8000-000000000002";
+
+function meterMessage(overrides = {}) {
+  return {type: "meter", owner: METER_A, sampleRate: 48_000,
+    windowStartFrame: "0", windowEndFrame: "2400", leftPeak: 0.5,
+    rightPeak: 0.125, leftPeakFrame: "257", rightPeakFrame: "2387",
+    renderQuantumFrames: 128, ...overrides};
+}
+
+test("inactive capture accepts an immutable meter and acknowledges its exact audio window", async () => {
+  const {controller, node} = await fixture();
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "pending"});
+  assert.equal(controller.setMeterOwner(METER_A), true);
+  assert.deepEqual(node.messages, [{type: "meter-owner", owner: METER_A}]);
+  node.port.onmessage({data: meterMessage()});
+  const measurement = controller.meterMeasurement();
+  const {type: _, ...expected} = meterMessage();
+  assert.deepEqual(measurement, {state: "available", ...expected});
+  assert.equal(Object.isFrozen(measurement), true);
+  assert.deepEqual(node.messages.at(-1), {type: "meter-ack", owner: METER_A, windowEndFrame: "2400"});
+  assert.equal(controller.setMeterOwner(METER_A), true);
+  assert.equal(node.messages.length, 2);
+  await controller.close();
+});
+
+test("meter controls and malformed meter traffic do not change capture generation, sequence or stop ACK", async () => {
+  const {controller, node} = await fixture();
+  const batches = [];
+  const failures = [];
+  let stopped = 0;
+  const capture = await controller.start({onBatch: (pcm) => batches.push(pcm),
+    onFailure: (...args) => failures.push(args), onStopped() { stopped += 1; }});
+  controller.setMeterOwner(METER_A);
+  node.port.onmessage({data: meterMessage()});
+  node.port.onmessage({data: meterMessage({windowStartFrame: "2400", windowEndFrame: "4800",
+    leftPeakFrame: "2400", rightPeakFrame: "4799", generation: 999})});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "protocol-error"});
+  const first = [Float32Array.of(0.5), Float32Array.of(0.125)];
+  node.port.onmessage({data: {type: "batch", generation: 1, sequence: 1, channels: first}});
+  const stop = capture.stop();
+  const final = [Float32Array.of(-0.25), Float32Array.of(-0.0625)];
+  node.port.onmessage({data: {type: "batch", generation: 1, sequence: 2, channels: final}});
+  node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 2}});
+  await stop;
+  assert.deepEqual(batches, [first, final]);
+  assert.deepEqual(failures, []);
+  assert.equal(stopped, 1);
+  assert.deepEqual(node.messages.filter(({type}) => type === "start" || type === "stop"),
+    [{type: "start", generation: 1, binding: null}, {type: "stop", generation: 1}]);
+  await controller.close();
+});
+
+test("meter packets cannot settle or reject a pending capture started ACK", async () => {
+  const {controller, node} = await fixture({controllerOptions: {autoStartAck: false}});
+  controller.setMeterOwner(METER_A);
+  let settled = null;
+  const started = controller.start({onBatch() {}, onFailure() { assert.fail("meter cannot fail capture"); },
+    onStopped() {}}).then(receipt => (settled = {receipt}), error => (settled = {error}));
+  node.port.onmessage({data: meterMessage()});
+  node.port.onmessage({data: meterMessage({leftPeak: NaN})});
+  await Promise.resolve();
+  assert.equal(settled, null);
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "protocol-error"});
+  node.port.onmessage({data: {type: "started", generation: 1, binding: null}});
+  const {receipt: capture} = await started;
+  assert.ok(capture);
+  assert.equal(capture.generation, 1);
+  const stop = capture.stop();
+  node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 0}});
+  await stop;
+  await controller.close();
+});
+
+test("valid old-owner meter drains its token without adopting or poisoning the new owner", async () => {
+  const {controller, node} = await fixture();
+  controller.setMeterOwner(METER_A);
+  controller.setMeterOwner(METER_B);
+  node.port.onmessage({data: meterMessage()});
+  assert.deepEqual(node.messages.at(-1), {type: "meter-ack", owner: METER_A, windowEndFrame: "2400"});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "pending"});
+  node.port.onmessage({data: meterMessage({leftPeak: NaN})});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "pending"});
+  node.port.onmessage({data: meterMessage({owner: METER_B, windowStartFrame: "2432",
+    windowEndFrame: "4832", leftPeakFrame: "2500", rightPeakFrame: "4800"})});
+  assert.equal(controller.meterMeasurement().owner, METER_B);
+  assert.equal(controller.meterMeasurement().windowStartFrame, "2432");
+  await controller.close();
+});
+
+test("unsafe clocks, malformed peaks and discontinuous windows fail only their meter owner", async () => {
+  const malformed = [
+    {windowEndFrame: "9007199254740992"}, {windowStartFrame: "00"},
+    {windowEndFrame: 2400}, {leftPeak: Infinity}, {rightPeak: -0.1},
+    {sampleRate: 0}, {renderQuantumFrames: 2401}, {leftPeakFrame: "2400"},
+    {rightPeakFrame: "-1"}, {extra: true},
+  ];
+  for (const overrides of malformed) {
+    const {controller, node} = await fixture();
+    controller.setMeterOwner(METER_A);
+    node.port.onmessage({data: meterMessage(overrides)});
+    assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "protocol-error"},
+      JSON.stringify(overrides));
+    controller.setMeterOwner(METER_B);
+    node.port.onmessage({data: meterMessage({owner: METER_B})});
+    assert.equal(controller.meterMeasurement().state, "available");
+    await controller.close();
+  }
+  const {controller, node} = await fixture();
+  controller.setMeterOwner(METER_A);
+  node.port.onmessage({data: meterMessage()});
+  node.port.onmessage({data: meterMessage({windowStartFrame: "2401", windowEndFrame: "4800",
+    leftPeakFrame: "2500", rightPeakFrame: "4799"})});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "protocol-error"});
+  await controller.close();
+});
+
+test("meter ACK failure is contained while a capture still receives its final PCM and ACK", async () => {
+  const {controller, node} = await fixture({onPostMessage(message) {
+    if (message.type === "meter-ack") throw new Error("meter ACK delivery failed");
+  }});
+  const batches = [];
+  const capture = await controller.start({onBatch: (pcm) => batches.push(pcm), onFailure() { assert.fail(); }, onStopped() {}});
+  controller.setMeterOwner(METER_A);
+  node.port.onmessage({data: meterMessage()});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "protocol-error"});
+  const stop = capture.stop();
+  const channels = [Float32Array.of(0.5), Float32Array.of(0.125)];
+  node.port.onmessage({data: {type: "batch", generation: 1, sequence: 1, channels}});
+  node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 1}});
+  await stop;
+  assert.deepEqual(batches, [channels]);
+  await controller.close();
+});
+
+test("real tap keeps full-frame stereo metering independent of capture start and partial stop", async () => {
+  const {controller, processor, processorMessages, clock} = await integratedFixture();
+  const render = (quanta) => {
+    for (let i = 0; i < quanta; i += 1) {
+      const left = new Float32Array(128).fill(0.5);
+      const right = new Float32Array(128).fill(-0.125);
+      const output = [new Float32Array(128), new Float32Array(128)];
+      assert.equal(processor.process([[left, right]], [output]), true);
+      assert.deepEqual(output, [left, right]);
+      clock.currentFrame += 128;
+    }
+  };
+  controller.setMeterOwner(METER_A);
+  render(19);
+  assert.equal(controller.meterMeasurement().leftPeak, 0.5);
+  assert.equal(controller.meterMeasurement().rightPeak, 0.125);
+  assert.equal(processorMessages.some(({type}) => type === "batch"), false);
+  const batches = [];
+  const capture = await controller.start({onBatch: (pcm) => batches.push(pcm), onFailure() { assert.fail(); }, onStopped() {}});
+  render(38);
+  await capture.stop();
+  assert.deepEqual(batches.map(([left, right]) => [left.length, right.length]), [[4800, 4800], [64, 64]]);
+  assert.equal(batches.every(([left, right]) => left.every((x) => x === 0.5) && right.every((x) => x === -0.125)), true);
+  assert.deepEqual(processorMessages.filter(({type}) => type === "batch" || type === "stopped")
+    .map(({type, generation, sequence, finalSequence}) => ({type, generation, sequence, finalSequence})), [
+    {type: "batch", generation: 1, sequence: 1, finalSequence: undefined},
+    {type: "batch", generation: 1, sequence: 2, finalSequence: undefined},
+    {type: "stopped", generation: 1, sequence: undefined, finalSequence: 2},
+  ]);
+  render(19);
+  assert.equal(controller.meterMeasurement().state, "available");
+  assert.equal(processorMessages.filter(({type}) => type === "batch").length, 2);
+  await controller.close();
+});
+
+test("processor failure and close revoke meter adoption without admitting a later owner", async () => {
+  const failed = await fixture();
+  failed.controller.setMeterOwner(METER_A);
+  failed.node.port.onmessage({data: meterMessage()});
+  failed.controller.failProcessor();
+  failed.node.port.onmessage({data: meterMessage({owner: METER_B})});
+  assert.deepEqual(failed.controller.meterMeasurement(), {state: "unavailable", reason: "processor-failed"});
+  assert.equal(failed.controller.setMeterOwner(METER_B), false);
+  const closed = await fixture();
+  closed.controller.setMeterOwner(METER_A);
+  const handler = closed.node.port.onmessage;
+  await closed.controller.close();
+  handler({data: meterMessage()});
+  assert.deepEqual(closed.controller.meterMeasurement(), {state: "unavailable", reason: "closed"});
+  assert.equal(closed.controller.setMeterOwner(METER_B), false);
+});
 
 function fakeTimers() {
   let nextId = 1;

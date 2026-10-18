@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-10-10
     occurrence: https://github.com/endaye/lmdj/pull/2001
     observed_by: Codex primary and remaining_decision_inventory
+  - date: 2026-10-18
+    occurrence: https://github.com/endaye/lmdj/issues/2231
+    observed_by: Codex primary
 exit: none
 ---
 
@@ -36,3 +39,21 @@ use a lucky rerun or environment correlation as the causal proof.
 cost requires source and actual timing judgment. The two targeted cadence
 repairs do not enforce that judgment for every future observation; no generic
 threshold or gate is introduced.
+
+## Second recurrence and escalation
+
+At the #2231 producer checkpoint `bca06427`, real clicks were 0.5s apart,
+lasted 40ms, and the analyser covered 2048/48000s. Default polling missed them;
+20ms observation retained the >0.001 predicate, 35s deadline and full journey.
+A read-only negative control aligned observation to the gap and sampled every
+two click periods. While 71 real clicks played and the audio clock advanced
+34.181333s, all 35 observations were zero at phases 0.258667–0.440000s after a
+click; the original assertion failed. Fresh ordinary observation passed both
+complete normal and actual-render-fault journeys (38.5s). No audio clock, product
+packet, gain, threshold or timeout was changed to produce this evidence.
+
+Escalation: [#2382](https://github.com/endaye/lmdj/issues/2382) tracks absorbing
+the period/window/request-cost judgment into the formal verification skill.
+Keep this entry open until that mechanism actually lands. No deterministic
+generic cadence gate is claimed. Original failures and all control traces
+remain retained; a later pass does not erase the missed-window evidence.

@@ -25,6 +25,37 @@ function tapBindingEqual(left, right) {
     left.session_id === right.session_id &&
     left.begin_command_id === right.begin_command_id;
 }
+const METER_OWNER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function meterFrame(value) {
+  if (typeof value !== "string" || value.length > 16 ||
+      !/^(0|[1-9][0-9]*)$/.test(value)) return null;
+  const frame = Number(value);
+  return Number.isSafeInteger(frame) ? frame : null;
+}
+
+function validMeterEvent(value) {
+  if (typeof value.owner !== "string" || !METER_OWNER.test(value.owner)) return false;
+  if (value.type === "meter-unavailable") {
+    return exactKeys(value, ["owner", "reason", "type"]) &&
+      ["clock-invalid", "non-finite-sample", "post-message-failed"].includes(value.reason);
+  }
+  if (!exactKeys(value, [
+    "leftPeak", "leftPeakFrame", "owner", "renderQuantumFrames", "rightPeak",
+    "rightPeakFrame", "sampleRate", "type", "windowEndFrame", "windowStartFrame",
+  ]) || !Number.isSafeInteger(value.sampleRate) || value.sampleRate <= 0 ||
+      !Number.isSafeInteger(value.renderQuantumFrames) || value.renderQuantumFrames <= 0 ||
+      value.renderQuantumFrames > Math.ceil(value.sampleRate / 20) ||
+      !Number.isFinite(value.leftPeak) || value.leftPeak < 0 ||
+      !Number.isFinite(value.rightPeak) || value.rightPeak < 0) return false;
+  const start = meterFrame(value.windowStartFrame);
+  const end = meterFrame(value.windowEndFrame);
+  const left = meterFrame(value.leftPeakFrame);
+  const right = meterFrame(value.rightPeakFrame);
+  return start !== null && end !== null && end > start &&
+    left !== null && left >= start && left < end &&
+    right !== null && right >= start && right < end;
+}
 
 function requireSink(sink) {
   if (
@@ -117,6 +148,75 @@ function createPerformanceMasterCaptureController({
   let pendingStart = null;
   let closed = false;
   let processorFailed = false;
+  let meterOwner = null;
+  let meterLatest = null;
+  let meterLastEndFrame = null;
+  let meterFailure = null;
+
+  function failMeter(reason) {
+    meterLatest = null;
+    meterFailure = reason;
+  }
+
+  function setMeterOwner(owner) {
+    if (!(owner === null || (typeof owner === "string" && METER_OWNER.test(owner)))) {
+      throw new TypeError("Output meter owner is invalid");
+    }
+    if (closed || processorFailed) return false;
+    if (owner === meterOwner) return meterFailure === null;
+    meterOwner = owner;
+    meterLatest = null;
+    meterLastEndFrame = null;
+    meterFailure = null;
+    try {
+      node.port.postMessage({type: "meter-owner", owner});
+      return true;
+    } catch {
+      failMeter("protocol-error");
+      return false;
+    }
+  }
+
+  function meterMeasurement() {
+    if (closed) return Object.freeze({state: "unavailable", reason: "closed"});
+    if (processorFailed) return Object.freeze({state: "unavailable", reason: "processor-failed"});
+    if (meterFailure !== null) return Object.freeze({state: "unavailable", reason: meterFailure});
+    return meterLatest ?? Object.freeze({state: "unavailable", reason: "pending"});
+  }
+
+  function observeMeter(data) {
+    if (closed || processorFailed) return;
+    if (!validMeterEvent(data)) {
+      // Malformed traffic which still names a canonical foreign owner cannot
+      // invalidate the current measurement. It never reaches capture either.
+      if (typeof data.owner === "string" && METER_OWNER.test(data.owner) &&
+          data.owner !== meterOwner) return;
+      failMeter("protocol-error");
+      return;
+    }
+    if (data.type === "meter") {
+      try {
+        // Also drain a valid old-owner token, without adopting its samples.
+        node.port.postMessage({type: "meter-ack", owner: data.owner,
+          windowEndFrame: data.windowEndFrame});
+      } catch {
+        failMeter("protocol-error");
+        return;
+      }
+    }
+    if (data.owner !== meterOwner || meterFailure !== null) return;
+    if (data.type === "meter-unavailable") {
+      failMeter(data.reason === "clock-invalid" ? "clock-invalid" : "protocol-error");
+      return;
+    }
+    if (meterLastEndFrame !== null && data.windowStartFrame !== meterLastEndFrame) {
+      failMeter("protocol-error");
+      return;
+    }
+    meterLastEndFrame = data.windowEndFrame;
+    const {type: _type, ...measurement} = data;
+    meterLatest = Object.freeze({state: "available", ...measurement});
+  }
 
   function callSink(callback) {
     try {
@@ -167,6 +267,10 @@ function createPerformanceMasterCaptureController({
   }
 
   node.port.onmessage = ({data}) => {
+    if (data?.type === "meter" || data?.type === "meter-unavailable") {
+      observeMeter(data);
+      return;
+    }
     if (pendingStart !== null) {
       const pending = pendingStart;
       if (!validMasterTapEvent(data)) {
@@ -226,6 +330,8 @@ function createPerformanceMasterCaptureController({
   function failProcessor() {
     if (processorFailed) return false;
     processorFailed = true;
+    meterOwner = null;
+    meterLatest = null;
     if (pendingStart !== null) {
       rejectPendingStart(pendingStart, "tap-processor-failed");
     }
@@ -346,6 +452,8 @@ function createPerformanceMasterCaptureController({
   async function close() {
     if (closed) return;
     closed = true;
+    meterOwner = null;
+    meterLatest = null;
     if (pendingStart !== null) {
       rejectPendingStart(pendingStart, "tap-closed");
     }
@@ -358,6 +466,8 @@ function createPerformanceMasterCaptureController({
 
   return Object.freeze({
     destinationNode: node,
+    setMeterOwner,
+    meterMeasurement,
     start,
     failProcessor,
     close,

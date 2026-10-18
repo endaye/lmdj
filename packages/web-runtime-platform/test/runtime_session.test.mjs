@@ -9,6 +9,7 @@ import {MasterTapBatchQueue} from
 import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
 import {createUserGestureToken} from "../web/input_adapters.mjs";
 import {createPerformanceMasterTap} from "../web/performance_master_capture.mjs";
+import {createPerformanceMasterTap as createRealMasterTap} from "../web/performance_master_capture.mjs";
 import {createRuntimeSession} from "../web/runtime_session.mjs";
 import {decodeLegacyPatternTransportStatus} from "./fixtures/legacy_pattern_transport_status.mjs";
 
@@ -17,6 +18,7 @@ const TEST_PRODUCT_BUILD = "9.8.7.6";
 const API = [
   "monitorDestination",
   "monitorVolume",
+  "outputMeter",
   "setMonitorVolume",
   "runCandidateJob", "inspectCandidateJob", "cancelCandidateJob", "discardCandidateSet",
   "auditionCandidate", "stopCandidateAudition", "adoptCandidates",
@@ -457,6 +459,251 @@ function fixture({
     terminated: () => terminated,
   };
 }
+
+// Exercise the real port demultiplexer and Session closure together. The
+// primitive below represents delivered tap traffic; PCM/onset computation is
+// independently exercised by the real-worklet tests and packaged journey.
+function outputMeterFixture(options = {}) {
+  let tapNode;
+  const requests = [];
+  const runtime = fixture({
+    ...options,
+    browserDocument: {baseURI: "https://example.test/creator/", ...options.browserDocument},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS,
+      performanceMasterTapUrl: "./assets/perform-master-tap.js", ...options.manifestSource},
+    send: async (request, transportOptions) => {
+      requests.push(request);
+      return options.send ? options.send(request, transportOptions) : success(request, defaultResult(request.operation));
+    },
+    createPerformanceMasterTap: async (arguments_) => {
+      const previousNode = globalThis.AudioWorkletNode;
+      globalThis.AudioWorkletNode = class extends EventTarget {
+        constructor(context) {
+          super();
+          this.context = context;
+          this.messages = [];
+          this.connected = [];
+          this.port = {onmessage: null, postMessage: (message) => this.messages.push(message)};
+          tapNode = this;
+        }
+        connect(destination) { this.connected.push(destination); }
+        disconnect() { this.connected = []; }
+      };
+      try { return await createRealMasterTap(arguments_); }
+      finally {
+        if (previousNode === undefined) delete globalThis.AudioWorkletNode;
+        else globalThis.AudioWorkletNode = previousNode;
+      }
+    },
+  });
+  runtime.context.sampleRate = 48_000;
+  runtime.context.audioWorklet = {async addModule() {}};
+  const owner = () => tapNode.messages.filter(({type}) => type === "meter-owner").at(-1)?.owner;
+  const deliver = (overrides = {}) => {
+    const message = {type: "meter", owner: owner(), sampleRate: 48_000,
+      windowStartFrame: "0", windowEndFrame: "2400", leftPeak: 0.5,
+      rightPeak: 0.125, leftPeakFrame: "257", rightPeakFrame: "2387",
+      renderQuantumFrames: 128, ...overrides};
+    tapNode.port.onmessage?.({data: message});
+    return message;
+  };
+  return {...runtime, requests, owner, deliver, node: () => tapNode};
+}
+
+async function activateMeter(runtime) {
+  await runtime.session.start();
+  assert.equal(await runtime.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  assert.equal(runtime.session.diagnostics().state, "running");
+  assert.equal(typeof runtime.owner(), "string");
+}
+
+test("output meter publishes the same immutable Session getter without a Truth or transport operation", async () => {
+  const browserWindow = {};
+  const runtime = outputMeterFixture({browserWindow, publishRuntime: true});
+  await activateMeter(runtime);
+  const published = browserWindow.lmdjWebRuntimeHost;
+  assert.equal(published.outputMeter, runtime.session.outputMeter);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(published, "outputMeter"),
+    {value: runtime.session.outputMeter, enumerable: false, configurable: false, writable: false});
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "pending"});
+  runtime.context.currentTime = 0.05;
+  const {type: _, ...message} = runtime.deliver();
+  const expected = {state: "available", ...message, contextTimeSeconds: 0.05};
+  assert.deepEqual(runtime.session.outputMeter(), expected);
+  assert.equal(Object.isFrozen(runtime.session.outputMeter()), true);
+  const before = runtime.requests.length;
+  runtime.session.setMonitorVolume(0);
+  for (let i = 0; i < 1_000; i += 1) assert.deepEqual(published.outputMeter(), expected);
+  assert.equal(runtime.requests.length, before);
+  assert.equal(runtime.session.monitorDestination().gain.value, 0);
+  await runtime.session.close();
+});
+
+test("meter freshness uses the actual audio frame and rejects an overlong backpressure window", async () => {
+  const runtime = outputMeterFixture();
+  await activateMeter(runtime);
+  runtime.deliver();
+  runtime.context.currentTime = 0.3;
+  assert.equal(runtime.session.outputMeter().state, "available");
+  runtime.context.currentTime = 0.30002;
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "stale"});
+  runtime.context.currentTime = 0.35;
+  runtime.deliver({windowStartFrame: "2400", windowEndFrame: "16800",
+    leftPeakFrame: "2500", rightPeakFrame: "16799"});
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "stale"});
+  runtime.context.currentTime = 0.4;
+  runtime.deliver({windowStartFrame: "16800", windowEndFrame: "19200",
+    leftPeak: 0, rightPeak: 0, leftPeakFrame: "19199", rightPeakFrame: "19199"});
+  assert.equal(runtime.session.outputMeter().state, "available");
+  assert.equal(runtime.session.outputMeter().leftPeak, 0);
+  assert.equal(runtime.session.outputMeter().rightPeak, 0);
+  await runtime.session.close();
+});
+
+test("meter allows one real render quantum of clock skew and refuses unsafe or mismatched audio clocks", async () => {
+  const runtime = outputMeterFixture();
+  await activateMeter(runtime);
+  runtime.deliver();
+  runtime.context.currentTime = (2400 - 128) / 48_000;
+  assert.equal(runtime.session.outputMeter().state, "available");
+  runtime.context.currentTime = (2400 - 129) / 48_000;
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "clock-invalid"});
+  runtime.context.currentTime = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "clock-invalid"});
+  runtime.context.currentTime = 0.05;
+  runtime.context.sampleRate = 44_100;
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "protocol-error"});
+  await runtime.session.close();
+});
+
+test("suspend revokes meter synchronously before a delayed native ACK and resume requires a fresh owner", async () => {
+  const suspend = Promise.withResolvers();
+  const runtime = outputMeterFixture({send: async (request) => {
+    if (request.operation === "audio.suspend") await suspend.promise;
+    return success(request, defaultResult(request.operation));
+  }});
+  await activateMeter(runtime);
+  runtime.context.currentTime = 0.05;
+  const old = runtime.deliver();
+  assert.equal(runtime.session.outputMeter().state, "available");
+  const suspension = runtime.session.suspendAudio();
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "not-running"});
+  runtime.deliver(old);
+  assert.equal(runtime.session.outputMeter().state, "unavailable");
+  suspend.resolve();
+  await suspension;
+  assert.equal(runtime.session.diagnostics().state, "audio-suspended");
+  assert.equal(await runtime.session.activateAudio(createUserGestureToken({isTrusted: true})), true);
+  assert.notEqual(runtime.owner(), old.owner);
+  runtime.deliver(old);
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "pending"});
+  runtime.context.currentTime = 0.1;
+  runtime.deliver({windowStartFrame: "2400", windowEndFrame: "4800",
+    leftPeakFrame: "2500", rightPeakFrame: "4799"});
+  assert.equal(runtime.session.outputMeter().state, "available");
+  await runtime.session.close();
+});
+
+test("recovery cannot revive a prior meter until the matching native voice-started receipt arms a new owner", async () => {
+  const browserWindow = new EventTarget();
+  const runtime = outputMeterFixture({browserWindow, send: async (request) => success(request,
+    request.operation === "trigger" ? {sequence: 7} : defaultResult(request.operation))});
+  await activateMeter(runtime);
+  runtime.context.currentTime = 0.05;
+  const old = runtime.deliver();
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  assert.equal(runtime.session.outputMeter().state, "unavailable");
+  await drainTasks();
+  assert.equal(runtime.session.diagnostics().state, "recovering");
+  assert.equal(runtime.session.diagnostics().recovery_probe_ready, true);
+  runtime.deliver(old);
+  assert.equal(runtime.session.outputMeter().state, "unavailable");
+  await runtime.session.trigger(0, 100, "keyboard");
+  assert.equal(runtime.session.outputMeter().state, "unavailable");
+  runtime.emitNotification({protocol_version: 1, event: "runtime.trigger_outcomes",
+    payload: {events: [{sequence: 7, outcome: "voice_started", runtime_frame: 42}]}});
+  assert.equal(runtime.session.diagnostics().state, "running");
+  assert.notEqual(runtime.owner(), old.owner);
+  runtime.deliver(old);
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "pending"});
+  runtime.context.currentTime = 0.1;
+  runtime.deliver({windowStartFrame: "2400", windowEndFrame: "4800",
+    leftPeakFrame: "2500", rightPeakFrame: "4799"});
+  assert.equal(runtime.session.outputMeter().state, "available");
+  await runtime.session.close();
+});
+
+test("old published meter closures remain closed while a replacement Session measures its own tap", async () => {
+  const closeGate = Promise.withResolvers();
+  const browserWindow = {};
+  const original = outputMeterFixture({browserWindow, publishRuntime: true, send: async (request) => {
+    if (request.operation === "host.close") await closeGate.promise;
+    return success(request, defaultResult(request.operation));
+  }});
+  await activateMeter(original);
+  original.context.currentTime = 0.05;
+  original.deliver();
+  const retained = browserWindow.lmdjWebRuntimeHost.outputMeter;
+  const closing = original.session.close();
+  assert.deepEqual(retained(), {state: "unavailable", reason: "closed"});
+  const replacement = outputMeterFixture({browserWindow, publishRuntime: true});
+  await activateMeter(replacement);
+  replacement.context.currentTime = 0.05;
+  replacement.deliver();
+  assert.notEqual(browserWindow.lmdjWebRuntimeHost.outputMeter, retained);
+  assert.equal(browserWindow.lmdjWebRuntimeHost.outputMeter().state, "available");
+  assert.deepEqual(retained(), {state: "unavailable", reason: "closed"});
+  closeGate.resolve();
+  await closing;
+  assert.deepEqual(retained(), {state: "unavailable", reason: "closed"});
+  await replacement.session.close();
+});
+
+test("native error event revokes meter and duplicate processor failures recover audio only once", async () => {
+  const direct = [];
+  const runtime = outputMeterFixture({connectAudioWorkletDirect: (...args) => { direct.push(args); return true; }});
+  await activateMeter(runtime);
+  runtime.context.currentTime = 0.05;
+  const old = runtime.deliver();
+  runtime.node().dispatchEvent(new Event("error"));
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "processor-failed"});
+  runtime.node().dispatchEvent(new Event("processorerror"));
+  runtime.node().dispatchEvent(new Event("error"));
+  await drainTasks();
+  assert.deepEqual(direct, [[1, 2]]);
+  runtime.deliver(old);
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "processor-failed"});
+  await runtime.session.close();
+});
+
+test("a tap processorerror makes meter unavailable and retains the existing monitor fallback", async () => {
+  const direct = [];
+  const runtime = outputMeterFixture({connectAudioWorkletDirect: (...args) => { direct.push(args); return true; }});
+  await activateMeter(runtime);
+  runtime.context.currentTime = 0.05;
+  const old = runtime.deliver();
+  runtime.node().dispatchEvent(new Event("processorerror"));
+  assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "processor-failed"});
+  await drainTasks();
+  assert.deepEqual(direct, [[1, 2]]);
+  runtime.deliver(old);
+  assert.equal(runtime.session.outputMeter().state, "unavailable");
+  await runtime.session.close();
+});
+
+test("unconfigured and failed-bootstrap meters stay unavailable rather than presenting silence", async () => {
+  const unconfigured = fixture();
+  await unconfigured.session.start();
+  assert.deepEqual(unconfigured.session.outputMeter(), {state: "unavailable", reason: "unconfigured"});
+  await unconfigured.session.close();
+  const failed = fixture({browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS, performanceMasterTapUrl: "./assets/tap.js"},
+    createPerformanceMasterTap: async () => { throw new Error("tap cannot load"); }});
+  await failed.session.start();
+  await failed.session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.deepEqual(failed.session.outputMeter(), {state: "unavailable", reason: "tap-unavailable"});
+  await failed.session.close();
+});
 
 test("monitor volume is applied before audio starts and changes no Project or capture request", async () => {
   const registered = [];
@@ -13957,7 +14204,15 @@ for (const coreStopFails of [false, true]) {
     assert.deepEqual(runtime.commands.filter(({type}) => type === "stop"), [
       {type: "stop", generation: 1},
     ]);
-    assert.deepEqual(runtime.messages.map(({type}) => type), ["started", "batch", "batch", "stopped"]);
+    // This capture-only VM intentionally uses oversized 4800-frame callbacks
+    // without an AudioContext clock. The new independent meter must report
+    // its precise clock failure while every original capture leg stays intact.
+    const meterFailures = runtime.messages.filter(({type}) => type === "meter-unavailable");
+    assert.equal(meterFailures.length, 1);
+    assert.deepEqual({...meterFailures[0]}, {type: "meter-unavailable",
+      owner: runtime.commands.find(({type}) => type === "meter-owner").owner, reason: "clock-invalid"});
+    assert.deepEqual(runtime.messages.filter(({type}) => type !== "meter-unavailable")
+      .map(({type}) => type), ["started", "batch", "batch", "stopped"]);
     assert.deepEqual({...runtime.messages.at(-1)}, {type: "stopped", generation: 1, finalSequence: 2});
     assert.equal(queue.pendingBatches, 2);
     assert.equal(queue.sealed, false);
