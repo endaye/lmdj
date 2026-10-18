@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
@@ -107,6 +108,47 @@ struct PatternReplacementAuthority {
   std::uint64_t generation;
   foundation::PatternId pattern_id;
   std::uint64_t activation_frame;
+};
+
+class RealtimeEngine;
+
+// Move-only serialized-control ownership of one immutable publication slot.
+// Engine must outlive the lease. reset/destruction releases a resource pin;
+// the caller must first retain the actual disposition for its durable consumer.
+class PatternPublicationLease final {
+ public:
+  PatternPublicationLease() noexcept = default;
+  PatternPublicationLease(const PatternPublicationLease&) = delete;
+  PatternPublicationLease& operator=(const PatternPublicationLease&) = delete;
+  PatternPublicationLease(PatternPublicationLease&& other) noexcept;
+  PatternPublicationLease& operator=(PatternPublicationLease&& other) noexcept;
+  ~PatternPublicationLease();
+  explicit operator bool() const noexcept { return engine_ != nullptr; }
+  void reset() noexcept;
+
+ private:
+  friend class RealtimeEngine;
+  PatternPublicationLease(RealtimeEngine& engine, std::uint8_t slot,
+                          std::uint64_t generation) noexcept
+      : engine_(&engine), slot_(slot), generation_(generation) {}
+  RealtimeEngine* engine_{};
+  std::uint8_t slot_{};
+  std::uint64_t generation_{};
+};
+
+struct RetainedPatternPublication {
+  PatternPublication publication;
+  PatternPublicationLease lease;
+};
+
+enum class PatternPublicationDisposition : std::uint8_t {
+  pending, applied, cancelled
+};
+
+struct PatternPublicationObservation {
+  PatternReplacementAuthority authority;
+  PatternPublicationDisposition disposition;
+  std::optional<std::uint64_t> applied_frame;
 };
 
 // Serialized control owner, concurrent with audio. Unlike latest-only
@@ -625,6 +667,21 @@ class RealtimeEngine final {
       PatternSwitchSnap snap,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
+  // Opt-in retained selected-boundary publication. Requires Engine running;
+  // stopped returns phase_mismatch without consuming the view. Admission pins
+  // before audio visibility; ordinary publication remains unpinned. Outstanding
+  // leases also prevent restart until their control owner releases them.
+  RetainedPatternPublication publish_retained_pattern_switch_view(
+      PreparedPatternView&& pattern,
+      PatternSwitchSnap snap = PatternSwitchSnap::bar,
+      std::optional<PatternReplacementAuthority> replacement_authority =
+          std::nullopt) noexcept;
+  // Serialized control only, concurrent with audio. A matching acquire slot
+  // publication supplies actual S, even after a successor/reclaim attempt.
+  // nullopt means an empty/moved lease or an Engine/generation mismatch.
+  // Audio-local cancellation stays pending until audio releases that slot.
+  std::optional<PatternPublicationObservation> observe_pattern_publication(
+      const PatternPublicationLease& lease) const;
   // Exact live ownership, including both pending publications and a
   // generation-tagged origin. nullopt means a bounded read raced audio;
   // callers must not fill the gap with guessed telemetry fields.
@@ -759,6 +816,9 @@ class RealtimeEngine final {
 #endif
 
  private:
+  friend class PatternPublicationLease;
+  void release_pattern_publication_lease(
+      std::uint8_t slot, std::uint64_t generation) noexcept;
   friend struct detail::RealtimeEngineAudioAccess;
   enum class BankState : std::uint8_t {
     empty,
@@ -1108,7 +1168,8 @@ class RealtimeEngine final {
       std::optional<PatternReplacementAuthority> replacement_authority,
       PatternPublicationTiming timing,
       std::uint64_t expected_generation = 0,
-      PatternSwitchSnap snap = PatternSwitchSnap::bar) noexcept;
+      PatternSwitchSnap snap = PatternSwitchSnap::bar,
+      PatternPublicationLease* retained = nullptr) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,

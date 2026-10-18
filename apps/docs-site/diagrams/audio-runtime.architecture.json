@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Audio Runtime Module",
-    "summary": "Runtime source：连续 tempo / SNAP、S6 scheduled cell、独立 input escrow 与 product/cue 输出"
+    "summary": "Runtime source：连续 tempo/SNAP、retained publication S、S6 scheduled cell、独立 input escrow 与 product/cue 输出"
   },
   "boundaries": [],
   "components": [
@@ -125,6 +125,16 @@
       "y": 490,
       "width": 230,
       "height": 96
+    },
+    {
+      "id": "publication_lease",
+      "label": "Publication Lease (opt-in)",
+      "detail": "control pin · retained actual S",
+      "kind": "core",
+      "x": 640,
+      "y": 490,
+      "width": 300,
+      "height": 96
     }
   ],
   "connections": [
@@ -195,6 +205,16 @@
       "from": "engine",
       "to": "cue",
       "label": "committed spans; render + ACK"
+    },
+    {
+      "from": "publication_lease",
+      "to": "bank",
+      "label": "pin before visibility"
+    },
+    {
+      "from": "bank",
+      "to": "publication_lease",
+      "label": "acquire actual S"
     }
   ],
   "cards": [

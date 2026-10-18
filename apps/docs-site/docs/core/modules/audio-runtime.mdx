@@ -122,6 +122,24 @@ Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造�
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 
+### 可保留的 Pattern publication 边界（S3 C1 source）
+
+串行控制 owner 可选 `publish_retained_pattern_switch_view`：仅 Engine running 时接受，
+与既有 selected SNAP admission 共用 producer，在 mailbox 对 audio 可见之前取得槽位的
+control pin；失败的 admission CAS 只回滚自己的 pin。返回 move-only
+`PatternPublicationLease`，Engine 必须比 lease 活得久；普通 publication 不持有该 lease。
+`observe_pattern_publication(lease)` 在 acquire 读取 current/retired 槽状态后复制该代
+实际 apply 的 generation／Pattern／S。queued frame 或宣布的 callback-end 不能冒充 Applied。
+即使后续 Pattern 已成为 current，旧 pin 仍保留原代的实际事实；audio-local 取消仍为 pending，
+直到其真实 audio owner 释放后才报告 cancelled，且没有伪造 S。
+
+lease 的 move/reset/destruction 只管理自己的 control pin，独立于 Voice/audio borrow。
+调用者先持有消费者所需的实际 disposition，再按自己的 durable ACK 规则释放；它本身不证明
+I/O 完成。固定槽位耗尽拒绝；原始 lease 未释放时也沿用既有 restart/quiescence 拒绝规则。
+不增加 Engine 成员布局、callback queue、audio 分配/锁/写入，亦不发送额外 transport epoch。
+此处仅提供 Native producer；录音中切换的 production I/O continuation、Host/Creator 门禁和
+完整多段恢复仍由 S3 后续 Tasks 交付。
+
 ### 显式 Pattern transport 与 cutoff 回执（A1 source）
 
 `enable_pattern_transport(generation)` 在 quiescent、`start()` 前选择显式模式；

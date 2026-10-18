@@ -8360,9 +8360,221 @@ void cue_consumer_fence_and_optional_downbeat_survive_applied_ack() {
   f.engine.stop();
   LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
 }
+
+PreparedPatternView retained_switch_material(const char* pattern) {
+  auto snapshot = pattern_snapshot(pattern, {0, 0}, 127, 120, 12'000);
+  snapshot.events.clear();
+  auto view = PreparedPatternView::from_snapshot(snapshot);
+  LMDJ_CHECK(view.has_value());
+  return std::move(view.value());
+}
+
+void retained_boundary_survives_successor_and_actual_reclaim() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  auto b = f.engine.publish_retained_pattern_switch_view(
+      retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  LMDJ_CHECK(b.publication.result == PatternPublishResult::accepted && b.lease);
+  LMDJ_CHECK(b.publication.activation_frame == 24'000);
+  render_until(f.engine, 24'001);
+  const auto c = f.engine.publish_pattern_switch_view(
+      retained_switch_material(kPatternA), PatternSwitchSnap::beat);
+  LMDJ_CHECK(c.result == PatternPublishResult::accepted && c.activation_frame == 48'000);
+  render_until(f.engine, 48'129);
+  LMDJ_CHECK(f.engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1); // Original unpinned A.
+  const auto retained = f.engine.observe_pattern_publication(b.lease);
+  LMDJ_CHECK(retained && retained->disposition == PatternPublicationDisposition::applied);
+  LMDJ_CHECK(retained->authority.generation == b.publication.generation);
+  LMDJ_CHECK(retained->authority.pattern_id == PatternId{kPatternB});
+  LMDJ_CHECK(retained->applied_frame == 24'000); // Actual B remains, despite current A.
+  b.lease.reset();
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  LMDJ_CHECK(!f.engine.observe_pattern_publication(b.lease));
+}
+
+void retained_apply_frame_is_not_its_queued_activation_prediction() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  auto b = f.engine.publish_retained_pattern_switch_view(
+      retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  LMDJ_CHECK(b.publication.activation_frame == 24'000);
+  // Controlled quiescent timeline advance: no callback is executing. The next
+  // real render must apply overdue material at its actual frame, not backdate S.
+  f.engine.set_rendered_frames_quiescent_for_testing(32'000);
+  const auto before = f.engine.observe_pattern_publication(b.lease);
+  LMDJ_CHECK(before && before->disposition == PatternPublicationDisposition::pending && !before->applied_frame);
+  render_frames(f.engine, 1);
+  const auto applied = f.engine.observe_pattern_publication(b.lease);
+  LMDJ_CHECK(applied && applied->disposition == PatternPublicationDisposition::applied);
+  LMDJ_CHECK(applied->authority.activation_frame == 24'000 && applied->applied_frame == 32'000);
+}
+
+void retained_leases_bound_slots_move_once_and_block_restart() {
+  using namespace lmdj::audio;
+  static_assert(!std::is_copy_constructible_v<PatternPublicationLease>);
+  static_assert(std::is_nothrow_move_constructible_v<PatternPublicationLease>);
+  static_assert(std::is_nothrow_move_assignable_v<PatternPublicationLease>);
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  std::array<PatternPublicationLease, kRealtimePatternCapacity> leases;
+  std::array<std::uint64_t, kRealtimePatternCapacity> generations{};
+  for (std::size_t i = 0; i < leases.size(); ++i) {
+    auto next = f.engine.publish_retained_pattern_switch_view(
+        retained_switch_material(i % 2 == 0 ? kPatternB : kPatternA), PatternSwitchSnap::beat);
+    LMDJ_CHECK(next.publication.result == PatternPublishResult::accepted);
+    generations[i] = next.publication.generation;
+    render_until(f.engine, (i + 1) * 24'000 + 129);
+    leases[i] = std::move(next.lease);
+    LMDJ_CHECK(!next.lease);
+    f.engine.reclaim_retired_patterns();
+  }
+  auto refused = f.engine.publish_retained_pattern_switch_view(
+      retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  LMDJ_CHECK(refused.publication.result == PatternPublishResult::pattern_slots_full && !refused.lease);
+  RealtimeEngine foreign;
+  LMDJ_CHECK(!foreign.observe_pattern_publication(leases[0]));
+  auto moved = std::move(leases[0]);
+  LMDJ_CHECK(!f.engine.observe_pattern_publication(leases[0]));
+  moved.reset();
+  moved.reset();
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  leases[1] = std::move(leases[2]); // Releases only old second, transfers third.
+  LMDJ_CHECK(!leases[2]);
+  LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  const auto third = f.engine.observe_pattern_publication(leases[1]);
+  LMDJ_CHECK(third && third->authority.generation == generations[2] && third->applied_frame == 72'000);
+  auto reused = f.engine.publish_retained_pattern_switch_view(
+      retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  LMDJ_CHECK(reused.publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(reused.publication.generation > generations.back());
+  f.engine.stop();
+  LMDJ_CHECK(!f.engine.start().has_value()); // Resource owner is still retained.
+  reused.lease.reset();
+  for (auto& lease : leases) lease.reset();
+  LMDJ_CHECK(f.engine.start().has_value());
+  LMDJ_CHECK(!f.engine.observe_pattern_publication(moved));
+  f.engine.stop();
+  auto material = retained_switch_material(kPatternA);
+  auto stopped = f.engine.publish_retained_pattern_switch_view(std::move(material));
+  LMDJ_CHECK(stopped.publication.result == PatternPublishResult::phase_mismatch && !stopped.lease);
+  LMDJ_CHECK(f.engine.publish_pattern_view(std::move(material)).result == PatternPublishResult::accepted);
+}
+
+void retained_cancel_waits_for_its_actual_audio_local_disposition() {
+  using namespace lmdj::audio;
+  for (const bool claimed : {false, true}) {
+    PatternTransportFixture f;
+    f.apply(1, PatternTransportAction::start);
+    auto b = f.engine.publish_retained_pattern_switch_view(
+        retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+    const PatternReplacementAuthority authority{b.publication.generation,
+        PatternId{kPatternB}, b.publication.activation_frame};
+    std::array<float, 1> left{}, right{};
+    if (claimed) f.engine.render(left.data(), right.data(), 0);
+    const auto pending = f.engine.observe_pattern_publication(b.lease);
+    LMDJ_CHECK(pending && pending->disposition == PatternPublicationDisposition::pending && !pending->applied_frame);
+    LMDJ_CHECK(f.engine.cancel_pattern_publication(authority));
+    if (claimed) {
+      LMDJ_CHECK(f.engine.observe_pattern_publication(b.lease)->disposition == PatternPublicationDisposition::pending);
+      render_until(f.engine, 24'001);
+    }
+    const auto cancelled = f.engine.observe_pattern_publication(b.lease);
+    LMDJ_CHECK(cancelled && cancelled->disposition == PatternPublicationDisposition::cancelled && !cancelled->applied_frame);
+    LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 0);
+    b.lease.reset();
+    LMDJ_CHECK(f.engine.reclaim_retired_patterns() == 1);
+  }
+}
+
+void retained_apply_claim_wins_cancel_without_fabricating_an_early_S() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  auto b = f.engine.publish_retained_pattern_switch_view(
+      retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  render_until(f.engine, 24'000);
+  PausedRealtimeHook gate;
+  testing::set_pattern_apply_hook(&gate.hook);
+  std::array<float, 1> left{}, right{};
+  std::thread audio([&] { f.engine.render(left.data(), right.data(), 1); });
+  gate.wait();
+  const PatternReplacementAuthority authority{b.publication.generation, PatternId{kPatternB}, 24'000};
+  LMDJ_CHECK(!f.engine.cancel_pattern_publication(authority));
+  LMDJ_CHECK(f.engine.observe_pattern_publication(b.lease)->disposition == PatternPublicationDisposition::pending);
+  gate.release(); audio.join();
+  testing::set_pattern_apply_hook(nullptr);
+  const auto applied = f.engine.observe_pattern_publication(b.lease);
+  LMDJ_CHECK(applied && applied->disposition == PatternPublicationDisposition::applied && applied->applied_frame == 24'000);
+}
+
+void retained_admission_retry_rolls_back_only_its_losing_pin() {
+  using namespace lmdj::audio;
+  PatternTransportFixture f;
+  f.apply(1, PatternTransportAction::start);
+  PausedRealtimeHook gate;
+  testing::set_realtime_hook(testing::RealtimeHookPoint::control_pattern_before_publication, &gate.hook);
+  RetainedPatternPublication next{};
+  std::thread control([&] {
+    next = f.engine.publish_retained_pattern_switch_view(
+        retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  });
+  gate.wait();
+  render_until(f.engine, 25'001);
+  gate.release(); control.join();
+  testing::set_realtime_hook(testing::RealtimeHookPoint::control_pattern_before_publication, nullptr);
+  LMDJ_CHECK(next.publication.result == PatternPublishResult::accepted && next.publication.activation_frame == 48'000);
+  f.engine.stop();
+  LMDJ_CHECK(f.engine.observe_pattern_publication(next.lease)->disposition == PatternPublicationDisposition::cancelled);
+  next.lease.reset();
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent()); // No losing pin leaked.
+  LMDJ_CHECK(f.engine.clear_pattern_view().has_value());
+  LMDJ_CHECK(f.engine.start().has_value());
+}
+
+void retained_switch_keeps_original_count_in_receipts_and_separate_current_cutoff() {
+  using namespace lmdj::audio;
+  ScheduledRecordFixture f(120, 1024, false, true);
+  LMDJ_CHECK(f.engine.submit_scheduled_pattern_record(f.request()) == ScheduledPatternSubmit::accepted);
+  auto before_S = f.engine.publish_retained_pattern_switch_view(retained_switch_material(kPatternB));
+  LMDJ_CHECK(before_S.publication.result == PatternPublishResult::publication_pending && !before_S.lease);
+  f.advance(96'001);
+  auto b = f.engine.publish_retained_pattern_switch_view(
+      retained_switch_material(kPatternB), PatternSwitchSnap::beat);
+  LMDJ_CHECK(b.publication.result == PatternPublishResult::accepted);
+  f.advance(24'000);
+  LMDJ_CHECK(f.engine.observe_pattern_publication(b.lease)->applied_frame == 120'000);
+  LMDJ_CHECK(f.engine.cancel_scheduled_pattern_record({71, 1, 1, 2}) == ScheduledPatternSubmit::start_won);
+  LMDJ_CHECK(f.engine.submit_pattern_transport({71, 2, b.publication.generation,
+      PatternTransportAction::fence, {}}) == PatternTransportSubmit::accepted);
+  f.advance(1);
+  const auto current = f.engine.inspect_pattern_transport_receipt(71, 2);
+  LMDJ_CHECK(current && current->pattern_id == PatternId{kPatternB} && current->effective_frame == 120'001);
+  const auto original = f.engine.inspect_scheduled_pattern_record(71, 1);
+  LMDJ_CHECK(original && original->start_receipt->pattern_id == PatternId{kPatternA});
+  LMDJ_CHECK(original->cancel_receipt->pattern_id == PatternId{kPatternA});
+  LMDJ_CHECK(original->cancel_receipt->effective_frame == current->effective_frame);
+  LMDJ_CHECK(f.engine.acknowledge_pattern_transport_receipt(71, 2));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 1));
+  LMDJ_CHECK(f.engine.acknowledge_scheduled_pattern_record(71, 1, 2));
+  f.engine.stop();
+  LMDJ_CHECK(!f.engine.scheduled_pattern_record_quiescent());
+  b.lease.reset();
+  LMDJ_CHECK(f.engine.scheduled_pattern_record_quiescent());
+}
+
 }  // namespace
 
 int main() {
+  retained_boundary_survives_successor_and_actual_reclaim();
+  retained_apply_frame_is_not_its_queued_activation_prediction();
+  retained_leases_bound_slots_move_once_and_block_restart();
+  retained_cancel_waits_for_its_actual_audio_local_disposition();
+  retained_apply_claim_wins_cancel_without_fabricating_an_early_S();
+  retained_admission_retry_rolls_back_only_its_losing_pin();
+  retained_switch_keeps_original_count_in_receipts_and_separate_current_cutoff();
   scheduled_restart_after_tempo_stop_has_a_fresh_musical_origin();
   stopped_then_exact_cancel_retains_refused_e2_and_independent_input_owners();
   quiescent_stop_before_S_requires_a_real_cancellation_intent();
