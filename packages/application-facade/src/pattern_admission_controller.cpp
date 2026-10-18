@@ -522,7 +522,8 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
   if (!journal.has_value()) {
     return foundation::Result<void>::failure(journal.error());
   }
-  if (journal.value().session_id != session_ || !journal.value().admission) {
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_) {
     return owner_error("admission_identity_mismatch");
   }
   const auto pending = pending_applied_switch(*journal.value().admission);
@@ -530,6 +531,12 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
   const auto project = store.load(bundle_);
   if (!project.has_value()) {
     return foundation::Result<void>::failure(project.error());
+  }
+  if (project.value().id != journal.value().admission->preparation.project_id ||
+      project.value().revision != journal.value().expected_revision) {
+    // A successful settings rebase advances this Journal too. An interrupted
+    // rebase is unresolved authority, not permission to bind a newer Project.
+    return owner_error("segment_project_authority_changed");
   }
   const auto found = project.value().patterns.find(pending->pattern_id);
   if (found == project.value().patterns.end()) {
@@ -539,6 +546,102 @@ foundation::Result<void> PatternAdmissionOwner::reconcile_switch(
       bundle_, session_, pending->pattern_id, found->second.bars,
       project_io::sequence_pattern_fingerprint(found->second),
       journal.value().expected_revision);
+}
+
+foundation::Result<void> PatternAdmissionOwner::continue_segment(
+    project_io::ProjectStore& store,
+    const project_io::SequencePublicationAuthority& authority,
+    std::uint16_t bpm, foundation::CommandId transfer_id,
+    foundation::CommandId flush_id, foundation::CommandId profile_id) {
+  if (!identity_) return owner_error("admission_identity_missing");
+  auto journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) return foundation::Result<void>::failure(journal.error());
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_)
+    return owner_error("admission_identity_mismatch");
+  const auto& admission = *journal.value().admission;
+  // A historical exact retry finishes durability without re-entering an old
+  // Pattern, deriving a new frontier, or touching its already committed Truth.
+  for (const auto& profile : admission.timing_profiles) {
+    if (profile.command_id != profile_id) continue;
+    if (profile.pattern_id != authority.pattern_id ||
+        profile.publication_generation != authority.generation ||
+        profile.runtime_frame != authority.frame || profile.tick_numerator != 0 ||
+        profile.bpm != bpm || std::ranges::find(admission.applied_switches, authority) ==
+            admission.applied_switches.end())
+      return owner_error("segment_work_identity_collision");
+    return journals_.retain_admission_timing_profile(bundle_, session_, *identity_, profile);
+  }
+  if (journal.value().state != project_io::SequenceSessionState::active ||
+      !admission.admission_fence || admission.cutoff_fence || admission.closure ||
+      admission.completed || bpm < 40 || bpm > 240)
+    return owner_error("segment_requires_active_admission");
+  // Upper control owns ordering. Once post-S input was accepted using the
+  // source clock we cannot repair it by retroactively inserting a profile.
+  if (std::ranges::any_of(admission.candidates, [&](const auto& candidate) {
+        return candidate.runtime_frame >= authority.frame;
+      }) || (!admission.transfers.empty() &&
+        admission.transfers.back().checkpoint.publication_generation != authority.generation &&
+        admission.transfers.back().checkpoint.last_runtime_frame >= authority.frame))
+    return owner_error("segment_requires_parked_target_input");
+  const auto truth = store.load(bundle_);
+  if (!truth.has_value()) return foundation::Result<void>::failure(truth.error());
+  if (truth.value().id != admission.preparation.project_id ||
+      !truth.value().patterns.contains(authority.pattern_id))
+    return owner_error("segment_project_authority_changed");
+  if (truth.value().revision != journal.value().expected_revision) {
+    bool exact_committed_flush = false;
+    for (const auto& flush : journal.value().flushes) {
+      if (flush.completed || flush.pattern_id != journal.value().pattern_id) continue;
+      const auto replay = store.replay_sequence_flush(bundle_,
+          {session_, flush.flush_seq, flush.command_id, flush.pattern_id});
+      if (!replay.has_value()) return foundation::Result<void>::failure(replay.error());
+      if (replay.value() && replay.value()->committed_revision == truth.value().revision &&
+          replay.value()->command.meta.expected_revision == flush.expected_revision &&
+          replay.value()->command.events == flush.canonical_events) {
+        exact_committed_flush = true;
+        break;
+      }
+    }
+    if (!exact_committed_flush) return owner_error("segment_project_authority_changed");
+  }
+  // An interrupted exact source flush can already have advanced Truth. Its
+  // original durable receipt must finish through execute_sequence_flush;
+  // reconcile_switch then checks the resulting revision again. A different
+  // mutation cannot borrow that receipt to rebase this recording.
+  auto result = retain_switch(authority);
+  if (!result.has_value()) return result;
+  // Exact retain_switch also syncs a readable partial switch record before
+  // reconcile_switch may observe that it has already advanced the segment.
+  result = drain_source_prefix(store, transfer_id, flush_id);
+  if (!result.has_value()) return result;
+  result = reconcile_switch(store);
+  if (!result.has_value()) return result;
+  journal = journals_.read_active(bundle_);
+  if (!journal.has_value()) return foundation::Result<void>::failure(journal.error());
+  if (journal.value().session_id != session_ || !journal.value().admission ||
+      journal.value().admission->preparation.identity != *identity_)
+    return owner_error("admission_identity_mismatch");
+  const auto& current = *journal.value().admission;
+  if (journal.value().pattern_id != authority.pattern_id ||
+      current.segment_generation != authority.generation)
+    return owner_error("segment_authority_mismatch");
+  auto first = current.preparation.first_watermark;
+  if (!current.transfers.empty()) {
+    const auto last = current.transfers.back().last_watermark;
+    if (last == std::numeric_limits<std::uint64_t>::max())
+      return owner_error("segment_watermark_exhausted");
+    first = std::max(first, last + 1);
+  }
+  if (!current.timing_profiles.empty())
+    first = std::max(first, current.timing_profiles.back().first_watermark);
+  const auto quantize = current.timing_profiles.empty()
+      ? current.preparation.quantize_enabled : current.timing_profiles.back().quantize_enabled;
+  const auto swing = current.timing_profiles.empty()
+      ? current.preparation.swing_percent : current.timing_profiles.back().swing_percent;
+  return journals_.retain_admission_timing_profile(bundle_, session_, *identity_,
+      {profile_id, first, authority.pattern_id, authority.generation,
+       journal.value().expected_revision, authority.frame, 0, bpm, quantize, swing});
 }
 
 foundation::Result<void> PatternAdmissionOwner::drain_source_prefix(

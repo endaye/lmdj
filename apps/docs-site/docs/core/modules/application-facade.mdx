@@ -132,6 +132,20 @@ authority/identity 不符（端口不报当前 Pattern 而 engagement 背后的 
 报告时绑定已在打开 journal 时重锚，见下），重读同一保留收据永不解决，
 coordinator 停驻 error phase：continuation 变 no-op、新命令被诚实拒绝（不为 busy），
 恢复路径是 Project 重开 + owner-loss recovery listing。
+S3 持续录音另有私有 I/O `segment` primitive，绑定原 recording operation、
+runtime generation 与 transport epoch，以及 Native 已实际应用的 Pattern/generation/S。
+它先耐久保留实际边界，把 `[source_start,S)` 的完整候选或 checkpoint tail
+flush 到旧 Pattern，再验证 Project 身份/revision、切换 Journal、耐久写出目标
+Pattern 在 S 的零 tick timing profile。目标段在录入期间不被提前 flush；下一次
+边界或真实末尾 cutoff 才结算它，因此跨边界旧 release 不会生成目标按压，
+A→B→A 的新 generation 使用新的零点而保留之前 A 的完整 Truth。
+稳定 work 派生的 transfer/flush/profile ID 使部分 append、manifest、switch 或
+profile 回应丢失仍可经实际 durable writer 精确重放；历史重试不倒退当前段。
+重建 I/O owner 可结算原耐久操作，但不会从可读 opening bytes 伪造原始正向
+opening completion，也不据此授权新的 live input。控制层仍须按真实 Native
+保留事实排序，并在 segment ACK 前暂存 S 起的输入；当前 Host/Creator 的录音中
+切换门禁尚未接线，此 primitive 和文件级回归不代表完整 S3 或设备验收。
+
 cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
 opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
 `RealtimeEngine` 收据，不是 Creator 或听感验收。

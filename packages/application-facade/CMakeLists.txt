@@ -134,6 +134,14 @@ if(BUILD_TESTING)
   lmdj_target_sanitizers(lmdj_pattern_admission_tests)
   lmdj_add_test(NAME facade.pattern_admission TIER component
     COMMAND lmdj_pattern_admission_tests)
+  add_executable(lmdj_pattern_transport_segment_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_segment_test.cpp")
+  target_include_directories(lmdj_pattern_transport_segment_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_pattern_transport_segment_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_pattern_transport_segment_tests)
+  lmdj_target_sanitizers(lmdj_pattern_transport_segment_tests)
+  lmdj_add_test(NAME facade.pattern_transport_segment TIER component
+    COMMAND lmdj_pattern_transport_segment_tests)
   add_executable(lmdj_pattern_transport_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_transport_test.cpp")
   target_include_directories(lmdj_pattern_transport_tests PRIVATE "${CMAKE_SOURCE_DIR}")

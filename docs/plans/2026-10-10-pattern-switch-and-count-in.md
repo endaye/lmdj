@@ -593,3 +593,161 @@ None expected. Each Task searches open entries labelled with its `area:*` before
 
 S4 records the new `shared-temporary-staging-ownership` process finding in
 `area:ci-release`; its first occurrence remains open without a new mechanism.
+
+### S3 C2b — durable continuation on the single I/O owner
+
+Premise refresh before implementation: actual integration main is
+`34f8f3535a499ab55ccf616742bf751dcfd76f6e`. #2361 design, #2362 Native
+leases and #2363 source-tail/identity prerequisite are delivered and must not
+be repeated. Live #2233 remains open and no open successor implements this
+continuation. At this revision the private I/O owner only reconciles a switch
+as part of terminal close; it has no ongoing segment operation or target
+zero-origin timing profile. Existing codec already permits serial boundaries,
+A→B→A generation-specific checkpoints, equal profile frontiers for segments
+without input, and immutable duplicate records with actual durable replay.
+Retain those formats and checks. `drain_target_segment` is a terminal helper:
+using it for ongoing recording would prematurely flush a held target press.
+
+This Task owns exactly these files:
+
+- `packages/application-facade/src/pattern_admission_controller.hpp`;
+- `packages/application-facade/src/pattern_admission_controller.cpp`;
+- `packages/application-facade/src/pattern_transport_io_owner.cpp`;
+- `packages/application-facade/CMakeLists.txt`;
+- `tests/core/facade/pattern_transport_segment_test.cpp`;
+- `apps/docs-site/docs/core/modules/application-facade.mdx`;
+- `apps/docs-site/diagrams/application-facade.architecture.json`;
+- `apps/docs-site/static/diagrams/application-facade.svg`;
+- `apps/docs-site/static/diagrams/application-facade.html`;
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md`.
+
+Add one private `segment` work operation, binding the exact original recording
+operation/runtime/epoch, actual copied Native Pattern/generation/S and BPM.
+Restore only that same admission owner, durably retain S, drain/flush the old
+segment, validate current Project identity/revision, reconcile the target,
+and durably retain its zero-tick clock before admitting post-S input. Upper
+control must park post-S input until this ACK; reject retroactive profiles or
+already-transferred post-S source data. No Engine/lease/PCM crosses the work
+payload. Exact immutable work IDs derive transfer/flush/profile identities;
+unknown responses replay through the real writer, including readable duplicate
+profiles and partial switch writes. Historical exact replay must not rewind a
+later segment or rewrite Truth. Record-off/Stop still use actual final Pattern.
+
+Lowest-tier verification: a dedicated `facade.pattern_transport_segment`
+component registration (unchanged standard budget) exercises real I/O owner,
+Store and Journal, A→B→A, held/released and empty segments, exact retries,
+partial append/flush/switch/profile durability failures, reconstructed owner,
+strict identity/revision refusal, terminal close and complete Truth/reopen.
+Run it with existing admission/transport/controller and Journal integration/
+stress tests; use an actual rebuilt perturbation to prove missing continuation
+clock is caught. Run dependency/ownership checks and the complete Portal
+check after official diagram generation. This adds product tests, not a CI
+control-plane change or universal full-lane gate. Native ingress ordering,
+Host opt-in, Creator packaged journey and physical acceptance remain separate
+C2c/C3/C4 work; supplied Native authority in this reduction is not their proof.
+
+#### Version Management
+
+Version impact: Application Facade feature MINOR debt, including prior private
+C2a PATCH, to be consolidated by #2237 without lowering existing higher debt.
+No public class layout/vtable, Contract/Journal format or allocated identity
+changes. No Product/Assembly allocation or snapshot in this Task.
+
+#### Documentation impact
+
+Documentation impact: required. Update `/core/modules/application-facade/`
+and its owning source/generated diagram for the private durable segment
+primitive and its still-unwired control/Host boundary. No claim of complete S3.
+
+
+C2b recovery clarification from the first actual reduction: a reconstructed
+I/O owner has no original positive opening-completion evidence. Its readable
+fence does not authorize new live input; the first fixture lost its later
+input as live-only and correctly failed the complete reopened revision (2
+instead of 3). Preserve that negative run. Normal live A→B→A keeps the actual
+live owner, while a separate reconstructed owner proves historical replay.
+Durability faults are injected on the second boundary after B input is already
+retained; reconstructed work settles that exact prefix and terminal close.
+Explicit far-side checks assert retained=true on every live candidate and
+retained=false/no Journal change after reconstruction. No fresh activation,
+renewed opening deadline or inferred proof is introduced to make restart pass.
+
+The revision reduction initially used an ordinary settings commit, which is
+already allowed to rebase the active Sequence Journal; expecting refusal was
+an incorrect fixture premise and the run failed. The corrected reduction
+interrupts that actual rebase after the Project commit: Truth has advanced,
+Journal has not, and continuation refuses without changing either. A pending
+original source flush is handled separately: its canonical receipt may have
+advanced Truth before its lost reply, so finish that exact flush through the
+real writer, then enforce the fresh Project/Journal revision at reconciliation.
+
+Final C2b local result: all six declared owning selections pass on the restored
+producer plus final exact-identity readback guard (28.12 s total): Journal 8.24 s,
+Journal stress 0.14 s, admission 2.28 s, new segment component 5.32 s, transport
+1.68 s and controller integration 10.46 s. Original deadlines, registrations
+and journeys remain; the separate segment component uses the unchanged 30 s
+standard budget. The rebuilt omitted-clock perturbation fails at its actual
+profile-count assertion (exit 8); fresh-mtime saved producer restoration is
+confirmed compiled, with all six selections passing before the final guard
+and again after it. Official diagram generation and complete Portal check pass
+(179 tests, 50 routes/internal links), dependency check and ownership 76 pass.
+The first PR declaration used the wrong route-field label and was rejected;
+correcting it to the existing `Affected portal pages:` field passes the same
+validator. No gate change, format relaxation or process pitfall was introduced.
+
+Precommit main refresh remains `34f8f3535a499ab55ccf616742bf751dcfd76f6e`;
+all applicable main governance bytes match the read instructions. Successor
+search finds only the already delivered design, Native and checkpoint layers.
+No successor supplies continuous I/O, control ingress or Host/Creator opt-in.
+This component is ready for exact-head review, while C2c/C3/C4 and all complete
+S3 candidate/physical acceptance remain explicitly outstanding.
+
+Exact-head review 39095715368 (GLM, review 5561363042) asked about reconciling a
+segment after terminal close removes its Journal. That interleaving violates
+the existing single retained work-cell protocol: the coordinator never consumes
+an unknown segment; executor submission of any later cutoff/close is busy while
+the original cell remains. Add a real threaded executor/I/O-owner regression
+on an actual lost durable profile reply. It asserts unknown/exact ticket,
+close submission busy before and after positive reconciliation, original
+consumption, actual cutoff and close/removal, stale old reconcile/step refusal,
+worker shutdown and full reopened Source/empty Target Truth. This documents the
+private owner's real lifecycle; it does not add unbounded cross-close history
+or infer success from an absent Journal. No additional declared files needed.
+
+The real executor regression passes; all six owning selections pass again
+(28.19 s total, segment 4.90 s, controller 10.40 s). Source/Portal inputs beyond
+that lifecycle comment, owning test and this report remain byte-identical to
+the 179-test/50-route Portal check. Preserve the original reviewed head as a
+recovery ref, amend this one Task's freeze, then obtain a new exact-head review.
+
+Second exact-head review 39096027048 (DeepSeek, 5561381070) raised two
+revision concerns. Reduce them before disposition:
+
+- The generic `any incomplete source flush` exemption is too broad as a
+  before-write guard. The real-API reduction checkpoints source, interrupts a
+  settings rebase after its actual Project commit, then retains a canonical
+  uncommitted stale flush. On the reviewed producer the normal rebase/close
+  control passes, then the stale pending-flush case fails the full Journal
+  unchanged assertion (exit 8): S was retained before the later flush refusal.
+  Narrow mismatch admission to an actual exact persisted Sequence flush
+  receipt matching Session/flush sequence/command/Pattern, original expected
+  revision and complete canonical events, whose committed revision is the
+  current Truth. Absence or unrelated revision refuses before retaining S.
+  This lookup is identity evidence only: actual execute/durable completion
+  still precedes the target clock ACK. All original manifest/response-loss
+  reductions must remain green.
+- The shared `reconcile_switch` concern assumes successful settings updates
+  leave the Journal at its old revision. Current Store actually rebases it
+  before returning success. A new positive regression asserts both revision 1,
+  then exercises the existing terminal applied-switch close, Source and Target
+  Truth, expected revision 3 and complete Store reopen. It passes even before
+  the receipt fix. Preserve the old switched-close profile's retained closed
+  Journal/no-terminal behavior as known remaining debt, rather than silently
+  changing it in this Task. An interrupted rebase remains a real conflict;
+  keep the strict check and document this distinction.
+
+After exact receipt validation, all six original/new selections pass again:
+27.67 s total, segment 5.17 s, controller 10.38 s, Journal 8.11 s, stress
+0.14 s, admission 2.22 s and transport 1.64 s. No Portal/diagram input changed
+from its complete passing check. Preserve reviewed 70c0b0fd before amending
+this Task; refresh unchanged main and request a new exact-head review.
