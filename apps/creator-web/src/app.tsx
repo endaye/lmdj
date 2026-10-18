@@ -3647,6 +3647,7 @@ function Workspace({
                     transport={transport}
                     onSelectPattern={(patternId) => { void selectSequencePattern(patternId); }}
                     patternSelectionLocked={patternSelectionLocked}
+                    slotEditingLocked={sequenceSettingsLocked}
                     recordingBusy={(padCaptureState !== null && padCaptureState.phase !== "idle") ||
                       !["idle", "permission-error"].includes(capturePhase) || recording}
                   />

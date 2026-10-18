@@ -230,7 +230,7 @@ Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页
 Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。三根主推子与 HOLD 保留在首屏；四槽横排和一处 MASTER 使用横向滑杆，在同一外层滚动区内可达。
 
 - **Live**：四组各四个横排 Pattern 启动槽、PRIMARY／FILTER／MORE、横向 FX 与 MASTER、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
-- **Slots**：Pattern Assign/Clear/Move 和 revision；选项在切页后保留。
+- **Slots**：分区显示 Assign、Move、Clear，Pattern 使用可区分的序号；目标槽旁只读显示已提交的 Pattern／Empty，操作失败不预填成功。选择、Escape 或返回 Live 不写工程、不 Launch，切页保留草稿选项；只有对应按钮才提交并刷新。演出录制非空闲、全局 Pattern 录制、COUNT-IN 及工程／transport 结算时锁定结构编辑，稳定的普通播放仍可编辑；revision 可在 Project details 查看。
 - **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
 - **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
 

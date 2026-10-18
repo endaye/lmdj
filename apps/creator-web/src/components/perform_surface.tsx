@@ -36,6 +36,7 @@ export interface PerformSurfaceProps {
   // every other mode consumes; it never drives it.
   readonly transport?: PatternTransportState;
   readonly patternSelectionLocked?: boolean;
+  readonly slotEditingLocked?: boolean;
   readonly recordingBusy?: boolean;
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
@@ -330,7 +331,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         pending={state.pendingLaunch} lastAck={state.lastLaunchAck}
         view={page === "live" ? "launch" : page === "slots" ? "edit" : null}
         disabled={launchDisabled}
-        mutationDisabled={state.recording.phase !== "idle"}
+        mutationDisabled={props.slotEditingLocked === true || state.recording.phase !== "idle"}
         transportPendingPatternId={props.transport?.status?.pendingSwitch?.patternId ?? null}
         transportCurrentPatternId={transportPlaying
           ? props.transport?.status?.currentPatternId ?? null

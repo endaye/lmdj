@@ -3966,7 +3966,15 @@ test.each([false, true])("an ordinary Perform launch with global recording=%s qu
   await userEvent.click(screen.getByRole("button", {name: "Perform"}));
   const launch = await screen.findByRole("button", {name: "Launch Pattern 1"});
   await waitFor(() => expect(launch.hasAttribute("disabled")).toBe(false));
-  await userEvent.click(launch);
+  await userEvent.click(within(screen.getByRole("navigation", {name: "Perform pages"}))
+    .getByRole("button", {name: "Slots"}));
+  const editor = screen.getByRole("group", {name: "Pattern slot editing"});
+  for (const control of [...within(editor).getAllByRole("combobox"), ...within(editor).getAllByRole("button")]) {
+    expect(control.hasAttribute("disabled")).toBe(recording);
+  }
+  await userEvent.click(within(screen.getByRole("navigation", {name: "Perform pages"}))
+    .getByRole("button", {name: "Live"}));
+  await userEvent.click(screen.getByRole("button", {name: "Launch Pattern 1"}));
   await waitFor(() => expect(switchRequests).toHaveLength(1));
   expect(switchRequests[0]!.patternId).toBe(secondSwitchPattern);
   expect(switchRequests[0]!.snap).toBe("beat");
@@ -7966,4 +7974,30 @@ test("Perform physical group arrows bind touch and encoders with SHIFT and Syste
     expect(apply).not.toHaveBeenCalled();
     expect(fx).not.toHaveBeenCalled();
   } finally {view.unmount();}
+});
+
+
+test("COUNT-IN locks Perform Slots until actual cancellation settles", async () => {
+  await writeCountInPreference(1);
+  const f = countInAppFixture();
+  const performance = performanceSessionStubs([]);
+  Object.assign(f.session, performance.stubs, {
+    performanceMasterCaptureStatus: () => ({state: "configured", error: null}),
+    subscribePerformanceMasterCaptureStatus: () => () => {},
+  });
+  await openCountInApp(f);
+  await userEvent.click(screen.getByRole("button", {name: "Perform"}));
+  await userEvent.click(within(screen.getByRole("navigation", {name: "Perform pages"}))
+    .getByRole("button", {name: "Slots"}));
+  const clear = screen.getByRole("button", {name: "Clear Pattern"});
+  await waitFor(() => expect(clear.hasAttribute("disabled")).toBe(false));
+  await userEvent.click(screen.getByRole("button", {name: "Record"}));
+  const cancel = await screen.findByRole("button", {name: "Record — cancel count-in"});
+  expect(clear.hasAttribute("disabled")).toBe(true);
+  await userEvent.click(cancel);
+  await waitFor(() => expect(f.session.cancelPatternCountIn).toHaveBeenCalledOnce());
+  expect(clear.hasAttribute("disabled")).toBe(true);
+  f.finishCancellation();
+  await waitFor(() => expect(clear.hasAttribute("disabled")).toBe(false));
+  expect(performance.stubs.clearPatternSlot).not.toHaveBeenCalled();
 });

@@ -648,8 +648,8 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | Replay 有条目，或任一子页回放中 | Replay／Stop Replay | 回放或停止。回放不会录进 Pattern；上屏仍显示全局 Pattern。Stop Replay 将 FX 归中、关闭 HOLD 并清空演出 Launch 状态，监听音量保持。 |
 | Replay，有演出恢复候选 | Apply recovery／Discard recovery | 恢复演出（自动收尾未松开的 Pad），或丢掉候选。丢候选不删除已保存的演出。 |
 | Live／Slots／Takes，有恢复候选 | Review recovery | 进入 Replay 查看。FX 推子按住时不可用。 |
-| Slots，演出录制空闲 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 选择要分配、清空或移动的槽。还没生效。 |
-| Slots，演出录制空闲 | Assign Pattern／Clear Pattern／Move Pattern | 把 Pattern 放进槽、清空槽或移动。源和目标相同时 Move 不可用。录制非空闲时这些编辑都不可用。 |
+| Slots，结构编辑可用 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 在 Assign／Move／Clear 分区选择参数。Pattern 以序号区分；目标槽读数来自实际工程映射。选择、Escape 或返回 Live 都不写工程、不 Launch，切页后保留选项。 |
+| Slots，结构编辑可用 | Assign Pattern／Clear Pattern／Move Pattern | 按对应按钮才提交分配、清空或移动，并刷新工程；失败不把草稿当成已提交读数。源和目标相同时 Move 不可用。演出录制非空闲、全局 Pattern 录制、COUNT-IN 及工程／transport 结算时禁用全部结构编辑；稳定普通播放可编辑，全局录制中的正常 Launch 规则不变。 |
 | 任意 | Recording details 折叠项 | 只读：WAV 录制和关联状态，以及未结束的 Pad／FX 手势数和 HOLD。 |
 | Slots，或有 Replay 的任意子页 | Project details／Replay details 折叠项 | 只读：Project 修订号，或回放状态和 Neutral FX。 |
 
