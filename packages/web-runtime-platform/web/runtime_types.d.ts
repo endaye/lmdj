@@ -85,8 +85,8 @@ export interface PatternTransportStatus {
   /** The Pattern the Engine is playing, or null before one is published. */
   readonly currentPatternId: string | null;
   /**
-   * The queued playing-state switch (#1958): the Pattern that will start at
-   * `activationFrame`, or null when none is queued.
+   * The latest queued switch while playing, including recording. This is a
+   * Native selection observation, not a durable segment acknowledgment.
    */
   readonly pendingSwitch: Readonly<{
     patternId: string;
@@ -118,7 +118,10 @@ export interface TransportPatternSwitchRequest {
 /**
  * Switches the playing transport's Pattern at the selected engine boundary. A
  * request for the Pattern already playing withdraws any queued switch and
- * answers `activationFrame: null`.
+ * answers `activationFrame: null`. Recording continues across accepted switches;
+ * old-segment persistence and retained input completion progress separately.
+ * Material/I/O/capacity refusal has no Native publication effect. The request
+ * ID is advisory and is not a durable replay/receipt identity.
  */
 export interface TransportPatternSwitchResult {
   readonly patternId: string;

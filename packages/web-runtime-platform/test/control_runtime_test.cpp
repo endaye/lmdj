@@ -39,6 +39,7 @@
 #include <lmdj/facade/mutation_publish_scope.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
+#include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
@@ -7655,6 +7656,7 @@ struct ForeignTaskCounter {
 void bump_foreign_task(void* context) noexcept {
   ++static_cast<ForeignTaskCounter*>(context)->runs;
 }
+
 }  // namespace
 
 // Control-thread tasks proxied from outside the bridge (audio failure,
@@ -11817,7 +11819,7 @@ void test_transport_record_after_cancellation_opens_from_the_production_receipt(
   LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("pending_switch").is_null());
 }
 
-void test_transport_switch_refused_while_recording_and_while_stopped() {
+void test_transport_switch_keeps_recording_and_refuses_while_stopped() {
   TempDirectory temp;
   FakeCoordinator coordinator;
   auto runtime = switch_test_runtime(temp, coordinator, false);
@@ -11832,14 +11834,17 @@ void test_transport_switch_refused_while_recording_and_while_stopped() {
   settled_transport_status(*runtime, engine, [](const auto& status) {
     return status.at("recording") == true && status.at("phase") == "idle";
   });
-  const auto refused_recording = check_error(
+  const auto before = runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project");
+  const auto switched = check_exact_success(
       runtime->dispatch(
           "pattern.transport.switch",
           transport_switch_request(kSwitchPatternB, 9822), {}),
-      "HOST_STATE_INVALID");
-  LMDJ_CHECK(
-      refused_recording.at("details").at("reason") ==
-      "pattern_transport_recording");
+      {"pattern_id", "activation_frame"});
+  const auto boundary = switched.at("activation_frame").get<std::uint64_t>();
+  render_switch_frames_exact(engine, boundary + 1 - engine.telemetry().rendered_frames);
+  const auto recording = pattern_transport_inspect(*runtime, kSequenceSessionId);
+  LMDJ_CHECK(recording.at("recording") == true && recording.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == boundary);
   check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9823, 3,
@@ -11849,6 +11854,8 @@ void test_transport_switch_refused_while_recording_and_while_stopped() {
     return status.at("recording") == false && status.at("phase") == "idle" &&
            status.at("publication_pending") == false;
   });
+  LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}).at("result").at("project") == before);
   check_success(dispatch_retained_for_test(*runtime,
       "pattern.transport.request",
       pattern_transport_request_payload(kSequenceSessionId, 9824, 4,
@@ -13563,16 +13570,22 @@ class HeldLegacyCandidateStorage final
     std::uint64_t prefix{};
     std::vector<std::byte> bytes;
     std::thread::id worker;
-    bool entered{}, delegated{}, returned{}, succeeded{}, expired{};
+    bool entered{}, delegated{}, returned{}, succeeded{}, expired{}, reply_lost{};
   };
   explicit HeldLegacyCandidateStorage(std::filesystem::path bundle)
       : bundle_(std::move(bundle)) {}
-  void arm() {
+  void arm(std::string kind = "admission-candidate", bool lose_reply = false) {
     std::lock_guard lock(mutex_);
     observation_ = {};
     released_ = false;
     armed_ = true;
+    kind_ = std::move(kind);
+    lose_reply_ = lose_reply;
     deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  }
+  void fail_next_append(std::string kind) {
+    std::lock_guard lock(mutex_);
+    fail_kind_ = std::move(kind);
   }
   void release() noexcept {
     std::lock_guard lock(mutex_);
@@ -13596,9 +13609,15 @@ class HeldLegacyCandidateStorage final
       std::unique_lock lock(mutex_);
       const auto relative = path.lexically_relative(bundle_);
       const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      if (!fail_kind_.empty() && path.filename() == "sequence.jsonl" &&
+          text.find(fail_kind_) != std::string::npos) {
+        fail_kind_.clear();
+        return lmdj::foundation::Result<void>::failure({lmdj::foundation::ErrorCode::io_error,
+            "Test decorator interrupted Journal append before write"});
+      }
       if (armed_ && path.filename() == "sequence.jsonl" &&
           !relative.empty() && *relative.begin() != ".." &&
-          text.find("admission-candidate") != std::string::npos) {
+          text.find(kind_) != std::string::npos) {
         armed_ = false; // Hold exactly the first candidate after explicit arming.
         selected = true;
         observation_ = {path, prefix, {bytes.begin(), bytes.end()},
@@ -13616,6 +13635,11 @@ class HeldLegacyCandidateStorage final
       std::lock_guard lock(mutex_);
       observation_.returned = true;
       observation_.succeeded = result.has_value();
+      if (result.has_value() && lose_reply_) {
+        observation_.reply_lost = true;
+        result = lmdj::foundation::Result<void>::failure({lmdj::foundation::ErrorCode::io_error,
+            "Test decorator lost the real successful append reply"});
+      }
       changed_.notify_all();
     }
     return result;
@@ -13643,7 +13667,10 @@ class HeldLegacyCandidateStorage final
   std::condition_variable changed_;
   std::chrono::steady_clock::time_point deadline_;
   Observation observation_;
+  std::string kind_;
+  std::string fail_kind_;
   bool armed_{}, released_{};
+  bool lose_reply_{};
 };
 
 void test_bridge_retains_original_legacy_rpc_until_exact_candidate_is_durable(
@@ -14131,10 +14158,599 @@ void test_prepared_record_timeout_waits_for_real_owner_and_original_consumers() 
   check_success(reopened->dispatch("host.close", Json::object(), {}));
 }
 
+// Host producer proof: only the worker decorator controls durable progress;
+// Native facts, input identities and Snapshot material all come from production.
+struct RecordingSwitchHostFixture {
+  TempDirectory temp;
+  FakeCoordinator coordinator;
+  std::filesystem::path bundle{temp.path() / "projects" / (std::string(kProjectId) + ".lmdj")};
+  std::shared_ptr<HeldLegacyCandidateStorage> storage{std::make_shared<HeldLegacyCandidateStorage>(bundle)};
+  std::unique_ptr<ControlRuntime> runtime;
+  Json capability, initial_truth;
+  std::uint32_t command{10600};
+  std::uint64_t serial{}, epoch{1};
+
+  RecordingSwitchHostFixture() {
+    auto config = make_application_config(temp.path());
+    config.storage_platform = storage;
+    auto made = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+    LMDJ_CHECK(made.has_value());
+    runtime = std::move(made.value());
+    check_success(runtime->dispatch("project.create", create_opted_in_project(), {}));
+    check_success(runtime->dispatch("pattern.transport.count-in.capabilities", {{"negotiate", true}}, {}));
+    const auto import_command = command++;
+    const auto assign_command = command++;
+    auto wav = mono_pcm16_wav(2'400);
+    for (std::size_t frame = 0; frame < 2'400; ++frame) write_u16(wav, 44 + frame * 2, 8192);
+    import_and_assign(*runtime, wav, kAssetId, import_command, assign_command, 0);
+    auto playback = parity_playback_payload("tone");
+    playback["trim_start_frame"] = 0;
+    playback["trim_end_frame"] = 2'400;
+    playback["trigger_mode"] = "loop_gate";
+    playback["release_ms"] = 0;
+    check_success(runtime->dispatch("sample.update_pad", {{"command_id", uuid(command++)},
+        {"expected_revision", project_revision_of(*runtime)}, {"slot", slot(0, 0)},
+        {"playback", playback}}, {}));
+    for (const auto pattern : {kSwitchPatternB, kSwitchPatternC, kNextPatternId}) {
+      check_success(runtime->dispatch("pattern.create", {{"command_id", uuid(command++)},
+          {"expected_revision", project_revision_of(*runtime)}, {"pattern_id", pattern}, {"bars", 1}}, {}));
+    }
+    check_success(runtime->dispatch("sequence.settings.update", {{"command_id", uuid(command++)},
+        {"expected_revision", project_revision_of(*runtime)}, {"session_id", nullptr},
+        {"bpm", nullptr}, {"quantize_enabled", false}, {"swing_percent", nullptr}}, {}));
+    check_success(runtime->dispatch("snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    coordinator.begin_acknowledgement = runtime->engine().bank_telemetry().accepted_publications;
+    LMDJ_CHECK(ControlRuntimeAudioAccess::install(*runtime, coordinator.seam()).has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    coordinator.engine = &runtime->engine();
+    coordinator.observe_engine_generation = true;
+    capability = check_locked_success_result(runtime->dispatch(
+        "pattern.transport.count-in.capabilities", {{"negotiate", false}}, {}));
+    initial_truth = truth();
+  }
+  ~RecordingSwitchHostFixture() { storage->release(); } // Before worker/runtime destruction.
+  RealtimeEngine& engine() { return runtime->engine(); }
+  Json truth() { return check_locked_success_result(runtime->dispatch("project.inspect", Json::object(), {})).at("project"); }
+  void check_truth(const Json& expected) {
+    const auto difference = Json::diff(expected, truth());
+    if (!difference.empty()) throw std::runtime_error("Recording switch Truth differs: " + difference.dump());
+  }
+  void idle_io() {
+    wait_until([&] {
+      runtime->service_pattern_transport();
+      return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime);
+    });
+    runtime->service_pattern_transport();
+    LMDJ_CHECK(lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*runtime));
+  }
+  Json request(std::string_view intent) {
+    return dispatch_retained_for_test(*runtime, "pattern.transport.request",
+        pattern_transport_request_payload(kSequenceSessionId, command++, epoch++, intent), {});
+  }
+  void start() {
+    check_success(request("record"));
+    settled_transport_status(*runtime, engine(), [](const auto& status) {
+      return status.at("recording") == true && status.at("phase") == "idle";
+    });
+    idle_io();
+  }
+  void until(std::uint64_t frame) {
+    LMDJ_CHECK(frame >= engine().telemetry().rendered_frames);
+    render_switch_frames_exact(engine(), frame - engine().telemetry().rendered_frames);
+  }
+  Json input(bool release = false, Json correlation = nullptr) {
+    return check_locked_success_result(runtime->dispatch("pattern.transport.input.request",
+        companion_input_request(capability, command++, std::to_string(++serial), release, correlation), {}));
+  }
+  Json inspect_input(const Json& input, bool consume = false) {
+    return check_locked_success_result(runtime->dispatch("pattern.transport.input.inspect",
+        companion_input_inspection(input.at("ticket"), consume), {}));
+  }
+  Json settle_input(const Json& input) {
+    Json status;
+    wait_until([&] { status = inspect_input(input); return status.at("complete") == true; });
+    LMDJ_CHECK(status.at("error").is_null() && status.at("durable_settled") == true);
+    LMDJ_CHECK(inspect_input(input, true) == status);
+    idle_io();
+    return status;
+  }
+  std::uint64_t publish(std::string_view pattern, std::string_view snap = "beat") {
+    idle_io();
+    const auto result = check_exact_success(runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(pattern, command++, snap), {}), {"pattern_id", "activation_frame"});
+    LMDJ_CHECK(result.at("pattern_id") == pattern && result.at("activation_frame").is_number_unsigned());
+    return result.at("activation_frame").get<std::uint64_t>();
+  }
+  std::uint64_t applied(std::string_view target, std::uint64_t lower_bound) {
+    until(lower_bound + 1);
+    LMDJ_CHECK(engine().current_pattern_id()->value() == target);
+    const auto actual = engine().current_pattern_origin_frame().value();
+    LMDJ_CHECK(actual >= lower_bound);
+    idle_io();
+    LMDJ_CHECK(pattern_transport_inspect(*runtime, kSequenceSessionId).at("origin_frame") == actual);
+    return actual;
+  }
+  void close_recording() {
+    check_success(request("record"));
+    const auto status = settled_transport_status(*runtime, engine(), [](const auto& s) {
+      return s.at("recording") == false && s.at("phase") == "idle" && s.at("publication_pending") == false;
+    });
+    LMDJ_CHECK(status.at("error").is_null() && status.at("playing") == true);
+    idle_io();
+    LMDJ_CHECK(!lmdj::project_io::SequenceJournal{}.read_active(bundle).has_value());
+  }
+  void stop_and_reopen(const Json& expected) {
+    check_success(request("play_stop"));
+    settled_transport_status(*runtime, engine(), [](const auto& s) {
+      return s.at("playing") == false && s.at("phase") == "idle";
+    });
+    idle_io();
+    LMDJ_CHECK(engine().pattern_telemetry().pending_generation == 0);
+    LMDJ_CHECK(truth() == expected);
+    reopen(expected);
+  }
+  void reopen(const Json& expected) {
+    runtime.reset();
+    auto reopened = make_runtime(temp.path());
+    check_success(reopened->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+    LMDJ_CHECK(check_locked_success_result(reopened->dispatch("project.inspect", Json::object(), {})).at("project") == expected);
+  }
+};
+
+Json recorded_switch_note(std::uint64_t tick, std::uint64_t duration = 240) {
+  return {{"slot", slot(0, 0)}, {"onset_tick", tick}, {"duration_tick", duration}, {"velocity", 100}};
+}
+
+void test_recording_switch_host_returns_to_acknowledged_material_and_reopens() {
+  RecordingSwitchHostFixture f;
+  f.start();
+  const auto origin = f.engine().current_pattern_origin_frame().value();
+  f.until(origin + 6'000);
+  const auto pa = f.input();
+  render_switch_frames_exact(f.engine(), 1);
+  const auto a = f.settle_input(pa);
+  LMDJ_CHECK(a.at("native_result").at("runtime_frame") == origin + 6'000);
+  // A's own newly queued overlay must be withdrawn before preparing B.
+  const auto sb = f.applied(kSwitchPatternB, f.publish(kSwitchPatternB));
+  auto expected = f.initial_truth;
+  expected["revision"] = expected.at("revision").get<std::uint64_t>() + 1;
+  expected["patterns"][kPatternId]["events"] = Json::array({recorded_switch_note(240)});
+  f.check_truth(expected);
+  LMDJ_CHECK(f.engine().pattern_input_profile_status().held_release_reservations == 1);
+  const auto ra = f.input(true, a.at("admission").at("sequence"));
+  render_switch_frames_exact(f.engine(), 1);
+  const auto released_a = f.settle_input(ra);
+  LMDJ_CHECK(released_a.at("native_result").at("disposition") == "release_applied");
+  render_switch_frames_exact(f.engine(), lmdj::audio::kRealtimeRampFrames);
+  LMDJ_CHECK(f.engine().telemetry().active_voices == 0);
+  f.until(sb + 6'000);
+  const auto pb = f.input();
+  render_switch_frames_exact(f.engine(), 1);
+  const auto b = f.settle_input(pb);
+  f.until(sb + 12'000);
+  const auto rb = f.input(true, b.at("admission").at("sequence"));
+  render_switch_frames_exact(f.engine(), 1);
+  f.settle_input(rb);
+  // B's zero/press projection was already claimed by the real callback.
+  // Refuse before any A publication; retry only after its actual application
+  // and Journal overlay acknowledgment, preserving the accepted SNAP frame.
+  const auto claimed = f.engine().pattern_transport_observation().value().pending_switches[0];
+  LMDJ_CHECK(claimed && claimed->pattern_id.value() == kSwitchPatternB);
+  const auto publications = f.engine().pattern_telemetry().accepted_publications;
+  const auto refused = f.runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kPatternId, f.command++, "beat"), {});
+  LMDJ_CHECK(!refused.value("ok", false));
+  LMDJ_CHECK(refused.at("error").at("details").at("reason") == "recording_switch_overlay_pending");
+  LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+  LMDJ_CHECK(!f.engine().pattern_transport_observation()->outstanding_cancellation);
+  f.until(claimed->activation_frame + 1);
+  f.idle_io();
+  const auto sa = f.applied(kPatternId, f.publish(kPatternId));
+  expected["revision"] = expected.at("revision").get<std::uint64_t>() + 1;
+  expected["patterns"][kSwitchPatternB]["events"] = Json::array({recorded_switch_note(240)});
+  f.check_truth(expected);
+  const auto voices = f.engine().telemetry().started_voices;
+  f.until(sa + 6'001);
+  LMDJ_CHECK(f.engine().telemetry().started_voices == voices + 1);
+  LMDJ_CHECK(f.engine().telemetry().active_voices == 1);
+  f.until(sa + 18'000);
+  const auto again = f.input();
+  render_switch_frames_exact(f.engine(), 1);
+  const auto again_status = f.settle_input(again);
+  const auto release = f.input(true, again_status.at("admission").at("sequence"));
+  render_switch_frames_exact(f.engine(), 1);
+  f.settle_input(release);
+  f.close_recording();
+  LMDJ_CHECK(f.engine().current_pattern_id()->value() == kPatternId);
+  expected["revision"] = expected.at("revision").get<std::uint64_t>() + 1;
+  expected["patterns"][kPatternId]["events"].push_back(recorded_switch_note(720, 1));
+  f.check_truth(expected);
+  f.stop_and_reopen(expected);
+}
+
+void test_recording_switch_host_keeps_both_native_facts_behind_real_io(bool exactly_at_s = false) {
+  RecordingSwitchHostFixture f;
+  f.start();
+  const auto origin = f.engine().current_pattern_origin_frame().value();
+  f.until(origin + 6'000);
+  const auto pa = f.input();
+  render_switch_frames_exact(f.engine(), 1);
+  const auto a = f.settle_input(pa);
+  const auto sb = f.publish(kSwitchPatternB);
+  render_switch_frames_exact(f.engine(), 1); // Audio claims B before C is queued.
+  const auto sc = f.publish(kSwitchPatternC);
+  LMDJ_CHECK(sc > sb);
+  f.storage->arm("admission-switch", true);
+  // The post-S variant applies both switches in one real callback. The at-S
+  // variant stops immediately before C, admits its input, then consumes both
+  // C and that original input at exactly S while B's writer remains held.
+  const auto frames = sc + (exactly_at_s ? 0 : 1) - f.engine().telemetry().rendered_frames;
+  std::vector<float> left(frames), right(frames);
+  f.engine().render(left.data(), right.data(), static_cast<std::uint32_t>(frames));
+  LMDJ_CHECK(f.engine().current_pattern_id()->value() == (exactly_at_s ? kSwitchPatternB : kSwitchPatternC));
+  wait_until([&] { f.runtime->service_pattern_transport(); return f.storage->inspect().entered; });
+  LMDJ_CHECK(f.storage->held() && f.storage->inspect().worker != std::this_thread::get_id());
+  const auto publications = f.engine().pattern_telemetry().accepted_publications;
+  const auto refused = f.runtime->dispatch("pattern.transport.switch",
+      transport_switch_request(kNextPatternId, f.command++), {});
+  LMDJ_CHECK(!refused.value("ok", false));
+  LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+  const auto current = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+  LMDJ_CHECK(current.at("recording") == true &&
+      current.at("current_pattern_id") == (exactly_at_s ? kSwitchPatternB : kSwitchPatternC));
+  LMDJ_CHECK(current.at("origin_frame") == (exactly_at_s ? sb : sc));
+  const auto pc = f.input();
+  render_switch_frames_exact(f.engine(), 1);
+  const auto pending = f.inspect_input(pc);
+  LMDJ_CHECK(pending.at("native_result").at("runtime_frame") == sc + (exactly_at_s ? 0 : 1));
+  LMDJ_CHECK(pending.at("complete") == false && pending.at("durable_settled") == false);
+  const auto applied_c = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+  LMDJ_CHECK(applied_c.at("current_pattern_id") == kSwitchPatternC && applied_c.at("origin_frame") == sc);
+  const auto release_a = f.input(true, a.at("admission").at("sequence"));
+  render_switch_frames_exact(f.engine(), 1);
+  LMDJ_CHECK(f.inspect_input(release_a).at("native_result").at("disposition") == "release_applied");
+  const auto release_c = f.input(true, pending.at("admission").at("sequence"));
+  render_switch_frames_exact(f.engine(), 1);
+  LMDJ_CHECK(f.inspect_input(release_c).at("native_result").at("disposition") == "release_applied");
+  render_switch_frames_exact(f.engine(), lmdj::audio::kRealtimeRampFrames);
+  LMDJ_CHECK(f.engine().telemetry().active_voices == 0);
+  LMDJ_CHECK(f.storage->held()); // Physical releases precede durable segment ACK.
+  f.storage->release();
+  f.settle_input(pc);
+  f.settle_input(release_a);
+  f.settle_input(release_c);
+  const auto gate = f.storage->inspect();
+  LMDJ_CHECK(gate.returned && gate.succeeded && gate.reply_lost && !gate.expired);
+  f.close_recording();
+  LMDJ_CHECK(f.engine().current_pattern_id()->value() == kSwitchPatternC);
+  auto expected = f.initial_truth;
+  expected["revision"] = expected.at("revision").get<std::uint64_t>() + 2;
+  expected["patterns"][kPatternId]["events"] = Json::array({recorded_switch_note(240)});
+  expected["patterns"][kSwitchPatternC]["events"] = Json::array({recorded_switch_note(0, 1)});
+  f.check_truth(expected); // Empty B changes no Truth or revision.
+  f.stop_and_reopen(expected);
+}
+
+void test_recording_switch_host_keeps_original_count_in_receipts_and_prompt_f() {
+  using namespace lmdj::web_runtime::detail;
+  RecordingSwitchHostFixture f;
+  CountInOwnerAudioBackend backend{f.engine()};
+  OneShotAudioDriver driver(backend.seam());
+  const auto ticket = start_count_in_owner_journey(*f.runtime, f.coordinator, driver, f.command++);
+  const auto original = check_locked_success_result(f.runtime->dispatch(
+      "pattern.transport.count-in.inspect", companion_count_in_inspection(ticket), {}));
+  const auto s0 = original.at("start_receipt").at("effective_frame").get<std::uint64_t>();
+  const auto render_until = [&](std::uint64_t frame) {
+    LMDJ_CHECK(frame >= f.engine().telemetry().rendered_frames);
+    while (f.engine().telemetry().rendered_frames < frame)
+      driver.render_frames(static_cast<std::uint32_t>(std::min<std::uint64_t>(128,
+          frame - f.engine().telemetry().rendered_frames)));
+  };
+  f.idle_io();
+  render_until(s0 + 6'000);
+  const auto pa = f.input();
+  driver.render_frames(1);
+  const auto press = f.settle_input(pa);
+  LMDJ_CHECK(press.at("native_result").at("disposition") == "voice_started");
+  const auto sb = f.publish(kSwitchPatternB);
+  f.storage->arm("admission-switch");
+  render_until(sb + 1);
+  wait_until([&] { f.runtime->service_pattern_transport(); return f.storage->inspect().entered; });
+  const auto selected = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+  LMDJ_CHECK(selected.at("recording") == true && selected.at("current_pattern_id") == kSwitchPatternB);
+  LMDJ_CHECK(selected.at("origin_frame") == sb && f.storage->held());
+  const auto before_stop = f.engine().telemetry().rendered_frames;
+  cancel_count_in_owner_journey(*f.runtime, ticket, f.command++);
+  driver.render_frames(1);
+  const auto stopped = check_locked_success_result(f.runtime->dispatch(
+      "pattern.transport.count-in.inspect", companion_count_in_inspection(ticket), {}));
+  LMDJ_CHECK(stopped.at("start_receipt") == original.at("start_receipt"));
+  const auto& e2 = stopped.at("cancel_receipt");
+  LMDJ_CHECK(e2.at("result") == "applied" && e2.at("effective_frame") == before_stop);
+  LMDJ_CHECK(e2.at("pattern_id") == kPatternId && e2.at("origin_frame") == s0);
+  LMDJ_CHECK(f.engine().current_pattern_id()->value() == kSwitchPatternB);
+  LMDJ_CHECK(f.storage->held()); // Actual F does not wait for the segment writer.
+  const auto release = f.input(true, press.at("admission").at("sequence"));
+  driver.render_frames(1);
+  const auto physical = f.inspect_input(release);
+  LMDJ_CHECK(physical.at("native_result").at("disposition") == "release_applied");
+  check_error(f.runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}), "HOST_STATE_INVALID"); // Unknown segment/close remains owned.
+  driver.render_one();
+  f.storage->release();
+  Json finished;
+  wait_until([&] {
+    f.runtime->service_pattern_transport();
+    finished = check_locked_success_result(f.runtime->dispatch(
+        "pattern.transport.count-in.inspect", companion_count_in_inspection(ticket), {}));
+    return lmdj::web_runtime::detail::ControlRuntimePatternIoAccess::idle(*f.runtime) &&
+        pattern_transport_inspect(*f.runtime, kSequenceSessionId).at("recording") == false;
+  });
+  // Normal caller evidence and the input consumer are independent owners.
+  // Consuming the real e1/e2 must not spend the original release ticket.
+  finished = check_locked_success_result(f.runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}));
+  LMDJ_CHECK(finished.at("start_receipt") == original.at("start_receipt"));
+  LMDJ_CHECK(finished.at("cancel_receipt") == e2 && finished.at("error").is_null());
+  const auto release_status = f.settle_input(release);
+  LMDJ_CHECK(release_status.at("native_result") == physical.at("native_result"));
+  LMDJ_CHECK(backend.cue_consumers_acknowledged.load());
+  LMDJ_CHECK(!f.storage->inspect().expired);
+  auto expected = f.initial_truth;
+  expected["revision"] = expected.at("revision").get<std::uint64_t>() + 1;
+  expected["patterns"][kPatternId]["events"] = Json::array({recorded_switch_note(240)});
+  f.check_truth(expected);
+  LMDJ_CHECK(!lmdj::project_io::SequenceJournal{}.read_active(f.bundle).has_value());
+  LMDJ_CHECK(f.engine().pattern_input_profile_status().held_release_reservations == 0);
+  driver.stop();
+  f.runtime.reset();
+  auto reopened = make_runtime(f.temp.path());
+  check_success(reopened->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(check_locked_success_result(reopened->dispatch("project.inspect", Json::object(), {})).at("project") == expected);
+}
+
+void test_recording_switch_host_preserves_recording_kind_exclusion() {
+  {
+    RecordingSwitchHostFixture f;
+    f.start();
+    const auto before = f.truth();
+    const auto journal = lmdj::project_io::SequenceJournal{}.read_active(f.bundle);
+    const auto publications = f.engine().pattern_telemetry().accepted_publications;
+    const auto response = f.runtime->dispatch("performance.record.begin",
+        {{"command_id", uuid(f.command++)}, {"expected_revision", before.at("revision")},
+         {"session_id", uuid(f.command++)}, {"performance_id", uuid(f.command++)}}, {});
+    LMDJ_CHECK(!response.value("ok", false));
+    f.check_truth(before);
+    LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+    LMDJ_CHECK(lmdj::project_io::SequenceJournal{}.read_active(f.bundle).value() == journal.value());
+    LMDJ_CHECK(pattern_transport_inspect(*f.runtime, kSequenceSessionId).at("recording") == true);
+    f.close_recording();
+    f.stop_and_reopen(before);
+  }
+  {
+    RecordingSwitchHostFixture f;
+    check_success(f.runtime->dispatch("performance.record.begin",
+        {{"command_id", uuid(f.command++)}, {"expected_revision", f.initial_truth.at("revision")},
+         {"session_id", uuid(f.command++)}, {"performance_id", uuid(f.command++)}}, {}));
+    const auto performance = check_locked_success_result(f.runtime->dispatch(
+        "performance.record.status", Json::object(), {}));
+    const auto before = f.truth(); // Performance begin created its own draft.
+    const auto publications = f.engine().pattern_telemetry().accepted_publications;
+    static_cast<void>(f.request("record")); // Admission can precede worker refusal.
+    const auto status = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+    LMDJ_CHECK(status.at("recording") == false && status.at("error").is_object());
+    LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+    LMDJ_CHECK(!f.engine().inspect_pattern_transport_receipt(
+        status.at("runtime_generation").get<std::uint64_t>(), 1));
+    LMDJ_CHECK(check_locked_success_result(f.runtime->dispatch(
+        "performance.record.status", Json::object(), {})) == performance);
+    f.check_truth(before);
+  }
+}
+
+void test_recording_switch_host_cancels_at_f_and_withdraws_current_target() {
+  for (const bool record_off : {false, true}) {
+    RecordingSwitchHostFixture f;
+    f.start();
+    const auto boundary = f.publish(kSwitchPatternB);
+    f.until(boundary); // Last rendered frame is S-1; Stop/Record-off owns F=S.
+    const auto generation = pattern_transport_inspect(*f.runtime, kSequenceSessionId).at("runtime_generation").get<std::uint64_t>();
+    const auto original = pattern_transport_request_payload(kSequenceSessionId,
+        f.command++, f.epoch++, record_off ? "record" : "play_stop");
+    check_success(dispatch_retained_for_test(*f.runtime, "pattern.transport.request", original, {}));
+    render_switch_frames_exact(f.engine(), 1);
+    const auto cutoff = f.engine().inspect_pattern_transport_receipt(generation, 2);
+    LMDJ_CHECK(cutoff && cutoff->effective_frame == boundary && cutoff->playing == record_off);
+    settled_transport_status(*f.runtime, f.engine(), [record_off](const auto& s) {
+      return s.at("playing") == record_off && s.at("recording") == false && s.at("phase") == "idle" &&
+          s.at("publication_pending") == false;
+    });
+    f.idle_io();
+    render_switch_frames_exact(f.engine(), 128); // Consume the independent close republication.
+    LMDJ_CHECK(f.engine().current_pattern_id()->value() == kPatternId);
+    if (!record_off) LMDJ_CHECK(f.engine().pattern_telemetry().pending_generation == 0);
+    else LMDJ_CHECK(!f.engine().pending_pattern_id() ||
+        f.engine().pending_pattern_id()->value() == kPatternId); // Only the real source's close view.
+    LMDJ_CHECK(!lmdj::project_io::SequenceJournal{}.read_active(f.bundle).has_value());
+    f.check_truth(f.initial_truth);
+    if (record_off) {
+      // A later playing switch must not turn an exact old Record-off retry
+      // into a new Record-on refusal or spend its completed command twice.
+      if (f.engine().pending_pattern_id()) {
+        f.until(f.engine().pattern_telemetry().pending_activation_frame + 1);
+        f.idle_io();
+      }
+      const auto next = f.publish(kSwitchPatternC);
+      const auto publications = f.engine().pattern_telemetry().accepted_publications;
+      const auto replay = check_locked_success_result(dispatch_retained_for_test(
+          *f.runtime, "pattern.transport.request", original, {}));
+      LMDJ_CHECK(replay.at("submit") == "replayed" && replay.at("status").at("recording") == false);
+      LMDJ_CHECK(replay.at("status").at("pending_switch").at("activation_frame") == next);
+      auto changed = original;
+      changed["expected_epoch"] = 3;
+      check_error(dispatch_retained_for_test(*f.runtime, "pattern.transport.request", changed, {}), "INVALID_ARGUMENT");
+      LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+      render_switch_frames_exact(f.engine(), 1);
+      LMDJ_CHECK(!f.engine().inspect_pattern_transport_receipt(generation, 3));
+      f.stop_and_reopen(f.initial_truth);
+    }
+    else f.reopen(f.initial_truth);
+  }
+  {
+    RecordingSwitchHostFixture f;
+    f.start();
+    const auto boundary = f.publish(kSwitchPatternB);
+    const auto publications = f.engine().pattern_telemetry().accepted_publications;
+    const auto repeat = check_locked_success_result(f.runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternB, f.command++, "beat"), {}));
+    LMDJ_CHECK(repeat.at("activation_frame") == boundary);
+    const auto withdrawn = check_locked_success_result(f.runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kPatternId, f.command++, "beat"), {}));
+    LMDJ_CHECK(withdrawn.at("activation_frame").is_null());
+    LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+    f.close_recording();
+    LMDJ_CHECK(f.engine().current_pattern_id()->value() == kPatternId);
+    f.check_truth(f.initial_truth);
+    f.stop_and_reopen(f.initial_truth);
+  }
+  {
+    RecordingSwitchHostFixture f;
+    f.start();
+    // Land any genuine opening overlay and its real Journal ACK first.
+    if (const auto pending = f.engine().pending_pattern_id()) {
+      f.until(f.engine().pattern_telemetry().pending_activation_frame + 1);
+      f.idle_io();
+    }
+    // Deliberately foreign immutable test material, outside the Host owner.
+    // No second Facade may borrow this runtime's retained writer authority.
+    const lmdj::cooker::RuntimeSnapshot snapshot{
+        lmdj::foundation::ProjectId{std::string(kProjectId)},
+        lmdj::foundation::PatternId{std::string(kPatternId)},
+        f.initial_truth.at("revision").get<std::uint64_t>(), 120, 1,
+        lmdj::domain::kPpq, lmdj::domain::kBarTicks4x4, {}, {}};
+    auto view = lmdj::audio::PreparedPatternView::from_snapshot(snapshot);
+    LMDJ_CHECK(view.has_value());
+    const auto foreign = f.engine().publish_pattern_view(std::move(view.value()));
+    LMDJ_CHECK(foreign.result == lmdj::audio::PatternPublishResult::accepted);
+    const auto publications = f.engine().pattern_telemetry().accepted_publications;
+    const auto refused = check_error(f.runtime->dispatch("pattern.transport.switch",
+        transport_switch_request(kSwitchPatternB, f.command++, "beat"), {}), "HOST_STATE_INVALID");
+    LMDJ_CHECK(refused.at("details").at("reason") == "pattern_publication_pending");
+    LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == publications);
+    // Same Pattern is insufficient ownership: the exact foreign generation
+    // remains pending until the real Stop fence cancels it.
+    LMDJ_CHECK(f.engine().pattern_telemetry().pending_generation == foreign.generation);
+    check_success(f.request("play_stop"));
+    settled_transport_status(*f.runtime, f.engine(), [](const auto& s) {
+      return s.at("playing") == false && s.at("recording") == false &&
+          s.at("phase") == "idle" && s.at("publication_pending") == false;
+    });
+    f.idle_io();
+    render_switch_frames_exact(f.engine(), 128);
+    LMDJ_CHECK(f.engine().pattern_telemetry().pending_generation == 0);
+    f.check_truth(f.initial_truth);
+    f.reopen(f.initial_truth);
+  }
+}
+
+void test_recording_switch_host_disposes_failed_io_before_native_pin_quiescence() {
+  RecordingSwitchHostFixture f;
+  f.start();
+  const auto generation = pattern_transport_inspect(*f.runtime, kSequenceSessionId).at("runtime_generation").get<std::uint64_t>();
+  const auto boundary = f.publish(kSwitchPatternB);
+  // External writer interruption: Truth commits, but its real Journal rebase
+  // append fails. This is a genuine authority conflict, not a fake switch ACK.
+  f.storage->fail_next_append("rebase");
+  const auto changed = lmdj::project_io::ProjectStore{f.storage}.execute(f.bundle,
+      lmdj::domain::Command{lmdj::domain::UpdateSequenceSettings{
+          {lmdj::foundation::CommandId{uuid(f.command++)}, f.initial_truth.at("revision").get<std::uint64_t>()},
+          130, {}, {}}});
+  LMDJ_CHECK(!changed.has_value());
+  const auto before = f.truth();
+  LMDJ_CHECK(before.at("revision") == f.initial_truth.at("revision").get<std::uint64_t>() + 1);
+  f.until(boundary + 1);
+  Json failed;
+  wait_until([&] {
+    failed = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+    return failed.at("phase") == "error";
+  });
+  LMDJ_CHECK(failed.at("error").is_object());
+  f.runtime->fail_and_seal("recording_switch_real_authority_conflict");
+  LMDJ_CHECK(f.coordinator.seam().await_quiescent(&f.coordinator, 1).has_value());
+  f.engine().stop();
+  LMDJ_CHECK(!f.engine().scheduled_pattern_record_quiescent()); // Host's actual B pin.
+  wait_until([&] { return f.runtime->acknowledge_pattern_input_owner_quiescent(generation); });
+  wait_until([&] { f.runtime->service_pattern_transport(); return f.runtime->pattern_transport_shutdown_complete(); });
+  LMDJ_CHECK(f.runtime->failed() && f.engine().scheduled_pattern_record_quiescent());
+  const auto final = pattern_transport_inspect(*f.runtime, kSequenceSessionId);
+  LMDJ_CHECK(final.at("error") == failed.at("error") && final.at("phase") == "error");
+  LMDJ_CHECK(!f.engine().inspect_pattern_transport_receipt(generation, 2)); // No invented F.
+  const auto retained = lmdj::project_io::SequenceJournal{}.read_active(f.bundle);
+  LMDJ_CHECK(retained.has_value() && retained.value().state == lmdj::project_io::SequenceSessionState::owner_lost);
+  LMDJ_CHECK(inspect_project(f.temp.path(), kProjectId).at("result").at("project") == before);
+  f.runtime.reset();
+  auto observer = make_application(f.temp.path());
+  const auto recovery = observer.list_sequence_recovery({f.bundle});
+  LMDJ_CHECK(recovery.has_value() && recovery.value().size() == 1);
+  LMDJ_CHECK(recovery.value()[0].session_id.value() == kSequenceSessionId && recovery.value()[0].reason == "owner_lost");
+  f.reopen(before);
+}
+
+void test_recording_switch_host_count_in_poll_republishes_actual_current_without_selection_poll() {
+  RecordingSwitchHostFixture f;
+  CountInOwnerAudioBackend backend{f.engine()};
+  OneShotAudioDriver driver(backend.seam());
+  const auto ticket = start_count_in_owner_journey(*f.runtime, f.coordinator, driver, f.command++);
+  const auto original = check_locked_success_result(f.runtime->dispatch(
+      "pattern.transport.count-in.inspect", companion_count_in_inspection(ticket), {}));
+  const auto boundary = f.publish(kSwitchPatternB);
+  while (f.engine().telemetry().rendered_frames <= boundary)
+    driver.render_frames(static_cast<std::uint32_t>(std::min<std::uint64_t>(128,
+        boundary + 1 - f.engine().telemetry().rendered_frames)));
+  LMDJ_CHECK(f.engine().current_pattern_id()->value() == kSwitchPatternB);
+  // No ordinary transport inspect/service occurs after B applies. The real
+  // count-in caller alone drives the close through its own status endpoint.
+  auto off = ticket;
+  off["start_command_id"] = ticket.at("command_id");
+  off["command_id"] = uuid(f.command++);
+  off["project_id"] = kProjectId;
+  off["expected_epoch"] = "2";
+  off["intent"] = "record";
+  check_success(f.runtime->dispatch("pattern.transport.count-in.cancel", off, {}));
+  driver.render_frames(1);
+  Json completed;
+  wait_until([&] {
+    completed = check_locked_success_result(f.runtime->dispatch("pattern.transport.count-in.inspect",
+        companion_count_in_inspection(ticket), {}));
+    return f.engine().pending_pattern_id().has_value();
+  });
+  LMDJ_CHECK(completed.at("start_receipt") == original.at("start_receipt"));
+  LMDJ_CHECK(completed.at("cancel_receipt").at("pattern_id") == kPatternId);
+  LMDJ_CHECK(completed.at("cancel_receipt").at("origin_frame") ==
+      original.at("start_receipt").at("origin_frame"));
+  LMDJ_CHECK(f.engine().pending_pattern_id()->value() == kSwitchPatternB);
+  LMDJ_CHECK(f.engine().current_pattern_id()->value() == kSwitchPatternB);
+  check_success(f.runtime->dispatch("pattern.transport.count-in.inspect",
+      companion_count_in_inspection(ticket, true), {}));
+  LMDJ_CHECK(!lmdj::project_io::SequenceJournal{}.read_active(f.bundle).has_value());
+  f.check_truth(f.initial_truth);
+  driver.stop();
+  f.epoch = 3;
+  f.stop_and_reopen(f.initial_truth);
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_recording_switch_host_returns_to_acknowledged_material_and_reopens();
+    test_recording_switch_host_keeps_both_native_facts_behind_real_io();
+    test_recording_switch_host_keeps_both_native_facts_behind_real_io(true);
+    test_recording_switch_host_keeps_original_count_in_receipts_and_prompt_f();
+    test_recording_switch_host_preserves_recording_kind_exclusion();
+    test_recording_switch_host_cancels_at_f_and_withdraws_current_target();
+    test_recording_switch_host_disposes_failed_io_before_native_pin_quiescence();
+    test_recording_switch_host_count_in_poll_republishes_actual_current_without_selection_poll();
     test_prepared_record_timeout_waits_for_real_owner_and_original_consumers();
     test_legacy_idle_play_timeout_retires_actual_worker_before_bridge_release();
     test_owner_loss_cleanup_failure_stops_and_clears_the_overlay(true);
@@ -14339,7 +14955,7 @@ int main() {
     test_transport_stop_cancels_a_switch_queued_after_record_off();
     test_transport_record_after_an_applied_switch_records_the_new_pattern();
     test_transport_record_after_cancellation_opens_from_the_production_receipt();
-    test_transport_switch_refused_while_recording_and_while_stopped();
+    test_transport_switch_keeps_recording_and_refuses_while_stopped();
     test_transport_stop_spends_a_deferred_switch_without_publishing();
     test_transport_switch_refuses_a_foreign_pending_publication();
     test_sequence_settings_bpm_refuses_a_pending_transport_switch();
