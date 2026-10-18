@@ -103,6 +103,15 @@ atomic32 claimed marker 管理 callback ownership，外部 authority 仍校验�
 累计计数、帧位置与 epoch 保留 64 位。音频、控制各自发布固定三缓冲值快照；多个非实时遥测读者只在读者之间互斥，音频完全不接触该锁。调度使用独立的 control-only transport 读取通道，在原 callback 起始前沿与 Pattern origin 交接点发布，不被遥测读者占用。Pattern 遥测只读取值副本，以认领前沿和精确取消身份排除已应用／已取消的旧 pending 记录，不读取可回收槽。所有相关写操作静止并与读者正确同步后，最终统计精确，无需再来一次 callback；运行中跨域仍是 best effort。`start/stop` 沿用 callback 排空要求，不能只看 stopped；交接时正常发布新值，不重置读者可能仍持有的三缓冲槽。输入和 FX 占用以 32 位原子保留原先的预留／回滚顺序，上界包含队列 1024 项及各一项在途生产者、消费者，合计 1026。64-Pad mask 保持完整 64 位，由 Bank pending-zero 的 release/acquire 交接保护。
 
 发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。Web Audio 的每个有效 callback（包括 paused callback）以 lock-free `uint32` heartbeat 表示活性；Browser Main 在 `AudioContext.resume()` 后必须先观察 heartbeat 前进，才请求打开 realtime gate。激活只在 accepted generation 已成为 current 且无 pending publication 时开启 gate；激活前锁存的 generation 由首个 open-gate callback 精确确认，避免 stop/start 或 suspend/resume 把旧的非零 acknowledgement 当作当前 Bank。context 已 resume 时，每个 paused callback 在把输出置零期间短暂持有 callback borrow；它不访问 Engine，因此不是拒绝激活的理由。Web adapter 的 readiness 只看 paused gate，不看 borrow 计数；开 gate 仍只从零 borrow 的 paused 状态原子完成，遇到在途 paused callback 时等待其释放间隙（上限 200 ms，只有 AudioWorklet 线程停顿才会耗尽），而不是把激活判为失败（#2345）。
+
+首个实际 open-gate render 同时发布该次 activation 的 engine epoch heartbeat：
+它是进入该 callback 前的 uint32 heartbeat，先于既有 generation acknowledgement。
+paused callback 不认领 epoch；后续 render／Bank publication 不改写；重新开 gate
+用自己的首个 render 重建。Web adapter 的 nonvirtual `engine_epoch_heartbeat()`
+通过原有 per-Runtime Bridge/publisher 供 Browser Main 直接读取，避免把异步激活回执
+延迟当作引擎起点。该 scalar 仅在首次 ACK 路径作一次 lock-free store，不改变
+callback borrow、quiescence、资源生命周期、Engine frame 或 Project Truth。
+
 Voice-state ring 内部使用自然对齐的紧凑 cell，入队／出队按字段复制，保留公开
 `RuntimeVoiceStateEvent` 的成员顺序和完整 64-bit sequence/runtime frame、32-bit
 source frame。默认容量仍为 10,240；SPSC 索引与内存序、满队列损坏状态、拒绝新

@@ -148,7 +148,12 @@ if (typeof globalThis.window !== "undefined") {
   }
 
   function audioCallbackHeartbeat() {
-    return Module["_lmdj_web_audio_callback_heartbeat"]();
+    return Module["_lmdj_web_audio_callback_heartbeat"]() >>> 0;
+  }
+
+  function audioEngineEpochHeartbeat() {
+    const sample = Module["_lmdj_web_audio_engine_epoch_heartbeat"];
+    return typeof sample === "function" ? sample() >>> 0 : null;
   }
 
   let startRecord = null;
@@ -1062,6 +1067,7 @@ if (typeof globalThis.window !== "undefined") {
     registerAudioContext,
     registerAudioNode,
     audioCallbackHeartbeat,
+    audioEngineEpochHeartbeat,
     startAudioWorklet,
     startAudioWorkletWithCountIn,
     setCountInMetronome,

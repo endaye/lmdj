@@ -80,6 +80,16 @@ Off 时只保留 `[C,S)` 内的四/八个强制 cue。该调用不经过排队 R
 录制状态。它尚不代表 Creator 控件、倒计时/灯和 JS scheduler 的 S 排除已经完成；
 后续 consumer 必须避免 native S 与 JS S 重复。浏览器 PCM 的精确边界证据不替代实机听感。
 
+`sampleAudioClock()` 的引擎 epoch heartbeat 来自首个真正 open-gate render 的
+Native callback，取该 callback 进入前的 heartbeat，并在既有 positive ACK 前发布。
+后来的 callback、Bank publication、激活回执延迟及异步 input-profile 刷新均不改写它；
+再次激活／恢复由自己的首个 render 建立新 epoch。Browser Main 通过同一 Runtime 的
+additive `audioEngineEpochHeartbeat()` 直接读取，`AudioClockSample` 仍为原有三个字段。
+当前 callback heartbeat 以 uint32 处理（包括符号位与 wrap），与原 epoch 作模减。
+旧 Native 缺少新 export 时返回明确的 unavailable，Session 保留 activation-return
+近似；该兼容路径不声称与原生 cue 精确同相。刷新结束后仍重验 activation/recovery
+owner，才继续发布 Running／recovery probe；读取 epoch 不代替 generation 或状态确认。
+
 Profile 在 stopped/quiescent、任何 live Pad 之前协商，每次 activation/recovery 更新
 真实 generation/frame epoch。canonical whole decimal uint64 input/epoch 与 uint60
 schedule serial 拒绝换行、leading zero、overflow；frame Number 超安全域 typed refuse。
