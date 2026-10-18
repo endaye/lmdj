@@ -691,6 +691,24 @@ Web role: Playwright system libraries are installed once by root
 the persistent `LMDJ_EMSDK_CACHE_ROOT`, `LMDJ_BROWSER_CACHE_ROOT` and
 `npm_config_cache` directories, so `install-system-deps` stays `"false"`.
 
+Both overflow hosts reach GitHub through a shared Tailscale exit node whose
+throughput swings from MiB/s to tens of KiB/s. A runner admitted while that
+link is slow fails checkout or downloads (runs 38743432320 and 39007862259), so
+each host runs `scripts/ci/host/runner-network-admission` every 10 minutes:
+the bash version from launchd on the M4 Pro
+(`scripts/ci/host/com.lmdj.runner-network-admission.plist`) and the PowerShell
+twin as a Windows scheduled task on en-home. It downloads a fixed 10 MiB range
+over the CI egress and adds the admission label (`ci-macos-gates` or
+`ci-web-overflow`) through the Runner API only after two consecutive samples
+of at least 2 MiB/s, and removes it after one sample under 500 KiB/s or a
+failed download. An unreadable Runner API changes nothing. The selectors then
+route by the label as before, so a slow link returns work to netcup or the M1
+instead of failing it. `tests/build/ci_runner_network_admission_test.py` runs
+the bash script against stubbed `curl` and `gh` and pins the twin's thresholds.
+The Windows task must invoke the stable App Execution Alias
+`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`; the versioned Store path
+disappears on update and the task then fails on every run.
+
 The nightly Release stress lane is trusted native workload on the bare-metal
 macOS M1 runner (`self-hosted, macOS, ARM64, lmdj, lmdj-mac-m1`), not on `ci-core`: it runs at
 most 20 consecutive successful repetitions and stops on the first failure, and
