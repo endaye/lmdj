@@ -16,6 +16,30 @@
 #include "testing_hooks.hpp"
 
 namespace lmdj::audio {
+
+PatternPublicationLease::PatternPublicationLease(
+    PatternPublicationLease&& other) noexcept
+    : engine_(std::exchange(other.engine_, nullptr)),
+      slot_(other.slot_), generation_(other.generation_) {}
+
+PatternPublicationLease& PatternPublicationLease::operator=(
+    PatternPublicationLease&& other) noexcept {
+  if (this != &other) {
+    reset();
+    engine_ = std::exchange(other.engine_, nullptr);
+    slot_ = other.slot_;
+    generation_ = other.generation_;
+  }
+  return *this;
+}
+
+PatternPublicationLease::~PatternPublicationLease() { reset(); }
+
+void PatternPublicationLease::reset() noexcept {
+  if (auto* engine = std::exchange(engine_, nullptr))
+    engine->release_pattern_publication_lease(slot_, generation_);
+}
+
 namespace {
 std::size_t checked_receipt_pending(std::size_t pending) {
   if (!RealtimeEngine::receipt_bounded_storage_bytes(pending)) {
@@ -1957,6 +1981,53 @@ PatternPublication RealtimeEngine::publish_pattern_switch_view(
       std::move(replacement_authority), PatternPublicationTiming::switch_bar, 0, snap);
 }
 
+RetainedPatternPublication RealtimeEngine::publish_retained_pattern_switch_view(
+    PreparedPatternView&& pattern, PatternSwitchSnap snap,
+    std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    ++pattern_publication_rejections_;
+    publish_control_observation();
+    return {{PatternPublishResult::phase_mismatch, 0, 0}, {}};
+  }
+  PatternPublicationLease lease;
+  const auto publication = publish_pattern_view_impl(std::move(pattern),
+      std::nullopt, std::move(replacement_authority),
+      PatternPublicationTiming::switch_bar, 0, snap, &lease);
+  return {publication, std::move(lease)};
+}
+
+std::optional<PatternPublicationObservation>
+RealtimeEngine::observe_pattern_publication(
+    const PatternPublicationLease& lease) const {
+  if (lease.engine_ != this || lease.slot_ >= pattern_slots_.size())
+    return std::nullopt;
+  const auto& slot = pattern_slots_[lease.slot_];
+  const auto state = slot.state.load(std::memory_order_acquire);
+  if (state == PatternState::empty || !slot.pattern ||
+      slot.generation != lease.generation_ || slot.scheduled_control_pins == 0)
+    return std::nullopt;
+  PatternPublicationObservation result{
+      {slot.generation, slot.pattern->pattern_id(), slot.activation_frame},
+      PatternPublicationDisposition::pending, std::nullopt};
+  // While pending, audio may still write apply metadata. Its acquire-published
+  // current/retired state makes that generation's write stable under this pin.
+  if (state == PatternState::pending) return result;
+  if (pattern_applied_generations_[lease.slot_] == lease.generation_) {
+    result.disposition = PatternPublicationDisposition::applied;
+    result.applied_frame = pattern_applied_frames_[lease.slot_];
+  } else if (state == PatternState::reclaimable) {
+    result.disposition = PatternPublicationDisposition::cancelled;
+  }
+  return result;
+}
+
+void RealtimeEngine::release_pattern_publication_lease(
+    std::uint8_t slot, std::uint64_t generation) noexcept {
+  if (slot < pattern_slots_.size() && pattern_slots_[slot].generation == generation &&
+      pattern_slots_[slot].scheduled_control_pins != 0)
+    --pattern_slots_[slot].scheduled_control_pins;
+}
+
 PatternPublication RealtimeEngine::publish_pattern_view_immediate(
     PreparedPatternView&& pattern) noexcept {
   return publish_pattern_view_impl(
@@ -1981,7 +2052,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     std::optional<std::uint64_t> requested_activation_frame,
     std::optional<PatternReplacementAuthority> replacement_authority,
     PatternPublicationTiming timing, std::uint64_t expected_generation,
-    PatternSwitchSnap snap) noexcept {
+    PatternSwitchSnap snap, PatternPublicationLease* retained) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   const bool tempo_transition = timing == PatternPublicationTiming::tempo_transition;
   const bool preserves_position = tempo_transition ||
@@ -2280,6 +2351,9 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
     const PatternPublishEntry publication{
         slot_index, slot->generation, activation_frame};
     slot->activation_frame = activation_frame;
+    // Only this serialized control producer can reclaim/reuse slots. Pin before
+    // the release mailbox CAS can expose this immutable generation to audio.
+    if (retained != nullptr) ++slot->scheduled_control_pins;
     slot->state.store(PatternState::pending, std::memory_order_release);
     if (!running) {
       apply_published_pattern(publication, 0);
@@ -2294,6 +2368,7 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
               static_cast<std::uint32_t>(publication.slot) + 1,
               std::memory_order_seq_cst,
               std::memory_order_seq_cst)) {
+        if (retained != nullptr) --slot->scheduled_control_pins;
         pattern = std::move(*slot->pattern);
         slot->pattern.reset();
         slot->generation = 0;
@@ -2320,6 +2395,8 @@ PatternPublication RealtimeEngine::publish_pattern_view_impl(
       }
     }
     accepted_pattern_publications_ += 1;
+    if (retained != nullptr)
+      *retained = PatternPublicationLease{*this, slot_index, publication.generation};
     return PatternPublication{
         PatternPublishResult::accepted,
         publication.generation,

@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="abd949d08f72280c63fa849deb369df3c9c3123def3edaa640a7c4853e680eb9">
-  <title id="title">Audio Runtime Module</title><desc id="description">Runtime source：连续 tempo / SNAP、S6 scheduled cell、独立 input escrow 与 product/cue 输出</desc>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="fafc43904a32d92fd9c20a7815d510429c784b2132ba7c087768a412ef79847b">
+  <title id="title">Audio Runtime Module</title><desc id="description">Runtime source：连续 tempo/SNAP、retained publication S、S6 scheduled cell、独立 input escrow 与 product/cue 输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -10,7 +10,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">Runtime source：连续 tempo / SNAP、S6 scheduled cell、独立 input escrow 与 product/cue 输出</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">Runtime source：连续 tempo/SNAP、retained publication S、S6 scheduled cell、独立 input escrow 与 product/cue 输出</text>
 
   <g class="connection"><path class="edge-mask" d="M 250 218 H 290 V 218 H 330"/><path class="edge" d="M 250 218 H 290 V 218 H 330" marker-end="url(#arrow)"/></g>
 <g class="connection"><path class="edge-mask" d="M 570 218 H 605 V 218 H 640"/><path class="edge" d="M 570 218 H 605 V 218 H 640" marker-end="url(#arrow)"/><text x="605" y="209">slot token + 64-bit identity</text></g>
@@ -26,6 +26,8 @@
 <g class="connection"><path class="edge-mask" d="M 250 428 H 284 V 592 H 6 V 538 H 40"/><path class="edge" d="M 250 428 H 284 V 592 H 6 V 538 H 40" marker-end="url(#arrow)"/><text x="145" y="474">separate companion</text></g>
 <g class="connection"><path class="edge-mask" d="M 320 538 H 480 V 218 H 640"/><path class="edge" d="M 320 538 H 480 V 218 H 640" marker-end="url(#arrow)"/><text x="480" y="369">C then S = C + bars * B</text></g>
 <g class="connection"><path class="edge-mask" d="M 870 218 H 1075 V 538 H 1280"/><path class="edge" d="M 870 218 H 1075 V 538 H 1280" marker-end="url(#arrow)"/><text x="1075" y="369">committed spans; render + ACK</text></g>
+<g class="connection"><path class="edge-mask" d="M 940 538 H 974 V 592 H 296 V 218 H 330"/><path class="edge" d="M 940 538 H 974 V 592 H 296 V 218 H 330" marker-end="url(#arrow)"/><text x="635" y="369">pin before visibility</text></g>
+<g class="connection"><path class="edge-mask" d="M 570 218 H 605 V 538 H 640"/><path class="edge" d="M 570 218 H 605 V 538 H 640" marker-end="url(#arrow)"/><text x="605" y="369">acquire actual S</text></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="166" width="218" height="104" rx="18"/>
@@ -98,6 +100,12 @@
       <rect class="node" x="1280" y="490" width="230" height="96" rx="14"/>
       <text class="node-title" x="1296" y="522">Cue PCM Output</text>
       <text class="node-detail" x="1296" y="548">pointer-free batch · output 1</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="636" y="486" width="308" height="104" rx="18"/>
+      <rect class="node" x="640" y="490" width="300" height="96" rx="14"/>
+      <text class="node-title" x="656" y="522">Publication Lease (opt-in)</text>
+      <text class="node-detail" x="656" y="548">control pin · retained actual S</text>
     </g>
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Clock / scheduled start</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">连续 tempo 保持位置/Voice；switch 从零开始。S6 先复制/借用再 Armed；e1=实际 S，e2=真 F。</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Input / lifetime</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">2N FIFO/completion；N ordinary + N held release。ACK 不退役物理 hold；借用/回调各自结算。</div></foreignObject></g>

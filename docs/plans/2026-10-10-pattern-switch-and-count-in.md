@@ -146,6 +146,92 @@ The addendum names its files and tests before code starts. Expected owners: `pat
 
 **Gate defect caught.** Events after the boundary landing in the old Pattern, or a second switch parking the engagement in `error`.
 
+### S3 C1 — retain actual Native publication boundaries
+
+At inspected main `4de2e7ddfe7f170aad3771b40d25333392c0a693`, playing
+publication/cancellation and per-slot actual applied generation/frame already
+exist. Serialized control pins already protect schedule material, independently
+of audio borrows. There is no control-owned publication lease/query surviving a
+later current Pattern. Add only that producer capability; the recording gate,
+I/O continuation and Creator switch controls remain C2–C4. The design Task is
+this branch's parent; refresh its actual introducing main before shipping C1.
+
+Declared files (one implementation Task):
+
+- `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`;
+- `packages/audio-runtime/src/realtime_engine.cpp`;
+- `tests/core/audio/realtime_engine_test.cpp`;
+- `tests/core/audio/realtime_engine_stress_test.cpp`;
+- `apps/docs-site/docs/core/modules/audio-runtime.mdx`;
+- `apps/docs-site/diagrams/audio-runtime.architecture.json`;
+- `apps/docs-site/static/diagrams/audio-runtime.svg` (official render);
+- `apps/docs-site/static/diagrams/audio-runtime.html` (official render);
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md`.
+
+The opt-in retained method requires Engine running; an outstanding lease keeps
+restart refused until its control owner releases it. Provide a move-only
+serialized-control lease, acquired inside publication
+admission before audio visibility and rolled back on a losing admission CAS.
+Use the existing slot control-pin storage without changing Engine object layout
+or adding work to render. Lease destruction/reset releases only its own pin;
+Engine must outlive its leases and callers still own durable ACK policy. Read
+matching actual apply metadata only after an acquire slot-state publication;
+never use a queued frame or announced callback end as an Applied result. A
+reclaimable slot without matching apply metadata proves exact cancellation;
+a pending or in-flight canceled audio owner stays pending until its own release.
+A later successor, stop/start or reclaim cannot turn an old ticket into a new
+publication. Ordinary non-retained publication and transport epochs are unchanged.
+
+Lowest checks: build and run existing `audio.realtime_engine` component and
+`audio.realtime_spsc_stress` stress selections, with reduced lease/reclaim,
+move/reset, cancellation/claim and delayed multi-switch tests in their existing
+owners. Preserve every existing case and deadline. Exercise the existing
+scheduled-material coexistence and concurrent audio/control reclamation; prove
+a retained boundary survives successor/reclaim against a freshly rebuilt mutant
+that omits its admission pin. The failure must be at that owning assertion.
+No new CTest registration, CI control or required gate. Update current Portal
+source diagram through the official renderer and run `scripts/docs-site.sh check`.
+
+Version impact: required — additive Audio Runtime methods/types, preserving
+existing public layouts and wire/Journal shapes, carry MINOR debt in #2237.
+No identity allocation. Documentation impact: required —
+`/core/modules/audio-runtime/` and its current source diagram describe the new
+control-only lifetime/query capability; no S3 UI or durable continuation claimed.
+
+C1 local results before shipping: all original/new `audio.realtime_engine` and
+`audio.realtime_spsc_stress` cases pass (1.61/1.64 s). Seven reduced Native
+scenarios include exact S distinct from queued prediction, delayed successor /
+reclaim, fixed-slot pressure, move/reset/foreign owner, cancellation/claim,
+admission rollback and original COUNT-IN receipt coexistence. The concurrent
+case traverses 48 publications while audio renders and control queries/cancels/
+reclaims, retaining the previous actual fact across each successor. Callback
+allocator guards and every existing scenario remain enabled.
+
+A rebuilt mutant omitting the admission pin fails the retained-boundary reclaim
+assertion at `realtime_engine_test.cpp:8386` (exit -6), not a setup/build failure.
+After a fresh-mtime restoration, the log recompiles the producer and both owning
+selections pass again (1.36/1.62 s). The first diagram render rejects layout /
+label/card constraints; correct only this source diagram to the existing grammar,
+then official render and complete Portal check pass: 179 tests, 10 source/20
+output diagrams, 50 routes/internal links. No validator or deadline is relaxed.
+Complete native/sanitizer/coverage/Web/Creator/candidate and physical checks are
+not claimed by these scoped C1 results; C2–C4 and S3's complete journey remain.
+
+C1 shipping refresh: S7 #2359 is integrated as `6be17e78`; design #2361 is
+integrated as `15ce56dfc2adbfdd0d1b2dc3909fa7c3b6493aa9`. Rebase C1 onto that
+actual introducing main, preserving its complete patch by range-diff. Native,
+Host, Facade and Journal premise sites remain byte-identical to inspected 4de2.
+No successor delivers the missing recording continuation or Host gate. Refresh
+Core configuration, rerun the owning component/stress and complete Portal check
+on this base before the amended commit; the prior mutant/restore evidence is
+retained. C2–C4 remain separate implementations, not implied by C1 integration.
+
+On the actual design-squash base, refreshed Core configuration/build and both
+owning selections pass again: component 1.75 s, stress 1.56 s. The complete
+Portal check also passes again (179 tests, 50 routes/internal links). No Native,
+test or Portal source bytes change during rebase; only this plan records the
+new main/source dispositions. Final commit/PR review remain head-bound.
+
 ## S4 — SEQ SNAP 1 BEAT and SEQ END
 
 **Behaviour.**

@@ -926,6 +926,85 @@ void corrupted_voice_state_stream_never_returns_a_partial_drain() {
   LMDJ_CHECK(drained == 0);
 }
 
+
+void retained_publication_boundaries_race_render_cancel_and_reclaim() {
+  using namespace lmdj;
+  using namespace lmdj::audio;
+  const foundation::ProjectId project{"00000000-0000-4000-8000-000000000001"};
+  const foundation::PatternId a{"00000000-0000-4000-8000-000000000002"};
+  const foundation::PatternId b{"00000000-0000-4000-8000-000000000003"};
+  auto make_view = [&](const foundation::PatternId& id) {
+    cooker::RuntimeSnapshot snapshot{project, id, 1, 240, 1,
+        domain::kPpq, domain::kBarTicks4x4, {}, {}};
+    auto view = PreparedPatternView::from_snapshot(snapshot);
+    LMDJ_CHECK(view.has_value());
+    return std::move(view.value());
+  };
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.publish_pattern_view(make_view(a)).result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  std::atomic<bool> done{};
+  std::thread audio([&] {
+    std::array<float, 64> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      callback_active = true;
+      engine.render(left.data(), right.data(), left.size());
+      callback_active = false;
+      std::this_thread::yield();
+    }
+  });
+  PatternPublicationLease previous;
+  std::optional<PatternPublicationObservation> previous_fact;
+  unsigned applied = 0, cancelled = 0;
+  for (unsigned i = 0; i < 48; ++i) {
+    engine.reclaim_retired_patterns();
+    const auto& target = i % 2 == 0 ? b : a;
+    auto next = engine.publish_retained_pattern_switch_view(make_view(target), PatternSwitchSnap::beat);
+    LMDJ_CHECK(next.publication.result == PatternPublishResult::accepted && next.lease);
+    bool cancel_won = false;
+    if (i % 4 == 0)
+      cancel_won = engine.cancel_pattern_publication(
+          {next.publication.generation, target, next.publication.activation_frame});
+    std::optional<PatternPublicationObservation> fact;
+    do {
+      fact = engine.observe_pattern_publication(next.lease);
+      LMDJ_CHECK(fact.has_value());
+      engine.reclaim_retired_patterns();
+      std::this_thread::yield();
+    } while (fact->disposition == PatternPublicationDisposition::pending);
+    LMDJ_CHECK(fact->authority.generation == next.publication.generation &&
+        fact->authority.pattern_id == target);
+    if (cancel_won) {
+      LMDJ_CHECK(fact->disposition == PatternPublicationDisposition::cancelled && !fact->applied_frame);
+      ++cancelled;
+    } else {
+      LMDJ_CHECK(fact->disposition == PatternPublicationDisposition::applied && fact->applied_frame);
+      LMDJ_CHECK(*fact->applied_frame >= next.publication.activation_frame);
+      ++applied;
+    }
+    if (previous_fact) {
+      const auto retained = engine.observe_pattern_publication(previous);
+      LMDJ_CHECK(retained && retained->authority.generation == previous_fact->authority.generation &&
+          retained->authority.pattern_id == previous_fact->authority.pattern_id &&
+          retained->disposition == previous_fact->disposition &&
+          retained->applied_frame == previous_fact->applied_frame);
+    }
+    previous = std::move(next.lease);
+    LMDJ_CHECK(!engine.observe_pattern_publication(next.lease));
+    previous_fact = std::move(fact);
+  }
+  previous.reset();
+  done.store(true, std::memory_order_release);
+  audio.join();
+  engine.stop();
+  engine.reclaim_retired_patterns();
+  LMDJ_CHECK(applied + cancelled == 48 && applied >= 36);
+  LMDJ_CHECK(engine.scheduled_pattern_record_quiescent());
+  const auto stats = engine.pattern_telemetry();
+  LMDJ_CHECK(stats.pending_publications == 0);
+  LMDJ_CHECK(stats.accepted_publications == stats.applied_publications + stats.canceled_publications);
+}
+
 }  // namespace
 
 void* operator new(std::size_t bytes) { return ordinary_allocate(bytes); }
@@ -946,6 +1025,7 @@ void operator delete(void* p, std::size_t, std::align_val_t) noexcept { release_
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { release_allocation(p); }
 
 int main() {
+  retained_publication_boundaries_race_render_cancel_and_reclaim();
   tempo_transitions_race_render_reclaim_and_retained_record_fences();
   phase_publication_races_render_reclaim_and_stop();
   pattern_transport_receipts_race_publication_and_reclaim();
