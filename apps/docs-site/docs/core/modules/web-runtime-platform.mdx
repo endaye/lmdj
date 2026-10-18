@@ -778,5 +778,7 @@ monitor path once. A late meter packet cannot restore the failed tap.
 返回对象与 binding 冻结；新 capture 的 identity 和计数重新开始。停止的只读值
 保留到下一次 capture start 或 tap/Session 关闭，旧 getter 在关闭后不能读取新 owner。
 这些是接收音频事实，不是 durable WAV、保存完整性、Performance 总时长或 Replay
-时钟。Writer/queue 的 durable prefix、已保存 Artifact 的验证 metadata 和 Creator
-Recording/Takes 呈现由 #2135 后续 Task 交付；本接口不修改 Project 或持久化格式。
+时钟。Creator 当前消费同一 SDK snapshot，并由既有 writer/queue 的真实回执独立发布
+本地 WAV/prefix 的 durableFrames、编码格式及结算事实。只读 observer 失败不取得录音
+控制权；owner、Save UNKNOWN 与 retry-bind 边界保持。已保存 Artifact 的验证 metadata
+与完整 Takes 列表仍待 #2135 B／U08b；本接口不修改 Project 或持久化格式。

@@ -4608,3 +4608,117 @@ test("Slots structural lock disables all draft controls and actions without disa
   for (const control of screen.getAllByRole("combobox")) expect(control.hasAttribute("disabled")).toBe(false);
   expect(screen.getByRole("button", {name: "Assign Pattern"}).hasAttribute("disabled")).toBe(false);
 });
+
+
+async function audioReadoutFixture(sampleRate = 48_000) {
+  const fixture = await shutdownRecordingFixture();
+  let generation = 0;
+  let value: import("@lmdj/web-runtime-platform/runtime_types").PerformanceMasterCaptureProgress =
+    Object.freeze({state:"unavailable",reason:"idle"});
+  const originalStart = fixture.runtime.session.startPerformanceMasterCapture;
+  fixture.runtime.session.performanceMasterCaptureProgress = vi.fn(() => value);
+  fixture.runtime.session.startPerformanceMasterCapture = async (sink,binding=null) => {
+    generation++;
+    value=Object.freeze({state:"available",captureId:`60000000-0000-4000-8000-${String(generation).padStart(12,"0")}`,
+      generation,binding,sampleRate,receivedFrames:0,phase:"recording",droppedFrames:0,failure:null});
+    const handle=await originalStart({
+      onBatch(channels){if(value.state==="available")value=Object.freeze({...value,receivedFrames:value.receivedFrames+channels[0].length});sink.onBatch(channels);},
+      onFailure(reason,dropped){if(value.state==="available")value=Object.freeze({...value,phase:"failed",failure:"protocol-error",droppedFrames:null});sink.onFailure(reason,dropped);},
+      onStopped(){if(value.state==="available" && value.phase!=="failed")value=Object.freeze({...value,phase:"stopped"});sink.onStopped();},
+    },binding);
+    return {stop(){if(value.state==="available" && value.phase!=="failed")value=Object.freeze({...value,phase:"stopping"});return handle.stop();}};
+  };
+  return {...fixture,
+    emit(frames=4800){expect(frames).toBeGreaterThan(0);expect(frames).toBeLessThanOrEqual(4800);fixture.getSink()!.onBatch([new Float32Array(frames),new Float32Array(frames)]);},
+    replaceCapture(){if(value.state==="available")value=Object.freeze({...value,captureId:"70000000-0000-4000-8000-000000000001",generation:99,phase:"recording",receivedFrames:777});},
+  };
+}
+
+test("audio readout separates received PCM from a slow durable checkpoint and final partial", async () => {
+  const f=await audioReadoutFixture();render(<PerformSurface controller={f.controller} project={project} bank={0}/>);
+  await userEvent.click(screen.getByRole("button",{name:"Record Performance"}));
+  act(()=>{f.emit();f.emit();f.emit(127);});
+  const captured=screen.getByRole("status",{name:"Captured audio"});
+  const wav=screen.getByRole("status",{name:"Local WAV audio"});
+  await waitFor(()=>expect(captured.textContent).toBe("00:00.202"));
+  expect(captured.getAttribute("data-frames")).toBe("9727");
+  expect(wav.textContent).toBe("00:00.000");
+  const prior=f.controller.getState().recordingAudio!;
+  expect(prior.wav!.snapshot.durableFrames).toBe(0);
+  const gate=deferred<void>();f.holdNextCheckpoint(gate.promise);
+  let stopping!:Promise<void>;act(()=>{stopping=f.controller.stop();});
+  await waitFor(()=>expect(f.checkpointEntered()).toBe(true));
+  expect(wav.getAttribute("data-frames")).toBe("0");expect(wav.getAttribute("data-settled")).toBe("false");
+  await act(async()=>{gate.resolve();await stopping;});
+  expect(wav.textContent).toBe("00:00.202");expect(wav.getAttribute("data-frames")).toBe("9727");
+  expect(wav.getAttribute("data-settled")).toBe("true");
+  expect(new DataView(f.bytes().buffer).getUint32(40,true)/4).toBe(9727);
+  expect(prior.wav!.snapshot.durableFrames).toBe(0);
+  expect(Object.isFrozen(f.controller.getState().recordingAudio!.wav!.snapshot)).toBe(true);
+  selectPerformPage("Takes");expect(screen.getByRole("status",{name:"Local WAV audio"}).textContent).toBe("00:00.202");
+});
+
+test("captured time uses its actual rate while local WAV uses its own header format", async () => {
+  const f=await audioReadoutFixture(44_100);render(<PerformSurface controller={f.controller} project={project} bank={0}/>);
+  await userEvent.click(screen.getByRole("button",{name:"Record Performance"}));
+  act(()=>f.emit(4410));await act(async()=>{await f.controller.stop();});
+  expect(screen.getByRole("status",{name:"Captured audio"}).textContent).toBe("00:00.100");
+  expect(screen.getByRole("status",{name:"Local WAV audio"}).textContent).toBe("00:00.091");
+  expect(new DataView(f.bytes().buffer).getUint32(24,true)).toBe(48_000);
+});
+
+test("a retained WAV prefix shows known storage drops and keeps unknown tap loss distinct", async () => {
+  const f=await audioReadoutFixture();render(<PerformSurface controller={f.controller} project={project} bank={0}/>);
+  await userEvent.click(screen.getByRole("button",{name:"Record Performance"}));
+  act(()=>{for(let i=0;i<32;i++)f.emit();});
+  await waitFor(()=>expect(f.writer.snapshot.durableFrames).toBe(153600));
+  act(()=>f.emit(1000));
+  await waitFor(()=>expect(f.writer.attemptedFrames).toBe(154600));
+  act(()=>f.getSink()!.onFailure("tap-failure",0));
+  await waitFor(()=>expect(f.controller.getState().recording.phase).toBe("stopped"));
+  expect(screen.getByRole("status",{name:"Local WAV audio"}).getAttribute("data-frames")).toBe("153600");
+  expect(screen.getByRole("status",{name:"Local WAV audio"}).getAttribute("data-dropped-frames")).toBe("1000");
+  expect(screen.getByText("Local WAV prefix")).toBeTruthy();
+  expect(screen.getByText("Additional audio loss unknown")).toBeTruthy();
+  expect(f.controller.getState().recordingAudio!.tapLoss).toBeNull();
+  expect(f.controller.getState().recordingAudio!.capture.state).toBe("available");
+});
+
+test("late checkpoint publication never adopts another capture's frames", async () => {
+  const f=await audioReadoutFixture();await f.controller.record();f.emit(127);
+  const original=f.controller.getState().recordingAudio!;
+  const gate=deferred<void>();f.holdNextCheckpoint(gate.promise);
+  const stop=f.controller.stop();await waitFor(()=>expect(f.checkpointEntered()).toBe(true));
+  expect(f.captureOwned()).toBe(false);f.replaceCapture();gate.resolve();await stop;
+  const final=f.controller.getState().recordingAudio!;
+  expect(final.capture).toEqual({state:"unavailable",reason:"owner-lost"});
+  expect(final.wav!.snapshot.durableFrames).toBe(127);
+  expect(original.capture.state==="available" && original.capture.receivedFrames).toBe(127);
+});
+
+test("controller close clears visible audio before delayed original writer callbacks settle", async () => {
+  const f=await audioReadoutFixture();await f.controller.record();f.emit(127);
+  const gate=deferred<void>();f.holdNextCheckpoint(gate.promise);
+  const closing=f.controller.close();
+  await waitFor(()=>expect(f.checkpointEntered()).toBe(true));
+  expect(f.controller.getState().recordingAudio).toBeNull();
+  gate.resolve();await closing;
+  expect(f.controller.getState().recordingAudio).toBeNull();
+  expect(new DataView(f.bytes().buffer).getUint32(40,true)/4).toBe(127);
+});
+
+test("audio facts survive Save UNKNOWN and bind retry until confirmed finalization", async () => {
+  const f=await audioReadoutFixture();await f.controller.record();f.emit(127);await f.controller.stop();
+  const original=f.controller.getState().recordingAudio;
+  const save=f.save.getMockImplementation()! as CreatorPerformanceRuntimeSession["savePerformance"];
+  f.save.mockImplementationOnce(async(request)=>{await save(request);throw new Error("save outcome unknown");});
+  f.inspect.mockRejectedValueOnce(new Error("readback unavailable"));
+  await f.controller.save("Audio Facts");
+  expect(f.controller.getState().recording.phase).toBe("stopped");expect(f.controller.getState().recordingAudio).toBe(original);
+  f.bind.mockRejectedValueOnce(new Error("bind unavailable"));
+  await f.controller.save("Audio Facts");
+  expect(f.controller.getState().bindingStatus).toBe("retry");expect(f.controller.getState().recordingAudio).toBe(original);
+  await f.controller.retryWavBind();
+  expect(f.controller.getState().bindingStatus).toBe("bound");expect(f.controller.getState().recordingAudio).toBeNull();
+  expect(f.save).toHaveBeenCalledTimes(1);
+});

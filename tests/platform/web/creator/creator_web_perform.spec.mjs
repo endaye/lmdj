@@ -70,6 +70,14 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function expectLocalAudioFrames(page, frames, sampleRate = 48_000) {
+  const output = page.getByRole("status", {name: "Local WAV audio", exact: true});
+  await expect(output).toHaveAttribute("data-frames", String(frames));
+  await expect(output).toHaveAttribute("data-rate", String(sampleRate));
+  await expect(output).toHaveAttribute("data-settled", "true");
+  await expect(output).not.toHaveText("Unavailable");
+}
+
 async function inspectProjectTruth(page) {
   return page.evaluate(() =>
     window.lmdjWebRuntimeHost.inspection.inspectProject());
@@ -1886,7 +1894,10 @@ for (const failure of [
     await expect(page.getByRole("status", {name: "WAV recording status"}))
       .toContainText(`sealed · ${failure.reason}`);
     await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-    parsePcm16StereoWav(await exportPerformanceWav(page));
+    const prefix = parsePcm16StereoWav(await exportPerformanceWav(page));
+    await expectLocalAudioFrames(page, prefix.frames);
+    await expect(page.getByRole("status", {name: "Local WAV audio", exact: true}))
+      .toHaveAttribute("data-reason", failure.reason);
   });
 }
 
@@ -1901,9 +1912,12 @@ test("a retryable WAV bind keeps the real Store receipt path and removes the tem
   expect((await opfsWavFiles(page)).length).toBeGreaterThan(baselineWavs.length);
   const revision = await projectRevision(page);
   await showPerformPage(page, "Takes");
+  const retainedWav = parsePcm16StereoWav(await exportPerformanceWav(page));
+  await expectLocalAudioFrames(page, retainedWav.frames);
   await page.getByRole("button", {name: "Retry WAV bind"}).click();
   await expect(page.getByRole("status", {name: "WAV binding status"}))
     .toContainText("bound", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await expect(page.getByRole("status", {name: "Local WAV audio", exact: true})).toHaveCount(0);
   await expectRevisionAfter(page, revision);
   await expect.poll(async () => (await opfsWavFiles(page)).filter(
     ({path}) => !/[0-9a-f]{64}\.wav$/.test(path),
@@ -2875,7 +2889,9 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
   await importActivateAndPerform(page);
   const read=()=>page.evaluate(()=>{
     const value=window.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress();
-    return {value,sampleRate:window.__captureProgressContext.sampleRate,
+    const ui=document.querySelector('[aria-label="Captured audio"]');
+    const host=ui?{frames:Number(ui.dataset.frames),rate:Number(ui.dataset.rate),captureId:ui.dataset.captureId,text:ui.textContent}:null;
+    return {value,host,sampleRate:window.__captureProgressContext.sampleRate,
       starts:window.__captureProgressStarts.filter(event=>event.generation===value.generation),
       stops:window.__captureProgressStops.filter(event=>event.generation===value.generation),
       batches:window.__performMasterBatchProof.filter(batch=>batch.generation===value.generation)};
@@ -2886,7 +2902,16 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
     await expect.poll(async()=>{
       const r=await read();return r.value.state==="available" && r.batches.filter(batch=>batch.peak===0).length>=2;
     },{timeout:AUDIO_TRANSITION_TIMEOUT_MS,intervals:[20]}).toBe(true);
+    const target=(await read()).value.receivedFrames;
+    const capturedUI=page.getByRole("status",{name:"Captured audio",exact:true});
+    await expect.poll(async()=>Number(await capturedUI.getAttribute("data-frames")),
+      {timeout:AUDIO_TRANSITION_TIMEOUT_MS,intervals:[20]}).toBeGreaterThanOrEqual(target);
     const active=await read();
+    expect(active.host.captureId).toBe(active.value.captureId);
+    expect(active.host.rate).toBe(active.sampleRate);
+    let prefixFrames=0;const deliveredPrefixes=active.batches.map(batch=>(prefixFrames+=batch.frames));
+    expect(deliveredPrefixes).toContain(active.host.frames);
+    expect(active.host.text).not.toBe("Unavailable");
     expect(active.value.phase).toBe("recording");
     expect(active.value.sampleRate).toBe(active.sampleRate);
     expect(active.value.receivedFrames).toBe(active.batches.reduce((sum,batch)=>sum+batch.frames,0));
@@ -2914,10 +2939,57 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
     expect(stopped.value.receivedFrames).toBe(pcm.frames);
     expect(stopped.value.sampleRate).toBe(wav.readUInt32LE(24));
     expect(stopped.batches.filter(batch=>batch.peak===0).reduce((sum,batch)=>sum+batch.frames,0)).toBeGreaterThanOrEqual(9600);
-    observations.push({active,stopped,wav:{frames:pcm.frames,sampleRate:wav.readUInt32LE(24),byteLength:wav.byteLength,sha256:sha256(wav)}});
+    await expectLocalAudioFrames(page,pcm.frames,wav.readUInt32LE(24));
+    await expect(capturedUI).toHaveAttribute("data-frames",String(stopped.value.receivedFrames));
+    const geometry=[];
+    const journeyViewport=page.viewportSize();
+    if(index===0)for(const viewport of [{width:1440,height:900},{width:1280,height:720},
+      {width:1024,height:768},{width:820,height:1180},{width:768,height:1024},{width:390,height:844}]) {
+      await page.setViewportSize(viewport);
+      await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,viewport);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+      for(const name of ["Live","Takes"]) {
+        await showPerformPage(page,name);
+        const card=page.getByRole("region",{name:"Recording audio readout",exact:true});
+        await card.scrollIntoViewIfNeeded();
+        const measurement=await card.evaluate(root=>{
+          const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,right:b.right,bottom:b.bottom};};
+          const touch=rect(root.closest('[data-testid="touch-workspace"]'));
+          return {outer:rect(root),touch,
+            rows:[...root.querySelectorAll('dl>div')].map(node=>({label:rect(node.firstElementChild),value:rect(node.lastElementChild)})),
+            text:[...root.querySelectorAll('dt,dd')].map(node=>({text:node.textContent,width:node.clientWidth,scroll:node.scrollWidth})),
+            scrollers:[...root.querySelectorAll('*')].filter(node=>['auto','scroll'].includes(getComputedStyle(node).overflowY)&&node.scrollHeight>node.clientHeight+1).length};
+        });
+        expect(measurement.outer.x).toBeGreaterThanOrEqual(measurement.touch.x-1);
+        expect(measurement.outer.right).toBeLessThanOrEqual(measurement.touch.right+1);
+        expect(measurement.outer.y).toBeGreaterThanOrEqual(measurement.touch.y-1);
+        expect(measurement.outer.bottom).toBeLessThanOrEqual(measurement.touch.bottom+1);
+        expect(measurement.scrollers).toBe(0);
+        // Portrait tablet consoles rotate -90deg: separation may be on either
+        // viewport axis. Both projections overlapping is the actual defect.
+        for(const row of measurement.rows)expect(
+          row.label.right<=row.value.x || row.value.right<=row.label.x ||
+          row.label.bottom<=row.value.y || row.value.bottom<=row.label.y,
+          JSON.stringify({viewport,name,row}),
+        ).toBe(true);
+        for(const text of measurement.text)expect(text.scroll,JSON.stringify({viewport,name,text})).toBeLessThanOrEqual(text.width+1);
+        geometry.push({viewport,page:name,...measurement});
+        const path=info.outputPath(`audio-${viewport.width}x${viewport.height}-${name}.png`);
+        await page.screenshot({path});await info.attach(`audio ${viewport.width} ${name}`,{path,contentType:"image/png"});
+      }
+    }
+    if(index===0) {
+      // Geometry probes must restore the original journey's viewport before
+      // continuing its discard/new-capture/Project reopen acceptance legs.
+      await page.setViewportSize(journeyViewport);
+      await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,journeyViewport);
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+    }
+    observations.push({active,stopped,geometry,wav:{frames:pcm.frames,sampleRate:wav.readUInt32LE(24),byteLength:wav.byteLength,sha256:sha256(wav)}});
     await page.getByRole("button",{name:"Discard Performance",exact:true}).click();
     await expect(page.getByRole("status",{name:"Performance recording status"})).toContainText("idle",{timeout:PROJECT_TRANSITION_TIMEOUT_MS});
     await showPerformPage(page,"Live");
+    await expect(page.getByRole("status",{name:"Captured audio",exact:true})).toHaveCount(0);
   }
   const retired=await page.evaluate(async()=>{
     const session=window.lmdjWebRuntimeHost.session;
@@ -2929,6 +3001,7 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
   await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
   const reopened=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress());
   expect(reopened).toEqual({state:"unavailable",reason:"idle"});
+  await expect(page.getByRole("status",{name:"Local WAV audio",exact:true})).toHaveCount(0);
   const path=info.outputPath("capture-progress-frames.json");
   await writeFile(path,JSON.stringify({observations,retired,reopened},null,2));
   await info.attach("real capture frames and Session identity",{path,contentType:"application/json"});
