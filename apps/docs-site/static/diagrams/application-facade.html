@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Application Facade Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="9fde2676e671b64185c13a80a2b662438a4d5a5b6c6cc380efb91755773ddd93">
-  <title id="title">Application Facade Module</title><desc id="description">唯一 Core 入口；S6 源码草稿以 serialized control + 单一 I/O owner 保留真实录音身份</desc>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Application Facade Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="94f832d02522973d8bc1508e1ff522c9e16181d0c887b7ed2c6c4c1a493494b8">
+  <title id="title">Application Facade Module</title><desc id="description">唯一 Core 入口；serialized control + 单一 I/O owner，实际 S 的耐久分段能力待接线</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -10,7 +10,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Application Facade Module</text><text class="page-summary" x="40" y="68">唯一 Core 入口；S6 源码草稿以 serialized control + 单一 I/O owner 保留真实录音身份</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Application Facade Module</text><text class="page-summary" x="40" y="68">唯一 Core 入口；serialized control + 单一 I/O owner，实际 S 的耐久分段能力待接线</text>
 
   <g class="connection"><path class="edge-mask" d="M 260 188 H 470 V 298 H 680"/><path class="edge" d="M 260 188 H 470 V 298 H 680" marker-end="url(#arrow)"/><text x="470" y="234">Facade API</text></g>
 <g class="connection"><path class="edge-mask" d="M 260 428 H 300 V 428 H 340"/><path class="edge" d="M 260 428 H 300 V 428 H 340" marker-end="url(#arrow)"/><text x="300" y="419">Platform API</text></g>
@@ -89,7 +89,7 @@
       <rect class="node-mask" x="1006" y="96" width="258" height="104" rx="18"/>
       <rect class="node" x="1010" y="100" width="250" height="96" rx="14"/>
       <text class="node-title" x="1026" y="132">Single I/O Owner</text>
-      <text class="node-detail" x="1026" y="158">Store/Journal/leases · lifecycle</text>
+      <text class="node-detail" x="1026" y="158">durable S · source flush · clock</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="1306" y="96" width="238" height="104" rx="18"/>
@@ -97,7 +97,7 @@
       <text class="node-title" x="1326" y="132">Exact Work Cell</text>
       <text class="node-detail" x="1326" y="158">64 KiB · exact work identity</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Facade / I/O owner</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 只用 Facade；Runtime-only 无 IO/Provider。worker 独占 Store/Journal/lease；scheduled count-in 在真 S 后开 Journal。</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Facade / I/O owner</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 只用 Facade；worker 独占 Store/Journal。实际 S 提交旧段、转目标、建立零点；持续切换控制接线待完成。</div></foreignObject></g>
 <g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">独立录音 release</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Native + durable 才 complete。press ticket 消费后保留 release correlation；真 S/F、exact readback。</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Performance authority</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Core epoch 绑定 verified Project；header 保存 live state。reserve → durable → publish → complete；unknown 冻结，replay 先还原 header。</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">shutdown 与验收</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">request_shutdown 后等 I/O stopped；Native/cue/hold 独立静止。原旅程保留；S6 执行 UNVERIFIED。</div></foreignObject></g>

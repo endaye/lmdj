@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Application Facade Module",
-    "summary": "唯一 Core 入口；S6 源码草稿以 serialized control + 单一 I/O owner 保留真实录音身份"
+    "summary": "唯一 Core 入口；serialized control + 单一 I/O owner，实际 S 的耐久分段能力待接线"
   },
   "boundaries": [],
   "components": [
@@ -109,7 +109,7 @@
     {
       "id": "io",
       "label": "Single I/O Owner",
-      "detail": "Store/Journal/leases · lifecycle",
+      "detail": "durable S · source flush · clock",
       "kind": "core",
       "x": 1010,
       "y": 100,
@@ -191,7 +191,7 @@
   "cards": [
     {
       "title": "Facade / I/O owner",
-      "body": "Host 只用 Facade；Runtime-only 无 IO/Provider。worker 独占 Store/Journal/lease；scheduled count-in 在真 S 后开 Journal。"
+      "body": "Host 只用 Facade；worker 独占 Store/Journal。实际 S 提交旧段、转目标、建立零点；持续切换控制接线待完成。"
     },
     {
       "title": "独立录音 release",

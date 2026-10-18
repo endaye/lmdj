@@ -143,7 +143,12 @@ PatternTransportWorkCompletion PatternTransportIoOwner::reconcile(const PatternT
     return PatternTransportWorkCompletion{uncertain ? PatternTransportWorkOutcome::unknown : PatternTransportWorkOutcome::refused,
         {}, result.error()};
   };
-  if (op == "prepare" || op == "open" || op == "activate") return replay_original();
+  // The coordinator keeps unknown segment work in the executor's single cell
+  // until its exact positive replay. Later cutoff/close cannot overtake it and
+  // remove the Journal. After consumption stale reconcile/steps are rejected
+  // by the executor; this private owner is not a historical cross-close API.
+  if (op == "prepare" || op == "open" || op == "activate" || op == "segment")
+    return replay_original();
   const auto journal = journals_.read_active(config_.bundle);
   auto unknown = [&](foundation::Error error) {
     return PatternTransportWorkCompletion{PatternTransportWorkOutcome::unknown, {}, std::move(error)};
@@ -313,6 +318,30 @@ Result PatternTransportIoOwner::perform(const PatternTransportWorkRequest& reque
   if (op == "activate") {
     const auto r = owner_.activate(*opening_fence,
         opening_commit ? &*opening_commit : nullptr);
+    return r.has_value() ? Result::success(Json::object()) : fail(r);
+  }
+  if (op == "segment") {
+    const auto active = journals_.read_active(config_.bundle);
+    if (!active.has_value()) return Result::failure(active.error());
+    const project_io::SequenceAdmissionIdentity identity{
+        foundation::CommandId{j.at("recording").get<std::string>()},
+        request.identity.runtime_generation, request.identity.transport_epoch};
+    if (active.value().session_id != config_.session || !active.value().admission ||
+        active.value().admission->preparation.identity != identity ||
+        active.value().admission->preparation.project_id != config_.project ||
+        request.identity.runtime_generation != config_.runtime_generation)
+      return Result::failure({foundation::ErrorCode::invalid_argument,
+          "Pattern segment recording owner changed"});
+    // Reconstruct only the exact durable admission after a worker restart.
+    // This duplicate uses the real writer; readable state is not a sync ACK.
+    auto r = owner_.prepare(active.value().admission->preparation);
+    if (!r.has_value()) return fail(r);
+    const project_io::SequencePublicationAuthority authority{
+        foundation::PatternId{j.at("pattern").get<std::string>()},
+        j.at("generation").get<std::uint64_t>(), j.at("frame").get<std::uint64_t>()};
+    const auto id = request.identity.command_id;
+    r = owner_.continue_segment(store_, authority, j.at("bpm").get<std::uint16_t>(),
+        id, derived(id, 0, 'f'), derived(id, 1, 'a'));
     return r.has_value() ? Result::success(Json::object()) : fail(r);
   }
   if (op == "admit") {
