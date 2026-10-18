@@ -16,6 +16,12 @@ manifest commit point、Swing、整数时钟、迁移归一化与 fingerprint �
 - `docs/prd/questions/recording-concurrency-semantics.md`
 - `docs/prd/questions/take-event-vs-audio-bounce.md`
 
+录音中全局 Pattern 多次切换的实现补充见
+[2026-10-18 retained boundaries / durable segments](2026-10-18-recording-pattern-switch-segments.md)。
+它按已批准 #1958 明确 SR-D23 的实际 Native 边界与异步 I/O 顺序、跨界按压和多段恢复；
+本体产品权威仍见[Stage 9 已确认决定](../prd/decisions/2026-08-23-sequence-recording-semantics.md)。
+该设计准备本身不解除当前 Host／Creator 的录音切换门禁。
+
 ## 1. 结论
 
 Stage 9 的演奏录音对标 Koala Sequence，**不是** Headless Core Proof 里的 Raw
