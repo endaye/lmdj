@@ -24,6 +24,25 @@ const state: CreatorState = {...initialCreatorState,
 const common = {state, sequence: initialSequenceState, snap: "1/16" as const,
   viewport: null, selection: []};
 
+test("Overview forwards the meter only while the actual Perform body is mounted", () => {
+  const outputMeter = vi.fn(() => ({state: "available" as const,
+    owner: "11111111-1111-4111-8111-111111111111", sampleRate: 48_000,
+    windowStartFrame: "0", windowEndFrame: "2400", renderQuantumFrames: 128,
+    leftPeak: 0, rightPeak: 0, leftPeakFrame: "2399", rightPeakFrame: "2399",
+    contextTimeSeconds: 0.05}));
+  const source = {outputMeter}; const running = {...state, audio: {phase: "running" as const}};
+  const view = render(<OverviewDisplay {...common} state={running} activeMode="perform"
+    outputMeterSource={source} />);
+  expect(screen.getByLabelText("Stereo output readout").textContent).toBe("L −∞  R −∞ dBFS");
+  const reads = outputMeter.mock.calls.length;
+  view.rerender(<OverviewDisplay {...common} state={running} activeMode="perform" systemOpen
+    outputMeterSource={source} />);
+  expect(screen.queryByLabelText("Stereo output readout")).toBeNull();
+  view.rerender(<OverviewDisplay {...common} state={running} activeMode="sample" outputMeterSource={source} />);
+  expect(screen.queryByLabelText("Stereo output readout")).toBeNull();
+  expect(outputMeter).toHaveBeenCalledTimes(reads);
+});
+
 const countInReadoutFixture = (): CountInState => ({...initialCountInState,
   active: true, phase: "counting", ticket: {sessionId: "session", commandId: "command",
     runtimeGeneration: "1", frameEpoch: "2", scheduleSerial: "3"},

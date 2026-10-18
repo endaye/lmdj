@@ -189,13 +189,13 @@
 .overview-display.interaction-overview[data-mode] .perform-overview-launch {
   position: absolute;
   left: 0;
-  bottom: 7px;
+  bottom: -5px;
   color: var(--creator-muted);
   font: 400 9px/13px var(--creator-font-mono);
 }
 .overview-display.interaction-overview[data-mode] .perform-overview-progress {
   position: absolute;
-  bottom: 0;
+  bottom: -9px;
   width: 100%;
   height: 3px;
   background: var(--creator-line);
@@ -204,8 +204,54 @@
 .overview-display.interaction-overview[data-mode] .perform-overview-facts {
   position: absolute;
   right: 0;
-  bottom: -14px;
+  bottom: -5px;
   gap: 12px;
   font: 400 9px/13px var(--creator-font-mono);
   letter-spacing: 0;
+}
+.perform-output-meter {
+  position: absolute;
+  top: 46px;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 53fr) minmax(0, 17fr);
+  gap: 20px;
+  height: 12px;
+  pointer-events: none;
+  color: var(--creator-muted);
+  font: 400 9px/13px var(--creator-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.perform-output-meter-tracks { display: grid; grid-template-rows: 3px 3px; gap: 3px; }
+.perform-output-meter-rail { position: relative; background: var(--creator-line); }
+.perform-output-meter-rail:first-child { color: var(--creator-lime); }
+.perform-output-meter-rail:last-child { color: #95d4df; }
+.perform-output-meter-fill { display: block; height: 100%; background: currentColor; }
+.perform-output-meter-hold {
+  position: absolute;
+  top: -1px;
+  width: 1px;
+  height: 5px;
+  transform: translateX(-1px);
+  background: currentColor;
+}
+.perform-output-meter output { margin-top: -2px; white-space: pre; }
+html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] { gap: 12px; }
+html[data-creator-layout="compact"] .perform-output-meter { grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; }
+@media (max-width: 600px) {
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] { gap: 8px; }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-columns { gap: 8px; }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-columns dt { font-size: 7px; line-height: 10px; }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-columns dd { font-size: 8px; line-height: 12px; }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-columns .perform-overview-counter { font-size: 8px; line-height: 10px; }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-launch {
+    top: 60px; bottom: auto; width: 54%; font-size: 7px; line-height: 9px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-facts {
+    top: 60px; bottom: auto; max-width: 44%; row-gap: 0; column-gap: 8px;
+    justify-content: flex-end; font-size: 7px; line-height: 9px;
+  }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-facts div { gap: 4px; }
+  html[data-creator-layout="compact"] .overview-display.interaction-overview[data-mode="perform"] .perform-overview-progress { top: 79px; bottom: auto; }
 }

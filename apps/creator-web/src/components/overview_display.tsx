@@ -20,6 +20,7 @@ import {SEQUENCE_TICKS_PER_BAR, sequenceBarBeat} from "../state/sequence_grid_mo
 import {usePatternPlayheadTick} from "./use_pattern_playhead";
 import {CountInReadout} from "./count_in_readout";
 import {initialCountInState, type CountInState} from "../runtime/count_in_controller";
+import type {OutputMeterSource} from "./stereo_output_meter";
 import "./overview_display.css";
 
 interface OverviewDisplayProps {
@@ -40,6 +41,7 @@ interface OverviewDisplayProps {
   countIn?: CountInState;
   midi?: MidiStatus | null;
   performController?: PerformController | null;
+  outputMeterSource?: OutputMeterSource | null;
 }
 
 function encoderLabel(label: string | undefined): string {
@@ -119,6 +121,7 @@ export function OverviewDisplay({
   countIn = initialCountInState,
   midi = null,
   performController,
+  outputMeterSource,
 }: OverviewDisplayProps) {
   const project = state.project.current;
   // #1958: while the transport plays, the upper screen names the Pattern the
@@ -203,6 +206,7 @@ export function OverviewDisplay({
         <PerformOverview
           state={state}
           hideState
+          outputMeterSource={outputMeterSource ?? null}
           selectedPatternId={selectedPatternId}
           {...(performController === undefined ? {} : {controller: performController})}
           {...(transport === undefined ? {} : {transport})}
