@@ -2379,13 +2379,32 @@ std::size_t run_rounds(Rounds rounds) {
     executed += run(kShards.front(), round);
   return executed;
 }
+// A worker keeps two threads runnable: wait_for spins on its predicate while
+// the Pattern transport executor does the durable work it waits on. Under
+// ASan a lone round on the M1 already spends about 1 s of the 3 s settle
+// deadline on each of the metadata journey's 512th and 1024th settles, and
+// eight ASan workers (sixteen spinning or working threads on four performance
+// and four efficiency cores) pushed one past it (run 39107252620). Instrumented
+// builds therefore give each worker two hardware threads. The deadline, all
+// 64 rounds and every case are unchanged; only fewer rounds overlap.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+constexpr unsigned kThreadsPerWorker = 2;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+constexpr unsigned kThreadsPerWorker = 2;
+#else
+constexpr unsigned kThreadsPerWorker = 1;
+#endif
+#else
+constexpr unsigned kThreadsPerWorker = 1;
+#endif
 // Every round must run and pass in some worker: a worker that exits nonzero,
 // is signalled or cannot be started fails the whole registration.
 bool run_rounds_in_workers() {
   // No more workers than rounds, so every worker's slice is non-empty and the
   // slices partition 1..kStressRounds exactly.
   const auto workers = std::min(
-      std::clamp(std::thread::hardware_concurrency(), 1U, 8U), kStressRounds);
+      std::clamp(std::thread::hardware_concurrency() / kThreadsPerWorker, 1U, 8U), kStressRounds);
   std::vector<std::pair<Rounds, pid_t>> children;
   bool passed = true;
   for (unsigned worker = 0; worker != workers; ++worker) {

@@ -36,6 +36,9 @@ recurrences:
   - date: 2026-10-17
     occurrence: https://github.com/endaye/lmdj/actions/runs/38984377212
     observed_by: Claude Code (Opus 5.5)
+  - date: 2026-10-18
+    occurrence: https://github.com/endaye/lmdj/actions/runs/39107252620
+    observed_by: Claude Code (Opus 5.5)
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/657
 ---
@@ -137,6 +140,17 @@ outran the 60-minute job, and over its 1,200 s TSan timeout in a 30-minute job
 (#2261).
 When repetitions are independent, run them in parallel child processes inside
 the one registration, and keep real-deadline cases out of that contention.
+Size the worker count by the threads each worker keeps runnable and by the
+build's instrumentation, not by core count alone. On 2026-10-18 the 2.0.116.0
+candidate's M1 ASan lane failed `facade.pattern_count_in_stress` after 288 s
+(run 39107252620): eight ASan workers, each a spinning `wait_for` plus the
+executor it waits on, shared four performance cores, and one settle missed
+its fixed 3 s deadline, whose two slowest settles already take about 1 s in a
+lone ASan round. The same binary had passed on the M4 Pro in 109 s. Sanitizer
+builds now give each worker two hardware threads; the deadline and all 64
+rounds are unchanged. The M1 is also a workstation: a loaded host fails even
+the reduced worker count, so do not run local heavy work while it serves a
+batch.
 Before adding a stress registration, multiply its Release time by twenty and
 measure it under TSan.
 
