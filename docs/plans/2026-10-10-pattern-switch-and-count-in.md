@@ -103,6 +103,38 @@ the original Creator/Portal-only scope no longer applies.
 
 ## S3 — switch while recording (Core)
 
+### S3 design preparation Task (2026-10-18, #2233)
+
+Integration main: `4de2e7ddfe7f170aad3771b40d25333392c0a693`;
+stack base: `0de1a81c941e19bd70d259566af283836b38926d` (S7 consumer #2359).
+Current main and live #2233 were refreshed before editing. No successor delivers
+recording switches: the Host still returns `pattern_transport_recording`;
+production I/O retains/reconciles a switch only through cutoff/close; Creator
+retains its recording gates. Native already retains actual per-slot applied
+frames, material control pins and selected-boundary publication, and the Journal
+already supports serially reconciled switch history. Reuse these positive
+controls rather than design another realtime receipt queue or schema.
+
+Declared files for this documentation-only Task:
+
+- `docs/design/2026-10-18-recording-pattern-switch-segments.md` (new);
+- `docs/design/2026-08-22-sequence-recording-semantics-design.md` (link addendum);
+- `docs/plans/2026-10-10-pattern-switch-and-count-in.md` (this preparation).
+
+The [S3 addendum](../design/2026-10-18-recording-pattern-switch-segments.md)
+selects actual boundary/segment ownership, durable ordering, retained lease
+lifetime, cross-boundary input and current-Pattern closure. It preserves the
+approved product/held-note/recovery semantics and existing wire/Journal shapes.
+Lowest-tier verification: source/test path ownership, local relative links,
+approved-decision traceability and exact three-file/whitespace inventory. No
+Native/UI/product proof or new CI gate belongs to this preparation. Each later
+producer/consumer Task freezes its own exact files and owning tests before code;
+the candidate owners below do not authorize a cross-layer omnibus commit.
+
+Version impact: none — design preparation allocates no identity or artifact.
+Documentation impact: none — current Portal/product behavior is unchanged.
+
+
 S3 starts with a short design addendum to the [Sequence recording semantics](../design/2026-08-22-sequence-recording-semantics-design.md). It must cover:
 
 - settling the old segment at the applied switch boundary rather than at close (SR-D23);
