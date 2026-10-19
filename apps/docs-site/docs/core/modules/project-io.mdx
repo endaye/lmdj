@@ -68,6 +68,15 @@ range companion 时返回 typed I/O unavailable，不退回全量读取。这项
 录音完整性或演出总时长，也不改变 Save／bind 的幂等与 writer 生命周期。
 
 ## 6. 状态、错误与生命周期
+本地 `list_local_projects` 的完整 inventory 摘要使用64KiB heap 窗口、前后长度和
+EOF 检查，并在同一 history guard／writer lease 内完成 Project load 与全部 hash。
+它保留原有 summary keys 和 canonical digest；生产 Native／OPFS 可发现包含长录音
+的本地工程，不在发现阶段套用 Bundle 传输的单文件／总 payload 字节限额。
+路径、条目数量和整数溢出检查保留；读取失败不发布部分摘要，已有 range reader
+失败不回退整文件读取。旧平台的小文件 complete-read 路径保留，大文件缺少有界
+能力时在分配前明确拒绝。此发现回执不授权传输：Bundle 导入、commit 与复制仍保留
+原64MiB／512MiB 限额，未改变格式或持久化 Contract。
+
 故障矩阵验证验证、取消、超时与发布中断恢复；typed error 区分输入、平台、busy 与提交失败。
 ## 7. 产品使用方
 Application Facade 使用；Host 不直接解析 bundle。

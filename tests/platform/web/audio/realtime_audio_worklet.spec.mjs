@@ -1618,6 +1618,9 @@ opfsTest("saved recording metadata RPC verifies real WAVs through two page reope
 
 opfsTest("thirty-minute recording Save and bind preserve full identity through two page reopens", async ({context}, testInfo) => {
   opfsTest.setTimeout(180_000);
+  const bundleSchema=JSON.parse(await (await import("node:fs/promises")).readFile(
+    new URL("../../../../contracts/project/lmdj.project-bundle.v1.schema.json",import.meta.url),"utf8"));
+  const bundleContractVersion=bundleSchema["x-lmdj-contract-version"];
   // Independent Python hashlib witness for this literal PCM16 stereo header
   // followed by345600000 zero bytes. This is a controlled physical file, not
   // device capture. Keep the production512MiB heap and default30s RPC budget.
@@ -1634,7 +1637,7 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
       const host=await waitForFormalHost(page);
       expect(host.memoryBytes).toBe(536870912);
       if(phase==="prepare") expect((await activateFromClick(page,48000)).ok).toBe(true);
-      const report=await page.evaluate(async ({admission,phase,projectId,patternId,performanceId,revision,artifact,header})=>{
+      const report=await page.evaluate(async ({admission,phase,projectId,patternId,performanceId,revision,artifact,header,bundleContractVersion})=>{
         const send=async (operation,payload)=>{
           const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
             request_id:crypto.randomUUID(),operation,payload});
@@ -1666,6 +1669,10 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
         const inspected=await send("performance.inspect",{performance_id:performanceId});
         const metadata=await send("performance.recording.metadata",{project_id:projectId,
           performance_id:performanceId,expected_revision:revision,recording_artifact:artifact});
+        // Creator boot discovers before opening. Direct project.open alone
+        // cannot prove this formerly whole-file allocation path works.
+        const listed=await send("project.list",{});
+        const project=await send("project.inspect",{});
         const assets=await (await (await root.getDirectoryHandle("projects"))
           .getDirectoryHandle(projectId+".lmdj")).getDirectoryHandle("assets");
         const file=await (await assets.getFileHandle(artifact.sha256+".wav")).getFile();
@@ -1677,10 +1684,40 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
           tail:Array.from(new Uint8Array(await file.slice(-4).arrayBuffer())),
           sampleRate:view.getUint32(24,true),channels:view.getUint16(22,true),
           sourceFrames:view.getUint32(52,true)/view.getUint16(32,true)};
+        // Independent browser Crypto oracle for the complete canonical
+        // inventory, using actual OPFS bytes rather than Core's hash helper.
+        const inventory=[];
+        const digest=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+          value=>value.toString(16).padStart(2,"0")).join("");
+        const walk=async (directory,parent="")=>{
+          for await(const [name,entry] of directory.entries()) {
+            const path=parent+name;
+            if(entry.kind==="directory")await walk(entry,path+"/");
+            else {
+              const file=await entry.getFile();
+              inventory.push({path,bytes:file.size,sha256:path===`assets/${artifact.sha256}.wav`
+                ?physical.sha256:await digest(await file.arrayBuffer())});
+            }
+          }
+        };
+        const directory=await (await root.getDirectoryHandle("projects")).getDirectoryHandle(projectId+".lmdj");
+        await walk(directory);
+        // All fixture paths are ASCII, whose ordering is unsigned UTF-8 byte
+        // ordering. Native canonical-path tests retain the non-ASCII cases.
+        inventory.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+        let total=0;
+        const entries=inventory.map(entry=>{const offset=total;total+=entry.bytes;return {...entry,offset};});
+        const canonical=value=>Array.isArray(value)?value.map(canonical):value!==null&&typeof value==="object"
+          ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+        const index={compression:"none",contract:"lmdj.project-bundle.v1",contract_version:bundleContractVersion,
+          entries,project_contract:project.project.contract,project_id:projectId,uncompressed_bytes:total};
+        const inventoryDigest=await digest(new TextEncoder().encode(JSON.stringify(canonical(index))));
         if(phase==="prepare")await send("audio.suspend",{});
         const closed=await send("host.close",{});
-        return {admitted,inspected,metadata,physical,closed,memoryBytes:window.Module.wasmMemory.buffer.byteLength};
-      },{admission,phase,projectId,patternId,performanceId,revision,artifact,header:Array.from(Buffer.from(headerHex,"hex"))});
+        return {admitted,inspected,metadata,physical,listed,inventory:{entries,total,digest:inventoryDigest},
+          closed,memoryBytes:window.Module.wasmMemory.buffer.byteLength};
+      },{admission,phase,projectId,patternId,performanceId,revision,artifact,bundleContractVersion,
+        header:Array.from(Buffer.from(headerHex,"hex"))});
       if(phase==="prepare")expect(report.admitted.receipt.project_revision).toBe(revision);
       else expect(report.admitted).toBeNull();
       expect(report.inspected).toEqual({performance:{id:performanceId,name:"thirty minutes",created_bpm:120,
@@ -1691,6 +1728,10 @@ opfsTest("thirty-minute recording Save and bind preserve full identity through t
       expect(report.physical).toEqual({sha256:artifact.sha256,byteLength:345600056,
         prefix:Array.from(Buffer.from(headerHex,"hex")),tail:[0,0,0,0],
         sampleRate:48000,channels:2,sourceFrames:86400000});
+      expect(report.listed.projects.find(value=>value.project_id===projectId)).toEqual({
+        project_id:projectId,pattern_id:patternId,revision,bpm:120,asset_count:0,assigned_pad_count:0,
+        bundle_digest:report.inventory.digest});
+      expect(report.inventory.total).toBeGreaterThan(345600056);
       expect(report.closed.state).toBe("closed");expect(report.memoryBytes).toBe(536870912);
       expect(errors,"production Wasm must not trap while verifying long recordings").toEqual([]);
       reports.push({phase,...report});await page.close();expect(page.isClosed()).toBe(true);
