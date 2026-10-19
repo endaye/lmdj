@@ -38,6 +38,12 @@ export const PERFORMANCE_FX_ORDER = Object.freeze([
   "gate", "reverse", "crush", "cutter",
 ] as const satisfies readonly PerformanceFx[]);
 
+export function performanceNameError(name: string): string | null {
+  const codePoints = Array.from(name).length;
+  return codePoints === 0 || codePoints > 64
+    ? "Use 1–64 characters for the Performance name." : null;
+}
+
 export interface PerformanceSummary {
   readonly performanceId: string;
   readonly name: string;
@@ -245,6 +251,7 @@ export interface PerformState {
     sessionId: string; journalRevision: number}> | null;
   readonly saveConfirmation: Readonly<{performanceId: string; name: string;
     projectRevision: number; source: "save" | "inspection"}> | null;
+  readonly pendingSaveName: string | null;
   readonly takeAudio: TakeAudioState | null;
   readonly recovery: readonly PerformanceRecoverySummary[];
   readonly recoveryLoaded: boolean;
@@ -276,6 +283,7 @@ export type PerformAction =
       readonly owner: ProjectView; readonly drafts: readonly string[];
       readonly stoppedDraft: PerformState["stoppedDraft"]}
   | {readonly type: "save-confirmation"; readonly value: PerformState["saveConfirmation"]}
+  | {readonly type: "save-pending-name"; readonly name: string}
   | {readonly type: "take-audio"; readonly value: TakeAudioState | null}
   | {readonly type: "performance-list-status"; readonly owner: ProjectView;
       readonly status: "loading" | "unavailable"}
@@ -326,6 +334,7 @@ export function initialPerformState(
     performanceDraftIds: Object.freeze([]),
     stoppedDraft: null,
     saveConfirmation: null,
+    pendingSaveName: null,
     takeAudio: null,
     recovery: Object.freeze([]),
     recoveryLoaded: false,
@@ -347,10 +356,12 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
     case "recording": return Object.freeze({...state,
       recordingAudio: ["idle", "starting"].includes(action.recording.phase) ? null : state.recordingAudio,
       saveConfirmation: ["idle", "starting"].includes(action.recording.phase) ? null : state.saveConfirmation,
+      pendingSaveName: ["idle", "starting"].includes(action.recording.phase) ? null : state.pendingSaveName,
       stoppedDraft: action.recording.phase === "starting" ? null : state.stoppedDraft,
       recording: freezeRecording(action.recording)});
     case "save-confirmation": return Object.freeze({...state,
       saveConfirmation: action.value === null ? null : Object.freeze({...action.value})});
+    case "save-pending-name": return Object.freeze({...state, pendingSaveName: action.name});
     case "recording-audio": return Object.freeze({...state, recordingAudio: action.value});
     case "pending-launch": return Object.freeze({...state,
       pendingLaunch: action.pending});
@@ -1861,6 +1872,13 @@ export function createPerformController(options: PerformControllerOptions): Perf
         return Promise.resolve();
       }
       if (refuseUnsettledFinalization()) return Promise.resolve();
+      if (!saveOutcomeUnknown && !saveCommitted) {
+        const nameError = performanceNameError(name);
+        if (nameError !== null) {
+          dispatch({type: "error", message: nameError});
+          return Promise.resolve();
+        }
+      }
       return runFinalization(async () => {
         const {performanceId} = currentRecording();
         const owner = recordingOwner;
@@ -1896,6 +1914,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
               rememberShutdownFailure(owner, "save", error);
               if (errorCode(error) === "PROJECT_BUSY") throw error;
               saveOutcomeUnknown = true;
+              dispatch({type: "save-pending-name", name: savedName});
               const inspected = await session.inspectPerformance(performanceId);
               if (inspected.id !== performanceId || inspected.name !== savedName) {
                 throw error;

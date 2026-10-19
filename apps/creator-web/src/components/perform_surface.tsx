@@ -1,6 +1,6 @@
 import "./perform_surface.css";
 import {performCaptureUnavailableMessage} from "../state/error_messages";
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
+import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from "react";
 import type {PerformanceFx} from "@lmdj/web-runtime-platform/runtime_types";
 import type {ContextualEncoders, ContextualNavigation} from "./physical_controls";
 
@@ -14,6 +14,7 @@ import {
 import {transportStatusLabel} from "./transport_status";
 import {
   PERFORMANCE_FX_ORDER,
+  performanceNameError,
   selectLivePadGate,
   type PerformController,
   type PerformState,
@@ -70,6 +71,8 @@ function RecordingPanel(props: {
 }) {
   const phase = props.state.recording.phase;
   const [name, setName] = useState("Performance");
+  const nameHelpId = useId();
+  const nameError = props.state.pendingSaveName === null ? performanceNameError(name.trim()) : null;
   const stopped = props.page === "takes" && ["stopped", "saving", "discarding"].includes(phase);
   return (
     <section className="perform-recording" aria-label="Performance recording" data-phase={phase}>
@@ -92,13 +95,16 @@ function RecordingPanel(props: {
           onClick={props.onFlush}>Flush Performance</button> : null}
         {["stopped", "saving", "discarding"].includes(phase) ? <>
           <label className="perform-take-name">Performance name
-            <input type="text" aria-label="Performance name" value={name}
-              disabled={phase !== "stopped" || props.state.saveConfirmation !== null}
+            <input type="text" aria-label="Performance name" value={props.state.pendingSaveName ?? name}
+              aria-invalid={nameError !== null || undefined}
+              aria-describedby={nameError === null ? undefined : nameHelpId}
+              disabled={phase !== "stopped" || props.state.saveConfirmation !== null || props.state.pendingSaveName !== null}
               onChange={(event) => setName(event.currentTarget.value)} />
           </label>
+          {nameError !== null ? <p role="alert" id={nameHelpId}>{nameError}</p> : null}
           <div className="perform-take-actions">
-          <button className="perform-take-save" type="button" disabled={phase !== "stopped" || name.trim() === ""}
-            onClick={() => props.onSave(name.trim())}>Save Performance</button>
+          <button className="perform-take-save" type="button" disabled={phase !== "stopped" || nameError !== null}
+            onClick={() => props.onSave(props.state.pendingSaveName ?? name.trim())}>Save Performance</button>
           <button className="perform-take-discard" type="button" disabled={phase !== "stopped"}
             onClick={props.onDiscard}>Discard Performance</button>
           </div>
