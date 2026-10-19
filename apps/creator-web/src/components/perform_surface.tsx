@@ -27,6 +27,7 @@ import {
 import {slotAddress} from "../state/view_model";
 import {PatternLaunchStrip} from "./pattern_launch_strip";
 import {RecordingAudioReadout} from "./recording_audio_readout";
+import {TakeAudioReadout} from "./take_audio_readout";
 
 export interface PerformSurfaceProps {
   readonly controller: PerformController;
@@ -68,9 +69,14 @@ function RecordingPanel(props: {
 }) {
   const phase = props.state.recording.phase;
   const [name, setName] = useState("Performance");
+  const stopped = props.page === "takes" && ["stopped", "saving", "discarding"].includes(phase);
   return (
-    <section className="perform-recording" aria-label="Performance recording">
-      {props.page === "live" || props.page === "takes"
+    <section className="perform-recording" aria-label="Performance recording" data-phase={phase}>
+      {stopped ? <div className="perform-stopped-card">
+        <h2 className="perform-take-heading">{phase === "saving" ? "Saving recording…"
+          : phase === "discarding" ? "Discarding recording…" : "Ready to save"}</h2>
+        <RecordingAudioReadout progress={props.state.recordingAudio} />
+      </div> : props.page === "live" || props.page === "takes"
         ? <RecordingAudioReadout progress={props.state.recordingAudio} /> : null}
       {props.page === "live" || props.page === "takes" ? <>
         {phase === "idle" ? <button type="button" disabled={!props.canRecord}
@@ -84,22 +90,27 @@ function RecordingPanel(props: {
         {phase === "recording" ? <button type="button"
           onClick={props.onFlush}>Flush Performance</button> : null}
         {["stopped", "saving", "discarding"].includes(phase) ? <>
-          <label>Performance name
+          <label className="perform-take-name">Performance name
             <input type="text" aria-label="Performance name" value={name}
               disabled={phase !== "stopped"}
               onChange={(event) => setName(event.currentTarget.value)} />
           </label>
-          <button type="button" disabled={phase !== "stopped" || name.trim() === ""}
+          <div className="perform-take-actions">
+          <button className="perform-take-save" type="button" disabled={phase !== "stopped" || name.trim() === ""}
             onClick={() => props.onSave(name.trim())}>Save Performance</button>
-          <button type="button" disabled={phase !== "stopped"}
+          <button className="perform-take-discard" type="button" disabled={phase !== "stopped"}
             onClick={props.onDiscard}>Discard Performance</button>
+          </div>
         </> : null}
         {props.state.recording.wav !== null ? <button type="button"
           onClick={props.onExportWav}>Export Performance WAV</button> : null}
         {props.state.bindingStatus === "retry" ? <button type="button"
           onClick={props.onRetryBind}>Retry WAV bind</button> : null}
       </> : null}
-      <p aria-hidden="true">{phase === "stopped" ? "Ready to save or discard" : phase}
+      <p aria-hidden="true" className={stopped && props.state.recordingNote === null ? "visually-hidden" : undefined}>
+        {{idle: "Ready to record", starting: "Preparing recording", recording: "Recording",
+          flushing: "Writing recording", stopping: "Finishing recording", stopped: "Ready to save or discard",
+          saving: "Saving recording", discarding: "Discarding recording"}[phase]}
         {props.state.recordingNote === null ? "" : ` · ${props.state.recordingNote}`}</p>
       <output className="visually-hidden" role="status" aria-label="Performance recording status">
         {phase}
@@ -129,6 +140,51 @@ function RecordingPanel(props: {
       </details>
     </section>
   );
+}
+
+function SavedTakesPanel({state, project, controller, selectedId, onSelect, onReplay}: {
+  readonly state: PerformState;
+  readonly project: ProjectView;
+  readonly controller: PerformController;
+  readonly selectedId: string | null;
+  readonly onSelect: (performanceId: string) => void;
+  readonly onReplay: (performanceId: string) => void;
+}) {
+  const owned = state.performancesOwner === project;
+  const performances = owned ? state.performances.filter(value =>
+    !state.performanceDraftIds.includes(value.performanceId) &&
+    (state.recording.phase === "idle" || state.recording.performanceId !== value.performanceId)) : [];
+  const selected = performances.find(value => value.performanceId === selectedId) ?? performances[0] ?? null;
+  useEffect(() => {
+    void controller.refreshPerformances().catch(() => {});
+  }, [controller, project]);
+  useEffect(() => {
+    if (selected !== null) void controller.inspectTakeAudio(selected.performanceId);
+    return () => controller.clearTakeAudio();
+  }, [controller, project, state.performances, selected?.performanceId]);
+  return <section className="perform-saved-takes" aria-label="Saved Takes">
+    <h2 className="perform-take-heading">Saved Takes</h2>
+    {!owned || state.performancesStatus === "loading" || state.performancesStatus === "unloaded"
+      ? <p role="status">Loading saved Takes…</p>
+      : state.performancesStatus === "unavailable" ? <>
+        <p role="status">Saved Takes unavailable</p>
+        <button type="button" onClick={() => {void controller.refreshPerformances().catch(() => {});}}>Retry saved Takes</button>
+      </> : performances.length === 0 ? <p>No saved Takes</p> : null}
+    <div className="perform-take-list" role="group" aria-label="Select saved Take">
+      {performances.map((performance, index) => <button type="button" key={performance.performanceId}
+        data-performance-id={performance.performanceId}
+        aria-label={`Select Take ${String(index + 1).padStart(2, "0")}: ${performance.name}`}
+        aria-pressed={selected?.performanceId === performance.performanceId}
+        onClick={() => onSelect(performance.performanceId)}>
+        <span>TAKE {String(index + 1).padStart(2, "0")}</span><span>{performance.name}</span>
+      </button>)}
+    </div>
+    {selected !== null ? <>
+      <TakeAudioReadout project={project} performance={selected} value={state.takeAudio}
+        onRetry={() => {void controller.inspectTakeAudio(selected.performanceId);}} />
+      <button type="button" onClick={() => onReplay(selected.performanceId)}>Replay selected Take</button>
+    </> : null}
+  </section>;
 }
 
 function ReplayPanel(props: {
@@ -170,6 +226,7 @@ function ReplayPanel(props: {
 export function PerformSurface(props: PerformSurfaceProps) {
   const {controller} = props;
   const [page, setPage] = useState<PerformPage>("live");
+  const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const surface = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!props.reviewRequested) return;
@@ -311,7 +368,7 @@ export function PerformSurface(props: PerformSurfaceProps) {
         ))}
       </nav>
       <header className="perform-live-header">
-        <p className="perform-live-title">{{live: "LIVE CONTROLS", slots: "PATTERN SLOTS", takes: "RECORDING", replay: "REPLAY"}[page]}</p>
+        <p className="perform-live-title">{{live: "LIVE CONTROLS", slots: "PATTERN SLOTS", takes: "RECORDING / TAKES", replay: "REPLAY"}[page]}</p>
       </header>
       <FxSliderBank action={<button className="perform-hold" type="button" aria-pressed={state.hold}
         onClick={() => controller.toggleHold()}>HOLD</button>} gestureOwner={controller} active={page === "live" && !padGatesOpen} onGestureActiveChange={setFxGestureActive} order={PERFORMANCE_FX_ORDER} values={state.fx}
@@ -407,6 +464,9 @@ export function PerformSurface(props: PerformSurfaceProps) {
         onDiscard={() => { void controller.discard(); }}
         onRetryBind={() => { void controller.retryWavBind(); }}
         onExportWav={() => { void controller.exportWav(); }} />
+      {page === "takes" ? <SavedTakesPanel controller={controller} state={state} project={props.project}
+        selectedId={selectedTakeId} onSelect={setSelectedTakeId}
+        onReplay={(performanceId) => {void controller.beginReplay(performanceId); setPage("replay");}} /> : null}
       {page === "replay" ? <ReplayPanel state={state}
         onReplay={(performanceId) => { void controller.beginReplay(performanceId); }}
         onRecover={(sessionId) => { void controller.applyRecovery(sessionId); }}

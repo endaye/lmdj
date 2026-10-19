@@ -25,6 +25,7 @@ import {
   cutoffPositionToHz,
   selectLivePadGate,
   type PerformControllerDependencies,
+  type PerformanceSummary,
 } from "../src/state/perform_state";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 
@@ -214,6 +215,10 @@ function sessionFixture(initialStatus = status("ready")) {
     queryPerformanceRecordingStatus: vi.fn(),
     listPerformances: vi.fn(async () => []),
     inspectPerformance: vi.fn(),
+    queryPerformanceRecordingMetadata: vi.fn(async (_request: unknown,
+      _options?: {signal?: AbortSignal}): Promise<unknown> => {
+      throw Object.assign(new Error("Fixture has no saved WAV bytes"), {code: "IO_ERROR"});
+    }),
     savePerformance: vi.fn(async () => ({performanceId: ids.performance,
       committedRevision: 10, replayed: false, projectRevision: 10})),
     discardPerformance: vi.fn(),
@@ -1289,6 +1294,117 @@ test("binds with the latest Project revision after a concurrent mutation", async
     performanceId: ids.performance});
 });
 
+test("saved Take header reads wait for the complete managed WAV bind", async () => {
+  const fixture = controllerFixture();
+  const disconnect = fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const binding = deferred<{committedRevision: number}>();
+  fixture.store.bind.mockReturnValueOnce(binding.promise);
+  const saving = fixture.controller.save("Pending WAV");
+  await vi.waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(1));
+  const list = vi.mocked(fixture.runtime.session.listPerformances);
+  list.mockClear();
+  const refreshing = fixture.controller.refreshPerformances();
+  try {
+    for (let n = 0; n < 32; n++) await Promise.resolve();
+    expect(list, "recovery-capable list must not scavenge the unbound managed WAV")
+      .not.toHaveBeenCalled();
+  } finally {
+    binding.resolve({committedRevision: 11});
+    await Promise.all([saving, refreshing]);
+  }
+  expect(list).toHaveBeenCalled();
+  expect(fixture.controller.getState().bindingStatus).toBe("bound");
+  disconnect();
+});
+
+test("managed WAV bind waits for older header reads without blocking unrelated mutations", async () => {
+  const fixture = controllerFixture();
+  const disconnect = fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const older = deferred<readonly PerformanceSummary[]>();
+  const list = vi.mocked(fixture.runtime.session.listPerformances);
+  list.mockReturnValueOnce(older.promise);
+  const refreshing = fixture.controller.refreshPerformances();
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  const saving = fixture.controller.save("Older observer");
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+  try {
+    for (let n = 0; n < 32; n++) await Promise.resolve();
+    expect(fixture.runtime.session.savePerformance).toHaveBeenCalledOnce();
+    expect(fixture.store.bind, "the older recovery-capable read must retire before installing WAV")
+      .not.toHaveBeenCalled();
+  } finally {
+    older.resolve([]);
+    await Promise.all([saving, refreshing]);
+    disconnect();
+  }
+  expect(fixture.controller.getState().bindingStatus).toBe("bound");
+});
+
+test("a failed WAV bind keeps later list observers away from its retained managed bytes", async () => {
+  const fixture = controllerFixture();
+  const disconnect = fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  fixture.store.bind.mockRejectedValueOnce(Object.assign(new Error("bind busy"), {code: "PROJECT_BUSY"}));
+  await fixture.controller.save("Retained WAV");
+  const list = vi.mocked(fixture.runtime.session.listPerformances);
+  list.mockClear();
+  await expect(fixture.controller.refreshPerformances()).rejects.toThrow("Bind or discard");
+  expect(list).not.toHaveBeenCalled();
+  await fixture.controller.retryWavBind();
+  expect(fixture.controller.getState().bindingStatus).toBe("bound");
+  expect(list).toHaveBeenCalled();
+  disconnect();
+});
+
+test("a rejected header peer does not retire the other read before managed WAV installation", async () => {
+  const fixture = controllerFixture();
+  const disconnect = fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  const list = vi.mocked(fixture.runtime.session.listPerformances);
+  const recovery = deferred<readonly never[]>();
+  list.mockRejectedValueOnce(new Error("older list failed"));
+  vi.mocked(fixture.runtime.session.listPerformanceRecovery).mockReturnValueOnce(recovery.promise);
+  const observing = fixture.controller.refreshPerformances().catch(() => {});
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  const saving = fixture.controller.save("Pending recovery read");
+  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+  try {
+    for (let n = 0; n < 32; n++) await Promise.resolve();
+    expect(fixture.store.bind, "one rejected peer does not retire the unfinished read")
+      .not.toHaveBeenCalled();
+  } finally {
+    recovery.resolve([]);
+    await Promise.all([observing, saving]);
+    disconnect();
+  }
+  expect(fixture.controller.getState().bindingStatus).toBe("bound");
+});
+
+test("discard after a failed WAV bind releases its saved Take observation restriction", async () => {
+  const fixture = controllerFixture();
+  const disconnect = fixture.controller.connect();
+  await fixture.controller.refreshRecovery();
+  await fixture.controller.record();
+  await fixture.controller.stop();
+  fixture.store.bind.mockRejectedValueOnce(Object.assign(new Error("bind busy"), {code: "PROJECT_BUSY"}));
+  await fixture.controller.save("Discard retained WAV");
+  await fixture.controller.discard();
+  expect(fixture.store.discard).toHaveBeenCalledOnce();
+  expect(fixture.controller.getState().recording.phase).toBe("idle");
+  expect(fixture.controller.getState().performancesStatus).toBe("ready");
+  disconnect();
+});
+
 test("retains a failed WAV binding for an explicit retry without saving twice", async () => {
   const fixture = controllerFixture();
   fixture.store.bind.mockRejectedValueOnce(Object.assign(
@@ -1341,10 +1457,14 @@ test("retries the saved Performance list projection before binding", async () =>
     .toHaveBeenCalledTimes(1));
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  selectPerformPage("Takes");
+  // Opening Takes now refreshes its saved list. Arm the failure only after
+  // that far-side read so the original Save->list->retry-bind leg owns it.
+  await waitFor(() => expect(fixture.controller.getState().performancesStatus).toBe("ready"));
+  expect(fixture.runtime.session.listPerformances).toHaveBeenCalledTimes(2);
   (fixture.runtime.session.listPerformances as ReturnType<typeof vi.fn>)
     .mockRejectedValueOnce(new Error("list failed"));
 
-  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toBe("The Performance was saved, but Creator could not show the latest Project. Choose Save Performance again."));
@@ -4721,4 +4841,223 @@ test("audio facts survive Save UNKNOWN and bind retry until confirmed finalizati
   await f.controller.retryWavBind();
   expect(f.controller.getState().bindingStatus).toBe("bound");expect(f.controller.getState().recordingAudio).toBeNull();
   expect(f.save).toHaveBeenCalledTimes(1);
+});
+
+const SAVED_TAKE = Object.freeze({performanceId: ids.performance, name: "Silent Take",
+  createdBpm: 120, eventCount: 0, recordingArtifact: Object.freeze({
+    sha256: "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
+    mediaType: "audio/wav" as const, byteLength: 192124})});
+
+function savedTakeMetadata(performanceId = ids.performance, revision = 7) {
+  return {projectId: ids.project, performanceId, projectRevision: revision, recordingRevision: 17,
+    recordingArtifact: SAVED_TAKE.recordingArtifact,
+    audioMetadata: {sampleRate: 48000 as const, channels: 2 as const, sourceFrames: 48017}, audioError: null};
+}
+
+async function savedTakeFixture() {
+  const f = controllerFixture();
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE]);
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValue(savedTakeMetadata());
+  await f.controller.refreshPerformances();
+  return f;
+}
+
+test("saved Take selection uses the exact verified selector and never hashes on list refresh", async () => {
+  const f = await savedTakeFixture();
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+  await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledExactlyOnceWith({
+    projectId: ids.project, performanceId: ids.performance, expectedRevision: 7,
+    recordingArtifact: SAVED_TAKE.recordingArtifact,
+  }, {signal: expect.any(AbortSignal)});
+  const value = f.controller.getState().takeAudio;
+  expect(value?.state).toBe("verified");expect(value?.owner).toBe(project);
+  expect(value?.metadata).toEqual(savedTakeMetadata());
+  expect(SAVED_TAKE.eventCount).toBe(0);
+});
+
+test("Takes renders a real silent WAV time and keeps Replay a separate explicit action", async () => {
+  const f = await savedTakeFixture();renderSurface(f);
+  await waitFor(() => expect(f.controller.getState().performancesStatus).toBe("ready"));
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+  selectPerformPage("Takes");
+  const output = await screen.findByRole("status", {name: "Take WAV audio"});
+  await waitFor(() => expect(output.textContent).toBe("00:01.000"));
+  expect(output.getAttribute("data-frames")).toBe("48017");
+  expect(output.getAttribute("data-rate")).toBe("48000");
+  expect(screen.getByText("Recording completeness unknown")).not.toBeNull();
+  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", {name: "Replay selected Take"})).not.toBeNull();
+});
+
+test("no-WAV Takes never submit a metadata query or invent a zero duration", async () => {
+  const f = await savedTakeFixture();
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([{...SAVED_TAKE, recordingArtifact: null}]);
+  await f.controller.refreshPerformances();await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.controller.getState().takeAudio?.state).toBe("no-wav");
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+});
+
+test("Saved Takes excludes recovery drafts while a real saved Take remains selectable", async () => {
+  const f = await savedTakeFixture(), savedId = ids.pattern2;
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE,
+    {...SAVED_TAKE, performanceId: savedId, name: "Earlier saved Take"}]);
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([{
+    sessionId: ids.session, performanceId: ids.performance, reason: "owner_lost",
+    durableEventCount: 0, pendingEventCount: 0, fingerprint: "f".repeat(64)}]);
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValue(savedTakeMetadata(savedId));
+  renderSurface(f);selectPerformPage("Takes");
+  await screen.findByRole("button", {name: /^Select Take \d+: Earlier saved Take$/});
+  expect(screen.queryByRole("button", {name: /^Select Take \d+: Silent Take$/})).toBeNull();
+  await waitFor(() => expect(screen.getByRole("status", {name: "Take WAV audio"}).textContent).toBe("00:01.000"));
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mock.calls.every(([request]) =>
+    request.performanceId === savedId)).toBe(true);
+  await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.controller.getState().takeAudio).toBeNull();
+});
+
+test("the current unsaved recording is never queried as a saved Take", async () => {
+  const f = await savedTakeFixture(), savedId = ids.pattern2;
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE,
+    {...SAVED_TAKE, performanceId: savedId, name: "Earlier saved Take"}]);
+  await f.controller.refreshRecovery();await f.controller.record();
+  expect(f.controller.getState().recording.performanceId).toBe(ids.performance);
+  await f.controller.refreshPerformances();await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValue(savedTakeMetadata(savedId));
+  await f.controller.inspectTakeAudio(savedId);
+  expect(f.controller.getState().takeAudio?.state).toBe("verified");
+  await f.controller.stop();await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.controller.getState().takeAudio).toBeNull();
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(1);
+  await f.controller.discard();
+});
+
+test("an unavailable recovery snapshot refuses the partial saved list until explicit retry", async () => {
+  const f = await savedTakeFixture();
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockRejectedValueOnce(new Error("recovery read unavailable"));
+  await expect(f.controller.refreshPerformances()).rejects.toThrow("recovery read unavailable");
+  expect(f.controller.getState().performancesStatus).toBe("unavailable");
+  expect(f.controller.getState().performances).toEqual([]);
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+  await f.controller.refreshPerformances();await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.controller.getState().takeAudio?.state).toBe("verified");
+});
+
+test("verified unsupported format and outer integrity or storage refusal remain distinct Take states", async () => {
+  const f = await savedTakeFixture();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValueOnce({
+    ...savedTakeMetadata(), audioMetadata: null,
+    audioError: {code: "UNSUPPORTED_AUDIO", message: "unsupported audio", details: {}}});
+  await f.controller.inspectTakeAudio(ids.performance);
+  expect(f.controller.getState().takeAudio?.state).toBe("unsupported");
+  expect(f.controller.getState().takeAudio?.metadata?.recordingArtifact).toEqual(SAVED_TAKE.recordingArtifact);
+  for (const [code, details, state] of [
+    ["COOK_FAILED", {storage_condition: "artifact_mismatch"}, "damaged"],
+    ["IO_ERROR", {reason: "bounded_read_unavailable"}, "unavailable"],
+    ["REVISION_CONFLICT", {}, "unavailable"],
+  ] as const) {
+    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockRejectedValueOnce(
+      Object.assign(new Error("private platform details"), {code, details}));
+    await f.controller.inspectTakeAudio(ids.performance);
+    expect(f.controller.getState().takeAudio?.state).toBe(state);
+    expect(f.controller.getState().takeAudio?.metadata).toBeNull();
+  }
+});
+
+test("a failed Take check retries only when explicitly requested", async () => {
+  const f = await savedTakeFixture();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockRejectedValueOnce(new Error("offline"));
+  renderSurface(f);selectPerformPage("Takes");
+  const retry = await screen.findByRole("button", {name: "Retry audio check"});
+  await waitFor(() => expect(f.controller.getState().takeAudio?.state).toBe("unavailable"));
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(1);
+  await userEvent.click(retry);
+  await waitFor(() => expect(screen.getByRole("status", {name: "Take WAV audio"}).textContent).toBe("00:01.000"));
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(2);
+});
+
+test("a changed selection aborts its observer and cannot adopt a valid late predecessor", async () => {
+  const f = await savedTakeFixture(), old = deferred<ReturnType<typeof savedTakeMetadata>>();
+  const secondId = "66666666-6666-4666-8666-666666666666";
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE, {...SAVED_TAKE, performanceId: secondId}]);
+  await f.controller.refreshPerformances();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => old.promise)
+    .mockResolvedValueOnce(savedTakeMetadata(secondId));
+  const pending = f.controller.inspectTakeAudio(ids.performance);
+  const firstSignal = vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mock.calls[0]![1]!.signal!;
+  await f.controller.inspectTakeAudio(secondId);expect(firstSignal.aborted).toBe(true);
+  old.resolve(savedTakeMetadata());await pending;
+  expect(f.controller.getState().takeAudio?.performanceId).toBe(secondId);
+  expect(f.controller.getState().takeAudio?.state).toBe("verified");
+});
+
+test("same-Project owner replacement and revision changes refuse valid late Take receipts", async () => {
+  for (const revision of [7, 8]) {
+    const f = await savedTakeFixture(), old = deferred<ReturnType<typeof savedTakeMetadata>>();
+    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => old.promise);
+    const pending = f.controller.inspectTakeAudio(ids.performance);
+    const nextProject = {...project, revision};
+    f.setCreatorState(creatorState({project: {phase: "ready", projects: [], current: nextProject}}));
+    old.resolve(savedTakeMetadata());await pending;
+    expect(f.controller.getState().takeAudio?.state).not.toBe("verified");
+    await f.controller.refreshPerformances();
+    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValueOnce(savedTakeMetadata(ids.performance, revision));
+    await f.controller.inspectTakeAudio(ids.performance);
+    expect(f.controller.getState().takeAudio?.owner).toBe(nextProject);
+    expect(f.controller.getState().takeAudio?.metadata?.projectRevision).toBe(revision);
+  }
+});
+
+test("list refresh generations and replaced owners never adopt out-of-order saved Takes", async () => {
+  const f = await savedTakeFixture(), old = deferred<readonly PerformanceSummary[]>(), next = deferred<readonly PerformanceSummary[]>();
+  vi.mocked(f.runtime.session.listPerformances).mockImplementationOnce(() => old.promise).mockImplementationOnce(() => next.promise);
+  const a = f.controller.refreshPerformances(), b = f.controller.refreshPerformances();
+  next.resolve([{...SAVED_TAKE, name: "Latest Take"}]);await b;
+  old.resolve([SAVED_TAKE]);await a;
+  expect(f.controller.getState().performances[0]!.name).toBe("Latest Take");
+  const stale = deferred<readonly PerformanceSummary[]>();
+  vi.mocked(f.runtime.session.listPerformances).mockImplementationOnce(() => stale.promise);
+  const pending = f.controller.refreshPerformances();
+  const newOwner = {...project};f.setCreatorState(creatorState({project: {phase: "ready", projects: [], current: newOwner}}));
+  await f.controller.refreshPerformances();
+  stale.reject(new Error("old owner's read failed"));await pending;
+  expect(f.controller.getState().performancesOwner).toBe(newOwner);
+  expect(f.controller.getState().performancesStatus).toBe("ready");
+});
+
+test("Take metadata rejects every mismatched owner revision or complete Artifact receipt", async () => {
+  const f = await savedTakeFixture();
+  for (const change of [
+    {projectId: ids.pattern1}, {performanceId: ids.pattern2}, {projectRevision: 8},
+    {recordingArtifact: {...SAVED_TAKE.recordingArtifact, sha256: "f".repeat(64)}},
+    {recordingArtifact: {...SAVED_TAKE.recordingArtifact, byteLength: 192125}},
+  ]) {
+    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValueOnce({...savedTakeMetadata(), ...change});
+    await f.controller.inspectTakeAudio(ids.performance);
+    expect(f.controller.getState().takeAudio?.state).toBe("unavailable");
+    expect(f.controller.getState().takeAudio?.metadata).toBeNull();
+  }
+});
+
+test("held Take metadata leaves the Project mutation tail available and retires on mutation or close", async () => {
+  const f = await savedTakeFixture(), gate = deferred<ReturnType<typeof savedTakeMetadata>>();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => gate.promise);
+  vi.mocked(f.runtime.session.assignPatternSlot).mockResolvedValue({patternSlot: 2, patternId: ids.pattern1,
+    committedRevision: 8, replayed: false, projectRevision: 8});
+  const pending = f.controller.inspectTakeAudio(ids.performance);
+  const signal = vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mock.calls[0]![1]!.signal!;
+  let committed = false;const mutation = f.controller.assignPattern(2, ids.pattern1).then(() => {committed = true;});
+  try {
+    for (let n = 0; n < 32; n++) await Promise.resolve();
+    expect(committed, "far-side Pattern receipt precedes releasing the WAV check").toBe(true);
+    expect(signal.aborted).toBe(true);
+    expect(f.controller.getState().takeAudio).toBeNull();
+  } finally {gate.resolve(savedTakeMetadata());await Promise.all([pending, mutation]);}
+  const closing = deferred<ReturnType<typeof savedTakeMetadata>>();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => closing.promise);
+  const late = f.controller.inspectTakeAudio(ids.performance);
+  await f.controller.close();closing.resolve(savedTakeMetadata());await late;
+  expect(f.controller.getState().takeAudio).toBeNull();
 });

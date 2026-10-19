@@ -231,7 +231,7 @@ Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequen
 
 - **Live**：四组各四个横排 Pattern 启动槽、PRIMARY／FILTER／MORE、横向 FX 与 MASTER、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
 - **Slots**：分区显示 Assign、Move、Clear，Pattern 使用可区分的序号；目标槽旁只读显示已提交的 Pattern／Empty，操作失败不预填成功。选择、Escape 或返回 Live 不写工程、不 Launch，切页保留草稿选项；只有对应按钮才提交并刷新。演出录制非空闲、全局 Pattern 录制、COUNT-IN 及工程／transport 结算时锁定结构编辑，稳定的普通播放仍可编辑；revision 可在 Project details 查看。
-- **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
+- **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。停止状态、音频卡、名称与保存动作分组。下方 Saved Takes 可选择已保存演出，查看经验证的 WAV 音频时长；选择本身不触发 Replay。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
 - **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
 
 
@@ -244,8 +244,24 @@ capture 的真实接收帧数和实际采样率显示 `mm:ss.mmm`，静音计入
 
 这些是本地录音事实，不表示 Save 或 WAV bind 已成功。Save UNKNOWN／Retry WAV bind
 期间保留同一 take 的计数，确认完成或丢弃才清除；关闭或替换录音 owner 不继承旧时钟。
-缺少真实 capture/rate 时显示 Unavailable；已保存并重开的 WAV metadata 与完整 Takes
-列表仍由 #2135 B／U08b 补齐。Replay 继续按事件进度，不使用 WAV 时长作分母。
+缺少真实 capture/rate 时显示 Unavailable。
+
+Saved Takes 只查询当前所选演出，不因进入 Perform 就扫描整份列表。
+列表排除当前未保存／结果未知的录音及恢复候选；恢复候选读取失败时不把部分
+结果冒充已保存列表，可显式重试。列表查询与托管 WAV 安装／绑定互相等待，
+避免列表恢复逻辑回收尚未绑定的文件；绑定失败时先保留原 WAV，完成显式绑定重试
+或确认丢弃后才恢复列表读取。该边界不串行化音频元数据检查或普通工程编辑。
+WAV audio 使用
+公共 SDK 返回并核对过 Project／Performance／revision／ArtifactRef 的实际 WAV
+frames／rate，显示 mm:ss.mmm；静音和稀疏事件不会改变此音频读数。旧工程即使 WAV
+可以验证，仍明确显示 Recording completeness unknown，不据此宣布完整演出时长。
+No WAV attached、不支持格式、WAV integrity check failed 和读取不可用各自呈现；
+读取失败只由 Retry audio check 显式重查，不隐式重放。列表读取失败可单独重试。
+换选择、刷新、Project mutation、离开或关闭退役旧 observer；同一 Project 重开、
+revision／WAV 引用变化时，视图在新查询开始前就隐藏旧回执。取消不证明底层 worker
+已退出，物理释放仍由 SDK／Runtime 原有 owner 负责。Replay selected Take 是独立
+动作；Replay 继续按事件进度，不使用 WAV 时长作分母。U08c 的完整呈现、组合候选
+及设备／听感验收仍单独记录。
 
 子页切换保留录制 session、回放轮询、HOLD、名称草稿和 参数组和 Mute/Solo 面板状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
 

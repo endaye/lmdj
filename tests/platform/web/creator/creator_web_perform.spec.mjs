@@ -78,6 +78,29 @@ async function expectLocalAudioFrames(page, frames, sampleRate = 48_000) {
   await expect(output).not.toHaveText("Unavailable");
 }
 
+async function expectNightSetAudio(page, bytes) {
+  await showPerformPage(page, "Takes");
+  await page.getByRole("button", {name:/^Select Take \d+: Night Set$/}).click();
+  const output=page.getByRole("status", {name:"Take WAV audio",exact:true});
+  const frames=(bytes.byteLength-44)/4, rate=bytes.readUInt32LE(24), digest=sha256(bytes);
+  await expect(output).toHaveAttribute("data-frames",String(frames),{timeout:AUDIO_TRANSITION_TIMEOUT_MS});
+  await expect(output).toHaveAttribute("data-rate",String(rate));
+  await expect(output).toHaveAttribute("data-sha256",digest);
+  await expect(output).toHaveAttribute("data-byte-length",String(bytes.byteLength));
+  // Integer rational arithmetic is independent of the Host's floating-point
+  // formatter, and the frames/rate come from the actual exported WAV.
+  const ms=BigInt(frames)*1000n/BigInt(rate);
+  const time=`${String(ms/60000n).padStart(2,'0')}:${String(ms/1000n%60n).padStart(2,'0')}.${String(ms%1000n).padStart(3,'0')}`;
+  await expect(output).toHaveText(time);
+  const truth=await inspectProjectTruth(page);
+  const [performanceId,performance]=Object.entries(truth.project.performances).find(([,value])=>value.name==="Night Set");
+  expect(performance.recording_artifact).toEqual({sha256:digest,media_type:"audio/wav",byte_length:bytes.byteLength});
+  await expect(output).toHaveAttribute("data-performance-id",performanceId);
+  await expect(output).toHaveAttribute("data-project-revision",String(truth.project_revision));
+  return {frames,rate,sha256:digest,byteLength:bytes.byteLength,time,performanceId,projectRevision:truth.project_revision,
+    ui:await output.evaluate(node=>({...node.dataset,text:node.textContent}))};
+}
+
 async function inspectProjectTruth(page) {
   return page.evaluate(() =>
     window.lmdjWebRuntimeHost.inspection.inspectProject());
@@ -1486,7 +1509,7 @@ test("Perform Launch carries the device SEQ SNAP while playing and the choice pe
 });
 
 
-test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
+test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}, info) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
   await observeMasterCaptureBatches(page);
@@ -1607,6 +1630,18 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(await projectRevision(page)).toBe(bankRevision);
 
   await showPerformPage(page, "Takes");
+  const pendingTake = await page.evaluate(async () => {
+    const session = window.lmdjWebRuntimeHost.session;
+    return {status: await session.queryPerformanceRecordingStatus(),
+      performances: await session.listPerformances(), recovery: await session.listPerformanceRecovery()};
+  });
+  expect(pendingTake.status.state).toBe("active");
+  expect(pendingTake.performances.some(value => value.performanceId === pendingTake.status.performanceId)).toBe(true);
+  expect(pendingTake.recovery.some(value => value.performanceId === pendingTake.status.performanceId)).toBe(true);
+  // The authoritative list really contains begin's unsaved draft. Saved Takes
+  // must exclude it while the original recording remains active.
+  await expect(page.getByRole("region", {name:"Saved Takes", exact:true})
+    .getByText("No saved Takes", {exact:true})).toBeVisible();
   await page.getByRole("button", {name: "Flush Performance"}).click();
   revision = await expectRevisionAfter(page, revision);
   await expect(recordingStatus).toContainText(/flushed/i);
@@ -1622,7 +1657,8 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(page.getByRole("button", {name: "Discard Performance", exact: true})).toBeVisible();
   await expect(page.getByRole("status", {name: "WAV recording status"}))
     .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
+  const encodedWav = await exportPerformanceWav(page);
+  const wav = parsePcm16StereoWav(encodedWav);
   expect(wav.frames).toBeGreaterThan(0);
   verifyDeterministicMasterOutput(wav);
 
@@ -1630,6 +1666,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   revision = await expectRevisionAfter(page, revision);
   await expect(page.getByRole("status", {name: "WAV binding status"}))
     .toContainText("bound");
+  const savedAudio=await expectNightSetAudio(page,encodedWav);
 
   const beforeReplace = revision;
   await replacePadSample(page);
@@ -1644,6 +1681,9 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await openPerform(page);
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))
     .toHaveAttribute("data-pattern-id", PATTERN_ID);
+  const reopenedAudio=await expectNightSetAudio(page,encodedWav);
+  expect(reopenedAudio.frames).toBe(savedAudio.frames);
+  expect(reopenedAudio.sha256).toBe(savedAudio.sha256);
   await showPerformPage(page, "Replay");
   await expect(page.getByText("Night Set", {exact: true})).toBeVisible();
 
@@ -1709,6 +1749,9 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await page.reload(); await openLocalProject(page);
   const reopened = await inspectProjectTruth(page);
   expect(reopened.project.assets[capturedId].artifact).toEqual(captured.project.assets[capturedId].artifact);
+  const audioPath=info.outputPath("recorded-take-saved-reopened-audio.json");
+  await writeFile(audioPath,JSON.stringify({savedAudio,reopenedAudio},null,2));
+  await info.attach("recorded Take audio before and after reopen",{path:audioPath,contentType:"application/json"});
 });
 
 test("a recorded rotary FX survives touch takeover and closes the same Core gesture on leaving Perform", async ({page, browserName}) => {
@@ -2981,7 +3024,25 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
           JSON.stringify({viewport,name,row}),
         ).toBe(true);
         for(const text of measurement.text)expect(text.scroll,JSON.stringify({viewport,name,text})).toBeLessThanOrEqual(text.width+1);
-        geometry.push({viewport,page:name,...measurement});
+        const controls=[];
+        if(name==="Takes") {
+          const panel=page.getByRole("region",{name:"Performance recording",exact:true});
+          const targets=panel.locator('button,input,summary');
+          for(let n=0;n<await targets.count();n++) {
+            const target=targets.nth(n);if(!await target.isVisible())continue;
+            await target.scrollIntoViewIfNeeded();
+            const hit=await target.evaluate(node=>{
+              const b=node.getBoundingClientRect(),touch=node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
+              return {name:node.getAttribute('aria-label')??node.textContent,width:b.width,height:b.height,
+                contained:b.x>=touch.x-1&&b.y>=touch.y-1&&b.right<=touch.right+1&&b.bottom<=touch.bottom+1,
+                hit:node.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};
+            });
+            expect(hit.width).toBeGreaterThanOrEqual(43.5);expect(hit.height).toBeGreaterThanOrEqual(43.5);
+            expect(hit.contained,JSON.stringify({viewport,hit})).toBe(true);expect(hit.hit).toBe(true);controls.push(hit);
+          }
+          await card.scrollIntoViewIfNeeded();
+        }
+        geometry.push({viewport,page:name,...measurement,controls});
         const path=info.outputPath(`audio-${viewport.width}x${viewport.height}-${name}.png`);
         await page.screenshot({path});await info.attach(`audio ${viewport.width} ${name}`,{path,contentType:"image/png"});
       }
@@ -3013,4 +3074,207 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
   const path=info.outputPath("capture-progress-frames.json");
   await writeFile(path,JSON.stringify({observations,retired,reopened},null,2));
   await info.attach("real capture frames and Session identity",{path,contentType:"application/json"});
+});
+
+test("Takes verifies saved WAV audio including thirty minutes across two reopens", async ({page, browserName}, info) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(420_000);
+  const fixtures = [
+    {kind: "valid", name: "Duration Silent", frames: 48017, rate: 48000},
+    {kind: "unsupported", name: "Duration Unsupported", frames: 48017, rate: 32000},
+    {kind: "damaged", name: "Duration Damaged", frames: 48017, rate: 48000},
+    {kind: "none", name: "Duration No WAV", frames: 0, rate: 48000},
+    {kind: "long", name: "Duration Thirty Minutes", frames: 86400000, rate: 48000},
+  ].map(value => {
+    if (value.kind === "none") return {...value, artifact: null, header: null, physicalSha: null};
+    const dataBytes = value.frames * 4;
+    const header = Buffer.alloc(56);
+    header.write("RIFF", 0);header.writeUInt32LE(dataBytes + 48, 4);header.write("WAVEfmt ", 8);
+    header.writeUInt32LE(16, 16);header.writeUInt16LE(1, 20);header.writeUInt16LE(2, 22);
+    header.writeUInt32LE(value.rate, 24);header.writeUInt32LE(value.rate * 4, 28);
+    header.writeUInt16LE(4, 32);header.writeUInt16LE(16, 34);
+    header.write("JUNK", 36);header.writeUInt32LE(3, 40);header.set([1, 2, value.kind === "damaged" ? 4 : 3, 171], 44);
+    header.write("data", 48);header.writeUInt32LE(dataBytes, 52);
+    const digest = (corrupt = false) => {
+      const hash = createHash("sha256").update(header), zeros = Buffer.alloc(65536);
+      for (let remaining = dataBytes - (corrupt ? 1 : 0); remaining > 0;) {
+        const count = Math.min(remaining, zeros.byteLength);hash.update(zeros.subarray(0, count));remaining -= count;
+      }
+      if (corrupt) hash.update(Buffer.from([1]));
+      return hash.digest("hex");
+    };
+    const sha256 = digest();
+    return {...value, artifact: {sha256, media_type: "audio/wav", byte_length: dataBytes + 56},
+      header: Array.from(header), physicalSha: value.kind === "damaged" ? digest(true) : sha256};
+  });
+  // Absolute witnesses distinguish a shared fixture-encoding mistake from
+  // producer/consumer agreement. Long audio is physically hashed, not decoded.
+  expect(fixtures[0].artifact.sha256).toBe("985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5");
+  expect(fixtures[1].artifact.sha256).toBe("62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19");
+  expect(fixtures[2].artifact.sha256).toBe("1c9584570dd5f2571c47180409b0e222f30667fafa5f6f72ec0eb858b1b1c345");
+  expect(fixtures[2].physicalSha).toBe("f1ca5248d62d3cd2710a15dbfaab7d990bc2471bf58362ee85204a078671f895");
+  // Corrupt one content-addressed file without corrupting the valid control.
+  expect(new Set(fixtures.filter(value => value.artifact !== null).map(value => value.artifact.sha256)).size).toBe(4);
+  expect(fixtures[4].artifact.byte_length).toBe(345600056);
+  await importActivateAndPerform(page);
+  const seeded = await page.evaluate(async fixtures => {
+    const send = async (operation, payload) => {
+      const response = await window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
+        request_id: crypto.randomUUID(), operation, payload});
+      if (!response.ok) throw new Error(operation + ": " + JSON.stringify(response));
+      return response.result;
+    };
+    const inspected = await window.lmdjWebRuntimeHost.inspection.inspectProject();
+    const projectId = inspected.project.project_id;
+    let revision = inspected.project_revision;
+    const root = await navigator.storage.getDirectory();
+    const projects = await root.getDirectoryHandle("projects");
+    const bundle = await projects.getDirectoryHandle(projectId + ".lmdj");
+    const assets = await bundle.getDirectoryHandle("assets");
+    const takes = [];
+    for (const fixture of fixtures) {
+      const performanceId = crypto.randomUUID(), recordingRevision = revision;
+      const begin = await send("performance.record.begin", {command_id: crypto.randomUUID(),
+        expected_revision: revision, session_id: performanceId, performance_id: performanceId});
+      if (begin.project_revision !== revision + 1) throw new Error("begin revision changed");
+      revision = begin.project_revision;
+      await send("performance.record.stop", {session_id: performanceId, request_id: crypto.randomUUID()});
+      let file;
+      if (fixture.artifact !== null) {
+        file = await assets.getFileHandle(fixture.artifact.sha256 + ".wav", {create: true});
+        const writable = await file.createWritable();
+        await writable.truncate(fixture.artifact.byte_length);
+        await writable.write({type: "write", position: 0, data: new Uint8Array(fixture.header)});
+        await writable.close();
+      }
+      const saved = await send("performance.save", {command_id: crypto.randomUUID(), expected_revision: revision,
+        performance_id: performanceId, name: fixture.name, recording_artifact: fixture.artifact});
+      if (saved.project_revision !== revision + 1) throw new Error("save revision changed");
+      revision = saved.project_revision;
+      if (fixture.kind === "damaged") {
+        const writable = await file.createWritable({keepExistingData: true});
+        await writable.write({type: "write", position: fixture.artifact.byte_length - 1, data: new Uint8Array([1])});
+        await writable.close();
+      }
+      takes.push({...fixture, performanceId, recordingRevision});
+    }
+    await window.lmdjWebRuntimeHost.session.close();
+    return {projectId, revision, takes, cleanup: await window.lmdjWebRuntimeHost.session.waitForTerminalCleanup()};
+  }, fixtures);
+  expect(seeded.cleanup).toBe(true);
+  const reports = [], geometry = [];
+  for (let reopen = 1; reopen <= 2; reopen++) {
+    await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
+    await showPerformPage(page, "Takes");
+    for (const take of seeded.takes) {
+      await page.getByRole("button", {name: new RegExp(`^Select Take \\d+: ${take.name}$`)}).click();
+      const output = page.getByRole("status", {name: "Take WAV audio", exact: true});
+      const expectedState = {valid: "verified", unsupported: "unsupported", damaged: "damaged", none: "no-wav", long: "verified"}[take.kind];
+      await expect(output).toHaveAttribute("data-state", expectedState, {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+      await expect(output).toHaveText({valid: "00:01.000", unsupported: "WAV format unsupported",
+        damaged: "WAV integrity check failed", none: "No WAV attached", long: "30:00.000"}[take.kind]);
+      const ui = await output.evaluate(node => ({text: node.textContent, data: {...node.dataset}}));
+      const evidence = await page.evaluate(async ({take, projectId, revision}) => {
+        const session = window.lmdjWebRuntimeHost.session;
+        const inspected = await session.inspectPerformance(take.performanceId);
+        let receipt = null, physical = null;
+        if (take.artifact !== null) {
+          const start = performance.now();
+          try {
+            receipt = {ok: true, value: await session.queryPerformanceRecordingMetadata({projectId,
+              performanceId: take.performanceId, expectedRevision: revision, recordingArtifact: {
+                sha256: take.artifact.sha256, mediaType: "audio/wav", byteLength: take.artifact.byte_length}})};
+          } catch (error) {receipt = {ok: false, code: error.code, details: error.details};}
+          receipt.elapsedMs = performance.now() - start;
+          const projects = await (await navigator.storage.getDirectory()).getDirectoryHandle("projects");
+          const assets = await (await projects.getDirectoryHandle(projectId + ".lmdj")).getDirectoryHandle("assets");
+          const file = await (await assets.getFileHandle(take.artifact.sha256 + ".wav")).getFile();
+          const prefix = new Uint8Array(await file.slice(0, 56).arrayBuffer());
+          const tail = Array.from(new Uint8Array(await file.slice(-4).arrayBuffer()));
+          const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())),
+            value => value.toString(16).padStart(2, "0")).join("");
+          const header = new DataView(prefix.buffer);
+          physical = {sha256: hash, byteLength: file.size, prefix: Array.from(prefix), tail,
+            rate: header.getUint32(24, true), channels: header.getUint16(22, true),
+            frames: header.getUint32(52, true) / header.getUint16(32, true)};
+        }
+        return {inspected, receipt, physical};
+      }, {take, projectId: seeded.projectId, revision: seeded.revision});
+      expect(evidence.inspected).toMatchObject({id: take.performanceId, name: take.name,
+        recordingArtifact: take.artifact === null ? null : {
+          sha256: take.artifact.sha256, mediaType: "audio/wav", byteLength: take.artifact.byte_length},
+        events: [], projectRevision: seeded.revision});
+      if (take.artifact !== null) {
+        expect(evidence.physical).toEqual({sha256: take.physicalSha, byteLength: take.artifact.byte_length,
+          prefix: take.header, tail: take.kind === "damaged" ? [0, 0, 0, 1] : [0, 0, 0, 0],
+          rate: take.rate, channels: 2, frames: take.frames});
+        if (take.kind === "damaged") expect(evidence.receipt).toMatchObject({ok: false,
+          code: "COOK_FAILED", details: {storage_condition: "artifact_mismatch"}});
+        else {
+          expect(evidence.receipt).toMatchObject({ok: true, value: {projectId: seeded.projectId,
+            performanceId: take.performanceId, projectRevision: seeded.revision,
+            recordingRevision: take.recordingRevision, recordingArtifact: {
+              sha256: take.artifact.sha256, mediaType: "audio/wav", byteLength: take.artifact.byte_length},
+            audioMetadata: take.kind === "unsupported" ? null : {sampleRate: take.rate, channels: 2, sourceFrames: take.frames},
+            audioError: take.kind === "unsupported" ? {code:"UNSUPPORTED_AUDIO"} : null}});
+          expect(ui.data.sha256).toBe(take.artifact.sha256);
+          expect(ui.data.byteLength).toBe(String(take.artifact.byte_length));
+          expect(ui.data.projectRevision).toBe(String(seeded.revision));
+          expect(ui.data.recordingRevision).toBe(String(take.recordingRevision));
+        }
+      }
+      if (take.kind === "valid" || take.kind === "long") {
+        expect(ui.data.frames).toBe(String(take.frames));expect(ui.data.rate).toBe(String(take.rate));
+        await expect(page.getByText("Recording completeness unknown", {exact: true})).toBeVisible();
+      } else expect(ui.data.frames).toBeUndefined();
+      reports.push({reopen, take, ui, ...evidence});
+    }
+    if (reopen === 1) {
+      await page.getByRole("button", {name: /^Select Take \d+: Duration Silent$/}).click();
+      const output = page.getByRole("status", {name: "Take WAV audio", exact: true});
+      await expect(output).toHaveText("00:01.000", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+      const originalViewport = page.viewportSize();
+      for (const viewport of [{width:1440,height:900},{width:1280,height:720},{width:1024,height:768},
+        {width:820,height:1180},{width:768,height:1024},{width:390,height:844}]) {
+        await page.setViewportSize(viewport);
+        await page.waitForFunction(({width,height}) => innerWidth === width && innerHeight === height, viewport);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        const panel = page.getByRole("region", {name: "Saved Takes", exact: true});
+        const controls = panel.getByRole("button"), hits = [];
+        for (let i = 0; i < await controls.count(); i++) {
+          const button = controls.nth(i);await button.scrollIntoViewIfNeeded();
+          const hit = await button.evaluate(node => {
+            const b = node.getBoundingClientRect(), touch = node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
+            return {name: node.textContent, width: b.width, height: b.height,
+              contained: b.x >= touch.x - 1 && b.y >= touch.y - 1 && b.right <= touch.right + 1 && b.bottom <= touch.bottom + 1,
+              hit: node.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2))};
+          });
+          expect(hit.width).toBeGreaterThanOrEqual(43.5);expect(hit.height).toBeGreaterThanOrEqual(43.5);
+          expect(hit.contained, JSON.stringify({viewport, hit})).toBe(true);expect(hit.hit).toBe(true);hits.push(hit);
+        }
+        const card = page.getByRole("region", {name: "Saved Take audio", exact: true});
+        await card.scrollIntoViewIfNeeded();
+        const measurement = await panel.evaluate(node => ({
+          text: [...node.querySelectorAll('dt,dd,button span')].map(item => ({text:item.textContent, width:item.clientWidth, scroll:item.scrollWidth})),
+          scrollers: [...node.querySelectorAll('*')].filter(item => ['auto','scroll'].includes(getComputedStyle(item).overflowY) && item.scrollHeight > item.clientHeight + 1).length,
+        }));
+        expect(measurement.scrollers).toBe(0);
+        for (const text of measurement.text) expect(text.scroll, JSON.stringify({viewport,text})).toBeLessThanOrEqual(text.width + 1);
+        geometry.push({viewport, hits, ...measurement});
+        const image = info.outputPath(`saved-take-${viewport.width}x${viewport.height}.png`);
+        await page.screenshot({path:image});await info.attach(`saved Take ${viewport.width}`, {path:image,contentType:"image/png"});
+      }
+      await page.setViewportSize(originalViewport);
+      await page.waitForFunction(({width,height}) => innerWidth === width && innerHeight === height, originalViewport);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    }
+    const retired = await page.evaluate(async () => {
+      await window.lmdjWebRuntimeHost.session.close();
+      return window.lmdjWebRuntimeHost.session.waitForTerminalCleanup();
+    });
+    expect(retired).toBe(true);
+  }
+  const path = info.outputPath("saved-take-audio-two-reopens.json");
+  await writeFile(path, JSON.stringify({seeded, reports, geometry}, null, 2));
+  await info.attach("saved Take WAV audio and physical readback", {path, contentType: "application/json"});
 });
