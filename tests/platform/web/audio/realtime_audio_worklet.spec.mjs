@@ -1615,3 +1615,89 @@ opfsTest("saved recording metadata RPC verifies real WAVs through two page reope
   await (await import("node:fs/promises")).writeFile(evidencePath,JSON.stringify({journeys},null,2),{flag:"wx"});
   await testInfo.attach("recording-metadata-query-reopens",{path:evidencePath,contentType:"application/json"});
 });
+
+opfsTest("thirty-minute recording Save and bind preserve full identity through two page reopens", async ({context}, testInfo) => {
+  opfsTest.setTimeout(180_000);
+  // Independent Python hashlib witness for this literal PCM16 stereo header
+  // followed by345600000 zero bytes. This is a controlled physical file, not
+  // device capture. Keep the production512MiB heap and default30s RPC budget.
+  const headerHex="524946463070991457415645666d7420100000000100020080bb000000ee0200040010004a554e4b03000000010203ab6461746100709914";
+  const artifact={sha256:"59602d6f8b90b228985c6254d5f843945c42fcbd33552d9326f4784da627fbc6",
+    media_type:"audio/wav",byte_length:345600056};
+  const journeys=[];
+  for(const admission of ["save","bind"]) {
+    const projectId=crypto.randomUUID(),patternId=crypto.randomUUID(),performanceId=crypto.randomUUID();
+    const revision=admission==="save"?2:3,reports=[];
+    for(const phase of ["prepare","reopen","reopen"]) {
+      const page=await context.newPage(),errors=[];
+      page.on("pageerror",error=>errors.push(error.message));
+      const host=await waitForFormalHost(page);
+      expect(host.memoryBytes).toBe(536870912);
+      if(phase==="prepare") expect((await activateFromClick(page,48000)).ok).toBe(true);
+      const report=await page.evaluate(async ({admission,phase,projectId,patternId,performanceId,revision,artifact,header})=>{
+        const send=async (operation,payload)=>{
+          const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+            request_id:crypto.randomUUID(),operation,payload});
+          if(!response.ok)throw new Error(operation+": "+JSON.stringify(response));
+          return response.result;
+        };
+        const root=await navigator.storage.getDirectory();
+        let admitted=null;
+        if(phase==="prepare") {
+          await send("project.create",{project_id:projectId,bpm:120,
+            initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
+          await send("snapshot.reload",{pattern_id:patternId});await send("audio.activate",{});
+          await send("performance.record.begin",{command_id:crypto.randomUUID(),expected_revision:0,
+            session_id:performanceId,performance_id:performanceId});
+          await send("performance.record.stop",{session_id:performanceId,request_id:crypto.randomUUID()});
+          if(admission==="bind")await send("performance.save",{command_id:crypto.randomUUID(),expected_revision:1,
+            performance_id:performanceId,name:"thirty minutes",recording_artifact:null});
+          const assets=await (await (await root.getDirectoryHandle("projects"))
+            .getDirectoryHandle(projectId+".lmdj")).getDirectoryHandle("assets");
+          const file=await assets.getFileHandle(artifact.sha256+".wav",{create:true});
+          const writable=await file.createWritable();await writable.truncate(artifact.byte_length);
+          await writable.write({type:"write",position:0,data:new Uint8Array(header)});await writable.close();
+          const started=performance.now();
+          admitted=await send(admission==="save"?"performance.save":"performance.recording.bind",{
+            command_id:crypto.randomUUID(),expected_revision:revision-1,performance_id:performanceId,
+            ...(admission==="save"?{name:"thirty minutes"}:{}),recording_artifact:artifact});
+          admitted={receipt:admitted,elapsedMs:performance.now()-started};
+        } else await send("project.open",{project_id:projectId,pattern_id:patternId});
+        const inspected=await send("performance.inspect",{performance_id:performanceId});
+        const metadata=await send("performance.recording.metadata",{project_id:projectId,
+          performance_id:performanceId,expected_revision:revision,recording_artifact:artifact});
+        const assets=await (await (await root.getDirectoryHandle("projects"))
+          .getDirectoryHandle(projectId+".lmdj")).getDirectoryHandle("assets");
+        const file=await (await assets.getFileHandle(artifact.sha256+".wav")).getFile();
+        const prefix=new Uint8Array(await file.slice(0,56).arrayBuffer());
+        const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",await file.arrayBuffer())),
+          value=>value.toString(16).padStart(2,"0")).join("");
+        const view=new DataView(prefix.buffer);
+        const physical={sha256,byteLength:file.size,prefix:Array.from(prefix),
+          tail:Array.from(new Uint8Array(await file.slice(-4).arrayBuffer())),
+          sampleRate:view.getUint32(24,true),channels:view.getUint16(22,true),
+          sourceFrames:view.getUint32(52,true)/view.getUint16(32,true)};
+        if(phase==="prepare")await send("audio.suspend",{});
+        const closed=await send("host.close",{});
+        return {admitted,inspected,metadata,physical,closed,memoryBytes:window.Module.wasmMemory.buffer.byteLength};
+      },{admission,phase,projectId,patternId,performanceId,revision,artifact,header:Array.from(Buffer.from(headerHex,"hex"))});
+      if(phase==="prepare")expect(report.admitted.receipt.project_revision).toBe(revision);
+      else expect(report.admitted).toBeNull();
+      expect(report.inspected).toEqual({performance:{id:performanceId,name:"thirty minutes",created_bpm:120,
+        recording_artifact:artifact,events:[]},project_revision:revision});
+      expect(report.metadata).toEqual({project_id:projectId,performance_id:performanceId,
+        project_revision:revision,recording_revision:0,recording_artifact:artifact,
+        audio_metadata:{sample_rate:48000,channels:2,source_frames:86400000},audio_error:null});
+      expect(report.physical).toEqual({sha256:artifact.sha256,byteLength:345600056,
+        prefix:Array.from(Buffer.from(headerHex,"hex")),tail:[0,0,0,0],
+        sampleRate:48000,channels:2,sourceFrames:86400000});
+      expect(report.closed.state).toBe("closed");expect(report.memoryBytes).toBe(536870912);
+      expect(errors,"production Wasm must not trap while verifying long recordings").toEqual([]);
+      reports.push({phase,...report});await page.close();expect(page.isClosed()).toBe(true);
+    }
+    journeys.push({admission,projectId,patternId,performanceId,artifact,reports,closedPages:3});
+  }
+  const evidencePath=testInfo.outputPath("thirty-minute-recording-save-bind-reopens.json");
+  await (await import("node:fs/promises")).writeFile(evidencePath,JSON.stringify({journeys},null,2),{flag:"wx"});
+  await testInfo.attach("thirty-minute-recording-save-bind-reopens",{path:evidencePath,contentType:"application/json"});
+});

@@ -148,6 +148,15 @@ if(BUILD_TESTING)
   lmdj_add_test(NAME project_io.performance_recording_scan TIER component
     COMMAND lmdj_performance_recording_scan_tests LABELS persistence concurrency)
 
+  add_executable(lmdj_performance_recording_verification_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/performance_recording_verification_test.cpp")
+  target_include_directories(lmdj_performance_recording_verification_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_performance_recording_verification_tests PRIVATE lmdj_project_io_testable)
+  lmdj_target_warnings(lmdj_performance_recording_verification_tests)
+  lmdj_target_sanitizers(lmdj_performance_recording_verification_tests)
+  lmdj_add_test(NAME project_io.performance_recording_verification TIER component
+    COMMAND lmdj_performance_recording_verification_tests LABELS persistence concurrency)
+
   add_executable(
     lmdj_project_storage_platform_tests
     "${CMAKE_SOURCE_DIR}/tests/core/project_io/storage_platform_contract_test.cpp"
