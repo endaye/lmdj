@@ -79,7 +79,7 @@
     {
       "id": "collaborators",
       "label": "Runtime Collaborators",
-      "detail": "Performance ports · tempo (B1)",
+      "detail": "Performance · Native tempo session",
       "kind": "core",
       "x": 1310,
       "y": 430,

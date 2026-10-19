@@ -31,6 +31,7 @@ lmdj_target_sanitizers(lmdj_performance_runtime)
 
 set(lmdj_application_sources
     src/application.cpp
+    src/pattern_tempo_preview.cpp
     src/performance_recording_metadata.cpp
     src/candidate_store.cpp
     src/assembly_loader.cpp
@@ -525,6 +526,23 @@ if(BUILD_TESTING)
     COMMAND lmdj_facade_pattern_tempo_gateway_tests LABELS audio concurrency)
   lmdj_add_test(NAME facade.pattern_tempo_gateway_stress TIER stress
     COMMAND lmdj_facade_pattern_tempo_gateway_tests --stress LABELS audio concurrency)
+
+  add_executable(lmdj_facade_pattern_tempo_preview_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_tempo_preview_test.cpp")
+  target_include_directories(lmdj_facade_pattern_tempo_preview_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_pattern_tempo_preview_tests PRIVATE lmdj::application Threads::Threads)
+  lmdj_target_warnings(lmdj_facade_pattern_tempo_preview_tests)
+  lmdj_target_sanitizers(lmdj_facade_pattern_tempo_preview_tests)
+  lmdj_add_test(NAME facade.pattern_tempo_preview.journey TIER component
+    COMMAND lmdj_facade_pattern_tempo_preview_tests journey LABELS audio concurrency)
+  lmdj_add_test(NAME facade.pattern_tempo_preview.identity TIER component
+    COMMAND lmdj_facade_pattern_tempo_preview_tests identity LABELS audio concurrency)
+  lmdj_add_test(NAME facade.pattern_tempo_preview.uncertain TIER component
+    COMMAND lmdj_facade_pattern_tempo_preview_tests uncertain LABELS audio concurrency)
+  lmdj_add_test(NAME facade.pattern_tempo_preview.ownership TIER component
+    COMMAND lmdj_facade_pattern_tempo_preview_tests ownership LABELS audio concurrency)
+  lmdj_add_test(NAME facade.pattern_tempo_preview_stress TIER stress
+    COMMAND lmdj_facade_pattern_tempo_preview_tests stress LABELS audio concurrency)
 
   add_executable(
     lmdj_facade_resample_performance_tests

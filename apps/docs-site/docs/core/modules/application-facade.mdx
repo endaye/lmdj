@@ -494,6 +494,58 @@ held voice、非整除节奏及大于 JavaScript 精确整数范围的 numerator
 Facade preview 生命周期、Web protocol/SDK、Creator 的400ms 操作或 metronome；这些
 后续工作仍须完成实际产品与存储旅程。它也不证明 legacy Bar 边界漂移已经修复。
 
+### Facade 拥有的 tempo preview session
+
+独立 `pattern_tempo_preview.hpp` 定义 typed Application 生命周期。
+`bind_pattern_tempo_source` 绑定 normalized bundle、Project/Pattern/revision、
+实际 Native generation/start epoch 与保留的 prepared source；Core 签发非零、
+单 Application 生命周期内递增的 source/preview ID。零 preview ID 只开始新一轮，
+旧 source/preview 的 set/cancel/commit 不得命中新一轮。bind 校验 committed 身份
+和实际 clock，immutable material 身份仍由 Native publication 在每次 set 时检查；
+ready 不表示已经试听成功，不为每个 detent 重新 Cook。
+
+`preview_pattern_tempo` 不写 Truth/history；有待应用 publication 时拒绝另一个
+detent，消费方须保留其输入。`service_pattern_tempo_preview` 只用 Native 实际观测
+推进状态。等待 generation 与 `applied` 中真实 predecessor 分开，精确整数 anchor
+不经过浮点换算。实际 owner 证明已接纳 publication 不再 current/pending/retained
+时返回 `preview_refused` 与 `tempo_publication_unapplied`，不伪造原因、不自动重复
+detent；显式 set/cancel/commit 仍可处理这个保留的 turn。
+
+`cancel_pattern_tempo_preview` 等先前 admission 真正落地，再恢复最新 committed
+BPM；Truth revision 改变时，通过 same-BPM publication 接纳新 revision。恢复或
+adoption 的 admission 都不是取消完成，实际应用之后才进入 cancelled。回到起始值
+不保存。`commit_pattern_tempo_preview` 冻结准确的 UpdateSequenceSettings 身份，
+将本轮划为一个 history action；持久化结果与尚未应用的 preview/adoption 分开。
+`project_revision` 表示已知 committed Truth，`source_revision` 表示保留的 audio
+source；等待 adoption 时两者不同，不能用旧 source revision 标记已提交的新 Truth。
+保存前按 history→同一 platform bundle writer 的顺序持有 custody，再检查当前
+Project 身份与 revision；相同 revision 的 foreign Project 也不能成为旧 source 的写入目标。
+私有 publication observer 委托已有 Host token 的 claim/commit/abort/failure 检查，
+首次失败且从未接纳 manifest claim 时才明确拒绝、不冻结命令。已接纳 claim 的失败
+或先前结果未知的命令保留 `commit_unknown`，只接受原 CommandMeta 重试；后续
+读取失败、cancel 与 release 都不会把它当成可撤销草稿。已有 `committed_revision` 的保存保持真实结果，
+原命令重试不再写入，也不先听见恢复旧 BPM。
+
+未结算 turn 会阻止 authoring/history、Sequence/Performance recording、Replay
+和 Facade-vended transport 的新 control/switch admission；反方向检查真实 recording、
+opening、replay 和 Sample import owner。空闲或仅播放的 transport 不构成 recording
+锁。登记观察稳定 pimpl，移动 public controller wrapper 不留下悬空观察者；每个
+controller instance 独立退役，同 Session ID 的旧实例销毁不移除新实例的检查。
+foreign generation/epoch 使旧 source 失效，旧取消和销毁不得发布或停止新 owner。
+
+`release_pattern_tempo_source` 可在 render 继续运行时完成 graceful cancel/adoption，
+实际终态之后才释放 binding；UNKNOWN 仍保留。若带未结算 binding 直接销毁
+Application，Host 必须先建立 Native start/stop/clear 所要求的 render quiescence，
+随后 Core 才停止并清除仍属于自己的 derived Pattern，避免重启复活 preview。
+Engine stop 本身不是 callback gate，Engine 必须晚于其 active binding 销毁。
+
+独立 Native 分组与并发测试覆盖实际 onset、完整 Truth/history、最新 Truth cancel、
+commit-before-apply、真实 manifest 已落盘但返回失败、原命令重试、Undo/reopen、
+record/replay/移动后的 transport、停止/替换/退出。真实 Wasm/OPFS fixture 走同一
+typed Application 路径，并回读完整 checkpoint 与 WAV digest/byte length；这些证据
+仍须与实际 Worklet、Creator400ms、metronome/S7 和物理验收分开。当前 B2 尚未新增
+JSON/SDK endpoint 或产品 caller，B3 必须接入全部 publication/owner-disposal 路径。
+
 ## 6. 状态、错误与并发
 窄 `RuntimeFacade` 的开发源码增加 `stopped_peak_voices()`，返回当前已停止运行的
 实际峰值 voice 数。它只供串行 control caller 使用：`finish_stop()` 的既有

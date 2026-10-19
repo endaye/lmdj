@@ -1341,6 +1341,211 @@ nlohmann::json project_bundle_import(
       {"artifact_byte_length",artifact.byte_length},{"artifact_bytes",text(value(store.read_artifact(bundle,artifact), "history final bytes"))}}}};
 }
 
+std::vector<std::byte> tempo_fixture_wav() {
+  std::vector<std::byte> result;
+  const auto literal = [&](std::string_view s) { for (char c : s) result.push_back(static_cast<std::byte>(c)); };
+  const auto u16 = [&](std::uint16_t n) {
+    result.push_back(static_cast<std::byte>(n & 255));
+    result.push_back(static_cast<std::byte>(n >> 8));
+  };
+  const auto u32 = [&](std::uint32_t n) { u16(static_cast<std::uint16_t>(n)); u16(static_cast<std::uint16_t>(n >> 16)); };
+  literal("RIFF"); u32(24'036); literal("WAVEfmt "); u32(16); u16(1); u16(1);
+  u32(48'000); u32(96'000); u16(2); u16(16); literal("data"); u32(24'000);
+  for (unsigned frame = 0; frame < 12'000; ++frame) u16(10'000);
+  return result;
+}
+
+template <typename T> T tempo_value(Result<T> result) {
+  if (!result.has_value()) throw std::runtime_error(
+      "tempo: " + result.error().message + " " + result.error().details.dump());
+  return std::move(result.value());
+}
+
+[[gnu::noinline]] void seed_tempo_project(lmdj::facade::Application& app,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  domain::Pattern pattern{foundation::PatternId{uuid("9802")}, 1, {}};
+  for (std::uint32_t tick = 0; tick < 3840; tick += 960)
+    pattern.events.push_back({{0, 0}, tick, 1, 127});
+  const auto created = std::unique_ptr<Result<domain::ProjectState>>(new Result<domain::ProjectState>(
+      app.create_initial_project({bundle, foundation::ProjectId{uuid("9801")}, 120, pattern})));
+  require(created->has_value(), "tempo fixture Project create");
+  const auto wav = tempo_fixture_wav();
+  const auto imported = std::unique_ptr<Result<domain::AppliedCommand>>(new Result<domain::AppliedCommand>(
+      app.import_artifact_bytes({bundle, {foundation::CommandId{uuid("9803")}, 0},
+          foundation::AssetId{uuid("9804")}, "audio/wav", wav})));
+  require(imported->has_value(), "tempo fixture WAV import");
+  const auto assigned = app.command({{"operation", "pad.assign"}, {"project_path", bundle.generic_string()},
+      {"command_id", uuid("9805")}, {"expected_revision", 1}, {"slot", {{"bank", 0}, {"pad", 0}}},
+      {"asset_id", uuid("9804")}});
+  require(assigned.value("ok", false), "tempo fixture Pad assignment");
+}
+
+[[gnu::noinline]] void expect_tempo_truth(lmdj::project_io::ProjectStore& store,
+    const std::filesystem::path& bundle, const lmdj::domain::ProjectState& original,
+    std::uint16_t bpm, std::uint64_t revision) {
+  using namespace lmdj;
+  const auto expected = std::unique_ptr<domain::ProjectState>(new domain::ProjectState(original));
+  expected->bpm = bpm; expected->revision = revision;
+  const auto current = std::unique_ptr<Result<domain::ProjectState>>(
+      new Result<domain::ProjectState>(store.inspect_committed(bundle)));
+  require(current->has_value() && current->value() == *expected, "tempo complete Truth differs");
+}
+
+void tempo_render(lmdj::audio::RealtimeEngine& engine, std::uint64_t frames) {
+  std::array<float, 128> left{}, right{};
+  while (frames) {
+    const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(128, frames));
+    engine.render(left.data(), right.data(), count); frames -= count;
+  }
+}
+
+void tempo_until(lmdj::audio::RealtimeEngine& engine, std::uint64_t frame) {
+  require(engine.telemetry().rendered_frames <= frame, "tempo frame oracle moved backwards");
+  tempo_render(engine, frame - engine.telemetry().rendered_frames);
+}
+
+void tempo_onset(lmdj::audio::RealtimeEngine& engine, std::uint64_t frame, std::uint64_t previous) {
+  tempo_until(engine, frame);
+  require(engine.telemetry().started_voices == previous, "tempo unexpected early voice");
+  float left{}, right{};
+  engine.render(&left, &right, 1);
+  require(engine.telemetry().started_voices == previous + 1 && left == 0 && right == 0,
+          "tempo independent actual onset frame differs");
+  engine.render(&left, &right, 1);
+  require(left > 0 && left == right, "tempo onset has no actual PCM");
+}
+
+nlohmann::json tempo_history(lmdj::facade::Application& app, const std::filesystem::path& bundle) {
+  const auto result = app.query({{"operation", "history.inspect"}, {"project_path", bundle.generic_string()}});
+  require(result.value("ok", false), "tempo history inspect failed");
+  return result.at("result");
+}
+
+[[gnu::noinline]] std::optional<nlohmann::json> run_tempo_preview_action() {
+  using namespace lmdj;
+  const auto action = query("action");
+  if (action != "tempo_preview_roundtrip" && action != "tempo_preview_reopen") return std::nullopt;
+  auto platform = project_io::make_web_project_storage_platform();
+  const auto bundle = std::filesystem::path{"/lmdj-workspace"} / (query("bundle") + ".lmdj");
+  facade::ApplicationConfig config{};
+  config.workspace_root = "/lmdj-workspace";
+  config.storage_platform = platform;
+  config.performance_replay_controller = facade::make_unavailable_performance_replay_controller();
+  // Engine outlives Application, including its terminal binding.
+  auto engine = std::unique_ptr<audio::RealtimeEngine>(new audio::RealtimeEngine);
+  auto app = std::make_unique<facade::Application>(std::move(config));
+  auto store = std::make_unique<project_io::ProjectStore>(platform);
+  const bool undo = query("undo") == "1";
+  const auto expected_bpm = static_cast<std::uint16_t>(undo ? 120 : 240);
+  const auto expected_revision = std::uint64_t{undo ? 4U : 3U};
+  if (action == "tempo_preview_roundtrip") seed_tempo_project(*app, bundle);
+  require(app->command({{"operation", "history.open"}, {"project_path", bundle.generic_string()},
+      {"session_id", uuid("9806")}}).value("ok", false), "tempo history open");
+  nlohmann::json result;
+  if (action == "tempo_preview_roundtrip") {
+    const auto baseline = std::unique_ptr<Result<domain::ProjectState>>(
+        new Result<domain::ProjectState>(store->inspect_committed(bundle)));
+    require(baseline->has_value() && baseline->value().revision == 2, "tempo baseline Truth");
+    auto snapshot = tempo_value(app->prepare_runtime_snapshot({bundle, foundation::PatternId{uuid("9802")}}));
+    auto source = tempo_value(audio::PreparedPatternView::from_snapshot(*snapshot));
+    success(engine->enable_pattern_transport(7), "tempo Native transport enable");
+    require(engine->publish_sample_bank(audio::PreparedSampleBank::empty(foundation::ProjectId{uuid("9801")}, 2)) ==
+        audio::PublishResult::accepted, "tempo sample bank");
+    const auto initial = engine->publish_pattern_view(tempo_value(source.with_tempo(120)));
+    require(initial.result == audio::PatternPublishResult::accepted, "tempo source publication");
+    success(engine->start(), "tempo engine start");
+    require(engine->submit_pattern_transport({7, 1, initial.generation, audio::PatternTransportAction::start, {}}) ==
+        audio::PatternTransportSubmit::accepted, "tempo initial transport start");
+    tempo_render(*engine, 1);
+    require(engine->inspect_pattern_transport_receipt(7, 1).has_value() &&
+        engine->acknowledge_pattern_transport_receipt(7, 1), "tempo initial actual receipt");
+    auto status = tempo_value(app->bind_pattern_tempo_source({bundle, foundation::ProjectId{uuid("9801")},
+        foundation::PatternId{uuid("9802")}, 2, {1, initial.generation}}, source, *engine));
+    const auto writes = lmdj_opfs_immutable_write_count();
+    tempo_until(*engine, 12'001);
+    status = tempo_value(app->preview_pattern_tempo({{status.identity.source_id, 0}, 240}));
+    expect_tempo_truth(*store, bundle, baseline->value(), 120, 2);
+    require(tempo_history(*app, bundle).at("undo_count") == 0, "tempo preview wrote history");
+    tempo_onset(*engine, 18'001, 1);
+    status = tempo_value(app->service_pattern_tempo_preview(status.identity.source_id));
+    require(status.applied && status.applied->anchor == (audio::TransportAnchor{12'001, 1'382'515'200, 240}),
+        "tempo actual Native anchor differs");
+    result["previewWrites"] = lmdj_opfs_immutable_write_count() - writes;
+    tempo_until(*engine, 20'000);
+    status = tempo_value(app->cancel_pattern_tempo_preview(status.identity));
+    require(status.phase == facade::PatternTempoPreviewPhase::cancelling, "tempo cancel claimed apply at admission");
+    expect_tempo_truth(*store, bundle, baseline->value(), 120, 2);
+    tempo_onset(*engine, 40'001, 2);
+    status = tempo_value(app->service_pattern_tempo_preview(status.identity.source_id));
+    require(status.phase == facade::PatternTempoPreviewPhase::cancelled, "tempo cancel not actually settled");
+    expect_tempo_truth(*store, bundle, baseline->value(), 120, 2);
+    require(tempo_history(*app, bundle).at("undo_count") == 0, "tempo cancel wrote history");
+    result["cancelWrites"] = lmdj_opfs_immutable_write_count() - writes;
+    tempo_until(*engine, 50'000);
+    status = tempo_value(app->preview_pattern_tempo({{status.identity.source_id, 0}, 240}));
+    tempo_onset(*engine, 57'001, 3);
+    status = tempo_value(app->service_pattern_tempo_preview(status.identity.source_id));
+    expect_tempo_truth(*store, bundle, baseline->value(), 120, 2);
+    tempo_until(*engine, 60'000);
+    const facade::PatternTempoPreviewCommit commit{status.identity, {foundation::CommandId{uuid("9807")}, 2}};
+    status = tempo_value(app->commit_pattern_tempo_preview(commit));
+    require(status.committed_revision == 3 && status.project_revision == 3 && status.source_revision == 2 &&
+        status.phase == facade::PatternTempoPreviewPhase::committed_pending,
+        "tempo durable receipt or pending adoption missing");
+    expect_tempo_truth(*store, bundle, baseline->value(), 240, 3);
+    require(tempo_history(*app, bundle).at("undo_count") == 1, "tempo save is not one Undo");
+    tempo_onset(*engine, 69'001, 4);
+    status = tempo_value(app->service_pattern_tempo_preview(status.identity.source_id));
+    require(status.phase == facade::PatternTempoPreviewPhase::committed && status.source_revision == 3,
+        "tempo revision adoption not applied");
+    const auto saved_writes = lmdj_opfs_immutable_write_count();
+    const auto accepted = engine->pattern_telemetry().accepted_publications;
+    require(tempo_value(app->commit_pattern_tempo_preview(commit)).committed_revision == 3, "tempo exact commit retry differs");
+    require(tempo_value(app->cancel_pattern_tempo_preview(commit.identity)).phase == facade::PatternTempoPreviewPhase::committed,
+        "tempo cancel rolled back a durable commit");
+    result["retryWrites"] = lmdj_opfs_immutable_write_count() - saved_writes;
+    require(engine->pattern_telemetry().accepted_publications == accepted, "tempo terminal retry republished audio");
+    expect_tempo_truth(*store, bundle, baseline->value(), 240, 3);
+    tempo_value(app->release_pattern_tempo_source(status.identity.source_id));
+    if (undo) {
+      const auto undone = app->command({{"operation", "history.undo"}, {"project_path", bundle.generic_string()},
+          {"session_id", uuid("9806")}, {"command_id", uuid("9808")}, {"expected_revision", 3}});
+      require(undone.value("ok", false), "tempo one Undo failed");
+      expect_tempo_truth(*store, bundle, baseline->value(), 120, 4);
+      require(tempo_history(*app, bundle).at("redo_count") == 1, "tempo Undo did not produce one Redo");
+    }
+    require(result.at("previewWrites") == 0 && result.at("cancelWrites") == 0 && result.at("retryWrites") == 0,
+        "tempo preview/cancel/exact retry published immutable Project bytes");
+    result["onsets"] = {18'001, 40'001, 57'001, 69'001};
+  }
+  const auto state = std::unique_ptr<Result<domain::ProjectState>>(
+      new Result<domain::ProjectState>(store->inspect_committed(bundle)));
+  require(state->has_value() && state->value().bpm == expected_bpm && state->value().revision == expected_revision,
+      "tempo final/reopen committed Truth differs");
+  const auto& artifact = state->value().assets.at(foundation::AssetId{uuid("9804")}).artifact;
+  require(artifact.sha256 == "d9116fe7b5537009d51623ec622a866c6a94be1f4a1d6c761078f2b6e16f6eba" &&
+      artifact.byte_length == 24'044 && tempo_value(store->read_artifact(bundle, artifact)) == tempo_fixture_wav(),
+      "tempo complete WAV Artifact identity/bytes differ");
+  const auto history = tempo_history(*app, bundle);
+  if (action == "tempo_preview_reopen")
+    require(history.at("undo_count") == 0 && history.at("redo_count") == 0, "tempo transient history survived cold reopen");
+  const auto manifest = nlohmann::json::parse(text(tempo_value(platform->read_complete(bundle / "manifest.json"))));
+  require(manifest.at("transactions").size() == expected_revision, "tempo persisted extra command");
+  const auto checkpoint = nlohmann::json::parse(text(tempo_value(platform->read_complete(
+      bundle / manifest.at("head_checkpoint").get<std::string>()))));
+  result["checkpoint"] = checkpoint;
+  result["revision"] = expected_revision;
+  result["bpm"] = expected_bpm;
+  result["undo"] = history.at("undo_count");
+  result["redo"] = history.at("redo_count");
+  result["artifact"] = {{"sha256", artifact.sha256}, {"byteLength", artifact.byte_length}};
+  app.reset(); engine->stop(); store.reset();
+  require(lmdj_project_io_physical_writer_count() == 0, "tempo retained a physical writer after close");
+  result["writersAfterClose"] = 0;
+  return nlohmann::json{{"complete", true}, {"result", std::move(result)}};
+}
+
 // Keep -O3 from inlining Project replacement into main: every other action
 // would then inherit its Project temporaries. Run these legs in their own frame.
 // Stacking both fixtures' ProjectState values exceeds the existing 128 KiB
@@ -2648,6 +2853,7 @@ int main() {
   try {
     report_progress("native-suite-start");
     auto action = run_project_replacement_action();
+    if (!action.has_value()) action = run_tempo_preview_action();
     if (!action.has_value()) action = run_history_action();
     if (!action.has_value()) action = run_admission_action();
     if (!action.has_value()) {
