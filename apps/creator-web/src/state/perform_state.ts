@@ -241,6 +241,10 @@ export interface PerformState {
   readonly performancesOwner: ProjectView | null;
   readonly performancesStatus: "unloaded" | "loading" | "ready" | "unavailable";
   readonly performanceDraftIds: readonly string[];
+  readonly stoppedDraft: Readonly<{owner: ProjectView; performanceId: string;
+    sessionId: string; journalRevision: number}> | null;
+  readonly saveConfirmation: Readonly<{performanceId: string; name: string;
+    projectRevision: number; source: "save" | "inspection"}> | null;
   readonly takeAudio: TakeAudioState | null;
   readonly recovery: readonly PerformanceRecoverySummary[];
   readonly recoveryLoaded: boolean;
@@ -269,7 +273,9 @@ export type PerformAction =
   | {readonly type: "pad-gates-pending"}
   | {readonly type: "hold"; readonly value: boolean}
   | {readonly type: "performances"; readonly values: readonly PerformanceSummary[];
-      readonly owner: ProjectView; readonly drafts: readonly string[]}
+      readonly owner: ProjectView; readonly drafts: readonly string[];
+      readonly stoppedDraft: PerformState["stoppedDraft"]}
+  | {readonly type: "save-confirmation"; readonly value: PerformState["saveConfirmation"]}
   | {readonly type: "take-audio"; readonly value: TakeAudioState | null}
   | {readonly type: "performance-list-status"; readonly owner: ProjectView;
       readonly status: "loading" | "unavailable"}
@@ -318,6 +324,8 @@ export function initialPerformState(
     performancesOwner: null,
     performancesStatus: "unloaded",
     performanceDraftIds: Object.freeze([]),
+    stoppedDraft: null,
+    saveConfirmation: null,
     takeAudio: null,
     recovery: Object.freeze([]),
     recoveryLoaded: false,
@@ -338,7 +346,11 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
     case "capture": return Object.freeze({...state, captureStatus: action.status});
     case "recording": return Object.freeze({...state,
       recordingAudio: ["idle", "starting"].includes(action.recording.phase) ? null : state.recordingAudio,
+      saveConfirmation: ["idle", "starting"].includes(action.recording.phase) ? null : state.saveConfirmation,
+      stoppedDraft: action.recording.phase === "starting" ? null : state.stoppedDraft,
       recording: freezeRecording(action.recording)});
+    case "save-confirmation": return Object.freeze({...state,
+      saveConfirmation: action.value === null ? null : Object.freeze({...action.value})});
     case "recording-audio": return Object.freeze({...state, recordingAudio: action.value});
     case "pending-launch": return Object.freeze({...state,
       pendingLaunch: action.pending});
@@ -402,10 +414,11 @@ export function reducePerform(state: PerformState, action: PerformAction): Perfo
     case "hold": return Object.freeze({...state, hold: action.value});
     case "performances": return Object.freeze({...state,
       performances: Object.freeze([...action.values]), performancesOwner: action.owner,
-      performancesStatus: "ready", performanceDraftIds: Object.freeze([...action.drafts])});
+      performancesStatus: "ready", performanceDraftIds: Object.freeze([...action.drafts]),
+      stoppedDraft: action.stoppedDraft === null ? null : Object.freeze({...action.stoppedDraft})});
     case "performance-list-status": return Object.freeze({...state,
       performances: Object.freeze([]), performancesOwner: action.owner,
-      performancesStatus: action.status, performanceDraftIds: Object.freeze([])});
+      performancesStatus: action.status, performanceDraftIds: Object.freeze([]), stoppedDraft: null});
     case "take-audio": return Object.freeze({...state, takeAudio: action.value});
     case "recovery": return Object.freeze({...state,
       recovery: Object.freeze([...action.values]), recoveryLoaded: true});
@@ -617,6 +630,8 @@ export interface PerformController {
   retryWavBind(): Promise<void>;
   exportWav(): Promise<void>;
   discard(): Promise<void>;
+  saveStoppedDraft(): Promise<void>;
+  discardStoppedDraft(): Promise<void>;
   recordRawEvent(event: PerformanceRawEvent, physicalKey?: object): Promise<void>;
   engageFx(fx: PerformanceFx, value: number): string;
   moveFx(gestureId: string, fx: PerformanceFx, value: number): void;
@@ -789,7 +804,11 @@ export function createPerformController(options: PerformControllerOptions): Perf
       ]);
       if (values.status === "rejected") throw values.reason;
       if (recovery.status === "rejected") throw recovery.reason;
-      return [values.value, recovery.value] as const;
+      // Only candidate drafts need this discriminator. With no Journal the
+      // query can reach recovery too, so retain the same WAV barrier and track
+      // its complete lifetime before any managed installation may begin.
+      const authority = recovery.value.length === 0 ? null : await session.queryPerformanceRecordingStatus();
+      return [values.value, recovery.value, authority] as const;
     });
     // Concurrent header reads retain their own generations. A later managed
     // install waits for every read to settle, including a rejected read's peer.
@@ -1322,6 +1341,40 @@ export function createPerformController(options: PerformControllerOptions): Perf
     discardCommitted = false;
   };
 
+  const finishStoppedDraft = (discard: boolean): Promise<void> => {
+    const draft = state.stoppedDraft, owner = options.getCreatorState().project.current;
+    const performance = state.performances.find(value => value.performanceId === draft?.performanceId);
+    if (closed || leavePromise !== null || draft === null || owner === null ||
+        resources !== null || state.recording.phase !== "idle" ||
+        options.getCreatorState().project.phase !== "ready" || draft.owner !== owner ||
+        state.performancesOwner !== owner || state.performancesStatus !== "ready" ||
+        draft.journalRevision !== owner.revision || performance === undefined) return Promise.resolve();
+    return runFinalization(async () => {
+      dispatch({type: "error", message: null});
+      // Retire the selector before admitting a mutation. Neither a duplicate
+      // click nor a refused/unknown result may reuse this stopped observation.
+      dispatch({type: "performance-list-status", owner, status: "loading"});
+      let committed = false;
+      try {
+        await mutate(async () => {
+          const request = {expectedRevision: owner.revision, performanceId: performance.performanceId};
+          const receipt = discard ? await session.discardPerformance(request)
+            : await session.savePerformance({...request, name: performance.name,
+              recordingArtifact: performance.recordingArtifact});
+          committed = true;
+          return receipt;
+        });
+        await loadRecovery(discard ? "discarded stopped recording" : "saved stopped recording");
+        await controller.refreshPerformances();
+      } catch (error) {
+        dispatch({type: "performance-list-status", owner, status: "unavailable"});
+        fail(error);
+        if (committed) dispatch({type: "error", message:
+          `The recording was ${discard ? "discarded" : "saved"}, but Creator could not show the latest Project. Refresh saved Takes.`});
+      }
+    });
+  };
+
   const observeLaunch = async (requestId: string, generation: number) => {
     for (let attempt = 0; attempt < maximumStatusQueries; attempt += 1) {
       if (generation !== launchPollGeneration) return;
@@ -1824,9 +1877,12 @@ export function createPerformController(options: PerformControllerOptions): Perf
             saveOutcomeUnknown = false;
             settleShutdownFailure(owner, "save");
             setRecording("saving", {expectedRevision: inspected.projectRevision});
+            dispatch({type: "save-confirmation", value: {performanceId,
+              name: inspected.name, projectRevision: inspected.projectRevision, source: "inspection"}});
           } else if (!saveCommitted) {
             savedName = name;
             let receipt: Readonly<{committedRevision: number}>;
+            let confirmationSource: "save" | "inspection" = "save";
             try {
               receipt = await runProjectMutation(async () => {
                 const saved = await session.savePerformance({
@@ -1848,10 +1904,13 @@ export function createPerformController(options: PerformControllerOptions): Perf
               saveCommitted = true;
               saveOutcomeUnknown = false;
               receipt = {committedRevision: inspected.projectRevision};
+              confirmationSource = "inspection";
             }
             saveCommitted = true;
             settleShutdownFailure(owner, "save");
             setRecording("saving", {expectedRevision: receipt.committedRevision});
+            dispatch({type: "save-confirmation", value: {performanceId,
+              name: savedName, projectRevision: receipt.committedRevision, source: confirmationSource}});
           }
           try {
             await refreshProjectTruth();
@@ -1887,6 +1946,8 @@ export function createPerformController(options: PerformControllerOptions): Perf
       dispatch({type: "error", message: null});
       return runFinalization(bindSavedRecording);
     },
+    saveStoppedDraft() { return finishStoppedDraft(false); },
+    discardStoppedDraft() { return finishStoppedDraft(true); },
     async exportWav() {
       if (resources?.readTemporary === undefined || state.recording.wav === null) return;
       try {
@@ -2198,9 +2259,14 @@ export function createPerformController(options: PerformControllerOptions): Perf
       try {
         // The public list includes begin's durable draft. A fresh recovery
         // snapshot distinguishes pending Takes without inventing a saved flag.
-        const [values, recovery] = await readPerformanceHeaders();
+        const [values, recovery, authority] = await readPerformanceHeaders();
+        const stoppedDraft = authority?.state === "stopped" && authority.pendingEventCount === 0 &&
+          authority.performanceId !== null && authority.sessionId !== null &&
+          authority.journalRevision === owner.revision
+          ? {owner, performanceId: authority.performanceId, sessionId: authority.sessionId,
+            journalRevision: authority.journalRevision} : null;
         if (owns()) dispatch({type: "performances", values: values as readonly PerformanceSummary[],
-          owner, drafts: recovery.map(value => value.performanceId)});
+          owner, drafts: recovery.map(value => value.performanceId), stoppedDraft});
       } catch (error) {
         if (!owns()) return;
         dispatch({type: "performance-list-status", owner, status: "unavailable"});
@@ -2280,6 +2346,7 @@ export function createPerformController(options: PerformControllerOptions): Perf
       try {
         await session.discardPerformanceRecovery({sessionId, requestId: createId()});
         await loadRecovery("discarded");
+        await controller.refreshPerformances();
       } catch (error) { fail(error); }
     },
     beginReplay(performanceId) {
@@ -2289,9 +2356,18 @@ export function createPerformController(options: PerformControllerOptions): Perf
       if (state.replay?.state === "playing") return Promise.resolve();
       const operation = (async () => {
         replayPollGeneration += 1;
-        dispatch({type: "replay", replay: await session.beginPerformanceReplay({
+        const replay = await session.beginPerformanceReplay({
           replayId: createId(), performanceId,
-        })});
+        });
+        dispatch({type: "replay", replay});
+        // Empty/already terminal begin is a real reset acknowledgement too.
+        // No playing poll will run for it; retain the same terminal projection
+        // as Stop/status rather than leaving its confirmed reset pending.
+        if (replay.state !== "playing") {
+          dispatch({type: "neutral"});
+          clearLiveGenerations();
+          void controller.refreshLiveStatus().catch(fail);
+        }
       })();
       const tracked = operation.then(() => {
         if (replayBeginPromise === tracked) replayBeginPromise = null;

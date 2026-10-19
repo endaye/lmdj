@@ -212,7 +212,8 @@ function sessionFixture(initialStatus = status("ready")) {
     requestPerformancePatternLaunch: calls.launch,
     flushPerformanceRecording: calls.flush,
     stopPerformanceRecording: calls.stop,
-    queryPerformanceRecordingStatus: vi.fn(),
+    queryPerformanceRecordingStatus: vi.fn(async () => authority({state: "idle",
+      sessionId: null, performanceId: null, journalRevision: 0, nextFlushSequence: 0})),
     listPerformances: vi.fn(async () => []),
     inspectPerformance: vi.fn(),
     queryPerformanceRecordingMetadata: vi.fn(async (_request: unknown,
@@ -273,6 +274,7 @@ test("wall-clock-reachable session double methods keep faithful defaults", () =>
     "listPerformances",
     "listPerformanceRecovery",
     "queryPerformanceLiveStatus",
+    "queryPerformanceRecordingStatus",
     "queryPerformanceReplayStatus",
   ] as const;
   const {session} = sessionFixture();
@@ -1549,8 +1551,11 @@ test("retries projection after committed discard without discarding twice", asyn
 
 test("renders authoritative recording, WAV, launch, replay, recovery and resample status", async () => {
   const fixture = controllerFixture();
+  // The stopped current recording is still unsaved. This separate saved Take
+  // keeps the original replay/reset leg without presenting that draft as saved.
+  const savedPerformanceId = ids.pattern2;
   (fixture.runtime.session.listPerformances as ReturnType<typeof vi.fn>)
-    .mockResolvedValue([{performanceId: ids.performance, name: "Take 1",
+    .mockResolvedValue([{performanceId: savedPerformanceId, name: "Take 1",
       createdBpm: 120, recordingArtifact: null, eventCount: 4}]);
   (fixture.runtime.session.beginPerformanceReplay as ReturnType<typeof vi.fn>)
     .mockResolvedValue({replayId: "replay-1", state: "playing", resolvedRevision: 7,
@@ -1577,6 +1582,9 @@ test("renders authoritative recording, WAV, launch, replay, recovery and resampl
 
   selectPerformPage("Replay");
   await userEvent.click(await screen.findByRole("button", {name: "Replay Take 1"}));
+  expect(fixture.runtime.session.beginPerformanceReplay).toHaveBeenCalledWith({
+    replayId: expect.any(String), performanceId: savedPerformanceId,
+  });
   expect(screen.getByRole("status", {name: "Replay status"}).textContent)
     .toContain("resolved revision · 7");
   await userEvent.click(screen.getByRole("button", {name: "Stop Replay"}));
@@ -5060,4 +5068,366 @@ test("held Take metadata leaves the Project mutation tail available and retires 
   const late = f.controller.inspectTakeAudio(ids.performance);
   await f.controller.close();closing.resolve(savedTakeMetadata());await late;
   expect(f.controller.getState().takeAudio).toBeNull();
+});
+
+const REPLAY_PLAYING = {replayId: "replay-1", state: "playing" as const,
+  resolvedRevision: 7, eventCursor: 0, eventCount: 4, projectRevision: null};
+
+async function replaySurfaceFixture(options: NonNullable<Parameters<typeof controllerFixture>[0]> = {}) {
+  const fixture = controllerFixture(options);
+  vi.mocked(fixture.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE]);
+  const rendered = renderSurface(fixture);
+  selectPerformPage("Replay");
+  await screen.findByRole("button", {name: `Replay ${SAVED_TAKE.name}`});
+  return {fixture, rendered};
+}
+
+test("Replay cards expose only saved Takes and never start audio metadata or a publisher on entry", async () => {
+  const f = controllerFixture();
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([
+    {...SAVED_TAKE, performanceId: ids.pattern2, name: "Saved evening"},
+    {...SAVED_TAKE, name: "Unsaved current"},
+    {...SAVED_TAKE, performanceId: ids.pattern1, name: "Recovery draft"},
+  ]);
+  f.controller.connect();await f.controller.refreshRecovery();
+  await f.controller.record();await f.controller.stop();
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([{
+    sessionId: ids.pattern1, performanceId: ids.pattern1, reason: "owner_lost",
+    durableEventCount: 1, pendingEventCount: 0, fingerprint: "f".repeat(64),
+  }]);
+  await f.controller.refreshPerformances();await f.controller.refreshRecovery();
+  renderSurface(f);selectPerformPage("Replay");
+  await screen.findByRole("button", {name: "Replay Saved evening"});
+  await act(async () => {for (let n = 0; n < 32; n++) await Promise.resolve();});
+  expect(screen.queryByRole("button", {name: "Replay Unsaved current"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Replay Recovery draft"})).toBeNull();
+  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", {name: "Apply recovery"})).not.toBeNull();
+});
+
+test("a Core-stopped recovered draft stays replayable separately without an in-memory apply flag", async () => {
+  const f = controllerFixture();
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([{...SAVED_TAKE,
+    name: "Recovered recording", recordingArtifact: null}]);
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([{
+    sessionId: ids.session, performanceId: ids.performance, reason: "stopped",
+    durableEventCount: 0, pendingEventCount: 0, fingerprint: "f".repeat(64),
+  }]);
+  vi.mocked(f.runtime.session.queryPerformanceRecordingStatus).mockResolvedValue(authority({
+    state: "stopped", journalRevision: project.revision,
+  }));
+  vi.mocked(f.runtime.session.beginPerformanceReplay).mockResolvedValue(REPLAY_PLAYING);
+  renderSurface(f);selectPerformPage("Replay");
+  await act(() => f.controller.refreshAuthority());
+  const draft = await screen.findByRole("region", {name: "Stopped Performance draft"});
+  expect(within(draft).getByText("Not saved yet · save or discard to finish.")).not.toBeNull();
+  await userEvent.click(within(draft).getByRole("button", {name: "Replay Recovered recording"}));
+  expect(f.runtime.session.beginPerformanceReplay).toHaveBeenCalledWith({
+    replayId: expect.any(String), performanceId: ids.performance,
+  });
+  expect(f.runtime.session.applyPerformanceRecovery).not.toHaveBeenCalled();
+  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
+});
+
+async function stoppedDraftFixture(statusOverrides: Record<string, unknown> = {}) {
+  const f = controllerFixture();
+  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([{...SAVED_TAKE,
+    name: "Recovered recording", recordingArtifact: null}]);
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([{
+    sessionId: ids.session, performanceId: ids.performance, reason: "stopped",
+    durableEventCount: 0, pendingEventCount: 0, fingerprint: "f".repeat(64),
+  }]);
+  vi.mocked(f.runtime.session.queryPerformanceRecordingStatus).mockResolvedValue(authority({
+    state: "stopped", journalRevision: project.revision, ...statusOverrides,
+  }));
+  await f.controller.refreshPerformances();
+  return f;
+}
+
+for (const [name, status] of [
+  ["active", {state: "active"}], ["unapplied recovery", {state: "recovery_required"}],
+  ["pending tail", {pendingEventCount: 1}], ["old revision", {journalRevision: project.revision - 1}],
+  ["missing session", {sessionId: null}], ["missing Performance", {performanceId: null}],
+] as const) {
+  test(`Replay does not admit a stopped draft from ${name} authority`, async () => {
+    const f = await stoppedDraftFixture(status);
+    expect(f.controller.getState().stoppedDraft).toBeNull();
+    await f.controller.saveStoppedDraft();await f.controller.discardStoppedDraft();
+    expect(f.runtime.session.savePerformance).not.toHaveBeenCalled();
+    expect(f.runtime.session.discardPerformance).not.toHaveBeenCalled();
+  });
+}
+
+test("stopped draft actions reject a changed Project owner even at the same revision", async () => {
+  const f = await stoppedDraftFixture();
+  f.setCreatorState({...creatorState(), project: {...creatorState().project, current: {...project}}});
+  await f.controller.saveStoppedDraft();await f.controller.discardStoppedDraft();
+  expect(f.runtime.session.savePerformance).not.toHaveBeenCalled();
+  expect(f.runtime.session.discardPerformance).not.toHaveBeenCalled();
+});
+
+test("a failed stopped-authority read publishes no partial saved snapshot", async () => {
+  const f = await stoppedDraftFixture();
+  vi.mocked(f.runtime.session.queryPerformanceRecordingStatus).mockRejectedValueOnce(new Error("status unavailable"));
+  await expect(f.controller.refreshPerformances()).rejects.toThrow("status unavailable");
+  expect(f.controller.getState().stoppedDraft).toBeNull();
+  expect(f.controller.getState().performancesStatus).toBe("unavailable");
+  expect(f.controller.getState().performances).toEqual([]);
+});
+
+test("the stopped-authority read remains inside the WAV observation lifetime", async () => {
+  const f = controllerFixture();
+  f.controller.connect();await f.controller.refreshRecovery();
+  await f.controller.record();await f.controller.stop();
+  const status = deferred<Awaited<ReturnType<typeof f.runtime.session.queryPerformanceRecordingStatus>>>();
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([{
+    sessionId: ids.session, performanceId: ids.performance, reason: "stopped",
+    durableEventCount: 0, pendingEventCount: 0, fingerprint: "f".repeat(64),
+  }]);
+  const statusQuery = vi.mocked(f.runtime.session.queryPerformanceRecordingStatus);
+  const saveHeadersObserved = deferred<void>();
+  statusQuery.mockClear();statusQuery.mockReturnValueOnce(status.promise)
+    .mockImplementationOnce(async () => {
+      saveHeadersObserved.resolve();
+      return authority({state: "stopped", journalRevision: project.revision});
+    });
+  const observing = f.controller.refreshPerformances();
+  await vi.waitFor(() => expect(statusQuery).toHaveBeenCalledOnce());
+  const saving = f.controller.save("Waiting for status observer");
+  try {
+    await saveHeadersObserved.promise;
+    for (let n = 0; n < 32; n++) await Promise.resolve();
+    expect(f.store.bind, "managed bytes cannot be installed while status can still run recovery").not.toHaveBeenCalled();
+  } finally {
+    status.resolve(authority({state: "stopped", journalRevision: project.revision}));
+    await Promise.all([observing, saving]);
+  }
+  expect(f.store.bind).toHaveBeenCalledOnce();
+});
+
+test.each([false, true])("stopped draft completion uses the real lifecycle once (discard=%s)", async discard => {
+  const f = await stoppedDraftFixture();
+  const operation = discard ? vi.mocked(f.runtime.session.discardPerformance) : vi.mocked(f.runtime.session.savePerformance);
+  const receipt = deferred<{performanceId: string; committedRevision: number; replayed: boolean; projectRevision: number}>();
+  operation.mockReturnValueOnce(receipt.promise);
+  const complete = discard ? () => f.controller.discardStoppedDraft() : () => f.controller.saveStoppedDraft();
+  const first = complete(), duplicate = complete();
+  await vi.waitFor(() => expect(operation).toHaveBeenCalledOnce());
+  expect(f.controller.getState().stoppedDraft).toBeNull();
+  const request = {expectedRevision: project.revision, performanceId: ids.performance};
+  expect(operation).toHaveBeenCalledWith(discard ? request : {...request, name: "Recovered recording", recordingArtifact: null});
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([]);
+  receipt.resolve({performanceId: ids.performance, committedRevision: 10, projectRevision: 10, replayed: false});
+  await Promise.all([first, duplicate]);
+  expect(f.controller.getState().performancesStatus).toBe("ready");
+  expect(f.controller.getState().stoppedDraft).toBeNull();
+  expect(f.store.bind).not.toHaveBeenCalled();
+  expect(f.store.discard).not.toHaveBeenCalled();
+  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
+});
+
+test("an unconfirmed stopped-draft save cannot claim success or reuse its old selector", async () => {
+  const f = await stoppedDraftFixture();
+  vi.mocked(f.runtime.session.savePerformance).mockRejectedValueOnce(Object.assign(new Error("reply lost"), {code: "HOST_TIMEOUT"}));
+  await f.controller.saveStoppedDraft();await f.controller.saveStoppedDraft();
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  expect(f.controller.getState().saveConfirmation).toBeNull();
+  expect(f.controller.getState().stoppedDraft).toBeNull();
+  expect(f.controller.getState().performancesStatus).toBe("unavailable");
+});
+
+test("leaving waits for an admitted stopped-draft Save without starting another owner", async () => {
+  const f = await stoppedDraftFixture();
+  const receipt = deferred<{performanceId: string; committedRevision: number; replayed: boolean; projectRevision: number}>();
+  vi.mocked(f.runtime.session.savePerformance).mockReturnValueOnce(receipt.promise);
+  const saving = f.controller.saveStoppedDraft();
+  await vi.waitFor(() => expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce());
+  let left = false;
+  const leaving = f.controller.leave().then(() => {left = true;});
+  try {
+    for (let n = 0; n < 32; n++) await Promise.resolve();
+    expect(left, "the admitted mutation owns the existing finalization barrier").toBe(false);
+  } finally {
+    vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([]);
+    receipt.resolve({performanceId: ids.performance, committedRevision: 10, projectRevision: 10, replayed: false});
+    await Promise.all([saving, leaving]);
+  }
+  expect(left).toBe(true);
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
+  expect(f.runtime.calls.capture).not.toHaveBeenCalled();
+});
+
+test("a late stopped-status snapshot cannot republish a replaced Project owner", async () => {
+  const f = await stoppedDraftFixture();
+  const status = deferred<Awaited<ReturnType<typeof f.runtime.session.queryPerformanceRecordingStatus>>>();
+  const query = vi.mocked(f.runtime.session.queryPerformanceRecordingStatus);
+  query.mockClear();query.mockReturnValueOnce(status.promise);
+  const pending = f.controller.refreshPerformances();
+  await vi.waitFor(() => expect(query).toHaveBeenCalledOnce());
+  const nextProject = {...project};
+  f.setCreatorState({...creatorState(), project: {...creatorState().project, current: nextProject}});
+  status.resolve(authority({state: "stopped", journalRevision: project.revision}));
+  await pending;
+  expect(f.controller.getState().stoppedDraft).toBeNull();
+  await f.controller.saveStoppedDraft();
+  expect(f.runtime.session.savePerformance).not.toHaveBeenCalled();
+});
+
+test("an owned Save UNKNOWN has no confirmation until actual inspection resolves it", async () => {
+  const f = controllerFixture();
+  await f.controller.refreshRecovery();await f.controller.record();await f.controller.stop();
+  vi.mocked(f.runtime.session.savePerformance).mockRejectedValueOnce(Object.assign(new Error("lost reply"), {code: "HOST_TIMEOUT"}));
+  vi.mocked(f.runtime.session.inspectPerformance).mockRejectedValueOnce(new Error("inspection unavailable"));
+  await f.controller.save("Unknown take");
+  expect(f.controller.getState().saveConfirmation).toBeNull();
+  f.store.bind.mockRejectedValueOnce(new Error("retain pending WAV"));
+  vi.mocked(f.runtime.session.inspectPerformance).mockResolvedValueOnce({id: ids.performance,
+    name: "Unknown take", createdBpm: 120, recordingArtifact: null, events: [], projectRevision: 10});
+  await f.controller.save("Changed field cannot rename unknown take");
+  expect(f.controller.getState().saveConfirmation).toEqual({performanceId: ids.performance,
+    name: "Unknown take", projectRevision: 10, source: "inspection"});
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+});
+
+test("an inspection of a same-name durable draft is never labelled an acknowledged Save", async () => {
+  const f = controllerFixture();
+  renderSurface(f);
+  await f.controller.refreshRecovery();await act(() => f.controller.record());await act(() => f.controller.stop());
+  vi.mocked(f.runtime.session.savePerformance).mockRejectedValueOnce(Object.assign(new Error("unconfirmed save"), {code: "HOST_TIMEOUT"}));
+  vi.mocked(f.runtime.session.inspectPerformance).mockResolvedValueOnce({id: ids.performance,
+    name: "Untitled Performance", createdBpm: 120, recordingArtifact: null, events: [], projectRevision: 8});
+  f.store.bind.mockRejectedValueOnce(new Error("WAV binding not confirmed"));
+  await act(() => f.controller.save("Untitled Performance"));selectPerformPage("Takes");
+  const observation = await screen.findByRole("status", {name: "Performance save confirmation"});
+  expect(observation.textContent).toBe("Performance inspected");
+  expect(observation.getAttribute("data-confirmation-source")).toBe("inspection");
+  expect(screen.queryByText("Performance saved", {exact: true})).toBeNull();
+});
+
+test("an acknowledged Performance Save stays visible while its WAV bind needs retry", async () => {
+  const f = controllerFixture();
+  f.store.bind.mockRejectedValueOnce(Object.assign(new Error("bind contention"), {code: "PROJECT_BUSY"}));
+  renderSurface(f);
+  await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
+  await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
+  await act(() => f.controller.save("Saved events"));
+  selectPerformPage("Takes");
+  const confirmed = await screen.findByRole("status", {name: "Performance save confirmation"});
+  expect(confirmed.textContent).toBe("Performance saved");
+  expect(screen.getByRole("status", {name: "WAV binding status"}).textContent).toBe("retry");
+  expect(confirmed.getAttribute("data-performance-id")).toBe(ids.performance);
+  expect(confirmed.getAttribute("data-project-revision")).toBe("10");
+  expect(confirmed.getAttribute("data-confirmation-source")).toBe("save");
+  expect(screen.getByRole("textbox", {name: "Performance name"}).hasAttribute("disabled")).toBe(true);
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  const list = vi.mocked(f.runtime.session.listPerformances);list.mockClear();
+  await expect(f.controller.refreshPerformances()).rejects.toThrow("Bind or discard");
+  expect(list).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "Retry WAV bind"}));
+  await waitFor(() => expect(f.controller.getState().bindingStatus).toBe("bound"));
+  expect(f.runtime.session.savePerformance).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("status", {name: "Performance save confirmation"})).toBeNull();
+});
+
+test("Replay consumes actual public cursors and keeps reset pending until the terminal Stop acknowledgement", async () => {
+  const {fixture: f} = await replaySurfaceFixture();
+  const session = f.runtime.session;
+  vi.mocked(session.beginPerformanceReplay).mockResolvedValue(REPLAY_PLAYING);
+  vi.mocked(session.queryPerformanceReplayStatus).mockResolvedValue({...REPLAY_PLAYING, eventCursor: 3});
+  type StopReceipt = Awaited<ReturnType<typeof session.stopPerformanceReplay>>;
+  const first = deferred<StopReceipt>(), terminal = deferred<StopReceipt>();
+  vi.mocked(session.stopPerformanceReplay).mockImplementationOnce(() => first.promise)
+    .mockImplementationOnce(() => terminal.promise);
+  await userEvent.click(screen.getByRole("button", {name: `Replay ${SAVED_TAKE.name}`}));
+  expect(screen.getByRole("status", {name: "Replay events"}).textContent).toBe("0 / 4 events");
+  await act(() => f.controller.refreshReplay());
+  expect(screen.getByRole("status", {name: "Replay events"}).textContent).toBe("3 / 4 events");
+  expect(screen.getByRole("button", {name: `Replay ${SAVED_TAKE.name}`}).hasAttribute("disabled")).toBe(true);
+  await userEvent.click(screen.getByRole("button", {name: "Stop Replay"}));
+  expect(screen.getByRole("heading", {name: "Stopping Replay…"})).not.toBeNull();
+  expect(screen.queryByText(/Neutral reset confirmed/)).toBeNull();
+  first.resolve({...REPLAY_PLAYING, eventCursor: 3, requestId: "stop-1", replayed: false});
+  await waitFor(() => expect(session.stopPerformanceReplay).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("button", {name: "Stop Replay"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.queryByText(/Neutral reset confirmed/)).toBeNull();
+  terminal.resolve({...REPLAY_PLAYING, eventCursor: 3, state: "stopped", requestId: "stop-2", replayed: false});
+  await screen.findByText("Neutral reset confirmed · HOLD off");
+  expect(screen.getByRole("status", {name: "Replay events"}).textContent).toBe("3 / 4 events");
+  expect(screen.getByRole("status", {name: "Replay status"}).textContent).toContain("stopped · neutral");
+});
+
+test("a failed Replay Stop keeps the same owner and progress available for explicit retry", async () => {
+  const {fixture: f} = await replaySurfaceFixture({maximumStatusQueries: 1});
+  const session = f.runtime.session;
+  vi.mocked(session.beginPerformanceReplay).mockResolvedValue({...REPLAY_PLAYING, eventCursor: 2});
+  vi.mocked(session.stopPerformanceReplay).mockRejectedValueOnce(new Error("Stop unavailable"))
+    .mockResolvedValue({...REPLAY_PLAYING, state: "stopped", eventCursor: 2,
+      requestId: "stop-retry", replayed: false});
+  await userEvent.click(screen.getByRole("button", {name: `Replay ${SAVED_TAKE.name}`}));
+  await userEvent.click(screen.getByRole("button", {name: "Stop Replay"}));
+  await waitFor(() => expect(screen.getByRole("button", {name: "Stop Replay"}).hasAttribute("disabled")).toBe(false));
+  expect(screen.getByRole("status", {name: "Replay events"}).textContent).toBe("2 / 4 events");
+  expect(screen.queryByText(/Neutral reset confirmed/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Stop Replay"}));
+  await screen.findByText("Neutral reset confirmed · HOLD off");
+  expect(session.beginPerformanceReplay).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(session.stopPerformanceReplay).mock.calls.map(([r]) => r.replayId)).toEqual(["replay-1", "replay-1"]);
+});
+
+test("natural Replay completion renders the Core terminal cursor and neutral fact without a synthetic Stop", async () => {
+  const {fixture: f} = await replaySurfaceFixture();
+  vi.mocked(f.runtime.session.beginPerformanceReplay).mockResolvedValue(REPLAY_PLAYING);
+  vi.mocked(f.runtime.session.queryPerformanceReplayStatus).mockResolvedValue({...REPLAY_PLAYING,
+    state: "complete", eventCursor: 4});
+  await userEvent.click(screen.getByRole("button", {name: `Replay ${SAVED_TAKE.name}`}));
+  await act(() => f.controller.refreshReplay());
+  expect(screen.getByRole("heading", {name: "Replay complete"})).not.toBeNull();
+  expect(screen.getByRole("status", {name: "Replay events"}).textContent).toBe("4 / 4 events");
+  expect(screen.getByText("Neutral reset confirmed · HOLD off")).not.toBeNull();
+  expect(f.runtime.session.stopPerformanceReplay).not.toHaveBeenCalled();
+});
+
+test("an empty Replay's actual terminal begin receipt confirms reset without fabricating a status or Stop", async () => {
+  const {fixture: f} = await replaySurfaceFixture();
+  vi.mocked(f.runtime.session.beginPerformanceReplay).mockResolvedValue({...REPLAY_PLAYING,
+    state: "complete", eventCount: 0});
+  await userEvent.click(screen.getByRole("button", {name: `Replay ${SAVED_TAKE.name}`}));
+  expect(screen.getByRole("heading", {name: "Replay complete"})).not.toBeNull();
+  expect(screen.getByRole("status", {name: "Replay events"}).textContent).toBe("0 / 0 events");
+  expect(screen.getByText("Neutral reset confirmed · HOLD off")).not.toBeNull();
+  expect(f.runtime.session.stopPerformanceReplay).not.toHaveBeenCalled();
+  expect(f.runtime.session.queryPerformanceReplayStatus).not.toHaveBeenCalled();
+});
+
+test("Replay refuses a failed saved-list snapshot until the explicit retry succeeds", async () => {
+  const {fixture: f} = await replaySurfaceFixture();
+  vi.mocked(f.runtime.session.listPerformanceRecovery).mockRejectedValueOnce(new Error("recovery unavailable"));
+  await act(async () => {await expect(f.controller.refreshPerformances()).rejects.toThrow("recovery unavailable");});
+  expect(screen.getByText("Saved Takes unavailable")).not.toBeNull();
+  expect(screen.queryByRole("button", {name: `Replay ${SAVED_TAKE.name}`})).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Retry saved Takes"}));
+  await screen.findByRole("button", {name: `Replay ${SAVED_TAKE.name}`});
+  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
+});
+
+test("Replay hides a replaced Project's saved cards before its new owner read settles", async () => {
+  const f = controllerFixture();
+  const list = vi.mocked(f.runtime.session.listPerformances);
+  list.mockResolvedValue([SAVED_TAKE]);
+  const view = render(<PerformSurface controller={f.controller} project={project} bank={0} />);
+  selectPerformPage("Replay");
+  await screen.findByRole("button", {name: `Replay ${SAVED_TAKE.name}`});
+  const next = deferred<readonly PerformanceSummary[]>();
+  list.mockReturnValueOnce(next.promise);
+  const newProject = {...project, revision: 8};
+  f.setCreatorState(creatorState({project: {phase: "ready", projects: [], current: newProject}}));
+  view.rerender(<PerformSurface controller={f.controller} project={newProject} bank={0} />);
+  await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("button", {name: `Replay ${SAVED_TAKE.name}`})).toBeNull();
+  next.resolve([{...SAVED_TAKE, name: "Current owner's Take"}]);
+  await screen.findByRole("button", {name: "Replay Current owner's Take"});
+  expect(f.controller.getState().performancesOwner).toBe(newProject);
+  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
 });
