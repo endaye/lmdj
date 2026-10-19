@@ -35,7 +35,6 @@ export interface PerformSurfaceProps {
   // The Perform surface renders the same global Pattern transport projection
   // every other mode consumes; it never drives it.
   readonly transport?: PatternTransportState;
-  readonly patternSelectionLocked?: boolean;
   readonly recordingBusy?: boolean;
   readonly reviewRequested?: boolean;
   readonly onReviewShown?: () => void;
@@ -267,7 +266,6 @@ export function PerformSurface(props: PerformSurfaceProps) {
   // recording/capture transition. The transport fallback also stays closed
   // while a transport command settles or records (recording switches are S3).
   const transportLaunchOpen = ["idle", "stopped"].includes(state.recording.phase) &&
-    props.patternSelectionLocked !== true &&
     props.transport !== undefined &&
     props.transport.status !== null &&
     !selectTransportBusy(props.transport) &&

@@ -68,7 +68,6 @@ interface PhysicalControlsProps extends ContextualNavigation {
   onRecord?: (event: MouseEvent<HTMLButtonElement>) => void;
   recordEnabled?: boolean;
   recording?: boolean;
-  countingIn?: boolean;
   onPlayStop?: (event: MouseEvent<HTMLButtonElement>) => void;
   playEnabled?: boolean;
   playing?: boolean;
@@ -202,7 +201,6 @@ export function PhysicalControls({
   onRecord,
   recordEnabled = false,
   recording = false,
-  countingIn = false,
   onPlayStop,
   playEnabled = false,
   playing = false,
@@ -327,8 +325,8 @@ export function PhysicalControls({
         )}
         <PhysicalKey
           label="REC"
-          className={` is-record${countingIn ? " is-counting-in" : ""}`}
-          ariaLabel={countingIn ? "Record — cancel count-in" : recording
+          className=" is-record"
+          ariaLabel={recording
             ? "Record — stop recording Pad events into the current Pattern"
             : "Record"}
           current={recording}
