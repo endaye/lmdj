@@ -1,0 +1,38 @@
+---
+title: PCM16 WAV Artifact Profile
+area: contracts
+status: partial
+owners: [core, providers]
+contracts: [lmdj.audio.pcm16-wav.v1]
+source_paths:
+  - contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md
+  - contracts/capability/sample.slice.v1.json
+decision_paths:
+  - docs/prd/decisions/2026-09-09-stage12-contract-candidate.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.audio.pcm16-wav.v1" />
+
+## 已集成的 Contract
+
+此 Contract 已随 Slice 参考 Provider 注册，完整源文件字节和版本绑定到 Assembly Lock。
+C++ 独立消费校验、JSON conformance 和字节回放已验证；Host owner 接线与用户执行流程留给 K5。
+音频 profile 是二进制格式规范，不是验证 WAV 字节的 JSON Schema。
+
+## 音频边界
+
+输入为 little-endian PCM16 RIFF/WAVE，mono/stereo，44.1 或 48 kHz，至少一个完整
+frame。解析遵循 chunk 长度与奇数字节 padding，验证 RIFF 边界、block alignment、
+byte rate 及唯一 fmt/data chunk；不假定固定 44-byte header。未知且完整的 chunk
+可跳过，截断、重复 chunk、浮点、压缩、extensible 与 RF64 格式拒绝。
+
+SDK 先验证 Artifact 绑定、hash、长度与访问权限；消费方负责解码与 profile 校验。
+Provider 只获得已绑定字节和 output sink，不获得 Project、bundle 或 Workspace 路径。
+
+## 相关 Contract
+
+正式输入端口及权限见 [Capability Contract](./capability.mdx)，输出坐标与绑定见
+[Slice Points Contract](./slice-points.mdx)。预算约束聚合 staging 与 handle lease，
+不宣称 direct execution 有 hard timeout 或进程总 RSS 上限。
