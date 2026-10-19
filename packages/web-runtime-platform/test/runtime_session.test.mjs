@@ -14402,6 +14402,42 @@ const METADATA_QUERY = Object.freeze({
   recordingArtifact: Object.freeze({sha256: "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
     mediaType: "audio/wav", byteLength: 192124}),
 });
+
+test("public inspection preserves actual saved headered Pad, Filter and HOLD events", async () => {
+  // Actual Native receipt from U08c's legal64 recording/Save/inspection failure.
+  const events = [
+    {duration_tick: 420, input_sequence: "1", kind: "pad_hit", onset_tick: 1853, slot: 0, velocity: 100},
+    {cutoff_hz: 20000, input_sequence: "3", kind: "filter_change", phase: "engage", resonance_milli: 0, tick: 2529, type: "lp"},
+    {cutoff_hz: 1552, input_sequence: "4", kind: "filter_change", phase: "move", resonance_milli: 0, tick: 2856, type: "lp"},
+    {cutoff_hz: 1552, input_sequence: "5", kind: "filter_change", phase: "release", resonance_milli: 0, tick: 3225, type: "lp"},
+    {input_sequence: "6", kind: "hold_on", tick: 3676},
+    {duration_tick: 348, input_sequence: "7", kind: "pad_hit", onset_tick: 15544, slot: 0, velocity: 100},
+    {input_sequence: "9", kind: "hold_off", tick: 16168},
+  ];
+  const artifact = {byte_length: 1532972, media_type: "audio/wav",
+    sha256: "aad2c199af0342865601284a9b1142ca64a24ccce3ff47bb392197c74993a1cd"};
+  const f = fixture({send: async envelope => {
+    if (envelope.operation === "performance.inspect") return success(envelope, {
+      performance: {id: METADATA_QUERY.performanceId, name: "Evening take", created_bpm: 120,
+        recording_artifact: artifact, events}, project_revision: 69});
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await f.session.start();
+  try {
+    const value = await f.session.inspectPerformance(METADATA_QUERY.performanceId);
+    assert.deepEqual(value, {id: METADATA_QUERY.performanceId, name: "Evening take", createdBpm: 120,
+      recordingArtifact: {sha256: artifact.sha256, mediaType: "audio/wav", byteLength: artifact.byte_length},
+      events, projectRevision: 69});
+    assert.equal(Object.isFrozen(value), true);
+    assert.equal(Object.isFrozen(value.events), true);
+    assert.equal(value.events.every(Object.isFrozen), true);
+    events[0].input_sequence = 1;
+    await assert.rejects(f.session.inspectPerformance(METADATA_QUERY.performanceId),
+      error => error.code === "HOST_PROTOCOL_MISMATCH");
+    assert.equal(value.events[0].input_sequence, "1", "a later response cannot mutate the public snapshot");
+  } finally {await f.session.close();}
+});
+
 function recordingMetadataResult() {
   return {project_id: METADATA_QUERY.projectId, performance_id: METADATA_QUERY.performanceId,
     project_revision: 3, recording_revision: 17, recording_artifact: {
