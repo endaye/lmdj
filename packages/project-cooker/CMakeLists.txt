@@ -1,6 +1,7 @@
 set(
   lmdj_project_cooker_sources
     src/wav_reader.cpp
+    src/wav_metadata_inspector.cpp
     src/wav_selection.cpp
     src/sample_analysis.cpp
     src/project_cooker.cpp
@@ -95,6 +96,15 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio
   )
+
+  add_executable(lmdj_wav_metadata_inspector_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/cooker/wav_metadata_inspector_test.cpp")
+  target_include_directories(lmdj_wav_metadata_inspector_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_wav_metadata_inspector_tests PRIVATE lmdj::project_cooker)
+  lmdj_target_warnings(lmdj_wav_metadata_inspector_tests)
+  lmdj_target_sanitizers(lmdj_wav_metadata_inspector_tests)
+  lmdj_add_test(NAME cooker.wav_metadata_inspector TIER unit
+    COMMAND lmdj_wav_metadata_inspector_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" LABELS audio)
 
   add_executable(
     lmdj_project_cooker_tests
