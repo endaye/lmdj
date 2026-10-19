@@ -1681,9 +1681,6 @@ async function recordSetupLayout(page, settings, testInfo, phase) {
     "Double Up Pattern", "Copy Pattern", ...(choosingLength ? [] : ["New Pattern"]),
     ...(choosingLength ? ["1 bars", "2 bars", "4 bars", "8 bars", "CANCEL", "Create Pattern"] : []),
     "1 BEAT", "1 BAR", "SEQ END", "Quantize", "Metronome",
-    // #2359: SETUP's device COUNT-IN segment (Off/1/2 bars) follows the
-    // toggles row and is enabled in every stopped, settled phase.
-    "Count-in Off", "Count-in 1 bar", "Count-in 2 bars",
   ];
   // The official fixture starts at Swing's lower bound and this journey never
   // changes it. Its disabled decrement remains part of layout, not the hit
@@ -1727,7 +1724,7 @@ async function recordSetupLayout(page, settings, testInfo, phase) {
   const visibilityPath = testInfo.outputPath(`setup-${phase}-visibility.json`);
   await writeFile(visibilityPath, JSON.stringify({phase, ...visibility}, null, 2));
   await testInfo.attach(`setup-${phase}-visibility`, {path: visibilityPath, contentType: "application/json"});
-  await expect(controls).toHaveCount(choosingLength ? 26 : 22);
+  await expect(controls).toHaveCount(choosingLength ? 23 : 19);
   for (const {name, disabled} of expectedInventory) {
     const control = settings.getByRole(name === "BPM" || name === "Swing" ? "slider" : "button",
       {name, exact: true});
@@ -1735,7 +1732,7 @@ async function recordSetupLayout(page, settings, testInfo, phase) {
     else await expect(control).toBeEnabled();
   }
   const enabledControls = settings.locator('button:not(:disabled):visible, input[type="range"]:not(:disabled):visible');
-  await expect(enabledControls).toHaveCount(choosingLength ? 25 : 21);
+  await expect(enabledControls).toHaveCount(choosingLength ? 22 : 18);
   expect(await enabledControls.evaluateAll(nodes => nodes.map(node =>
     node.getAttribute("aria-label") ?? node.textContent.trim())))
     .toEqual(expectedNames.filter(name => name !== "Decrease Swing"));

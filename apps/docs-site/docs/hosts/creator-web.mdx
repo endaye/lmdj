@@ -712,32 +712,6 @@ share the header row. EDIT is the default, and a mode change returns to it.
     cut or repeated notes. The Host republishes a resized current Pattern, so
     the next Play uses the new length.
 - **QUANTIZE and METRONOME toggles.**
-- **COUNT-IN.** Off, 1 or 2 bars applies only to global Pattern Record from
-  stopped. It defaults to Off and is stored as numeric `0 | 1 | 2` in
-  `lmdj.creator.host` / `settings` / `count-in.v1`, outside Project Truth and
-  Undo history. A late boot read cannot replace an explicit choice.
-  - Off keeps immediate Record; Record during playback keeps ordinary overdub.
-    Sample capture and Performance recording retain their own controls and do
-    not acquire count-in from this preference.
-  - The upper screen shows the real schedule and beats remaining. REC blinks
-    during preparation/counting, then becomes steady only on Native's Applied
-    receipt. Passing the planned start frame alone displays Starting; opening
-    a durable Journal is a separate result.
-  - BPM/Pattern authoring and selection lock while the original caller is
-    pending. Pads remain playable. Pre-start held input and its later release
-    stay live-only; the Core admits new post-start input to the Journal.
-  - REC or Play/Stop cancels the retained request, including a press before
-    admission returns. Buttons stay reachable for cancellation. Locks clear
-    only after matching settlement and the Host's actual consumer ACK, not an
-    optimistic button state or a terminal-looking readout. Unknown replies
-    retain their original identity; replacement delegates retirement to the SDK.
-  - Native forces four/eight cues regardless of METRONOME. The monitoring
-    switch is published synchronously for Native's optional accented S beat;
-    JS excludes that exact native-owned frame and handles later beats. A late
-    On toggle never replays S. Both cue paths stay downstream of product capture
-    and obey device monitoring volume.
-  - An environment without scheduled/cue support keeps the setting and visibly
-    refuses this Record. It never falls back to immediate recording.
 - **SEQ SNAP.** 1 BEAT, 1 BAR or SEQ END chooses when a playing,
   non-recording Pattern switch lands. Default 1 BAR; Sequence arrows/GROOVE
   and non-recording Perform Launch share this device preference. It is saved
