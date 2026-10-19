@@ -43,6 +43,23 @@ SHA-256 或 Project ownership。后续消费者仍须在既有 owner/lease 下�
 实际关闭页面并重开两次，检查固定字节和没有新增 physical writer。它们不替代设备验收。
 
 ## 证据
+
+Project I/O 的 `scan_performance_recording` 在一个 Project writer lease 内解析 committed
+owner、预期 revision 与录音 binding，再以64KiB heap buffer读取和 SHA-256 校验完整
+Artifact；前后长度和 expected EOF 均检查。history guard 先于 lease 取得，既有平台
+writer admission/intent 语义保留。Store 不触发 authoring recovery 或 orphan scavenge，
+不为此读取无关 Asset/Performance 音频。同步 consumer 的每个 span 只在回调期间有效，
+全部状态在最终 receipt 成功前都是 provisional；失败必须丢弃。结束前再次读取 committed
+owner/revision/binding，以拒绝重入修改后的陈旧回执。所有出口销毁本次逻辑 lease，平台
+physical close 失败仍按既有规则保留 custody/debt；扫描回执不确认物理 close。没有整文件
+fallback、额外 writer 或隐式重试。
+
+独立 Native observer 使用真实文件/锁并拒绝整文件音频读取，覆盖精确 selector、revision、
+跨窗口损坏/长度变化、短读、错误/重入后释放和大于64MiB的真实稀疏 PCM WAV。实际
+C++/Wasm/OPFS 旅程再验证多窗口、固定 digest/bytes、关页重开两次、stale revision
+拒绝及归还 physical writer。它们证明有界原始输入完整性，不解释 WAV frames、保存完整性
+或 Performance elapsed；这些仍由后续 parser 和 Facade 负责。
+
 Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、writer-lease admission、并发 begin-vs-authoring、durable tail、torn-tail refusal、真实 `SIGKILL` restart、project store 和 journal 测试覆盖 shared native/OPFS storage boundary；硬终止 subprocess gate 在 native component 层执行。
 ## 限制
 云同步、冲突合并、协同与远程备份未在当前平台 Contract 中实现。

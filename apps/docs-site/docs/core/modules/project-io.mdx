@@ -36,8 +36,22 @@ File，只读取 `slice` 窗口。每次调用独立，失败后的 buffer 内�
 平台所有者必须在使用 companion 期间保持存活；缺少能力时没有整文件读取 fallback。
 
 这些是未校验的原始字节，不证明 Artifact digest、Performance 引用、writer authority
-或耐久性。已保存录音的有界完整校验、WAV 元数据解析及 Facade/Host 查询仍属于后续
-任务，Host 继续只使用 Application Facade。
+或耐久性。已保存录音须通过下述 ProjectStore 扫描校验其 owner 和完整输入；WAV
+元数据解析及 Facade/Host 查询仍属于后续任务，Host 继续只使用 Application Facade。
+
+`ProjectStore::scan_performance_recording` 在既有 history guard 和单次 writer lease
+内核对 Project ID、Performance ID、预期 Project revision 与精确录音 ArtifactRef，
+入口固定 bundle/selector 快照，回调改写调用方请求对象也不会改变本次读取身份；
+只扫描该录音；不执行 authoring recovery/scavenge，也不读取其他音频。它用64KiB heap
+buffer、连续 uint64 offset、完整 SHA-256、前后长度和 EOF 检查验证全部输入，结束时
+重新核对 committed owner/revision/binding。既有 vector reader 的64MiB限制不适用于
+这项有界扫描，原 reader 行为保留。
+
+同步 consumer 收到的是临时、未校验 span，不能保留或用于重入/修改 Project；失败后必须
+丢弃 consumer 状态。只有最终 `PerformanceRecordingVerification` 回执证明完整输入
+匹配该 owner 下的 Artifact，回执携带 Project/recording revision 和精确引用。缺少
+range companion 时返回 typed I/O unavailable，不退回全量读取。这项扫描不证明 WAV
+编码、录音完整性或演出 elapsed；后续有界 WAV parser 与 Facade/SDK/Host 查询仍待。
 
 ## 6. 状态、错误与生命周期
 故障矩阵验证验证、取消、超时与发布中断恢复；typed error 区分输入、平台、busy 与提交失败。

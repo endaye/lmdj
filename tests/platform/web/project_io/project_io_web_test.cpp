@@ -1585,6 +1585,70 @@ nlohmann::json project_bundle_import(
   }
 }
 
+[[gnu::noinline]] nlohmann::json performance_scan_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
+  constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
+  const foundation::ArtifactRef artifact{
+      "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55", "audio/wav", 131089};
+  constexpr std::array pattern{std::byte{97}, std::byte{98}, std::byte{0}, std::byte{255},
+                               std::byte{99}, std::byte{100}, std::byte{120}, std::byte{121}};
+  project_io::ProjectStore store{platform};
+  const auto phase = query("phase");
+  require(phase == "prepare" || phase == "inspect", "invalid Performance scan phase");
+  if (phase == "prepare") {
+    // Construct the Result directly on the heap: no ProjectState-sized return
+    // temporaries in this long-lived Web fixture frame.
+    auto initial = std::unique_ptr<Result<domain::ProjectState>>(new Result<domain::ProjectState>(
+        domain::create_project(foundation::ProjectId{project_id}, 120)));
+    require(initial->has_value(), "scan fixture initial Project failed");
+    initial->value().performances.emplace(domain::PerformanceId{performance_id},
+        domain::Performance{domain::PerformanceId{performance_id}, "recorded", 120, 0, artifact, {}});
+    success(store.create(bundle, initial->value()), "scan fixture Project create");
+    auto lease = value(platform->acquire_writer(bundle), "scan fixture seed lease");
+    std::vector<std::byte> payload(artifact.byte_length);
+    for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = pattern[i % pattern.size()];
+    success(platform->create_immutable(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
+            "scan fixture raw recording");
+    lease.reset();
+  }
+  require(lmdj_project_io_physical_writer_count() == 0, "scan fixture retained seed writer");
+  const auto writes_before = lmdj_opfs_immutable_write_count();
+  std::uint64_t bytes_seen = 0;
+  std::size_t calls = 0;
+  const project_io::PerformanceRecordingSelector selector{
+      foundation::ProjectId{project_id}, domain::PerformanceId{performance_id}, 0, artifact};
+  const auto verified = value(store.scan_performance_recording(bundle, selector, [&](auto input) {
+    require(lmdj_project_io_physical_writer_count() == 1, "scan lost physical writer custody");
+    require(!input.empty() && input.size() <= 65536, "scan exceeded its bounded window");
+    for (const auto byte : input) {
+      require(byte == pattern[bytes_seen % pattern.size()], "scan received incorrect recording byte");
+      ++bytes_seen;
+    }
+    ++calls;
+    return Result<void>::success();
+  }), "verified Performance recording scan");
+  require(bytes_seen == 131089 && calls == 3, "scan did not consume every recording window");
+  require(lmdj_project_io_physical_writer_count() == 0, "scan retained writer custody after return");
+  auto stale = selector;
+  stale.expected_revision = 1;
+  const auto refused = store.scan_performance_recording(bundle, stale, [](auto) {
+    throw std::runtime_error("stale recording selector reached consumer");
+    return Result<void>::success();
+  });
+  require(!refused.has_value() && refused.error().code == foundation::ErrorCode::revision_conflict,
+          "stale recording revision was accepted");
+  require(lmdj_project_io_physical_writer_count() == 0, "refusal retained writer custody");
+  require(lmdj_opfs_immutable_write_count() == writes_before, "read-only scan published Project bytes");
+  return {{"projectId", verified.project_id.value()}, {"performanceId", verified.performance_id.value()},
+          {"projectRevision", verified.project_revision}, {"recordingRevision", verified.recording_revision},
+          {"artifact", verified.artifact}, {"bytesSeen", bytes_seen}, {"consumerCalls", calls},
+          {"staleRevision", foundation::error_code_name(refused.error().code)},
+          {"writersAfter", lmdj_project_io_physical_writer_count()}, {"publishedWrites", 0}};
+}
+
 [[gnu::noinline]] nlohmann::json bounded_range_witness(
     const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle) {
@@ -1651,6 +1715,9 @@ nlohmann::json project_bundle_import(
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "performance_artifact_scan") {
+      return {{"complete", true}, {"result", performance_scan_witness(platform, fault_bundle)}};
+    }
     if (action == "bounded_range_read") {
       return {{"complete", true}, {"result", bounded_range_witness(platform, fault_bundle)}};
     }
