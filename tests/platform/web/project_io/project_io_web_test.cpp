@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,6 +53,9 @@ extern "C" int lmdj_opfs_append_flush_count();
 extern "C" int lmdj_opfs_immutable_write_count();
 extern "C" int lmdj_opfs_publication_max_chunk_bytes();
 extern "C" std::uint32_t lmdj_project_io_physical_writer_count();
+
+std::uintptr_t paint_unused_stack();
+nlohmann::json stack_report(std::uintptr_t painted_top);
 
 namespace {
 
@@ -1651,9 +1655,103 @@ nlohmann::json project_bundle_import(
           {"writersAfter", lmdj_project_io_physical_writer_count()}, {"publishedWrites", 0}};
 }
 
+[[gnu::noinline]] nlohmann::json facade_recording_metadata_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle, const lmdj::foundation::ArtifactRef& artifact) {
+  using namespace lmdj;
+  constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
+  constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
+  facade::ApplicationConfig config{};
+  config.workspace_root = "/lmdj-workspace";
+  config.storage_platform = platform;
+  config.performance_replay_controller = facade::make_unavailable_performance_replay_controller();
+  auto application = std::make_unique<facade::Application>(std::move(config));
+  auto root = std::optional{value(application->acquire_project_writer(bundle), "metadata Control root writer")};
+  require(lmdj_project_io_physical_writer_count() == 1, "metadata Control root did not hold custody");
+  auto reader = application->make_performance_recording_metadata_reader();
+  application.reset(); // The detached reader must not borrow Application state.
+  const auto writes_before = lmdj_opfs_immutable_write_count();
+  struct State {
+    std::atomic<bool> exit_ready{false};
+    bool distinct = false, pre_cancelled = false;
+    std::string error;
+    nlohmann::json worker_stack;
+    std::optional<Result<facade::PerformanceRecordingRead>> result;
+  };
+  const auto state = std::make_shared<State>();
+  const auto control_thread = std::this_thread::get_id();
+  const facade::PerformanceRecordingMetadataRequest request{bundle, foundation::ProjectId{project_id},
+      domain::PerformanceId{performance_id}, 0, artifact};
+  std::thread worker([state, reader = std::move(reader), request, control_thread]() mutable {
+    const auto painted_top = paint_unused_stack();
+    try {
+      state->distinct = std::this_thread::get_id() != control_thread;
+      std::stop_source stopped;
+      stopped.request_stop();
+      const auto cancelled = reader->inspect(request, stopped.get_token());
+      state->pre_cancelled = cancelled.has_value() &&
+          std::holds_alternative<facade::PerformanceRecordingReadCancelled>(cancelled.value());
+      state->result.emplace(reader->inspect(request));
+    } catch (const std::exception& error) {
+      state->error = error.what();
+    } catch (...) {
+      state->error = "unknown metadata worker failure";
+    }
+    reader.reset(); // No worker-owned I/O or reader destruction after exit readiness.
+    state->worker_stack = stack_report(painted_top);
+    state->exit_ready.store(true, std::memory_order_release);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+  while (!state->exit_ready.load(std::memory_order_acquire) &&
+      std::chrono::steady_clock::now() < deadline) emscripten_sleep(1);
+  if (!state->exit_ready.load(std::memory_order_acquire)) {
+    // All unfinished inputs and the reader are heap-owned. A timeout never
+    // claims cancellation, join or physical release of that worker.
+    worker.detach();
+    root.reset();
+    throw std::runtime_error("unfinished metadata worker; no exit or join witness");
+  }
+  worker.join();
+  require(state->error.empty(), state->error);
+  require(state->distinct && state->pre_cancelled && state->result.has_value(), "metadata worker proof missing");
+  require(lmdj_project_io_physical_writer_count() == 1, "metadata worker lost or retained Control custody");
+  root.reset();
+  require(lmdj_project_io_physical_writer_count() == 0, "metadata root retained physical custody");
+  require(lmdj_opfs_immutable_write_count() == writes_before, "metadata reader published Project bytes");
+  nlohmann::json report{{"requested", {{"projectId", project_id}, {"performanceId", performance_id},
+      {"projectRevision", 0}, {"artifact", artifact}}}, {"verification", nullptr},
+      {"metadata", nullptr}, {"failureCode", nullptr}, {"workerDistinct", state->distinct},
+      {"preCancelled", state->pre_cancelled}, {"applicationRetired", !application},
+      {"workerExitedBeforeJoin", true}, {"rootWritersDuring", 1}, {"writersAfter", 0}, {"publishedWrites", 0}};
+  report["workerStack"] = state->worker_stack;
+  const auto& result = *state->result;
+  if (!result.has_value()) {
+    require(result.error().code == foundation::ErrorCode::cook_failed &&
+        result.error().details.value("storage_condition", "") == project_io::kStorageConditionArtifactMismatch,
+        "metadata reader failed for an unexpected reason");
+    report["status"] = "artifact_mismatch";
+    report["failureCode"] = foundation::error_code_name(result.error().code);
+    return report;
+  }
+  const auto* metadata = std::get_if<facade::PerformanceRecordingMetadata>(&result.value());
+  require(metadata != nullptr, "uncancelled reader returned cancellation");
+  report["verification"] = {{"projectId", metadata->project_id.value()},
+      {"performanceId", metadata->performance_id.value()}, {"projectRevision", metadata->project_revision},
+      {"recordingRevision", metadata->recording_revision}, {"artifact", metadata->artifact}};
+  if (metadata->audio.has_value()) {
+    report["status"] = "verified";
+    report["metadata"] = {{"sampleRate", metadata->audio.value().sample_rate},
+        {"channels", metadata->audio.value().channels}, {"sourceFrames", metadata->audio.value().source_frames}};
+  } else {
+    report["status"] = "unsupported_audio";
+    report["failureCode"] = foundation::error_code_name(metadata->audio.error().code);
+  }
+  return report;
+}
+
 [[gnu::noinline]] nlohmann::json performance_wav_metadata_witness(
     const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
-    const std::filesystem::path& bundle) {
+    const std::filesystem::path& bundle, bool facade_reader = false) {
   using namespace lmdj;
   constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
   constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
@@ -1698,6 +1796,7 @@ nlohmann::json project_bundle_import(
     lease.reset();
   }
   require(lmdj_project_io_physical_writer_count() == 0, "WAV fixture retained seed writer");
+  if (facade_reader) return facade_recording_metadata_witness(platform, bundle, artifact);
   const auto writes_before = lmdj_opfs_immutable_write_count();
   cooker::WavMetadataInspector inspector{artifact.byte_length};
   std::optional<foundation::Error> format_error;
@@ -1814,6 +1913,9 @@ nlohmann::json project_bundle_import(
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "performance_facade_metadata") {
+      return {{"complete", true}, {"result", performance_wav_metadata_witness(platform, fault_bundle, true)}};
+    }
     if (action == "performance_wav_metadata") {
       return {{"complete", true}, {"result", performance_wav_metadata_witness(platform, fault_bundle)}};
     }

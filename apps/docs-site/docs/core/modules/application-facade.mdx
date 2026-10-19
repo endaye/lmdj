@@ -433,6 +433,39 @@ header、事件、reset 和 transport 副作用前通过 profile 校验。Legacy
 `sample.update_pad` 与 `sample.inspect` 的 `playback` 在五个必填键之外接受 `lmdj.project.v5` `5.1.0` 的六个可选回放对齐键（`reverse`、`pitch_cents`、`pan`、`loop_mode`、`loop_start_frame`、`loop_crossfade_frames`），缺失即缺省、未知键仍拒绝，回读只输出非缺省键；`update_sample_pad` 用 Authoring Domain 的 `is_valid_playback_for_source` 按 WAV 源帧数校验循环点与 crossfade。typed `resolve_sample_preview_playback(SampleInspectResult, PadPlayback)` 把试听交给 Project Cooker 的 `resolve_pad_playback`，所以试听与 Cook 得到同一个 `ResolvedPlayback`（含逐 voice DSP 块），未分配 Pad 返回 `missing_asset`，越界返回 `invalid_argument`。`5.2.0` 的 `attack_ms`、`release_ms`、`tone` 与 `eq` 遵循同一规则：每个值在收窄到 32 位之前先按领域范围检查，所以超出 32 位、收窄后会落回合法区间的值同样被拒绝；`eq` 的每一段要求键完全匹配、`kind` 只能是 `shelf` 或 `cut`，回读只输出出现的频段。这些用例在 `facade.sample_surface.playback_parity` 分片中，以同一个共享 fixture 的 `tone` 变体往返。
 
 C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；`sample.quota` 请求恰含 `operation/project_path/slot`，成功结果中的 `project_revision` 必须作为后续 `sample.import.begin.expected_revision`。Bundle/Sample streaming API 不暴露 Project internals；Assembly Loader 校验锁定身份。typed `duplicate_project(ProjectDuplicateRequest{source_project_id, project_id})` 在 Workspace 内按调用方提供的新 Project ID 复制一个本地 Project，返回与 `list_local_projects` 相同的 `LocalProjectSummary`（revision 0）；它只有 typed 入口，不增加 JSON/C API/MCP/CLI operation。复制期间持有 Project-scoped admission lock，本 Application 内的 Sequence、Pattern transport 或 Performance session 以 `sequence_session_active` / `performance_session_active` 拒绝；与普通 authoring 不同，duplicate 不 reconcile 孤儿 Journal，崩溃 owner 留下的 active Journal 由 Project I/O 拒绝并原样保留，取回 take 须重新打开源 Project。
+### 已保存录音的独立只读 metadata reader
+
+`Application::make_performance_recording_metadata_reader()` 不执行 I/O，返回仅保留
+该 Application 精确 storage platform 的 move-only reader。它拥有独立只读 Store，
+不捕获 Application、session、Provider 或 live AuthoringHistory；否则完整 hash 期间
+持有 live history mutex 仍会阻塞 Control。空闲 reader 可以转交 worker，也可晚于
+Application 销毁；一次只有一个串行调用者，所有本次 lease 在该调用者上退役。
+必须等 inspect 真正返回后才销毁，不能用于 audio callback 或长时间占用串行 Control。
+
+`PerformanceRecordingMetadataRequest` 固定 absolute/normalized bundle、Project/
+Performance ID、expected revision 和完整 ArtifactRef。入口复制请求，复用 Project I/O
+完整有界扫描和 Cooker 流式 WAV 检查；不恢复、scavenge 或写入 authoring 状态。
+最终 owner/revision/binding 改变时拒绝原请求，不隐式重试。既有 list/inspect 的无 WAV
+仍单独表示；这个 reader 只解释一个已绑定录音，不更改 Project Truth。
+
+外层 failure 保留 storage、revision、owner 和 Artifact mismatch；成功的 metadata
+携带完整校验后的身份及 Project/recording revision。其 audio Result 成功时返回实际
+sample rate/channels/data frames；UNSUPPORTED_AUDIO 只在完整原始输入已校验后
+报告。临时格式错误不会提前终止 hash，摘要失败不能发布元数据或该格式诊断。
+这些结果不证明 capture 完整性、Performance elapsed 或 physical close。
+
+`std::stop_token` 在 I/O 前、每个有界窗口和最终发布前观察取消，返回独立的
+`PerformanceRecordingReadCancelled` variant。取消不能中断正在执行的平台调用，
+也不能撤销已返回的值；调用方仍需等待实际完成，不能把 timeout 当成取消或已归还
+writer。后续异步 Runtime coordinator 还须过滤 retired owner/generation 的迟到结果。
+当前未新增 JSON/SDK operation 或 Take 界面字段。
+
+Native component 的真实文件/线程屏障验证：扫描暂停时 Control 可提交 rename，旧
+revision 扫描被拒绝；外部取消后实际 worker 返回前仍拒绝 foreign writer，返回后才
+可取得。另覆盖独立夹具值、完整格式/摘要区分、request snapshot、取消边界、实际重开
+和 Application 销毁后的 reader，owning TSan 检查同一并发路径。实际 OPFS 组合旅程
+通过 Facade 工厂在共享 Control root 下使用独立 worker，并测量该 worker 自己的栈。
+
 ## 6. 状态、错误与并发
 窄 `RuntimeFacade` 的开发源码增加 `stopped_peak_voices()`，返回当前已停止运行的
 实际峰值 voice 数。它只供串行 control caller 使用：`finish_stop()` 的既有
