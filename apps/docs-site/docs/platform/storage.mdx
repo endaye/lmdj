@@ -22,6 +22,26 @@ Project writer lease 排斥其他进程或 platform owner；同一 Facade 内的
 `lmdj.project-bundle.v1 · 1.1.0` 只传输完整 Project 内容，并声明 Project v1/v2/v3 identity；新 writer 发出 v3。managed Bundle paths use the portable ASCII segment subset `[A-Za-z0-9._/-]`；Project payload text remains UTF-8。导入在临时 staging 中完成路径、大小、顺序与 hash 验证，再通过 publication journal 原子发布；Host 不解释或直接写入 Project internals。
 ## Complete-read
 Native `read_complete` 对已存在完整文件的 `replace_complete` 竞态重试 open/lock/short-pread/revalidation 瞬时失败，读者只看到完整旧字节或完整新字节；缺失、符号链接与非普通文件仍失败。Web/OPFS 路径未改。
+## Bounded raw range read
+
+可选 `ProjectStorageRangeReader` 使用调用方的 `span<byte>`，以无符号 64-bit offset
+读取最多一个 buffer。成功返回实际字节数；到达或超过 EOF 返回零，短尾不改写其余
+buffer。空 buffer 仍执行文件和路径校验。错误保留平台原有 typed mapping，失败时已复制
+的字节不得作为有效数据使用。能力不持有跨调用 descriptor、缓存、writer lease 或隐式
+整文件 fallback；原有 complete-read 的行为不变。
+
+Native 复用拒绝符号链接和特殊文件的安全打开、共享锁与 identity 复核，直接 `pread`
+到 buffer，读后检查稳定 metadata；检测到文件变化即拒绝，没有 range 级自动重试。
+OPFS 每次解析现有路径、取得 File snapshot，只执行请求窗口的 `slice(...).arrayBuffer()`，
+然后复制到 suspension 结束后的当前 Wasm heap。内部 glue 用两个 unsigned 32-bit word
+传递 offset，并在转成 JavaScript Number 前检查 EOF，防止高位截断。
+
+此接口只提供原始输入，不保证多次读取是同一文件版本，也不证明完整 Artifact 的长度、
+SHA-256 或 Project ownership。后续消费者仍须在既有 owner/lease 下解析已提交引用并
+完整校验，才能发布录音元数据。Native contract 与 Node 边界测试覆盖窗口、canary、
+高位 offset、fresh read 和失败；独立真实 OPFS journey 通过 C++/Wasm/Asyncify 读取，
+实际关闭页面并重开两次，检查固定字节和没有新增 physical writer。它们不替代设备验收。
+
 ## 证据
 Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、writer-lease admission、并发 begin-vs-authoring、durable tail、torn-tail refusal、真实 `SIGKILL` restart、project store 和 journal 测试覆盖 shared native/OPFS storage boundary；硬终止 subprocess gate 在 native component 层执行。
 ## 限制

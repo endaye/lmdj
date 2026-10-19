@@ -49,6 +49,7 @@ make_web_project_storage_platform_for_test(bool mounted);
 extern "C" int lmdj_opfs_append_flush_count();
 extern "C" int lmdj_opfs_immutable_write_count();
 extern "C" int lmdj_opfs_publication_max_chunk_bytes();
+extern "C" std::uint32_t lmdj_project_io_physical_writer_count();
 
 namespace {
 
@@ -1407,6 +1408,9 @@ nlohmann::json project_bundle_import(
       unavailable->byte_length(unavailable_path), "length query");
   require_mount_error(
       unavailable->read_complete(unavailable_path), "complete read");
+  const auto* range = dynamic_cast<const project_io::ProjectStorageRangeReader*>(unavailable.get());
+  require(range != nullptr, "unavailable platform lost its range capability");
+  require_mount_error(range->read_range(unavailable_path, 0, {}), "range read");
   require_mount_error(
       unavailable->create_immutable(unavailable_path, bytes("x")),
       "immutable creation");
@@ -1581,6 +1585,62 @@ nlohmann::json project_bundle_import(
   }
 }
 
+[[gnu::noinline]] nlohmann::json bounded_range_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  const auto phase = query("phase");
+  require(phase == "prepare" || phase == "inspect", "invalid range witness phase");
+  const auto path = bundle / "raw.bin";
+  if (phase == "prepare") {
+    success(platform->ensure_directory(bundle), "range fixture directory");
+    auto lease = value(platform->acquire_writer(bundle), "range fixture writer");
+    require(lmdj_project_io_physical_writer_count() == 1, "range seed writer was not held");
+    const std::array data{std::byte{'a'}, std::byte{'b'}, std::byte{0}, std::byte{0xff},
+                          std::byte{'c'}, std::byte{'d'}, std::byte{'x'}, std::byte{'y'}};
+    success(platform->create_immutable(path, data), "range fixture binary seed");
+    lease.reset();
+  }
+  const auto before = lmdj_project_io_physical_writer_count();
+  require(before == 0, "range witness must not hold a writer");
+  const auto* range = dynamic_cast<const project_io::ProjectStorageRangeReader*>(platform.get());
+  require(range != nullptr, "Web bounded range capability missing");
+  std::array<std::byte, 6> output;
+  output.fill(std::byte{0x55});
+  const auto count = value(range->read_range(path, 2, std::span{output}.subspan(1, 4)),
+                           "range binary window");
+  require(count == 4 && output == (std::array{std::byte{0x55}, std::byte{0}, std::byte{0xff},
+      std::byte{'c'}, std::byte{'d'}, std::byte{0x55}}), "range binary window or canary mismatch");
+  const auto window = output;
+  output.fill(std::byte{0x55});
+  const auto tail = value(range->read_range(path, 7, std::span{output}.subspan(1, 4)),
+                          "range tail window");
+  require(tail == 1 && output == (std::array{std::byte{0x55}, std::byte{'y'}, std::byte{0x55},
+      std::byte{0x55}, std::byte{0x55}, std::byte{0x55}}), "range short tail changed unfilled bytes");
+  const auto tail_bytes = output;
+  for (const auto offset : std::array<std::uint64_t, 4>{8, 9, (1ULL << 32) + 1, UINT64_MAX}) {
+    require(value(range->read_range(path, offset, output), "range EOF") == 0,
+            "range EOF or high offset wrapped");
+    require(output == tail_bytes, "range EOF modified destination");
+  }
+  const auto empty = value(range->read_range(path, 0, {}), "range empty destination");
+  require(empty == 0, "range empty destination returned bytes");
+  const auto missing = range->read_range(bundle / "missing.bin", 0, {});
+  require(!missing.has_value() && missing.error().code == foundation::ErrorCode::not_found,
+          "range empty destination bypassed missing-file validation");
+  const auto after = lmdj_project_io_physical_writer_count();
+  require(after == before, "range acquired physical writer authority");
+  const auto integers = [](const auto& input) {
+    std::vector<unsigned int> result;
+    for (const auto byte : input) result.push_back(std::to_integer<unsigned int>(byte));
+    return result;
+  };
+  return {{"windowCount", count}, {"window", integers(window)},
+          {"tailCount", tail}, {"tail", integers(tail_bytes)},
+          {"eofWindows", 4}, {"emptyCount", empty}, {"missingErrorCode", "NOT_FOUND"},
+          {"writersBefore", before}, {"writersAfter", after}};
+}
+
 [[gnu::noinline]] nlohmann::json run_storage_fault_action() {
   using namespace lmdj;
   auto platform = project_io::make_web_project_storage_platform();
@@ -1591,6 +1651,9 @@ nlohmann::json project_bundle_import(
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "bounded_range_read") {
+      return {{"complete", true}, {"result", bounded_range_witness(platform, fault_bundle)}};
+    }
     if (action == "cross_realm_writer") {
       return {{"complete", true}, {"result", cross_realm_writer_witness(platform, fault_bundle)}};
     }

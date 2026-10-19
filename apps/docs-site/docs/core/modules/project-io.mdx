@@ -27,6 +27,18 @@ Facade 提交 Project、Bundle stream、bounded Sample bytes 或 Sequence flush�
 `ProjectBundleTransfer::duplicate` 在调用方提供的新 Project ID 下复制一个本地 Project：全程持有源与目标 writer lease（其他进程或标签页持有任一方时返回 `project_busy`），源有 active Sequence 或 Performance Journal 时以 `sequence_session_active` / `performance_session_active` 拒绝；随后读取已提交 Project Truth，把每个被引用的 Asset 与 Performance 录音 Artifact 按 SHA-256 与长度校验后复制到 staging，以 revision 0 写出全新 history 并完整重载验证，最后在同一目标 lease 下 `publish_directory_if_absent`。副本不携带源 history、sealed recovery 或未引用 blob；Lineage 中的源 revision 原样保留为溯源。拒绝、失败或取消都不发布任何目录，staging 由同一次调用或启动清理删除。
 ## 5. API 与 Artifact 边界
 只持久化 Project Truth 与原始 WAV Artifact；`lmdj.project-bundle.v1` 只定义 transfer envelope；Workspace waveform cache 可丢弃重建，Runtime Snapshot 明确禁止持久化为创作真相。
+
+`ProjectStorageRangeReader` 是可选 C++ companion，不改变既有 storage platform
+vtable。`read_range(path, uint64 offset, span<byte>)` 返回实际写入的前缀长度，最多为
+调用方 buffer 大小；短尾、EOF 和空 buffer 保留未写部分，空读仍验证文件路径。
+Native 复用安全打开与共享文件锁，在 `pread` 后复核 metadata；OPFS 每次取得新的
+File，只读取 `slice` 窗口。每次调用独立，失败后的 buffer 内容不可信，没有跨调用快照。
+平台所有者必须在使用 companion 期间保持存活；缺少能力时没有整文件读取 fallback。
+
+这些是未校验的原始字节，不证明 Artifact digest、Performance 引用、writer authority
+或耐久性。已保存录音的有界完整校验、WAV 元数据解析及 Facade/Host 查询仍属于后续
+任务，Host 继续只使用 Application Facade。
+
 ## 6. 状态、错误与生命周期
 故障矩阵验证验证、取消、超时与发布中断恢复；typed error 区分输入、平台、busy 与提交失败。
 ## 7. 产品使用方
