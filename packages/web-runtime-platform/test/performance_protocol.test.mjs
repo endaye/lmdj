@@ -20,6 +20,7 @@ const PERFORMANCE_OPERATIONS = Object.freeze([
   "pattern.slot.move",
   "performance.list",
   "performance.inspect",
+  "performance.recording.metadata",
   "performance.record.begin",
   "performance.record.event",
   "performance.fx.gesture",
@@ -65,6 +66,8 @@ function validRequests() {
     ["pattern.slot.move", {command_id: ids[1], expected_revision: 2, from_slot: 3, to_slot: 4}],
     ["performance.list", {}],
     ["performance.inspect", {performance_id: ids[2]}],
+    ["performance.recording.metadata", {project_id: ids[1], performance_id: ids[2], expected_revision: 3,
+      recording_artifact: {sha256: sha, media_type: "audio/wav", byte_length: 192124}}],
     ["performance.record.begin", {command_id: ids[1], expected_revision: 2, session_id: ids[2], performance_id: ids[3]}],
     ["performance.record.begin", {command_id: ids[1], expected_revision: 2, session_id: ids[2], performance_id: ids[3], control_epoch: ids[5]}],
     ...[
@@ -112,7 +115,7 @@ function validRequests() {
 }
 
 test("locks the complete Performance operation inventory", () => {
-  assert.equal(PERFORMANCE_OPERATIONS.length, 26);
+  assert.equal(PERFORMANCE_OPERATIONS.length, 27);
   assert.deepEqual(
     HOST_OPERATIONS.filter((operation) =>
       operation.startsWith("performance.") || operation.startsWith("pattern.slot.")),
@@ -211,7 +214,7 @@ const liveState = {
 function validResults() {
   const revisioned = new Set([
     "pattern.slot.assign", "pattern.slot.clear", "pattern.slot.move",
-    "performance.list", "performance.inspect", "performance.record.begin",
+    "performance.list", "performance.inspect", "performance.recording.metadata", "performance.record.begin",
     "performance.record.flush", "performance.save", "performance.discard",
     "performance.recovery.apply", "performance.rename", "performance.delete",
     "performance.recording.bind", "performance.resample.commit",
@@ -222,6 +225,9 @@ function validResults() {
     ["pattern.slot.move", {from_slot: 1, to_slot: 2, pattern_id: ids[2], committed_revision: 3, replayed: false}],
     ["performance.list", {performances: [{performance_id: ids[3], name: "Take 1", created_bpm: 120, recording_artifact: null, event_count: 2}]}],
     ["performance.inspect", {performance: {id: ids[3], name: "Take 1", created_bpm: 120, recording_artifact: null, events: [{kind: "hold_on", tick: 0}, {kind: "hold_off", tick: 960}]}}],
+    ["performance.recording.metadata", {project_id: ids[1], performance_id: ids[2], recording_revision: 17,
+      recording_artifact: {sha256: sha, media_type: "audio/wav", byte_length: 192124},
+      audio_metadata: {sample_rate: 48000, channels: 2, source_frames: 48017}, audio_error: null}],
     ["performance.record.begin", lifecycle],
     ["performance.record.event", {event_id: ids[3], accepted_tick: 0, input_sequence: 1, coalesced: false, replayed: false}],
     ["performance.fx.gesture", {applied: true}],
@@ -521,4 +527,38 @@ test("transport validates a successful result against its pending operation", as
   await assert.rejects(pending, (error) =>
     error instanceof HostProtocolError &&
     error.code === "HOST_PROTOCOL_MISMATCH");
+});
+
+test("recording metadata keeps verified identity separate from a format refusal", () => {
+  const operation = "performance.recording.metadata";
+  const value = validResults().get(operation);
+  const wrap = result => ({protocol_version: 1, request_id: ids[0], ok: true, result});
+  const unsupported = {...value, audio_metadata: null,
+    audio_error: {code: "UNSUPPORTED_AUDIO", message: "unsupported audio", details: {}}};
+  assert.equal(validateResponseEnvelope(wrap(unsupported), operation).result, unsupported);
+  for (const key of Object.keys(value)) {
+    const missing = {...value}; delete missing[key];
+    expectProtocolMismatch(() => validateResponseEnvelope(wrap(missing), operation));
+  }
+  for (const changed of [
+    {...value, project_revision: Number.MAX_SAFE_INTEGER + 1},
+    {...value, recording_revision: -1},
+    {...value, recording_artifact: null},
+    {...value, audio_error: unsupported.audio_error},
+    {...value, audio_metadata: null},
+    {...value, audio_metadata: {...value.audio_metadata, sample_rate: 32000}},
+    {...value, audio_metadata: {...value.audio_metadata, channels: 3}},
+    {...value, audio_metadata: {...value.audio_metadata, source_frames: 48017.5}},
+    {...value, audio_metadata: {...value.audio_metadata, source_frames: Number.MAX_SAFE_INTEGER}},
+    {...value, audio_metadata: {...value.audio_metadata, extra: 0}},
+    {...unsupported, audio_error: {...unsupported.audio_error, code: "IO_ERROR"}},
+    {...unsupported, audio_error: {...unsupported.audio_error, details: null}},
+    {...unsupported, audio_error: {...unsupported.audio_error, extra: 0}},
+  ]) expectProtocolMismatch(() => validateResponseEnvelope(wrap(changed), operation));
+  const input = validRequests().find(([name]) => name === operation)[1];
+  for (const changed of [{...input, project_path: "/foreign"}, {...input, project_id: "bad"},
+    {...input, performance_id: "bad"}, {...input, expected_revision: -1},
+    {...input, recording_artifact: null},
+    {...input, recording_artifact: {...input.recording_artifact, media_type: "audio/mpeg"}}])
+    expectProtocolMismatch(() => request(operation, changed));
 });

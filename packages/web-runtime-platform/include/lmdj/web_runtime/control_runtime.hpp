@@ -75,6 +75,14 @@ class ControlRuntime final {
   // deliberately removes pending/ticket metadata and is not this authority.
   bool owns_pending_pattern_rpc(
       std::string_view original_request_id, std::string_view operation) const;
+  // Internal read-only RPC continuation. Cancelling/retiring its observer
+  // does not retire the worker; actual join gates physical Module disposal.
+  bool owns_pending_recording_metadata(std::string_view request_id) const;
+  std::optional<nlohmann::json> inspect_recording_metadata(
+      std::string_view request_id, bool consume = false, bool cancel = false);
+  void service_recording_metadata();
+  bool recording_metadata_pending() const noexcept;
+  bool recording_metadata_workers_stopped() const noexcept;
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
   foundation::Result<void> drain_capture();
