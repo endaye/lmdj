@@ -466,6 +466,34 @@ revision 扫描被拒绝；外部取消后实际 worker 返回前仍拒绝 forei
 和 Application 销毁后的 reader，owning TSan 检查同一并发路径。实际 OPFS 组合旅程
 通过 Facade 工厂在共享 Control root 下使用独立 worker，并测量该 worker 自己的栈。
 
+### Pattern tempo 的 Native publication gateway
+
+`pattern_tempo_gateway.hpp` 提供独立的 C++ `PatternTempoPublicationGateway`，
+由 `make_engine_pattern_tempo_publication_gateway(RealtimeEngine&)` 绑定现有
+Native engine。`publish` 从调用方保留的原始 `PreparedPatternView` 派生 tempo，
+只调用已有 continuous tempo primitive；重新 Cook 相同 ID 并不能证明相同的
+immutable PCM/material owner。`adopt` 只用已有 same-BPM phase publication 接纳
+已提交 revision，保留当前 musical position 与 sounding voices，不负责写入 Truth。
+两者的拒绝均不消费调用方 source/view，也不隐式重试或清除原 publication。
+
+`PatternTempoAuthority` 同时绑定 generation 和 engine start epoch。成功返回仅
+表示 admission；`observe` 才返回 audio 实际应用的 frame 与完整整数 anchor。
+pending generation、旧 generation、stopped engine 或重启前 epoch 没有可用观测，
+不能填成预测 frame 或零 anchor。所有调用和销毁属于串行 control owner，可以与
+render 并发；engine 须晚于 gateway 销毁，reclaim 仍在 control，不增加 audio 回调。
+
+authority 不可用返回 `tempo_source_stale`；Native publication 拒绝保留为
+`tempo_publication_project_mismatch`、`tempo_publication_pending`、
+`tempo_publication_slots_full`、`tempo_publication_queue_full`、
+`tempo_publication_generation_exhausted` 或 `tempo_publication_phase_mismatch`。
+无效 BPM 的派生错误直接保留，调用方不能把任一拒绝当作已经应用。
+
+Native component 通过真实 PCM onset 验证变速、cancel、同 BPM revision adoption、
+held voice、非整除节奏及大于 JavaScript 精确整数范围的 numerator；独立 stress
+覆盖 publication/observation/reclaim 与 render 的竞争。这个 B1 gateway 尚未接入
+Facade preview 生命周期、Web protocol/SDK、Creator 的400ms 操作或 metronome；这些
+后续工作仍须完成实际产品与存储旅程。它也不证明 legacy Bar 边界漂移已经修复。
+
 ## 6. 状态、错误与并发
 窄 `RuntimeFacade` 的开发源码增加 `stopped_peak_voices()`，返回当前已停止运行的
 实际峰值 voice 数。它只供串行 control caller 使用：`finish_stop()` 的既有

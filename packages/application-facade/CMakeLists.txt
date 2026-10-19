@@ -12,6 +12,7 @@ add_library(
   lmdj_performance_runtime
   STATIC
     src/performance_engine_adapter.cpp
+    src/pattern_tempo_gateway.cpp
     src/performance_replay.cpp
     src/performance_runtime.cpp
 )
@@ -509,6 +510,21 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio concurrency
   )
+
+  add_executable(lmdj_facade_pattern_tempo_gateway_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/pattern_tempo_gateway_test.cpp")
+  target_include_directories(lmdj_facade_pattern_tempo_gateway_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_compile_definitions(lmdj_facade_pattern_tempo_gateway_tests PRIVATE LMDJ_AUDIO_RUNTIME_TESTING=1)
+  # Existing quiescent frame seam proves full-width native anchors; no hook is
+  # enabled on the product library or used while its renderer is running.
+  target_link_libraries(lmdj_facade_pattern_tempo_gateway_tests PRIVATE
+    lmdj_audio_runtime_testable lmdj::performance_runtime Threads::Threads)
+  lmdj_target_warnings(lmdj_facade_pattern_tempo_gateway_tests)
+  lmdj_target_sanitizers(lmdj_facade_pattern_tempo_gateway_tests)
+  lmdj_add_test(NAME facade.pattern_tempo_gateway TIER component
+    COMMAND lmdj_facade_pattern_tempo_gateway_tests LABELS audio concurrency)
+  lmdj_add_test(NAME facade.pattern_tempo_gateway_stress TIER stress
+    COMMAND lmdj_facade_pattern_tempo_gateway_tests --stress LABELS audio concurrency)
 
   add_executable(
     lmdj_facade_resample_performance_tests
