@@ -498,6 +498,31 @@ export interface PerformanceMasterCapture {
   stop(): Promise<void>;
 }
 
+/** Validated received PCM only; neither durable WAV nor whole Performance time. */
+export type PerformanceMasterCaptureProgress = Readonly<{
+  state: "unavailable";
+  reason: "idle" | "starting" | "start-failed" | "closed" | "owner-lost" |
+    "identity-unavailable" | "unsupported" | "sample-rate-invalid" |
+    "frame-overflow" | "protocol-error";
+}> | Readonly<{
+  state: "available";
+  captureId: string;
+  generation: number;
+  binding: Readonly<{controlEpoch: string; sessionId: string; beginCommandId: string}> | null;
+  sampleRate: number;
+  receivedFrames: number;
+  phase: "recording" | "stopping" | "stopped" | "failed";
+  /** Tap-to-SDK loss only, excluding Host queue/writer drops; null is unknown. */
+  droppedFrames: number | null;
+  failure: "tap-failure" | "protocol-error" | "post-message-failed" |
+    "processor-failed" | "stop-post-failed" | "stop-timeout" | "closed" | null;
+}>;
+
+/** Optional capability: old capture handles/results retain their exact keys. */
+export interface PerformanceMasterCaptureProgressSession {
+  performanceMasterCaptureProgress(): PerformanceMasterCaptureProgress;
+}
+
 export interface WebPerformanceCaptureSession {
   performanceMasterCaptureStatus(): PerformanceMasterCaptureStatus;
   subscribePerformanceMasterCaptureStatus(
