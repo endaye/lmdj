@@ -748,3 +748,28 @@ request_id 限合法 lowercase UUID，deadline_ms 限有限数值 `0..0xffffffff
 caller、清理和 retained 自身超时不重复输出；正常 terminate 不输出。console
 发出与浏览器 collector 实际留存仍是两个事实，external CDP 页面尤其需另行
 确认捕获，不能把一次 Node VM 日志当作浏览器采证或运行验收。
+
+
+## Performance capture progress
+
+独立的 `PerformanceMasterCaptureProgressSession` 提供
+`session.performanceMasterCaptureProgress()`，同步只读返回同一真实 master tap
+的 `captureId`、generation、begin binding、实际 AudioContext `sampleRate`、
+`receivedFrames`、phase、drop 与失败原因。只有通过原 started ACK、generation、
+连续 sequence 和声道校验的已投递 PCM 才累计；静音也计帧，尚未投递的部分或
+延迟回调不补数。Stop 的最后 partial batch 计入后，只有 exact finalSequence
+确认才进入 stopped。读数不发送 RPC、不读音频时钟、不新增 I/O、计时器或录制 owner。
+
+这是独立的可选能力，原配置、capture `{stop}` 句柄及所有 Worklet/Facade 回执键
+保持不变。缺少新能力、实际采样率或 passive identity 时只令进度 unavailable，
+不拒绝原录音。协议缺口、Stop 超时、processor failure 的丢帧量未知时为 null；
+只在实际 Worklet failure 明确报告时给出已知 droppedFrames。这里的 phase/drop/failure
+只描述 tap→SDK 传输，不涵盖 Host queue/writer 的失败或丢帧。失败时的 received
+仍只描述验证过的 PCM，不能与未知 loss 相加重建完整录音。
+
+返回对象与 binding 冻结；新 capture 的 identity 和计数重新开始。停止的只读值
+保留到下一次 capture start 或 tap/Session 关闭，旧 getter 在关闭后不能读取新 owner。
+这些是接收音频事实，不是 durable WAV、保存完整性、Performance 总时长或 Replay
+时钟。已保存 Artifact 的有界验证 metadata 已由独立 Facade/SDK 前置交付；
+Writer/queue 的 durable prefix 与 Creator Recording/Takes 消费仍由 #2135 后续
+Task 交付。本接口不修改 Project 或持久化格式，也不替代已交付的 metadata。
