@@ -322,8 +322,41 @@ foundation::Result<void> verify_managed_wav_artifact(
     });
   }
   const auto path = bundle / "assets" / (artifact.sha256 + ".wav");
-  auto described = describe_artifact(platform, path, artifact.media_type);
-  if (!described.has_value() || described.value() != artifact) {
+  const auto matches = [&]() {
+    const auto* reader = dynamic_cast<const ProjectStorageRangeReader*>(&platform);
+    if (reader == nullptr) {
+      // Preserve legacy platform compatibility. Production Native and OPFS
+      // provide bounded reads; a present reader's failure never falls back.
+      const auto described = describe_artifact(platform, path, artifact.media_type);
+      return described.has_value() && described.value() == artifact;
+    }
+    const auto length = platform.byte_length(path);
+    if (!length.has_value() || length.value() != artifact.byte_length) return false;
+    // OPFS read_complete needs a whole-file allocation and a second C++ copy.
+    // Keep recording verification independent of recording length and off the
+    // small Web stack, without changing writer ownership or decoding PCM.
+    constexpr std::size_t kChunkBytes = 64U * 1024U;
+    auto buffer = std::make_unique<std::array<std::byte, kChunkBytes>>();
+    picosha2::hash256_one_by_one hasher;
+    std::uint64_t offset = 0;
+    while (offset < artifact.byte_length) {
+      const auto requested = static_cast<std::size_t>(std::min<std::uint64_t>(
+          kChunkBytes, artifact.byte_length - offset));
+      const auto read = reader->read_range(path, offset, std::span{*buffer}.first(requested));
+      if (!read.has_value() || read.value() == 0 || read.value() > requested) return false;
+      const auto* begin = reinterpret_cast<const unsigned char*>(buffer->data());
+      hasher.process(begin, begin + read.value());
+      offset += read.value();
+    }
+    const auto after_length = platform.byte_length(path);
+    if (!after_length.has_value() || after_length.value() != artifact.byte_length) return false;
+    std::array<std::byte, 1> extra;
+    const auto eof = reader->read_range(path, offset, extra);
+    if (!eof.has_value() || eof.value() != 0) return false;
+    hasher.finish();
+    return picosha2::get_hash_hex_string(hasher) == artifact.sha256;
+  };
+  if (!matches()) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::missing_asset,
         "Performance recording ArtifactRef does not match managed storage",
