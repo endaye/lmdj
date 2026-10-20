@@ -1,4 +1,4 @@
-import {createEvent, fireEvent, render, screen} from "@testing-library/react";
+import {act, createEvent, fireEvent, render, screen} from "@testing-library/react";
 import {expect, test, vi} from "vitest";
 
 import {EQ_VIEW, EqEditor, freqToX, gainToY} from "../src/components/eq_editor";
@@ -74,6 +74,59 @@ test("a neutral EQ shows three bypassed poles", () => {
   for (const band of ["Low", "Mid", "High"] as const) {
     expect(pole(band).getAttribute("aria-valuetext")).toBe(`${band} off`);
   }
+});
+
+test("the response and summary follow a preview and restore together on Escape", () => {
+  const {container, onCommit} = renderEditor();
+  const curve = container.querySelector(".eq-response-curve")!;
+  const flat = curve.getAttribute("d");
+  const summary = screen.getByLabelText("Pad A01 EQ frequencies");
+  expect(summary.textContent).toBe("OFF / OFF / OFF");
+  drag(pole("Mid"), [{x: freqToX(1000), y: gainToY(0)}, {x: freqToX(2000), y: gainToY(6000)}]);
+  expect(curve.getAttribute("d")).not.toBe(flat);
+  expect(summary.textContent).toBe("OFF / 2.00 kHz / OFF");
+  fireEvent.keyDown(document.body, {key: "Escape"});
+  expect(curve.getAttribute("d")).toBe(flat);
+  expect(summary.textContent).toBe("OFF / OFF / OFF");
+  expect(onCommit).not.toHaveBeenCalled();
+});
+
+test("a local SVG resize preserves44px hits and12px visible poles", () => {
+  let resized = () => {};
+  const disconnect = vi.fn();
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) {resized = callback;}
+    observe() {}
+    disconnect = disconnect;
+  });
+  try {
+    const view = renderEditor();
+    const plot = view.container.querySelector("svg")!;
+    Object.defineProperties(plot, {clientWidth: {value: 200}, clientHeight: {value: 132}});
+    act(() => resized());
+    const hit = view.container.querySelector(".eq-pole-hit")!;
+    const dot = view.container.querySelector(".eq-pole-dot")!;
+    for (const size of [Number(hit.getAttribute("rx")) * 2 * 200 / EQ_VIEW.width,
+      Number(hit.getAttribute("ry")) * 2 * 132 / EQ_VIEW.height]) {
+      expect(size).toBeGreaterThanOrEqual(44);
+      expect(size).toBeLessThan(44.01);
+    }
+    expect(Number(dot.getAttribute("rx")) * 2 * 200 / EQ_VIEW.width).toBeCloseTo(12, 12);
+    expect(Number(dot.getAttribute("ry")) * 2 * 132 / EQ_VIEW.height).toBeCloseTo(12, 12);
+    view.unmount(); expect(disconnect).toHaveBeenCalledOnce();
+  } finally {vi.unstubAllGlobals();}
+});
+
+test("a rotated/scaled screen matrix maps pointer travel to the intended EQ values", () => {
+  const {onCommit, container} = renderEditor();
+  const plot = container.querySelector("svg")!;
+  Object.defineProperty(plot, "getScreenCTM", {value: () => ({a: 0, b: -2, c: 2, d: 0, e: 50, f: 700})});
+  const screenPoint = (x: number, y: number) => ({x: 50 + 2 * y, y: 700 - 2 * x});
+  drag(pole("Mid"), [screenPoint(freqToX(1000), gainToY(0)), screenPoint(freqToX(2000), gainToY(6000))]);
+  fireEvent.pointerUp(pole("Mid"), {pointerId: 1});
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, eq: {
+    low: null, mid: {freqHz: 2000, gainMillidb: 6000, qMilli: 707}, high: null,
+  }});
 });
 
 test("dragging the mid pole previews each move and commits one bell", () => {

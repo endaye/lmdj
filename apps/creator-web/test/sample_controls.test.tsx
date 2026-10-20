@@ -279,12 +279,13 @@ test.each(["playback", "tone", "pad"] as const)("every %s control and confirmati
   ]) {
     const name = action.getAttribute("aria-label") ?? action.textContent ?? action.tagName;
     if (action instanceof SVGElement) {
-      // An EQ pole: a 22-unit hit circle in a plot that never renders
-      // narrower than its 320-unit viewBox is at least 44 px across.
+      // This standalone no-layout DOM retains the unscaled fallback. The
+      // EqEditor resize regression and actual six-viewport journeys own
+      // the responsive hardware shell's inverse-scaled 44px ellipses.
       const plot = action.closest("svg")!;
       expect(plot.getAttribute("viewBox"), name).toBe("0 0 320 184");
       expect(getComputedStyle(plot).minWidth, name).toBe("320px");
-      expect(Number(action.querySelector(".eq-pole-hit")?.getAttribute("r")), name)
+      for (const axis of ["rx", "ry"]) expect(Number(action.querySelector(".eq-pole-hit")?.getAttribute(axis)), name)
         .toBeGreaterThanOrEqual(22);
       continue;
     }

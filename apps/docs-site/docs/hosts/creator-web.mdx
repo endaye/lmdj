@@ -241,7 +241,11 @@ Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页
 - 回到 0 dB 的架式或钟形被旁通，所以平直的 EQ 不让 Pad 变成非中性；极点仍停在原频率。
 - 键盘：上下键 0.5 dB，最多到底线，在底线再按一次变为 cut；从 cut 按上键恢复它保留的增益；左右键一个半音；Shift 加上下键调中段 Q；Delete/Backspace 旁通该段；松开这些步进键时提交，松开其他键不提交。
 - 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
-- 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
+- 每个极点是带频段描述的 slider。Tone/EQ 触摸区使用132px高的自适应图，保留320×184内部坐标；极点命中椭圆按本地图形缩放反向补偿，实际目标至少44 CSS px，彩色可见点为12个设计单位。绘图区允许命中框延伸进已有面板内距，不用320px最小宽度制造横向溢出。指针通过实际SVG屏幕矩阵转换，所以旋转的平板布局仍沿正确的频率／增益方向编辑。
+
+三段EQ曲线从当前参数（包括尚未提交的拖动）派生，使用既有48kHz引擎的shelf／bell／Butterworth cut系数及float存储精度；它只计算显示频响，不渲染PCM、不创建额外AudioContext，也不持久化。图显示原±18dB窗口，底层响应与保存参数不被截断；Tone仍是独立滤波阶段。频率摘要读取实际Low／Mid／High值，旁通显示OFF，原完整频率／增益／Q／kind读数及Cut、双击Q、键盘与取消规则保留。Tone保持原精确输入与预览／提交语义，轨道绘制随当前草稿与Escape回滚。
+
+合法频率可让极点命中区重叠；重叠处保留原SVG顺序，由后绘制的极点接收指针，每段仍可键盘聚焦编辑。自适应布局不会限制频率或缩小44px命中框来制造间距。
 
 Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。三根主推子与 HOLD 保留在首屏；四槽横排和一处 MASTER 使用横向滑杆，在同一外层滚动区内可达。
 

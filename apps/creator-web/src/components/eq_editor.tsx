@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState} from "react";
+import {eqResponseCurve} from "./eq_response";
 
 import type {
   PadEq,
@@ -173,6 +174,22 @@ export function EqEditor({
   const [draft, setDraft] = useState<PadEq | null>(null);
   const gesture = useRef<Gesture | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const [pixels, setPixels] = useState({x: 1, y: 1});
+  // Only local SVG scaling needs compensation. The supported outer stage
+  // is at least 1x, so a local 44px ellipse stays >=44 actual CSS pixels,
+  // including a quarter-turn, without observing or counteracting that stage.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (svg === null || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const x = svg.clientWidth / EQ_VIEW.width, y = svg.clientHeight / EQ_VIEW.height;
+      if (!(x > 0 && y > 0)) return;
+      setPixels(previous => previous.x === x && previous.y === y ? previous : {x, y});
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(svg); measure();
+    return () => observer.disconnect();
+  }, []);
   const lastTap = useRef<{band: EqBand; at: number} | null>(null);
   const remembered = useRef<Remembered>({
     low: DEFAULT_FREQ.low,
@@ -264,7 +281,18 @@ export function EqEditor({
   };
 
   const viewPoint = (clientX: number, clientY: number): {x: number; y: number} | null => {
-    const rect = svgRef.current?.getBoundingClientRect();
+    const svg = svgRef.current;
+    if (svg === null) return null;
+    if (typeof svg.getScreenCTM === "function") {
+      const m = svg.getScreenCTM();
+      if (m === null) return null;
+      const determinant = m.a * m.d - m.b * m.c;
+      if (determinant === 0) return null;
+      const x = clientX - m.e, y = clientY - m.f;
+      return {x: (m.d * x - m.c * y) / determinant, y: (m.a * y - m.b * x) / determinant};
+    }
+    // A no-layout unit DOM has no SVG screen matrix.
+    const rect = svg.getBoundingClientRect();
     if (rect === undefined || rect.width <= 0 || rect.height <= 0) return null;
     return {
       x: ((clientX - rect.left) / rect.width) * EQ_VIEW.width,
@@ -431,11 +459,12 @@ export function EqEditor({
 
   return (
     <section className="eq-editor" aria-label={`${padLabel} EQ`}>
-      <span className="eq-editor-title">EQ</span>
+      <span className="eq-editor-title visually-hidden">EQ</span>
       <svg
         ref={svgRef}
         className="eq-plot"
         viewBox={`0 0 ${EQ_VIEW.width} ${EQ_VIEW.height}`}
+        preserveAspectRatio="none"
         role="group"
         aria-label={`${padLabel} EQ bands`}
       >
@@ -457,6 +486,8 @@ export function EqEditor({
             </text>
           </g>
         ))}
+        <path className="eq-response-curve" aria-hidden="true" d={eqResponseCurve(shown).map(({hz, db}, index) =>
+          `${index === 0 ? "M" : "L"}${freqToX(hz).toFixed(3)} ${gainToY(clamp(db, -18, 18) * 1000).toFixed(3)}`).join(" ")} />
         {BANDS.map((band) => {
           const active = shown[band] !== null;
           const gain = shown[band]?.gainMillidb ?? 0;
@@ -481,16 +512,25 @@ export function EqEditor({
               onKeyUp={keyUp}
               onBlur={finish}
             >
-              <circle className="eq-pole-hit" r={22} />
-              <circle className="eq-pole-dot" r={8} />
+              <title>{describeBand(band, shown)}</title>
+              <ellipse className="eq-pole-hit"
+                rx={Math.ceil(22 / pixels.x * 1024) / 1024}
+                ry={Math.ceil(22 / pixels.y * 1024) / 1024} />
+              <ellipse className="eq-pole-dot" rx={6 / pixels.x} ry={6 / pixels.y} />
               <text className="eq-pole-label" y={4} textAnchor="middle">{BAND_NAMES[band][0]}</text>
             </g>
           );
         })}
       </svg>
+      <div className="eq-frequency-summary">
+        <span>LOW / MID / HIGH</span>
+        <output aria-label={`${padLabel} EQ frequencies`}>{BANDS.map(band =>
+          shown[band] === null ? "OFF" : formatFreq(bandFreq(band))).join(" / ")}</output>
+      </div>
       <output className="eq-readout" aria-live="off">
         {BANDS.map((band) => describeBand(band, shown)).join(" · ")}
       </output>
+      <p className="eq-gesture-hint">Drag: frequency / gain · mid double-tap: Q</p>
     </section>
   );
 }

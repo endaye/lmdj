@@ -2001,6 +2001,164 @@ test("contextual Sample encoders merge one save, cancel old targets and restore 
   await noErrors();
 });
 
+async function recordToneGeometry(page, evidence) {
+  const controls = page.getByRole("region", {name: "Pad A01 Sample controls", exact: true});
+  const targets = controls.locator('.tone-control input, .tone-control button, .eq-pole');
+  await expect(targets).toHaveCount(5);
+  const value = {targets: []};
+  evidence.geometry.push(value);
+  for (let index = 0; index < await targets.count(); ++index) {
+    const target = targets.nth(index);
+    await target.scrollIntoViewIfNeeded();
+    const measured = await target.evaluate(element => {
+      const b = element.getBoundingClientRect();
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+      const points = [[cx, cy], [b.x + 1, cy], [b.right - 1, cy], [cx, b.y + 1], [cx, b.bottom - 1]];
+      const poles = [...(element.closest("svg")?.querySelectorAll(".eq-pole") ?? [])];
+      const name = element.getAttribute("aria-label");
+      // Valid band positions can overlap44px footprints on a narrow plot.
+      // Preserve all five probes; independently calculate the exact last
+      // containing ellipse instead of calling every later-pole hit a miss.
+      const expectedOwners = points.map(([x, y]) => poles.length === 0 ? name :
+        [...poles].reverse().find(pole => {
+          const ellipse = pole.querySelector(".eq-pole-hit");
+          const local = new DOMPoint(x, y).matrixTransform(ellipse.getScreenCTM().inverse());
+          return ((local.x - ellipse.cx.baseVal.value) / ellipse.rx.baseVal.value) ** 2 +
+            ((local.y - ellipse.cy.baseVal.value) / ellipse.ry.baseVal.value) ** 2 <= 1;
+        })?.getAttribute("aria-label"));
+      return {name: element.getAttribute("aria-label"), rect: b.toJSON(),
+        expectedOwners, owners: points.map(([x, y]) => {
+          const hit = document.elementFromPoint(x, y);
+          return hit === element || element.contains(hit) ? name : hit?.closest(".eq-pole")?.getAttribute("aria-label");
+        }),
+        hits: points.map(([x, y]) => {const hit = document.elementFromPoint(x, y); return hit === element || element.contains(hit);})};
+    });
+    value.targets.push(measured);
+    expect(measured.rect.width, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.rect.height, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.owners, measured.name).toHaveLength(5);
+    expect(measured.expectedOwners.every(Boolean), measured.name).toBe(true);
+    expect(measured.owners, measured.name).toEqual(measured.expectedOwners);
+    expect(measured.hits[0], measured.name).toBe(true);
+    if (measured.expectedOwners.every(owner => owner === measured.name)) {
+      expect(measured.hits, measured.name).toEqual([true, true, true, true, true]);
+    }
+  }
+  expect(value.targets).toHaveLength(5);
+  value.layout = await controls.evaluate(element => {
+    const plot = element.querySelector("svg");
+    const touch = element.closest('[aria-label="Touch workspace"]');
+    const outer = new DOMMatrixReadOnly(getComputedStyle(element.closest(".hardware-workspace")).transform);
+    const scale = Math.hypot(outer.a, outer.b);
+    return {viewport: {width: innerWidth, height: innerHeight}, plotHeight: parseFloat(getComputedStyle(plot).height),
+      overflow: [element.scrollWidth - element.clientWidth, touch.scrollWidth - touch.clientWidth,
+        document.documentElement.scrollWidth - innerWidth],
+      dots: [...plot.querySelectorAll(".eq-pole-dot")].map(dot => {
+        const b = dot.getBoundingClientRect(); return {width: b.width / scale, height: b.height / scale};
+      })};
+  });
+  expect(value.layout.overflow).toEqual([0, 0, 0]);
+  expect(value.layout.plotHeight).toBe(132);
+  for (const dot of value.layout.dots) {
+    expect(dot.width).toBeCloseTo(12, 1); expect(dot.height).toBeCloseTo(12, 1);
+  }
+  await expect(controls.locator(".eq-response-curve")).toHaveAttribute("d", /^M/);
+  return controls;
+}
+
+for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
+  {width: 768, height: 600}, {width: 768, height: 1024},
+  {width: 390, height: 844}, {width: 844, height: 390}]) {
+  test(`Tone EQ preserves real geometry, gestures and history at ${viewport.width}x${viewport.height}`, async ({page, browserName}, info) => {
+    test.skip(browserName !== "chromium"); test.setTimeout(300_000);
+    const evidence = {viewport, geometry: []};
+    try {
+      await installHostProofRecorder(page);
+      await page.setViewportSize(viewport); await page.goto("/index.html");
+      await waitForBootProject(page); await activateAudio(page);
+      await chooseSampleFile(page, "Add Sample to Pad A01", "tone-layout.wav", pcm16Wav({frames: 4800}));
+      await commitLongSourceSelection(page); await expectProjectRevision(page, 1);
+      await showSamplePage(page, "Tone / EQ");
+      const before = (await rawRequest(page, "project.inspect", {})).result;
+      evidence.before = before;
+      const controls = await recordToneGeometry(page, evidence);
+      const tone = page.getByRole("slider", {name: "Pad A01 Tone", exact: true});
+      await tone.focus();
+      for (let step = 0; step < 5; ++step) await page.keyboard.down("ArrowRight");
+      await expect(controls.locator(".tone-control output")).toHaveText("HP 5");
+      await page.keyboard.press("Escape"); await page.keyboard.up("ArrowRight");
+      await expect(controls.locator(".tone-control output")).toHaveText("Off");
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(before);
+
+      const low = page.getByRole("slider", {name: "Pad A01 EQ Low", exact: true});
+      await low.scrollIntoViewIfNeeded();
+      const lowCentre = await low.evaluate(node => {const m = node.getScreenCTM(); return {x: m.e, y: m.f};});
+      await page.mouse.click(lowCentre.x, lowCentre.y);
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(before);
+      const mid = page.getByRole("slider", {name: "Pad A01 EQ Mid", exact: true});
+      await mid.scrollIntoViewIfNeeded();
+      const movement = await mid.evaluate(node => {
+        const m = node.getScreenCTM();
+        return {from: {x: m.e, y: m.f}, to: {x: m.e + m.a * 24 - m.c * 12, y: m.f + m.b * 24 - m.d * 12}};
+      });
+      await page.mouse.move(movement.from.x, movement.from.y); await page.mouse.down();
+      await page.mouse.move(movement.to.x, movement.to.y, {steps: 5}); await page.mouse.up();
+      await expectProjectRevision(page, 2);
+      const moved = await inspectedPlayback(page); evidence.moved = moved;
+      expect(moved.eq.mid.freq_hz).toBeGreaterThan(1000);
+      expect(moved.eq.mid.gain_millidb).toBeGreaterThan(0);
+      expect(moved.eq.mid.q_milli).toBe(707);
+      await mid.focus(); await page.keyboard.down("Shift");
+      await page.keyboard.press("ArrowUp"); await page.keyboard.up("Shift");
+      await expectProjectRevision(page, 3);
+      const withQ = await inspectedPlayback(page); evidence.withQ = withQ;
+      expect(withQ.eq.mid.q_milli).toBeGreaterThan(707);
+      expect(withQ.eq.mid.freq_hz).toBe(moved.eq.mid.freq_hz);
+      expect(withQ.eq.mid.gain_millidb).toBe(moved.eq.mid.gain_millidb);
+      await holdKeySteps(page, low, "ArrowDown", 37); await expectProjectRevision(page, 4);
+      const cut = (await rawRequest(page, "project.inspect", {})).result; evidence.cut = cut;
+      await expect(low).toHaveAttribute("aria-valuetext", "Low cut 100 Hz");
+      await low.press("Delete"); await expectProjectRevision(page, 5);
+      const bypassed = (await rawRequest(page, "project.inspect", {})).result; evidence.bypassed = bypassed;
+      await expect(low).toHaveAttribute("aria-valuetext", "Low off");
+      const high = page.getByRole("slider", {name: "Pad A01 EQ High", exact: true});
+      await high.focus(); await page.keyboard.down("ArrowUp");
+      await expect(high).not.toHaveAttribute("aria-valuetext", "High off");
+      await page.keyboard.press("Escape"); await page.keyboard.up("ArrowUp");
+      await expect(high).toHaveAttribute("aria-valuetext", "High off");
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(bypassed);
+      await pressRailUndo(page); await expectProjectRevision(page, 6);
+      expect((await rawRequest(page, "project.inspect", {})).result)
+        .toEqual({...cut, project_revision: 6, project: {...cut.project, revision: 6}});
+      await pressRailRedo(page); await expectProjectRevision(page, 7);
+      const finalTruth = (await rawRequest(page, "project.inspect", {})).result;
+      expect(finalTruth).toEqual({...bypassed, project_revision: 7, project: {...bypassed.project, revision: 7}});
+      const projectId = finalTruth.project.project_id;
+      const inventory = await countInProjectInventory(page, projectId);
+      evidence.finalTruth = finalTruth; evidence.inventory = inventory;
+      for (const size of [{width: 768, height: 600}, viewport]) {
+        await page.setViewportSize(size);
+        await page.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, size);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await recordToneGeometry(page, evidence);
+        expect((await rawRequest(page, "project.inspect", {})).result).toEqual(finalTruth);
+      }
+      await controls.locator(".eq-editor").scrollIntoViewIfNeeded();
+      await page.screenshot({path: info.outputPath("tone-eq.png")});
+      await page.reload(); await waitForProjectReopen(page, projectId.slice(0, 8));
+      await showSamplePage(page, "Tone / EQ");
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(finalTruth);
+      expect(await countInProjectInventory(page, projectId)).toEqual(inventory);
+      await recordToneGeometry(page, evidence);
+      await expect(mid).not.toHaveAttribute("aria-valuetext", "Mid off");
+    } finally {
+      const path = info.outputPath("tone-eq-layout.json");
+      await writeFile(path, JSON.stringify(evidence, null, 2));
+      await info.attach("Tone EQ actual geometry and Truth", {path, contentType: "application/json"});
+    }
+  });
+}
+
 async function recordPadLayoutGeometry(page, surface, receipt) {
   receipt.controls = [];
   const actions = surface.locator("button, summary");
