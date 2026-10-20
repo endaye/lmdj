@@ -69,7 +69,11 @@ range companion 时返回 typed I/O unavailable，不退回全量读取。这项
 
 ## 6. 状态、错误与生命周期
 本地 `list_local_projects` 的完整 inventory 摘要使用64KiB heap 窗口、前后长度和
-EOF 检查，并在同一 history guard／writer lease 内完成 Project load 与全部 hash。
+EOF 检查。history guard 覆盖 Project load 与全部 hash；能取得 writer 时持有到扫描
+结束。foreign writer 繁忙时保留 `ProjectStore::load` 原有的已提交只读读取，不能因此
+恢复、修改或取得对方的 writer 权限，也不承诺跨 owner 的原子文件系统 snapshot。
+读取失败或观察到长度／EOF 变化仍拒绝，不发布部分摘要。单个已打开工程不会仅因
+其 writer 被占用而让整个列表失败；显式打开该繁忙工程仍保留原 `project_busy` 拒绝。
 它保留原有 summary keys 和 canonical digest；生产 Native／OPFS 可发现包含长录音
 的本地工程，不在发现阶段套用 Bundle 传输的单文件／总 payload 字节限额。
 路径、条目数量和整数溢出检查保留；读取失败不发布部分摘要，已有 range reader

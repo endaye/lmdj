@@ -1,5 +1,69 @@
 # Current-main integration of #2410
 
+## Current review correction before follow-up commit
+
+GLM5591733351/run39497355277 found a real compatibility regression: the new
+unconditional outer writer acquisition rejected a busy Project where the existing
+ProjectStore::load explicitly allows committed read-only loading. An isolated real
+Native two-Project case passes against main5ec03d71 and fails against candidate
+3f25339e after actual source rebuilds. The complete candidate CTest and actual
+Chromium foreign-owner case also fail at the discovery-success assertion.
+
+Correct the overly strong unconditional-writer premise: preserve history-before-
+writer ordering and retain a genuine lease for the full scan whenever acquired;
+when project_busy, follow the existing committed-read path without writer,
+recovery or mutation authority. Full canonical bytes, bounded windows, original
+error/EOF checks and all original allocation/ownership oracles remain. This is
+existing read-only compatibility, not a new atomic cross-owner snapshot promise.
+Add persistent Native two-Project/foreign-owner and actual public OPFS two-page
+ownership regressions; free Project open succeeds, busy Project open still
+refuses and the original owner retains its Project. Both digests are independently
+verified in the browser. Old full selections remain and the new case adds one
+per browser; no deadline, quota, threshold or journey leg is reduced.
+
+The second review note describes the per-instance transfer mutex, whose scope
+is byte-identical in5ec03d71 and3f25339e. It already serialized full hashing with
+begin/append/commit/abort. Retaining a successfully acquired writer through the
+scan is the declared consistency cost; the existing API gains no nonblocking or
+concurrent-transfer guarantee. Record this limitation and reasoned disposition;
+do not remove full hashing to make the concern disappear.
+
+All initial3f25339e passing results below remain historical. Updated complete
+Native/Wasm/browser/Portal/production verification and new-head independent
+review/automatic repair recheck remain pending until actual receipts exist.
+
+
+## Follow-up source verification before clean checkpoint
+
+The exact corrected collector rebuilt successfully and the complete original-plus-
+new Native owning selection passed12/12 in29.172s. Official pinned6.0.5 formal
+build-audio-runtime passed50.359s. Final full Chromium5/5 passed107.255s and
+supported OPFS WebKit4/4 passed154.474s, zero skips/flaky/retries. Artifact readback
+verifies9 metadata reports,6 full long-file inventories,4 pre-open lists and18
+closed pages perbrowser. Every original Save/bind/two-reopen leg, full345600056-
+byte SHA/header/tail/86400000frames,512MiB and30s/180s budgets remains.
+
+The new two-Project case compares each full digest with independent browser
+Crypto, opens the free Project, receives exact public PROJECT_BUSY on the busy
+Project, retains the free/current and foreign/original owners and closes all3
+pages. Native separately proves project_busy and no transferred writer authority.
+Two added-test mistakes remain negative evidence: initial Chromium checked the
+underlying storage field instead of established normalized PROJECT_BUSY; next
+WebKit assumed an empty profile though that supported browser retains earlier
+fixtures across contexts. The final test independently enumerates physical
+pre-existing Project directories before seeding, then asserts the entire exact
+returned ID inventory plus both new Projects. No original test is removed or
+weakened. All failed traces remain distinct from the actual old-code busy RED.
+
+Dependencies, Runtime and explicit-root Host boundaries and spec syntax pass.
+Current four verified non-plan input hashes are saved. Full Portal passed50.676s:
+179 tests,53 pages and51 routes/internal links before the follow-up Conventional
+Commit. Clean-head production configure/build/package, committed ownership/scope,
+independent new-head review and automatic repair publication remain separate
+boundaries recorded in the PR only after actual receipts. Never amend/force the
+already published initial3f25339e.
+
+
 # #2410 integration premises before source edits
 
 Main5ec03d715b2fbf2323219537be159336f5b6f315; original sourcec3edab71c0ad6eb380e0d9a8837dd56a67db7ee2, original parent3a62b103c7c79cbfb8c18e4849b3cd477318df4c. Clean isolated fix/project-discovery-bounded-inventory-main has10 actual symlinks. Live #2112/#2135/#2237/comments and #2410/#2411/#2438 refreshed. No competing discovery implementation exists; #2411 owns subsequent Take consumer.
@@ -26,7 +90,7 @@ Project/Pattern/revision/summary-key identity and digest shape prove startup
 admission with no selected Project; the independent full physical digest remains
 asserted after the original list. No original leg, limit or budget is removed.
 
-## Current-main source verification
+## Initial 3f25339e source verification before review
 
 Original complete Native bundle-transfer baseline passed3.263s. Added observer
 rebuilt against unchanged main fails at complete_recording_reads==0 (exit8),
