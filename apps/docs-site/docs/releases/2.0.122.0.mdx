@@ -1,0 +1,82 @@
+---
+title: LMDJ 2.0.122.0 release changelog
+area: history
+status: implemented
+owners: [release, docs]
+source_paths: [docs/release-evidence/release-intents.json, docs/release-evidence/changelog-publications.json, tools/release/changelog_site.py]
+---
+
+{/* Generated release projection; do not hand-edit frozen version pages. */}
+
+Published: 2026-10-20T10:57:09Z. Release ID: 418182265.
+
+[GitHub Release](https://github.com/endaye/lmdj/releases/tag/lmdj-v2.0.122.0) · [全部版本](./index.mdx)
+
+本页记录经审查的 Release 公开事实，不表示两个 Host 已部署或已晋级。
+
+# LMDJ 2.0.122.0
+
+Tag: `lmdj-v2.0.122.0`
+Target: `8c361623f2c1bf32460c32793a33a4d7e204fb7f`
+
+Changes since `lmdj-v2.0.87.0` (`5abc52106728f463768210eb4186777a0b44ad7f`).
+
+## Features
+
+- creator: Reorganize Sample, Perform and Sequence into contextual pages with a unified Graphite control language, consolidated status and recovery controls, mode-specific overview context, touch-bar Sequence views and guided Sound Set installation. ([502932e345b6](https://github.com/endaye/lmdj/commit/502932e345b621abc5533431e61adf0d0253a189), [dac4c79913c2](https://github.com/endaye/lmdj/commit/dac4c79913c27bb5a99b948acc662f9d88774053), [2b495a137cc6](https://github.com/endaye/lmdj/commit/2b495a137cc68c52e30b13929c8093cc92731dc0), [0483967a6b67](https://github.com/endaye/lmdj/commit/0483967a6b67c7e071dc7f31ec56dc288f92a843), [414268d654ad](https://github.com/endaye/lmdj/commit/414268d654adeae32dfb500f62c000f06e4f2b47), [ec15f9adf3ca](https://github.com/endaye/lmdj/commit/ec15f9adf3ca7c3fd09c06d61b53e0bcdf189fe6), [42d86bfdf3c7](https://github.com/endaye/lmdj/commit/42d86bfdf3c74785810ebaa0c5fe3e0e11e6e19f), [d5554ed55f7e](https://github.com/endaye/lmdj/commit/d5554ed55f7ebc2d800285715cef79dcfed57c9a))
+
+- creator: Redesign the console shell for Desktop Final: Project, Sample and Perform upper screens, A01-D16 Pad addressing, eight scrollable Sequence track rows, EDIT and SETUP touch layers, Sequence encoders and direction keys, bundled IBM Plex Mono, fitted centred scaling and System behind the brand mark. ([7d165f8bf18f](https://github.com/endaye/lmdj/commit/7d165f8bf18f9c63d176d6f246da635542515542), [352fedc36f9b](https://github.com/endaye/lmdj/commit/352fedc36f9b8dbbf5466d12ce548bf115cd52f6), [e4b4612fbf4c](https://github.com/endaye/lmdj/commit/e4b4612fbf4c9ca095bf3da727b7d59d355abd89), [dadb570561ca](https://github.com/endaye/lmdj/commit/dadb570561ca61175915bebfbc7d0d67ce5a6b80), [1647e0ea40e0](https://github.com/endaye/lmdj/commit/1647e0ea40e07293dacfb30c5b7093808de894b7), [1383ff1c8541](https://github.com/endaye/lmdj/commit/1383ff1c8541d354e6051092607acd9f3681c63b), [66e7d7d873fd](https://github.com/endaye/lmdj/commit/66e7d7d873fd4ce9d0d150fa7f8f1a3aca8adef7), [be51c09b6462](https://github.com/endaye/lmdj/commit/be51c09b646294b6f5cc90562158ebb612f6fc68), [7350b1a072e6](https://github.com/endaye/lmdj/commit/7350b1a072e688165cff02a20a099cc8275d8c0f), [1ed1d34006bd](https://github.com/endaye/lmdj/commit/1ed1d34006bd4443f23819acf1ebb70863095c73))
+
+- creator: Arrange Pad matrices from the bottom left, draw one user-chosen Pad colour on every surface, and persist Pad colours and categories in Projects. ([60b1af16e2eb](https://github.com/endaye/lmdj/commit/60b1af16e2ebfc379a2d8aaeaaa466af527a2613), [c27694c759d9](https://github.com/endaye/lmdj/commit/c27694c759d95a27dca09b3703b48e59d93fff79), [1f20e8f63e6a](https://github.com/endaye/lmdj/commit/1f20e8f63e6a7ed333fa1de1a5503dbb88ce59b7), [0d7c178b2bc4](https://github.com/endaye/lmdj/commit/0d7c178b2bc4d277ff34424bb5f42c78aee7ef9d), [146f133c226c](https://github.com/endaye/lmdj/commit/146f133c226cdc1e2d81fabd341ca271d46fe60a))
+
+- core: Resize, double and copy Patterns through Core, the Web Host and SETUP. ([c74bca309a5b](https://github.com/endaye/lmdj/commit/c74bca309a5b3575a64fc8671ef4612b8d8ed834), [c22ae86ba2e7](https://github.com/endaye/lmdj/commit/c22ae86ba2e75728083c2b037bb14824e4239f16))
+
+- core: Switch Patterns while the transport plays: bind pending Pattern cutoff and Record opening, switch the transport at the next Bar, configure playing switch boundaries and fence named switches against the playing generation. ([da7da98ff27d](https://github.com/endaye/lmdj/commit/da7da98ff27db8fa4c4e885631f0e4472faa64e0), [e9dae833d1c6](https://github.com/endaye/lmdj/commit/e9dae833d1c609bb203030a62053dee39b9d8b61), [aa12f7f1a3a2](https://github.com/endaye/lmdj/commit/aa12f7f1a3a2b62f965a28e3d91e5a2e55d7e889), [a98ae01c4f03](https://github.com/endaye/lmdj/commit/a98ae01c4f033c78221fc961f6207c7fe5cabfd7), [e220c98ca1b0](https://github.com/endaye/lmdj/commit/e220c98ca1b0f4a3c08646bfeb328ffa186a263d))
+
+- core: Add live Performance controls: a one-admission live-control kernel with a durable Project profile and admission ledger, live Pad Mute/Solo gating with shared-FX tail preservation, and an independent live Filter branch with typed cutoff and resonance. ([a61ab819686a](https://github.com/endaye/lmdj/commit/a61ab819686ad896a3192e4a4bce1541ae55676d), [9555be7b85db](https://github.com/endaye/lmdj/commit/9555be7b85db214acb73ed4afac564064d7f8e9e), [7df1af16df5e](https://github.com/endaye/lmdj/commit/7df1af16df5e6d864ca7968626d63f84a5d9cb63), [d21ea97c71da](https://github.com/endaye/lmdj/commit/d21ea97c71da281f89ac78238f6fcceb8b03e638))
+
+- creator: Share device monitor volume with Perform MASTER, add contextual encoders and a capture-independent monitor output. ([9119a7f90262](https://github.com/endaye/lmdj/commit/9119a7f90262e1c8ada92ac6b894f5014a5c0cab), [9b4d80c9e5ed](https://github.com/endaye/lmdj/commit/9b4d80c9e5ed965f5776c0321cf166d9d1f289ce), [116280f92092](https://github.com/endaye/lmdj/commit/116280f9209245b4757a814fcf3155002b025269))
+
+- creator: Map keyboard rows 1234/QWER/ASDF/ZXCV to pad rows and reserve keyboard shortcuts from Pad input. ([b503688d6377](https://github.com/endaye/lmdj/commit/b503688d637789569ea985a4af79cc1454a5facc), [ea15c7b4408d](https://github.com/endaye/lmdj/commit/ea15c7b4408de446af9f2cd443bee0a371687349), [9534841424c0](https://github.com/endaye/lmdj/commit/9534841424c04399bd0e94341ba96d38dd3dcbe4), [25b887547839](https://github.com/endaye/lmdj/commit/25b8875478396df39ff0882c223c4c11bdf98806), [97897f880a21](https://github.com/endaye/lmdj/commit/97897f880a218233b7ae58e4d4c3986271d221f8), [cf7707d32dd5](https://github.com/endaye/lmdj/commit/cf7707d32dd5ad7711db633c452b60ff71d39057), [73fc1c7bf0cd](https://github.com/endaye/lmdj/commit/73fc1c7bf0cd2f0a7f52cef481d0746ff032dd22))
+
+- creator: Edit Sample parameters precisely and unify the current Pad across Sample and Sequence. ([ea657b3e6f63](https://github.com/endaye/lmdj/commit/ea657b3e6f6346fcafe0c4fbeb7667518f073244), [5ba70fa2bbe1](https://github.com/endaye/lmdj/commit/5ba70fa2bbe108c9d5fe42da9045a985c4847c2c))
+
+- core: Cut lmdj.project.v5 5.3.0 to 5.4.1 with Pad colours and categories, the live-control profile and the canonical input\_sequence anchor. ([ae6a7ce24dd3](https://github.com/endaye/lmdj/commit/ae6a7ce24dd388a93b5d860939ca7bd1ed7de338), [667e39a47fe4](https://github.com/endaye/lmdj/commit/667e39a47fe42ad07369a337b4c8d80aac47b686), [bc76dc42c3ab](https://github.com/endaye/lmdj/commit/bc76dc42c3ab4b0f7dcc7368da90b047a701cddd))
+
+- release: Activate Cloudflare Portal previews under a bounded monthly hosted budget. ([6ae1dff55b07](https://github.com/endaye/lmdj/commit/6ae1dff55b07c7882527941e144cd5874bf1d1d3))
+
+- creator: Align the touch interaction layouts across Interaction, Slice, Numeric, Sequence setup, Import Audio, Sound Sets, Capture, Trim, Playback, Pad palette and recovery, and expose live Pad mute and solo controls. ([45c8f479aa35](https://github.com/endaye/lmdj/commit/45c8f479aa350cd490a100044a4723428976e2be), [50ecc7107a33](https://github.com/endaye/lmdj/commit/50ecc7107a3347878e1d5aa7f72b031d7d58eb98), [613e23c26bb0](https://github.com/endaye/lmdj/commit/613e23c26bb0ae54dccd75003b8858ac484b0faf), [14fcb4df9721](https://github.com/endaye/lmdj/commit/14fcb4df97214756ba4810706fff3a0463cbc141), [dad44c45137f](https://github.com/endaye/lmdj/commit/dad44c45137f44377c4ffafb2098020eaabd64e3), [8a5142efd9a8](https://github.com/endaye/lmdj/commit/8a5142efd9a86f207fade75661ed0f4a225c56e0), [0ae6dbd2298b](https://github.com/endaye/lmdj/commit/0ae6dbd2298b0ca9993171b4178447268a9c94f3), [28ff18c5c1f3](https://github.com/endaye/lmdj/commit/28ff18c5c1f3790157193e900b5c7980cc595026), [d46d90319d14](https://github.com/endaye/lmdj/commit/d46d90319d14e96896134e1d65a59e3e8b05694b), [c4bde2ffa439](https://github.com/endaye/lmdj/commit/c4bde2ffa4390eb83e5ccc1e0313f933732bf88a), [12dcdfee511f](https://github.com/endaye/lmdj/commit/12dcdfee511ff9093b95014c72af6188eb90a8c1), [79aed2652d91](https://github.com/endaye/lmdj/commit/79aed2652d916310725782942e0a7c17cebc4c25), [cec309c4eaae](https://github.com/endaye/lmdj/commit/cec309c4eaaefd1b41623e8e413945f387315062), [5b9d14510423](https://github.com/endaye/lmdj/commit/5b9d14510423dc6981ef5b794da8cf3f1538765a))
+
+- runtime: End unreleased terminal owners instead of waiting forever and stop retained polling after a terminal owner ends. ([064cb30eb866](https://github.com/endaye/lmdj/commit/064cb30eb86640c506ac57307146701feebb159c), [ca0395407317](https://github.com/endaye/lmdj/commit/ca039540731744095921b869ecb3627988466478), [f5854e737689](https://github.com/endaye/lmdj/commit/f5854e737689c897afe60ceed2ad84e665b48a63))
+
+- core: Align Performance Pattern Launch with the transport origin, preflight direct replay profiles before effects, enqueue replay neutral gates before the gesture burst, retain landed overlay authority before cutoff, stop JSON parsing at the depth limit and serialize Creator inspections through an owned Session. ([61d4132c042b](https://github.com/endaye/lmdj/commit/61d4132c042ba74ce69b7dc7e8b836041fd6c53f), [133939a945b3](https://github.com/endaye/lmdj/commit/133939a945b3ea10f7686ab1f0a9f8d58c998aee), [083ac6281256](https://github.com/endaye/lmdj/commit/083ac62812564266721c664dd49915d636b94123), [67d66bf20d77](https://github.com/endaye/lmdj/commit/67d66bf20d7701d339ab2554ac2090bae78ec483), [a4923f20f78b](https://github.com/endaye/lmdj/commit/a4923f20f78ba6780d1265882669b8a00a762de4), [0664296156c0](https://github.com/endaye/lmdj/commit/0664296156c0736d4f61282b910b3d5bd3d8be37))
+
+- core: Preserve musical position across tempo changes (#2155), expose the typed Performance live-control producer on the Web Host (#2083), publish retained Pad assignments (#2107), consume the typed Filter and FX groups in the Creator (#2139), keep the full liveness deadline for a late Performance event (#2336), anchor the audio clock to the first native render (#2360), retain actual Pattern switch publication boundaries (#2362), and persist continuous recording segments with their ordering (#2364, #2365). ([f11746f8e1c6](https://github.com/endaye/lmdj/commit/f11746f8e1c6b56e344bbe69701a51fb67ddc8c5), [ecc2c9ece903](https://github.com/endaye/lmdj/commit/ecc2c9ece903bcbd8205e6dde655c28ec07ebf2a), [0909a3015d8f](https://github.com/endaye/lmdj/commit/0909a3015d8f19ee91dab415cd682822e9d3d3b5), [73ea149af0f8](https://github.com/endaye/lmdj/commit/73ea149af0f804af84a821fbd8874de4617dc7b6), [450b3c6b0405](https://github.com/endaye/lmdj/commit/450b3c6b0405b8d81b818cafaf48336f537442d8), [4de2e7ddfe7f](https://github.com/endaye/lmdj/commit/4de2e7ddfe7f170aad3771b40d25333392c0a693), [61f877fe100e](https://github.com/endaye/lmdj/commit/61f877fe100ec48533243aa7efa5e40042636a5b), [b679b5f54531](https://github.com/endaye/lmdj/commit/b679b5f5453186d519f2a4f7225c5c4c8c68f3cd), [aa476632440f](https://github.com/endaye/lmdj/commit/aa476632440fd76bb1e99776725a719c75b4378d))
+
+## Fixes
+
+- creator: Preserve ready history across page navigation, keep Performance Launch closed during transitions, avoid aliasing live bar observation windows, cancel queued switches from the current Groove and keep transport reconciliation with the current command. ([4dde8e5e6b51](https://github.com/endaye/lmdj/commit/4dde8e5e6b511c3ae2bd9c310f607f7d6148d2dc), [c4287b454fab](https://github.com/endaye/lmdj/commit/c4287b454fab09c733f7b7d4e025b905cf1fe779), [5d31f21bb7b5](https://github.com/endaye/lmdj/commit/5d31f21bb7b5f91014881c05b0ef7f4708c03b29), [a5bc444be23e](https://github.com/endaye/lmdj/commit/a5bc444be23edf4d4d14378e3ff60c3c8bf037fc), [544efcf159d9](https://github.com/endaye/lmdj/commit/544efcf159d980dd65f4ecca428df43e67541756))
+
+- creator: Fit touch controls within fixed panels, synchronize touch and overview previews, name only the real Perform gate in its disabled label, refresh queued authoring commits at their committed revision, configure Catalog for local serving and align the hardware keyboard hint with the spatial mapping. ([0b333d3bd5c1](https://github.com/endaye/lmdj/commit/0b333d3bd5c1a935a6c481551fb4d885abc78dc8), [74708e6ef487](https://github.com/endaye/lmdj/commit/74708e6ef487003f68bc7cfb4f8c98c71f75864e), [4281d5f54dd0](https://github.com/endaye/lmdj/commit/4281d5f54dd01ad73c18e876c2119a35b0229e0b), [35394a2a0a5a](https://github.com/endaye/lmdj/commit/35394a2a0a5a30d4aec8c99374bfff4d842be858), [fb58ee897146](https://github.com/endaye/lmdj/commit/fb58ee897146c3e73426c3ba0b7cb66f69566a8f), [618cb45ef763](https://github.com/endaye/lmdj/commit/618cb45ef7630280405bbec1c121184816be945c), [f084f3e345b4](https://github.com/endaye/lmdj/commit/f084f3e345b4122e0649907e30eb83f331546887))
+
+- runtime: Stop replay before transport and Project changes, preserve stopped Pattern transport authority, observe selection after a completed callback, measure monitor energy on matched frames, route retained transport retries through the facade, adopt the observed recording admission cursor and wait out an in-flight paused callback when activating audio. ([2cbcdb77a4c2](https://github.com/endaye/lmdj/commit/2cbcdb77a4c2aff7701a5bf333ba675c2296962f), [d430cf54d1fa](https://github.com/endaye/lmdj/commit/d430cf54d1faa55e5c5824d83752a255f23db8ae), [a2a43cc088ab](https://github.com/endaye/lmdj/commit/a2a43cc088ab35e40297e80eecb7ef048923a154), [03a8b1d8b3ee](https://github.com/endaye/lmdj/commit/03a8b1d8b3eea15ad03f44234b390bb3ab85fc59), [8769907ea753](https://github.com/endaye/lmdj/commit/8769907ea75320f051d43707301af5188c0f0086), [edb05dbb14c0](https://github.com/endaye/lmdj/commit/edb05dbb14c0f6ed28abeeeceab742fc3e282080), [7d27e33d209d](https://github.com/endaye/lmdj/commit/7d27e33d209d4b0644339085d27c038d41e2393a), [0c873e6755fa](https://github.com/endaye/lmdj/commit/0c873e6755fa5753f38ce4bf5267ea5cee00f080), [8a2d785c4c58](https://github.com/endaye/lmdj/commit/8a2d785c4c58b36c45ea13c9dbec5ce90b08e926))
+
+- core: Report applied state on exact live-control retries, count headered Performance FX gestures, isolate render CPU and validate Master FX accounting, cut live-gated Pad input immediately and flush the checkpointed source tail before a Pattern switch. ([ce9fd920d0e5](https://github.com/endaye/lmdj/commit/ce9fd920d0e5aa79a702d9a89d301aa5f120bb59), [692d2ac18397](https://github.com/endaye/lmdj/commit/692d2ac18397190f71a54ce0297e5e0a54cee5ab), [8fe1abf785cc](https://github.com/endaye/lmdj/commit/8fe1abf785ccec14a5b63efe1c65d66ae716726c), [3f05b962902c](https://github.com/endaye/lmdj/commit/3f05b962902c9bf2d9c8c5f558ab3b4d033f5492), [34f8f3535a49](https://github.com/endaye/lmdj/commit/34f8f3535a499ab55ccf616742bf751dcfd76f6e))
+
+## Compatibility / migration
+
+No entries recorded in this category.
+
+## Known issues
+
+No entries recorded in this category.
+
+Content SHA-256: `76c271b79dbd0ce3f05d1806e46825a69bf9217a4206f35a9c09b3e5f672ff71`
+
+Notes SHA-256: `9c671236f7281416098e6a28815f700cf216b139a78b8abfe41a6d8fdcaf5c3c`
+
+Plan SHA-256 (reviewed publication record): `bbc257126f957d08801460c93b58074a14ec47384a84d9bad863984effa92430`
+
+本投影重算 Content / Notes 摘要；Plan 摘要、Release ID 与公开时间来自经审查的公开记录，不在此处重新认证远端 Release。
+
+[Creator Host 日志](../operations/creator-changelog.mdx) · [Runtime Host 日志](../operations/runtime-changelog.mdx)
