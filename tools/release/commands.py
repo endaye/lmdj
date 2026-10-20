@@ -64,8 +64,10 @@ def describe_failure(error: BaseException, *, limit: int = 320) -> str:
     never becomes the request's persisted or public status. The operator still
     needs the cause on the console. Errors this package raises carry authored
     why/remedy messages (and a command's already-sanitized `detail`), so those
-    are kept after sanitizing; any other exception contributes its type name
-    only, never its message.
+    are kept; any other exception contributes its type name only, never its
+    message. A package error may still interpolate external text into its
+    message, so every kept message passes `sanitize_diagnostic` — the same
+    redaction retained audit reports rely on — and is bounded to `limit`.
     """
     name = type(error).__name__
     if not type(error).__module__.startswith("tools.release"):

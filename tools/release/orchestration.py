@@ -400,8 +400,13 @@ class RequestJournal(AbstractContextManager):
             note = json.loads(raw)
         except ValueError:
             _fail("failure note is malformed")
-        if (type(note) is not dict or note.get("schema") != "lmdj.release-step-failure.v1"
-                or note.get("request_id") != request_id):
+        if (type(note) is not dict
+                or set(note) != {"schema", "request_id", "step", "status", "diagnostic", "observed_utc"}
+                or note["schema"] != "lmdj.release-step-failure.v1" or note["request_id"] != request_id
+                or note["step"] not in STEPS
+                or any(type(note[key]) is not str or not note[key]
+                       for key in ("status", "diagnostic", "observed_utc"))
+                or len(note["diagnostic"]) > 400):
             _fail("failure note is malformed")
         return note
 

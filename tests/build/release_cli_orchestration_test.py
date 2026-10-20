@@ -205,6 +205,16 @@ class ReleaseEntryPointTest(unittest.TestCase):
         code, report = self.status()
         self.assertNotIn("last failure", report)
 
+    def test_a_malformed_failure_note_does_not_hide_the_listing(self):
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(self.run_cli(["run", "--authority", "issue:1301"]), 2)
+        request_id = self.request_ids()[0]
+        (self.journal() / f"{request_id}.failure").write_text("{}")
+        code, report = self.status()
+        self.assertEqual(code, 0)
+        self.assertIn(request_id, report)
+        self.assertIn("last failure: unreadable", report)
+
     def test_status_before_any_request_reports_none_without_creating_a_journal(self):
         code, report = self.status()
         self.assertEqual(code, 0)

@@ -543,6 +543,35 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.driver.resume("release-1").status, "complete")
         self.assertFalse((self.journal / "release-1.failure").exists())
 
+    def test_a_later_result_without_a_cause_clears_an_older_note(self):
+        # A note from step A must not be reported once the request stops at
+        # step B for a reason that carries no diagnostic.
+        def fail_read(state, operation):
+            raise RuntimeError("transient read failure")
+        original = self.backend.observe
+        self.backend.observe = fail_read
+        self.driver.run(request())
+        self.assertTrue((self.journal / "release-1.failure").exists())
+        self.backend.observe = original
+        self.backend.post_pending = "changelog_site"
+        result = self.driver.resume("release-1")
+        self.assertEqual((result.status, result.step), ("pending", "changelog_site"))
+        self.assertFalse((self.journal / "release-1.failure").exists())
+
+    def test_a_malformed_failure_note_fails_closed(self):
+        self.backend.failure = "candidate"
+        self.driver.run(request())
+        path = self.journal / "release-1.failure"
+        note = json.loads(path.read_text())
+        for broken in ({k: v for k, v in note.items() if k != "step"},
+                       dict(note, step="not-a-step"),
+                       dict(note, diagnostic=""),
+                       dict(note, extra=1)):
+            path.write_text(json.dumps(broken))
+            with RequestJournal(self.journal, writable=False) as journal:
+                with self.assertRaises(JournalError):
+                    journal.read_failure("release-1")
+
     def test_a_diagnostic_is_bounded_and_never_rides_on_success(self):
         Observation("unknown", diagnostic="RuntimeError: cause").validate()
         Observation("conflict", diagnostic="RuntimeError: cause").validate()

@@ -207,9 +207,11 @@ class ReleaseDriver:
         def result(status, step, observed=None):
             # The sanitized cause goes only to the private local failure note,
             # never into the result or the request state.
+            # A result without a cause clears any older note, so `status`
+            # never names a step other than the one that last stopped.
             if observed is not None and observed.diagnostic is not None:
                 journal.record_failure(request_id, step, status, observed.diagnostic)
-            elif status == "complete":
+            else:
                 journal.clear_failure(request_id)
             return DriveResult(request_id, status, step, tuple(verified))
 

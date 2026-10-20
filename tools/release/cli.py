@@ -524,9 +524,14 @@ def format_request_status(root: Path, git, request_id: str | None = None) -> str
                 f"  step: {outstanding or '-'}\n"
                 f"  outstanding intent: {outstanding if unresolved else '-'}\n"
             )
-            note = journal.read_failure(state["request"]["id"])
-            if note is not None:
-                report.append(f"  {_format_failure_note(note)}\n")
+            try:
+                note = journal.read_failure(state["request"]["id"])
+            except JournalError as error:
+                # One bad note never hides the rest of the listing.
+                report.append(f"  last failure: unreadable ({error})\n")
+            else:
+                if note is not None:
+                    report.append(f"  {_format_failure_note(note)}\n")
     if not report:
         return "release request journal: no requests\n"
     return "source: local request journal; run `resume` to re-verify against live state\n" + "".join(report)
