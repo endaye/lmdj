@@ -16,7 +16,7 @@ import re
 
 from .model import canonical_sha256
 from .orchestration_driver import Observation
-from .transitions import TransitionError
+from .transitions import ReleaseReadUnavailable, TransitionError
 
 
 class DraftStepError(ValueError):
@@ -167,6 +167,10 @@ class DraftCarrier:
         if isinstance(observed, dict) and observed["status"] == "verified":
             try:
                 self.verify_assets(release.id)
+            except ReleaseReadUnavailable:
+                # A transient read failure proves nothing about the Draft and
+                # must not trigger repair writes during an outage.
+                return "unknown"
             except Exception:
                 # Any asset verification failure is unfinished Draft work, never
                 # a verified Draft. The driver advances a pending self-driving

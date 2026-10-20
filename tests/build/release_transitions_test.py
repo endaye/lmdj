@@ -865,6 +865,30 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertTrue(all(a.state == "uploaded" for a in self.github.release.assets))
         self.assertTrue(set(uploaded_before) <= {a.name for a in self.github.release.assets})
 
+    def test_an_unreadable_inventory_after_removal_names_the_resume(self) -> None:
+        push_tag(self.tag, self.context())
+        stalled_name = self._asset_payloads()[0][0]
+        self.github.stall_upload.add(stalled_name)
+        with self.assertRaises(TransitionError):
+            create_draft(self.tag, self.context())
+        original_list = self.github.list_release_assets
+        original_delete = self.github.delete_incomplete_draft_asset
+
+        def delete_then_fail_reads(repository, release_id, asset):
+            original_delete(repository, release_id, asset)
+            def unavailable(*args, **kwargs):
+                raise RuntimeError("GitHub unavailable")
+            self.github.list_release_assets = unavailable
+        self.github.delete_incomplete_draft_asset = delete_then_fail_reads
+        with self.assertRaisesRegex(
+                TransitionError,
+                f"{re.escape(stalled_name)} was removed as an incomplete upload but the inventory could not be re-read"):
+            create_draft(self.tag, self.context())
+        # Once reads recover, the same resume uploads the missing asset.
+        self.github.list_release_assets = original_list
+        self.github.delete_incomplete_draft_asset = original_delete
+        self.assertEqual(create_draft(self.tag, self.context()).status, "draft-verified")
+
     def test_a_published_release_with_an_incomplete_asset_is_never_edited(self) -> None:
         push_tag(self.tag, self.context())
         self.github.stall_upload.add(self._asset_payloads()[0][0])

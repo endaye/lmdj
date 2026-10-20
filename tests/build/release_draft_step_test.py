@@ -210,6 +210,19 @@ class CarrierTest(unittest.TestCase):
         with self.assertRaisesRegex(TransitionError, "digest conflicts"):
             carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
 
+    def test_an_unavailable_asset_read_is_unknown_and_never_repairs(self):
+        from tools.release.transitions import ReleaseReadUnavailable
+        self.release = DRAFT
+
+        def unavailable(release_id):
+            raise ReleaseReadUnavailable("GitHub Release asset download is unavailable")
+        carrier = DraftCarrier(spec=spec(), create_draft=self.create_draft,
+                               release_by_tag=self.release_by_tag, verify_assets=unavailable)
+        self.assertEqual(carrier.observe({}, {"step": "draft"}).status, "unknown")
+        self.assertEqual(carrier.advance({}, {"step": "draft"}, before_write=lambda: None).status,
+                         "unknown")
+        self.assertEqual(self.creations, 0, "an outage never triggers create_draft")
+
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(DraftStepError):
             DraftCarrier(spec=spec(), create_draft=None,

@@ -38,6 +38,14 @@ class TransitionError(RuntimeError):
     """An exact release transition could not be safely reconciled."""
 
 
+class ReleaseReadUnavailable(TransitionError):
+    """GitHub could not serve a Release read right now; nothing was learned.
+
+    Distinct from a verified incomplete, missing or divergent asset: a caller
+    must not treat it as Draft work to repair, only as an unknown read.
+    """
+
+
 @dataclass(frozen=True)
 class TransitionResult:
     status: str
@@ -659,7 +667,15 @@ def _remove_incomplete_draft_asset(
             f"GitHub Release asset {asset.name} upload is incomplete and could not be removed; "
             "remedy: resume `scripts/release.sh create-draft TAG` once the GitHub API is available"
         ) from None
-    if asset.name in _asset_map(authority, release):
+    try:
+        remaining = _asset_map(authority, release)
+    except TransitionError:
+        raise TransitionError(
+            f"GitHub Release asset {asset.name} was removed as an incomplete upload but the "
+            "inventory could not be re-read; remedy: resume `scripts/release.sh create-draft TAG`, "
+            "which uploads any declared asset that is missing"
+        ) from None
+    if asset.name in remaining:
         raise TransitionError(
             f"GitHub Release asset {asset.name} is still present after removing an incomplete upload"
         )
@@ -678,7 +694,7 @@ def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHu
             authority.context.policy.repository, release.id,
         )
     except Exception:
-        raise TransitionError("GitHub Release asset inventory is unavailable") from None
+        raise ReleaseReadUnavailable("GitHub Release asset inventory is unavailable") from None
     by_name: dict[str, GitHubAsset] = {}
     identifiers: set[int] = set()
     for asset in assets:
@@ -699,7 +715,7 @@ def _compare_download(
             authority.context.policy.repository, release_id, remote,
         )
     except Exception:
-        raise TransitionError("GitHub Release asset download is unavailable") from None
+        raise ReleaseReadUnavailable("GitHub Release asset download is unavailable") from None
     if remote.size != len(payload) or expected.bytes != len(payload) or hashlib.sha256(payload).hexdigest() != expected.sha256:
         raise TransitionError("GitHub Release asset digest conflicts with the release plan")
 
@@ -726,7 +742,7 @@ def _download_and_verify_assets(
                     authority.context.policy.repository, release.id, asset,
                 )
             except Exception:
-                raise TransitionError("GitHub Release asset download is unavailable") from None
+                raise ReleaseReadUnavailable("GitHub Release asset download is unavailable") from None
             if asset.size != len(payload):
                 raise TransitionError("GitHub Release asset size does not match downloaded bytes")
             sha256 = hashlib.sha256(payload).hexdigest()
