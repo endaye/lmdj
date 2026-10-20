@@ -1602,6 +1602,8 @@ function createRuntimeSessionController(options = {}) {
   let countInOutputActive = false;
   let monitorLevel = 100;
   let performanceMasterTap = null;
+  let outputMeterOwner = null;
+  let outputMeterArmFailed = false;
   let activePerformanceMasterCapture = null;
   // D0/W1: the session registers its pending capture start before awaiting
   // it, so a second start can never slip through the active=null window.
@@ -1861,6 +1863,74 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function revokeOutputMeter() {
+    const hadOwner = outputMeterOwner !== null;
+    outputMeterOwner = null;
+    outputMeterArmFailed = false;
+    if (hadOwner) {
+      try { performanceMasterTap?.setMeterOwner?.(null); } catch {}
+    }
+  }
+
+  function armOutputMeter() {
+    if (closing || tapProcessorFailed || performanceMasterTap === null ||
+        audioContext?.state !== "running" ||
+        typeof performanceMasterTap.setMeterOwner !== "function" ||
+        typeof performanceMasterTap.meterMeasurement !== "function") return;
+    try {
+      const owner = crypto.randomUUID();
+      if (!UUID_PATTERN.test(owner) || performanceMasterTap.setMeterOwner(owner) !== true) {
+        outputMeterArmFailed = true;
+        return;
+      }
+      outputMeterOwner = owner;
+      outputMeterArmFailed = false;
+    } catch {
+      outputMeterArmFailed = true;
+    }
+  }
+
+  /** @returns {import("./runtime_types.d.ts").StereoOutputMeter} */
+  function outputMeter() {
+    const unavailable = (reason) => Object.freeze({state: "unavailable", reason});
+    if (closing || terminalCleanupStarted || machine.state === "closed") return unavailable("closed");
+    if (tapProcessorFailed) return unavailable("processor-failed");
+    if (captureConfig === null) return unavailable("unconfigured");
+    if (performanceMasterTap === null ||
+        typeof performanceMasterTap.meterMeasurement !== "function" ||
+        typeof performanceMasterTap.setMeterOwner !== "function") return unavailable("tap-unavailable");
+    if (machine.state !== "running" || safetyReservation !== null ||
+        interruptionReservation !== null || audioContext?.state !== "running") return unavailable("not-running");
+    if (outputMeterArmFailed) return unavailable("protocol-error");
+    if (outputMeterOwner === null) return unavailable("pending");
+    let measurement;
+    try { measurement = performanceMasterTap.meterMeasurement(); }
+    catch { return unavailable("protocol-error"); }
+    if (measurement?.state !== "available") {
+      return unavailable(["pending", "protocol-error", "clock-invalid", "processor-failed", "closed"]
+        .includes(measurement?.reason) ? measurement.reason : "protocol-error");
+    }
+    if (measurement.owner !== outputMeterOwner) return unavailable("pending");
+    const rate = audioContext.sampleRate;
+    const contextTimeSeconds = audioContext.currentTime;
+    const contextFrame = Math.ceil(contextTimeSeconds * rate);
+    if (!Number.isSafeInteger(rate) || rate <= 0 ||
+        !Number.isFinite(contextTimeSeconds) || contextTimeSeconds < 0 ||
+        !Number.isSafeInteger(contextFrame) || contextFrame < 0) return unavailable("clock-invalid");
+    if (measurement.sampleRate !== rate) return unavailable("protocol-error");
+    // The manager validated canonical safe frame strings. Compare against the
+    // same AudioContext clock, never native engine frames or arrival time.
+    const start = Number(measurement.windowStartFrame);
+    const end = Number(measurement.windowEndFrame);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start ||
+        !Number.isSafeInteger(measurement.renderQuantumFrames) ||
+        measurement.renderQuantumFrames <= 0 ||
+        end - contextFrame > measurement.renderQuantumFrames) return unavailable("clock-invalid");
+    const maximumAgeFrames = Math.floor(rate / 4);
+    if (end - start > maximumAgeFrames || contextFrame - end > maximumAgeFrames) return unavailable("stale");
+    return Object.freeze({...measurement, contextTimeSeconds});
+  }
+
   function performanceMasterCaptureStatus() {
     return captureStatus;
   }
@@ -2006,6 +2076,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function closePerformanceMasterTap() {
+    revokeOutputMeter();
     const tap = performanceMasterTap;
     if (tap === null) return;
     await tap.close();
@@ -2019,6 +2090,7 @@ function createRuntimeSessionController(options = {}) {
       return Promise.resolve(false);
     }
     tapProcessorFailed = true;
+    revokeOutputMeter();
     const tap = performanceMasterTap;
     tap.failProcessor();
     publishCaptureUnavailable(
@@ -2115,6 +2187,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function beginSafetyCleanup(reason) {
+    revokeOutputMeter();
     if (safetyReservation !== null) {
       return safetyReservation;
     }
@@ -2165,6 +2238,10 @@ function createRuntimeSessionController(options = {}) {
 
   const machine = createHostStateMachine({
     notify(event, payload) {
+      if (event === "host.state_changed") {
+        if (payload.state === "running") armOutputMeter();
+        else revokeOutputMeter();
+      }
       renderDiagnostics();
       if (event === "host.state_changed") {
         const value = Object.freeze({
@@ -3742,11 +3819,12 @@ function createRuntimeSessionController(options = {}) {
             }
             performanceMasterTap = localTap;
             localTap = null;
-            listen(
-              performanceMasterTap.destinationNode,
-              "processorerror",
-              () => { void handleTapProcessorFailure(); },
-            );
+            // Chromium currently reports the native onprocessorerror as an
+            // ErrorEvent named "error"; retain the standard event as well.
+            // One failure can never run the direct-monitor recovery twice.
+            const recoverTap = () => { void handleTapProcessorFailure(); };
+            listen(performanceMasterTap.destinationNode, "processorerror", recoverTap);
+            listen(performanceMasterTap.destinationNode, "error", recoverTap);
           } catch {
             if (localTap !== null) {
               try {
@@ -7891,6 +7969,9 @@ function createRuntimeSessionController(options = {}) {
           value: Object.freeze({inspectProject, inspectSample}),
           configurable: false, writable: false,
         });
+        Object.defineProperty(runtime, "outputMeter", {
+          value: outputMeter, configurable: false, writable: false,
+        });
         Object.defineProperty(runtime, "candidates", {
           value: Object.freeze({runCandidateJob, inspectCandidateJob, cancelCandidateJob,
             discardCandidateSet, auditionCandidate, stopCandidateAudition, adoptCandidates}),
@@ -8611,6 +8692,7 @@ function createRuntimeSessionController(options = {}) {
     subscribeVoiceState,
     diagnostics,
     sampleAudioClock,
+    outputMeter,
   });
   registerDiagnosticTransport(session, async (...arguments_) => {
     try {
