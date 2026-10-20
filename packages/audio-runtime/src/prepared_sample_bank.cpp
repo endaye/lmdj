@@ -326,6 +326,27 @@ std::optional<std::uint64_t> anchored_tick_boundary_frame(
   return anchor.runtime_frame + frames;
 }
 
+std::optional<TransportAnchor> phase_matched_pattern_anchor(
+    std::uint64_t runtime_frame,
+    std::uint64_t source_tick_numerator,
+    std::uint64_t source_loop_length_ticks,
+    std::uint64_t target_loop_length_ticks,
+    std::uint16_t target_bpm) noexcept {
+  constexpr auto maximum_ticks =
+      std::numeric_limits<std::uint64_t>::max() / kTickDenominator;
+  if (!valid_bpm(target_bpm) || source_loop_length_ticks == 0 ||
+      target_loop_length_ticks == 0 ||
+      source_loop_length_ticks > maximum_ticks ||
+      target_loop_length_ticks > maximum_ticks) {
+    return std::nullopt;
+  }
+  const auto source_local =
+      source_tick_numerator % (source_loop_length_ticks * kTickDenominator);
+  const auto target_local =
+      source_local % (target_loop_length_ticks * kTickDenominator);
+  return TransportAnchor{runtime_frame, target_local, target_bpm};
+}
+
 foundation::Result<TransportAnchor> freeze_transport_bpm(
     const TransportAnchor& anchor,
     std::uint64_t runtime_frame,
