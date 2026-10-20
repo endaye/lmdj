@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include <lmdj/cooker/wav_reader.hpp>
+#include <lmdj/cooker/wav_metadata_inspector.hpp>
 
 namespace lmdj::cooker {
 namespace {
@@ -58,16 +58,10 @@ std::int16_t symmetric_round(
 
 foundation::Result<WavMetadata> inspect_wav(
     std::span<const std::byte> bytes) {
-  const auto decoded = decode_wav(bytes);
-  if (!decoded.has_value()) {
-    return foundation::Result<WavMetadata>::failure(decoded.error());
-  }
-  return foundation::Result<WavMetadata>::success(WavMetadata{
-      decoded.value()->sample_rate,
-      decoded.value()->channels,
-      static_cast<std::uint64_t>(
-          decoded.value()->interleaved.size() / decoded.value()->channels),
-  });
+  WavMetadataInspector inspector{bytes.size()};
+  const auto fed = inspector.feed(bytes);
+  if (!fed.has_value()) return foundation::Result<WavMetadata>::failure(fed.error());
+  return inspector.finish();
 }
 
 foundation::Result<WaveformEnvelope> waveform_envelope(

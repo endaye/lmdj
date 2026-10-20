@@ -58,7 +58,12 @@ fallback、额外 writer 或隐式重试。
 跨窗口损坏/长度变化、短读、错误/重入后释放和大于64MiB的真实稀疏 PCM WAV。实际
 C++/Wasm/OPFS 旅程再验证多窗口、固定 digest/bytes、关页重开两次、stale revision
 拒绝及归还 physical writer。它们证明有界原始输入完整性，不解释 WAV frames、保存完整性
-或 Performance elapsed；这些仍由后续 parser 和 Facade 负责。
+或 Performance elapsed。Project Cooker 的 `WavMetadataInspector` 可消费相同临时
+窗口，以固定状态验证完整 RIFF/WAVE PCM16 并解释实际 data frames，不分配 PCM。
+格式错误必须与扫描最终回执分开：完整 hash 成功后才报告元数据或 unsupported
+encoding；尾部摘要错误即丢弃 parser 状态。组合 OPFS 旅程覆盖192124字节、48017帧
+的零事件静音和 odd JUNK，以及不支持的编码与末字节损坏，各自实际重开两次。
+异步 Facade/SDK/Host 查询、取消/owner retirement、保存完整性与演出 elapsed 仍待。
 
 Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、writer-lease admission、并发 begin-vs-authoring、durable tail、torn-tail refusal、真实 `SIGKILL` restart、project store 和 journal 测试覆盖 shared native/OPFS storage boundary；硬终止 subprocess gate 在 native component 层执行。
 ## 限制

@@ -29,6 +29,19 @@ resolved playback 同时填充 voice DSP 块：循环点与 crossfade 以与 tri
 ## 5. API 与 Artifact 边界
 Artifact 输入显式传入；inspect/waveform 不修改 Project，Cook 输出 resolved playback、Runtime Snapshot 或 privacy-safe typed error。
 
+`WavMetadataInspector(total_byte_length)` 通过 `feed(span)` 按顺序消费连续窗口，
+`finish()` 仅在完整输入和合法末端边界后返回现有 `WavMetadata`：sample rate、channels
+与 data chunk 的 source frames。它只保留16字节头部缓冲和固定数量状态，不保留输入
+view、PCM 或未知 chunk 的 payload；成功解析不分配 heap。空窗口无副作用，错误和
+提前 finish 均为 sticky failure，额外输入也拒绝。现有 `inspect_wav(span)` 使用同一
+检查器，元数据检查不再为整段 PCM 分配内存；`decode_wav` 的解码行为保留。
+
+格式仍为严格 RIFF/WAVE：精确 RIFF 长度、chunk extent 和奇数 padding、唯一16字节
+PCM fmt 与唯一非空 data、PCM16 mono/stereo、44.1/48kHz、准确 byte rate 与完整 frame
+alignment。支持 data 在 fmt 之前和未知 chunk。元数据不来自总文件字节、event cursor
+或未读完的头部提示。此 API 仅解释完整输入的格式；Artifact 摘要、owner 和 revision
+须由 Project I/O 扫描的最终回执证明。保存完整性和演出 elapsed 仍是独立事实。
+
 当前 source 追加 `encode_runtime_content` / `decode_runtime_content`，处理
 `contracts/runtime-content/README.md` 所定义的确定性 little-endian 派生内容。编码保留单个 Pattern、
 Pad playback 和未压缩 PCM16；按包含格式描述的 sample body 完整身份去重。解码先验证
@@ -51,6 +64,13 @@ Audio Runtime 与 Application Facade 消费 Cook 结果。
 ## 8. 测试与证据
 `project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出；`performance_replay_projection_test.cpp` 覆盖 replay 投影的字段解析、Pattern Slot 解析与 boundary 展开，并覆盖 `5.4.1` header：零事件存活、独立于首事件 tick、revision 与素材身份固定。`wav_selection_test.cpp` 覆盖选区语义。
 ## 9. 限制与下一门禁
+`wav_metadata_inspector_test.cpp` 覆盖任意 split、单字节复用窗口、严格格式错误、
+截断/额外输入、sticky failure 和30分钟静音的固定窗口零 PCM 分配；保留原 decoder
+作为格式比较，并用独立字面 rate/channels/frames 约束共同计算错误。真实 C++/Wasm/
+OPFS 组合覆盖多窗口静音、odd JUNK、已校验但不支持的编码和末字节摘要错误，各自
+关闭页面并重开两次。Facade/SDK/Host 的异步查询、取消与 owner retirement、Take
+时长展示仍待；该检查器不应作为长时间同步 Control 查询接入。
+
 `runtime_content_test.cpp` 和独立 `runtime_content_contract_test.py` 覆盖固定字节、
 跨实现读取、exact/+1 限额、异常字段与分配失败。新 Contract 尚未选择到 desktop
 Assembly；新增兼容 API 的 MINOR 分配与消费者 lock 留给 B2 Assembly 集成。
