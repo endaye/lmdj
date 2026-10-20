@@ -14387,3 +14387,59 @@ test("public capture progress rejects a provider that turns unknown protocol los
   assert.equal(valid.state,"available");assert.equal(valid.phase,"failed");assert.equal(valid.droppedFrames,null);
   await h.stop();assert.equal(stops,1);await f.session.close();
 });
+
+
+function optionalTelemetryIsolationFixture(kind) {
+  let sink;let stops=0;let coercions=0;
+  const raw={async stop(){stops++;sink.onStopped();}};
+  if(kind==="generation-getter")Object.defineProperty(raw,"generation",{get(){throw new Error("optional generation unavailable");}});
+  else if(kind==="symbol")raw.generation=Symbol("invalid optional generation");
+  else if(kind==="coercion")raw.generation={valueOf(){coercions++;throw new Error("generation must not be coerced");}};
+  else raw.generation=1;
+  const tap={destinationNode:Object.assign(new EventTarget(),{disconnect(){}}),
+    async start(next){sink=next;return raw;},async close(){sink?.onStopped();},
+    captureProgress(){return {state:"available",generation:1,binding:null,sampleRate:48_000,
+      receivedFrames:13,phase:"recording",droppedFrames:0,failure:null};}};
+  if(kind==="progress-getter")Object.defineProperty(tap,"captureProgress",{get(){throw new Error("optional progress unavailable");}});
+  const f=fixture({browserDocument:{baseURI:"https://example.test/"},
+    manifestSource:{resourceLimits:RESOURCE_LIMITS,performanceMasterTapUrl:"./tap.js"},
+    createPerformanceMasterTap:async()=>tap});
+  return {...f,deliver:frames=>sink.onBatch([new Float32Array(frames),new Float32Array(frames)]),
+    stops:()=>stops,coercions:()=>coercions};
+}
+
+test("optional generation lookup failure never refuses otherwise valid capture",async()=>{
+  const f=optionalTelemetryIsolationFixture("generation-getter");await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let received=0;
+  try {
+    let capture;
+    await assert.doesNotReject(async()=>{capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});},"passive metadata cannot reject capture admission");
+    assert.deepEqual(Object.keys(capture),["stop"]);f.deliver(13);assert.equal(received,13);
+    assert.deepEqual(f.session.performanceMasterCaptureProgress(),{state:"unavailable",reason:"unsupported"});
+    assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
+  } finally {await f.session.close();}
+});
+
+test("optional progress accessor failure is unavailable and cannot operate capture",async()=>{
+  const f=optionalTelemetryIsolationFixture("progress-getter");await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let received=0;
+  try {
+    const capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+    f.deliver(17);assert.equal(received,17);let value;
+    assert.doesNotThrow(()=>{value=f.session.performanceMasterCaptureProgress();},"passive lookup cannot escape the read");
+    assert.deepEqual(value,{state:"unavailable",reason:"protocol-error"});f.deliver(7);assert.equal(received,24);
+    assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
+  } finally {await f.session.close();}
+});
+
+for(const kind of ["symbol","coercion"])test(`invalid optional generation ${kind} is unavailable without coercion or capture control`,async()=>{
+  const f=optionalTelemetryIsolationFixture(kind);await f.session.start();await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+  let received=0;
+  try {
+    const capture=await f.session.startPerformanceMasterCapture({onBatch:([left])=>{received+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+    f.deliver(13);assert.equal(received,13);let value;
+    assert.doesNotThrow(()=>{value=f.session.performanceMasterCaptureProgress();},"untrusted metadata must not be numerically coerced");
+    assert.deepEqual(value,{state:"unavailable",reason:"protocol-error"});assert.equal(f.coercions(),0);
+    assert.equal(f.stops(),0);await capture.stop();assert.equal(f.stops(),1);
+  } finally {await f.session.close();}
+});

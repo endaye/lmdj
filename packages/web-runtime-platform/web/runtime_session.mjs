@@ -1919,8 +1919,10 @@ function createRuntimeSessionController(options = {}) {
     if (performanceMasterTap !== identity.tap) return unavailable("owner-lost");
     if (identity.generation === null) return unavailable(identity.failed ? "start-failed" : "starting");
     if (identity.captureId === null) return unavailable("identity-unavailable");
-    if (typeof identity.tap.captureProgress !== "function" || identity.generation < 0) return unavailable("unsupported");
     try {
+      if (typeof identity.tap.captureProgress !== "function") return unavailable("unsupported");
+      if (!Number.isSafeInteger(identity.generation)) return unavailable("protocol-error");
+      if (identity.generation < 0) return unavailable("unsupported");
       const value = identity.tap.captureProgress();
       if (value?.state === "unavailable") {
         return ["idle", "starting", "start-failed", "closed", "sample-rate-invalid", "frame-overflow"].includes(value.reason)
@@ -2039,7 +2041,17 @@ function createRuntimeSessionController(options = {}) {
       releaseOwnership();
       throw typedError("HOST_STATE_INVALID", "Performance master capture start was cancelled by closure");
     }
-    progressIdentity.generation = platformCapture.generation ?? -1;
+    // Optional metadata cannot refuse an already started capture or retain
+    // provider objects through the compact progress identity. NaN stays private
+    // and makes malformed metadata a protocol-error read; -1 is unsupported.
+    let generation = -1;
+    try {
+      const value = platformCapture.generation;
+      if (value !== undefined && value !== null) {
+        generation = Number.isSafeInteger(value) ? value : Number.NaN;
+      }
+    } catch {}
+    progressIdentity.generation = generation;
     let stopping = null;
     capture = Object.freeze({
       stop() {
