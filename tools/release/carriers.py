@@ -378,7 +378,7 @@ def enroll_tag(*, root, candidate_root, repository_id, ledger, push_tag,
 
 
 def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
-                 release_by_tag):
+                 release_by_tag, verify_draft):
     """The `draft` step: it creates the Draft and re-reads it to verify.
 
     A `draft` spec binds the prepared plan, so the step stays `pending` until
@@ -407,8 +407,11 @@ def enroll_draft(*, root, candidate_root, repository_id, ledger, create_draft,
         # operation, so it is tag-stable for its lifetime by construction; a
         # far-side Release under another tag is caught by read_back's own tag
         # comparison, never silently read as this step's work.
+        plan_sha256 = spec["plan_sha256"]
         return DraftCarrier(spec=spec, create_draft=create_draft,
-                            release_by_tag=lambda: release_by_tag(tag))
+                            release_by_tag=lambda: release_by_tag(tag),
+                            verify_assets=lambda release_id: verify_draft(
+                                tag, release_id, plan_sha256))
 
     return RecoveredStep("draft", recover, drives=True)
 
