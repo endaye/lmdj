@@ -63,7 +63,18 @@ C++/Wasm/OPFS 旅程再验证多窗口、固定 digest/bytes、关页重开两�
 格式错误必须与扫描最终回执分开：完整 hash 成功后才报告元数据或 unsupported
 encoding；尾部摘要错误即丢弃 parser 状态。组合 OPFS 旅程覆盖192124字节、48017帧
 的零事件静音和 odd JUNK，以及不支持的编码与末字节损坏，各自实际重开两次。
-异步 Facade/SDK/Host 查询、取消/owner retirement、保存完整性与演出 elapsed 仍待。
+Facade 的 typed `PerformanceRecordingMetadataReader` 可在独立 worker 消费上述输入。
+它由 Application 工厂保留精确 shared platform，使用独立只读 Store/history，避免长
+hash 锁住 Control 的 live AuthoringHistory；不会捕获可变 Application 或修改 writer
+admission。并发提交改变 expected revision 时，扫描仍拒绝旧 selector。
+
+完整 raw verification 的 receipt 与 audio Result 分开，已校验但不支持的 WAV 编码
+保留身份；摘要错误丢弃 provisional 格式状态。cooperative stop token 在平台调用
+返回后才可生效，取消请求本身不证明 worker、lease 或 physical custody 已结束。
+真实 Native 屏障/TSan 和 OPFS worker 旅程分别覆盖并发 Control、取消退役与共享
+root；后者还验证 Application 已销毁、worker 真正退出后 join、root 归还和实际重开。
+Runtime/SDK/Host 的异步查询、stale-owner retirement 与 Take 展示仍待，保存完整性
+与演出 elapsed 也不是这些只读层的结论。
 
 Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、writer-lease admission、并发 begin-vs-authoring、durable tail、torn-tail refusal、真实 `SIGKILL` restart、project store 和 journal 测试覆盖 shared native/OPFS storage boundary；硬终止 subprocess gate 在 native component 层执行。
 ## 限制
