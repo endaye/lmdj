@@ -101,6 +101,10 @@ generation、epoch、frame 与 tick numerator 始终保持完整十进制字符�
 `source_pending` 表示尚在接纳同 BPM 的 committed revision，preview ID 可为零。
 取消或退出先记录取消意图，实际 source 应用之后也不会再发出已取消的变速。
 取消完成与保存完成都需要实际 Native adoption；未知保存只能用原命令收敛。
+正常暂停音频在结算和物理退出后保留原 ticket 的 `source_lost` 回执，空 applied
+clock 不再声称旧音频仍在运行。重复取消、同一已保存命令只读回原结果；恢复后
+新 begin 替换旧票据。用于恢复的实际 prepared source 保留在 Control，恢复时仍核对
+Native generation；关闭或失败清理不保留该副本。
 切换候选撤回后，实际当前音源仍可作为下一次预览来源；若音频线程还持有撤回
 候选的 cancellation 资源，则须等待真实退役后再开始预览。
 

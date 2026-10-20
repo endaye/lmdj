@@ -689,8 +689,92 @@ void ordinary_suspend_and_close_cancel_before_the_real_quiescence_gate() {
     LMDJ_CHECK(f.quiescence_calls == 1 && f.drain_requests == 0);
     if (source_only) LMDJ_CHECK(f.engine().pattern_telemetry().accepted_publications == pubs);
     LMDJ_CHECK(f.truth() == expected && f.platform->writes == writes); f.artifact();
+    if (std::string_view{operation} == "audio.suspend") {
+      const auto retired = f.inspect(ticket);
+      LMDJ_CHECK(retired.at("ticket") == ticket && retired.at("phase") == "source_lost");
+      LMDJ_CHECK(retired.at("applied").is_null() && retired.at("command_id").is_null());
+      LMDJ_CHECK(retired.at("committed_bpm") == 120 && retired.at("project_revision") == expected.revision);
+      if (source_only) LMDJ_CHECK(retired.at("preview_id") == "0");
+      LMDJ_CHECK(f.call("pattern.tempo.preview.cancel", {{"ticket", ticket}}) == retired);
+      LMDJ_CHECK(f.truth() == expected && f.platform->writes == writes); f.artifact();
+
+      // Resume this actual Control owner, rather than cold-reopening away the
+      // stale ticket. No frame-count oracle depends on the callback thread.
+      f.call("audio.activate", Json::object());
+      LMDJ_CHECK(f.inspect(ticket) == retired);
+      f.transport(true); f.start_audio();
+      const auto fresh = f.begin(expected.revision).at("ticket");
+      LMDJ_CHECK(fresh != ticket);
+      const auto stale = f.runtime->dispatch("pattern.tempo.preview.set", {{"ticket", ticket}, {"bpm", 180}}, {});
+      LMDJ_CHECK(!stale.at("ok").get<bool>() &&
+          stale.at("error").at("details").at("reason") == "tempo_preview_stale");
+      f.call("pattern.tempo.preview.set", {{"ticket", fresh}, {"bpm", 240}});
+      const auto resumed_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+      while (f.inspect(fresh).at("phase") != "previewing")
+        LMDJ_CHECK(std::chrono::steady_clock::now() < resumed_deadline);
+      f.call("pattern.tempo.preview.cancel", {{"ticket", fresh}});
+      while (f.inspect(fresh).at("phase") != "cancelled")
+        LMDJ_CHECK(std::chrono::steady_clock::now() < resumed_deadline);
+      LMDJ_CHECK(f.truth() == expected && f.platform->writes == writes); f.artifact();
+      f.join_audio();
+    }
     f.reopen(expected);
    }
+  }
+}
+
+void ordinary_suspend_retains_only_the_original_saved_receipt() {
+  for (const bool lose_response : {false, true}) {
+    Fixture f(true); f.start_audio();
+    const auto ticket = f.begin().at("ticket");
+    f.call("pattern.tempo.preview.set", {{"ticket", ticket}, {"bpm", 240}});
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (f.inspect(ticket).at("phase") != "previewing")
+      LMDJ_CHECK(std::chrono::steady_clock::now() < deadline);
+    f.pause_audio(); f.platform->lose_manifest_response = lose_response;
+    const Json original{{"ticket", ticket}, {"command_id", uuid(460)}};
+    const auto saving = f.call("pattern.tempo.preview.commit", original);
+    if (lose_response) LMDJ_CHECK(saving.at("phase") == "commit_unknown" && f.platform->lost_responses == 1);
+    auto saved = *f.baseline; saved.bpm = 240; saved.revision = 3;
+    LMDJ_CHECK(f.truth() == saved); f.artifact();
+    const auto writes = f.platform->writes.load();
+    f.render_enabled = true;
+    f.call("audio.suspend", Json::object());
+    LMDJ_CHECK(f.physically_joined && !f.audio_thread.joinable());
+    LMDJ_CHECK(f.engine().telemetry().state == audio::RealtimeState::stopped && !f.runtime->failed());
+    const auto retired = f.inspect(ticket);
+    LMDJ_CHECK(retired.at("phase") == "source_lost" && retired.at("applied").is_null());
+    LMDJ_CHECK(retired.at("command_id") == uuid(460) && retired.at("committed_revision") == 3 &&
+        retired.at("project_revision") == 3 && retired.at("committed_bpm") == 240);
+    LMDJ_CHECK(f.call("pattern.tempo.preview.commit", original) == retired);
+    LMDJ_CHECK(f.call("pattern.tempo.preview.cancel", {{"ticket", ticket}}) == retired);
+    const auto refused = f.runtime->dispatch("pattern.tempo.preview.commit",
+        {{"ticket", ticket}, {"command_id", uuid(461)}}, {});
+    LMDJ_CHECK(!refused.at("ok").get<bool>());
+    LMDJ_CHECK(f.truth() == saved && f.platform->writes == writes); f.artifact();
+    f.call("audio.activate", Json::object());
+    LMDJ_CHECK(f.inspect(ticket) == retired);
+    f.transport(true); f.start_audio();
+    const auto fresh = f.begin(3).at("ticket");
+    f.call("pattern.tempo.preview.set", {{"ticket", fresh}, {"bpm", 180}});
+    const auto resumed_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (f.inspect(fresh).at("phase") != "previewing")
+      LMDJ_CHECK(std::chrono::steady_clock::now() < resumed_deadline);
+    f.call("pattern.tempo.preview.cancel", {{"ticket", fresh}});
+    Json restored_clock;
+    do {
+      restored_clock = f.inspect(fresh);
+      LMDJ_CHECK(std::chrono::steady_clock::now() < resumed_deadline);
+    } while (restored_clock.at("phase") != "cancelled");
+    LMDJ_CHECK(restored_clock.at("applied").at("anchor").at("bpm") == 240);
+    LMDJ_CHECK(f.truth() == saved && f.platform->writes == writes); f.artifact();
+    f.join_audio(); f.transport(false);
+    const auto history = f.history();
+    LMDJ_CHECK(history.at("undo_count") == f.baseline_undo + 1);
+    f.call("history.undo", {{"session_id", history.at("session_id")}, {"command_id", uuid(462)}, {"expected_revision", 3}});
+    auto restored = *f.baseline; restored.revision = 4;
+    LMDJ_CHECK(f.truth() == restored && f.history().at("redo_count") == 1); f.artifact();
+    f.reopen(restored);
   }
 }
 
@@ -1246,6 +1330,7 @@ int main(int argc, char** argv) {
       failed_bridge_can_reconcile_only_the_original_published_save();
       failed_source_pending_does_not_emit_a_late_preview_or_retire_before_join();
       ordinary_suspend_and_close_cancel_before_the_real_quiescence_gate();
+      ordinary_suspend_retains_only_the_original_saved_receipt();
     }
     if (group == "stress" || group == "all") concurrent_render_retains_sources_and_makes_accepted_and_refused_progress();
     if (group == "edit" || group == "all") live_and_stopped_edits_retain_their_actual_source();

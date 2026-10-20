@@ -167,7 +167,14 @@ failure 先记录取消，不能在稍后 service 时重新发出这次变速。
 Control 从 Application 复制实际 source，再释放 binding，保留 PCM owner 身份。
 
 suspend/close 先在原 deadline 内结算取消或已签发的保存，再进入原 audio/transport
-quiescence。fatal 后的 pre.js 与 C++ Bridge 只保留精确 status/cancel/commit 入口；
+quiescence。正常 Suspend 不在结算后立即丢弃本轮回执：物理退出确认后，原 ticket
+仍可读取 `source_lost` 和空 applied clock；已保存的 command ID、revision 与 BPM
+保留，重复 cancel 或同一已保存命令只返回原结果。新命令和旧 set 仍拒绝。
+同一 Session 恢复音频后，该回执保留到新 begin 成功替换；旧 ticket 不能修改新轮。
+正常 Suspend 只保留一份实际不可变 prepared source 供恢复，随后按真实 Native
+generation 绑定；Facade binding 与在途候选在原物理门禁后释放。close/fatal 仍完整
+退役 source，不把已知持久化或一条回执当作 callback 退出证明。
+fatal 后的 pre.js 与 C++ Bridge 只保留精确 status/cancel/commit 入口；
 Core 只允许原已冻结 command 的 commit，不能借该入口开始新保存。`source_pending`
 即使尚无 B2 binding，仍属于 terminal ownership。失败、Stop、线程退出请求或已知
 持久化结果都不代替物理 callback 退出回执及原 response-consumer 释放。

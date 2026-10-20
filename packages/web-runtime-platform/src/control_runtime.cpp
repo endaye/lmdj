@@ -2517,15 +2517,23 @@ struct ControlRuntime::Impl {
         {"error", value.failure ? tempo_error(*value.failure).at("error") : Json(nullptr)}});
   }
 
-  foundation::Result<void> release_tempo_for_external(bool retire_turn = true) {
+  enum class TempoRelease { external, rebase, terminal_receipt };
+
+  foundation::Result<void> release_tempo_for_external(TempoRelease disposition = TempoRelease::external) {
     refresh_tempo();
+    const bool retire_turn = disposition != TempoRelease::rebase;
+    // A completed terminal owner needs its exact last receipt after Suspend
+    // and through resume. Keep only the typed turn, never its Native binding.
+    // A new accepted begin replaces it; foreign Project tickets still refuse.
+    const bool discard_turn = disposition == TempoRelease::external &&
+        (!tempo_turn || tempo_turn->status.phase != facade::PatternTempoPreviewPhase::source_lost);
     if (retire_turn && tempo_turn && (tempo_turn->pending_source || !tempo_terminal(tempo_turn->status)))
       return foundation::Result<void>::failure(tempo_refused("tempo_preview_active"));
     if (!retire_turn && (!tempo_turn || tempo_turn->pending_source ||
         tempo_turn->status.identity.preview_id != 0 || tempo_turn->status.command_id))
       return foundation::Result<void>::failure(tempo_refused("tempo_preview_active"));
     if (!tempo_source_id) {
-      if (retire_turn) tempo_turn.reset();
+      if (discard_turn) tempo_turn.reset();
       return foundation::Result<void>::success();
     }
     // B2 may have adopted a new revision since our last ordinary publication.
@@ -2540,8 +2548,10 @@ struct ControlRuntime::Impl {
     if (!released.has_value()) return foundation::Result<void>::failure(released.error());
     if (!tempo_terminal(released.value()))
       return foundation::Result<void>::failure(tempo_refused("tempo_preview_settling"));
+    if (disposition == TempoRelease::terminal_receipt)
+      tempo_turn->status = std::move(released.value());
     tempo_source_id.reset();
-    if (retire_turn) tempo_turn.reset();
+    if (discard_turn) tempo_turn.reset();
     return foundation::Result<void>::success();
   }
 
@@ -2706,7 +2716,7 @@ struct ControlRuntime::Impl {
           turn.status.failure = admitted.error();
           return tempo_error(admitted.error());
         }
-        const auto released = release_tempo_for_external(false);
+        const auto released = release_tempo_for_external(TempoRelease::rebase);
         if (!released.has_value()) return tempo_error(released.error());
         auto copy = turn.prepared_rebase->with_tempo(turn.prepared_rebase->bpm());
         if (!copy.has_value()) return tempo_error(copy.error());
@@ -2731,6 +2741,9 @@ struct ControlRuntime::Impl {
         }
       }
     } else if (operation == "pattern.tempo.preview.cancel") {
+      if (!tempo_source_id && tempo_terminal(turn.status) &&
+          turn.status.phase != facade::PatternTempoPreviewPhase::ready)
+        return tempo_reply(); // Idempotent observation of the actual retired outcome.
       if (turn.pending_source) {
         turn.cancel_source = true;
         turn.status.phase = facade::PatternTempoPreviewPhase::cancelling;
@@ -2745,6 +2758,9 @@ struct ControlRuntime::Impl {
       }
     } else if (operation == "pattern.tempo.preview.commit") {
       const auto command = uuid_field(payload, "command_id");
+      if (!tempo_source_id && tempo_terminal(turn.status) && turn.status.command_id &&
+          turn.status.command_id->value() == command && turn.status.committed_revision)
+        return tempo_reply(); // Only the already-published original save can replay.
       if (turn.pending_source || !tempo_source_id || turn.status.identity.preview_id == 0) {
         auto refusal = tempo_error(tempo_refused("tempo_preview_not_started"));
         refusal["error"]["details"]["tempo_commit_refused"] = true;
@@ -2804,9 +2820,9 @@ struct ControlRuntime::Impl {
     if (!tempo_source_id || tempo_turn->status.identity.preview_id == 0) {
       if (tempo_turn->status.phase != facade::PatternTempoPreviewPhase::source_lost)
         tempo_turn->status.phase = facade::PatternTempoPreviewPhase::cancelled;
-      return release_tempo_for_external();
+      return release_tempo_for_external(TempoRelease::terminal_receipt);
     }
-    if (!tempo_turn->started) return release_tempo_for_external();
+    if (!tempo_turn->started) return release_tempo_for_external(TempoRelease::terminal_receipt);
     auto& value = tempo_turn->status;
     if (value.command_id && !value.committed_revision) {
       auto reconciled = application.commit_pattern_tempo_preview({value.identity,
@@ -2826,11 +2842,11 @@ struct ControlRuntime::Impl {
       refresh_tempo();
       std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
-    return release_tempo_for_external();
+    return release_tempo_for_external(TempoRelease::terminal_receipt);
   }
 
   // Invoke only after the existing real callback fence, never from telemetry.
-  void retire_tempo_after_quiescence() noexcept {
+  void retire_tempo_after_quiescence(bool retain_prepared_source = false) noexcept {
     try {
       if (tempo_turn) {
         tempo_turn->pending_source.reset(); tempo_turn->prepared_rebase.reset();
@@ -2847,7 +2863,9 @@ struct ControlRuntime::Impl {
           tempo_source_id.reset();
         }
       }
-      tempo_material.reset(); tempo_material_generation = 0;
+      if (!retain_prepared_source) {
+        tempo_material.reset(); tempo_material_generation = 0;
+      }
       for (auto& cell : tempo_candidates) cell.reset();
     } catch (...) { /* Retain the binding and its exact UNKNOWN identity. */ }
   }
@@ -4578,7 +4596,7 @@ struct ControlRuntime::Impl {
     return foundation::Result<void>::failure(std::move(error));
   }
 
-  foundation::Result<void> quiesce_and_stop_audio() noexcept {
+  foundation::Result<void> quiesce_and_stop_audio(bool resumable = false) noexcept {
     trigger_admission = false;
     if (!coordinator.has_value() ||
         coordinator->await_quiescent == nullptr) {
@@ -4607,7 +4625,7 @@ struct ControlRuntime::Impl {
     // failure cleanup; beginning a successor invalidates it below.
     if (!physical_audio) terminal_legacy_quiescent = true;
     engine.stop();
-    retire_tempo_after_quiescence();
+    retire_tempo_after_quiescence(resumable);
     return quiescent;
   }
 
@@ -8108,7 +8126,7 @@ Json ControlRuntime::dispatch(
       }
       const auto had_pending_pattern =
           impl_->engine.pending_pattern_id().has_value();
-      const auto cleanup = impl_->quiesce_and_stop_audio();
+      const auto cleanup = impl_->quiesce_and_stop_audio(true);
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }

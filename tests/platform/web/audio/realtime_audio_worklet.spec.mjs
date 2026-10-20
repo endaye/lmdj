@@ -1845,8 +1845,8 @@ function assertTempoContinuity(previous, actual) {
     (BigInt(actual.anchor.frame) - BigInt(previous.anchor.frame)) * BigInt(previous.anchor.bpm) * 960n);
 }
 
-async function observeTempoQuarters(page, status, offset, count = 2) {
-  const frames = nextTempoQuarterFrames(status.applied.anchor, count, status.applied.appliedFrame)
+async function observeTempoQuarters(page, status, offset, count = 2, afterFrame = status.applied.appliedFrame) {
+  const frames = nextTempoQuarterFrames(status.applied.anchor, count, afterFrame)
     .map(frame => Number(frame + offset + 1n));
   expect(frames.every(Number.isSafeInteger)).toBe(true);
   const observation = await page.evaluate(frame => window.__lmdjTempoOnsetProbe.readThrough(frame), frames.at(-1) + 256);
@@ -2103,6 +2103,191 @@ for (const sourceAdoption of [false, true]) {
       const path = testInfo.outputPath("actual-tempo-worklet-journey.json");
       await writeFile(path, JSON.stringify(evidence, null, 2));
       await testInfo.attach("actual-tempo-worklet-journey", {path, contentType: "application/json"});
+    }
+  });
+}
+
+async function playResumedTempoSdk(page, setup, revision, bpm) {
+  const admission = await page.evaluate(async ({projectId, revision}) => {
+    const session = window.__lmdjTempoSession, sessionId = crypto.randomUUID();
+    const before = await session.inspectPatternTransport(sessionId);
+    const afterFrame = Math.ceil(session.monitorDestination().context.currentTime * 48000);
+    await session.requestPatternTransport({sessionId, projectId, commandId: crypto.randomUUID(),
+      expectedEpoch: before.transportEpoch + 1, intent: "play_stop", expectedRevision: revision});
+    return {sessionId, afterFrame};
+  }, {projectId: setup.projectId, revision});
+  let status;
+  await expect.poll(async () => {
+    status = await page.evaluate(id => window.__lmdjTempoSession.inspectPatternTransport(id), admission.sessionId);
+    return status.playing && status.phase === "idle";
+  }, {timeout: 5_000}).toBe(true);
+  let pcm, onsets;
+  await expect.poll(async () => {
+    pcm = await page.evaluate(() => window.__lmdjTempoOnsetProbe.readThrough(0));
+    onsets = pcm.onsets.filter(frame => frame >= admission.afterFrame);
+    return onsets.length;
+  }, {timeout: 5_000}).toBeGreaterThanOrEqual(2);
+  expect(onsets[1] - onsets[0]).toBe(Math.ceil(2880000 / bpm));
+  return {...admission, status, pcm, offset: String(BigInt(onsets[0]) - BigInt(status.originFrame) - 1n)};
+}
+
+for (const savedBeforeSuspend of [false, true]) {
+  opfsTest(`actual SDK tempo ${savedBeforeSuspend ? "saved" : "cancelled"} receipt survives Suspend and same-Session resumed PCM`, async ({page, context}, testInfo) => {
+    opfsTest.setTimeout(120_000);
+    const evidence = {savedBeforeSuspend, legs: []}; let reopened = null;
+    try {
+      await bootTempoSdk(page);
+      const setup = await page.evaluate(async () => {
+        const session = window.__lmdjTempoSession;
+        const projectId = crypto.randomUUID(), patternId = crypto.randomUUID();
+        await session.createProject({projectId, patternId, bpm: 120, bars: 1});
+        const bytes = new Uint8Array(1004), wav = new DataView(bytes.buffer);
+        const text = (at, value) => {for (let n = 0; n < value.length; ++n) bytes[at + n] = value.charCodeAt(n);};
+        text(0, "RIFF"); wav.setUint32(4, 996, true); text(8, "WAVEfmt "); wav.setUint32(16, 16, true);
+        wav.setUint16(20, 1, true); wav.setUint16(22, 1, true); wav.setUint32(24, 48000, true);
+        wav.setUint32(28, 96000, true); wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+        text(36, "data"); wav.setUint32(40, 960, true);
+        for (let n = 0; n < 480; ++n) wav.setInt16(44 + n * 2, 10000, true);
+        await session.importAssignSample(new File([bytes], "resume-tempo.wav", {type: "audio/wav"}),
+          {slot: 0, expectedRevision: 0});
+        await session.editPatternEvents({patternId, expectedRevision: 1, remove: [],
+          put: [0, 960, 1920, 2880].map(onsetTick => ({slot: 0, onsetTick, durationTick: 1, velocity: 127}))});
+        await session.reloadSnapshot(patternId);
+        return {projectId, patternId, bytes: [...bytes]};
+      });
+      const baseline = await tempoSnapshot(page, setup.projectId);
+      expect(baseline.artifacts).toEqual([{name: "9545d7cb33070fd89c29147fb1ae68f58e098a9c4f14b83800f90739b9d364f8.wav",
+        sha256: "9545d7cb33070fd89c29147fb1ae68f58e098a9c4f14b83800f90739b9d364f8", byteLength: 1004, bytes: setup.bytes}]);
+      await activateTempoSdk(page); await attachTempoOnsetProbe(page);
+      const playing = await playResumedTempoSdk(page, setup, 2, 120);
+      const first = await page.evaluate(async setup => {
+        const session = window.__lmdjTempoSession;
+        const ready = await session.beginPatternTempoPreview({...setup, expectedRevision: 2});
+        window.__lmdjTempoTickets.push(ready.ticket);
+        await session.setPatternTempoPreview({ticket: ready.ticket, bpm: 240});
+        return ready;
+      }, {projectId: setup.projectId, patternId: setup.patternId});
+      const actual = await waitTempoPhase(page, 0, "previewing");
+      evidence.legs.push({leg: "actual pre-Suspend preview", first, actual,
+        pcm: await observeTempoQuarters(page, actual, BigInt(playing.offset))});
+      let save = null;
+      const expected = structuredClone(baseline);
+      if (savedBeforeSuspend) {
+        save = await page.evaluate(async () => {
+          const session = window.__lmdjTempoSession;
+          window.__lmdjTempoSaveCommand = crypto.randomUUID();
+          return session.commitPatternTempoPreview({ticket: window.__lmdjTempoTickets[0], commandId: window.__lmdjTempoSaveCommand});
+        });
+        await waitTempoPhase(page, 0, "committed");
+        expected.view.project.bpm = 240; expected.view.project.revision = 3; expected.view.project_revision = 3;
+        expected.checkpoint.bpm = 240; expected.checkpoint.revision = 3;
+        expected.manifest.head_revision = 3; expected.manifest.head_checkpoint = "history/checkpoints/3.json";
+        expected.manifest.transactions.push(`history/transactions/3-${save.commandId}.json`);
+        Object.assign(expected.history, {projectRevision: 3, undoCount: baseline.history.undoCount + 1,
+          redoCount: 0, undoLabel: "Edit Sequence settings", redoLabel: ""});
+      } else await page.evaluate(() => window.__lmdjTempoSession.cancelPatternTempoPreview(window.__lmdjTempoTickets[0]));
+      expect(await page.evaluate(() => window.__lmdjTempoSession.suspendAudio())).toBe(true);
+      const retired = await tempoStatus(page, 0);
+      expect(retired.phase).toBe("source_lost"); expect(retired.applied).toBeNull();
+      expect(retired.ticket).toEqual(first.ticket);
+      expect(retired.committedBpm).toBe(savedBeforeSuspend ? 240 : 120);
+      expect(retired.commandId).toBe(save?.commandId ?? null);
+      expect(retired.committedRevision).toBe(save === null ? null : 3);
+      const contextState = await page.evaluate(() => window.__lmdjTempoSession.monitorDestination().context.state);
+      expect(contextState).toBe("suspended");
+      Object.assign(expected.history, {disabledReason: "", canUndo: expected.history.undoCount > 0, canRedo: false});
+      expect(await tempoSnapshot(page, setup.projectId)).toEqual(expected);
+      const repeatedCancel = await page.evaluate(() => window.__lmdjTempoSession.cancelPatternTempoPreview(window.__lmdjTempoTickets[0]));
+      expect(repeatedCancel).toEqual(retired);
+      if (save !== null) expect(await page.evaluate(() => window.__lmdjTempoSession.commitPatternTempoPreview({
+        ticket: window.__lmdjTempoTickets[0], commandId: window.__lmdjTempoSaveCommand}))).toEqual(retired);
+      expect(await tempoSnapshot(page, setup.projectId)).toEqual(expected);
+      evidence.legs.push({leg: "real Suspend and exact terminal replay", retired, repeatedCancel, snapshot: structuredClone(expected), contextState});
+
+      // A fresh real gesture resumes the same frozen SDK Session and context.
+      await page.evaluate(async () => {
+        const {createUserGestureToken} = await import("/tempo-preview-sdk/input_adapters.mjs");
+        const button = document.createElement("button"); button.id = "tempo-resume-audio";
+        button.textContent = "Resume actual tempo audio";
+        button.addEventListener("click", async event => {
+          window.__lmdjTempoResumed = await window.__lmdjTempoSession.activateAudio(createUserGestureToken(event));
+        }, {once: true});
+        document.body.append(button);
+      });
+      await page.locator("#tempo-resume-audio").click();
+      await expect.poll(() => page.evaluate(() => window.__lmdjTempoResumed)).toBe(true);
+      expect(await page.evaluate(() => window.lmdjWebRuntimeHost.session === window.__lmdjTempoSession)).toBe(true);
+      expect(await tempoStatus(page, 0)).toEqual(retired);
+      const resumed = await playResumedTempoSdk(page, setup, savedBeforeSuspend ? 3 : 2, savedBeforeSuspend ? 240 : 120);
+      const fresh = await page.evaluate(async ({projectId, patternId, expectedRevision}) => {
+        const session = window.__lmdjTempoSession;
+        const ready = await session.beginPatternTempoPreview({projectId, patternId, expectedRevision});
+        window.__lmdjTempoTickets.push(ready.ticket);
+        await session.setPatternTempoPreview({ticket: ready.ticket, bpm: 180}); return ready;
+      }, {projectId: setup.projectId, patternId: setup.patternId, expectedRevision: savedBeforeSuspend ? 3 : 2});
+      expect(fresh.ticket.previewToken).not.toBe(first.ticket.previewToken);
+      const newPreview = await waitTempoPhase(page, 1, "previewing");
+      const stale = await page.evaluate(async () => {
+        try {await window.__lmdjTempoSession.setPatternTempoPreview({ticket: window.__lmdjTempoTickets[0], bpm: 200}); return "accepted";}
+        catch (error) {return error.code;}
+      });
+      expect(stale).toBe("HOST_STATE_INVALID");
+      const afterStale = await page.evaluate(() => Math.ceil(window.__lmdjTempoSession.monitorDestination().context.currentTime * 48000));
+      const newPcm = await observeTempoQuarters(page, newPreview, BigInt(resumed.offset), 2,
+        BigInt(afterStale) - BigInt(resumed.offset));
+      await page.evaluate(() => window.__lmdjTempoSession.cancelPatternTempoPreview(window.__lmdjTempoTickets[1]));
+      const restored = await waitTempoPhase(page, 1, "cancelled");
+      expect(restored.applied.anchor.bpm).toBe(savedBeforeSuspend ? 240 : 120);
+      const restoredPcm = await observeTempoQuarters(page, restored, BigInt(resumed.offset));
+      Object.assign(expected.history, {disabledReason: "pattern_transport_busy", canUndo: false});
+      expect(await tempoSnapshot(page, setup.projectId)).toEqual(expected);
+      evidence.legs.push({leg: "same Session resumes actual cadence and a fresh independently owned preview", resumed,
+        fresh, newPreview, stale, newPcm, restored, restoredPcm, snapshot: structuredClone(expected)});
+      await page.evaluate(async ({sessionId, projectId, revision}) => {
+        const session = window.__lmdjTempoSession, status = await session.inspectPatternTransport(sessionId);
+        await session.requestPatternTransport({sessionId, projectId, commandId: crypto.randomUUID(),
+          expectedEpoch: status.transportEpoch + 1, intent: "play_stop", expectedRevision: revision});
+      }, {sessionId: resumed.sessionId, projectId: setup.projectId, revision: savedBeforeSuspend ? 3 : 2});
+      await expect.poll(async () => !(await page.evaluate(id => window.__lmdjTempoSession.inspectPatternTransport(id), resumed.sessionId)).playing).toBe(true);
+      Object.assign(expected.history, {disabledReason: "", canUndo: expected.history.undoCount > 0});
+      expect(await tempoSnapshot(page, setup.projectId)).toEqual(expected);
+      if (savedBeforeSuspend) {
+        const undo = await page.evaluate(async () => {
+          const session = window.__lmdjTempoSession, history = await session.inspectAuthoringHistory();
+          window.__lmdjTempoUndoCommand = crypto.randomUUID();
+          return session.undoAuthoring({sessionId: history.sessionId, commandId: window.__lmdjTempoUndoCommand, expectedRevision: 3});
+        });
+        expected.view.project.bpm = 120; expected.view.project.revision = 4; expected.view.project_revision = 4;
+        expected.checkpoint.bpm = 120; expected.checkpoint.revision = 4;
+        expected.manifest.head_revision = 4; expected.manifest.head_checkpoint = "history/checkpoints/4.json";
+        expected.manifest.transactions.push(`history/transactions/4-${await page.evaluate(() => window.__lmdjTempoUndoCommand)}.json`);
+        Object.assign(expected.history, {projectRevision: 4, undoCount: baseline.history.undoCount,
+          redoCount: 1, undoLabel: baseline.history.undoLabel, redoLabel: "Edit Sequence settings", canUndo: baseline.history.canUndo, canRedo: true});
+        expect(await tempoSnapshot(page, setup.projectId)).toEqual(expected);
+        evidence.legs.push({leg: "Undo after resumed owner restores the complete original authoring state", undo, snapshot: structuredClone(expected)});
+      }
+      await page.evaluate(() => window.__lmdjTempoOnsetProbe.close());
+      expect(await page.evaluate(() => window.__lmdjTempoSession.close())).toBe(true);
+      await page.close(); expect(page.isClosed()).toBe(true);
+      reopened = await context.newPage(); await bootTempoSdk(reopened);
+      await reopened.evaluate(async setup => window.__lmdjTempoSession.openProject(setup.projectId, setup.patternId), setup);
+      const cold = await tempoSnapshot(reopened, setup.projectId);
+      const expectedCold = structuredClone(expected);
+      Object.assign(expectedCold.history, {sessionId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+        undoCount: 0, redoCount: 0, undoLabel: "", redoLabel: "", canUndo: false, canRedo: false});
+      expect(cold).toEqual(expectedCold); expect(cold.history.sessionId).not.toBe(expected.history.sessionId);
+      await activateTempoSdk(reopened); await attachTempoOnsetProbe(reopened);
+      const coldAudio = await playResumedTempoSdk(reopened, setup, savedBeforeSuspend ? 4 : 2, 120);
+      evidence.legs.push({leg: "cold Runtime reopens exact Truth and actually plays restored 120 BPM", cold, coldAudio});
+    } finally {
+      for (const owned of [page, reopened]) if (owned !== null && !owned.isClosed()) {
+        await owned.evaluate(() => window.__lmdjTempoOnsetProbe?.close()).catch(() => {});
+        await owned.evaluate(() => window.__lmdjTempoSession?.close()).catch(() => {});
+        if (owned === reopened) await owned.close();
+      }
+      const path = testInfo.outputPath("actual-tempo-suspend-resume.json");
+      await writeFile(path, JSON.stringify(evidence, null, 2));
+      await testInfo.attach("actual-tempo-suspend-resume", {path, contentType: "application/json"});
     }
   });
 }
