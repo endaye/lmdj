@@ -28,6 +28,22 @@ target_bpm)` 是无分配的纯计算：先把精确 numerator 折回源 Pattern
 Host/SDK、Creator 偏好和 metronome 尚未接线。现有 Beat/Bar/End 仍从目标零位置
 开始；此函数不改变其调度、Voice 或 Journal，也不构成 OFF 端到端验收。
 
+## 逐次 publication 的真实时钟
+
+`observe_pattern_publication_clock(lease)` 是旧 disposition 查询的独立 companion：
+返回同一 generation 的实际生效帧、分数 numerator、BPM 与不可变 PPQ/loop 几何。
+逐槽 numerator 在 applied state 的 release 之前写入，既有 lease pin 保证之后不复用；
+B 已退到后继 C、control 尝试 reclaim 或 Engine Stop 后，仍读取 B 当时的锚点，
+不借用当前 transport clock。pending/cancelled 没有 anchor；已 applied 但位置溢出
+时保留实际 frame/disposition，anchor 为 unavailable，不填零。
+
+`publish_retained_pattern_view_preserving_phase(view, expected_generation)`
+为既有同 Pattern phase edit 增加 opt-in retention；沿用精确 generation、
+Project/Pattern/BPM/PPQ/loop 与 pending/transport 保护，要求 Engine running。
+原 publication DTO 和普通 API 保留，audio 不分配或析构 owner。新增私有逐槽存储
+仍改变公开 concrete Engine 的 C++ ABI，登记 MAJOR debt；此能力尚未接到 OFF、
+录音或 Host/SDK/Creator consumer，不能据此声明产品 OFF 已完成。
+
 ## 连续 tempo transition
 
 `PreparedPatternView::with_tempo(bpm)` 从不可变 prepared source 派生 40..240 BPM
