@@ -20,6 +20,24 @@ import {
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
 
 const SLOT_A1 = {bank: 0, pad: 0};
+const SLOT_D16 = {bank: 3, pad: 15};
+
+async function assignmentPicker(page, assetId, slot = 63) {
+  await page.getByRole("button", {name: "ASSIGN", exact: true}).click();
+  const dialog = page.getByRole("dialog", {name: "Assign retained Asset"});
+  await expect(dialog.getByRole("combobox", {name: "Retained source"})).toBeEnabled();
+  await dialog.getByRole("combobox", {name: "Retained source"}).selectOption({value: assetId});
+  await dialog.getByRole("combobox", {name: "Destination Pad"}).selectOption({value: String(slot)});
+  return dialog;
+}
+async function submitAssignmentPicker(page, dialog, occupied = true) {
+  await dialog.getByRole("button", {name: "Assign Asset", exact: true}).click();
+  if (occupied) await dialog.getByRole("button", {name: "Confirm replacement", exact: true}).click();
+  await expect(dialog).not.toBeVisible();
+}
+async function assignmentWireCount(page) {
+  return page.evaluate(() => (window.__sampleProofOperations ?? []).filter(op => op === "pad.assign").length);
+}
 // Every audio lifecycle gesture owns one independently bounded 30-second
 // Runtime request, so the state that follows an accepted gesture is promised
 // only within that bound plus bounded render settling.
@@ -156,6 +174,8 @@ async function installHostProofRecorder(page) {
               const [request] = arguments_;
               window.__sampleProofOperations ??= [];
               window.__sampleProofOperations.push(request?.operation ?? null);
+              window.__sampleProofRequests ??= [];
+              window.__sampleProofRequests.push(structuredClone(request));
               // A manufactured failure never reaches the Runtime, so the
               // Project cannot change; only the Creator's handling is proven.
               if (request?.operation === "sample.update_pad" &&
@@ -168,7 +188,21 @@ async function installHostProofRecorder(page) {
                   error: {code: "INTERNAL_ERROR", message: "Sample update failed", details: {}},
                 };
               }
-              const response = await nativeTransport.send(...arguments_);
+              // D03 reduced fault seams are off for every original journey.
+              // Stale/missing faults reach the actual producer with invalid
+              // input; owner/publication/lost-receipt seams prove consumer
+              // handling only and do not establish native publication failure.
+              let forwarded = arguments_;
+              if (request?.operation === "pad.assign" && window.__assignmentRefusal) {
+                const fault = window.__assignmentRefusal;
+                window.__assignmentRefusal = null;
+                if (fault === "owner") return {protocol_version: 1, request_id: request.request_id,
+                  ok: false, error: {code: "HOST_STATE_INVALID", message: "owner unavailable", details: {}}};
+                forwarded = [{...request, payload: {...request.payload,
+                  ...(fault === "stale" ? {expected_revision: request.payload.expected_revision - 1}
+                    : {asset_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"})}}, ...arguments_.slice(1)];
+              }
+              const response = await nativeTransport.send(...forwarded);
               const consumed = observeInput(request, response);
               if (consumed) window.__sampleInputProof.push(consumed);
               window.__sampleProofResponses ??= [];
@@ -178,6 +212,28 @@ async function installHostProofRecorder(page) {
                 result: response?.result ?? null,
                 error: response?.error ?? null,
               });
+              if (request?.operation === "project.inspect" && window.__holdAssignmentCatalog === true) {
+                window.__holdAssignmentCatalog = false;
+                window.__assignmentCatalogHeld = true;
+                await new Promise(resolve => {window.__releaseAssignmentCatalog = resolve;});
+              }
+              if (request?.operation === "pad.assign" && response?.ok === true) {
+                if (window.__holdAssignmentReply === true) {
+                  window.__holdAssignmentReply = false;
+                  window.__assignmentReplyHeld = true;
+                  await new Promise(resolve => {window.__releaseAssignmentReply = resolve;});
+                }
+                if (window.__assignmentPublicationFailure === true) {
+                  window.__assignmentPublicationFailure = false;
+                  return {...response, result: {...response.result, runtime_published: false,
+                    runtime_revision: null, snapshot_error: {
+                      code: "COOK_FAILED", message: "consumer publication failure fixture", details: {}}}};
+                }
+                if (window.__loseAssignmentReply === true) {
+                  window.__loseAssignmentReply = false;
+                  throw Object.assign(new Error("assignment receipt lost"), {code: "HOST_TIMEOUT"});
+                }
+              }
               if (request?.operation === "sample.inspect") {
                 window.__sampleProofInspects ??= [];
                 window.__sampleProofInspects.push(response?.result ?? response?.error ?? null);
@@ -207,6 +263,12 @@ async function installHostProofRecorder(page) {
             return nativeTransport.subscribe(...arguments_);
           },
           subscribeFailure(...arguments_) {
+            // Reduced error notification only; the SDK still performs the
+            // genuine old-owner close and fresh Runtime/Project recovery.
+            const [listener] = arguments_;
+            window.__sampleRestartOwnerForProof = () => listener(Object.assign(
+              new Error("ASSIGN consumer owner-replacement fixture"),
+              {code: "HOST_RESTART_REQUIRED", details: {}}));
             return nativeTransport.subscribeFailure(...arguments_);
           },
           terminate(...arguments_) {
@@ -223,6 +285,13 @@ async function installHostProofRecorder(page) {
         exposed = nativeHost;
       },
     });
+    const instrument = Object.getOwnPropertyDescriptor(window, "lmdjWebRuntimeHost").set;
+    window.__sampleRestoreProofRecorder = () => {
+      const runtime = window.lmdjWebRuntimeHost;
+      // Normal SDK close may remove the global property before its fresh
+      // loader publishes a new owner. Reattach observation to that real owner.
+      if (runtime && runtime !== exposed) instrument(runtime);
+    };
   });
 }
 
@@ -1561,6 +1630,267 @@ test("Pad Delete preserves recorded rhythm through Undo, Redo, reassignment and 
   noErrors();
 });
 
+
+test("retained Asset ASSIGN preserves materials, confirms destinations and retains origin outcomes", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  const noErrors = recordPageErrors(page);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await waitForBootProject(page);
+  await importV1SampleProject(page);
+  await activateAudio(page);
+  await enterSampleEditor(page);
+  // Import X into empty A01, then replace it: X becomes retained unassigned
+  // material while the source Pad now owns Y. Neither catalog is synthesized.
+  let revision = 46;
+  await chooseSampleFile(page, "Add Sample to Pad A01", "assign-x.wav", pcm16Wav({frames: 4800}));
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, ++revision);
+  const withX = (await rawRequest(page, "project.inspect", {})).result.project;
+  const x = withX.banks[0].pads[0].asset_id;
+  await chooseSampleFile(page, "Replace Sample", "assign-y.wav", pcm16Wav({frames: 9600, phase: 7}));
+  await page.getByRole("button", {name: "Confirm replace", exact: true}).click();
+  await commitLongSourceSelection(page);
+  await expectProjectRevision(page, ++revision);
+  const baseline = (await rawRequest(page, "project.inspect", {})).result.project;
+  const y = baseline.banks[0].pads[0].asset_id;
+  expect(y).not.toBe(x);
+  expect(baseline.banks.flatMap(bank => bank.pads).some(pad => pad.asset_id === x)).toBe(false);
+  expect(baseline.assets[x].artifact).toEqual(withX.assets[x].artifact);
+  expect(baseline.assets[x].artifact).toMatchObject({media_type: "audio/wav", sha256: expect.stringMatching(/^[a-f0-9]{64}$/)});
+  expect(baseline.assets[x].artifact.byte_length).toBe(9644);
+  expect(baseline.assets[y].artifact.byte_length).toBe(19244);
+  expect(baseline.banks[3].pads[15].asset_id).toBeNull();
+  const defaultPlayback = (await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback;
+  const sourcePad = baseline.banks[0].pads[0];
+  const preserveSources = project => {
+    expect(project.assets).toEqual(baseline.assets);
+    expect(project.banks[0].pads[0]).toEqual(sourcePad);
+    expect(project.patterns).toEqual(baseline.patterns);
+    for (let slot = 0; slot < 63; ++slot) {
+      const bank = Math.floor(slot / 16), pad = slot % 16;
+      expect(project.banks[bank].pads[pad]).toEqual(baseline.banks[bank].pads[pad]);
+    }
+    expect({...project, revision: baseline.revision, banks: baseline.banks}).toEqual(baseline);
+  };
+  const operationsBefore = await page.evaluate(() => window.__sampleProofOperations.length);
+  const historyBefore = (await rawRequest(page, "history.inspect", {})).result;
+  const emptyPicker = await assignmentPicker(page, x);
+  const destinations = await emptyPicker.getByRole("combobox", {name: "Destination Pad"})
+    .locator("option").evaluateAll(options => options.map(option => [option.value, option.textContent]));
+  expect(destinations).toEqual(["A", "B", "C", "D"].flatMap((bank, bankIndex) =>
+    Array.from({length: 16}, (_, pad) => [String(bankIndex * 16 + pad), `${bank}${String(pad + 1).padStart(2, "0")}`])));
+  // The far-side public read ensures selection has had its command turn.
+  expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(baseline);
+  const selectionOperations = await page.evaluate(offset => window.__sampleProofOperations.slice(offset), operationsBefore);
+  expect(selectionOperations).not.toContain("pad.assign");
+  expect(selectionOperations).not.toContain("trigger");
+  expect(selectionOperations).not.toContain("sample.stop");
+  await submitAssignmentPicker(page, emptyPicker, false);
+  await expectProjectRevision(page, ++revision);
+  expect(await assignmentWireCount(page)).toBe(1);
+  const receipt = await page.evaluate(() => window.__sampleProofResponses.findLast(entry => entry.operation === "pad.assign"));
+  expect(receipt).toMatchObject({ok: true, result: {slot: SLOT_D16, asset_id: x,
+    committed_revision: revision, project_revision: revision, replayed: false,
+    runtime_revision: revision, runtime_published: true}});
+  const assigned = (await rawRequest(page, "project.inspect", {})).result.project;
+  preserveSources(assigned);
+  expect(assigned.banks[3].pads[15].asset_id).toBe(x);
+  expect((await rawRequest(page, "history.inspect", {})).result.undo_count).toBe(historyBefore.undo_count + 1);
+  const firstTarget = (await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result;
+  expect(firstTarget.asset_id).toBe(x);
+  expect(firstTarget.playback).toEqual(defaultPlayback);
+  expect(firstTarget.metadata.source_frames).toBe(4800);
+
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank D", exact: true}).click();
+  await selectPadWithoutPress(page, await page.getByRole("button", {name: /^Pad D16 —/}).getAttribute("aria-label"));
+  await showSamplePage(page, "Playback");
+  await page.getByRole("button", {name: "Edit Pad D16 Volume"}).click();
+  await page.getByRole("spinbutton", {name: "Pad D16 Volume value"}).fill("-3.2");
+  await page.getByRole("button", {name: "Apply Volume", exact: true}).click();
+  await expectProjectRevision(page, ++revision);
+  await showSamplePage(page, "Pad");
+  await page.getByRole("button", {name: "VOCAL colour", exact: true}).click();
+  await expectProjectRevision(page, ++revision);
+  const customized = (await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback;
+  const colour = (await rawRequest(page, "project.inspect", {})).result.project.banks[3].pads[15].colour_override;
+  expect(customized.gain_millidb).toBe(-3200);
+  expect(colour).toBe(3);
+  await submitAssignmentPicker(page, await assignmentPicker(page, x));
+  await expectProjectRevision(page, ++revision);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback).toEqual(customized);
+  preserveSources((await rawRequest(page, "project.inspect", {})).result.project);
+  await submitAssignmentPicker(page, await assignmentPicker(page, y));
+  await expectProjectRevision(page, ++revision);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback).toEqual(defaultPlayback);
+  await showSamplePage(page, "Playback");
+  await page.getByRole("button", {name: "Edit Pad D16 Volume"}).click();
+  await page.getByRole("spinbutton", {name: "Pad D16 Volume value"}).fill("-5.1");
+  await page.getByRole("button", {name: "Apply Volume", exact: true}).click();
+  await expectProjectRevision(page, ++revision);
+  const occupiedTruth = (await rawRequest(page, "project.inspect", {})).result.project;
+  const occupiedPlayback = (await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback;
+  const occupiedHistory = (await rawRequest(page, "history.inspect", {})).result;
+  const occupiedCount = await assignmentWireCount(page);
+  for (const cancellation of ["Cancel", "Escape", "target", "context"]) {
+    const operationOffset = await page.evaluate(() => window.__sampleProofOperations.length);
+    const picker = await assignmentPicker(page, x);
+    await picker.getByRole("button", {name: "Assign Asset", exact: true}).click();
+    await expect(picker.getByRole("button", {name: "Confirm replacement"})).toBeVisible();
+    await expect(picker).toContainText(`${x} → D16`);
+    await expect(picker).toContainText(y);
+    if (cancellation === "Cancel") await picker.getByRole("button", {name: "Cancel assignment"}).click();
+    else if (cancellation === "Escape") await page.keyboard.press("Escape");
+    else if (cancellation === "target") {
+      await picker.getByRole("combobox", {name: "Destination Pad"}).selectOption({value: "62"});
+      await expect(picker.getByRole("button", {name: "Confirm replacement"})).not.toBeVisible();
+      await page.keyboard.press("Escape");
+    } else {
+      // Controlled handler interleave proves context invalidation. Inert
+      // background cannot receive this native pointer route; component tests
+      // are the companion witness, not a physical input claim.
+      await page.locator('button[aria-label="Project"]').evaluate(element =>
+        element.dispatchEvent(new MouseEvent("click", {bubbles: true, detail: 1})));
+      await page.getByRole("button", {name: "Sample", exact: true}).click();
+    }
+    await expect(picker).not.toBeVisible();
+    expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(occupiedTruth);
+    expect((await rawRequest(page, "history.inspect", {})).result).toEqual(occupiedHistory);
+    expect(await assignmentWireCount(page)).toBe(occupiedCount);
+    const operations = await page.evaluate(start => window.__sampleProofOperations.slice(start), operationOffset);
+    expect(operations).not.toContain("trigger");
+    expect(operations).not.toContain("sample.stop");
+  }
+  await submitAssignmentPicker(page, await assignmentPicker(page, x));
+  await expectProjectRevision(page, ++revision);
+  const overwritten = (await rawRequest(page, "project.inspect", {})).result.project;
+  preserveSources(overwritten);
+  expect(overwritten.banks[3].pads[15].colour_override).toBe(colour);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback).toEqual(defaultPlayback);
+  await pressRailUndo(page);
+  await expectProjectRevision(page, ++revision);
+  expect((await rawRequest(page, "project.inspect", {})).result.project.banks).toEqual(occupiedTruth.banks);
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.playback).toEqual(occupiedPlayback);
+  await pressRailRedo(page);
+  await expectProjectRevision(page, ++revision);
+  const persisted = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(persisted.banks).toEqual(overwritten.banks);
+  preserveSources(persisted);
+  await page.reload();
+  await waitForProjectReopen(page, persisted.project_id.slice(0, 8));
+  expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(persisted);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank D", exact: true}).click();
+  await selectPadWithoutPress(page, await page.getByRole("button", {name: /^Pad D16 —/}).getAttribute("aria-label"));
+  await showSamplePage(page, "Playback");
+  await expect(page.getByRole("button", {name: "Edit Pad D16 Volume"})).toBeEnabled();
+  expect((await rawRequest(page, "sample.inspect", {slot: SLOT_D16})).result.asset_id).toBe(x);
+  const playableStart = await page.evaluate(() => window.__sampleInputProof.length);
+  await page.getByRole("button", {name: /^Pad D16 —/}).click();
+  await expect.poll(() => page.evaluate(start => window.__sampleInputProof.slice(start)
+    .some(event => event.status.native_result.slot === 63), playableStart)).toBe(true);
+
+  for (const fault of ["stale", "missing", "owner"]) {
+    await page.evaluate(value => {window.__assignmentRefusal = value;}, fault);
+    const offset = await page.evaluate(() => window.__sampleProofOperations.length);
+    await submitAssignmentPicker(page, await assignmentPicker(page, y));
+    await expect(page.getByRole("region", {name: "Retained Asset assignment status"})).toContainText("Assignment refused");
+    expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(persisted);
+    expect(await page.evaluate(start => window.__sampleProofOperations.slice(start), offset)).not.toContain("sample.stop");
+  }
+  await page.evaluate(() => {window.__holdAssignmentCatalog = true;});
+  await page.getByRole("button", {name: "ASSIGN", exact: true}).click();
+  await expect.poll(() => page.evaluate(() => window.__assignmentCatalogHeld)).toBe(true);
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => window.__releaseAssignmentCatalog());
+  await expect(page.getByRole("dialog", {name: "Assign retained Asset"})).not.toBeVisible();
+  expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(persisted);
+
+  // This manufactured publication receipt follows a REAL known commit; it
+  // covers consumer settlement, not the producer's actual failure path/PCM.
+  await page.evaluate(() => {window.__assignmentPublicationFailure = true;});
+  await submitAssignmentPicker(page, await assignmentPicker(page, y));
+  await expectProjectRevision(page, ++revision);
+  await expect(page.getByRole("region", {name: "Retained Asset assignment status"})).toContainText("COOK_FAILED");
+  const savedCount = await assignmentWireCount(page);
+  expect((await rawRequest(page, "project.inspect", {})).result.project.banks[3].pads[15].asset_id).toBe(y);
+  await page.getByRole("button", {name: "Retry audio preparation", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Retry audio preparation", exact: true})).not.toBeVisible();
+  expect(await assignmentWireCount(page)).toBe(savedCount);
+
+  await page.evaluate(() => {window.__holdAssignmentReply = true;});
+  await submitAssignmentPicker(page, await assignmentPicker(page, x));
+  await expect.poll(() => page.evaluate(() => window.__assignmentReplyHeld)).toBe(true);
+  await page.getByTestId("physical-controls").getByRole("button", {name: "Bank A", exact: true}).click();
+  await selectPadWithoutPress(page, await page.getByRole("button", {name: /^Pad A02 —/}).getAttribute("aria-label"));
+  await page.getByRole("button", {name: "Project", exact: true}).click();
+  await page.evaluate(() => window.__releaseAssignmentReply());
+  await expectProjectRevision(page, ++revision);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.locator(".selected-sample")).toHaveText("Pad A02");
+  preserveSources((await rawRequest(page, "project.inspect", {})).result.project);
+
+  await page.evaluate(() => {
+    window.__sampleUnknownOriginHost = window.lmdjWebRuntimeHost;
+    window.__loseAssignmentReply = true;
+  });
+  const countBeforeLost = await assignmentWireCount(page);
+  await submitAssignmentPicker(page, await assignmentPicker(page, y));
+  await expect(page.getByRole("region", {name: "Retained Asset assignment status"})).toContainText("outcome unknown");
+  const unknownTruth = (await rawRequest(page, "project.inspect", {})).result.project;
+  expect(unknownTruth.revision).toBe(revision + 1);
+  expect(unknownTruth.banks[3].pads[15].asset_id).toBe(y);
+  preserveSources(unknownTruth);
+  // Actual matching Truth does not turn a lost receipt into a known receipt.
+  expect(await assignmentWireCount(page)).toBe(countBeforeLost + 1);
+  await expect(page.getByRole("button", {name: "ASSIGN", exact: true})).toBeDisabled();
+  const originalUnknown = await page.evaluate(() => window.__sampleProofRequests
+    .filter(request => request.operation === "pad.assign").at(-1).payload);
+  // The notification is manufactured. Closing the old owner, loading a new
+  // Native Runtime and reopening its genuine stored Truth are not mocked.
+  await page.evaluate(() => window.__sampleRestartOwnerForProof());
+  await expect.poll(() => page.evaluate(() => window.lmdjWebRuntimeHost !== undefined &&
+    window.lmdjWebRuntimeHost !== window.__sampleUnknownOriginHost)).toBe(true);
+  await expectProjectRevision(page, unknownTruth.revision);
+  await page.evaluate(() => window.__sampleRestoreProofRecorder());
+  expect(await page.evaluate(() => ({terminated: window.__sampleUnknownOriginHost.transport.terminated,
+    released: window.__sampleUnknownOriginHost.transport.terminalOwnerReleased})))
+    .toEqual({terminated: true, released: true});
+  const originalStatus = page.getByRole("region", {name: "Retained Asset assignment status"})
+    .filter({hasText: "outcome unknown"});
+  await expect(originalStatus).toContainText(originalUnknown.command_id);
+  await page.getByRole("button", {name: "Sample", exact: true}).click();
+  await expect(page.getByRole("button", {name: "ASSIGN", exact: true})).toBeEnabled();
+  await page.getByRole("button", {name: "ASSIGN", exact: true}).click();
+  const fresh = page.getByRole("dialog", {name: "Assign retained Asset"});
+  await expect(fresh.getByRole("combobox", {name: "Retained source"})).toBeEnabled();
+  await expect(fresh.getByRole("combobox", {name: "Destination Pad"})).toHaveValue("");
+  await fresh.getByRole("combobox", {name: "Retained source"}).selectOption(x);
+  await expect(fresh.getByRole("button", {name: "Assign Asset", exact: true})).toBeDisabled();
+  await fresh.getByRole("button", {name: "Cancel assignment", exact: true}).click();
+  await expect(fresh).not.toBeVisible();
+  expect(await assignmentWireCount(page)).toBe(countBeforeLost + 1);
+  await submitAssignmentPicker(page, await assignmentPicker(page, x));
+  await expectProjectRevision(page, unknownTruth.revision + 1);
+  await expect(originalStatus).toContainText(originalUnknown.command_id);
+  expect(await assignmentWireCount(page)).toBe(countBeforeLost + 2);
+  const newIntent = await page.evaluate(() => window.__sampleProofRequests
+    .filter(request => request.operation === "pad.assign").at(-1).payload);
+  expect(newIntent.command_id).not.toBe(originalUnknown.command_id);
+  expect(newIntent).toEqual({command_id: expect.any(String), expected_revision: unknownTruth.revision,
+    slot: SLOT_D16, asset_id: x});
+  expect(await page.evaluate(command => window.__sampleProofRequests.filter(request =>
+    request.operation === "pad.assign" && request.payload.command_id === command).length,
+  originalUnknown.command_id)).toBe(1);
+  const finalTruth = (await rawRequest(page, "project.inspect", {})).result.project;
+  preserveSources(finalTruth);
+  expect(finalTruth.banks[3].pads[15].asset_id).toBe(x);
+  await page.reload();
+  await waitForProjectReopen(page, finalTruth.project_id.slice(0, 8));
+  expect((await rawRequest(page, "project.inspect", {})).result.project).toEqual(finalTruth);
+  noErrors();
+});
 
 test("contextual Sample encoders merge one save, cancel old targets and restore monitoring level", async ({page, browserName}) => {
   // Boot/import, two authoring transitions, Undo and persisted reopen each

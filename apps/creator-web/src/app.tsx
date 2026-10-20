@@ -10,6 +10,7 @@ import {CandidateSurface, isCandidateSession} from "./components/candidate_surfa
 import {
   useCallback,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -72,7 +73,9 @@ import {
   createCreatorInputController,
   type PerformancePadInputEvent,
 } from "./runtime/input_controller";
-import {captureCommitJourney, inspectSampleJourney, reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
+import {assignRetainedAssetJourney, freezePadAssignmentRequest, isPadAssignmentSession,
+  captureCommitJourney, inspectSampleJourney, reloadPrepareJourney, retryPrepareJourney,
+  type PadAssignmentResolution} from "./runtime/sample_actions";
 import {createPadCapture, type PadCaptureState, type PadCaptureSource} from "./capture/pad_capture";
 import {createPadCaptureSources} from "./capture/pad_capture_sources";
 import {
@@ -107,6 +110,7 @@ import type {
   CreatorSampleRuntimeSession,
   LocalProjectSummary,
   PadColour,
+  PadAssignmentRequest,
   PatternEventsEditMutation,
   RuntimeSessionFactory,
   TypedRuntimeError,
@@ -556,6 +560,32 @@ function Workspace({
   candidateAudioRef.current = candidateAudio;
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
+  // This owner lives above Sample presentation. Never put a destination-
+  // independent assignment in SamplePendingAction (which owns the edit Pad).
+  const assignmentOriginContext = useMemo(() => ({}), [session, runtimePhase, state.project.current?.projectId]);
+  const assignmentOriginContextRef = useRef(assignmentOriginContext);
+  assignmentOriginContextRef.current = assignmentOriginContext;
+  type AssignmentAttempt = Readonly<{
+    request: Readonly<PadAssignmentRequest>;
+    projectId: string;
+    session: CreatorRuntimeSession;
+    context: object;
+    lease: ProjectActionToken;
+    resolution: PadAssignmentResolution | null;
+    refreshError: string | null;
+  }>;
+  const assignmentAttemptRef = useRef<AssignmentAttempt | null>(null);
+  const assignmentAttemptsRef = useRef<readonly AssignmentAttempt[]>([]);
+  const [assignmentAttempts, setAssignmentAttempts] = useState<readonly AssignmentAttempt[]>([]);
+  const assignmentAttempt = assignmentAttempts[assignmentAttempts.length - 1] ?? null;
+  const [assignmentSettling, setAssignmentSettling] = useState(false);
+  const assignmentUnresolved = assignmentAttempts.some(attempt =>
+    attempt.session === session && attempt.resolution?.kind === "unknown");
+  const assignmentReconfirmationRequired = assignmentAttempts.some(attempt =>
+    attempt.session !== session && attempt.resolution?.kind === "unknown");
+  const assignmentBusy = assignmentUnresolved ||
+    (assignmentSettling && assignmentAttempt?.session === session);
+  const assignmentTail = useRef<Promise<void> | null>(null);
   const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
   const sequenceAuthoringRevision = useRef(0);
   const sequenceAuthoringProjectId = useRef<string | null>(null);
@@ -1236,6 +1266,102 @@ function Workspace({
     }
   };
 
+  const assignRetainedAsset = async (value: Readonly<PadAssignmentRequest>): Promise<void> => {
+    const project = stateRef.current.project.current;
+    const previous = assignmentAttemptRef.current;
+    if (!isPadAssignmentSession(session) || project === null || runtimePhase !== "ready" ||
+        sessionRef.current !== session || runtimePhaseRef.current !== "ready" ||
+        assignmentOriginContextRef.current !== assignmentOriginContext ||
+        stateRef.current.project.phase !== "ready" || project.revision !== value.expectedRevision ||
+        stateRef.current.sample.pendingAction !== null || sampleUpdateOwnerRef.current !== null ||
+        sampleRetryAction.current !== null || historyBusy || assignmentTail.current !== null ||
+        (previous !== null && previous.resolution === null) ||
+        assignmentAttemptsRef.current.some(attempt =>
+          attempt.request.commandId === value.commandId ||
+          (attempt.session === session && attempt.resolution?.kind === "unknown"))) {
+      throw new Error("Another Project action is active or this assignment draft is stale.");
+    }
+    const request = freezePadAssignmentRequest(value);
+    const lease = projectActions.claim(session);
+    if (lease === null) throw new Error("Another Project action is active.");
+    const attempt: AssignmentAttempt = Object.freeze({request, projectId: project.projectId,
+      session, context: assignmentOriginContextRef.current, lease, resolution: null, refreshError: null});
+    assignmentAttemptRef.current = attempt;
+    // Completed known outcomes may leave presentation when a new operation
+    // starts; every unresolved UNKNOWN keeps its exact origin identity.
+    assignmentAttemptsRef.current = Object.freeze([
+      ...assignmentAttemptsRef.current.filter(record => record.resolution?.kind === "unknown"), attempt,
+    ]);
+    setAssignmentAttempts(assignmentAttemptsRef.current);
+    setAssignmentSettling(true);
+    const ownsOrigin = () => assignmentOriginContextRef.current === attempt.context &&
+      runtimePhaseRef.current === "ready" && stateRef.current.project.phase === "ready" &&
+      sessionRef.current === attempt.session && projectActions.owns(lease, attempt.session) &&
+      stateRef.current.project.current?.projectId === attempt.projectId;
+    const retain = (resolution: PadAssignmentResolution, refreshError: string | null = null) => {
+      const settled = Object.freeze({...attempt, resolution, refreshError});
+      // Settle this origin only. A fresh operation never replaces an old
+      // UNKNOWN journal entry, even when Project/Pad values happen to match.
+      assignmentAttemptsRef.current = Object.freeze(assignmentAttemptsRef.current.map(record =>
+        record.lease === attempt.lease ? settled : record));
+      if (assignmentAttemptRef.current?.lease === attempt.lease) assignmentAttemptRef.current = settled;
+      setAssignmentAttempts(assignmentAttemptsRef.current);
+    };
+    const run = (async () => {
+      try {
+        const resolution = await assignRetainedAssetJourney(session, request);
+        // Keep the complete origin receipt BEFORE any projection read. A late
+        // result is retained even after its lease/session/context was retired.
+        retain(resolution);
+        if (resolution.kind !== "committed") {
+          reportFailure("Assign retained Asset", resolution.error);
+          return;
+        }
+        const receipt = resolution.receipt;
+        if (receipt.snapshotError !== null) reportFailure("Publish assigned Asset", receipt.snapshotError);
+        if (!ownsOrigin()) return;
+        const current = stateRef.current.project.current!;
+        const revision = Math.max(current.revision, receipt.projectRevision);
+        const selectedSlot = stateRef.current.sample.selectedSlot;
+        dispatch({type: "project-revision-updated", revision});
+        dispatch({type: "candidate-audio-invalidated", projectId: project.projectId, revision});
+        // Preserve the current edit object, which may differ from destination.
+        if (selectedSlot !== null) dispatch({type: "sample-action", action: {type: "slot-selected", slot: selectedSlot}});
+        dispatch({type: "candidate-audio-published", projectId: project.projectId, revision,
+          runtimeRevision: receipt.runtimeRevision});
+        setCandidateAudio(receipt.runtimePublished && receipt.runtimeRevision === revision ? null :
+          {projectId: project.projectId, revision, preparing: false});
+        const refreshToken = Object.freeze({id: crypto.randomUUID(), projectId: project.projectId,
+          patternId: current.patternId, baseRevision: revision});
+        dispatch({type: "project-projection-refresh-started", token: refreshToken});
+        try {
+          const refreshed = await refreshProjectProjectionJourney(session, current);
+          if (refreshed === null || refreshed.revision < revision) {
+            throw new Error("Assigned Project projection has not settled.");
+          }
+          if (!ownsOrigin()) return;
+          dispatch({type: "project-projection-refreshed", token: refreshToken, project: refreshed});
+        } catch (error) {
+          retain(resolution, "Assignment saved; the Project view could not be refreshed.");
+          if (ownsOrigin()) dispatch({type: "project-projection-refresh-failed", token: refreshToken,
+            errorCode: reportFailure("Refresh assigned Project", error)});
+        }
+      } finally {
+        projectActions.finish(lease);
+      }
+    })();
+    assignmentTail.current = run;
+    try {await run;} finally {
+      if (assignmentTail.current === run) {
+        assignmentTail.current = null;
+        setAssignmentSettling(false);
+      }
+    }
+  };
+
+  useEffect(() => registerRuntimeShutdownBarrier?.(() => assignmentTail.current ?? Promise.resolve()),
+    [registerRuntimeShutdownBarrier]);
+
   const refreshCandidateProject = async (projectId: string, committedRevision?: number) => {
     if (!isSampleSession(session) || stateRef.current.project.current?.projectId !== projectId) {
       throw new Error("Candidate Project is no longer open");
@@ -1345,6 +1471,8 @@ function Workspace({
       samplePending?.kind === "update" && samplePending.slot === updateOwner.pending.slot &&
       samplePending.expectedRevision === updateOwner.pending.expectedRevision;
     if (!session || projectActions.busy ||
+      assignmentAttemptsRef.current.some(attempt =>
+        attempt.session === session && attempt.resolution?.kind === "unknown") ||
       sampleRetryAction.current !== null ||
       ((samplePending !== null || updateOwner !== null) && !recoveringSampleUpdate)) return null;
     if (requireSelector) {
@@ -2717,24 +2845,28 @@ function Workspace({
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     sampleUpdateOwner === null &&
+    !assignmentBusy &&
     selectCanOpenProject(state);
   const canImportProject = session !== undefined &&
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     sampleUpdateOwner === null &&
+    !assignmentBusy &&
     selectCanImportProject(state);
   const canCreateProject = session !== undefined &&
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     sampleUpdateOwner === null &&
+    !assignmentBusy &&
     selectCanCreateProject(state);
   const canDuplicateProject = session !== undefined &&
     !projectActions.busy &&
     sampleRetryAction.current === null &&
     state.sample.pendingAction === null &&
     sampleUpdateOwner === null &&
+    !assignmentBusy &&
     selectCanDuplicateProject(state);
   const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
     state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
@@ -2934,6 +3066,7 @@ function Workspace({
       state.runtime.phase !== "ready" ? "Wait for the audio session to become ready." :
       state.transfer.phase !== "idle" || state.sample.pendingAction !== null ||
       sampleUpdateOwner !== null ||
+      assignmentBusy || projectActions.busy ||
       state.projectProjectionRefresh !== null ? "Wait for the current Project change to finish." :
       !["idle", "permission-error"].includes(capturePhase) ? "Finish or discard the sound recording first." :
       historyPerformPhase !== "idle" ? "Save or discard the Performance recording first." :
@@ -3218,6 +3351,30 @@ function Workspace({
               </>}
               </SystemSurface>
               <div hidden={systemOpen}>
+              {assignmentAttempts.map(assignmentAttempt => (
+                <section key={assignmentAttempt.request.commandId} aria-label="Retained Asset assignment status">
+                  <p role="status">{assignmentAttempt.resolution === null
+                    ? `Assigning Asset to ${slotAddress(assignmentAttempt.request.slot)}…`
+                    : assignmentAttempt.resolution.kind === "committed"
+                      ? assignmentAttempt.resolution.receipt.runtimePublished
+                        ? `Assignment saved to ${slotAddress(assignmentAttempt.request.slot)}.`
+                        : `Assignment saved to ${slotAddress(assignmentAttempt.request.slot)}; playback preparation failed (${assignmentAttempt.resolution.receipt.snapshotError?.code}).`
+                      : assignmentAttempt.resolution.kind === "unknown"
+                        ? "Assignment outcome unknown. The command will not be sent again."
+                        : "Assignment refused; no assignment was saved. Refresh before choosing again."}</p>
+                  {assignmentAttempt.refreshError === null ? null : <p role="alert">{assignmentAttempt.refreshError}</p>}
+                  <details><summary>Assignment details</summary>
+                    <p>Origin Project {assignmentAttempt.projectId}; Asset {assignmentAttempt.request.assetId};
+                      command {assignmentAttempt.request.commandId}.</p>
+                    {assignmentAttempt.resolution?.kind === "committed" ? <p>
+                      Committed revision {assignmentAttempt.resolution.receipt.committedRevision};
+                      current Project revision {assignmentAttempt.resolution.receipt.projectRevision};
+                      Runtime revision {assignmentAttempt.resolution.receipt.runtimeRevision ?? "none"};
+                      replayed {String(assignmentAttempt.resolution.receipt.replayed)}.
+                    </p> : null}
+                  </details>
+                </section>
+              ))}
               {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
                 (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
                 <section className="sample-runtime-stale" aria-label="Project audio status">
@@ -3414,6 +3571,11 @@ function Workspace({
               <div className={trimOverlayOpen ? "sample-overlay-host" : ""}
                 hidden={activeMode !== "sample" && !trimOverlayOpen}>
                 <SampleSurface
+                  {...(isPadAssignmentSession(session) ? {assignment: {session,
+                    busy: assignmentSettling || assignmentBusy || projectActions.busy || historyBusy || state.projectProjectionRefresh !== null,
+                    unresolved: assignmentUnresolved,
+                    reconfirmationRequired: assignmentReconfirmationRequired,
+                    onAssign: assignRetainedAsset}} : {})}
                   onUpdatePendingChange={sampleUpdatePendingChanged}
                   padColourControls={activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
                     state.project.current !== null ? (

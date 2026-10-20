@@ -28,6 +28,8 @@ import type {
   RuntimeHostState,
   PadPlayback,
   SampleCommit,
+  PadAssignmentRequest,
+  PadAssignmentResult,
   WaveformEnvelope,
   WaveformQuery,
 } from "../src/runtime/runtime_types";
@@ -796,6 +798,220 @@ function deferred<T>() {
   });
   return {promise, resolve, reject};
 }
+
+function retainedAssignmentFixture() {
+  const fixture = mutableSampleRuntimeFixture();
+  const retainedId = "44444444-4444-4444-8444-444444444444";
+  fixture.session.inspectProject = async () => {
+    const inspected = fixture.inspectProject();
+    return {...inspected, project: {...inspected.project, assets: Object.fromEntries(
+      [...new Set([...fixture.assigned.values(), retainedId])].map(assetId => [assetId,
+        {artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 60}}]))}};
+  };
+  fixture.session.listLocalProjects = async () => [{...fixture.summary(), assetCount: 2}];
+  const reply = deferred<PadAssignmentResult>();
+  const assignPad = vi.fn((_request: Readonly<PadAssignmentRequest>) => reply.promise);
+  Object.assign(fixture.session, {assignPad});
+  return Object.assign(fixture, {retainedId, reply, assignPad});
+}
+async function sendAppAssignment(retainedId: string, destination = "63") {
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await userEvent.click(await screen.findByRole("button", {name: "ASSIGN"}));
+  await waitFor(() => expect(screen.getByRole("combobox", {name: "Retained source"})).toHaveProperty("disabled", false));
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Retained source"}), retainedId);
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Destination Pad"}), destination);
+  await userEvent.click(screen.getByRole("button", {name: "Assign Asset"}));
+}
+
+test("ordinary Sample remains usable while ASSIGN producer capability is absent", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await expectSelectedAsset(fixture.assigned.get(0)!);
+  expect(screen.getByRole("button", {name: "ASSIGN"})).toHaveProperty("disabled", true);
+  selectSamplePage("Playback");
+  expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"})).toHaveProperty("disabled", false);
+});
+
+test.each(["published", "publication failure", "unknown", "refused"] as const)(
+  "App retains sent ASSIGN %s across page and Pad loss without retargeting or retry", async outcome => {
+    const fixture = retainedAssignmentFixture();
+    const source = {...fixture.inspectSample(0)};
+    const stop = vi.spyOn(fixture.session, "stopPad");
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await sendAppAssignment(fixture.retainedId);
+    await waitFor(() => expect(fixture.assignPad).toHaveBeenCalledTimes(1));
+    const request = fixture.assignPad.mock.calls[0]![0];
+    expect(request).toEqual({commandId: expect.any(String), expectedRevision: 3,
+      slot: 63, assetId: fixture.retainedId});
+    expect(Object.isFrozen(request)).toBe(true);
+    await userEvent.click(screen.getByRole("button", {name: /^Pad A02 —/}));
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", true);
+    expect(stop).not.toHaveBeenCalled();
+    await act(async () => {
+      if (outcome === "unknown" || outcome === "refused") {
+        fixture.reply.reject(Object.assign(new Error(outcome), {
+          code: outcome === "unknown" ? "HOST_TIMEOUT" : "REVISION_CONFLICT"}));
+      } else {
+        fixture.assigned.set(63, fixture.retainedId);
+        fixture.revision = 4;
+        fixture.reply.resolve({slot: 63, assetId: fixture.retainedId, committedRevision: 4,
+          projectRevision: 4, replayed: false, runtimeRevision: outcome === "published" ? 4 : 3,
+          runtimePublished: outcome === "published", snapshotError: outcome === "published" ? null
+            : {code: "COOK_FAILED", message: "not prepared", details: {}}});
+      }
+    });
+    const status = screen.getByRole("region", {name: "Retained Asset assignment status"});
+    await waitFor(() => expect(status.textContent).toContain(outcome === "unknown" ? "outcome unknown"
+      : outcome === "refused" ? "Assignment refused" : "Assignment saved to D16"));
+    if (outcome === "publication failure") expect(status.textContent).toContain("COOK_FAILED");
+    await waitFor(() => expect(revisionCell()?.textContent).toBe(
+      outcome === "published" || outcome === "publication failure" ? "4" : "3"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    expect(document.querySelector(".selected-sample")?.textContent).toBe("Pad A02");
+    await flushAsyncTurns();
+    expect(fixture.assignPad).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(fixture.inspectSample(0).assetId).toBe(source.assetId);
+    expect(fixture.inspectSample(0).playback).toEqual(source.playback);
+    if (outcome === "unknown") {
+      expect(screen.getByRole("button", {name: "ASSIGN"})).toHaveProperty("disabled", true);
+      // Identical manufactured Truth is deliberately not receipt proof.
+      expect(fixture.revision).toBe(3);
+    }
+  });
+
+test("known ASSIGN commit is retained before a held projection then survives refresh failure", async () => {
+  const fixture = retainedAssignmentFixture();
+  const projection = deferred<unknown>();
+  const originalInspect = fixture.session.inspectProject;
+  let held = false;
+  fixture.session.inspectProject = async () => held ? projection.promise : originalInspect();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await sendAppAssignment(fixture.retainedId);
+  await waitFor(() => expect(fixture.assignPad).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    fixture.revision = 4;
+    held = true;
+    fixture.reply.resolve({slot: 63, assetId: fixture.retainedId, committedRevision: 4,
+      projectRevision: 4, replayed: false, runtimeRevision: 4, runtimePublished: true, snapshotError: null});
+  });
+  await screen.findByText("Assignment saved to D16.");
+  await act(async () => projection.reject(Object.assign(new Error("read failed"), {code: "HOST_TIMEOUT"})));
+  await screen.findByText("Assignment saved; the Project view could not be refreshed.");
+  await flushAsyncTurns();
+  expect(fixture.assignPad).toHaveBeenCalledTimes(1);
+  expect(fixture.revision).toBe(4);
+});
+
+test("sent assignment keeps its origin result through Runtime owner replacement", async () => {
+  const first = retainedAssignmentFixture();
+  const second = retainedAssignmentFixture();
+  let publish!: (state: RuntimeHostState) => void;
+  first.session.subscribeHostState = listener => {publish = listener; return () => {};};
+  const sessions = [first.session, second.session];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+  await sendAppAssignment(first.retainedId);
+  await waitFor(() => expect(first.assignPad).toHaveBeenCalledTimes(1));
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await act(async () => publish({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+  await flushAsyncTurns();
+  // The shutdown barrier retains the sent command through natural settlement.
+  expect(created).toBe(1);
+  await act(async () => first.reply.resolve({slot: 63, assetId: first.retainedId,
+    committedRevision: 4, projectRevision: 4, replayed: true, runtimeRevision: null,
+    runtimePublished: false, snapshotError: {code: "COOK_FAILED", message: "not prepared", details: {}}}));
+  await waitFor(() => expect(created).toBe(2));
+  await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+  await screen.findByText(/Assignment saved to D16; playback preparation failed/);
+  const details = screen.getByRole("region", {name: "Retained Asset assignment status"});
+  expect(details.textContent).toContain("Committed revision 4");
+  expect(details.textContent).toContain("replayed true");
+  // The replacement storage/revision must not adopt the old receipt by equal
+  // Project/target values; only the originating receipt notice remains.
+  expect(revisionCell()?.textContent).toBe("3");
+  expect(second.assignPad).not.toHaveBeenCalled();
+  expect(first.assignPad).toHaveBeenCalledTimes(1);
+});
+
+test("old UNKNOWN survives fresh-session recovery, cancellation and one explicitly confirmed NEW assignment", async () => {
+  const first = retainedAssignmentFixture();
+  const second = retainedAssignmentFixture();
+  let publish!: (state: RuntimeHostState) => void;
+  first.session.subscribeHostState = listener => {publish = listener; return () => {};};
+  const replacementOpen = vi.spyOn(second.session, "openProject");
+  const sessions = [first.session, second.session];
+  let created = 0;
+  render(<App initialState={ready} runtimeFactory={() => sessions[created++]!} />);
+  await waitFor(() => expect(first.calls).toContain("reloadSnapshot"));
+  await sendAppAssignment(first.retainedId);
+  await waitFor(() => expect(first.assignPad).toHaveBeenCalledTimes(1));
+  const original = first.assignPad.mock.calls[0]![0];
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await act(async () => first.reply.reject(Object.assign(new Error("receipt lost"), {code: "HOST_TIMEOUT"})));
+  await screen.findByText("Assignment outcome unknown. The command will not be sent again.");
+  await act(async () => publish({state: "restart-required", errorCode: "HOST_RESTART_REQUIRED", errorDetails: {}}));
+  await waitFor(() => expect(created).toBe(2));
+  await waitFor(() => expect(replacementOpen).toHaveBeenCalledExactlyOnceWith(
+    listedSummary.projectId, listedSummary.patternId));
+  await waitFor(() => expect(second.calls).toContain("reloadSnapshot"));
+  await waitFor(() => expect(screen.getByRole("button", {name: "New Project"})).toHaveProperty("disabled", false));
+  const status = screen.getByRole("region", {name: "Retained Asset assignment status"});
+  expect(status.textContent).toContain("outcome unknown");
+  expect(status.textContent).toContain(original.commandId);
+  expect(revisionCell()?.textContent).toBe("3");
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await expectSelectedAsset(second.assigned.get(0)!);
+  // The old unknown only protects its assignment identity. Existing Sample
+  // controls and new-session recovery remain usable; no automatic retry exists.
+  expect(screen.getByRole("button", {name: "ASSIGN"})).toHaveProperty("disabled", false);
+  selectSamplePage("Playback");
+  expect(screen.getByRole("button", {name: "Edit Pad A01 Volume"})).toHaveProperty("disabled", false);
+  await flushAsyncTurns();
+  expect(first.assignPad).toHaveBeenCalledExactlyOnceWith(original);
+  expect(second.assignPad).not.toHaveBeenCalled();
+  // Matching manufactured storage does not establish S1's durability.
+  expect(first.revision).toBe(3);
+  expect(second.inspectSample(63).assetId).toBeNull();
+  expect(status.textContent).toContain("outcome unknown");
+  await userEvent.click(screen.getByRole("button", {name: "ASSIGN"}));
+  await waitFor(() => expect(screen.getByRole("combobox", {name: "Retained source"})).toHaveProperty("disabled", false));
+  expect(screen.getByRole("combobox", {name: "Destination Pad"})).toHaveProperty("value", "");
+  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Retained source"}), second.retainedId);
+  expect(screen.getByRole("button", {name: "Assign Asset"})).toHaveProperty("disabled", true);
+  await flushAsyncTurns();
+  expect(second.assignPad).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", {name: "Cancel assignment"}));
+  expect(status.textContent).toContain(original.commandId);
+  expect(status.textContent).toContain("outcome unknown");
+  await sendAppAssignment(second.retainedId);
+  await waitFor(() => expect(second.assignPad).toHaveBeenCalledTimes(1));
+  const newIntent = second.assignPad.mock.calls[0]![0];
+  expect(newIntent).toEqual({...original, commandId: expect.any(String)});
+  expect(newIntent.commandId).not.toBe(original.commandId);
+  expect(Object.isFrozen(newIntent)).toBe(true);
+  await act(async () => {
+    second.assigned.set(63, second.retainedId);
+    second.revision = 4;
+    second.reply.resolve({slot: 63, assetId: second.retainedId, committedRevision: 4,
+      projectRevision: 4, replayed: false, runtimeRevision: 4, runtimePublished: true, snapshotError: null});
+  });
+  await screen.findByText("Assignment saved to D16.");
+  await waitFor(() => expect(revisionCell()?.textContent).toBe("4"));
+  expect(second.inspectSample(63).assetId).toBe(second.retainedId);
+  expect(status.textContent).toContain(original.commandId);
+  expect(status.textContent).toContain("outcome unknown");
+  expect(screen.getAllByRole("region", {name: "Retained Asset assignment status"})).toHaveLength(2);
+  await flushAsyncTurns();
+  expect(first.assignPad).toHaveBeenCalledExactlyOnceWith(original);
+  expect(second.assignPad).toHaveBeenCalledExactlyOnceWith(newIntent);
+});
 
 async function flushAsyncTurns(turns = 40) {
   await act(async () => {

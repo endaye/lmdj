@@ -206,6 +206,14 @@ export interface SampleCommit {
   snapshotError: Readonly<SampleSnapshotError> | null;
 }
 
+// D03 is separately guarded: ordinary Sample capability remains available
+// when a Host has not delivered the public retained-Asset producer yet.
+export type {PadAssignmentRequest, PadAssignmentResult} from "@lmdj/web-runtime-platform/runtime_types";
+
+export interface CreatorPadAssignmentRuntimeSession extends CreatorRuntimeSession {
+  assignPad(request: Readonly<PadAssignmentRequest>): Promise<Readonly<PadAssignmentResult>>;
+}
+
 export interface SampleImportOptions {
   slot: number;
   expectedRevision: number;
@@ -567,6 +575,8 @@ export interface TypedRuntimeError extends Error {
   details?: Readonly<Record<string, unknown>>;
 }
 import type {
+  PadAssignmentRequest,
+  PadAssignmentResult,
   PatternEventKeyRequest,
   PatternEventRequest,
   PerformanceRuntimeSession,

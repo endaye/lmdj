@@ -1,6 +1,9 @@
 import {PUBLIC_ERROR_CODES, SAMPLE_PREVIEW_FAILURE} from "../state/error_messages";
 import type {
+  CreatorPadAssignmentRuntimeSession,
   CreatorSampleRuntimeSession,
+  PadAssignmentRequest,
+  PadAssignmentResult,
   PadPlayback,
   SampleCommit,
   SampleImportOptions,
@@ -91,6 +94,78 @@ export type SampleMutationResolution =
 export type SampleDraftCommitResolution =
   | SampleMutationResolution
   | Readonly<{kind: "cancelled"}>;
+
+export function isPadAssignmentSession(
+  session: unknown,
+): session is CreatorPadAssignmentRuntimeSession {
+  return typeof (session as Partial<CreatorPadAssignmentRuntimeSession> | undefined)
+    ?.assignPad === "function";
+}
+
+export type PadAssignmentResolution =
+  | Readonly<{kind: "committed"; receipt: Readonly<PadAssignmentResult>}>
+  | Readonly<{kind: "refused" | "unknown"; error: unknown}>;
+
+export function freezePadAssignmentRequest(value: PadAssignmentRequest): Readonly<PadAssignmentRequest> {
+  if (!exactKeys(value, ["commandId", "expectedRevision", "slot", "assetId"]) ||
+      typeof value.commandId !== "string" || !UUID_PATTERN.test(value.commandId) ||
+      !unsignedInteger(value.expectedRevision, Number.MAX_SAFE_INTEGER - 1) ||
+      !slotNumber(value.slot) || typeof value.assetId !== "string" ||
+      !UUID_PATTERN.test(value.assetId)) {
+    throw new TypeError("Pad assignment request is invalid");
+  }
+  return Object.freeze({commandId: value.commandId, expectedRevision: value.expectedRevision,
+    slot: value.slot, assetId: value.assetId});
+}
+
+function normalizePadAssignmentReceipt(
+  value: unknown, request: Readonly<PadAssignmentRequest>,
+): Readonly<PadAssignmentResult> {
+  if (!exactKeys(value, ["slot", "assetId", "committedRevision", "replayed",
+    "projectRevision", "runtimeRevision", "runtimePublished", "snapshotError"]) ||
+      value.slot !== request.slot || value.assetId !== request.assetId ||
+      value.committedRevision !== request.expectedRevision + 1 ||
+      !unsignedInteger(value.projectRevision) || value.projectRevision < Number(value.committedRevision) ||
+      typeof value.replayed !== "boolean" || typeof value.runtimePublished !== "boolean" ||
+      !(value.runtimeRevision === null || unsignedInteger(value.runtimeRevision)) ||
+      (value.runtimeRevision !== null && Number(value.runtimeRevision) > value.projectRevision)) {
+    throw protocolMismatch("Pad assignment receipt is invalid");
+  }
+  const snapshotError = normalizeSnapshotError(value.snapshotError);
+  if (value.runtimePublished
+      ? value.runtimeRevision !== value.projectRevision || snapshotError !== null
+      : snapshotError === null) {
+    throw protocolMismatch("Pad assignment publication receipt is invalid");
+  }
+  return Object.freeze({slot: request.slot, assetId: request.assetId,
+    committedRevision: request.expectedRevision + 1, replayed: value.replayed,
+    projectRevision: value.projectRevision, runtimeRevision: value.runtimeRevision as number | null,
+    runtimePublished: value.runtimePublished, snapshotError});
+}
+
+// A valid receipt is the only proof of commit. Transport loss and malformed
+// receipts retain unknown durability; reading matching Truth cannot resolve it.
+// This journey never stops, clears preview, refreshes or resends a command.
+export async function assignRetainedAssetJourney(
+  session: CreatorPadAssignmentRuntimeSession, value: PadAssignmentRequest,
+): Promise<PadAssignmentResolution> {
+  const request = freezePadAssignmentRequest(value);
+  let result: unknown;
+  try {
+    result = await session.assignPad(request);
+  } catch (error) {
+    const code = errorCode(error);
+    const refused = code !== undefined && ["REVISION_CONFLICT", "NOT_FOUND", "MISSING_ASSET",
+      "INVALID_ARGUMENT", "INVALID_PROJECT", "PROJECT_BUSY", "HOST_STATE_INVALID",
+      "COMMAND_CONFLICT"].includes(code);
+    return Object.freeze({kind: refused ? "refused" : "unknown", error});
+  }
+  try {
+    return Object.freeze({kind: "committed", receipt: normalizePadAssignmentReceipt(result, request)});
+  } catch (error) {
+    return Object.freeze({kind: "unknown", error});
+  }
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

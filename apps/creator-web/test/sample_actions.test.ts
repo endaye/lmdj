@@ -1,7 +1,9 @@
-import {describe, expect, test} from "vitest";
+import {describe, expect, test, vi} from "vitest";
 
 import {
   CAPTURE_FILE_NAME,
+  assignRetainedAssetJourney,
+  isPadAssignmentSession,
   cancelSamplePreviewJourney,
   captureCommitJourney,
   commitSampleDraft,
@@ -19,6 +21,9 @@ import {CaptureBuffer} from "../src/capture/capture_buffer";
 import {encodePcm16Wav} from "../src/capture/wav_encoder";
 import type {
   CreatorSampleRuntimeSession,
+  CreatorPadAssignmentRuntimeSession,
+  PadAssignmentRequest,
+  PadAssignmentResult,
   RuntimeHostState,
   RuntimeOutcome,
   RuntimeVoiceState,
@@ -79,6 +84,80 @@ const published: SampleCommit = Object.freeze({
   runtimeRevision: 43,
   runtimePublished: true,
   snapshotError: null,
+});
+
+describe("retained Asset assignment receipt", () => {
+  const request: PadAssignmentRequest = {commandId: "44444444-4444-4444-8444-444444444444",
+    expectedRevision: 42, slot: 63, assetId: "11111111-1111-4111-8111-111111111111"};
+  const receipt: PadAssignmentResult = {...published, slot: 63, assetId: request.assetId,
+    projectRevision: 43, replayed: false};
+  const assignmentSession = (assignPad: CreatorPadAssignmentRuntimeSession["assignPad"]) =>
+    Object.assign(fixture().session, {assignPad});
+
+  test("assignment is a separate capability from existing Sample", () => {
+    expect(isPadAssignmentSession(fixture().session)).toBe(false);
+    expect(isPadAssignmentSession(assignmentSession(async () => receipt))).toBe(true);
+  });
+  test("freezes exactly four fields before sending and retains all eight result facts", async () => {
+    let finish!: (result: PadAssignmentResult) => void;
+    const assignPad = vi.fn((_request: Readonly<PadAssignmentRequest>) =>
+      new Promise<PadAssignmentResult>(resolve => {finish = resolve;}));
+    const session = assignmentSession(assignPad);
+    const mutable = {...request};
+    const pending = assignRetainedAssetJourney(session, mutable);
+    mutable.slot = 0;
+    mutable.assetId = "22222222-2222-4222-8222-222222222222";
+    expect(assignPad).toHaveBeenCalledExactlyOnceWith(request);
+    expect(Object.isFrozen(assignPad.mock.calls[0]![0])).toBe(true);
+    finish({...receipt, projectRevision: 45, runtimeRevision: 45, replayed: true});
+    expect(await pending).toEqual({kind: "committed", receipt: {...receipt,
+      projectRevision: 45, runtimeRevision: 45, replayed: true}});
+  });
+  test.each([{slot: -1}, {slot: 64}, {assetId: null}, {commandId: "bad"},
+    {expectedRevision: Number.MAX_SAFE_INTEGER}, {signal: new AbortController().signal}])(
+    "rejects malformed request %j without invoking", async change => {
+      const assignPad = vi.fn(async () => receipt);
+      await expect(assignRetainedAssetJourney(assignmentSession(assignPad),
+        {...request, ...change} as PadAssignmentRequest)).rejects.toThrow();
+      expect(assignPad).not.toHaveBeenCalled();
+    });
+  test.each([{slot: 62}, {assetId: "22222222-2222-4222-8222-222222222222"},
+    {committedRevision: 44}, {projectRevision: 42}, {runtimeRevision: 44},
+    {replayed: "false"}, {runtimePublished: false}, {snapshotError: {}},
+    {extra: true}])("keeps invalid sent receipt %j unknown without retry", async change => {
+      const assignPad = vi.fn(async () => ({...receipt, ...change}) as PadAssignmentResult);
+      const outcome = await assignRetainedAssetJourney(assignmentSession(assignPad), request);
+      expect(outcome.kind).toBe("unknown");
+      expect(assignPad).toHaveBeenCalledTimes(1);
+    });
+  test("known commit survives typed publication failure without pre-stop or refresh", async () => {
+    const session = assignmentSession(async () => ({...receipt, runtimePublished: false,
+      runtimeRevision: null, snapshotError: {code: "COOK_FAILED", message: "not prepared", details: {}}}));
+    session.stopPad = vi.fn(async () => true);
+    session.clearSamplePreview = vi.fn(async () => true);
+    session.inspectProject = vi.fn(async () => ({}));
+    const outcome = await assignRetainedAssetJourney(session, request);
+    expect(outcome).toEqual({kind: "committed", receipt: {...receipt, runtimePublished: false,
+      runtimeRevision: null, snapshotError: {code: "COOK_FAILED",
+        message: "The sound was saved but is not ready to play yet.", details: {}}}});
+    expect(session.stopPad).not.toHaveBeenCalled();
+    expect(session.clearSamplePreview).not.toHaveBeenCalled();
+    expect(session.inspectProject).not.toHaveBeenCalled();
+  });
+  test.each(["REVISION_CONFLICT", "NOT_FOUND", "MISSING_ASSET", "HOST_STATE_INVALID"])(
+    "%s refuses before commit without pre-stop", async code => {
+      const session = assignmentSession(vi.fn(async () => {throw Object.assign(new Error(code), {code});}));
+      session.stopPad = vi.fn(async () => true);
+      expect((await assignRetainedAssetJourney(session, request)).kind).toBe("refused");
+      expect(session.stopPad).not.toHaveBeenCalled();
+      expect(session.assignPad).toHaveBeenCalledTimes(1);
+    });
+  test.each(["HOST_TIMEOUT", "HOST_RESTART_REQUIRED", "HOST_PROTOCOL_MISMATCH", "INTERNAL_ERROR"])(
+    "%s keeps sent durability unknown with original command", async code => {
+      const assignPad = vi.fn(async () => {throw Object.assign(new Error(code), {code});});
+      expect((await assignRetainedAssetJourney(assignmentSession(assignPad), request)).kind).toBe("unknown");
+      expect(assignPad).toHaveBeenCalledExactlyOnceWith(request);
+    });
 });
 
 const retried: SnapshotPublication = Object.freeze({
