@@ -532,6 +532,74 @@ void fractional_anchor_has_absolute_independent_boundary_oracles() {
       {std::numeric_limits<std::uint64_t>::max(), 0, 120}, 1));
 }
 
+void phase_match_discards_completed_source_loops_before_target_mapping() {
+  // Approved example: one bar, second loop, beat 2 -> two bars, beat 2.
+  // Reducing directly by the target length would incorrectly keep tick 4800.
+  const auto anchor = lmdj::audio::phase_matched_pattern_anchor(
+      123'456, 13'824'000'000, 3840, 7680, 120);
+  LMDJ_CHECK(anchor.has_value());
+  LMDJ_CHECK((anchor.value() == TransportAnchor{123'456, 2'764'800'000, 120}));
+}
+
+void phase_match_wraps_source_local_position_within_shorter_target() {
+  // Two bars, second loop, beat 6 -> one bar, beat 2.
+  const auto anchor = lmdj::audio::phase_matched_pattern_anchor(
+      456'789, 35'942'400'000, 7680, 3840, 120);
+  LMDJ_CHECK(anchor.has_value());
+  LMDJ_CHECK((anchor.value() == TransportAnchor{456'789, 2'764'800'000, 120}));
+}
+
+void phase_match_maps_source_loop_boundary_to_target_zero() {
+  const auto anchor = lmdj::audio::phase_matched_pattern_anchor(
+      50'000, 33'177'600'000, 3840, 7680, 120);
+  LMDJ_CHECK(anchor.has_value());
+  LMDJ_CHECK((anchor.value() == TransportAnchor{50'000, 0, 120}));
+}
+
+void phase_match_preserves_fractional_tick_and_exact_projection() {
+  const auto anchor = lmdj::audio::phase_matched_pattern_anchor(
+      17, 11'061'207'360, 3840, 3840, 97);
+  LMDJ_CHECK(anchor.has_value());
+  LMDJ_CHECK((anchor.value() == TransportAnchor{17, 2'007'360, 97}));
+  LMDJ_CHECK(lmdj::audio::anchored_tick_boundary_frame(anchor.value(), 1) == 27);
+}
+
+void phase_match_preserves_real_frame_when_synthetic_origin_would_be_negative() {
+  // At source 240 BPM this is tick 2880 at S=36000. Target 40 BPM must not
+  // subtract its 216000-frame phase from S and underflow an unsigned origin.
+  const auto anchor = lmdj::audio::phase_matched_pattern_anchor(
+      36'000, 8'294'400'000, 3840, 3840, 40);
+  LMDJ_CHECK(anchor.has_value());
+  LMDJ_CHECK((anchor.value() == TransportAnchor{36'000, 8'294'400'000, 40}));
+  LMDJ_CHECK(lmdj::audio::anchored_tick_boundary_frame(anchor.value(), 2881) ==
+             36'075);
+}
+
+void phase_match_accepts_representable_unsigned_extremes() {
+  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+  const auto anchor = lmdj::audio::phase_matched_pattern_anchor(
+      maximum, maximum, 3840, 7680, 240);
+  LMDJ_CHECK(anchor.has_value());
+  LMDJ_CHECK((anchor.value() == TransportAnchor{maximum, 10'938'351'615, 240}));
+  const auto largest_geometry = lmdj::audio::phase_matched_pattern_anchor(
+      0, maximum, 6'405'119'470'038, 6'405'119'470'038, 40);
+  LMDJ_CHECK(largest_geometry.has_value());
+  LMDJ_CHECK((largest_geometry.value() == TransportAnchor{0, 111'615, 40}));
+}
+
+void phase_match_rejects_invalid_bpm_and_unrepresentable_geometry() {
+  using lmdj::audio::phase_matched_pattern_anchor;
+  constexpr auto overflow_ticks = 6'405'119'470'039ULL;
+  static_assert(noexcept(phase_matched_pattern_anchor(0, 0, 1, 1, 120)));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, 0, 3840, 120));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, 3840, 0, 120));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, overflow_ticks, 3840, 120));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, 3840, overflow_ticks, 120));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, 3840, 3840, 0));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, 3840, 3840, 39));
+  LMDJ_CHECK(!phase_matched_pattern_anchor(0, 0, 3840, 3840, 241));
+}
+
 void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   auto prior = PreparedSampleBank::empty(ProjectId{kProjectId}, 6);
   const std::array<float, 2> prior_pcm{0.25F, 0.25F};
@@ -704,4 +772,11 @@ int main() {
   pattern_event_equality_includes_the_voice_dsp_block();
   alternate_tempo_retains_source_events_and_shared_material();
   fractional_anchor_has_absolute_independent_boundary_oracles();
+  phase_match_discards_completed_source_loops_before_target_mapping();
+  phase_match_wraps_source_local_position_within_shorter_target();
+  phase_match_maps_source_loop_boundary_to_target_zero();
+  phase_match_preserves_fractional_tick_and_exact_projection();
+  phase_match_preserves_real_frame_when_synthetic_origin_would_be_negative();
+  phase_match_accepts_representable_unsigned_extremes();
+  phase_match_rejects_invalid_bpm_and_unrepresentable_geometry();
 }

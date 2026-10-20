@@ -16,6 +16,18 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 S6 的 scheduled Record、输入 profile 与双输出适配未在真实 MIDI 硬件或物理设备上验收，也未做听感验收。
 
+## SEQ SNAP OFF 相位计算基础
+
+`phase_matched_pattern_anchor(S, source_N, source_loop_ticks, target_loop_ticks,
+target_bpm)` 是无分配的纯计算：先把精确 numerator 折回源 Pattern 当前这一轮，
+再按目标长度折回，保留实际 engine 帧 S 与分数 tick。旧一小节第二轮第二拍
+切到两小节仍是第二拍，不把源的累计轮数带入目标。长度为零、乘法 overflow
+或 BPM 不在 40..240 时返回 unavailable，不伪造零相位或负数物理 origin。
+
+这仅提供位置计算；Native 跨 Pattern OFF 发布及其 retained 非零锚点、录音归段、
+Host/SDK、Creator 偏好和 metronome 尚未接线。现有 Beat/Bar/End 仍从目标零位置
+开始；此函数不改变其调度、Voice 或 Journal，也不构成 OFF 端到端验收。
+
 ## 连续 tempo transition
 
 `PreparedPatternView::with_tempo(bpm)` 从不可变 prepared source 派生 40..240 BPM
