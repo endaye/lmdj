@@ -3419,11 +3419,6 @@ function Workspace({
                 />
               )}
 
-              {!systemOpen && activeMode === "sample" &&
-              <nav className="touch-navigation" aria-label="Workspace navigation">
-                <button type="button" disabled={!sliceEnabled}
-                  onClick={() => selectMode("slice")}>Slice</button>
-              </nav>}
               <SystemSurface active={systemOpen} onBack={() => {
                 setSystemOpen(false);
                 // The entry stays mounted. Restore focus in this gesture so
@@ -3707,12 +3702,14 @@ function Workspace({
                     reconfirmationRequired: assignmentReconfirmationRequired,
                     onAssign: assignRetainedAsset}} : {})}
                   onUpdatePendingChange={sampleUpdatePendingChanged}
-                  padColourControls={activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
-                    state.project.current !== null ? (
+                  padAction={<button type="button" className="touch-control" disabled={!sliceEnabled}
+                    onClick={() => selectMode("slice")}>Slice</button>}
+                  renderPadColourControls={activeMode === "sample" && !trimOverlayOpen && isPadColourSession(session) &&
+                    state.project.current !== null ? actions => (
                     <PadColourControls
                       pad={state.sample.selectedSlot === null
                         ? null
-                        : state.project.current.pads.find(
+                        : state.project.current?.pads.find(
                           ({slot}) => slot === state.sample.selectedSlot) ?? null}
                       disabledReason={padColourDisabledReason}
                       error={padColourError !== null && padColourError.slot === state.sample.selectedSlot
@@ -3722,7 +3719,7 @@ function Workspace({
                         const slot = state.sample.selectedSlot;
                         if (slot !== null) void setPadColour(slot, colour);
                       }}
-                    />
+                    >{actions}</PadColourControls>
                   ) : null}
                   encodersActive={activeMode === "sample" && !systemOpen}
                   onEncodersReady={bindSampleEncoders}

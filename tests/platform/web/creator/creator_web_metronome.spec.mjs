@@ -704,6 +704,7 @@ test("global COUNT-IN on every page cancels through both physical keys without a
       await page.getByRole("button", {name: "Sound Sets", exact: true}).click();
     } else if (mode === "Slice") {
       await page.getByRole("button", {name: "Sample", exact: true}).click();
+      await showSamplePage(page, "Pad");
       await page.getByRole("button", {name: "Slice", exact: true}).click();
     } else await page.getByRole("button", {name: mode, exact: true}).click();
     await recordKey(page).click();

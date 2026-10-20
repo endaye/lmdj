@@ -28,6 +28,7 @@ interface SampleControlsProps {
   onCommit: (playback: Readonly<PadPlayback>) => void;
   onCancel?: () => void;
   onReset: () => void;
+  padAction?: ReactNode;
 }
 
 const NOOP = () => {};
@@ -129,6 +130,7 @@ export function SampleControls({
   onCommit,
   onCancel = NOOP,
   onReset,
+  padAction,
 }: SampleControlsProps) {
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [numericEdit, setNumericEdit] = useState<NumericEdit | null>(null);
@@ -383,15 +385,18 @@ export function SampleControls({
         onCancel={onCancel}
       />
       </> : null}
-      {page === "pad" ? <button
+      {page === "pad" ? <div className="sample-pad-edit-actions">
+        {padAction}
+        <button
         ref={resetTrigger}
         type="button"
         className="reset-sample"
+        aria-label="Reset Pad to Defaults"
         disabled={disabled}
         onClick={() => setConfirmingReset(true)}
       >
-        Reset Pad to Defaults
-      </button> : null}
+        Reset defaults
+      </button></div> : null}
       {confirmingReset ? (
         <ConfirmationDialog
           labelledBy="reset-heading"

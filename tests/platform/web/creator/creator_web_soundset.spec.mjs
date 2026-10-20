@@ -1085,7 +1085,14 @@ async function expectColourPickerPalette(controls, selected) {
     const swatch = controls.getByRole("button", {name: `${colour.label} colour`, exact: true});
     await expect(swatch).toHaveAttribute("data-pad-colour", String(index));
     await expect(swatch).toHaveAttribute("aria-pressed", String(index === selected));
-    await expect(swatch).toHaveCSS(index === selected ? "background-color" : "color", colour.rgb);
+    // U05c uses filled faces for all five indices. Check the actual painted
+    // face against the independent approved RGB, not a hidden text label.
+    const face = await swatch.evaluate(element => {
+      const style = getComputedStyle(element, "::before");
+      return {fill: style.backgroundColor, outline: style.borderTopColor};
+    });
+    expect(face.fill).toBe(colour.rgb);
+    if (index === selected) expect(face.outline).toBe("rgb(241, 242, 233)");
   }
 }
 
