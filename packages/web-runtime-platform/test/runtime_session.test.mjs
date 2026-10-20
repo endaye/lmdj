@@ -486,6 +486,20 @@ function outputMeterFixture(options = {}) {
           this.port = {onmessage: null, postMessage: (message) => this.messages.push(message)};
           tapNode = this;
         }
+        // Controlled native-event model only; the real packaged render-throw
+        // journey independently requires an actual trusted browser ErrorEvent.
+        nativeErrorListeners = new Set();
+        addEventListener(type, listener, options) {
+          if (type === "error") this.nativeErrorListeners.add(listener);
+          super.addEventListener(type, listener, options);
+        }
+        removeEventListener(type, listener, options) {
+          if (type === "error") this.nativeErrorListeners.delete(listener);
+          super.removeEventListener(type, listener, options);
+        }
+        emitNativeProcessorError() {
+          for (const listener of this.nativeErrorListeners) listener({type: "error", isTrusted: true});
+        }
         connect(destination) { this.connected.push(destination); }
         disconnect() { this.connected = []; }
       };
@@ -659,13 +673,29 @@ test("old published meter closures remain closed while a replacement Session mea
   await replacement.session.close();
 });
 
+test("synthetic generic error cannot revoke a running meter or reconnect its graph", async () => {
+  const direct = [];
+  const runtime = outputMeterFixture({connectAudioWorkletDirect: (...args) => { direct.push(args); return true; }});
+  await activateMeter(runtime);
+  runtime.context.currentTime = 0.05;
+  runtime.deliver();
+  const before = runtime.session.outputMeter();
+  const event = new Event("error");
+  assert.equal(event.isTrusted, false);
+  runtime.node().dispatchEvent(event);
+  await drainTasks();
+  assert.deepEqual(runtime.session.outputMeter(), before);
+  assert.deepEqual(direct, []);
+  await runtime.session.close();
+});
+
 test("native error event revokes meter and duplicate processor failures recover audio only once", async () => {
   const direct = [];
   const runtime = outputMeterFixture({connectAudioWorkletDirect: (...args) => { direct.push(args); return true; }});
   await activateMeter(runtime);
   runtime.context.currentTime = 0.05;
   const old = runtime.deliver();
-  runtime.node().dispatchEvent(new Event("error"));
+  runtime.node().emitNativeProcessorError();
   assert.deepEqual(runtime.session.outputMeter(), {state: "unavailable", reason: "processor-failed"});
   runtime.node().dispatchEvent(new Event("processorerror"));
   runtime.node().dispatchEvent(new Event("error"));

@@ -3824,7 +3824,11 @@ function createRuntimeSessionController(options = {}) {
             // One failure can never run the direct-monitor recovery twice.
             const recoverTap = () => { void handleTapProcessorFailure(); };
             listen(performanceMasterTap.destinationNode, "processorerror", recoverTap);
-            listen(performanceMasterTap.destinationNode, "error", recoverTap);
+            listen(performanceMasterTap.destinationNode, "error", (event) => {
+              // Chromium's native processor fault is trusted; a Host's
+              // synthetic generic error is not evidence of render failure.
+              if (event.isTrusted === true) recoverTap();
+            });
           } catch {
             if (localTap !== null) {
               try {

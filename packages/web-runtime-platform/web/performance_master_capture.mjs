@@ -200,7 +200,9 @@ function createPerformanceMasterCaptureController({
         node.port.postMessage({type: "meter-ack", owner: data.owner,
           windowEndFrame: data.windowEndFrame});
       } catch {
-        failMeter("protocol-error");
+        // Drain old tokens when possible, but an old owner's failed ACK
+        // cannot revoke the current owner's measurement or failure state.
+        if (data.owner === meterOwner) failMeter("protocol-error");
         return;
       }
     }

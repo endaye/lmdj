@@ -213,6 +213,25 @@ test("valid old-owner meter drains its token without adopting or poisoning the n
   await controller.close();
 });
 
+test("old-owner ACK failure does not poison the current meter owner", async () => {
+  const {controller, node} = await fixture({onPostMessage(message) {
+    if (message.type === "meter-ack" && message.owner === METER_A) throw new Error("old ACK failed");
+  }});
+  controller.setMeterOwner(METER_A);
+  controller.setMeterOwner(METER_B);
+  node.port.onmessage({data: meterMessage()});
+  assert.deepEqual(controller.meterMeasurement(), {state: "unavailable", reason: "pending"});
+  // Controller-level admitted traffic, not a claim that MessagePort retries
+  // a failed ACK or the Worklet can bypass its single in-flight token.
+  node.port.onmessage({data: meterMessage({owner: METER_B})});
+  const current = controller.meterMeasurement();
+  assert.equal(current.state, "available");
+  assert.equal(current.owner, METER_B);
+  node.port.onmessage({data: meterMessage()});
+  assert.deepEqual(controller.meterMeasurement(), current);
+  await controller.close();
+});
+
 test("unsafe clocks, malformed peaks and discontinuous windows fail only their meter owner", async () => {
   const malformed = [
     {windowEndFrame: "9007199254740992"}, {windowStartFrame: "00"},
