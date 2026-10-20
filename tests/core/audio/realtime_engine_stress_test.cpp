@@ -955,6 +955,7 @@ void retained_publication_boundaries_race_render_cancel_and_reclaim() {
   });
   PatternPublicationLease previous;
   std::optional<PatternPublicationObservation> previous_fact;
+  std::optional<PatternPublicationClockObservation> previous_clock;
   unsigned applied = 0, cancelled = 0;
   for (unsigned i = 0; i < 48; ++i) {
     engine.reclaim_retired_patterns();
@@ -974,12 +975,16 @@ void retained_publication_boundaries_race_render_cancel_and_reclaim() {
     } while (fact->disposition == PatternPublicationDisposition::pending);
     LMDJ_CHECK(fact->authority.generation == next.publication.generation &&
         fact->authority.pattern_id == target);
+    const auto clock = engine.observe_pattern_publication_clock(next.lease);
+    LMDJ_CHECK(clock && clock->ppq == 960 && clock->loop_length_ticks == 3840);
     if (cancel_won) {
       LMDJ_CHECK(fact->disposition == PatternPublicationDisposition::cancelled && !fact->applied_frame);
+      LMDJ_CHECK(!clock->applied_anchor);
       ++cancelled;
     } else {
       LMDJ_CHECK(fact->disposition == PatternPublicationDisposition::applied && fact->applied_frame);
       LMDJ_CHECK(*fact->applied_frame >= next.publication.activation_frame);
+      LMDJ_CHECK(clock->applied_anchor == (TransportAnchor{*fact->applied_frame, 0, 240}));
       ++applied;
     }
     if (previous_fact) {
@@ -988,10 +993,15 @@ void retained_publication_boundaries_race_render_cancel_and_reclaim() {
           retained->authority.pattern_id == previous_fact->authority.pattern_id &&
           retained->disposition == previous_fact->disposition &&
           retained->applied_frame == previous_fact->applied_frame);
+      const auto retained_clock = engine.observe_pattern_publication_clock(previous);
+      LMDJ_CHECK(retained_clock && previous_clock &&
+          retained_clock->applied_anchor == previous_clock->applied_anchor);
     }
     previous = std::move(next.lease);
     LMDJ_CHECK(!engine.observe_pattern_publication(next.lease));
+    LMDJ_CHECK(!engine.observe_pattern_publication_clock(next.lease));
     previous_fact = std::move(fact);
+    previous_clock = clock;
   }
   previous.reset();
   done.store(true, std::memory_order_release);
@@ -1003,6 +1013,81 @@ void retained_publication_boundaries_race_render_cancel_and_reclaim() {
   const auto stats = engine.pattern_telemetry();
   LMDJ_CHECK(stats.pending_publications == 0);
   LMDJ_CHECK(stats.accepted_publications == stats.applied_publications + stats.canceled_publications);
+}
+
+void retained_phase_clocks_race_render_and_reclaim_with_exact_history() {
+  using namespace lmdj;
+  using namespace lmdj::audio;
+  const foundation::ProjectId project{"00000000-0000-4000-8000-000000000001"};
+  const foundation::PatternId pattern{"00000000-0000-4000-8000-000000000002"};
+  const auto make_view = [&] {
+    cooker::RuntimeSnapshot snapshot{project, pattern, 1, 97, 1, 960, 3840, {}, {}};
+    auto view = PreparedPatternView::from_snapshot(snapshot);
+    LMDJ_CHECK(view.has_value());
+    return std::move(view.value());
+  };
+  RealtimeEngine engine;
+  auto current = engine.publish_pattern_view(make_view()).generation;
+  LMDJ_CHECK(current != 0 && engine.start().has_value());
+  std::atomic<bool> done{};
+  std::thread audio([&] {
+    std::array<float, 64> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      callback_active = true;
+      engine.render(left.data(), right.data(), left.size());
+      callback_active = false;
+      std::this_thread::yield();
+    }
+  });
+  PatternPublicationLease previous;
+  std::optional<TransportAnchor> previous_anchor;
+  try {
+    for (unsigned i = 0; i < 1000; ++i) {
+      engine.reclaim_retired_patterns();
+      auto next = engine.publish_retained_pattern_view_preserving_phase(make_view(), current);
+      LMDJ_CHECK(next.publication.result == PatternPublishResult::accepted && next.lease);
+      std::optional<PatternPublicationClockObservation> clock;
+      do {
+        clock = engine.observe_pattern_publication_clock(next.lease);
+        LMDJ_CHECK(clock.has_value());
+        if (clock->publication.disposition == PatternPublicationDisposition::pending)
+          LMDJ_CHECK(!clock->applied_anchor);
+        std::this_thread::yield();
+      } while (clock->publication.disposition == PatternPublicationDisposition::pending);
+      LMDJ_CHECK(clock->publication.disposition == PatternPublicationDisposition::applied);
+      LMDJ_CHECK(clock->applied_anchor && clock->publication.applied_frame);
+      const auto frame = *clock->publication.applied_frame;
+      // Independent closed-form legacy 97 BPM clock: rounded loop=118763,
+      // exact loop numerator=11059200000, per-frame numerator=93120. This
+      // preserves the existing rounded path; it does not settle #1973.
+      const auto numerator = (frame / 118'763) * 11'059'200'000 +
+          (frame % 118'763) * 93'120;
+      LMDJ_CHECK(clock->applied_anchor == (TransportAnchor{frame, numerator, 97}));
+      LMDJ_CHECK(clock->ppq == 960 && clock->loop_length_ticks == 3840);
+      if (previous_anchor) {
+        const auto retained = engine.observe_pattern_publication_clock(previous);
+        LMDJ_CHECK(retained && retained->applied_anchor == previous_anchor);
+      }
+      previous = std::move(next.lease);
+      previous_anchor = clock->applied_anchor;
+      current = next.publication.generation;
+      // Applied slot evidence precedes publication of current-only telemetry.
+      // Wait for that producer's far side before the next exact-current edit.
+      while (engine.pattern_telemetry().current_generation != current)
+        std::this_thread::yield();
+    }
+  } catch (...) {
+    done.store(true, std::memory_order_release);
+    audio.join();
+    throw;
+  }
+  done.store(true, std::memory_order_release);
+  audio.join();
+  engine.stop();
+  LMDJ_CHECK(engine.observe_pattern_publication_clock(previous)->applied_anchor == previous_anchor);
+  previous.reset();
+  engine.reclaim_retired_patterns();
+  LMDJ_CHECK(engine.pattern_telemetry().pending_publications == 0);
 }
 
 }  // namespace
@@ -1025,6 +1110,7 @@ void operator delete(void* p, std::size_t, std::align_val_t) noexcept { release_
 void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { release_allocation(p); }
 
 int main() {
+  retained_phase_clocks_race_render_and_reclaim_with_exact_history();
   retained_publication_boundaries_race_render_cancel_and_reclaim();
   tempo_transitions_race_render_reclaim_and_retained_record_fences();
   phase_publication_races_render_reclaim_and_stop();

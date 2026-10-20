@@ -151,6 +151,16 @@ struct PatternPublicationObservation {
   std::optional<std::uint64_t> applied_frame;
 };
 
+// Companion to the unchanged disposition DTO. Applied anchors describe this
+// immutable publication's actual application, not the later current clock.
+// Applied with unavailable position has no anchor; pending/cancelled never do.
+struct PatternPublicationClockObservation {
+  PatternPublicationObservation publication;
+  std::optional<TransportAnchor> applied_anchor;
+  std::uint32_t ppq;
+  std::uint32_t loop_length_ticks;
+};
+
 // Serialized control owner, concurrent with audio. Unlike latest-only
 // telemetry, this names both immutable publications: audio-owned, then Q.
 struct PatternTransportObservation {
@@ -682,6 +692,11 @@ class RealtimeEngine final {
   // Audio-local cancellation stays pending until audio releases that slot.
   std::optional<PatternPublicationObservation> observe_pattern_publication(
       const PatternPublicationLease& lease) const;
+  // Same serialized-control/pin contract. Geometry and BPM come from the
+  // immutable pinned view; actual S/N are acquired from its apply evidence.
+  // A retained historical anchor remains stable through successors and Stop.
+  std::optional<PatternPublicationClockObservation> observe_pattern_publication_clock(
+      const PatternPublicationLease& lease) const;
   // Exact live ownership, including both pending publications and a
   // generation-tagged origin. nullopt means a bounded read raced audio;
   // callers must not fill the gap with guessed telemetry fields.
@@ -698,6 +713,10 @@ class RealtimeEngine final {
   // the first effective render frame without changing origin or sounding voices.
   // Explicit Pattern-stopped remains stopped; legacy scheduling stays enabled.
   PatternPublication publish_pattern_view_preserving_phase(
+      PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
+  // Opt-in retained form of the same phase-edit contract. Requires Engine
+  // running; refusals do not consume the view. Pins before audio visibility.
+  RetainedPatternPublication publish_retained_pattern_view_preserving_phase(
       PreparedPatternView&& pattern, std::uint64_t expected_generation) noexcept;
   // Tempo-only derivation of the exact current immutable source. Uses the
   // same publication admission/cutoff as phase edits, keeps voices and exact
@@ -944,6 +963,10 @@ class RealtimeEngine final {
   // Audio-owned apply evidence is generation tagged across slot reuse.
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_generations_{};
   std::array<std::uint64_t, kRealtimePatternCapacity> pattern_applied_frames_{};
+  // Written before the same slot state release; immutable under a control pin.
+  // S is already retained above and BPM/geometry belong to the pinned view.
+  std::array<std::optional<std::uint64_t>, kRealtimePatternCapacity>
+      pattern_applied_positions_{};
 
   static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
   static constexpr std::uint64_t schedule_tag(
