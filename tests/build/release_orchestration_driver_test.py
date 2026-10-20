@@ -505,5 +505,54 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.backend.calls, [])
 
 
+    def test_a_swallowed_failure_leaves_only_a_private_sanitized_note(self):
+        from tools.release.commands import CommandError
+        def failing_execute(state, operation):
+            raise CommandError("release command failed: gh (exit 1)",
+                               detail="upload to https://user:hunter2@example.com failed token ghp_" + "b" * 36)
+        self.backend.execute = failing_execute
+        result = self.driver.run(request())
+        self.assertEqual((result.status, result.step), ("unknown", "candidate"))
+        # The result and the request state stay free of failure text.
+        self.assertNotIn("release command failed", repr(result))
+        self.assertNotIn("release command failed", json.dumps(self.state()))
+        with RequestJournal(self.journal, writable=False) as journal:
+            note = journal.read_failure("release-1")
+        self.assertEqual((note["step"], note["status"]), ("candidate", "unknown"))
+        self.assertIn("CommandError: release command failed: gh (exit 1): upload to", note["diagnostic"])
+        for secret in ("hunter2", "ghp_", "b" * 36):
+            self.assertNotIn(secret, note["diagnostic"])
+        mode = (self.journal / "release-1.failure").stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_a_foreign_exception_leaves_only_its_type_in_the_note(self):
+        self.backend.failure = "candidate"
+        self.driver.run(request())
+        with RequestJournal(self.journal, writable=False) as journal:
+            note = journal.read_failure("release-1")
+        self.assertEqual(note["diagnostic"], "RuntimeError")
+
+    def test_a_later_complete_run_clears_the_failure_note(self):
+        def fail_read(state, operation):
+            raise RuntimeError("transient read failure")
+        original = self.backend.observe
+        self.backend.observe = fail_read
+        self.assertEqual(self.driver.run(request()).status, "unknown")
+        self.assertTrue((self.journal / "release-1.failure").exists())
+        self.backend.observe = original
+        self.assertEqual(self.driver.resume("release-1").status, "complete")
+        self.assertFalse((self.journal / "release-1.failure").exists())
+
+    def test_a_diagnostic_is_bounded_and_never_rides_on_success(self):
+        Observation("unknown", diagnostic="RuntimeError: cause").validate()
+        Observation("conflict", diagnostic="RuntimeError: cause").validate()
+        for observed in (Observation("pending", diagnostic="x"),
+                         Observation("unknown", diagnostic="x" * 401),
+                         Observation("unknown", diagnostic="")):
+            with self.assertRaises(JournalError):
+                observed.validate()
+        # A diagnostic never changes what two observations mean.
+        self.assertEqual(Observation("unknown", diagnostic="a"), Observation("unknown"))
+
 if __name__ == "__main__":
     unittest.main()

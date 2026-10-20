@@ -57,6 +57,26 @@ def sanitize_diagnostic(
     return _bounded(collapsed, limit)
 
 
+def describe_failure(error: BaseException, *, limit: int = 320) -> str:
+    """One bounded, secret-safe line naming why a swallowed step failure happened.
+
+    Release step adapters report an exception as `unknown` so that a raw message
+    never becomes the request's persisted or public status. The operator still
+    needs the cause on the console. Errors this package raises carry authored
+    why/remedy messages (and a command's already-sanitized `detail`), so those
+    are kept after sanitizing; any other exception contributes its type name
+    only, never its message.
+    """
+    name = type(error).__name__
+    if not type(error).__module__.startswith("tools.release"):
+        return name
+    message = str(error)
+    detail = getattr(error, "detail", "")
+    if isinstance(detail, str) and detail:
+        message = f"{message}: {detail}"
+    return sanitize_diagnostic(f"{name}: {message}", limit=limit)
+
+
 class CommandError(RuntimeError):
     """A command failed without exposing its environment or output secrets.
 

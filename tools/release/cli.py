@@ -524,6 +524,9 @@ def format_request_status(root: Path, git, request_id: str | None = None) -> str
                 f"  step: {outstanding or '-'}\n"
                 f"  outstanding intent: {outstanding if unresolved else '-'}\n"
             )
+            note = journal.read_failure(state["request"]["id"])
+            if note is not None:
+                report.append(f"  {_format_failure_note(note)}\n")
     if not report:
         return "release request journal: no requests\n"
     return "source: local request journal; run `resume` to re-verify against live state\n" + "".join(report)
@@ -709,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
                     release_journal_root(root, context.git), policy,
                     ReleaseBackend(context.git, context.github, carriers=()))
                 result = driver.resume(options.request_id)
-                _print_drive_result(result)
+                _print_drive_result(result, release_journal_root(root, context.git))
                 return 0 if result.status == "complete" else 2
             carriers = release_carriers(context, policy, request)
             backend = ReleaseBackend(context.git, context.github, carriers=carriers)
@@ -728,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
                 driver.run(request)
                 if options.command == "run" else driver.resume(options.request_id)
             )
-            _print_drive_result(result)
+            _print_drive_result(result, release_journal_root(root, context.git))
             return 0 if result.status == "complete" else 2
         if options.command == "prepare":
             prepared = prepare(options.tag, context)
@@ -778,11 +781,29 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _print_drive_result(result) -> None:
+def _failure_note(journal_root: Path, request_id: str):
+    """The latest sanitized step-failure note, read without joining the writer lock."""
+    try:
+        with RequestJournal(journal_root, writable=False) as journal:
+            return journal.read_failure(request_id)
+    except JournalError:
+        return None
+
+
+def _format_failure_note(note) -> str:
+    return (f"last failure: {note['step']} {note['status']} at {note['observed_utc']}: "
+            f"{note['diagnostic']}")
+
+
+def _print_drive_result(result, journal_root: Path | None = None) -> None:
     print(f"release request: {result.request_id}")
     print(f"request status: {result.status}")
     print(f"step: {result.step or '-'}")
     print(f"verified steps: {len(result.verified_steps)}/{len(STEPS)}")
+    if result.status != "complete" and journal_root is not None:
+        note = _failure_note(journal_root, result.request_id)
+        if note is not None:
+            print(_format_failure_note(note))
     if result.status != "complete":
         print("next step: reconcile the reported step, then resume this same request ID")
 

@@ -8,6 +8,7 @@ An outstanding intent forbids another begin: it requires reconciliation first.
 from contextlib import AbstractContextManager
 from copy import deepcopy
 import fcntl
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -345,6 +346,64 @@ class RequestJournal(AbstractContextManager):
     @staticmethod
     def _encode(state):
         return canonical_json({"state": state, "sha256": canonical_sha256(state)})
+
+    def record_failure(self, request_id, step, status, diagnostic):
+        """Keep the latest sanitized step-failure cause beside, not inside, the request.
+
+        The note is private local operator evidence: the request state, its
+        digest and every public status stay free of failure text.
+        """
+        self._active()
+        if not self.writable:
+            _fail("journal is open for reading only")
+        if not _match(_ID, request_id) or step not in STEPS:
+            _fail("failure note names an invalid request or step")
+        if type(status) is not str or not status or type(diagnostic) is not str \
+                or not diagnostic or len(diagnostic) > 400:
+            _fail("failure note is invalid")
+        note = {"schema": "lmdj.release-step-failure.v1", "request_id": request_id,
+                "step": step, "status": status, "diagnostic": diagnostic,
+                "observed_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        self._write(request_id + ".failure", canonical_json(note))
+
+    def clear_failure(self, request_id):
+        self._active()
+        if not self.writable:
+            _fail("journal is open for reading only")
+        if not _match(_ID, request_id):
+            _fail("invalid request ID")
+        try:
+            os.unlink(request_id + ".failure", dir_fd=self.directory)
+        except FileNotFoundError:
+            return
+        os.fsync(self.directory)
+
+    def read_failure(self, request_id):
+        """The latest failure note for this request, or None."""
+        self._active()
+        if not _match(_ID, request_id):
+            _fail("invalid request ID")
+        try:
+            fd = os.open(request_id + ".failure", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=self.directory)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            _fail("failure note is unsafe or unavailable")
+        try:
+            self._private(fd)
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                raw = source.read(_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+        try:
+            note = json.loads(raw)
+        except ValueError:
+            _fail("failure note is malformed")
+        if (type(note) is not dict or note.get("schema") != "lmdj.release-step-failure.v1"
+                or note.get("request_id") != request_id):
+            _fail("failure note is malformed")
+        return note
 
     def _save(self, state):
         self._active()

@@ -6,9 +6,10 @@ a verified result. No production adapter is selected by this module.
 """
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
+from .commands import describe_failure
 from .model import canonical_sha256
 from .orchestration import JournalError, RequestJournal, STEPS, _validate_evidence, validate_request
 from .orchestration_policy import OrchestrationPolicy
@@ -19,6 +20,9 @@ class Observation:
     # absent means positively absent, not unreadable/not yet indexed.
     status: str
     evidence: dict | None = None
+    # Console-only cause of an unknown/conflict result, already reduced by
+    # `commands.describe_failure`. Never journaled and never part of equality.
+    diagnostic: str | None = field(default=None, compare=False)
 
     def validate(self):
         if self.status not in ("verified", "absent", "pending", "conflict", "unknown"):
@@ -27,6 +31,10 @@ class Observation:
             _validate_evidence(self.evidence)
         elif self.evidence is not None:
             raise JournalError("why: unverified adapter evidence; remedy: verify the far-side result")
+        if self.diagnostic is not None and (
+                self.status not in ("unknown", "conflict") or type(self.diagnostic) is not str
+                or not self.diagnostic or len(self.diagnostic) > 400):
+            raise JournalError("why: invalid adapter diagnostic; remedy: report only a bounded unknown/conflict cause")
 
 
 class TransitionBackend(Protocol):
@@ -138,9 +146,10 @@ class ReleaseDriver:
         try:
             observer = self._managed(operation) or self.backend
             result = observer.observe(deepcopy(state), deepcopy(operation))
-        except Exception:
-            # Read failures carry no negative proof and may contain secrets.
-            return Observation("unknown")
+        except Exception as error:
+            # Read failures carry no negative proof and may contain secrets:
+            # only the sanitized console diagnostic leaves this frame.
+            return Observation("unknown", diagnostic=describe_failure(error))
         if type(result) is not Observation:
             raise JournalError("why: invalid adapter result; remedy: repair the trusted adapter")
         result.validate()
@@ -158,8 +167,8 @@ class ReleaseDriver:
                 managed.advance(deepcopy(state),deepcopy(operation),before_post=before_write)
             else:
                 managed.advance(deepcopy(state), deepcopy(operation), before_write=before_write)
-        except Exception:
-            return Observation("unknown")
+        except Exception as error:
+            return Observation("unknown", diagnostic=describe_failure(error))
         return self._observe(journal.read(state["request"]["id"]), operation)
 
     def _backend_carrier(self, operation):
@@ -185,17 +194,23 @@ class ReleaseDriver:
 
         try:
             advanced.advance(deepcopy(state), deepcopy(operation), before_write=guard)
-        except Exception:
+        except Exception as error:
             # External errors may embed credentials; never persist or
             # expose their strings as the request's public status.
-            return Observation("unknown")
+            return Observation("unknown", diagnostic=describe_failure(error))
         return self._observe(journal.read(request_id), operation)
 
     def _advance(self, journal, state):
         verified = []
         request_id = state["request"]["id"]
 
-        def result(status, step):
+        def result(status, step, observed=None):
+            # The sanitized cause goes only to the private local failure note,
+            # never into the result or the request state.
+            if observed is not None and observed.diagnostic is not None:
+                journal.record_failure(request_id, step, status, observed.diagnostic)
+            elif status == "complete":
+                journal.clear_failure(request_id)
             return DriveResult(request_id, status, step, tuple(verified))
 
         # Persisted verified bits are not accepted without fresh far-side proof.
@@ -204,7 +219,7 @@ class ReleaseDriver:
             observed = self._observe(state, operation)
             if operation["status"] == "verified":
                 if observed.status != "verified":
-                    return result("evidence-" + observed.status, operation["step"])
+                    return result("evidence-" + observed.status, operation["step"], observed)
                 if observed.evidence != operation["evidence"]:
                     return result("evidence-conflict", operation["step"])
             else:
@@ -218,7 +233,7 @@ class ReleaseDriver:
                         observed = self._advance_backend(journal, request_id, operation, advanced)
                 if observed.status != "verified":
                     return result("unknown" if observed.status == "absent" else observed.status,
-                                  operation["step"])
+                                  operation["step"], observed)
                 journal.confirm(request_id, operation["operation_id"], observed.evidence)
             verified.append(operation["step"])
 
@@ -233,16 +248,16 @@ class ReleaseDriver:
             advanced = self._backend_advance(operation)
             if observed.status not in (("absent", "verified", "pending")
                                        if managed or advanced else ("absent", "verified")):
-                return result(observed.status, step)
+                return result(observed.status, step, observed)
             journal.begin(request_id, step)
             if managed and observed.status != "verified":
                 observed = self._advance_managed(journal, journal.read(request_id), operation)
                 if observed.status != "verified":
-                    return result("unknown" if observed.status == "absent" else observed.status, step)
+                    return result("unknown" if observed.status == "absent" else observed.status, step, observed)
             elif advanced is not None and observed.status != "verified":
                 observed = self._advance_backend(journal, request_id, operation, advanced)
                 if observed.status != "verified":
-                    return result("unknown" if observed.status == "absent" else observed.status, step)
+                    return result("unknown" if observed.status == "absent" else observed.status, step, observed)
             elif observed.status == "absent":
                 # Intent is durable before anything that can perform a write.
                 # An auth failure here leaves an unresolved intent, not a retry.
@@ -250,13 +265,13 @@ class ReleaseDriver:
                 state = journal.read(request_id)
                 try:
                     self.backend.execute(deepcopy(state), deepcopy(operation))
-                except Exception:
+                except Exception as error:
                     # External errors may embed credentials; never persist or
                     # expose their strings as the request's public status.
-                    return result("unknown", step)
+                    return result("unknown", step, Observation("unknown", diagnostic=describe_failure(error)))
                 observed = self._observe(state, operation)
                 if observed.status != "verified":
-                    return result("unknown" if observed.status == "absent" else observed.status, step)
+                    return result("unknown" if observed.status == "absent" else observed.status, step, observed)
             journal.confirm(request_id, operation["operation_id"], observed.evidence)
             verified.append(step)
         return result("complete", None)
