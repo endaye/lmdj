@@ -1226,6 +1226,47 @@ test("Web Project I/O retains a child writer after Control root reset and releas
   }
 });
 
+test("Web Project I/O reads bounded binary ranges without a writer through two page reopens", async ({context, browserName}, testInfo) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const preflight = await trackedPage(context);
+  await navigate(preflight, "/preflight.html");
+  const capabilities = await inspectStorageCapabilities(preflight);
+  await preflight.close();
+  expect(preflight.isClosed()).toBe(true);
+  if (capabilities.status === "unsupported") {
+    expect(browserName).toBe("webkit");
+    expect(capabilities.error).toEqual({code: "UNSUPPORTED_WEB_RUNTIME",
+      missing: STORAGE_CAPABILITY_ORDER.filter(name => capabilities.capabilities[name] !== true)});
+    testInfo.annotations.push({type: "platform-limitation", description: capabilities.error.missing.join(",")});
+    await retainAdmissionEvidence(testInfo, "bounded-range-capability-refusal.json", capabilities);
+    return;
+  }
+  const bundle = `bounded-range-${Date.now()}`;
+  const expected = {windowCount: 4, window: [85, 0, 255, 99, 100, 85],
+    tailCount: 1, tail: [85, 121, 85, 85, 85, 85], eofWindows: 4, emptyCount: 0,
+    missingErrorCode: "NOT_FOUND", writersBefore: 0, writersAfter: 0};
+  const reports = [];
+  const physical = [];
+  for (const phase of ["prepare", "inspect", "inspect"]) {
+    const page = await trackedPage(context);
+    await navigate(page, `/project_io/project_io_web_test.html?action=bounded_range_read&phase=${phase}&bundle=${bundle}`);
+    const result = await waitForResult(page);
+    expect(result).toEqual(expected);
+    reports.push(result);
+    const actualBytes = await page.evaluate(async bundle => {
+      const root = await navigator.storage.getDirectory();
+      const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+      const file = await (await directory.getFileHandle("raw.bin")).getFile();
+      return Array.from(new Uint8Array(await file.arrayBuffer()));
+    }, bundle);
+    expect(actualBytes).toEqual([97, 98, 0, 255, 99, 100, 120, 121]);
+    physical.push(actualBytes);
+    await page.close();
+    expect(page.isClosed(), "range reopen requires the prior page to actually close").toBe(true);
+  }
+  await retainAdmissionEvidence(testInfo, "bounded-range-reopens.json", {bundle, reports, physical, closedPages: 3});
+});
+
 test("Web Project I/O creates and opens an untouched v5 Project", async ({context, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);

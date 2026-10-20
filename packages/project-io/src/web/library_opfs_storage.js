@@ -1187,6 +1187,32 @@ mergeInto(LibraryManager.library, {
         }
       }),
 
+  lmdj_opfs_read_range__deps: ["$LmdjOpfs"],
+  lmdj_opfs_read_range:
+      (path, length, offsetLow, offsetHigh, output, capacity) => LmdjOpfs.suspend(async () => {
+        try {
+          const [parent, name] = await LmdjOpfs.parent(
+              LmdjOpfs.parts(path, length), false);
+          const file = await (await parent.getFileHandle(name)).getFile();
+          if (!Number.isSafeInteger(file.size) || file.size < 0 ||
+              !Number.isInteger(capacity) || capacity < 0) {
+            throw new DOMException("", "InvalidStateError");
+          }
+          const offset = (BigInt(offsetHigh >>> 0) << 32n) | BigInt(offsetLow >>> 0);
+          if (offset >= BigInt(file.size) || capacity === 0) return 0;
+          const start = Number(offset);
+          const count = Math.min(capacity, file.size - start);
+          const bytes = new Uint8Array(await file.slice(start, start + count).arrayBuffer());
+          if (bytes.length !== count) throw new DOMException("", "InvalidStateError");
+          // Resolve the current heap after suspension, rather than retaining a
+          // view that a memory growth could detach while the Blob is read.
+          HEAPU8.set(bytes, output >>> 0);
+          return count;
+        } catch (error) {
+          return LmdjOpfs.status(error);
+        }
+      }),
+
   lmdj_opfs_create_immutable__deps: ["$LmdjOpfs"],
   lmdj_opfs_create_immutable:
       (path, length, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
