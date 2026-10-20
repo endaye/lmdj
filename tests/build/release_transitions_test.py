@@ -889,6 +889,25 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.github.delete_incomplete_draft_asset = original_delete
         self.assertEqual(create_draft(self.tag, self.context()).status, "draft-verified")
 
+    def test_a_release_published_mid_run_is_rechecked_before_deletion(self) -> None:
+        push_tag(self.tag, self.context())
+        self.github.stall_upload.add(self._asset_payloads()[0][0])
+        with self.assertRaises(TransitionError):
+            create_draft(self.tag, self.context())
+        original_get = self.github.get_release
+
+        def get_release(repository, release_id):
+            # create_draft read a Draft; the numeric re-read made just before
+            # the delete sees it published by a concurrent actor.
+            current = original_get(repository, release_id)
+            if sys._getframe(1).f_code.co_name == "_remove_incomplete_draft_asset":
+                return GitHubRelease(**{**current.__dict__, "draft": False})
+            return current
+        self.github.get_release = get_release
+        with self.assertRaisesRegex(TransitionError, "no longer an unpublished Draft"):
+            create_draft(self.tag, self.context())
+        self.assertEqual(self.github.deleted_assets, [])
+
     def test_a_published_release_with_an_incomplete_asset_is_never_edited(self) -> None:
         push_tag(self.tag, self.context())
         self.github.stall_upload.add(self._asset_payloads()[0][0])

@@ -658,6 +658,20 @@ def _remove_incomplete_draft_asset(
 ) -> None:
     if not release.draft:
         raise TransitionError(_incomplete_asset_message(asset))
+    # The projection above was read at the start of this run; re-read the
+    # Release by its numeric ID immediately before the delete so a Release
+    # published in between is never edited.
+    try:
+        current = authority.context.github.get_release(
+            authority.context.policy.repository, release.id,
+        )
+    except Exception:
+        raise ReleaseReadUnavailable("GitHub Release projection is unavailable") from None
+    if current is None or current.id != release.id or not current.draft:
+        raise TransitionError(
+            f"GitHub Release {release.id} is no longer an unpublished Draft; "
+            f"incomplete asset {asset.name} was not removed"
+        )
     try:
         authority.context.github.delete_incomplete_draft_asset(
             authority.context.policy.repository, release.id, asset,
