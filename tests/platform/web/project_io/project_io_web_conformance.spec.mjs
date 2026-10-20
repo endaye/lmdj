@@ -1267,6 +1267,53 @@ test("Web Project I/O reads bounded binary ranges without a writer through two p
   await retainAdmissionEvidence(testInfo, "bounded-range-reopens.json", {bundle, reports, physical, closedPages: 3});
 });
 
+test("Web Project I/O verifies a bounded Performance recording scan through two page reopens", async ({context, browserName}, testInfo) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const preflight = await trackedPage(context);
+  await navigate(preflight, "/preflight.html");
+  const capabilities = await inspectStorageCapabilities(preflight);
+  await preflight.close();
+  expect(preflight.isClosed()).toBe(true);
+  if (capabilities.status === "unsupported") {
+    expect(browserName).toBe("webkit");
+    expect(capabilities.error).toEqual({code: "UNSUPPORTED_WEB_RUNTIME",
+      missing: STORAGE_CAPABILITY_ORDER.filter(name => capabilities.capabilities[name] !== true)});
+    testInfo.annotations.push({type: "platform-limitation", description: capabilities.error.missing.join(",")});
+    await retainAdmissionEvidence(testInfo, "performance-scan-capability-refusal.json", capabilities);
+    return;
+  }
+  const sha256 = "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55";
+  const expected = {projectId: "00000000-0000-4000-8000-000000000001",
+    performanceId: "10000000-0000-4000-8000-000000000001", projectRevision: 0, recordingRevision: 0,
+    artifact: {sha256, media_type: "audio/wav", byte_length: 131089}, bytesSeen: 131089,
+    consumerCalls: 3, staleRevision: "REVISION_CONFLICT", writersAfter: 0, publishedWrites: 0};
+  const bundle = `performance-scan-${Date.now()}`;
+  const reports = [], physical = [];
+  for (const phase of ["prepare", "inspect", "inspect"]) {
+    const page = await trackedPage(context);
+    await navigate(page, `/project_io/project_io_web_test.html?action=performance_artifact_scan&phase=${phase}&bundle=${bundle}`);
+    const result = await waitForResult(page);
+    expect(result).toEqual(expected);
+    reports.push(result);
+    const bytes = await page.evaluate(async ({bundle, sha256}) => {
+      const root = await navigator.storage.getDirectory();
+      const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+      const assets = await directory.getDirectoryHandle("assets");
+      const file = await (await assets.getFileHandle(`${sha256}.wav`)).getFile();
+      const data = new Uint8Array(await file.arrayBuffer());
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+      return {length: file.size, sha256: Array.from(digest, v => v.toString(16).padStart(2, "0")).join(""),
+        prefix: Array.from(data.slice(0, 8)), tail: Array.from(data.slice(-8))};
+    }, {bundle, sha256});
+    expect(bytes).toEqual({length: 131089, sha256, prefix: [97, 98, 0, 255, 99, 100, 120, 121],
+      tail: [98, 0, 255, 99, 100, 120, 121, 97]});
+    physical.push(bytes);
+    await page.close();
+    expect(page.isClosed(), "recording scan reopen requires the previous page to close").toBe(true);
+  }
+  await retainAdmissionEvidence(testInfo, "performance-scan-reopens.json", {bundle, reports, physical, closedPages: 3});
+});
+
 test("Web Project I/O creates and opens an untouched v5 Project", async ({context, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);
