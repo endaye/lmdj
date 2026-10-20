@@ -12,6 +12,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
+#include <lmdj/cooker/wav_metadata_inspector.hpp>
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/json.hpp>
@@ -1649,6 +1651,103 @@ nlohmann::json project_bundle_import(
           {"writersAfter", lmdj_project_io_physical_writer_count()}, {"publishedWrites", 0}};
 }
 
+[[gnu::noinline]] nlohmann::json performance_wav_metadata_witness(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  constexpr auto project_id = "00000000-0000-4000-8000-000000000001";
+  constexpr auto performance_id = "10000000-0000-4000-8000-000000000001";
+  const auto variant = query("variant");
+  const auto phase = query("phase");
+  require(variant == "valid" || variant == "unsupported" || variant == "mismatch",
+          "invalid WAV metadata variant");
+  require(phase == "prepare" || phase == "inspect", "invalid WAV metadata phase");
+  // Independent Python struct/hashlib oracle; the mismatch retains the valid
+  // reference but changes the very last PCM byte, after all header windows.
+  const foundation::ArtifactRef artifact{variant == "unsupported"
+      ? "62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19"
+      : "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
+      "audio/wav", 192124};
+  project_io::ProjectStore store{platform};
+  if (phase == "prepare") {
+    auto initial = std::unique_ptr<Result<domain::ProjectState>>(new Result<domain::ProjectState>(
+        domain::create_project(foundation::ProjectId{project_id}, 120)));
+    require(initial->has_value(), "WAV fixture initial Project failed");
+    // Zero events: recorded silence still has real frames independent of replay.
+    initial->value().performances.emplace(domain::PerformanceId{performance_id},
+        domain::Performance{domain::PerformanceId{performance_id}, "silence", 120, 0, artifact, {}});
+    success(store.create(bundle, initial->value()), "WAV fixture Project create");
+    auto lease = value(platform->acquire_writer(bundle), "WAV fixture seed lease");
+    std::vector<std::byte> payload(artifact.byte_length);
+    const auto tag = [&](std::size_t at, std::string_view text) {
+      for (std::size_t i = 0; i < text.size(); ++i) payload[at + i] = static_cast<std::byte>(text[i]);
+    };
+    const auto number = [&](std::size_t at, std::uint32_t n, unsigned width) {
+      for (unsigned i = 0; i < width; ++i) payload[at + i] = static_cast<std::byte>(n >> (i * 8));
+    };
+    const std::uint32_t rate = variant == "unsupported" ? 32000 : 48000;
+    tag(0, "RIFF"); number(4, 192116, 4); tag(8, "WAVE");
+    tag(12, "fmt "); number(16, 16, 4); number(20, 1, 2); number(22, 2, 2);
+    number(24, rate, 4); number(28, rate * 4, 4); number(32, 4, 2); number(34, 16, 2);
+    tag(36, "JUNK"); number(40, 3, 4);
+    payload[44] = std::byte{1}; payload[45] = std::byte{2}; payload[46] = std::byte{3};
+    payload[47] = std::byte{0xab}; tag(48, "data"); number(52, 192068, 4);
+    if (variant == "mismatch") payload.back() = std::byte{1};
+    success(platform->create_immutable(bundle / "assets" / (artifact.sha256 + ".wav"), payload),
+            "WAV fixture raw recording");
+    lease.reset();
+  }
+  require(lmdj_project_io_physical_writer_count() == 0, "WAV fixture retained seed writer");
+  const auto writes_before = lmdj_opfs_immutable_write_count();
+  cooker::WavMetadataInspector inspector{artifact.byte_length};
+  std::optional<foundation::Error> format_error;
+  std::uint64_t bytes_seen = 0;
+  std::size_t calls = 0;
+  const project_io::PerformanceRecordingSelector selector{
+      foundation::ProjectId{project_id}, domain::PerformanceId{performance_id}, 0, artifact};
+  const auto scanned = store.scan_performance_recording(bundle, selector, [&](auto input) {
+    require(lmdj_project_io_physical_writer_count() == 1, "WAV scan lost physical writer custody");
+    require(!input.empty() && input.size() <= 65536, "WAV scan exceeded bounded window");
+    const auto fed = inspector.feed(input);
+    if (!fed.has_value() && !format_error) format_error = fed.error();
+    bytes_seen += input.size();
+    ++calls;
+    // A format refusal must not stop the independent full Artifact hash.
+    return Result<void>::success();
+  });
+  require(bytes_seen == 192124 && calls == 3, "WAV scan omitted a window");
+  require(lmdj_project_io_physical_writer_count() == 0, "WAV scan retained physical custody");
+  require(lmdj_opfs_immutable_write_count() == writes_before, "WAV inspection wrote Project bytes");
+  nlohmann::json report{{"requested", {{"projectId", project_id}, {"performanceId", performance_id},
+      {"projectRevision", 0}, {"artifact", artifact}}}, {"verification", nullptr},
+      {"metadata", nullptr}, {"failureCode", nullptr}, {"bytesSeen", bytes_seen}, {"consumerCalls", calls},
+      {"writersAfter", lmdj_project_io_physical_writer_count()}, {"publishedWrites", 0}};
+  if (!scanned.has_value()) {
+    require(scanned.error().code == foundation::ErrorCode::cook_failed &&
+        scanned.error().details.value("storage_condition", "") == project_io::kStorageConditionArtifactMismatch,
+        "WAV scan failed for an unexpected reason");
+    report["status"] = "artifact_mismatch";
+    report["failureCode"] = foundation::error_code_name(scanned.error().code);
+    return report; // Never publish the provisional parser state on hash failure.
+  }
+  const auto& receipt = scanned.value();
+  report["verification"] = {{"projectId", receipt.project_id.value()},
+      {"performanceId", receipt.performance_id.value()}, {"projectRevision", receipt.project_revision},
+      {"recordingRevision", receipt.recording_revision}, {"artifact", receipt.artifact}};
+  const auto parsed = inspector.finish();
+  if (!parsed.has_value() && !format_error) format_error = parsed.error();
+  if (format_error) {
+    require(format_error->code == foundation::ErrorCode::unsupported_audio, "unexpected format error");
+    report["status"] = "unsupported_audio";
+    report["failureCode"] = foundation::error_code_name(format_error->code);
+  } else {
+    report["status"] = "verified";
+    report["metadata"] = {{"sampleRate", parsed.value().sample_rate}, {"channels", parsed.value().channels},
+        {"sourceFrames", parsed.value().source_frames}};
+  }
+  return report;
+}
+
 [[gnu::noinline]] nlohmann::json bounded_range_witness(
     const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle) {
@@ -1715,6 +1814,9 @@ nlohmann::json project_bundle_import(
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "performance_wav_metadata") {
+      return {{"complete", true}, {"result", performance_wav_metadata_witness(platform, fault_bundle)}};
+    }
     if (action == "performance_artifact_scan") {
       return {{"complete", true}, {"result", performance_scan_witness(platform, fault_bundle)}};
     }

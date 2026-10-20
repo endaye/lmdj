@@ -37,7 +37,8 @@ File，只读取 `slice` 窗口。每次调用独立，失败后的 buffer 内�
 
 这些是未校验的原始字节，不证明 Artifact digest、Performance 引用、writer authority
 或耐久性。已保存录音须通过下述 ProjectStore 扫描校验其 owner 和完整输入；WAV
-元数据解析及 Facade/Host 查询仍属于后续任务，Host 继续只使用 Application Facade。
+元数据可由 Project Cooker 的有界流式检查器解析；Facade/Host 查询仍属于后续任务，
+Host 继续只使用 Application Facade。
 
 `ProjectStore::scan_performance_recording` 在既有 history guard 和单次 writer lease
 内核对 Project ID、Performance ID、预期 Project revision 与精确录音 ArtifactRef，
@@ -51,7 +52,11 @@ buffer、连续 uint64 offset、完整 SHA-256、前后长度和 EOF 检查验�
 丢弃 consumer 状态。只有最终 `PerformanceRecordingVerification` 回执证明完整输入
 匹配该 owner 下的 Artifact，回执携带 Project/recording revision 和精确引用。缺少
 range companion 时返回 typed I/O unavailable，不退回全量读取。这项扫描不证明 WAV
-编码、录音完整性或演出 elapsed；后续有界 WAV parser 与 Facade/SDK/Host 查询仍待。
+编码、录音完整性或演出 elapsed。consumer 可将窗口交给 Project Cooker 的
+`WavMetadataInspector`，保留格式错误并继续完整 hash；最终回执成功后才发布元数据
+或 unsupported encoding。摘要/owner 校验失败须丢弃 provisional parser 状态。
+真实 OPFS 测试分别验证有效静音、已校验但不支持的编码和尾部摘要损坏，并在两次
+实际重开后核对完整身份与元数据。Facade/SDK/Host 异步查询和 owner retirement 仍待。
 
 ## 6. 状态、错误与生命周期
 故障矩阵验证验证、取消、超时与发布中断恢复；typed error 区分输入、平台、busy 与提交失败。
