@@ -379,7 +379,11 @@ class RequestJournal(AbstractContextManager):
         os.fsync(self.directory)
 
     def read_failure(self, request_id):
-        """The latest failure note for this request, or None."""
+        """The latest failure note for this request, or None.
+
+        Every way a note can be unsafe, oversized or malformed fails closed as
+        JournalError, so a caller can report it without losing other output.
+        """
         self._active()
         if not _match(_ID, request_id):
             _fail("invalid request ID")
@@ -391,14 +395,19 @@ class RequestJournal(AbstractContextManager):
         except OSError:
             _fail("failure note is unsafe or unavailable")
         try:
-            self._private(fd)
-            with os.fdopen(fd, "rb", closefd=False) as source:
-                raw = source.read(_MAX_BYTES + 1)
-        finally:
-            os.close(fd)
+            try:
+                self._private(fd)
+                with os.fdopen(fd, "rb", closefd=False) as source:
+                    raw = source.read(_MAX_BYTES + 1)
+            finally:
+                os.close(fd)
+        except OSError:
+            _fail("failure note is unsafe or unavailable")
+        if len(raw) > _MAX_BYTES:
+            _fail("failure note exceeds size limit")
         try:
             note = json.loads(raw)
-        except ValueError:
+        except (ValueError, UnicodeError):
             _fail("failure note is malformed")
         if (type(note) is not dict
                 or set(note) != {"schema", "request_id", "step", "status", "diagnostic", "observed_utc"}

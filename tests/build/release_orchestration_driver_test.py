@@ -571,6 +571,21 @@ class ReleaseDriverTest(unittest.TestCase):
             with RequestJournal(self.journal, writable=False) as journal:
                 with self.assertRaises(JournalError):
                     journal.read_failure("release-1")
+        for raw in (b"\xff\xfe not utf-8", b" " * (1024 * 1024 + 1) + json.dumps(note).encode()):
+            path.write_bytes(raw)
+            with RequestJournal(self.journal, writable=False) as journal:
+                with self.assertRaises(JournalError):
+                    journal.read_failure("release-1")
+
+    def test_only_errors_the_cli_already_prints_keep_their_message(self):
+        from tools.release.commands import describe_failure
+        from tools.release.orchestration_driver import JournalError as DriverJournalError
+        self.assertEqual(describe_failure(DriverJournalError("why: x; remedy: y")),
+                         "JournalError: why: x; remedy: y")
+        Unlisted = type("SomeHelperError", (ValueError,), {"__module__": "tools.release.helper"})
+        self.assertEqual(describe_failure(Unlisted("remote body text")), "SomeHelperError")
+        Impostor = type("CommandError", (RuntimeError,), {"__module__": "tests.fixture"})
+        self.assertEqual(describe_failure(Impostor("remote body text")), "CommandError")
 
     def test_a_diagnostic_is_bounded_and_never_rides_on_success(self):
         Observation("unknown", diagnostic="RuntimeError: cause").validate()
