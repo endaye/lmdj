@@ -36,6 +36,7 @@ add_library(
   lmdj_web_runtime_control
   STATIC
     src/control_runtime.cpp
+    src/recording_metadata_queries.cpp
 )
 add_library(lmdj::web_runtime_control ALIAS lmdj_web_runtime_control)
 target_include_directories(
@@ -341,6 +342,7 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     lmdj_web_runtime_control_testable
     STATIC
       src/control_runtime.cpp
+      src/recording_metadata_queries.cpp
   )
   target_include_directories(
     lmdj_web_runtime_control_testable
@@ -484,6 +486,21 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio concurrency
   )
+
+  add_executable(lmdj_web_recording_metadata_query_tests
+    test/recording_metadata_query_test.cpp src/bridge.cpp)
+  target_include_directories(lmdj_web_recording_metadata_query_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/packages/application-facade/internal")
+  target_link_libraries(lmdj_web_recording_metadata_query_tests PRIVATE
+    lmdj_web_runtime_control_testable Threads::Threads)
+  lmdj_target_warnings(lmdj_web_recording_metadata_query_tests)
+  lmdj_target_sanitizers(lmdj_web_recording_metadata_query_tests)
+  lmdj_add_test(NAME host.web_recording_metadata_query TIER host
+    COMMAND lmdj_web_recording_metadata_query_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" LABELS concurrency persistence)
+  lmdj_add_test(NAME host.web_recording_metadata_query_stress TIER stress
+    COMMAND lmdj_web_recording_metadata_query_tests --stress
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" LABELS concurrency persistence)
   lmdj_add_test(
     NAME host.web_source_boundary
     TIER contract

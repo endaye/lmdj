@@ -61,6 +61,7 @@ const API = [
   "inspectSample",
   "inspectSoundSet",
   "inspectPerformance",
+  "queryPerformanceRecordingMetadata",
   "inspectProject",
   "inspectAuthoringHistory",
   "undoAuthoring",
@@ -13993,3 +13994,212 @@ for (const coreStopFails of [false, true]) {
     assert.equal(runtime.commands.filter(({type}) => type === "stop").length, 1);
   });
 }
+
+const METADATA_QUERY = Object.freeze({
+  projectId: "00000000-0000-4000-8000-000000000001",
+  performanceId: "10000000-0000-4000-8000-000000000001",
+  expectedRevision: 3,
+  recordingArtifact: Object.freeze({sha256: "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
+    mediaType: "audio/wav", byteLength: 192124}),
+});
+function recordingMetadataResult() {
+  return {project_id: METADATA_QUERY.projectId, performance_id: METADATA_QUERY.performanceId,
+    project_revision: 3, recording_revision: 17, recording_artifact: {
+      sha256: METADATA_QUERY.recordingArtifact.sha256, media_type: "audio/wav", byte_length: 192124},
+    audio_metadata: {sample_rate: 48000, channels: 2, source_frames: 48017}, audio_error: null};
+}
+
+test("recording metadata snapshots the selector and leaves Control's SDK tail available", async () => {
+  const gate = Promise.withResolvers(), seen = [];
+  let queryOptions, controlFinished = false;
+  const f = fixture({now:()=>0, send: async (envelope, options) => {
+    seen.push(structuredClone(envelope));
+    if (envelope.operation === "performance.recording.metadata") {
+      queryOptions = options; await gate.promise;
+      return success(envelope, recordingMetadataResult());
+    }
+    if (envelope.operation === "performance.inspect") return success(envelope, {
+      performance: {id: METADATA_QUERY.performanceId, name: "silent", created_bpm: 120,
+        recording_artifact: null, events: []}, project_revision: 3});
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await f.session.start();
+  const request = structuredClone(METADATA_QUERY);
+  const pending = f.session.queryPerformanceRecordingMetadata(request,{signal:undefined});
+  request.expectedRevision = 400; request.recordingArtifact.sha256 = "a".repeat(64);
+  const control = f.session.inspectPerformance(METADATA_QUERY.performanceId).then(value => {
+    assert.equal(value.id, METADATA_QUERY.performanceId); controlFinished = true;
+  });
+  try {
+    for (let n=0;n<32;++n) await Promise.resolve();
+    assert.equal(controlFinished, true, "far-side Control response precedes releasing the scan");
+    assert.equal(queryOptions.cancelQuery, true); assert.equal(queryOptions.deadlineMs, 30000);
+    assert.equal(queryOptions.signal.aborted, false);
+    const sent = seen.find(value => value.operation === "performance.recording.metadata");
+    assert.deepEqual(sent.payload, {project_id: METADATA_QUERY.projectId,
+      performance_id: METADATA_QUERY.performanceId, expected_revision: 3,
+      recording_artifact: recordingMetadataResult().recording_artifact});
+  } finally { gate.resolve(); await Promise.allSettled([pending,control]); await f.session.close(); }
+  await control;
+  const value = await pending;
+  assert.deepEqual(value, {projectId: METADATA_QUERY.projectId, performanceId: METADATA_QUERY.performanceId,
+    projectRevision: 3, recordingRevision: 17, recordingArtifact: METADATA_QUERY.recordingArtifact,
+    audioMetadata: {sampleRate: 48000, channels: 2, sourceFrames: 48017}, audioError: null});
+  assert.ok(Object.isFrozen(value) && Object.isFrozen(value.audioMetadata) && Object.isFrozen(value.recordingArtifact));
+});
+
+test("recording metadata validates the complete returned owner revision and Artifact", async () => {
+  for (const change of [
+    {project_id: "00000000-0000-4000-8000-000000000002"},
+    {performance_id: "10000000-0000-4000-8000-000000000002"},
+    {project_revision: 4},
+    {recording_artifact: {...recordingMetadataResult().recording_artifact, sha256: "a".repeat(64)}},
+    {recording_artifact: {...recordingMetadataResult().recording_artifact, byte_length: 192125}},
+  ]) {
+    const f=fixture({send: async envelope => success(envelope,
+      envelope.operation === "performance.recording.metadata"
+        ? {...recordingMetadataResult(), ...change} : defaultResult(envelope.operation))});
+    await f.session.start();
+    await assert.rejects(f.session.queryPerformanceRecordingMetadata(METADATA_QUERY),
+      error => error.code === "HOST_PROTOCOL_MISMATCH");
+    await f.session.close();
+  }
+});
+
+test("recording metadata retains verified unsupported format and distinct outer integrity failure", async () => {
+  for (const variant of ["unsupported", "mismatch"]) {
+    const f=fixture({send: async envelope => {
+      if (envelope.operation !== "performance.recording.metadata") return success(envelope, defaultResult(envelope.operation));
+      if (variant === "mismatch") return {protocol_version:1, request_id:envelope.request_id, ok:false,
+        error:{code:"COOK_FAILED",message:"invalid recording",details:{storage_condition:"artifact_mismatch"}}};
+      return success(envelope, {...recordingMetadataResult(), audio_metadata:null,
+        audio_error:{code:"UNSUPPORTED_AUDIO",message:"unsupported audio",details:{}}});
+    }});
+    await f.session.start();
+    if (variant === "mismatch") await assert.rejects(f.session.queryPerformanceRecordingMetadata(METADATA_QUERY),
+      error => error.code === "COOK_FAILED" && error.details.storage_condition === "artifact_mismatch");
+    else {
+      const value=await f.session.queryPerformanceRecordingMetadata(METADATA_QUERY);
+      assert.equal(value.audioMetadata,null);assert.equal(value.audioError.code,"UNSUPPORTED_AUDIO");
+      assert.deepEqual(value.recordingArtifact,METADATA_QUERY.recordingArtifact);
+      assert.ok(Object.isFrozen(value.audioError) && Object.isFrozen(value.audioError.details));
+    }
+    await f.session.close();
+  }
+});
+
+test("recording metadata caller cancellation and owner retirement reject even a valid late response", async () => {
+  for (const retirement of ["caller", "same-project", "different-project", "create", "safety", "close"]) {
+    const gate=Promise.withResolvers();let observedSignal;
+    const f=fixture({send:async (envelope,options) => {
+      if (envelope.operation === "performance.recording.metadata") {
+        observedSignal=options.signal;await gate.promise;
+        return success(envelope,recordingMetadataResult()); // Deliberately ignores abort.
+      }
+      if (envelope.operation === "project.create") return success(envelope,{project_id:envelope.payload.project_id,
+        project_revision:0,initial_pattern_id:envelope.payload.initial_pattern.pattern_id,runtime_ready:true});
+      return success(envelope,defaultResult(envelope.operation));
+    }});
+    await f.session.start();
+    if (retirement === "safety") await f.session.activateAudio(createUserGestureToken({isTrusted:true}));
+    const controller=new AbortController();
+    const pending=f.session.queryPerformanceRecordingMetadata(METADATA_QUERY,{signal:controller.signal});
+    const rejected=assert.rejects(pending,error => error.name === "AbortError");
+    if (retirement === "caller") controller.abort();
+    if (retirement.endsWith("project")) await f.session.openProject(
+      retirement === "same-project" ? METADATA_QUERY.projectId : "00000000-0000-4000-8000-000000000002",
+      "00000000-0000-4000-8000-000000000010");
+    if (retirement === "create") await f.session.createProject({projectId:"00000000-0000-4000-8000-000000000002",
+      patternId:"00000000-0000-4000-8000-000000000010",bpm:120,bars:1});
+    if (retirement === "safety") await f.session.suspendAudio();
+    if (retirement === "close") await f.session.close();
+    assert.equal(observedSignal.aborted,true,retirement);
+    gate.resolve();await rejected;
+    if (retirement !== "close") await f.session.close();
+  }
+});
+
+test("recording metadata rejects invalid selectors and pre-cancel before transport", async () => {
+  let sent=0;
+  const f=fixture({send:async envelope => {if(envelope.operation === "performance.recording.metadata") sent++;
+    return success(envelope,defaultResult(envelope.operation));}});
+  await f.session.start();
+  for (const request of [null,{...METADATA_QUERY,project_path:"/foreign"},{...METADATA_QUERY,expectedRevision:-1},
+    {...METADATA_QUERY,projectId:"bad"},{...METADATA_QUERY,recordingArtifact:null}])
+    await assert.rejects(f.session.queryPerformanceRecordingMetadata(request));
+  const stopped=new AbortController();stopped.abort();
+  await assert.rejects(f.session.queryPerformanceRecordingMetadata(METADATA_QUERY,{signal:stopped.signal}),
+    error => error.name === "AbortError");
+  assert.equal(sent,0);await f.session.close();
+});
+
+test("recording metadata bounds its independent queue before the Native RPC pool", async () => {
+  const gate=Promise.withResolvers();let admitted=0,controlFinished=false;
+  const f=fixture({send:async envelope => {
+    if(envelope.operation === "performance.recording.metadata") {admitted++;await gate.promise;return success(envelope,recordingMetadataResult());}
+    if(envelope.operation === "performance.inspect") return success(envelope,{
+      performance:{id:METADATA_QUERY.performanceId,name:"silent",created_bpm:120,recording_artifact:null,events:[]},project_revision:3});
+    return success(envelope,defaultResult(envelope.operation));
+  }});
+  await f.session.start();
+  const pending=Array.from({length:16},()=>f.session.queryPerformanceRecordingMetadata(METADATA_QUERY));
+  const settled=Promise.allSettled(pending);
+  try {
+    assert.equal(admitted,1,"one metadata RPC preserves the remaining ordinary Control cells");
+    await assert.rejects(f.session.queryPerformanceRecordingMetadata(METADATA_QUERY),
+      error=>error.code === "WEB_RUNTIME_RESOURCE_LIMIT");
+    const control=f.session.inspectPerformance(METADATA_QUERY.performanceId).then(()=>{controlFinished=true;});
+    for(let n=0;n<32;++n) await Promise.resolve();
+    assert.equal(controlFinished,true);await control;
+  } finally {gate.resolve();await settled;await f.session.close();}
+  assert.equal(admitted,16,"all admitted non-cancelled observers eventually run");
+});
+
+test("recording metadata waiting spends the original budget without renewing it", async () => {
+  const gate=Promise.withResolvers(),budgets=[];let now=0;
+  const f=fixture({now:()=>now,send:async (envelope,options) => {
+    if(envelope.operation === "performance.recording.metadata") {
+      budgets.push(options.deadlineMs);if(budgets.length===1) await gate.promise;
+      return success(envelope,recordingMetadataResult());
+    }
+    return success(envelope,defaultResult(envelope.operation));
+  }});
+  await f.session.start();
+  const first=f.session.queryPerformanceRecordingMetadata(METADATA_QUERY);
+  const second=f.session.queryPerformanceRecordingMetadata(METADATA_QUERY);
+  try {
+    assert.deepEqual(budgets,[30000]);now=1234;gate.resolve();
+    await Promise.all([first,second]);assert.deepEqual(budgets,[30000,28766]);
+  } finally {gate.resolve();await Promise.allSettled([first,second]);await f.session.close();}
+});
+
+test("recording metadata waiting cancellation and expiry never enter Native", async () => {
+  const gate=Promise.withResolvers(),scheduled=new Map();let next=0,now=0,admitted=0;
+  const timers={setTimeout(callback,delay){const handle=++next;scheduled.set(handle,{callback,delay});return handle;},
+    clearTimeout(handle){scheduled.delete(handle);}};
+  const f=fixture({timers,now:()=>now,send:async envelope => {
+    if(envelope.operation === "performance.recording.metadata") {admitted++;await gate.promise;return success(envelope,recordingMetadataResult());}
+    return success(envelope,defaultResult(envelope.operation));
+  }});
+  await f.session.start();const firstAbort=new AbortController(),secondAbort=new AbortController();
+  const first=f.session.queryPerformanceRecordingMetadata(METADATA_QUERY,{signal:firstAbort.signal});
+  const second=f.session.queryPerformanceRecordingMetadata(METADATA_QUERY,{signal:secondAbort.signal});
+  let secondFate,thirdFate;
+  const secondObserved=second.catch(error=>{secondFate=error;});
+  secondAbort.abort();
+  for(let n=0;n<32;++n) await Promise.resolve();
+  const existing=new Set(scheduled.keys());
+  const third=f.session.queryPerformanceRecordingMetadata(METADATA_QUERY);
+  const thirdObserved=third.catch(error=>{thirdFate=error;});
+  try {
+    assert.equal(secondFate?.name,"AbortError");
+    const added=[...scheduled].filter(([handle])=>!existing.has(handle));
+    assert.equal(added.length,1);assert.equal(added[0][1].delay,30000);
+    now=30000;added[0][1].callback();
+    for(let n=0;n<32;++n) await Promise.resolve();
+    assert.equal(thirdFate?.code,"HOST_TIMEOUT");assert.equal(admitted,1);
+  } finally {
+    firstAbort.abort();gate.resolve();
+    await Promise.allSettled([first,secondObserved,thirdObserved]);await f.session.close();
+  }
+});

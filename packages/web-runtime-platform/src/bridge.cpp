@@ -253,7 +253,7 @@ Json bridge_query_cancelled_error() {
 bool safety_interruptible_query(std::string_view operation) {
   return operation == "project.inspect" || operation == "history.inspect" || operation == "project.list" ||
          operation == "sample.inspect" || operation == "sample.quota" ||
-         operation == "sample.waveform";
+         operation == "sample.waveform" || operation == "performance.recording.metadata";
 }
 
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
@@ -274,7 +274,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 111> operations{
+  static constexpr std::array<std::string_view, 112> operations{
       "host.status",
       "project.create",
       "project.duplicate",
@@ -340,6 +340,7 @@ bool supported_operation(std::string_view operation) {
       "pattern.slot.move",
       "performance.list",
       "performance.inspect",
+      "performance.recording.metadata",
       "performance.record.begin",
       "performance.record.event",
       "performance.fx.gesture",
@@ -1345,9 +1346,9 @@ struct ControlBridge::Impl {
           response = bridge_timeout_error();
           // An expired envelope cannot retire a retained transport/input owner
           // or spend the caller's count-in receipt acknowledgment.
-          terminal_after_response = !runtime.pattern_transport_pending();
+          terminal_after_response = !(runtime.pattern_transport_pending() || runtime.recording_metadata_pending());
           realtime_service_enabled.store(
-              runtime.pattern_transport_pending(), std::memory_order_release);
+              (runtime.pattern_transport_pending() || runtime.recording_metadata_pending()), std::memory_order_release);
         } else {
           if (snapshot_notification_operation(operation)) {
             notification_slot = reserve_message();
@@ -1391,11 +1392,11 @@ struct ControlBridge::Impl {
               // already-failed, stopped Runtime. This Bridge's real failure
               // transition still latches immediately, independently of debt.
               observe_runtime_failure();
-              terminal_after_response = !runtime.pattern_transport_pending();
+              terminal_after_response = !(runtime.pattern_transport_pending() || runtime.recording_metadata_pending());
             }
             realtime_service_enabled.store(
                 runtime.engine().telemetry().state ==
-                    audio::RealtimeState::running || runtime.pattern_transport_pending(),
+                    audio::RealtimeState::running || runtime.pattern_transport_pending() || runtime.recording_metadata_pending(),
                 std::memory_order_release);
           }
         }
@@ -1481,6 +1482,18 @@ struct ControlBridge::Impl {
       }
     }
 
+    if (!response.value("ok", false) && operation == "performance.recording.metadata" &&
+        runtime.owns_pending_recording_metadata(request.request_id)) {
+      request.continuation_operation = operation;
+      request.deadline = deadline;
+      request.state.store(RequestState::awaiting_continuation, std::memory_order_release);
+      response_slot->state.store(MessageState::free, std::memory_order_release);
+      reservations.response = nullptr;
+      realtime_service_enabled.store(true, std::memory_order_release);
+      request_realtime_service();
+      return;
+    }
+
     // Keep the original 16-slot RPC cell, RequestId and absolute deadline,
     // but release Asyncify's dispatch gate. Legacy success remains the exact
     // old schema and waits for its original candidate's real I/O result.
@@ -1544,9 +1557,9 @@ struct ControlBridge::Impl {
           ControlRuntime::AbsoluteRequestDeadline{deadline});
       observe_runtime_failure();
       response = bridge_timeout_error();
-      terminal_after_response = !runtime.pattern_transport_pending();
+      terminal_after_response = !(runtime.pattern_transport_pending() || runtime.recording_metadata_pending());
       realtime_service_enabled.store(
-          runtime.pattern_transport_pending(), std::memory_order_release);
+          (runtime.pattern_transport_pending() || runtime.recording_metadata_pending()), std::memory_order_release);
       if (notification_slot != nullptr) {
         notification_slot->state.store(
             MessageState::free, std::memory_order_release);
@@ -1593,11 +1606,17 @@ struct ControlBridge::Impl {
   }
 
   void service_retained_responses() {
+    runtime.service_recording_metadata();
     for (auto& request : requests) {
       if (request.state.load(std::memory_order_acquire) != RequestState::awaiting_continuation) continue;
       const bool expired = std::chrono::steady_clock::now() >= request.deadline ||
           request.publication.load(std::memory_order_acquire) == PublicationState::cancelled;
       std::optional<Json> response;
+      const auto metadata = request.continuation_operation == "performance.recording.metadata";
+      const auto cancelled_query = request.publication.load(std::memory_order_acquire) ==
+          PublicationState::query_cancelled;
+      if (metadata) response = runtime.inspect_recording_metadata(
+          request.request_id, false, expired || cancelled_query);
       if (!request.legacy_ticket.empty()) response = runtime.inspect_legacy_trigger(request.legacy_ticket);
       if (expired) {
         response = bridge_timeout_error();
@@ -1605,6 +1624,7 @@ struct ControlBridge::Impl {
             ControlRuntime::AbsoluteRequestDeadline{request.deadline});
         observe_runtime_failure();
       }
+      if (!response && metadata) continue;
       if (!response && request.legacy_ticket.empty()) {
         // The exact lifecycle operation may resume only before its original
         // deadline; its guard precedes every mutation. The single dispatch
@@ -1615,8 +1635,34 @@ struct ControlBridge::Impl {
         continue;
       }
       if (!response) continue;
+#if !defined(__EMSCRIPTEN__)
+      if (metadata && hooks.before_response_serialization != nullptr)
+        hooks.before_response_serialization(hooks.context);
+#endif
       auto* message = reserve_realtime_message();
       if (!message) continue;
+      if (metadata) {
+        // Freeze the read response against the same atomic cancellation and
+        // absolute cutoff used by its original RPC. A cancellation that wins
+        // while the ready result is being assembled cannot publish metadata.
+        auto publication = request.publication.load(std::memory_order_acquire);
+        if (publication == PublicationState::open) {
+          const auto next = std::chrono::steady_clock::now() >= request.deadline
+              ? PublicationState::cancelled : PublicationState::committed;
+          request.publication.compare_exchange_strong(publication, next,
+              std::memory_order_acq_rel, std::memory_order_acquire);
+          publication = request.publication.load(std::memory_order_acquire);
+        }
+        if (publication == PublicationState::query_cancelled) {
+          response = bridge_query_cancelled_error();
+          static_cast<void>(runtime.inspect_recording_metadata(request.request_id, false, true));
+        } else if (publication == PublicationState::cancelled) {
+          response = bridge_timeout_error();
+          static_cast<void>(runtime.inspect_recording_metadata(request.request_id, false, true));
+          runtime.fail_and_seal("request_timeout", ControlRuntime::AbsoluteRequestDeadline{request.deadline});
+          observe_runtime_failure();
+        }
+      }
       Json envelope{{"protocol_version", 1}, {"request_id", request.request_id}, {"ok", response->at("ok")}};
       envelope[response->at("ok").get<bool>() ? "result" : "error"] =
           response->at(response->at("ok").get<bool>() ? "result" : "error");
@@ -1628,6 +1674,8 @@ struct ControlBridge::Impl {
       }
       if (!request.legacy_ticket.empty())
         static_cast<void>(runtime.inspect_legacy_trigger(request.legacy_ticket, true));
+      if (metadata) static_cast<void>(runtime.inspect_recording_metadata(
+          request.request_id, true, expired || cancelled_query));
     }
   }
 
@@ -1931,6 +1979,7 @@ bool ControlBridge::terminal_release_ready() const noexcept {
   // Controller worker, retained Native inputs and physical/authoring owners
   // outlive a finished RPC. Their acknowledgments are independent gates.
   if (!impl_->runtime.pattern_transport_shutdown_complete()) return false;
+  if (!impl_->runtime.recording_metadata_workers_stopped()) return false;
   for (const auto& request : impl_->requests) {
     const auto state = request.state.load(std::memory_order_acquire);
     // Awaiting-response and its actual release thunk still belong to the
