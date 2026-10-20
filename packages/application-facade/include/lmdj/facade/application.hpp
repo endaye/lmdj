@@ -20,6 +20,7 @@
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/facade/pattern_transport_controller.hpp>
 #include <lmdj/facade/performance_ports.hpp>
+#include <lmdj/facade/performance_recording_metadata.hpp>
 #include <lmdj/facade/performance_replay.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/project_io/soundset_catalog_transport.hpp>
@@ -582,6 +583,10 @@ class Application {
       const RuntimeContentExportRequest& request);
   foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(
       const std::filesystem::path& project_path);
+  // Independent read state over this exact platform. Move the idle reader to
+  // a worker; it does not borrow Application or its mutable authoring history.
+  std::unique_ptr<PerformanceRecordingMetadataReader>
+  make_performance_recording_metadata_reader() const;
   // Host-facing Pattern transport factory (#1230). Unlike the free function,
   // the returned controller's Journal/Store run on this Application's storage
   // platform instance, so a Host-held Project writer lease never reports the

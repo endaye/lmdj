@@ -32,12 +32,13 @@ class StubNode extends EventTarget {
   }
 }
 
-async function fixture({controllerOptions, onPostMessage, monitor = false} = {}) {
+async function fixture({controllerOptions, onPostMessage, monitor = false, sampleRate = 48_000} = {}) {
   const previousLocation = globalThis.location;
   const previousNode = globalThis.AudioWorkletNode;
   const modules = [];
   const destination = {kind: "speakers"};
   const context = {
+    sampleRate,
     destination,
     audioWorklet: {async addModule(url) { modules.push(url); }},
   };
@@ -888,4 +889,175 @@ test("a legacy null binding still arms, and a malformed binding is refused", asy
   const stopping = capture.stop();
   node.port.onmessage({data: {type: "stopped", generation: 1, finalSequence: 0}});
   await stopping;
+});
+
+
+test("capture progress counts delivered silent PCM and the real final partial batch, without a wall clock", async () => {
+  // Batch/getter/WAV agreement can share a dropped partial. The real VM must
+  // independently deliver all 38 * 128 = 4864 frames, including the final 64.
+  const f = await integratedFixture();
+  const delivered = [];
+  const handle = await f.controller.start({onBatch: ([left]) => delivered.push(left.length), onStopped() {}, onFailure() { assert.fail(); }});
+  const initial = f.controller.captureProgress();
+  assert.equal(initial.receivedFrames, 0);
+  assert.equal(initial.sampleRate, 48_000);
+  const render = count => {
+    for (let i=0;i<count;i++) {
+      assert.equal(f.processor.process([[new Float32Array(128),new Float32Array(128)]],
+        [[new Float32Array(128),new Float32Array(128)]]), true);
+      f.clock.currentFrame += 128;
+    }
+  };
+  render(37);
+  assert.equal(f.controller.captureProgress().receivedFrames, 0, "unposted partial frames are not received");
+  render(1);
+  const received = f.controller.captureProgress();
+  assert.equal(received.receivedFrames, 4800);
+  assert.equal(received.phase, "recording");
+  assert.equal(Object.isFrozen(received), true);
+  await handle.stop();
+  assert.deepEqual(delivered, [4800,64]);
+  const stopped = f.controller.captureProgress();
+  assert.equal(stopped.receivedFrames, 4864);
+  assert.equal(stopped.phase, "stopped");
+  assert.equal(stopped.failure, null);
+  assert.equal(stopped.droppedFrames, 0);
+  assert.equal(initial.receivedFrames, 0);
+  assert.equal(received.receivedFrames, 4800, "prior immutable snapshots do not drift");
+  render(38);
+  assert.deepEqual(f.controller.captureProgress(), stopped, "audio after Stop is not this capture");
+  await f.controller.close();
+});
+
+test("capture progress waits for exact started ACK and uses the actual context rate", async () => {
+  const f = await fixture({sampleRate: 44_100,controllerOptions:{autoStartAck:false}});
+  assert.deepEqual(f.controller.captureProgress(), {state:"unavailable",reason:"idle"});
+  const starting = f.controller.start(kSink(), kBinding);
+  assert.deepEqual(f.controller.captureProgress(), {state:"unavailable",reason:"starting"});
+  f.node.port.onmessage({data:{type:"started",generation:0,binding:kBinding}});
+  assert.equal(f.controller.captureProgress().state,"unavailable");
+  f.node.port.onmessage({data:{type:"started",generation:1,binding:kBinding}});
+  const handle = await starting;
+  const value=f.controller.captureProgress();
+  assert.equal(value.sampleRate,44_100);
+  assert.deepEqual(value.binding,kBinding);
+  assert.equal(Object.isFrozen(value.binding),true);
+  await f.controller.close();
+  await handle.stop();
+  assert.deepEqual(f.controller.captureProgress(),{state:"unavailable",reason:"closed"});
+});
+
+test("capture progress replaces stopped identity and ignores late old batches", async () => {
+  const f=await fixture();
+  const first=await f.controller.start(kSink());
+  f.node.port.onmessage({data:{type:"batch",generation:1,sequence:1,channels:[new Float32Array(3),new Float32Array(3)]}});
+  const stop=first.stop();
+  f.node.port.onmessage({data:{type:"stopped",generation:1,finalSequence:1}});
+  await stop;
+  const old=f.controller.captureProgress();
+  const second=await f.controller.start(kSink());
+  f.node.port.onmessage({data:{type:"batch",generation:1,sequence:2,channels:[new Float32Array(5),new Float32Array(5)]}});
+  assert.equal(f.controller.captureProgress().generation,2);
+  assert.equal(f.controller.captureProgress().receivedFrames,0);
+  assert.equal(old.receivedFrames,3);
+  await first.stop();
+  assert.equal(f.controller.captureProgress().phase,"recording");
+  await f.controller.close();await second.stop();
+});
+
+test("a reported tap drop remains known while a sequence failure has unknown loss", async () => {
+  for(const reported of [true,false]) {
+    const f=await fixture();const h=await f.controller.start(kSink());
+    f.node.port.onmessage({data:{type:"batch",generation:1,sequence:1,channels:[new Float32Array(3),new Float32Array(3)]}});
+    f.node.port.onmessage({data:reported
+      ? {type:"failed",generation:1,reason:"post-message-failed",droppedFrames:17}
+      : {type:"batch",generation:1,sequence:3,channels:[new Float32Array(7),new Float32Array(7)]}});
+    await h.stop();const value=f.controller.captureProgress();
+    assert.equal(value.receivedFrames,3);
+    assert.equal(value.phase,"failed");
+    assert.equal(value.droppedFrames,reported?17:null);
+    assert.equal(value.failure,reported?"post-message-failed":"protocol-error");
+    await f.controller.close();
+  }
+});
+
+test("capture stop timeout reports unknown loss and never counts unacknowledged final frames", async () => {
+  const timers=fakeTimers();const f=await fixture({controllerOptions:{timers:timers.api}});
+  const h=await f.controller.start(kSink());
+  f.node.port.onmessage({data:{type:"batch",generation:1,sequence:1,channels:[new Float32Array(9),new Float32Array(9)]}});
+  const stopping=h.stop();assert.equal(f.controller.captureProgress().phase,"stopping");
+  [...timers.scheduled.values()][0].callback();await stopping;
+  const value=f.controller.captureProgress();assert.equal(value.phase,"failed");
+  assert.equal(value.failure,"stop-timeout");assert.equal(value.droppedFrames,null);assert.equal(value.receivedFrames,9);
+  await f.controller.close();
+});
+
+test("missing capture sample rate makes only progress unavailable", async () => {
+  const f=await fixture({sampleRate:null});let frames=0;
+  const h=await f.controller.start({onBatch:([left])=>{frames+=left.length;},onStopped(){},onFailure(){assert.fail();}});
+  f.node.port.onmessage({data:{type:"batch",generation:1,sequence:1,channels:[new Float32Array(4),new Float32Array(4)]}});
+  assert.equal(frames,4);
+  assert.deepEqual(f.controller.captureProgress(),{state:"unavailable",reason:"sample-rate-invalid"});
+  const stop=h.stop();f.node.port.onmessage({data:{type:"stopped",generation:1,finalSequence:1}});await stop;
+  await f.controller.close();
+});
+
+
+test("capture progress is published before sink callbacks and does not claim Host durability", async () => {
+  const f=await fixture();let duringBatch;let duringStop;
+  const h=await f.controller.start({
+    onBatch(){duringBatch=f.controller.captureProgress();throw new Error("Host writer failed");},
+    onStopped(){duringStop=f.controller.captureProgress();},onFailure(){assert.fail();},
+  });
+  f.node.port.onmessage({data:{type:"batch",generation:1,sequence:1,channels:[new Float32Array(3),new Float32Array(3)]}});
+  assert.equal(duringBatch.receivedFrames,3);
+  assert.equal(duringBatch.phase,"recording");
+  assert.equal(duringBatch.droppedFrames,0,"this counter covers tap transport, not the Host writer");
+  assert.equal(Object.hasOwn(duringBatch,"durableFrames"),false);
+  const stop=h.stop();f.node.port.onmessage({data:{type:"stopped",generation:1,finalSequence:1}});await stop;
+  assert.equal(duringStop.phase,"stopped");assert.equal(duringStop.receivedFrames,3);
+  await f.controller.close();
+});
+
+test("real meter owner replacement preserves capture progress through final partial and stopped metering", async () => {
+  const f = await integratedFixture();
+  const batches = [];
+  f.controller.setMeterOwner(METER_A);
+  const capture = await f.controller.start({
+    onBatch: channels => batches.push(channels[0].length),
+    onFailure() { assert.fail("meter ownership cannot fail capture"); },
+    onStopped() {},
+  });
+  let rendered = 0;
+  const render = quanta => {
+    for (let i = 0; i < quanta; i++) {
+      f.clock.currentFrame = rendered;
+      const input = [new Float32Array(128).fill(0.5), new Float32Array(128).fill(0.125)];
+      f.processor.process([input], [[new Float32Array(128), new Float32Array(128)]]);
+      rendered += 128;
+    }
+  };
+  try {
+    render(40);
+    assert.equal(f.controller.meterMeasurement().owner, METER_A);
+    assert.equal(f.controller.meterMeasurement().leftPeak, 0.5);
+    assert.equal(f.controller.meterMeasurement().rightPeak, 0.125);
+    assert.equal(f.controller.captureProgress().receivedFrames, 4800);
+    f.controller.setMeterOwner(METER_B);
+    assert.equal(f.controller.captureProgress().receivedFrames, 4800);
+    render(7);
+    await capture.stop();
+    // Closed-form rendering count is independent of both consumers' counters.
+    assert.equal(rendered, 6016);
+    assert.deepEqual(batches, [4800, 1216]);
+    const progress = f.controller.captureProgress();
+    assert.equal(progress.phase, "stopped");
+    assert.equal(progress.receivedFrames, 6016);
+    assert.equal(progress.generation, capture.generation);
+    render(20);
+    assert.equal(f.controller.meterMeasurement().owner, METER_B);
+    assert.equal(f.controller.meterMeasurement().leftPeak, 0.5);
+    assert.equal(f.controller.meterMeasurement().rightPeak, 0.125);
+    assert.deepEqual(f.controller.captureProgress(), progress);
+  } finally { await f.controller.close(); }
 });

@@ -957,7 +957,8 @@ class DraftEnrollmentTest(unittest.TestCase):
             root=self.root, candidate_root=self.root, repository_id=12,
             ledger=Ledger(),
             create_draft=self.create_draft,
-            release_by_tag=lambda _tag: self.release)
+            release_by_tag=lambda _tag: self.release,
+            verify_draft=lambda tag, release_id, plan_sha256: None)
 
     def operation(self):
         return {"step": "draft", "operation_id": DIGEST, "status": "intent",

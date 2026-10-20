@@ -131,6 +131,22 @@ class ProjectStorageTextReader {
       const std::filesystem::path& path) const = 0;
 };
 
+// Optional bounded raw reads into the caller's buffer. Each call validates and
+// opens a fresh regular file; success returns only the initialized prefix size.
+// EOF (including offsets beyond EOF) and an empty output return zero after path
+// validation. The unfilled tail is untouched. On failure, copied bytes are
+// untrusted. This grants no writer authority, Artifact integrity, durability or
+// atomic view across calls. Keep the platform alive while using this companion;
+// there is no complete-read fallback when the capability is absent.
+class ProjectStorageRangeReader {
+ public:
+  virtual ~ProjectStorageRangeReader() = default;
+  virtual foundation::Result<std::size_t> read_range(
+      const std::filesystem::path& path,
+      std::uint64_t offset,
+      std::span<std::byte> output) const = 0;
+};
+
 // Optional companion for the canonical Project journal layout. Each call
 // freshly validates the complete managed tree, the eight required directories,
 // and manifest regular-file length. Success is neither a durable-write receipt

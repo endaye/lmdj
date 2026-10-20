@@ -121,6 +121,7 @@
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/control_runtime_test.cpp"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/manifest_gate_test.cpp"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/performance_bridge_test.cpp"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host", "creator"]},
+    {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/recording_metadata_query_test.cpp"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/realtime_session_test.cpp"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host", "creator"]},
     {"match": {"kind": "prefix", "value": "providers/"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage"]},
     {"match": {"kind": "prefix", "value": "products/lmdj/"}, "lanes": ["portal"]},

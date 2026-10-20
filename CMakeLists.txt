@@ -201,6 +201,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_domain_model_sequence_tests
     lmdj_authoring_history_tests
     lmdj_project_store_tests
+    lmdj_performance_recording_verification_tests
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
     lmdj_runtime_content_tests

@@ -1174,7 +1174,8 @@ foundation::Result<std::optional<mode_t>> path_mode_without_symlinks(
 
 class NativeProjectStoragePlatform final : public ProjectStoragePlatform,
                                          public ProjectJournalLayoutValidator,
-                                         public ProjectStorageTextReader {
+                                         public ProjectStorageTextReader,
+                                         public ProjectStorageRangeReader {
  public:
   explicit NativeProjectStoragePlatform(std::filesystem::path metadata_root)
       : metadata_root_(std::move(metadata_root)) {}
@@ -1352,6 +1353,56 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform,
   foundation::Result<std::string> read_complete_text(
       const std::filesystem::path& path) const override {
     return read_complete_buffer<std::string>(path);
+  }
+
+  foundation::Result<std::size_t> read_range(
+      const std::filesystem::path& path,
+      std::uint64_t offset,
+      std::span<std::byte> output) const override {
+    auto opened = open_regular_file(path);
+    if (!opened.has_value()) {
+      return foundation::Result<std::size_t>::failure(opened.error());
+    }
+    auto descriptor = std::move(opened.value().first);
+    const auto before = opened.value().second;
+    if (before.st_size < 0) {
+      return foundation::Result<std::size_t>::failure(
+          storage_error("storage byte length is invalid", path));
+    }
+    const auto size = static_cast<std::uint64_t>(before.st_size);
+    const auto length = offset >= size ? 0 : static_cast<std::size_t>(
+        std::min<std::uint64_t>(size - offset, output.size()));
+    std::size_t consumed = 0;
+    while (consumed < length) {
+      const auto request = std::min<std::size_t>(
+          length - consumed, std::numeric_limits<ssize_t>::max());
+      const auto count = ::pread(descriptor.get(), output.data() + consumed,
+                                 request, static_cast<off_t>(offset + consumed));
+      if (count < 0) {
+        if (errno == EINTR) continue;
+        return foundation::Result<std::size_t>::failure(
+            storage_error("storage range could not be read", path));
+      }
+      if (count == 0) {
+        return foundation::Result<std::size_t>::failure(
+            storage_error("storage file ended during range read", path));
+      }
+      consumed += static_cast<std::size_t>(count);
+    }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    const auto intercepted = testing::detail::invoke_fault(
+        testing::FaultPoint::range_read_complete, path);
+    if (!intercepted.has_value()) {
+      return foundation::Result<std::size_t>::failure(intercepted.error());
+    }
+#endif
+    struct stat after {};
+    if (fstat_retry(descriptor.get(), &after) != 0 ||
+        !S_ISREG(after.st_mode) || !same_stable_metadata(before, after)) {
+      return foundation::Result<std::size_t>::failure(
+          storage_error("storage file changed during range read", path));
+    }
+    return foundation::Result<std::size_t>::success(consumed);
   }
 
   foundation::Result<void> create_immutable(

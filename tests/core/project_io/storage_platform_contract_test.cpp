@@ -11,6 +11,7 @@
 #include <future>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1631,10 +1632,155 @@ void test_journal_layout_holds_and_releases_real_shared_manifest_lock() {
   LMDJ_CHECK(journal_after.value() == journal_before.value());
 }
 
+void test_range_read_preserves_binary_window_and_canaries() {
+  TempDirectory temp;
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  const auto path = temp.path() / "raw.bin";
+  write_bytes(path, std::string_view{"ab\0\xff" "cdxy", 8});
+  std::array<std::byte, 6> output;
+  output.fill(std::byte{0x55});
+  const auto read = reader->read_range(path, 2, std::span{output}.subspan(1, 4));
+  LMDJ_CHECK(read.has_value());
+  LMDJ_CHECK(read.value() == 4);
+  const std::array expected{std::byte{0x55}, std::byte{0}, std::byte{0xff},
+                            std::byte{'c'}, std::byte{'d'}, std::byte{0x55}};
+  LMDJ_CHECK(output == expected);
+}
+
+void test_range_read_tail_eof_and_empty_still_validate_file() {
+  TempDirectory temp;
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  const auto path = temp.path() / "raw.bin";
+  write_bytes(path, "abcd");
+  std::array<std::byte, 5> output;
+  output.fill(std::byte{0x55});
+  const auto tail = reader->read_range(path, 3, std::span{output}.subspan(1, 3));
+  LMDJ_CHECK(tail.has_value() && tail.value() == 1);
+  const std::array expected{std::byte{0x55}, std::byte{'d'}, std::byte{0x55},
+                            std::byte{0x55}, std::byte{0x55}};
+  LMDJ_CHECK(output == expected);
+  for (const auto offset : std::array<std::uint64_t, 4>{4, 5, (1ULL << 32) + 1,
+                          std::numeric_limits<std::uint64_t>::max()}) {
+    const auto eof = reader->read_range(path, offset, output);
+    LMDJ_CHECK(eof.has_value() && eof.value() == 0);
+    LMDJ_CHECK(output == expected);
+  }
+  const auto empty = reader->read_range(path, 0, {});
+  LMDJ_CHECK(empty.has_value() && empty.value() == 0);
+  const auto missing = reader->read_range(temp.path() / "missing", 0, {});
+  LMDJ_CHECK(!missing.has_value());
+  LMDJ_CHECK(missing.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(missing.error().details.at("system_error") == std::strerror(ENOENT));
+}
+
+void test_range_read_uses_fresh_replaced_file() {
+  TempDirectory temp;
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  const auto path = temp.path() / "raw.bin";
+  write_bytes(path, "abcd");
+  std::array<std::byte, 2> output;
+  const auto first = reader->read_range(path, 1, output);
+  LMDJ_CHECK(first.has_value() && first.value() == 2);
+  LMDJ_CHECK(output == (std::array{std::byte{'b'}, std::byte{'c'}}));
+  write_bytes(temp.path() / "replacement", "wxyz");
+  std::filesystem::rename(temp.path() / "replacement", path);
+  const auto second = reader->read_range(path, 1, output);
+  LMDJ_CHECK(second.has_value() && second.value() == 2);
+  LMDJ_CHECK(output == (std::array{std::byte{'x'}, std::byte{'y'}}));
+}
+
+void test_range_read_refuses_unsafe_and_special_paths() {
+  TempDirectory temp;
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  std::filesystem::create_directory(temp.path() / "real");
+  write_bytes(temp.path() / "real/raw.bin", "abcd");
+  std::filesystem::create_symlink(temp.path() / "real/raw.bin", temp.path() / "link");
+  std::filesystem::create_directory_symlink(temp.path() / "real", temp.path() / "ancestor");
+  LMDJ_CHECK(::mkfifo((temp.path() / "fifo").c_str(), 0600) == 0);
+  for (const auto& path : std::array{temp.path() / "link", temp.path() / "ancestor/raw.bin",
+                                    temp.path() / "real", temp.path() / "fifo"}) {
+    std::array<std::byte, 1> output{std::byte{0x55}};
+    const auto read = reader->read_range(path, 0, output);
+    LMDJ_CHECK(!read.has_value());
+    LMDJ_CHECK(output[0] == std::byte{0x55});
+    LMDJ_CHECK(!reader->read_range(path, 0, {}).has_value());
+  }
+}
+
+int range_change_calls = 0;
+lmdj::foundation::Result<void> resize_after_range_read(
+    FaultPoint point, const std::filesystem::path& path) {
+  if (point == FaultPoint::range_read_complete) {
+    ++range_change_calls;
+    std::filesystem::resize_file(path, 1);
+  }
+  return lmdj::foundation::Result<void>::success();
+}
+
+void test_range_read_rejects_actual_file_change_after_copy() {
+  TempDirectory temp;
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  const auto path = temp.path() / "raw.bin";
+  write_bytes(path, "abcd");
+  range_change_calls = 0;
+  std::array<std::byte, 2> output;
+  StorageHookGuard hook{resize_after_range_read};
+  const auto read = reader->read_range(path, 0, output);
+  LMDJ_CHECK(range_change_calls == 1);
+  LMDJ_CHECK(std::filesystem::file_size(path) == 1);
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(read.error().message == "storage file changed during range read");
+}
+
+lmdj::foundation::Result<void> reject_complete_read(
+    FaultPoint point, const std::filesystem::path&) {
+  if (point != FaultPoint::complete_read) return lmdj::foundation::Result<void>::success();
+  ++complete_read_fault_calls;
+  return lmdj::foundation::Result<void>::failure(
+      {ErrorCode::io_error, "whole read forbidden by range test"});
+}
+
+void test_range_read_does_not_fall_back_to_complete_read() {
+  TempDirectory temp;
+  auto platform = make_native_project_storage_platform(temp.path() / "metadata");
+  const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(platform.get());
+  LMDJ_CHECK(reader != nullptr);
+  const auto path = temp.path() / "raw.bin";
+  write_bytes(path, "abcd");
+  complete_read_fault_calls = 0;
+  StorageHookGuard hook{reject_complete_read};
+  const auto whole = platform->read_complete(path);
+  LMDJ_CHECK(!whole.has_value());
+  LMDJ_CHECK(whole.error().message == "whole read forbidden by range test");
+  LMDJ_CHECK(complete_read_fault_calls == 1);
+  std::array<std::byte, 2> output;
+  const auto read = reader->read_range(path, 1, output);
+  LMDJ_CHECK(read.has_value() && read.value() == 2);
+  LMDJ_CHECK(output == (std::array{std::byte{'b'}, std::byte{'c'}}));
+  LMDJ_CHECK(complete_read_fault_calls == 1);
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_range_read_preserves_binary_window_and_canaries();
+    test_range_read_tail_eof_and_empty_still_validate_file();
+    test_range_read_uses_fresh_replaced_file();
+    test_range_read_refuses_unsafe_and_special_paths();
+    test_range_read_rejects_actual_file_change_after_copy();
+    test_range_read_does_not_fall_back_to_complete_read();
     test_writer_lease_is_reentrant_per_platform_and_competes_across_instances();
     test_writer_lease_rejects_hard_link_before_changing_permissions();
     test_complete_immutable_append_replace_and_remove_contract();

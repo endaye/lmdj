@@ -1517,3 +1517,320 @@ test("real count-in cue ACK and callback last use independently fence terminal r
     assertValidFence(checkpoints.finalFence);
   }
 });
+
+opfsTest("saved recording metadata RPC verifies real WAVs through two page reopens", async ({context}, testInfo) => {
+  opfsTest.setTimeout(180_000);
+  const validDigest="985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5";
+  const unsupportedDigest="62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19";
+  const mismatchDigest="6517a13adcf9f3e715104fd2d8fa6e738ae1ccad2437c615e2f85a7d7b706adc";
+  const journeys=[];
+  for(const variant of ["valid","unsupported","mismatch"]) {
+    const projectId=crypto.randomUUID(),patternId=crypto.randomUUID(),performanceId=crypto.randomUUID();
+    const artifact={sha256:variant==="unsupported"?unsupportedDigest:validDigest,
+      media_type:"audio/wav",byte_length:192124};
+    const reports=[];
+    for(const phase of ["prepare","reopen","reopen"]) {
+      const page=await context.newPage();
+      await waitForFormalHost(page);
+      if(phase==="prepare") expect((await activateFromClick(page,48000)).ok).toBe(true);
+      const report=await page.evaluate(async ({variant,phase,projectId,patternId,performanceId,artifact}) => {
+        const send=async (operation,payload) => {
+          const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+            request_id:crypto.randomUUID(),operation,payload});
+          if(!response.ok) throw new Error(operation+": "+JSON.stringify(response));
+          return response.result;
+        };
+        const root=await navigator.storage.getDirectory();
+        if(phase==="prepare") {
+          const created=await send("project.create",{project_id:projectId,bpm:120,
+            initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
+          if(created.project_revision!==0) throw new Error("Project creation revision changed");
+          await send("snapshot.reload",{pattern_id:patternId});await send("audio.activate",{});
+          const begun=await send("performance.record.begin",{command_id:crypto.randomUUID(),expected_revision:0,
+            session_id:performanceId,performance_id:performanceId});
+          if(begun.project_revision!==1) throw new Error("Performance begin revision changed");
+          await send("performance.record.stop",{session_id:performanceId,request_id:crypto.randomUUID()});
+          // Independent fixture, not recorded PCM: zero events with an exact
+          // positive WAV frame count and odd non-audio JUNK/padding.
+          const bytes=new Uint8Array(192124),view=new DataView(bytes.buffer);
+          const text=(at,value)=>{for(let i=0;i<value.length;++i) bytes[at+i]=value.charCodeAt(i);};
+          const rate=variant==="unsupported"?32000:48000;
+          text(0,"RIFF");view.setUint32(4,192116,true);text(8,"WAVE");text(12,"fmt ");view.setUint32(16,16,true);
+          view.setUint16(20,1,true);view.setUint16(22,2,true);view.setUint32(24,rate,true);view.setUint32(28,rate*4,true);
+          view.setUint16(32,4,true);view.setUint16(34,16,true);text(36,"JUNK");view.setUint32(40,3,true);
+          bytes.set([1,2,3,171],44);text(48,"data");view.setUint32(52,192068,true);
+          const projects=await root.getDirectoryHandle("projects");
+          const bundle=await projects.getDirectoryHandle(projectId+".lmdj");
+          const assets=await bundle.getDirectoryHandle("assets");
+          const file=await assets.getFileHandle(artifact.sha256+".wav",{create:true});
+          const writable=await file.createWritable();await writable.write(bytes);await writable.close();
+          const saved=await send("performance.save",{command_id:crypto.randomUUID(),expected_revision:1,
+            performance_id:performanceId,name:"silent recording metadata fixture",recording_artifact:artifact});
+          if(saved.project_revision!==2) throw new Error("Performance save revision changed");
+          if(variant==="mismatch") {
+            const corrupt=await file.createWritable({keepExistingData:true});
+            await corrupt.write({type:"write",position:192123,data:new Uint8Array([1])});await corrupt.close();
+          }
+        } else await send("project.open",{project_id:projectId,pattern_id:patternId});
+        const inspected=await send("performance.inspect",{performance_id:performanceId});
+        const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+          request_id:crypto.randomUUID(),operation:"performance.recording.metadata",
+          payload:{project_id:projectId,performance_id:performanceId,expected_revision:2,recording_artifact:artifact}});
+        const queryHostState=(await send("host.status",{})).state;
+        if(phase==="prepare") await send("audio.suspend",{});
+        const projects=await root.getDirectoryHandle("projects");
+        const bundle=await projects.getDirectoryHandle(projectId+".lmdj");
+        const assets=await bundle.getDirectoryHandle("assets");
+        const file=await (await assets.getFileHandle(artifact.sha256+".wav")).getFile();
+        const bytes=new Uint8Array(await file.arrayBuffer());
+        const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+          value=>value.toString(16).padStart(2,"0")).join("");
+        const closed=await send("host.close",{});
+        return {phase,queryHostState,inspected,response,physical:{sha256,length:file.size,
+          prefix:Array.from(bytes.slice(0,56)),tail:Array.from(bytes.slice(-4))},closed};
+      },{variant,phase,projectId,patternId,performanceId,artifact});
+      expect(report.phase).toBe(phase);
+      expect(report.queryHostState).toBe(phase==="prepare"?"running":"core-ready");
+      expect(report.inspected).toEqual({performance:{id:performanceId,name:"silent recording metadata fixture",
+        created_bpm:120,recording_artifact:artifact,events:[]},project_revision:2});
+      const {request_id,...response}=report.response;
+      expect(request_id).toMatch(/^[0-9a-f-]{36}$/);
+      if(variant==="mismatch") expect(response).toEqual({protocol_version:1,ok:false,
+        error:{code:"COOK_FAILED",message:"runtime snapshot preparation failed",details:{storage_condition:"artifact_mismatch"}}});
+      else expect(response).toEqual({protocol_version:1,ok:true,result:{project_id:projectId,performance_id:performanceId,
+        project_revision:2,recording_revision:0,recording_artifact:artifact,
+        audio_metadata:variant==="valid"?{sample_rate:48000,channels:2,source_frames:48017}:null,
+        audio_error:variant==="unsupported"?{code:"UNSUPPORTED_AUDIO",message:"audio input is unsupported",details:{}}:null}});
+      const prefix=variant==="unsupported"
+        ? "5249464674ee020057415645666d74201000000001000200007d000000f40100040010004a554e4b03000000010203ab6461746144ee0200"
+        : "5249464674ee020057415645666d7420100000000100020080bb000000ee0200040010004a554e4b03000000010203ab6461746144ee0200";
+      expect(report.physical).toEqual({sha256:variant==="mismatch"?mismatchDigest:artifact.sha256,length:192124,
+        prefix:Array.from(Buffer.from(prefix,"hex")),tail:variant==="mismatch"?[0,0,0,1]:[0,0,0,0]});
+      expect(report.closed.state).toBe("closed");
+      reports.push(report);await page.close();expect(page.isClosed()).toBe(true);
+    }
+    journeys.push({variant,projectId,patternId,performanceId,artifact,reports,closedPages:3});
+  }
+  const evidencePath=testInfo.outputPath("recording-metadata-query-reopens.json");
+  await (await import("node:fs/promises")).writeFile(evidencePath,JSON.stringify({journeys},null,2),{flag:"wx"});
+  await testInfo.attach("recording-metadata-query-reopens",{path:evidencePath,contentType:"application/json"});
+});
+
+opfsTest("thirty-minute recording Save and bind preserve full identity through two page reopens", async ({context}, testInfo) => {
+  opfsTest.setTimeout(180_000);
+  const bundleSchema=JSON.parse(await (await import("node:fs/promises")).readFile(
+    new URL("../../../../contracts/project/lmdj.project-bundle.v1.schema.json",import.meta.url),"utf8"));
+  const bundleContractVersion=bundleSchema["x-lmdj-contract-version"];
+  // Independent Python hashlib witness for this literal PCM16 stereo header
+  // followed by345600000 zero bytes. This is a controlled physical file, not
+  // device capture. Keep the production512MiB heap and default30s RPC budget.
+  const headerHex="524946463070991457415645666d7420100000000100020080bb000000ee0200040010004a554e4b03000000010203ab6461746100709914";
+  const artifact={sha256:"59602d6f8b90b228985c6254d5f843945c42fcbd33552d9326f4784da627fbc6",
+    media_type:"audio/wav",byte_length:345600056};
+  const journeys=[];
+  for(const admission of ["save","bind"]) {
+    const projectId=crypto.randomUUID(),patternId=crypto.randomUUID(),performanceId=crypto.randomUUID();
+    const revision=admission==="save"?2:3,reports=[];
+    for(const phase of ["prepare","reopen","reopen"]) {
+      const page=await context.newPage(),errors=[];
+      page.on("pageerror",error=>errors.push(error.message));
+      const host=await waitForFormalHost(page);
+      expect(host.memoryBytes).toBe(536870912);
+      if(phase==="prepare") expect((await activateFromClick(page,48000)).ok).toBe(true);
+      const report=await page.evaluate(async ({admission,phase,projectId,patternId,performanceId,revision,artifact,header,bundleContractVersion})=>{
+        const send=async (operation,payload)=>{
+          const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+            request_id:crypto.randomUUID(),operation,payload});
+          if(!response.ok)throw new Error(operation+": "+JSON.stringify(response));
+          return response.result;
+        };
+        const root=await navigator.storage.getDirectory();
+        let admitted=null,startupListed=null;
+        if(phase==="prepare") {
+          await send("project.create",{project_id:projectId,bpm:120,
+            initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
+          await send("snapshot.reload",{pattern_id:patternId});await send("audio.activate",{});
+          await send("performance.record.begin",{command_id:crypto.randomUUID(),expected_revision:0,
+            session_id:performanceId,performance_id:performanceId});
+          await send("performance.record.stop",{session_id:performanceId,request_id:crypto.randomUUID()});
+          if(admission==="bind")await send("performance.save",{command_id:crypto.randomUUID(),expected_revision:1,
+            performance_id:performanceId,name:"thirty minutes",recording_artifact:null});
+          const assets=await (await (await root.getDirectoryHandle("projects"))
+            .getDirectoryHandle(projectId+".lmdj")).getDirectoryHandle("assets");
+          const file=await assets.getFileHandle(artifact.sha256+".wav",{create:true});
+          const writable=await file.createWritable();await writable.truncate(artifact.byte_length);
+          await writable.write({type:"write",position:0,data:new Uint8Array(header)});await writable.close();
+          const started=performance.now();
+          admitted=await send(admission==="save"?"performance.save":"performance.recording.bind",{
+            command_id:crypto.randomUUID(),expected_revision:revision-1,performance_id:performanceId,
+            ...(admission==="save"?{name:"thirty minutes"}:{}),recording_artifact:artifact});
+          admitted={receipt:admitted,elapsedMs:performance.now()-started};
+        } else {
+          // Creator startup discovers on an unselected Session before opening.
+          // Keep the later post-open full physical digest oracle as well.
+          startupListed=await send("project.list",{});
+          await send("project.open",{project_id:projectId,pattern_id:patternId});
+        }
+        const inspected=await send("performance.inspect",{performance_id:performanceId});
+        const metadata=await send("performance.recording.metadata",{project_id:projectId,
+          performance_id:performanceId,expected_revision:revision,recording_artifact:artifact});
+        // Creator boot discovers before opening. Direct project.open alone
+        // cannot prove this formerly whole-file allocation path works.
+        const listed=await send("project.list",{});
+        const project=await send("project.inspect",{});
+        const assets=await (await (await root.getDirectoryHandle("projects"))
+          .getDirectoryHandle(projectId+".lmdj")).getDirectoryHandle("assets");
+        const file=await (await assets.getFileHandle(artifact.sha256+".wav")).getFile();
+        const prefix=new Uint8Array(await file.slice(0,56).arrayBuffer());
+        const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",await file.arrayBuffer())),
+          value=>value.toString(16).padStart(2,"0")).join("");
+        const view=new DataView(prefix.buffer);
+        const physical={sha256,byteLength:file.size,prefix:Array.from(prefix),
+          tail:Array.from(new Uint8Array(await file.slice(-4).arrayBuffer())),
+          sampleRate:view.getUint32(24,true),channels:view.getUint16(22,true),
+          sourceFrames:view.getUint32(52,true)/view.getUint16(32,true)};
+        // Independent browser Crypto oracle for the complete canonical
+        // inventory, using actual OPFS bytes rather than Core's hash helper.
+        const inventory=[];
+        const digest=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+          value=>value.toString(16).padStart(2,"0")).join("");
+        const walk=async (directory,parent="")=>{
+          for await(const [name,entry] of directory.entries()) {
+            const path=parent+name;
+            if(entry.kind==="directory")await walk(entry,path+"/");
+            else {
+              const file=await entry.getFile();
+              inventory.push({path,bytes:file.size,sha256:path===`assets/${artifact.sha256}.wav`
+                ?physical.sha256:await digest(await file.arrayBuffer())});
+            }
+          }
+        };
+        const directory=await (await root.getDirectoryHandle("projects")).getDirectoryHandle(projectId+".lmdj");
+        await walk(directory);
+        // All fixture paths are ASCII, whose ordering is unsigned UTF-8 byte
+        // ordering. Native canonical-path tests retain the non-ASCII cases.
+        inventory.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+        let total=0;
+        const entries=inventory.map(entry=>{const offset=total;total+=entry.bytes;return {...entry,offset};});
+        const canonical=value=>Array.isArray(value)?value.map(canonical):value!==null&&typeof value==="object"
+          ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+        const index={compression:"none",contract:"lmdj.project-bundle.v1",contract_version:bundleContractVersion,
+          entries,project_contract:project.project.contract,project_id:projectId,uncompressed_bytes:total};
+        const inventoryDigest=await digest(new TextEncoder().encode(JSON.stringify(canonical(index))));
+        if(phase==="prepare")await send("audio.suspend",{});
+        const closed=await send("host.close",{});
+        return {admitted,startupListed,inspected,metadata,physical,listed,inventory:{entries,total,digest:inventoryDigest},
+          closed,memoryBytes:window.Module.wasmMemory.buffer.byteLength};
+      },{admission,phase,projectId,patternId,performanceId,revision,artifact,bundleContractVersion,
+        header:Array.from(Buffer.from(headerHex,"hex"))});
+      if(phase==="prepare")expect(report.admitted.receipt.project_revision).toBe(revision);
+      else expect(report.admitted).toBeNull();
+      if(phase==="prepare") expect(report.startupListed).toBeNull();
+      else expect(report.startupListed.projects.find(value=>value.project_id===projectId)).toEqual({
+        project_id:projectId,pattern_id:patternId,revision,bpm:120,asset_count:0,assigned_pad_count:0,
+        bundle_digest:expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
+      expect(report.inspected).toEqual({performance:{id:performanceId,name:"thirty minutes",created_bpm:120,
+        recording_artifact:artifact,events:[]},project_revision:revision});
+      expect(report.metadata).toEqual({project_id:projectId,performance_id:performanceId,
+        project_revision:revision,recording_revision:0,recording_artifact:artifact,
+        audio_metadata:{sample_rate:48000,channels:2,source_frames:86400000},audio_error:null});
+      expect(report.physical).toEqual({sha256:artifact.sha256,byteLength:345600056,
+        prefix:Array.from(Buffer.from(headerHex,"hex")),tail:[0,0,0,0],
+        sampleRate:48000,channels:2,sourceFrames:86400000});
+      expect(report.listed.projects.find(value=>value.project_id===projectId)).toEqual({
+        project_id:projectId,pattern_id:patternId,revision,bpm:120,asset_count:0,assigned_pad_count:0,
+        bundle_digest:report.inventory.digest});
+      expect(report.inventory.total).toBeGreaterThan(345600056);
+      expect(report.closed.state).toBe("closed");expect(report.memoryBytes).toBe(536870912);
+      expect(errors,"production Wasm must not trap while verifying long recordings").toEqual([]);
+      reports.push({phase,...report});await page.close();expect(page.isClosed()).toBe(true);
+    }
+    journeys.push({admission,projectId,patternId,performanceId,artifact,reports,closedPages:3});
+  }
+  const evidencePath=testInfo.outputPath("thirty-minute-recording-save-bind-reopens.json");
+  await (await import("node:fs/promises")).writeFile(evidencePath,JSON.stringify({journeys},null,2),{flag:"wx"});
+  await testInfo.attach("thirty-minute-recording-save-bind-reopens",{path:evidencePath,contentType:"application/json"});
+});
+
+opfsTest("busy local Projects remain discoverable without taking foreign writer ownership", async ({context}, testInfo) => {
+  const schema=JSON.parse(await (await import("node:fs/promises")).readFile(
+    new URL("../../../../contracts/project/lmdj.project-bundle.v1.schema.json",import.meta.url),"utf8"));
+  const busyId=crypto.randomUUID(),busyPattern=crypto.randomUUID();
+  const freeId=crypto.randomUUID(),freePattern=crypto.randomUUID();
+  const busy=await context.newPage(),free=await context.newPage(),reader=await context.newPage();
+  const send=(page,operation,payload)=>page.evaluate(async ({operation,payload})=>
+    window.lmdjWebRuntimeHost.transport.send({protocol_version:1,request_id:crypto.randomUUID(),operation,payload}),
+    {operation,payload});
+  await waitForFormalHost(reader);
+  // Supported WebKit retains this run's earlier OPFS fixtures across contexts.
+  // Enumerate the physical pre-existing inventory independently of project.list.
+  const existingIds=await reader.evaluate(async ()=>{
+    const root=await navigator.storage.getDirectory();
+    const projects=await root.getDirectoryHandle("projects",{create:true});
+    const ids=[];
+    for await(const [name,entry] of projects.entries())
+      if(entry.kind==="directory"&&name.endsWith(".lmdj"))ids.push(name.slice(0,-5));
+    return ids.sort();
+  });
+  const seed=async (page,projectId,patternId,bpm)=>{
+    await waitForFormalHost(page);
+    const result=await send(page,"project.create",{project_id:projectId,bpm,
+      initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
+    expect(result.ok).toBe(true);expect(result.result.project_revision).toBe(0);
+    const inspected=await send(page,"project.inspect",{});expect(inspected.ok).toBe(true);
+    return inspected.result.project.contract;
+  };
+  const busyContract=await seed(busy,busyId,busyPattern,120);
+  const freeContract=await seed(free,freeId,freePattern,126);
+  expect((await send(free,"host.close",{})).result.state).toBe("closed");
+  await free.close();expect(free.isClosed()).toBe(true);
+  const observed=await reader.evaluate(async ({projects,version})=>{
+    const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+      request_id:crypto.randomUUID(),operation:"project.list",payload:{}});
+    const root=await navigator.storage.getDirectory(),digests={};
+    const hash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+      value=>value.toString(16).padStart(2,"0")).join("");
+    const canonical=value=>Array.isArray(value)?value.map(canonical):value!==null&&typeof value==="object"
+      ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+    for(const project of projects) {
+      const directory=await (await root.getDirectoryHandle("projects")).getDirectoryHandle(project.id+".lmdj");
+      const entries=[];
+      const walk=async (folder,parent="")=>{
+        for await(const [name,entry] of folder.entries()) {
+          const path=parent+name;
+          if(entry.kind==="directory")await walk(entry,path+"/");
+          else {const file=await entry.getFile();entries.push({path,bytes:file.size,sha256:await hash(await file.arrayBuffer())});}
+        }
+      };
+      await walk(directory);entries.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+      let total=0;const indexed=entries.map(entry=>{const offset=total;total+=entry.bytes;return {...entry,offset};});
+      const index={compression:"none",contract:"lmdj.project-bundle.v1",contract_version:version,
+        entries:indexed,project_contract:project.contract,project_id:project.id,uncompressed_bytes:total};
+      digests[project.id]=await hash(new TextEncoder().encode(JSON.stringify(canonical(index))));
+    }
+    return {response,digests};
+  },{projects:[{id:busyId,contract:busyContract},{id:freeId,contract:freeContract}],version:schema["x-lmdj-contract-version"]});
+  expect(observed.response.ok).toBe(true);
+  expect(observed.response.result.projects.map(value=>value.project_id).sort()).toEqual(
+    [...existingIds,busyId,freeId].sort());
+  for(const [projectId,patternId,bpm] of [[busyId,busyPattern,120],[freeId,freePattern,126]])
+    expect(observed.response.result.projects.find(value=>value.project_id===projectId)).toEqual({
+      project_id:projectId,pattern_id:patternId,revision:0,bpm,asset_count:0,assigned_pad_count:0,
+      bundle_digest:observed.digests[projectId]});
+  const opened=await send(reader,"project.open",{project_id:freeId,pattern_id:freePattern});
+  expect(opened.ok).toBe(true);
+  const refused=await send(reader,"project.open",{project_id:busyId,pattern_id:busyPattern});
+  expect(refused.ok).toBe(false);expect(refused.error).toEqual({
+    code:"PROJECT_BUSY",details:{},message:"project is already open for writing"});
+  const kept=await send(reader,"project.inspect",{});expect(kept.ok).toBe(true);
+  expect(kept.result.project.project_id).toBe(freeId);
+  const owner=await send(busy,"project.inspect",{});expect(owner.ok).toBe(true);
+  expect(owner.result.project.project_id).toBe(busyId);
+  expect((await send(reader,"host.close",{})).result.state).toBe("closed");
+  expect((await send(busy,"host.close",{})).result.state).toBe("closed");
+  await reader.close();await busy.close();expect(reader.isClosed()).toBe(true);expect(busy.isClosed()).toBe(true);
+  const path=testInfo.outputPath("busy-project-discovery.json");
+  await (await import("node:fs/promises")).writeFile(path,JSON.stringify({existingIds,busyId,freeId,observed,opened,refused,kept,owner,closedPages:3},null,2),{flag:"wx"});
+  await testInfo.attach("busy-project-discovery",{path,contentType:"application/json"});
+});

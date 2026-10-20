@@ -30,6 +30,7 @@ lmdj_target_sanitizers(lmdj_performance_runtime)
 
 set(lmdj_application_sources
     src/application.cpp
+    src/performance_recording_metadata.cpp
     src/candidate_store.cpp
     src/assembly_loader.cpp
     src/mutation_publish_scope.cpp
@@ -405,6 +406,16 @@ if(BUILD_TESTING)
     COMMAND lmdj_facade_sequence_surface_tests --shard=rebase
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+
+  add_executable(lmdj_facade_performance_recording_metadata_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/performance_recording_metadata_test.cpp")
+  target_include_directories(lmdj_facade_performance_recording_metadata_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_performance_recording_metadata_tests PRIVATE lmdj::application Threads::Threads)
+  lmdj_target_warnings(lmdj_facade_performance_recording_metadata_tests)
+  lmdj_target_sanitizers(lmdj_facade_performance_recording_metadata_tests)
+  lmdj_add_test(NAME facade.performance_recording_metadata TIER component
+    COMMAND lmdj_facade_performance_recording_metadata_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" LABELS concurrency persistence)
 
   add_executable(
     lmdj_facade_performance_operation_contract_tests

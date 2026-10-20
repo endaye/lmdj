@@ -1226,6 +1226,223 @@ test("Web Project I/O retains a child writer after Control root reset and releas
   }
 });
 
+test("Web Project I/O reads bounded binary ranges without a writer through two page reopens", async ({context, browserName}, testInfo) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const preflight = await trackedPage(context);
+  await navigate(preflight, "/preflight.html");
+  const capabilities = await inspectStorageCapabilities(preflight);
+  await preflight.close();
+  expect(preflight.isClosed()).toBe(true);
+  if (capabilities.status === "unsupported") {
+    expect(browserName).toBe("webkit");
+    expect(capabilities.error).toEqual({code: "UNSUPPORTED_WEB_RUNTIME",
+      missing: STORAGE_CAPABILITY_ORDER.filter(name => capabilities.capabilities[name] !== true)});
+    testInfo.annotations.push({type: "platform-limitation", description: capabilities.error.missing.join(",")});
+    await retainAdmissionEvidence(testInfo, "bounded-range-capability-refusal.json", capabilities);
+    return;
+  }
+  const bundle = `bounded-range-${Date.now()}`;
+  const expected = {windowCount: 4, window: [85, 0, 255, 99, 100, 85],
+    tailCount: 1, tail: [85, 121, 85, 85, 85, 85], eofWindows: 4, emptyCount: 0,
+    missingErrorCode: "NOT_FOUND", writersBefore: 0, writersAfter: 0};
+  const reports = [];
+  const physical = [];
+  for (const phase of ["prepare", "inspect", "inspect"]) {
+    const page = await trackedPage(context);
+    await navigate(page, `/project_io/project_io_web_test.html?action=bounded_range_read&phase=${phase}&bundle=${bundle}`);
+    const result = await waitForResult(page);
+    expect(result).toEqual(expected);
+    reports.push(result);
+    const actualBytes = await page.evaluate(async bundle => {
+      const root = await navigator.storage.getDirectory();
+      const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+      const file = await (await directory.getFileHandle("raw.bin")).getFile();
+      return Array.from(new Uint8Array(await file.arrayBuffer()));
+    }, bundle);
+    expect(actualBytes).toEqual([97, 98, 0, 255, 99, 100, 120, 121]);
+    physical.push(actualBytes);
+    await page.close();
+    expect(page.isClosed(), "range reopen requires the prior page to actually close").toBe(true);
+  }
+  await retainAdmissionEvidence(testInfo, "bounded-range-reopens.json", {bundle, reports, physical, closedPages: 3});
+});
+
+test("Web Project I/O verifies a bounded Performance recording scan through two page reopens", async ({context, browserName}, testInfo) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const preflight = await trackedPage(context);
+  await navigate(preflight, "/preflight.html");
+  const capabilities = await inspectStorageCapabilities(preflight);
+  await preflight.close();
+  expect(preflight.isClosed()).toBe(true);
+  if (capabilities.status === "unsupported") {
+    expect(browserName).toBe("webkit");
+    expect(capabilities.error).toEqual({code: "UNSUPPORTED_WEB_RUNTIME",
+      missing: STORAGE_CAPABILITY_ORDER.filter(name => capabilities.capabilities[name] !== true)});
+    testInfo.annotations.push({type: "platform-limitation", description: capabilities.error.missing.join(",")});
+    await retainAdmissionEvidence(testInfo, "performance-scan-capability-refusal.json", capabilities);
+    return;
+  }
+  const sha256 = "d257cf3b0c9d53ca39e618938b660595fb3c80b8779c82f22b3a3075f04b4e55";
+  const expected = {projectId: "00000000-0000-4000-8000-000000000001",
+    performanceId: "10000000-0000-4000-8000-000000000001", projectRevision: 0, recordingRevision: 0,
+    artifact: {sha256, media_type: "audio/wav", byte_length: 131089}, bytesSeen: 131089,
+    consumerCalls: 3, staleRevision: "REVISION_CONFLICT", writersAfter: 0, publishedWrites: 0};
+  const bundle = `performance-scan-${Date.now()}`;
+  const reports = [], physical = [];
+  for (const phase of ["prepare", "inspect", "inspect"]) {
+    const page = await trackedPage(context);
+    await navigate(page, `/project_io/project_io_web_test.html?action=performance_artifact_scan&phase=${phase}&bundle=${bundle}`);
+    const result = await waitForResult(page);
+    expect(result).toEqual(expected);
+    reports.push(result);
+    const bytes = await page.evaluate(async ({bundle, sha256}) => {
+      const root = await navigator.storage.getDirectory();
+      const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+      const assets = await directory.getDirectoryHandle("assets");
+      const file = await (await assets.getFileHandle(`${sha256}.wav`)).getFile();
+      const data = new Uint8Array(await file.arrayBuffer());
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+      return {length: file.size, sha256: Array.from(digest, v => v.toString(16).padStart(2, "0")).join(""),
+        prefix: Array.from(data.slice(0, 8)), tail: Array.from(data.slice(-8))};
+    }, {bundle, sha256});
+    expect(bytes).toEqual({length: 131089, sha256, prefix: [97, 98, 0, 255, 99, 100, 120, 121],
+      tail: [98, 0, 255, 99, 100, 120, 121, 97]});
+    physical.push(bytes);
+    await page.close();
+    expect(page.isClosed(), "recording scan reopen requires the previous page to close").toBe(true);
+  }
+  await retainAdmissionEvidence(testInfo, "performance-scan-reopens.json", {bundle, reports, physical, closedPages: 3});
+});
+
+test("Web Project I/O verifies streaming WAV metadata through two page reopens", async ({context, browserName}, testInfo) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const preflight = await trackedPage(context);
+  await navigate(preflight, "/preflight.html");
+  const capabilities = await inspectStorageCapabilities(preflight);
+  await preflight.close();
+  expect(preflight.isClosed()).toBe(true);
+  if (capabilities.status === "unsupported") {
+    expect(browserName).toBe("webkit");
+    expect(capabilities.error).toEqual({code: "UNSUPPORTED_WEB_RUNTIME",
+      missing: STORAGE_CAPABILITY_ORDER.filter(name => capabilities.capabilities[name] !== true)});
+    testInfo.annotations.push({type: "platform-limitation", description: capabilities.error.missing.join(",")});
+    await retainAdmissionEvidence(testInfo, "wav-metadata-capability-refusal.json", capabilities);
+    return;
+  }
+  const validDigest = "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5";
+  const unsupportedDigest = "62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19";
+  const mismatchDigest = "6517a13adcf9f3e715104fd2d8fa6e738ae1ccad2437c615e2f85a7d7b706adc";
+  const journeys = [];
+  for (const variant of ["valid", "unsupported", "mismatch"]) {
+    const sha256 = variant === "unsupported" ? unsupportedDigest : validDigest;
+    const requested = {projectId: "00000000-0000-4000-8000-000000000001",
+      performanceId: "10000000-0000-4000-8000-000000000001", projectRevision: 0,
+      artifact: {sha256, media_type: "audio/wav", byte_length: 192124}};
+    const expected = {requested, verification: variant === "mismatch" ? null : {...requested, recordingRevision: 0},
+      metadata: variant === "valid" ? {sampleRate: 48000, channels: 2, sourceFrames: 48017} : null,
+      status: {valid: "verified", unsupported: "unsupported_audio", mismatch: "artifact_mismatch"}[variant],
+      failureCode: {valid: null, unsupported: "UNSUPPORTED_AUDIO", mismatch: "COOK_FAILED"}[variant],
+      bytesSeen: 192124, consumerCalls: 3, writersAfter: 0, publishedWrites: 0};
+    const bundle = `wav-metadata-${variant}-${Date.now()}`;
+    const reports = [], physical = [];
+    for (const phase of ["prepare", "inspect", "inspect"]) {
+      const page = await trackedPage(context);
+      await navigate(page, `/project_io/project_io_web_test.html?action=performance_wav_metadata&variant=${variant}&phase=${phase}&bundle=${bundle}`);
+      const result = await waitForResult(page);
+      expect(result).toEqual(expected);
+      reports.push(result);
+      const bytes = await page.evaluate(async ({bundle, sha256}) => {
+        const root = await navigator.storage.getDirectory();
+        const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+        const assets = await directory.getDirectoryHandle("assets");
+        const file = await (await assets.getFileHandle(`${sha256}.wav`)).getFile();
+        const data = new Uint8Array(await file.arrayBuffer());
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+        return {length: file.size, sha256: Array.from(digest, v => v.toString(16).padStart(2, "0")).join(""),
+          prefix: Array.from(data.slice(0, 56)), tail: Array.from(data.slice(-4))};
+      }, {bundle, sha256});
+      // Closed-form fixture layout and Python hashlib constants are independent
+      // of the C++ parser, scanner and browser digest. JUNK is not audio frames.
+      const prefix = variant === "unsupported"
+        ? "5249464674ee020057415645666d74201000000001000200007d000000f40100040010004a554e4b03000000010203ab6461746144ee0200"
+        : "5249464674ee020057415645666d7420100000000100020080bb000000ee0200040010004a554e4b03000000010203ab6461746144ee0200";
+      expect(bytes).toEqual({length: 192124, sha256: variant === "mismatch" ? mismatchDigest : sha256,
+        prefix: Array.from(Buffer.from(prefix, "hex")), tail: variant === "mismatch" ? [0, 0, 0, 1] : [0, 0, 0, 0]});
+      physical.push(bytes);
+      await page.close();
+      expect(page.isClosed(), "WAV metadata reopen requires the previous page to close").toBe(true);
+    }
+    journeys.push({variant, bundle, reports, physical, closedPages: 3});
+  }
+  await retainAdmissionEvidence(testInfo, "wav-metadata-reopens.json", {journeys});
+});
+
+test("Web Project I/O verifies worker-owned Facade recording metadata through two page reopens", async ({context, browserName}, testInfo) => {
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+  const preflight = await trackedPage(context);
+  await navigate(preflight, "/preflight.html");
+  const capabilities = await inspectStorageCapabilities(preflight);
+  await preflight.close();
+  expect(preflight.isClosed()).toBe(true);
+  if (capabilities.status === "unsupported") {
+    expect(browserName).toBe("webkit");
+    expect(capabilities.error).toEqual({code: "UNSUPPORTED_WEB_RUNTIME",
+      missing: STORAGE_CAPABILITY_ORDER.filter(name => capabilities.capabilities[name] !== true)});
+    testInfo.annotations.push({type: "platform-limitation", description: capabilities.error.missing.join(",")});
+    await retainAdmissionEvidence(testInfo, "facade-metadata-capability-refusal.json", capabilities);
+    return;
+  }
+  const validDigest = "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5";
+  const unsupportedDigest = "62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19";
+  const mismatchDigest = "6517a13adcf9f3e715104fd2d8fa6e738ae1ccad2437c615e2f85a7d7b706adc";
+  const journeys = [];
+  for (const variant of ["valid", "unsupported", "mismatch"]) {
+    const sha256 = variant === "unsupported" ? unsupportedDigest : validDigest;
+    const requested = {projectId: "00000000-0000-4000-8000-000000000001",
+      performanceId: "10000000-0000-4000-8000-000000000001", projectRevision: 0,
+      artifact: {sha256, media_type: "audio/wav", byte_length: 192124}};
+    const expected = {requested, verification: variant === "mismatch" ? null : {...requested, recordingRevision: 0},
+      metadata: variant === "valid" ? {sampleRate: 48000, channels: 2, sourceFrames: 48017} : null,
+      status: {valid: "verified", unsupported: "unsupported_audio", mismatch: "artifact_mismatch"}[variant],
+      failureCode: {valid: null, unsupported: "UNSUPPORTED_AUDIO", mismatch: "COOK_FAILED"}[variant],
+      workerDistinct: true, preCancelled: true, applicationRetired: true, workerExitedBeforeJoin: true,
+      rootWritersDuring: 1, writersAfter: 0, publishedWrites: 0};
+    const bundle = `facade-metadata-${variant}-${Date.now()}`;
+    const reports = [], physical = [];
+    for (const phase of ["prepare", "inspect", "inspect"]) {
+      const page = await trackedPage(context);
+      await navigate(page, `/project_io/project_io_web_test.html?action=performance_facade_metadata&variant=${variant}&phase=${phase}&bundle=${bundle}`);
+      const result = await waitForResult(page);
+      const {workerStack, ...observed} = result;
+      expect(observed).toEqual(expected);
+      expectStackHeadroom(page.url() + " / metadata worker", workerStack);
+      reports.push(result);
+      const bytes = await page.evaluate(async ({bundle, sha256}) => {
+        const root = await navigator.storage.getDirectory();
+        const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+        const assets = await directory.getDirectoryHandle("assets");
+        const file = await (await assets.getFileHandle(`${sha256}.wav`)).getFile();
+        const data = new Uint8Array(await file.arrayBuffer());
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+        return {length: file.size, sha256: Array.from(digest, v => v.toString(16).padStart(2, "0")).join(""),
+          prefix: Array.from(data.slice(0, 56)), tail: Array.from(data.slice(-4))};
+      }, {bundle, sha256});
+      // Closed-form fixture layout and Python hashlib constants are independent
+      // of the C++ parser, scanner and browser digest. JUNK is not audio frames.
+      const prefix = variant === "unsupported"
+        ? "5249464674ee020057415645666d74201000000001000200007d000000f40100040010004a554e4b03000000010203ab6461746144ee0200"
+        : "5249464674ee020057415645666d7420100000000100020080bb000000ee0200040010004a554e4b03000000010203ab6461746144ee0200";
+      expect(bytes).toEqual({length: 192124, sha256: variant === "mismatch" ? mismatchDigest : sha256,
+        prefix: Array.from(Buffer.from(prefix, "hex")), tail: variant === "mismatch" ? [0, 0, 0, 1] : [0, 0, 0, 0]});
+      physical.push(bytes);
+      await page.close();
+      expect(page.isClosed(), "WAV metadata reopen requires the previous page to close").toBe(true);
+    }
+    journeys.push({variant, bundle, reports, physical, closedPages: 3});
+  }
+  await retainAdmissionEvidence(testInfo, "facade-recording-metadata-reopens.json", {journeys});
+});
+
 test("Web Project I/O creates and opens an untouched v5 Project", async ({context, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);

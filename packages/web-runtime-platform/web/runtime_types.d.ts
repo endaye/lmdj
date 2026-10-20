@@ -498,6 +498,31 @@ export interface PerformanceMasterCapture {
   stop(): Promise<void>;
 }
 
+/** Validated received PCM only; neither durable WAV nor whole Performance time. */
+export type PerformanceMasterCaptureProgress = Readonly<{
+  state: "unavailable";
+  reason: "idle" | "starting" | "start-failed" | "closed" | "owner-lost" |
+    "identity-unavailable" | "unsupported" | "sample-rate-invalid" |
+    "frame-overflow" | "protocol-error";
+}> | Readonly<{
+  state: "available";
+  captureId: string;
+  generation: number;
+  binding: Readonly<{controlEpoch: string; sessionId: string; beginCommandId: string}> | null;
+  sampleRate: number;
+  receivedFrames: number;
+  phase: "recording" | "stopping" | "stopped" | "failed";
+  /** Tap-to-SDK loss only, excluding Host queue/writer drops; null is unknown. */
+  droppedFrames: number | null;
+  failure: "tap-failure" | "protocol-error" | "post-message-failed" |
+    "processor-failed" | "stop-post-failed" | "stop-timeout" | "closed" | null;
+}>;
+
+/** Optional capability: old capture handles/results retain their exact keys. */
+export interface PerformanceMasterCaptureProgressSession {
+  performanceMasterCaptureProgress(): PerformanceMasterCaptureProgress;
+}
+
 export interface WebPerformanceCaptureSession {
   performanceMasterCaptureStatus(): PerformanceMasterCaptureStatus;
   subscribePerformanceMasterCaptureStatus(
@@ -631,6 +656,25 @@ export interface PerformanceArtifact {
   readonly sha256: string;
   readonly mediaType: "audio/wav";
   readonly byteLength: number;
+}
+
+/** Verified WAV facts at the requested revision; never capture completeness. */
+export interface PerformanceRecordingMetadata {
+  readonly projectId: string;
+  readonly performanceId: string;
+  readonly projectRevision: number;
+  readonly recordingRevision: number;
+  readonly recordingArtifact: PerformanceArtifact;
+  readonly audioMetadata: Readonly<{
+    sampleRate: 44100 | 48000;
+    channels: 1 | 2;
+    sourceFrames: number;
+  }> | null;
+  readonly audioError: Readonly<{
+    code: "UNSUPPORTED_AUDIO";
+    message: string;
+    details: Readonly<Record<string, unknown>>;
+  }> | null;
 }
 
 export interface PerformanceLifecycleResult {
@@ -929,6 +973,13 @@ export interface PerformanceRuntimeSession {
     events: readonly Readonly<Record<string, unknown>>[];
     projectRevision: number;
   }>>;
+  /** Independent asynchronous read. Abort does not prove worker/resource exit. */
+  queryPerformanceRecordingMetadata(request: Readonly<{
+    projectId: string;
+    performanceId: string;
+    expectedRevision: number;
+    recordingArtifact: PerformanceArtifact;
+  }>, options?: Readonly<{signal?: AbortSignal}>): Promise<PerformanceRecordingMetadata>;
   beginPerformanceRecording(request: Readonly<{
     sessionId: string;
     performanceId: string;

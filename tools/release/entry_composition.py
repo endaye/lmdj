@@ -473,6 +473,13 @@ def _create_draft(context):
     return lambda tag: create_draft(tag, context)
 
 
+def _verify_draft(context):
+    """The trusted Draft asset verifier: downloads and checks every asset."""
+    from .transitions import verify_draft
+
+    return lambda tag, release_id, plan_sha256: verify_draft(tag, release_id, plan_sha256, context)
+
+
 def _push_tag(context):
     """The trusted `push_tag` controller: the real command, bound to this run.
 
@@ -882,7 +889,8 @@ def compose_carriers(context, policy, request):
         enroll_draft(root=root, candidate_root=candidate_root,
                      repository_id=repository_id, ledger=ledger,
                      create_draft=_create_draft(context),
-                     release_by_tag=draft_release_by_tag),
+                     release_by_tag=draft_release_by_tag,
+                     verify_draft=_verify_draft(context)),
         enroll_publication(root=root, candidate_root=candidate_root,
                            repository_id=repository_id, ledger=ledger,
                            workflow_id=_workflow_id(github,

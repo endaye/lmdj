@@ -322,8 +322,41 @@ foundation::Result<void> verify_managed_wav_artifact(
     });
   }
   const auto path = bundle / "assets" / (artifact.sha256 + ".wav");
-  auto described = describe_artifact(platform, path, artifact.media_type);
-  if (!described.has_value() || described.value() != artifact) {
+  const auto matches = [&]() {
+    const auto* reader = dynamic_cast<const ProjectStorageRangeReader*>(&platform);
+    if (reader == nullptr) {
+      // Preserve legacy platform compatibility. Production Native and OPFS
+      // provide bounded reads; a present reader's failure never falls back.
+      const auto described = describe_artifact(platform, path, artifact.media_type);
+      return described.has_value() && described.value() == artifact;
+    }
+    const auto length = platform.byte_length(path);
+    if (!length.has_value() || length.value() != artifact.byte_length) return false;
+    // OPFS read_complete needs a whole-file allocation and a second C++ copy.
+    // Keep recording verification independent of recording length and off the
+    // small Web stack, without changing writer ownership or decoding PCM.
+    constexpr std::size_t kChunkBytes = 64U * 1024U;
+    auto buffer = std::make_unique<std::array<std::byte, kChunkBytes>>();
+    picosha2::hash256_one_by_one hasher;
+    std::uint64_t offset = 0;
+    while (offset < artifact.byte_length) {
+      const auto requested = static_cast<std::size_t>(std::min<std::uint64_t>(
+          kChunkBytes, artifact.byte_length - offset));
+      const auto read = reader->read_range(path, offset, std::span{*buffer}.first(requested));
+      if (!read.has_value() || read.value() == 0 || read.value() > requested) return false;
+      const auto* begin = reinterpret_cast<const unsigned char*>(buffer->data());
+      hasher.process(begin, begin + read.value());
+      offset += read.value();
+    }
+    const auto after_length = platform.byte_length(path);
+    if (!after_length.has_value() || after_length.value() != artifact.byte_length) return false;
+    std::array<std::byte, 1> extra;
+    const auto eof = reader->read_range(path, offset, extra);
+    if (!eof.has_value() || eof.value() != 0) return false;
+    hasher.finish();
+    return picosha2::get_hash_hex_string(hasher) == artifact.sha256;
+  };
+  if (!matches()) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::missing_asset,
         "Performance recording ArtifactRef does not match managed storage",
@@ -8404,6 +8437,131 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
         Error{ErrorCode::not_found, "Project Asset does not own Artifact"});
   }
   return read_verified_artifact(*platform_, bundle, artifact);
+}
+
+foundation::Result<PerformanceRecordingVerification>
+ProjectStore::scan_performance_recording(
+    const std::filesystem::path& requested_bundle,
+    const PerformanceRecordingSelector& requested_selector,
+    const ArtifactChunkConsumer& consumer) const {
+  using ScanResult = foundation::Result<PerformanceRecordingVerification>;
+  // Callback activity cannot retarget the in-flight read through caller-owned
+  // aliases. The complete request identity stays fixed for this invocation.
+  const auto bundle = requested_bundle;
+  const auto selector = requested_selector;
+  auto history_guard = history_->acquire();
+  if (bundle.extension() != ".lmdj" ||
+      !domain::is_valid_uuid(selector.project_id.value()) ||
+      !domain::is_valid_uuid(selector.performance_id.value()) ||
+      !valid_sha256(selector.artifact.sha256) ||
+      selector.artifact.media_type != "audio/wav" || !consumer) {
+    return ScanResult::failure(
+        Error{ErrorCode::invalid_argument, "Performance recording selector or consumer is invalid"});
+  }
+  auto tree = platform_->validate_managed_tree(bundle);
+  if (!tree.has_value()) return ScanResult::failure(tree.error());
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) return ScanResult::failure(lease.error());
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return ScanResult::failure(tree.error());
+
+  const auto owner = [&selector](const domain::ProjectState& state)
+      -> foundation::Result<std::uint64_t> {
+    using OwnerResult = foundation::Result<std::uint64_t>;
+    if (state.id != selector.project_id) {
+      return OwnerResult::failure(
+          Error{ErrorCode::not_found, "Project does not own Performance recording"});
+    }
+    if (state.revision != selector.expected_revision) {
+      return OwnerResult::failure(Error{
+          ErrorCode::revision_conflict, "Performance recording expected revision does not match",
+          {{"actual_revision", state.revision}, {"expected_revision", selector.expected_revision}}});
+    }
+    const auto found = state.performances.find(selector.performance_id);
+    if (found == state.performances.end() ||
+        found->second.recording_artifact != selector.artifact) {
+      return OwnerResult::failure(
+          Error{ErrorCode::not_found, "Performance does not own recording Artifact"});
+    }
+    return OwnerResult::success(found->second.recording_revision);
+  };
+  const auto loaded = load_project(*platform_, bundle, false);
+  if (!loaded.has_value()) return ScanResult::failure(loaded.error());
+  const auto recording_revision = owner(loaded.value()->state);
+  if (!recording_revision.has_value()) return ScanResult::failure(recording_revision.error());
+  const auto* reader = dynamic_cast<const ProjectStorageRangeReader*>(platform_.get());
+  if (reader == nullptr) {
+    return ScanResult::failure(Error{
+        ErrorCode::io_error, "Project storage does not support bounded Artifact reads",
+        {{"reason", "bounded_read_unavailable"}}});
+  }
+  const auto path = bundle / "assets" / (selector.artifact.sha256 + ".wav");
+  const auto mismatch = [&path](std::string message) {
+    return ScanResult::failure(Error{
+        ErrorCode::cook_failed, std::move(message),
+        {{"path", path.generic_string()},
+         {"storage_condition", std::string{kStorageConditionArtifactMismatch}}}});
+  };
+  const auto present = platform_->exists(path);
+  if (!present.has_value()) return ScanResult::failure(present.error());
+  if (!present.value()) {
+    return ScanResult::failure(Error{
+        ErrorCode::not_found, "Performance recording Artifact does not exist",
+        {{"path", path.generic_string()}}});
+  }
+  const auto length = platform_->byte_length(path);
+  if (!length.has_value()) return ScanResult::failure(length.error());
+  if (length.value() != selector.artifact.byte_length) {
+    return mismatch("Performance recording byte length does not match its reference");
+  }
+  // Keep the buffer off the small Web stack, independently of recording size.
+  constexpr std::size_t kChunkBytes = 64U * 1024U;
+  auto buffer = std::make_unique<std::array<std::byte, kChunkBytes>>();
+  picosha2::hash256_one_by_one hasher;
+  std::uint64_t offset = 0;
+  while (offset < selector.artifact.byte_length) {
+    const auto requested = static_cast<std::size_t>(std::min<std::uint64_t>(
+        kChunkBytes, selector.artifact.byte_length - offset));
+    const auto read = reader->read_range(path, offset, std::span{*buffer}.first(requested));
+    if (!read.has_value()) return ScanResult::failure(read.error());
+    if (read.value() == 0) return mismatch("Performance recording ended during scan");
+    if (read.value() > requested) {
+      return ScanResult::failure(Error{
+          ErrorCode::io_error, "Performance recording range returned an invalid count",
+          {{"storage_condition", std::string{kStorageConditionInvalidState}}}});
+    }
+    const auto* begin = reinterpret_cast<const unsigned char*>(buffer->data());
+    hasher.process(begin, begin + read.value());
+    const auto consumed = consumer(std::span<const std::byte>{*buffer}.first(read.value()));
+    if (!consumed.has_value()) return ScanResult::failure(consumed.error());
+    offset += read.value();
+  }
+  const auto after_length = platform_->byte_length(path);
+  if (!after_length.has_value()) return ScanResult::failure(after_length.error());
+  if (after_length.value() != selector.artifact.byte_length) {
+    return mismatch("Performance recording byte length changed during scan");
+  }
+  std::array<std::byte, 1> extra;
+  const auto eof = reader->read_range(path, offset, extra);
+  if (!eof.has_value()) return ScanResult::failure(eof.error());
+  if (eof.value() != 0) return mismatch("Performance recording has bytes beyond its reference");
+  hasher.finish();
+  if (picosha2::get_hash_hex_string(hasher) != selector.artifact.sha256) {
+    return mismatch("Performance recording hash does not match its reference");
+  }
+  // The history mutex and same-platform leases are reentrant. Even a consumer
+  // that violates its no-mutation contract must not receive a stale receipt.
+  const auto final = load_project(*platform_, bundle, false);
+  if (!final.has_value()) return ScanResult::failure(final.error());
+  const auto final_owner = owner(final.value()->state);
+  if (!final_owner.has_value()) return ScanResult::failure(final_owner.error());
+  if (final_owner.value() != recording_revision.value()) {
+    return ScanResult::failure(
+        Error{ErrorCode::not_found, "Performance recording revision changed during scan"});
+  }
+  return ScanResult::success(PerformanceRecordingVerification{
+      selector.project_id, selector.performance_id, final.value()->state.revision,
+      final_owner.value(), selector.artifact});
 }
 
 foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(

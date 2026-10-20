@@ -57,6 +57,41 @@ def sanitize_diagnostic(
     return _bounded(collapsed, limit)
 
 
+# The release-tool error classes whose messages `scripts/release.sh` already
+# prints in full to stderr (`release verification error: ...`). Only these keep
+# their message in a failure note, so the note never shows more than the CLI.
+_DISCLOSED_ERRORS = frozenset({
+    "ChangelogError", "CommandError", "EditorialError", "GitHubApiError",
+    "GitRepositoryError", "HydrateError", "JournalError", "OpenPgpError",
+    "OrchestrationPolicyError", "PrepareError", "ProfileError", "PromotionError",
+    "PublicationError", "RehearsalError", "ReleaseModelError", "TransitionError",
+    # TransitionError subclasses, printed by release.sh as TransitionError.
+    "IncompleteAssetError", "ReleaseReadUnavailable",
+})
+
+
+def describe_failure(error: BaseException, *, limit: int = 320) -> str:
+    """One bounded, secret-safe line naming why a swallowed step failure happened.
+
+    Release step adapters report an exception as `unknown` so that a raw message
+    never becomes the request's persisted or public status. The operator still
+    needs the cause on the console. The release tool's own error classes that
+    `release.sh` already prints to stderr keep their authored why/remedy message
+    (and a command's already-sanitized `detail`), passed through
+    `sanitize_diagnostic` and bounded to `limit`. Any other exception, including
+    other classes inside this package, contributes its type name only.
+    """
+    kind = type(error)
+    name = kind.__name__
+    if name not in _DISCLOSED_ERRORS or not kind.__module__.startswith("tools.release."):
+        return name
+    message = str(error)
+    detail = getattr(error, "detail", "")
+    if isinstance(detail, str) and detail:
+        message = f"{message}: {detail}"
+    return sanitize_diagnostic(f"{name}: {message}", limit=limit)
+
+
 class CommandError(RuntimeError):
     """A command failed without exposing its environment or output secrets.
 

@@ -1,10 +1,13 @@
 #include <lmdj/project_io/project_bundle_transfer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -19,6 +22,7 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/authoring_history.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
 #include "publish_token.hpp"
@@ -316,12 +320,75 @@ struct InventoryEntry {
   std::string digest;
 };
 
+// Discovery describes local Truth, which can contain recordings larger than
+// the transfer envelope permits. Its digest remains the full canonical index;
+// a summary does not grant import/copy eligibility.
+enum class InventoryPurpose { transfer, discovery };
+
+foundation::Result<InventoryEntry> read_inventory_entry(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& path,
+    std::string portable,
+    InventoryPurpose purpose) {
+  using ReadResult = foundation::Result<InventoryEntry>;
+  const auto length = platform.byte_length(path);
+  if (!length.has_value()) return ReadResult::failure(sanitized_storage_error(
+      length.error(), "Project inventory file length could not be read"));
+  if (purpose == InventoryPurpose::transfer && length.value() > kMaximumEntryBytes)
+    return ReadResult::failure(resource_limit("Project inventory entry exceeds 64 MiB"));
+  const auto changed = [] {
+    return ReadResult::failure(Error{ErrorCode::io_error,
+        "Project inventory file changed or returned invalid bytes",
+        {{"storage_condition", std::string{kStorageConditionInvalidState}}}});
+  };
+  const auto* reader = dynamic_cast<const ProjectStorageRangeReader*>(&platform);
+  if (reader == nullptr) {
+    // Never allocate a large local recording just to discover its Project.
+    // Preserve the existing complete-read path for small legacy platforms.
+    if (length.value() > kMaximumEntryBytes) return ReadResult::failure(Error{
+        ErrorCode::io_error, "Large Project inventory requires bounded storage reads",
+        {{"reason", "bounded_read_unavailable"}}});
+    const auto content = platform.read_complete(path);
+    if (!content.has_value()) return ReadResult::failure(sanitized_storage_error(
+        content.error(), "Project inventory file could not be read"));
+    if (content.value().size() != length.value()) return changed();
+    return ReadResult::success({std::move(portable),length.value(),sha256(content.value())});
+  }
+  constexpr std::size_t kWindowBytes = 64U*1024U;
+  auto buffer = std::make_unique<std::array<std::byte,kWindowBytes>>();
+  picosha2::hash256_one_by_one hasher;
+  std::uint64_t offset = 0;
+  while (offset < length.value()) {
+    const auto capacity = static_cast<std::size_t>(std::min<std::uint64_t>(
+        kWindowBytes,length.value()-offset));
+    const auto read = reader->read_range(path,offset,std::span{*buffer}.first(capacity));
+    if (!read.has_value()) return ReadResult::failure(sanitized_storage_error(
+        read.error(), "Project inventory range could not be read"));
+    if (read.value() == 0 || read.value() > capacity) return changed();
+    const auto* first = reinterpret_cast<const unsigned char*>(buffer->data());
+    hasher.process(first,first+read.value());
+    offset += read.value();
+  }
+  const auto after = platform.byte_length(path);
+  if (!after.has_value()) return ReadResult::failure(sanitized_storage_error(
+      after.error(), "Project inventory final length could not be read"));
+  if (after.value() != length.value()) return changed();
+  std::array<std::byte,1> extra;
+  const auto eof = reader->read_range(path,offset,extra);
+  if (!eof.has_value()) return ReadResult::failure(sanitized_storage_error(
+      eof.error(), "Project inventory EOF could not be read"));
+  if (eof.value() != 0) return changed();
+  hasher.finish();
+  return ReadResult::success({std::move(portable),length.value(),picosha2::get_hash_hex_string(hasher)});
+}
+
 foundation::Result<void> collect_inventory(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& root,
     const std::filesystem::path& relative,
     std::vector<InventoryEntry>& entries,
-    std::uint64_t& total) {
+    std::uint64_t& total,
+    InventoryPurpose purpose) {
   const auto directory = relative.empty() ? root : root / relative;
   const auto names = platform.list_names(directory);
   if (!names.has_value()) {
@@ -336,27 +403,16 @@ foundation::Result<void> collect_inventory(
       return foundation::Result<void>::failure(
           invalid_bundle("Project inventory contains an invalid path"));
     }
-    const auto content = platform.read_complete(root / child_relative);
-    if (!content.has_value()) {
-      return foundation::Result<void>::failure(
-          sanitized_storage_error(
-              content.error(), "Project inventory file could not be read"));
-    }
-    if (content.value().size() > kMaximumEntryBytes) {
-      return foundation::Result<void>::failure(
-          resource_limit("Project inventory entry exceeds 64 MiB"));
-    }
-    total += content.value().size();
-    if (total > kMaximumPayloadBytes) {
+    auto entry = read_inventory_entry(platform,root/child_relative,portable,purpose);
+    if (!entry.has_value()) return foundation::Result<void>::failure(entry.error());
+    if (entry.value().bytes > std::numeric_limits<std::uint64_t>::max()-total)
+      return foundation::Result<void>::failure(resource_limit("Project inventory byte count overflows"));
+    total += entry.value().bytes;
+    if (purpose == InventoryPurpose::transfer && total > kMaximumPayloadBytes) {
       return foundation::Result<void>::failure(
           resource_limit("Project inventory exceeds 512 MiB"));
     }
-    entries.push_back(
-        InventoryEntry{
-            portable,
-            content.value().size(),
-            sha256(content.value()),
-        });
+    entries.push_back(std::move(entry.value()));
     if (entries.size() > kMaximumEntries) {
       return foundation::Result<void>::failure(
           resource_limit("Project inventory entry count exceeds 4096"));
@@ -371,7 +427,7 @@ foundation::Result<void> collect_inventory(
   for (const auto& name : directories.value()) {
     const auto child_relative = relative / name;
     const auto collected = collect_inventory(
-        platform, root, child_relative, entries, total);
+        platform, root, child_relative, entries, total,purpose);
     if (!collected.has_value()) {
       return collected;
     }
@@ -413,7 +469,8 @@ foundation::Result<std::string> project_digest(
     const std::filesystem::path& path,
     const foundation::ProjectId& project_id,
     domain::ProjectContract contract,
-    std::string_view contract_version) {
+    std::string_view contract_version,
+    InventoryPurpose purpose) {
   const auto tree = platform.validate_managed_tree(path);
   if (!tree.has_value()) {
     return foundation::Result<std::string>::failure(
@@ -423,7 +480,7 @@ foundation::Result<std::string> project_digest(
   std::vector<InventoryEntry> entries;
   std::uint64_t total = 0;
   const auto collected = collect_inventory(
-      platform, path, {}, entries, total);
+      platform, path, {}, entries, total,purpose);
   if (!collected.has_value()) {
     return foundation::Result<std::string>::failure(collected.error());
   }
@@ -497,7 +554,20 @@ foundation::Result<LocalProjectSummary> summarize_project(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::shared_ptr<AuthoringHistory>& history,
     const std::filesystem::path& path,
-    std::string_view contract_version = kBundleContractVersion) {
+    std::string_view contract_version = kBundleContractVersion,
+    InventoryPurpose purpose = InventoryPurpose::transfer) {
+  auto history_guard = history->acquire();
+  auto lease = platform->acquire_writer(path);
+  // Preserve ProjectStore::load's existing committed-read path under a busy
+  // foreign owner. Busy is no authority to recover, mutate or transfer.
+  // A successfully acquired lease remains alive through the complete hash.
+  const auto writer_busy =
+      !lease.has_value() && lease.error().details.is_object() &&
+      lease.error().details.value("storage_condition", std::string{}) ==
+          kStorageConditionProjectBusy;
+  if (!lease.has_value() && !writer_busy)
+    return foundation::Result<LocalProjectSummary>::failure(
+        sanitized_storage_error(lease.error(), "Project inventory writer could not be acquired"));
   ProjectStore store{platform, history};
   const auto loaded = store.load(path);
   if (!loaded.has_value()) {
@@ -511,7 +581,7 @@ foundation::Result<LocalProjectSummary> summarize_project(
         invalid_bundle("Project has no playable Pattern"));
   }
   const auto digest = project_digest(
-      *platform, path, state.id, state.contract, contract_version);
+      *platform, path, state.id, state.contract, contract_version,purpose);
   if (!digest.has_value()) {
     return foundation::Result<LocalProjectSummary>::failure(digest.error());
   }
@@ -592,7 +662,8 @@ ProjectBundleTransfer::list_local_projects(
     if (directory.extension() != ".lmdj") {
       continue;
     }
-    const auto summary = summarize_project(impl_->platform, impl_->history, root / directory);
+    const auto summary = summarize_project(impl_->platform, impl_->history,
+        root / directory,kBundleContractVersion,InventoryPurpose::discovery);
     if (!summary.has_value()) {
       return foundation::Result<std::vector<LocalProjectSummary>>::failure(
           summary.error());
