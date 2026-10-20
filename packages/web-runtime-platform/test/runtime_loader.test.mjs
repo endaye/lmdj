@@ -837,3 +837,33 @@ test(`actual fatal deadline still rejects and starts cleanup when diagnostic con
   assert.equal(f.transport.terminalOwnerReleased, false);
 });
 }
+
+for (const operation of ["pattern.tempo.preview.status", "pattern.tempo.preview.cancel", "pattern.tempo.preview.commit"]) {
+  test(`real sealed transport admits exact retained tempo ${operation}`, async () => {
+    const f = deadlineTransportFixture();
+    void f.transport.terminate();
+    const id = "80000000-0000-4000-8000-000000000001";
+    const ticket = {preview_token: "1", project_id: id, pattern_id: id, source_id: "2", expected_revision: 3};
+    const request = {...deadlineRequest(operation, id), payload: {ticket,
+      ...(operation.endsWith(".commit") ? {command_id: id} : {})}};
+    const pending = f.transport.sendRetained(request);
+    assert.equal(f.submissions.length, 1);
+    assert.deepEqual(f.submissions[0].envelope, request);
+    f.responses.push({protocol_version: 1, request_id: id, ok: true, result: {original: true}});
+    f.advance(200);
+    // The actual pre.js runs in a distinct VM realm; compare every wire
+    // field while normalizing only its Object prototype.
+    assert.deepEqual(JSON.parse(JSON.stringify(await pending)),
+      {protocol_version: 1, request_id: id, ok: true, result: {original: true}});
+    assert.equal(f.transport.terminalOwnerReleased, false, "RPC completion is not physical owner release");
+  });
+}
+for (const operation of ["pattern.tempo.preview.begin", "pattern.tempo.preview.set"]) {
+  test(`real sealed transport refuses fresh tempo admission ${operation}`, async () => {
+    const f = deadlineTransportFixture();
+    void f.transport.terminate();
+    await assert.rejects(f.transport.sendRetained({...deadlineRequest(operation), payload: {}}),
+      e => e.code === "HOST_STATE_INVALID" && e.details.pending === false);
+    assert.equal(f.submissions.length, 0);
+  });
+}

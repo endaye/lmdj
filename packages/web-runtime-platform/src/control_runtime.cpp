@@ -113,6 +113,8 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
       operation == "performance.fx.gesture" ||
       operation == "performance.live.control" ||
       operation == "performance.live.status" ||
+      operation == "pattern.tempo.preview.set" || operation == "pattern.tempo.preview.cancel" ||
+      operation == "pattern.tempo.preview.status" ||
       operation == "performance.record.launch-request" ||
       operation == "performance.record.status" ||
       operation == "performance.recovery.list" ||
@@ -2012,12 +2014,30 @@ struct ControlRuntime::Impl {
     std::array<std::optional<RememberedTransportSwitch>, 2> predecessors{};
   };
 
-  static facade::Application compose_application(
+  facade::Application compose_application(
       audio::RealtimeEngine& engine,
       facade::ApplicationConfig config,
       const std::shared_ptr<std::atomic<bool>>& publication_failure,
       std::function<void()>& service) {
     auto gateway = facade::make_engine_pattern_publication_gateway(engine);
+    // Both Performance publication routes share the Control source-retention
+    // boundary. These callbacks run after Application construction completes.
+    gateway.publish = [this](std::shared_ptr<const cooker::RuntimeSnapshot> snapshot,
+        std::optional<std::uint64_t> frame,
+        std::optional<audio::PatternReplacementAuthority> authority) {
+      if (!snapshot) return foundation::Result<audio::PatternPublication>::failure(
+          Error{ErrorCode::invalid_argument, "Runtime Pattern material is required"});
+      auto prepared = audio::PreparedPatternView::from_snapshot(*snapshot);
+      if (!prepared.has_value()) return foundation::Result<audio::PatternPublication>::failure(prepared.error());
+      return publish_prepared_pattern(std::move(prepared.value()), frame, std::move(authority));
+    };
+    gateway.publish_immediate = [this](std::shared_ptr<const cooker::RuntimeSnapshot> snapshot) {
+      if (!snapshot) return foundation::Result<audio::PatternPublication>::failure(
+          Error{ErrorCode::invalid_argument, "Runtime Pattern material is required"});
+      auto prepared = audio::PreparedPatternView::from_snapshot(*snapshot);
+      if (!prepared.has_value()) return foundation::Result<audio::PatternPublication>::failure(prepared.error());
+      return publish_prepared_pattern(std::move(prepared.value()), {}, {}, true);
+    };
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     auto publish = std::move(gateway.publish);
     gateway.publish =
@@ -2152,6 +2172,7 @@ struct ControlRuntime::Impl {
       replay_restore.reset();
       return;
     }
+    if (!release_tempo_for_external().has_value()) return;
     bool playing = false;
     if (transport != nullptr) {
       const auto status = transport->controller->inspect();
@@ -2178,8 +2199,13 @@ struct ControlRuntime::Impl {
       }
       auto pattern = prepare_project_pattern(selected);
       if (pattern.has_value()) {
-        const auto result =
-            engine.publish_pattern_view(std::move(pattern.value())).result;
+        auto copy = pattern.value().with_tempo(pattern.value().bpm());
+        if (!copy.has_value()) return;
+        const auto cell = reserve_tempo_material();
+        if (!cell.has_value()) return;
+        const auto publication = engine.publish_pattern_view(std::move(pattern.value()));
+        const auto result = publication.result;
+        remember_tempo_material(std::move(copy.value()), publication, cell.value());
         if (result == audio::PatternPublishResult::pattern_slots_full) {
           // A sounding retiring view holds every slot; retry once one frees.
           replay_restore->held_at_reclaimed = reclaimed;
@@ -2309,6 +2335,523 @@ struct ControlRuntime::Impl {
     return recorded;
   }
 
+  static bool tempo_terminal(const facade::PatternTempoPreviewStatus& value) {
+    using Phase = facade::PatternTempoPreviewPhase;
+    return !(value.command_id && !value.committed_revision) &&
+        (value.phase == Phase::ready || value.phase == Phase::cancelled ||
+         value.phase == Phase::committed || value.phase == Phase::source_lost);
+  }
+
+  static Error tempo_refused(const char* reason) {
+    return {ErrorCode::invalid_argument, "Pattern tempo preview is unavailable", {{"reason", reason}}};
+  }
+
+  static Json tempo_error(const Error& error) {
+    auto response = normalized_error(error);
+    // Producer-owned vocabulary only: platform/provider text and paths remain
+    // behind the normal redactor, including errors after a manifest claim.
+    static constexpr std::string_view reasons[]{
+      "tempo_clock_unavailable", "tempo_commit_identity_mismatch", "tempo_commit_invalid",
+      "tempo_commit_unresolved", "tempo_preview_active", "tempo_preview_id_exhausted",
+      "tempo_preview_invalid", "tempo_preview_pending", "tempo_preview_settling",
+      "tempo_preview_stale", "tempo_preview_not_started", "tempo_truth_changed",
+      "tempo_source_stale", "tempo_source_unsettled", "tempo_publication_unapplied",
+      "tempo_publication_pending", "tempo_publication_phase_mismatch",
+      "tempo_publication_project_mismatch", "tempo_publication_queue_full",
+      "tempo_publication_slots_full", "tempo_publication_generation_exhausted",
+      "tempo_recording_active", "tempo_replay_active", "sample_import_pending",
+      "pattern_switch_pending", "tempo_ticket_exhausted"};
+    if (error.details.is_object() && error.details.contains("reason") &&
+        error.details.at("reason").is_string()) {
+      const auto& reason = error.details.at("reason").get_ref<const std::string&>();
+      if (std::find(std::begin(reasons), std::end(reasons), reason) != std::end(reasons))
+        response["error"]["details"]["reason"] = reason;
+    }
+    return response;
+  }
+
+  static const char* tempo_phase(facade::PatternTempoPreviewPhase phase) {
+    using Phase = facade::PatternTempoPreviewPhase;
+    switch (phase) {
+      case Phase::ready: return "ready";
+      case Phase::preview_pending: return "preview_pending";
+      case Phase::preview_refused: return "preview_refused";
+      case Phase::previewing: return "previewing";
+      case Phase::cancelling: return "cancelling";
+      case Phase::cancelled: return "cancelled";
+      case Phase::commit_unknown: return "commit_unknown";
+      case Phase::committed_pending: return "committed_pending";
+      case Phase::committed: return "committed";
+      case Phase::source_lost: return "source_lost";
+    }
+    return "source_lost";
+  }
+
+  foundation::Result<void> bind_and_set_tempo() {
+    auto& turn = *tempo_turn;
+    if (!tempo_source_id) {
+      if (!tempo_material || tempo_material->project_revision() != safe_unsigned_field(turn.ticket, "expected_revision"))
+        return foundation::Result<void>::failure(tempo_refused("tempo_source_unsettled"));
+      auto bound = application.bind_pattern_tempo_source({*retained_project_path,
+          tempo_material->project_id(), tempo_material->pattern_id(), tempo_material->project_revision(),
+          turn.source_authority}, *tempo_material, engine);
+      if (!bound.has_value()) return foundation::Result<void>::failure(bound.error());
+      tempo_source_id = bound.value().identity.source_id;
+    }
+    const auto prior = turn.status.identity.source_id == *tempo_source_id ? turn.status.identity.preview_id : 0;
+    auto set = application.preview_pattern_tempo({{*tempo_source_id, prior}, turn.status.preview_bpm});
+    if (!set.has_value()) return foundation::Result<void>::failure(set.error());
+    turn.status = std::move(set.value()); turn.started = true;
+    return foundation::Result<void>::success();
+  }
+
+  void advance_tempo_source() {
+    auto& turn = *tempo_turn;
+    if (!turn.pending_source) return;
+    if (state == State::failed || terminal_audio_retirement_requested) turn.cancel_source = true;
+    auto gateway = facade::make_engine_pattern_tempo_publication_gateway(engine);
+    const auto life = engine.telemetry();
+    if (life.state != audio::RealtimeState::running || life.start_epoch != turn.source_authority.start_epoch) {
+      turn.pending_source.reset(); turn.status.phase = facade::PatternTempoPreviewPhase::source_lost;
+      turn.status.applied.reset(); turn.status.failure = tempo_refused("tempo_source_stale");
+      return;
+    }
+    const auto actual = gateway.observe(*turn.pending_source);
+    if (!actual) {
+      turn.status.applied = gateway.observe(turn.source_authority);
+      const auto ownership = engine.pattern_transport_observation();
+      if (!ownership) return; // Bounded unavailability is not retirement.
+      bool retained = ownership->outstanding_cancellation &&
+          ownership->outstanding_cancellation->generation == turn.pending_source->generation;
+      for (const auto& pending : ownership->pending_switches)
+        retained |= pending && pending->generation == turn.pending_source->generation;
+      if (!retained && ownership->current_generation != turn.pending_source->generation) {
+        const bool original = ownership->current_generation == turn.source_authority.generation;
+        turn.pending_source.reset();
+        turn.status.publication_generation = turn.source_authority.generation;
+        turn.status.phase = original ? facade::PatternTempoPreviewPhase::preview_refused
+                                    : facade::PatternTempoPreviewPhase::source_lost;
+        turn.status.failure = tempo_refused(original ? "tempo_publication_unapplied" : "tempo_source_stale");
+      }
+      return;
+    }
+    // This exact accepted candidate is now Native-applied. Moving its retained
+    // copy preserves the actual PCM owners, including across a cancelled set.
+    tempo_material = std::move(*turn.prepared_rebase); turn.prepared_rebase.reset();
+    tempo_material_generation = turn.pending_source->generation;
+    turn.source_authority = *turn.pending_source; turn.pending_source.reset();
+    turn.status.source_revision = tempo_material->project_revision();
+    turn.status.publication_generation = tempo_material_generation; turn.status.applied = actual;
+    if (turn.cancel_source) { turn.status.phase = facade::PatternTempoPreviewPhase::cancelled; return; }
+    const auto set = bind_and_set_tempo();
+    if (!set.has_value()) {
+      turn.status.phase = facade::PatternTempoPreviewPhase::preview_refused;
+      turn.status.failure = set.error();
+    }
+  }
+
+  void refresh_tempo() {
+    if (!tempo_turn) return;
+    if (tempo_turn->pending_source) advance_tempo_source();
+    if (tempo_turn->pending_source) return;
+    if (!tempo_source_id) {
+      const auto life = engine.telemetry();
+      tempo_turn->status.applied = facade::make_engine_pattern_tempo_publication_gateway(engine)
+          .observe(tempo_turn->source_authority);
+      if (life.state != audio::RealtimeState::running || life.start_epoch != tempo_turn->source_authority.start_epoch) {
+        tempo_turn->status.phase = facade::PatternTempoPreviewPhase::source_lost;
+        tempo_turn->status.applied.reset();
+      }
+      return;
+    }
+    auto current = application.service_pattern_tempo_preview(*tempo_source_id);
+    if (!current.has_value()) { tempo_turn->status.failure = current.error(); return; }
+    auto status = std::move(current.value());
+    if ((!tempo_turn->started || status.identity.preview_id == 0) &&
+        status.phase != facade::PatternTempoPreviewPhase::source_lost) {
+      status.identity.preview_id = 0;
+      status.phase = tempo_turn->status.phase;
+      status.project_revision = tempo_turn->status.project_revision;
+      status.committed_bpm = tempo_turn->status.committed_bpm;
+      status.preview_bpm = tempo_turn->status.preview_bpm;
+      status.failure = tempo_turn->status.failure;
+      status.command_id.reset(); status.committed_revision.reset();
+    }
+    tempo_turn->status = std::move(status);
+    const auto& value = tempo_turn->status;
+    if (project_id && *project_id == tempo_turn->ticket.at("project_id").get_ref<const std::string&>() &&
+        (!project_revision || value.project_revision >= *project_revision)) {
+      project_revision = value.project_revision;
+      project_bpm = value.committed_bpm;
+      if (tempo_turn->runtime_was_current &&
+          value.phase == facade::PatternTempoPreviewPhase::committed &&
+          value.committed_revision == value.project_revision &&
+          value.source_revision == value.project_revision)
+        runtime_revision = value.project_revision;
+    }
+  }
+
+  Json tempo_reply() const {
+    const auto& value = tempo_turn->status;
+    Json applied = nullptr;
+    if (value.applied) {
+      const auto& actual = *value.applied;
+      applied = {{"start_epoch", std::to_string(actual.start_epoch)},
+          {"pattern_generation", std::to_string(actual.pattern_generation)},
+          {"applied_frame", std::to_string(actual.applied_frame)},
+          {"anchor", {{"frame", std::to_string(actual.anchor.runtime_frame)},
+              {"tick_numerator", std::to_string(actual.anchor.tick_numerator)},
+              {"bpm", actual.anchor.bpm}}}, {"playing", actual.playing}};
+    }
+    return success({{"ticket", tempo_turn->ticket},
+        {"preview_id", std::to_string(value.identity.preview_id)},
+        {"phase", tempo_turn->pending_source ?
+            (tempo_turn->cancel_source ? "cancelling" : "source_pending") : tempo_phase(value.phase)},
+        {"committed_bpm", value.committed_bpm},
+        {"preview_bpm", value.preview_bpm}, {"project_revision", value.project_revision},
+        {"source_revision", value.source_revision},
+        {"publication_generation", std::to_string(value.publication_generation)},
+        {"command_id", value.command_id ? Json(value.command_id->value()) : Json(nullptr)},
+        {"committed_revision", value.committed_revision ? Json(*value.committed_revision) : Json(nullptr)},
+        {"applied", std::move(applied)},
+        {"error", value.failure ? tempo_error(*value.failure).at("error") : Json(nullptr)}});
+  }
+
+  foundation::Result<void> release_tempo_for_external(bool retire_turn = true) {
+    refresh_tempo();
+    if (retire_turn && tempo_turn && (tempo_turn->pending_source || !tempo_terminal(tempo_turn->status)))
+      return foundation::Result<void>::failure(tempo_refused("tempo_preview_active"));
+    if (!retire_turn && (!tempo_turn || tempo_turn->pending_source ||
+        tempo_turn->status.identity.preview_id != 0 || tempo_turn->status.command_id))
+      return foundation::Result<void>::failure(tempo_refused("tempo_preview_active"));
+    if (!tempo_source_id) {
+      if (retire_turn) tempo_turn.reset();
+      return foundation::Result<void>::success();
+    }
+    // B2 may have adopted a new revision since our last ordinary publication.
+    // Preserve its actual PCM owners before releasing, never recook them.
+    if (tempo_turn->status.phase != facade::PatternTempoPreviewPhase::source_lost) {
+      auto copy = application.retain_pattern_tempo_source(*tempo_source_id);
+      if (!copy.has_value()) return foundation::Result<void>::failure(copy.error());
+      tempo_material = std::move(copy.value());
+      tempo_material_generation = tempo_turn->status.publication_generation;
+    }
+    auto released = application.release_pattern_tempo_source(*tempo_source_id);
+    if (!released.has_value()) return foundation::Result<void>::failure(released.error());
+    if (!tempo_terminal(released.value()))
+      return foundation::Result<void>::failure(tempo_refused("tempo_preview_settling"));
+    tempo_source_id.reset();
+    if (retire_turn) tempo_turn.reset();
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<std::size_t> reserve_tempo_material() {
+    // Audio may have claimed B while Control queues C. Only this coherent
+    // ownership read proves a retained candidate cannot still become current.
+    const auto owned = engine.pattern_transport_observation();
+    if (owned) for (auto& cell : tempo_candidates) {
+      if (!cell || cell->generation == owned->current_generation) continue;
+      bool retained = owned->outstanding_cancellation &&
+          owned->outstanding_cancellation->generation == cell->generation;
+      for (const auto& pending : owned->pending_switches)
+        retained |= pending && pending->generation == cell->generation;
+      if (!retained) cell.reset();
+    }
+    for (std::size_t i = 0; i < tempo_candidates.size(); ++i)
+      if (!tempo_candidates[i]) return foundation::Result<std::size_t>::success(i);
+    // An unavailable bounded observation must not evict an authority. Refuse
+    // before Native acceptance rather than losing its prepared source after it.
+    return foundation::Result<std::size_t>::failure(tempo_refused("tempo_source_unsettled"));
+  }
+
+  void remember_tempo_material(audio::PreparedPatternView copy,
+      const audio::PatternPublication& publication, std::size_t cell) {
+    if (publication.result != audio::PatternPublishResult::accepted) return;
+    tempo_candidates[cell].emplace(RetainedTempoMaterial{publication.generation, std::move(copy)});
+  }
+
+  foundation::Result<void> select_actual_tempo_material() {
+    const auto owned = engine.pattern_transport_observation();
+    if (!owned) return foundation::Result<void>::failure(tempo_refused("tempo_clock_unavailable"));
+    if (tempo_material && tempo_material_generation == owned->current_generation)
+      return foundation::Result<void>::success();
+    for (auto& cell : tempo_candidates) {
+      if (!cell || cell->generation != owned->current_generation) continue;
+      tempo_material_generation = cell->generation;
+      tempo_material = std::move(cell->material); cell.reset();
+      return foundation::Result<void>::success();
+    }
+    return foundation::Result<void>::failure(tempo_refused("tempo_source_stale"));
+  }
+
+  Json begin_tempo(const Json& payload) {
+    require(exact_keys(payload, {"project_id", "pattern_id", "expected_revision"}));
+    const auto project = uuid_field(payload, "project_id");
+    const auto pattern = uuid_field(payload, "pattern_id");
+    const auto revision = safe_unsigned_field(payload, "expected_revision");
+    if (state != State::running || !session_available() || project_id != project ||
+        pattern_id != pattern || project_revision != revision)
+      return tempo_error(tempo_refused("tempo_truth_changed"));
+    if (active_sequence || (transport && (transport->controller->inspect().recording ||
+        transport->controller->inspect().phase != facade::PatternTransportPhase::idle ||
+        transport->publish_pending))) return tempo_error(tempo_refused("tempo_recording_active"));
+    if (active_replay || replay_restore) return tempo_error(tempo_refused("tempo_replay_active"));
+    const auto admitted = application.check_pattern_tempo_preview_admission(*retained_project_path);
+    if (!admitted.has_value()) return tempo_error(admitted.error());
+    if (transport_switch_pending() || deferred_pattern_edit || engine.pattern_telemetry().pending_generation)
+      return tempo_error(tempo_refused("pattern_switch_pending"));
+    const auto ownership = engine.pattern_transport_observation();
+    if (!ownership) return tempo_error(tempo_refused("tempo_clock_unavailable"));
+    if (ownership->outstanding_cancellation || std::any_of(ownership->pending_switches.begin(),
+            ownership->pending_switches.end(), [](const auto& pending) { return pending.has_value(); }))
+      return tempo_error(tempo_refused("pattern_switch_pending"));
+    refresh_tempo();
+    if (tempo_turn && (tempo_turn->pending_source || !tempo_terminal(tempo_turn->status)))
+      return tempo_error(tempo_refused("tempo_preview_active"));
+    const auto inspected = application.query({{"operation", "project.inspect"},
+        {"project_path", retained_project_path->generic_string()}});
+    if (!inspected.value("ok", false)) return normalized_facade_error(inspected);
+    const auto& truth = inspected.at("result").at("project");
+    if (truth.at("project_id") != project || truth.at("revision") != revision ||
+        !truth.at("patterns").contains(pattern))
+      return tempo_error(tempo_refused("tempo_truth_changed"));
+    if (tempo_turn && tempo_turn->status.phase == facade::PatternTempoPreviewPhase::ready)
+      return tempo_reply();
+    if (tempo_source_id && tempo_turn->status.phase == facade::PatternTempoPreviewPhase::source_lost) {
+      const auto released = release_tempo_for_external();
+      if (!released.has_value()) return tempo_error(released.error());
+    }
+    if (tempo_source_id) {
+      auto copy = application.retain_pattern_tempo_source(*tempo_source_id);
+      if (!copy.has_value()) return tempo_error(copy.error());
+      tempo_material = std::move(copy.value());
+      tempo_material_generation = tempo_turn->status.publication_generation;
+    }
+    const auto selected = select_actual_tempo_material();
+    if (!selected.has_value()) return tempo_error(selected.error());
+    const auto life = engine.telemetry();
+    const facade::PatternTempoAuthority authority{life.start_epoch, tempo_material_generation};
+    const auto actual = facade::make_engine_pattern_tempo_publication_gateway(engine).observe(authority);
+    if (!tempo_material || !actual || tempo_material->project_id().value() != project ||
+        tempo_material->pattern_id().value() != pattern || truth.at("bpm") != actual->anchor.bpm)
+      return tempo_error(tempo_refused("tempo_source_stale"));
+    std::optional<audio::PreparedPatternView> rebase;
+    if (tempo_material->project_revision() != revision) {
+      auto fresh = prepare_project_pattern(foundation::PatternId{pattern});
+      if (!fresh.has_value()) return tempo_error(fresh.error());
+      if (fresh.value().project_id().value() != project || fresh.value().project_revision() != revision ||
+          fresh.value().bpm() != actual->anchor.bpm)
+        return tempo_error(tempo_refused("tempo_truth_changed"));
+      rebase = std::move(fresh.value());
+    }
+    if (next_tempo_token == std::numeric_limits<std::uint64_t>::max())
+      return tempo_error(tempo_refused("tempo_ticket_exhausted"));
+    facade::PatternTempoPreviewStatus source{};
+    source.identity.source_id = tempo_source_id.value_or(0);
+    source.phase = facade::PatternTempoPreviewPhase::ready;
+    source.committed_bpm = actual->anchor.bpm; source.preview_bpm = actual->anchor.bpm;
+    source.project_revision = revision; source.source_revision = tempo_material->project_revision();
+    source.publication_generation = tempo_material_generation; source.applied = actual;
+    tempo_turn = TempoTurn{{{"preview_token", std::to_string(next_tempo_token++)},
+        {"project_id", project}, {"pattern_id", pattern},
+        {"source_id", std::to_string(tempo_material_generation)}, {"expected_revision", revision}},
+        std::move(source), false, runtime_revision == project_revision};
+    tempo_turn->source_authority = authority;
+    tempo_turn->prepared_rebase = std::move(rebase);
+    return tempo_reply();
+  }
+
+  Json dispatch_tempo(std::string_view operation, const Json& payload) {
+    require(operation == "pattern.tempo.preview.begin" || operation == "pattern.tempo.preview.set" ||
+        operation == "pattern.tempo.preview.cancel" || operation == "pattern.tempo.preview.commit" ||
+        operation == "pattern.tempo.preview.status");
+    if (operation == "pattern.tempo.preview.begin") return begin_tempo(payload);
+    require(exact_keys(payload, operation == "pattern.tempo.preview.set"
+        ? std::initializer_list<std::string_view>{"ticket", "bpm"}
+        : operation == "pattern.tempo.preview.commit"
+        ? std::initializer_list<std::string_view>{"ticket", "command_id"}
+        : std::initializer_list<std::string_view>{"ticket"}));
+    const auto& ticket = payload.at("ticket");
+    require(exact_keys(ticket, {"preview_token", "project_id", "pattern_id", "source_id", "expected_revision"}));
+    (void)nonzero_decimal_field(ticket, "preview_token"); (void)nonzero_decimal_field(ticket, "source_id");
+    (void)uuid_field(ticket, "project_id"); (void)uuid_field(ticket, "pattern_id");
+    (void)safe_unsigned_field(ticket, "expected_revision");
+    if (!tempo_turn || ticket != tempo_turn->ticket ||
+        project_id != ticket.at("project_id").get_ref<const std::string&>())
+      return tempo_error(tempo_refused("tempo_preview_stale"));
+    // A cancellation linearizes before service can turn an applied metadata
+    // adoption into the audible set that this caller is cancelling.
+    if (operation == "pattern.tempo.preview.cancel" && tempo_turn->pending_source) {
+      tempo_turn->cancel_source = true;
+      tempo_turn->status.phase = facade::PatternTempoPreviewPhase::cancelling;
+    }
+    refresh_tempo();
+    if (operation == "pattern.tempo.preview.status") return tempo_reply();
+    auto& turn = *tempo_turn;
+    if (operation == "pattern.tempo.preview.set") {
+      const auto bpm = safe_unsigned_field(payload, "bpm", 240); require(bpm >= 40);
+      if (turn.pending_source) return tempo_error(tempo_refused("tempo_preview_pending"));
+      if ((tempo_terminal(turn.status) && turn.status.phase != facade::PatternTempoPreviewPhase::ready) ||
+          turn.status.command_id || turn.status.phase == facade::PatternTempoPreviewPhase::cancelling)
+        return tempo_error(tempo_refused("tempo_preview_settling"));
+      turn.status.preview_bpm = static_cast<std::uint16_t>(bpm);
+      if (turn.status.identity.preview_id == 0 && bpm == turn.status.committed_bpm) {
+        turn.status.phase = facade::PatternTempoPreviewPhase::cancelled;
+        return tempo_reply();
+      }
+      if (turn.prepared_rebase) {
+        const auto admitted = application.check_pattern_tempo_preview_admission(*retained_project_path);
+        if (!admitted.has_value()) {
+          turn.status.phase = facade::PatternTempoPreviewPhase::preview_refused;
+          turn.status.failure = admitted.error();
+          return tempo_error(admitted.error());
+        }
+        const auto released = release_tempo_for_external(false);
+        if (!released.has_value()) return tempo_error(released.error());
+        auto copy = turn.prepared_rebase->with_tempo(turn.prepared_rebase->bpm());
+        if (!copy.has_value()) return tempo_error(copy.error());
+        static_cast<void>(engine.reclaim_retired_patterns());
+        auto adopted = facade::make_engine_pattern_tempo_publication_gateway(engine)
+            .adopt(std::move(copy.value()), turn.source_authority);
+        if (!adopted.has_value()) {
+          turn.status.phase = facade::PatternTempoPreviewPhase::preview_refused;
+          turn.status.failure = adopted.error();
+          return tempo_error(adopted.error());
+        }
+        turn.pending_source = facade::PatternTempoAuthority{turn.source_authority.start_epoch, adopted.value().generation};
+        turn.status.publication_generation = adopted.value().generation;
+        turn.status.phase = facade::PatternTempoPreviewPhase::preview_pending;
+        turn.status.failure.reset(); turn.started = true;
+      } else {
+        const auto set = bind_and_set_tempo();
+        if (!set.has_value()) {
+          turn.status.phase = facade::PatternTempoPreviewPhase::preview_refused;
+          turn.status.failure = set.error();
+          return tempo_error(set.error());
+        }
+      }
+    } else if (operation == "pattern.tempo.preview.cancel") {
+      if (turn.pending_source) {
+        turn.cancel_source = true;
+        turn.status.phase = facade::PatternTempoPreviewPhase::cancelling;
+      } else if (turn.status.identity.preview_id == 0) {
+        turn.status.phase = facade::PatternTempoPreviewPhase::cancelled;
+      }
+      else {
+        if (!tempo_source_id) return tempo_error(tempo_refused("tempo_source_stale"));
+        auto cancelled = application.cancel_pattern_tempo_preview(turn.status.identity);
+        if (!cancelled.has_value()) return tempo_error(cancelled.error());
+        turn.status = std::move(cancelled.value());
+      }
+    } else if (operation == "pattern.tempo.preview.commit") {
+      const auto command = uuid_field(payload, "command_id");
+      if (turn.pending_source || !tempo_source_id || turn.status.identity.preview_id == 0) {
+        auto refusal = tempo_error(tempo_refused("tempo_preview_not_started"));
+        refusal["error"]["details"]["tempo_commit_refused"] = true;
+        return refusal;
+      }
+      if ((state == State::failed || terminal_audio_retirement_requested) &&
+          (!turn.status.command_id || turn.status.command_id->value() != command))
+        return tempo_error(tempo_refused("tempo_commit_unresolved"));
+      auto committed = application.commit_pattern_tempo_preview({turn.status.identity,
+          {foundation::CommandId{command}, safe_unsigned_field(ticket, "expected_revision")}});
+      if (!committed.has_value()) {
+        auto actual = application.service_pattern_tempo_preview(*tempo_source_id);
+        if (actual.has_value()) {
+          turn.status = std::move(actual.value());
+          if (turn.status.command_id) {
+            turn.status.failure = committed.error();
+            return tempo_reply();
+          }
+          auto refusal = tempo_error(committed.error());
+          refusal["error"]["details"]["tempo_commit_refused"] = true;
+          return refusal;
+        }
+        return tempo_error(committed.error());
+      }
+      turn.status = std::move(committed.value());
+    } else protocol_failure();
+    refresh_tempo();
+    return tempo_reply();
+  }
+
+  bool tempo_pending() const {
+    if (!tempo_turn) return false;
+    if (tempo_turn->pending_source) return true;
+    if (!tempo_source_id) return false;
+    const auto& value = tempo_turn->status;
+    using Phase = facade::PatternTempoPreviewPhase;
+    return value.phase == Phase::preview_pending || value.phase == Phase::cancelling ||
+        value.phase == Phase::committed_pending ||
+        (value.phase == Phase::commit_unknown && value.applied &&
+         value.publication_generation != value.applied->pattern_generation);
+  }
+
+  foundation::Result<void> settle_tempo_for_terminal() {
+    if (!tempo_turn) return foundation::Result<void>::success();
+    if (tempo_turn->pending_source) tempo_turn->cancel_source = true;
+    refresh_tempo();
+    if (tempo_turn->pending_source) {
+      tempo_turn->cancel_source = true;
+      tempo_turn->status.phase = facade::PatternTempoPreviewPhase::cancelling;
+      while (tempo_turn->pending_source) {
+        if (request_cancelled())
+          return foundation::Result<void>::failure(tempo_refused("tempo_preview_settling"));
+        refresh_tempo();
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+      }
+    }
+    if (!tempo_source_id || tempo_turn->status.identity.preview_id == 0) {
+      if (tempo_turn->status.phase != facade::PatternTempoPreviewPhase::source_lost)
+        tempo_turn->status.phase = facade::PatternTempoPreviewPhase::cancelled;
+      return release_tempo_for_external();
+    }
+    if (!tempo_turn->started) return release_tempo_for_external();
+    auto& value = tempo_turn->status;
+    if (value.command_id && !value.committed_revision) {
+      auto reconciled = application.commit_pattern_tempo_preview({value.identity,
+          {*value.command_id, safe_unsigned_field(tempo_turn->ticket, "expected_revision")}});
+      if (!reconciled.has_value()) return foundation::Result<void>::failure(reconciled.error());
+      value = std::move(reconciled.value());
+      if (!value.committed_revision)
+        return foundation::Result<void>::failure(tempo_refused("tempo_commit_unresolved"));
+    } else if (!value.command_id && !tempo_terminal(value)) {
+      auto cancelled = application.cancel_pattern_tempo_preview(value.identity);
+      if (!cancelled.has_value()) return foundation::Result<void>::failure(cancelled.error());
+      value = std::move(cancelled.value());
+    }
+    while (!tempo_terminal(tempo_turn->status)) {
+      if (request_cancelled())
+        return foundation::Result<void>::failure(tempo_refused("tempo_preview_settling"));
+      refresh_tempo();
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return release_tempo_for_external();
+  }
+
+  // Invoke only after the existing real callback fence, never from telemetry.
+  void retire_tempo_after_quiescence() noexcept {
+    try {
+      if (tempo_turn) {
+        tempo_turn->pending_source.reset(); tempo_turn->prepared_rebase.reset();
+        if (!tempo_source_id) {
+          tempo_turn->status.phase = facade::PatternTempoPreviewPhase::source_lost;
+          tempo_turn->status.applied.reset();
+        }
+      }
+      if (tempo_source_id) {
+        refresh_tempo();
+        auto released = application.release_pattern_tempo_source(*tempo_source_id);
+        if (released.has_value() && tempo_terminal(released.value())) {
+          if (tempo_turn) tempo_turn->status = std::move(released.value());
+          tempo_source_id.reset();
+        }
+      }
+      tempo_material.reset(); tempo_material_generation = 0;
+      for (auto& cell : tempo_candidates) cell.reset();
+    } catch (...) { /* Retain the binding and its exact UNKNOWN identity. */ }
+  }
+
   foundation::Result<audio::PreparedPatternView> prepare_project_pattern(
       const foundation::PatternId& selected_pattern,
       std::span<const domain::PatternEvent> overlay = {}) {
@@ -2342,6 +2885,12 @@ struct ControlRuntime::Impl {
       std::optional<audio::PatternReplacementAuthority>
           replacement_authority = std::nullopt,
       bool immediate = false) {
+    const auto released = release_tempo_for_external();
+    if (!released.has_value()) return foundation::Result<audio::PatternPublication>::failure(released.error());
+    auto copy = pattern.with_tempo(pattern.bpm());
+    if (!copy.has_value()) return foundation::Result<audio::PatternPublication>::failure(copy.error());
+    const auto cell = reserve_tempo_material();
+    if (!cell.has_value()) return foundation::Result<audio::PatternPublication>::failure(cell.error());
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     if (fail_next_pattern_publication) {
       fail_next_pattern_publication = false;
@@ -2362,6 +2911,7 @@ struct ControlRuntime::Impl {
           "runtime Pattern publication is unavailable",
       });
     }
+    remember_tempo_material(std::move(copy.value()), publication, cell.value());
     return foundation::Result<audio::PatternPublication>::success(publication);
   }
 
@@ -2386,6 +2936,12 @@ struct ControlRuntime::Impl {
       audio::PreparedPatternView&& pattern, audio::PatternSwitchSnap snap,
       std::optional<audio::PatternReplacementAuthority> authority,
       std::optional<facade::PatternTransportSwitchTicket> recording_ticket = {}) {
+    const auto released = release_tempo_for_external();
+    if (!released.has_value()) return foundation::Result<audio::PatternPublication>::failure(released.error());
+    auto copy = pattern.with_tempo(pattern.bpm());
+    if (!copy.has_value()) return foundation::Result<audio::PatternPublication>::failure(copy.error());
+    const auto source_cell = reserve_tempo_material();
+    if (!source_cell.has_value()) return foundation::Result<audio::PatternPublication>::failure(source_cell.error());
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     if (std::exchange(fail_next_pattern_publication, false)) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
@@ -2412,6 +2968,7 @@ struct ControlRuntime::Impl {
       if (retained.publication.result != audio::PatternPublishResult::accepted)
         return foundation::Result<audio::PatternPublication>::failure(Error{
             ErrorCode::invalid_argument, "runtime Pattern publication is unavailable"});
+      remember_tempo_material(std::move(copy.value()), retained.publication, source_cell.value());
       cell->emplace(RetainedRecordingSwitch{*recording_ticket, std::move(retained.lease)});
       if (!transport->controller->bind_pattern_switch(*recording_ticket,
               {retained.publication.generation, target, retained.publication.activation_frame}, bpm)) {
@@ -2432,6 +2989,7 @@ struct ControlRuntime::Impl {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument, "runtime Pattern publication is unavailable"});
     }
+    remember_tempo_material(std::move(copy.value()), publication, source_cell.value());
     return foundation::Result<audio::PatternPublication>::success(publication);
   }
 
@@ -2445,11 +3003,17 @@ struct ControlRuntime::Impl {
   // reclaim frees one, which only the transport service cadence can retry.
   EditedPatternPublication publish_edited_pattern(
       const foundation::PatternId& selected_pattern, bool playing) {
+    const auto released = release_tempo_for_external();
+    if (!released.has_value()) return {std::nullopt, tempo_error(released.error()).at("error")};
     deferred_pattern_edit.reset();
     auto pattern = prepare_project_pattern(selected_pattern);
     if (!pattern.has_value()) {
       return {std::nullopt, normalized_error(pattern.error()).at("error")};
     }
+    auto copy = pattern.value().with_tempo(pattern.value().bpm());
+    if (!copy.has_value()) return {std::nullopt, normalized_error(copy.error()).at("error")};
+    const auto cell = reserve_tempo_material();
+    if (!cell.has_value()) return {std::nullopt, tempo_error(cell.error()).at("error")};
     static_cast<void>(engine.reclaim_retired_patterns());
     const auto telemetry = engine.pattern_telemetry();
     bool injected_rejection = false;
@@ -2465,6 +3029,7 @@ struct ControlRuntime::Impl {
               std::move(pattern.value()), telemetry.current_generation)
         : engine.publish_pattern_view_immediate(std::move(pattern.value()));
     if (publication.result == audio::PatternPublishResult::accepted) {
+      remember_tempo_material(std::move(copy.value()), publication, cell.value());
       return {publication, std::nullopt};
     }
     if (publication.result == audio::PatternPublishResult::pattern_slots_full &&
@@ -3755,6 +4320,9 @@ struct ControlRuntime::Impl {
         limits.maximum_generation_bytes,
         limits.maximum_resident_bytes,
     };
+    const auto tempo_released = release_tempo_for_external();
+    if (!tempo_released.has_value())
+      return SnapshotResult{false, false, std::nullopt, tempo_error(tempo_released.error()).at("error")};
     auto bank = audio::PreparedSampleBank::from_snapshot(
         snapshot, publication_limits);
     if (!bank.has_value()) {
@@ -3774,6 +4342,8 @@ struct ControlRuntime::Impl {
         !current_pattern.has_value() ||
         current_pattern->value() != selected_pattern);
     std::optional<audio::PreparedPatternView> pattern;
+    std::optional<audio::PreparedPatternView> tempo_copy;
+    std::optional<std::size_t> tempo_cell;
     if (publish_pattern) {
       auto prepared_pattern =
           audio::PreparedPatternView::from_snapshot(snapshot);
@@ -3783,6 +4353,14 @@ struct ControlRuntime::Impl {
             false, false, std::nullopt, error.at("error")};
       }
       pattern.emplace(std::move(prepared_pattern.value()));
+      auto copy = pattern->with_tempo(pattern->bpm());
+      if (!copy.has_value()) return SnapshotResult{false, false, std::nullopt,
+          normalized_error(copy.error()).at("error")};
+      tempo_copy = std::move(copy.value());
+      const auto cell = reserve_tempo_material();
+      if (!cell.has_value()) return SnapshotResult{false, false, std::nullopt,
+          tempo_error(cell.error()).at("error")};
+      tempo_cell = cell.value();
     }
     if (preserve_saved_truth ? request_cancelled() : cancel_if_expired()) {
       auto error = timeout_error();
@@ -3845,6 +4423,7 @@ struct ControlRuntime::Impl {
         auto error = state_error("runtime Pattern publication is unavailable");
         return SnapshotResult{false, false, std::nullopt, error.at("error")};
       }
+      remember_tempo_material(std::move(*tempo_copy), pattern_publication, *tempo_cell);
     }
     reserved_live_bytes = *aggregate;
     runtime_ready = true;
@@ -3989,6 +4568,7 @@ struct ControlRuntime::Impl {
         terminal_pattern_clear_pending = false;
       }
     }
+    retire_tempo_after_quiescence();
   }
 
   foundation::Result<void> failed_audio_retirement(Error error) noexcept {
@@ -4027,6 +4607,7 @@ struct ControlRuntime::Impl {
     // failure cleanup; beginning a successor invalidates it below.
     if (!physical_audio) terminal_legacy_quiescent = true;
     engine.stop();
+    retire_tempo_after_quiescence();
     return quiescent;
   }
 
@@ -4081,6 +4662,7 @@ struct ControlRuntime::Impl {
     }
     static_cast<void>(engine.clear_pattern_view());
     static_cast<void>(engine.reclaim_retired_patterns());
+    retire_tempo_after_quiescence();
   }
 
   foundation::Result<void> abort_imports() {
@@ -4175,6 +4757,26 @@ struct ControlRuntime::Impl {
   std::shared_ptr<std::atomic<bool>> performance_publication_failure;
   std::function<void()> performance_service;
   facade::Application application;
+  struct TempoTurn {
+    Json ticket;
+    facade::PatternTempoPreviewStatus status;
+    bool started{};
+    bool runtime_was_current{};
+    facade::PatternTempoAuthority source_authority{};
+    std::optional<audio::PreparedPatternView> prepared_rebase{};
+    std::optional<facade::PatternTempoAuthority> pending_source{};
+    bool cancel_source{};
+  };
+  std::optional<TempoTurn> tempo_turn;
+  std::optional<std::uint64_t> tempo_source_id;
+  std::optional<audio::PreparedPatternView> tempo_material;
+  std::uint64_t tempo_material_generation{};
+  struct RetainedTempoMaterial {
+    std::uint64_t generation;
+    audio::PreparedPatternView material;
+  };
+  std::array<std::optional<RetainedTempoMaterial>, audio::kRealtimePatternCapacity> tempo_candidates;
+  std::uint64_t next_tempo_token{1};
   detail::RecordingMetadataQueries recording_metadata;
   State state = State::core_ready;
   std::optional<facade::RuntimeProjectWriterLease> writer_lease;
@@ -4426,6 +5028,9 @@ Json ControlRuntime::dispatch(
   try {
     impl_->recording_metadata.service();
     const bool retained_owner_operation =
+        operation == "pattern.tempo.preview.status" ||
+        operation == "pattern.tempo.preview.commit" ||
+        operation == "pattern.tempo.preview.cancel" ||
         operation == "pattern.transport.input.inspect" ||
         operation == "pattern.transport.input.request" ||
         operation == "pattern.transport.count-in.inspect" ||
@@ -4445,6 +5050,27 @@ Json ControlRuntime::dispatch(
     }
     if (impl_->cancel_if_expired()) {
       return timeout_error();
+    }
+    if (operation.starts_with("pattern.tempo.preview.")) {
+      require(sidecar.empty());
+      return impl_->dispatch_tempo(operation, payload);
+    }
+    // Read-only observations and live Pad ingress do not replace the Pattern.
+    // Every other owner/action must first retire a settled binding. An active
+    // turn refuses, so malformed or conflicting requests cannot cancel it.
+    const bool tempo_observation = operation.ends_with(".inspect") || operation.ends_with(".status") ||
+        operation.ends_with(".list") || operation.ends_with(".describe") ||
+        operation.ends_with(".quota") || operation.ends_with(".waveform") ||
+        operation.ends_with(".pending") || operation.ends_with(".capabilities") ||
+        operation == "performance.recording.metadata" || operation == "trigger" ||
+        operation.starts_with("pattern.transport.input.") ||
+        operation == "pattern.transport.count-in.inspect" ||
+        operation == "pattern.transport.count-in.cancel" ||
+        operation == "sample.preview.set" || operation == "sample.preview.clear" || operation == "sample.stop";
+    if (impl_->tempo_turn && !tempo_observation &&
+        operation != "audio.suspend" && operation != "host.close") {
+      const auto released = impl_->release_tempo_for_external();
+      if (!released.has_value()) return Impl::tempo_error(released.error());
     }
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     if (operation == "__testing.fail-next-pattern-publication") {
@@ -7429,6 +8055,8 @@ Json ControlRuntime::dispatch(
     if (operation == "audio.suspend") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
+      const auto tempo = impl_->settle_tempo_for_terminal();
+      if (!tempo.has_value()) return Impl::tempo_error(tempo.error());
       if (impl_->state == Impl::State::audio_suspended) {
         return success({
             {"state", "audio-suspended"},
@@ -7516,6 +8144,8 @@ Json ControlRuntime::dispatch(
     if (operation == "host.close") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
+      const auto tempo = impl_->settle_tempo_for_terminal();
+      if (!tempo.has_value()) return Impl::tempo_error(tempo.error());
       impl_->recording_metadata.retire();
       std::optional<std::string> stopped_sequence;
       std::optional<Error> close_failure;
@@ -7663,6 +8293,7 @@ void ControlRuntime::service_pattern_transport() noexcept {
       return;
     }
     impl_->service_terminal_audio_retirement();
+    impl_->refresh_tempo();
     // An audio interruption retires the engagement but not a deferral.
     impl_->service_pattern_inputs();
     if (impl_->state == Impl::State::failed &&
@@ -7706,6 +8337,7 @@ void ControlRuntime::service_pattern_transport() noexcept {
 }
 
 bool ControlRuntime::pattern_transport_pending() const noexcept {
+  if (impl_->tempo_pending()) return true;
   if (impl_->terminal_native_stop_pending ||
       impl_->terminal_pattern_clear_pending) return true;
   if (!impl_->legacy_inputs.empty()) return true;
@@ -7724,6 +8356,7 @@ bool ControlRuntime::pattern_transport_pending() const noexcept {
 }
 
 bool ControlRuntime::pattern_transport_shutdown_complete() const noexcept {
+  if (impl_->tempo_source_id || (impl_->tempo_turn && impl_->tempo_turn->pending_source)) return false;
   if (impl_->terminal_native_stop_pending || impl_->terminal_pattern_clear_pending ||
       (impl_->terminal_audio_retirement_requested &&
        (impl_->physical_audio ? !impl_->physical_audio->physically_quiescent(

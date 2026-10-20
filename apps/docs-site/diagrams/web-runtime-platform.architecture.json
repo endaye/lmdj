@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Web Runtime Platform Module",
-    "summary": "同一 frozen Session、strict companion、两张 S3 切换 lease；S6 原验收债与设备验收独立"
+    "summary": "同一 Session、S3 lease 与 tempo source/turn；精确 Native clock，设备验收独立"
   },
   "boundaries": [
     {
@@ -48,7 +48,7 @@
     {
       "id": "session",
       "label": "Runtime Session",
-      "detail": "frozen owner · 2 switch leases · tickets",
+      "detail": "frozen owner · switch/tempo tickets",
       "kind": "core",
       "x": 650,
       "y": 170,
@@ -68,7 +68,7 @@
     {
       "id": "facade",
       "label": "Application Facade",
-      "detail": "control · one I/O worker",
+      "detail": "control · tempo owner · I/O worker",
       "kind": "core",
       "x": 1010,
       "y": 170,
@@ -220,7 +220,7 @@
     },
     {
       "title": "同一 Session owner",
-      "body": "frozen Session；录音切换先 reserve，再同步 prepare/publish/bind。两张真实 lease 逐张观察到耐久 ACK；claimed overlay 忙。"
+      "body": "S3 两 lease/耐久 ACK，claimed 忙。tempo 保留同材料 source/实际 clock；未知保存只用原命令，物理回执后退役。"
     },
     {
       "title": "双输出与严格 tap ACK",

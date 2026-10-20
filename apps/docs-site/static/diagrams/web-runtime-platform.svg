@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="49473df7b7f04672dcb44dbc6036b37dc9ae725b4b450ed9ce6ad47710b799dd">
-  <title id="title">Web Runtime Platform Module</title><desc id="description">同一 frozen Session、strict companion、两张 S3 切换 lease；S6 原验收债与设备验收独立</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="e15f9cc673e46f69b7be75204f930c829fd0a6fe53f9caf003368ccb8744ba35">
+  <title id="title">Web Runtime Platform Module</title><desc id="description">同一 Session、S3 lease 与 tempo source/turn；精确 Native clock，设备验收独立</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
     :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
@@ -9,7 +9,7 @@
     svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
     .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
   </style>
-  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Web Runtime Platform Module</text><text class="page-summary" x="40" y="68">同一 frozen Session、strict companion、两张 S3 切换 lease；S6 原验收债与设备验收独立</text>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Web Runtime Platform Module</text><text class="page-summary" x="40" y="68">同一 Session、S3 lease 与 tempo source/turn；精确 Native clock，设备验收独立</text>
 
     <g class="boundary"><rect x="300" y="100" width="930" height="490" rx="22"/><text x="320" y="130">packages/web-runtime-platform · product-neutral</text></g>
   <g class="connection"><path class="edge-mask" d="M 250 191 H 295 V 216 H 340"/><path class="edge" d="M 250 191 H 295 V 216 H 340" marker-end="url(#arrow)"/><text x="295" y="195">Creator identity</text></g>
@@ -50,7 +50,7 @@
       <rect class="node-mask" x="646" y="166" width="298" height="100" rx="18"/>
       <rect class="node" x="650" y="170" width="290" height="92" rx="14"/>
       <text class="node-title" x="666" y="202">Runtime Session</text>
-      <text class="node-detail" x="666" y="228">frozen owner · 2 switch leases · tickets</text>
+      <text class="node-detail" x="666" y="228">frozen owner · switch/tempo tickets</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="336" y="376" width="228" height="100" rx="18"/>
@@ -62,7 +62,7 @@
       <rect class="node-mask" x="1006" y="166" width="258" height="100" rx="18"/>
       <rect class="node" x="1010" y="170" width="250" height="92" rx="14"/>
       <text class="node-title" x="1026" y="202">Application Facade</text>
-      <text class="node-detail" x="1026" y="228">control · one I/O worker</text>
+      <text class="node-detail" x="1026" y="228">control · tempo owner · I/O worker</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="1306" y="166" width="238" height="100" rx="18"/>
@@ -101,7 +101,7 @@
       <text class="node-detail" x="1326" y="438">speaker / headphones</text>
     </g>
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">身份与兼容</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">清单投影身份；envelope1/ordinary/单输出保留。完整 startup tuple，恢复不加路由；未分配 Build。</div></foreignObject></g>
-<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">同一 Session owner</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">frozen Session；录音切换先 reserve，再同步 prepare/publish/bind。两张真实 lease 逐张观察到耐久 ACK；claimed overlay 忙。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">同一 Session owner</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">S3 两 lease/耐久 ACK，claimed 忙。tempo 保留同材料 source/实际 clock；未知保存只用原命令，物理回执后退役。</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">双输出与严格 tap ACK</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">producer 与验收边界</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 分段与 Creator 选择分别证明。COUNT-IN 等 Applied+opening ACK；取消仍锁。S6 held I/O/raw PCM、组合候选/设备/听感债保留。</div></foreignObject></g>
 </svg>

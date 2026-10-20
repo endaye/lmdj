@@ -87,6 +87,31 @@ recording Journal 的现有互斥保持；普通 Perform Launch 走同一 Patter
 
 监听输出属于 Session/Host 状态，位于 master capture 下游。`monitorVolume()` 返回 0–100 的百分比，`setMonitorVolume(value)` 在未激活时先记录值，创建音频图时先应用；运行中用 20 ms ramp 调整线性 gain。`monitorDestination()` 在图未建立或会话终止时返回 `null`，其余时候返回同一监听节点，供 Host 的非录制声音接入。正常 master tap、tap 初始化失败和 processorerror 恢复路径均经过这个节点。录制批次、Project Truth、authoring history 与导出电平不受监听音量影响；关闭时断开节点并拒绝后续设置。设备记忆由 Host 实现。
 
+## 可听 BPM 预览
+
+同一 Session 的 `patternTransport` namespace 提供
+`beginPatternTempoPreview`、`setPatternTempoPreview`、`cancelPatternTempoPreview`、
+`commitPatternTempoPreview` 和 `inspectPatternTempoPreview`。先 begin 取得本轮原始
+ticket，再 set40–240的整数 BPM；预览和取消不改变 Project/history，保存携带调用方
+保留的原 command ID。ticket、真实 applied anchor 和未知保存的责任边界见
+[模块接口](../core/modules/web-runtime-platform.mdx#pattern-tempo-preview-的-web-owner)。
+
+Host 展示 Core 的 ready/pending/actual/cancelling/committed/source_lost 状态；
+generation、epoch、frame 与 tick numerator 始终保持完整十进制字符串。
+`source_pending` 表示尚在接纳同 BPM 的 committed revision，preview ID 可为零。
+取消或退出先记录取消意图，实际 source 应用之后也不会再发出已取消的变速。
+取消完成与保存完成都需要实际 Native adoption；未知保存只能用原命令收敛。
+切换候选撤回后，实际当前音源仍可作为下一次预览来源；若音频线程还持有撤回
+候选的 cancellation 资源，则须等待真实退役后再开始预览。
+
+suspend/close 的原 deadline 和 callback 退出门禁保持。fatal 后只保留观察、取消
+和原已冻结保存的入口；新 begin、set、新 command 的保存均拒绝。持久化 receipt
+不代表 callback 或 backend 已释放。此 Platform 接口与 Creator400ms 消费、
+metronome/S7 及真实设备/听感分别验证。实际 Worklet 旅程从最终 PCM 观察137BPM
+预览、120BPM 取消恢复和240BPM 保存，保存窗口跨到实际 adoption frame 之后；
+同时核完整 checkpoint、manifest/history、WAV 字节，以及 Undo/实际关闭/冷重开后的
+重新播放。source SDK 与正式 Wasm 的组合证明不替代 packaged Creator 或设备验收。
+
 ## S6 scheduled Record 与原生 count-in
 
 S6 的 scheduled Record、生产 Facade I/O owner、strict Host/SDK companion 与
