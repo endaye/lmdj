@@ -2074,6 +2074,64 @@ html[data-creator-layout="compact"] {
   html[data-creator-layout="compact"] .hardware-console .pad-live-gate { font-size: 8px; line-height: 10px; }
 }
 
+/* Short landscape has room for two 44px key rows, not the 544px rail.
+   48 + 8 + 188 + 8 + 380 = 632px; with two 8px margins it needs 648px.
+   A 244px matrix below the 88px strip needs a 332px stage plus 32px chrome.
+   Reflow before main.tsx measures the stage so actual targets stay unscaled. */
+@media (orientation: landscape) and (min-width: 648px) and (min-height: 364px) and (max-height: 599px) {
+  html[data-creator-layout="compact"] {
+    body { min-width: 0; }
+    .site-header, .site-footer { height: 16px; }
+    .site-wordmark { line-height: 16px; }
+    .site-product, .site-footer { line-height: 14px; }
+    .hardware-console { height: calc(100dvh - 32px); margin-block: 0; }
+    .hardware-console > [aria-label="Physical controls"] {
+      left: 0; top: 0; width: 632px; height: 88px;
+    }
+    .physical-controls {
+      height: 88px;
+      grid-template-columns: 48px 188px 380px;
+      grid-template-rows: 88px;
+      column-gap: 8px;
+      row-gap: 0;
+      align-items: center;
+    }
+    .physical-encoders {
+      width: 188px; height: 44px;
+      grid-template-columns: repeat(4, var(--creator-control-hit));
+      grid-template-rows: var(--creator-control-hit);
+    }
+    .physical-keys {
+      width: 380px; height: 88px;
+      grid-template-columns: repeat(8, var(--creator-control-hit));
+      grid-template-rows: repeat(2, var(--creator-control-hit));
+      row-gap: 0;
+    }
+    .physical-key.is-shift { grid-column: span 2; }
+    .hardware-console > [aria-label="Pad matrix"] {
+      left: 0; top: 88px; right: auto; width: 244px; height: 244px;
+    }
+    .hardware-console .pad-grid {
+      width: 244px; height: 244px; max-width: none;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-rows: repeat(4, minmax(0, 1fr));
+    }
+    .hardware-console .pad strong { left: 5px; }
+    .hardware-console .pad kbd { right: 5px; }
+    .hardware-console .pad span { left: 4px; right: 4px; bottom: 5px; }
+    .hardware-console .pad.is-selected span { padding-right: 0; }
+    /* The dot uses the bottom gutter, leaving the whole caption width for
+       ASSIGNED/TEXTURE; two-line transient states stay below the address. */
+    .hardware-console .pad-selected-dot { right: 5px; bottom: 1px; }
+    .hardware-console > [aria-label="Overview display"] {
+      left: 252px; top: 88px; right: 0; width: auto;
+    }
+    .hardware-console > [aria-label="Touch workspace"] {
+      left: 252px; top: 248px; right: 0; bottom: 0; width: auto; height: auto;
+    }
+  }
+}
+
 /* Pad colour controls (#1207): the selected Pad's five colours and restore,
    in the Sample touch area. */
 .pad-colour-controls {

@@ -78,6 +78,159 @@ async function expectConsoleFitsStage(page) {
   return scale;
 }
 
+// Short landscape must reflow before stage fitting. Measure rendered targets
+// and their real pointer owners: equal CSS widths can hide a shared transform.
+async function expectShortLandscape(page, info, observations, label) {
+  const value = await page.getByTestId("hardware-console").evaluate(root => {
+    const rect = node => node.getBoundingClientRect().toJSON();
+    const transform = new DOMMatrixReadOnly(getComputedStyle(root.closest(".hardware-workspace")).transform);
+    const targets = [...root.querySelectorAll(
+      '[data-testid="physical-controls"] button,[data-testid="pad-matrix"] button',
+    )].map(node => {
+      const b = node.getBoundingClientRect();
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+      const points = [[cx, cy], [b.x + 2, cy], [b.right - 2, cy], [cx, b.y + 2], [cx, b.bottom - 2]];
+      const face = node.matches(".physical-key") ? getComputedStyle(node, "::before") : null;
+      return {name: node.getAttribute("aria-label"), disabled: node.disabled, rect: rect(node),
+        face: face === null ? null : {width: face.width, height: face.height},
+        encoderFace: node.matches(".physical-encoder") ? rect(node.querySelector("svg")) : null,
+        hits: points.map(([x, y]) => {
+          const top = document.elementFromPoint(x, y);
+          return top === node || node.contains(top);
+        })};
+    });
+    const padLabels = [...root.querySelectorAll(".pad")].map(pad => {
+      const range = document.createRange();
+      range.selectNodeContents(pad.querySelector("span"));
+      const dot = pad.querySelector(".pad-selected-dot");
+      const heading = [...pad.querySelectorAll("strong,kbd")].flatMap(node => {
+        const text = document.createRange();
+        text.selectNodeContents(node);
+        return [...text.getClientRects()].map(b => b.toJSON());
+      });
+      return {name: pad.getAttribute("aria-label"), rect: rect(pad),
+        heading, text: [...range.getClientRects()].map(b => b.toJSON()), dot: dot === null ? null : rect(dot)};
+    });
+    const touch = root.querySelector('[data-testid="touch-workspace"]');
+    return {viewport: {width: innerWidth, height: innerHeight},
+      scale: Math.hypot(transform.a, transform.b), console: rect(root),
+      stage: rect(document.querySelector("#root")), regions: [...root.children].map(rect),
+      targets, padLabels, keyOrder: [...root.querySelectorAll(".physical-key")].map(node => node.textContent),
+      padOrder: [...root.querySelectorAll(".pad strong")].map(node => node.textContent),
+      touch: {width: touch.clientWidth, scrollWidth: touch.scrollWidth},
+      document: {width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth}};
+  });
+  observations.push({label, ...value});
+  await writeFile(info.outputPath("short-landscape-observations.json"), JSON.stringify({observations}, null, 2));
+  expect(value.scale, `${label}: stage must preserve actual input size`).toBe(1);
+  expect(value.console.width).toBe(Math.min(880, value.viewport.width - 16));
+  expect(value.console.height).toBe(value.viewport.height - 32);
+  expect(value.console.x).toBeGreaterThanOrEqual(value.stage.x);
+  expect(value.console.right).toBeLessThanOrEqual(value.stage.right);
+  expect(value.console.y).toBeGreaterThanOrEqual(value.stage.y);
+  expect(value.console.bottom).toBeLessThanOrEqual(value.stage.bottom);
+  expect(value.touch.scrollWidth).toBeLessThanOrEqual(value.touch.width);
+  expect(value.document.scrollWidth).toBeLessThanOrEqual(value.document.width);
+  expect(value.regions).toHaveLength(4);
+  for (let i = 0; i < value.regions.length; i++) for (let j = i + 1; j < value.regions.length; j++) {
+    const a = value.regions[i], b = value.regions[j];
+    expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y,
+      `${label}: regions ${i}/${j} overlap`).toBe(true);
+  }
+  expect(value.targets).toHaveLength(36);
+  for (const target of value.targets) {
+    expect(target.rect.width, `${label}: ${target.name} width`).toBeGreaterThanOrEqual(44);
+    expect(target.rect.height, `${label}: ${target.name} height`).toBeGreaterThanOrEqual(44);
+    if (!target.disabled) expect(target.hits, `${label}: ${target.name} centre/edge owner`)
+      .toEqual([true, true, true, true, true]);
+    if (target.face !== null) expect(target.face).toEqual({
+      width: target.name.startsWith("SHIFT") ? "80px" : "32px", height: "32px",
+    });
+    if (target.encoderFace !== null) expect(target.encoderFace).toMatchObject({width: 32, height: 32});
+  }
+  expect(value.keyOrder).toEqual(["PRJ", "SMP", "SEQ", "PRF", "A", "B", "C", "D",
+    "SHIFT", "↑", "↓", "←", "→", "REC", "PLAY"]);
+  const keyTargets = value.targets.filter(target => target.face !== null);
+  for (const target of keyTargets.slice(0, 8)) expect(target.rect.y).toBe(keyTargets[0].rect.y);
+  for (const target of keyTargets.slice(8)) expect(target.rect.y).toBe(keyTargets[0].rect.y + 44);
+  expect(keyTargets[8].rect.width).toBe(92);
+  expect(value.padLabels).toHaveLength(16);
+  for (const pad of value.padLabels) for (const text of pad.text) {
+    expect(text.x, pad.name).toBeGreaterThanOrEqual(pad.rect.x);
+    expect(text.right, pad.name).toBeLessThanOrEqual(pad.rect.right);
+    expect(text.y, pad.name).toBeGreaterThanOrEqual(pad.rect.y);
+    expect(text.bottom, pad.name).toBeLessThanOrEqual(pad.rect.bottom);
+    if (pad.dot !== null) expect(text.right <= pad.dot.x || pad.dot.right <= text.x ||
+      text.bottom <= pad.dot.y || pad.dot.bottom <= text.y, `${pad.name}: label overlaps selection dot`).toBe(true);
+    for (const heading of pad.heading) expect(text.right <= heading.x || heading.right <= text.x ||
+      text.bottom <= heading.y || heading.bottom <= text.y, `${pad.name}: status overlaps address or key`).toBe(true);
+  }
+  await expectOverviewFits(page.getByTestId("overview-display"), label);
+  return value;
+}
+
+for (const viewport of [{width: 648, height: 364}, {width: 667, height: 375}, {width: 844, height: 390}]) {
+  test(`short landscape preserves actual controls and navigation at ${viewport.width}x${viewport.height}`, async ({page}, info) => {
+    test.setTimeout(PROJECT_TRANSITION_TIMEOUT_MS);
+    const observations = [];
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await waitForBootProject(page);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    const keys = page.getByTestId("physical-controls");
+    await expectShortLandscape(page, info, observations, "fresh short boot");
+    await importAndOpenProject(page);
+    const before = await inspectTruth(page);
+    for (const mode of ["Project", "Sample", "Sequence", "Perform"]) {
+      await keys.getByRole("button", {name: mode, exact: true}).click();
+      await expect(page.locator(".overview-display")).toHaveAttribute("data-mode", mode.toLowerCase());
+      await expect(keys.getByRole("button", {name: mode, exact: true})).toBeFocused();
+      await expectShortLandscape(page, info, observations, mode);
+      expect(await inspectTruth(page)).toEqual(before);
+    }
+    await keys.getByRole("button", {name: "Bank B", exact: true}).click();
+    const bankB = await expectShortLandscape(page, info, observations, "Bank B");
+    expect(bankB.padOrder).toEqual([13, 14, 15, 16, 9, 10, 11, 12, 5, 6, 7, 8, 1, 2, 3, 4]
+      .map(number => `B${String(number).padStart(2, "0")}`));
+    await keys.getByRole("button", {name: "Bank A", exact: true}).click();
+    await keys.getByRole("button", {name: "System", exact: true}).click();
+    await expect(page.locator(".overview-display")).toHaveAttribute("data-mode", "system");
+    await expectShortLandscape(page, info, observations, "System");
+    await page.getByRole("button", {name: "Back to music", exact: true}).click();
+    await expect(page.locator(".overview-display")).toHaveAttribute("data-mode", "perform");
+    await expect(keys.getByRole("button", {name: "System", exact: true})).toBeFocused();
+    await expectShortLandscape(page, info, observations, "System return");
+    expect(await inspectTruth(page)).toEqual(before);
+    // Preserve the old strict full and compact oracles, then cross the
+    // portrait boundary in both directions before returning to the new form.
+    for (const regular of [{width: 768, height: 600}, {width: 1440, height: 900}]) {
+      await resizeViewport(page, regular);
+      await expectConsoleFitsStage(page);
+      expect(await inspectTruth(page)).toEqual(before);
+    }
+    await resizeViewport(page, {width: 768, height: 1024});
+    const portrait = await page.locator(".hardware-workspace").evaluate(node => {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(node).transform);
+      return {a: matrix.a, b: matrix.b};
+    });
+    expect(portrait).toEqual({a: 0, b: -1});
+    expect(await inspectTruth(page)).toEqual(before);
+    await resizeViewport(page, viewport);
+    await expectShortLandscape(page, info, observations, "returned short stage");
+    await page.reload();
+    await waitForProjectReopen(page, before.project_id.slice(0, 8));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    await expectShortLandscape(page, info, observations, "cold reopened short stage");
+    expect(await inspectTruth(page)).toEqual(before);
+    const screenshot = info.outputPath("short-landscape.png");
+    await page.screenshot({path: screenshot});
+    await info.attach("short landscape", {path: screenshot, contentType: "image/png"});
+    await info.attach("all short landscape transitions", {
+      path: info.outputPath("short-landscape-observations.json"), contentType: "application/json",
+    });
+  });
+}
+
 test("renders the 880×592 hardware shell and keeps the overview read-only", async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto("/");
