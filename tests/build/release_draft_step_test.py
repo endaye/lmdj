@@ -194,6 +194,22 @@ class CarrierTest(unittest.TestCase):
         self.assertEqual(advanced.status, "verified")
         self.assertEqual(self.creations, 1, "advance resumes create_draft to repair the assets")
 
+    def test_a_divergent_draft_surfaces_create_drafts_named_refusal(self):
+        # Pending is never a silent wait: advance runs create_draft, whose
+        # deterministic refusal for a divergent asset reaches the driver.
+        from tools.release.transitions import TransitionError
+        self.release = DRAFT
+        self.assets_complete = False
+
+        def refusing(tag):
+            raise TransitionError("GitHub Release asset digest conflicts with the release plan")
+        carrier = DraftCarrier(spec=spec(), create_draft=refusing,
+                               release_by_tag=self.release_by_tag,
+                               verify_assets=self.verify_assets)
+        self.assertEqual(carrier.observe({}, {"step": "draft"}).status, "pending")
+        with self.assertRaisesRegex(TransitionError, "digest conflicts"):
+            carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(DraftStepError):
             DraftCarrier(spec=spec(), create_draft=None,

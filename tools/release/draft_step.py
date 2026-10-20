@@ -168,8 +168,14 @@ class DraftCarrier:
             try:
                 self.verify_assets(release.id)
             except Exception:
-                # Incomplete or unreadable assets are unfinished Draft work:
-                # advance resumes `create_draft`, which repairs an interrupted
-                # upload and refuses a divergent one with a named reason.
+                # Any asset verification failure is unfinished Draft work, never
+                # a verified Draft. The driver advances a pending self-driving
+                # step at once, and `create_draft` is the one place that tells
+                # the cases apart: it re-uploads a missing asset (including one
+                # removed just before an interrupted re-upload), replaces an
+                # incomplete upload, and refuses a divergent or undeclared asset
+                # with a named TransitionError that `advance` re-raises. Calling
+                # this a conflict here would strand the recoverable cases,
+                # because a missing asset also changes the reconstructed plan.
                 return "pending"
         return observed
