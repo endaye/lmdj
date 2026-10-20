@@ -38,6 +38,14 @@ class TransitionError(RuntimeError):
     """An exact release transition could not be safely reconciled."""
 
 
+class IncompleteAssetError(TransitionError):
+    """A declared Draft asset exists but its upload never completed.
+
+    The one Draft defect `create_draft` repairs by itself; every other asset
+    verification failure is a conflict for a person to resolve.
+    """
+
+
 class ReleaseReadUnavailable(TransitionError):
     """GitHub could not serve a Release read right now; nothing was learned.
 
@@ -723,7 +731,7 @@ def _compare_download(
     authority: _Authority, release_id: int, remote: GitHubAsset, expected: AssetBuild,
 ) -> None:
     if remote.state != "uploaded":
-        raise TransitionError(_incomplete_asset_message(remote))
+        raise IncompleteAssetError(_incomplete_asset_message(remote))
     try:
         payload = authority.context.github.download_asset(
             authority.context.policy.repository, release_id, remote,
@@ -750,7 +758,7 @@ def _download_and_verify_assets(
         for name in sorted(assets):
             asset = assets[name]
             if asset.state != "uploaded":
-                raise TransitionError(_incomplete_asset_message(asset))
+                raise IncompleteAssetError(_incomplete_asset_message(asset))
             try:
                 payload = authority.context.github.download_asset(
                     authority.context.policy.repository, release.id, asset,

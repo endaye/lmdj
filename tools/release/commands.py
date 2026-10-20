@@ -65,6 +65,8 @@ _DISCLOSED_ERRORS = frozenset({
     "GitRepositoryError", "HydrateError", "JournalError", "OpenPgpError",
     "OrchestrationPolicyError", "PrepareError", "ProfileError", "PromotionError",
     "PublicationError", "RehearsalError", "ReleaseModelError", "TransitionError",
+    # TransitionError subclasses, printed by release.sh as TransitionError.
+    "IncompleteAssetError", "ReleaseReadUnavailable",
 })
 
 

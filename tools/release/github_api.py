@@ -1074,6 +1074,15 @@ class GitHubClient:
             raise GitHubApiError("GitHub asset upload completed; it is never deleted as incomplete")
         if _asset_api_identity(asset.api_url) != (repository, asset.id):
             raise GitHubApiError("GitHub asset API URL is invalid")
+        # The caller's projection may be stale: read this asset's own state
+        # immediately before the delete, so an upload that completed in the
+        # meantime is never removed.
+        current = _parse_asset(
+            _json_response(self._request("GET", f"/repos/{repository}/releases/assets/{asset.id}"), {200}),
+            repository, release_id,
+        )
+        if current.id != asset.id or current.name != asset.name or current.state == "uploaded":
+            raise GitHubApiError("GitHub asset is no longer an incomplete upload; it was not deleted")
         response = self._request("DELETE", f"/repos/{repository}/releases/assets/{asset.id}")
         if response.status != 204:
             raise GitHubApiError("GitHub incomplete asset deletion is unavailable")

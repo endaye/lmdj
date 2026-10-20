@@ -16,7 +16,8 @@ import re
 
 from .model import canonical_sha256
 from .orchestration_driver import Observation
-from .transitions import ReleaseReadUnavailable, TransitionError
+from .commands import describe_failure
+from .transitions import IncompleteAssetError, ReleaseReadUnavailable, TransitionError
 
 
 class DraftStepError(ValueError):
@@ -127,26 +128,23 @@ class DraftCarrier:
         self.verify_assets = verify_assets
 
     def observe(self, state, operation):
-        observed = self._read_back()
-        if isinstance(observed, dict):
-            # read_back reports the verified status and its evidence together;
-            # a verified observation without evidence is not a valid one.
-            return Observation(observed["status"], observed["evidence"])
-        return Observation(observed)
+        return self._observation(*self._read_back())
 
     def advance(self, state, operation, *, before_write):
         if not callable(before_write):
             _fail("requires the driver's durable write guard")
-        observed = self._read_back()
-        if isinstance(observed, dict):
+        observed, diagnostic = self._read_back()
+        if isinstance(observed, dict) or observed != "pending":
             # A published Release is not this step's verified work: report the
             # status so the driver surfaces it instead of marking draft done.
-            return Observation(observed["status"], observed["evidence"])
-        if observed != "pending":
-            return Observation(observed)
+            return self._observation(observed, diagnostic)
         before_write()
         try:
             self.create_draft(self.spec["tag"])
+        except ReleaseReadUnavailable as error:
+            # An outage during the repair proves nothing about the Draft: the
+            # same unknown the read path reports, with its sanitized cause.
+            return Observation("unknown", diagnostic=describe_failure(error))
         except TransitionError:
             # create_draft raises TransitionError only after its own
             # reconciliation: a deterministic pre-write or unrecoverable
@@ -156,30 +154,37 @@ class DraftCarrier:
             # A raw transport failure during the POST is an unresolved write;
             # the next advance reconciles far-side state.
             return Observation("unknown")
-        verified = self._read_back()
+        verified, diagnostic = self._read_back()
         if isinstance(verified, dict):
             return Observation(verified["status"], verified["evidence"])
-        return Observation("unknown")
+        return Observation("unknown" if verified == "pending" else verified,
+                           diagnostic=diagnostic)
 
     def _read_back(self):
+        """(observation, diagnostic) for the Draft, verifying every asset.
+
+        Only an interrupted upload is pending Draft work that `create_draft`
+        repairs. A read outage is unknown. Any other asset verification
+        failure — divergent or undeclared asset, a declared asset that is
+        missing, a Release that is no longer this Draft — is a conflict whose
+        cause names it; it is never retried as a write.
+        """
         release = self.release_by_tag()
         observed = read_back(release, self.spec)
         if isinstance(observed, dict) and observed["status"] == "verified":
             try:
                 self.verify_assets(release.id)
-            except ReleaseReadUnavailable:
-                # A transient read failure proves nothing about the Draft and
-                # must not trigger repair writes during an outage.
-                return "unknown"
-            except Exception:
-                # Any asset verification failure is unfinished Draft work, never
-                # a verified Draft. The driver advances a pending self-driving
-                # step at once, and `create_draft` is the one place that tells
-                # the cases apart: it re-uploads a missing asset (including one
-                # removed just before an interrupted re-upload), replaces an
-                # incomplete upload, and refuses a divergent or undeclared asset
-                # with a named TransitionError that `advance` re-raises. Calling
-                # this a conflict here would strand the recoverable cases,
-                # because a missing asset also changes the reconstructed plan.
-                return "pending"
-        return observed
+            except IncompleteAssetError:
+                return "pending", None
+            except ReleaseReadUnavailable as error:
+                return "unknown", describe_failure(error)
+            except Exception as error:
+                return "conflict", describe_failure(error)
+        return observed, None
+
+    @staticmethod
+    def _observation(observed, diagnostic):
+        if isinstance(observed, dict):
+            return Observation(observed["status"], observed["evidence"])
+        return Observation(observed,
+                           diagnostic=diagnostic if observed in ("unknown", "conflict") else None)

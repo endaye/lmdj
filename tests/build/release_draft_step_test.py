@@ -111,9 +111,10 @@ class CarrierTest(unittest.TestCase):
         self.verified_ids = []
 
     def verify_assets(self, release_id):
+        from tools.release.transitions import IncompleteAssetError
         self.verified_ids.append(release_id)
         if not self.assets_complete:
-            raise RuntimeError("GitHub Release asset upload is incomplete")
+            raise IncompleteAssetError("GitHub Release asset host.zip upload is incomplete (state=starter)")
 
     def create_draft(self, tag):
         self.creations += 1
@@ -194,21 +195,23 @@ class CarrierTest(unittest.TestCase):
         self.assertEqual(advanced.status, "verified")
         self.assertEqual(self.creations, 1, "advance resumes create_draft to repair the assets")
 
-    def test_a_divergent_draft_surfaces_create_drafts_named_refusal(self):
-        # Pending is never a silent wait: advance runs create_draft, whose
-        # deterministic refusal for a divergent asset reaches the driver.
+    def test_a_divergent_draft_is_a_named_conflict_with_no_write(self):
+        # Only an interrupted upload is repaired by create_draft; any other
+        # verification failure is a conflict that names its cause.
         from tools.release.transitions import TransitionError
         self.release = DRAFT
-        self.assets_complete = False
 
-        def refusing(tag):
+        def divergent(release_id):
             raise TransitionError("GitHub Release asset digest conflicts with the release plan")
-        carrier = DraftCarrier(spec=spec(), create_draft=refusing,
-                               release_by_tag=self.release_by_tag,
-                               verify_assets=self.verify_assets)
-        self.assertEqual(carrier.observe({}, {"step": "draft"}).status, "pending")
-        with self.assertRaisesRegex(TransitionError, "digest conflicts"):
-            carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+        carrier = DraftCarrier(spec=spec(), create_draft=self.create_draft,
+                               release_by_tag=self.release_by_tag, verify_assets=divergent)
+        observed = carrier.observe({}, {"step": "draft"})
+        self.assertEqual(observed.status, "conflict")
+        self.assertIn("digest conflicts with the release plan", observed.diagnostic)
+        guards = []
+        advanced = carrier.advance({}, {"step": "draft"}, before_write=lambda: guards.append(1))
+        self.assertEqual(advanced.status, "conflict")
+        self.assertEqual((self.creations, guards), (0, []), "a conflict is never retried as a write")
 
     def test_an_unavailable_asset_read_is_unknown_and_never_repairs(self):
         from tools.release.transitions import ReleaseReadUnavailable
@@ -218,10 +221,25 @@ class CarrierTest(unittest.TestCase):
             raise ReleaseReadUnavailable("GitHub Release asset download is unavailable")
         carrier = DraftCarrier(spec=spec(), create_draft=self.create_draft,
                                release_by_tag=self.release_by_tag, verify_assets=unavailable)
-        self.assertEqual(carrier.observe({}, {"step": "draft"}).status, "unknown")
+        observed = carrier.observe({}, {"step": "draft"})
+        self.assertEqual(observed.status, "unknown")
+        self.assertIn("asset download is unavailable", observed.diagnostic)
         self.assertEqual(carrier.advance({}, {"step": "draft"}, before_write=lambda: None).status,
                          "unknown")
         self.assertEqual(self.creations, 0, "an outage never triggers create_draft")
+
+    def test_an_outage_during_the_repair_is_unknown_with_its_cause(self):
+        from tools.release.transitions import ReleaseReadUnavailable
+        self.release = DRAFT
+        self.assets_complete = False
+
+        def outage(tag):
+            raise ReleaseReadUnavailable("GitHub Release asset inventory is unavailable")
+        carrier = DraftCarrier(spec=spec(), create_draft=outage,
+                               release_by_tag=self.release_by_tag, verify_assets=self.verify_assets)
+        advanced = carrier.advance({}, {"step": "draft"}, before_write=lambda: None)
+        self.assertEqual(advanced.status, "unknown")
+        self.assertIn("asset inventory is unavailable", advanced.diagnostic)
 
     def test_carrier_refuses_an_untrusted_composition(self):
         with self.assertRaises(DraftStepError):
