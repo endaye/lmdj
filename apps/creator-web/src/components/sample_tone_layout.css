@@ -39,7 +39,8 @@
   .tone-control input[type="range"]:focus-visible { outline: 2px solid var(--creator-lime); outline-offset: 2px; }
   .eq-editor { min-width: 0; gap: var(--creator-group-gap); }
   .eq-plot {
-    display: block; width: 100%; min-width: 0; max-width: none; height: 132px;
+    display: block; width: 100%; min-width: var(--eq-min-width); max-width: none; height: 132px;
+    min-height: var(--eq-min-height);
     border: 0; border-radius: 0; overflow: visible; background: var(--creator-base);
   }
   .eq-zero { stroke: var(--creator-line); stroke-width: .8; }
@@ -50,6 +51,9 @@
   .eq-pole-low { --eq-band-colour: var(--creator-apricot); }
   .eq-pole-mid { --eq-band-colour: var(--creator-lime); }
   .eq-pole-high { --eq-band-colour: var(--creator-sky); }
+  .eq-handle-guide { pointer-events: none; opacity: .65; }
+  .eq-handle-guide line { stroke: var(--eq-band-colour); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .eq-data-point { fill: var(--eq-band-colour); }
   .eq-pole .eq-pole-dot { fill: var(--eq-band-colour); stroke: var(--eq-band-colour); stroke-width: 0; }
   .eq-pole:focus-visible .eq-pole-dot { stroke: var(--creator-text); stroke-width: 2; vector-effect: non-scaling-stroke; }
   .eq-pole-label { display: none; }

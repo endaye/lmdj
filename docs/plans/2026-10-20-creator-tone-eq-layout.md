@@ -171,9 +171,12 @@ These mathematical checks are not PCM, browser or device acceptance.
 
 The local commits are unpublished clean-source checkpoints. The owned proof
 runner requires clean Git source and records its full HEAD separately from
-the package's byte identities. Source audit correction: the stable full
-`proof` entry point enforces clean source; standalone `package` validates its
-inputs/distribution and does not itself enforce that Git condition or embed
+the package's byte identities. Source audit correction (2026-10-20): both the
+stable full `proof` entry point and standalone `package` enforce clean source.
+The latter delegates to `apps/creator-web/tools/package.py`, whose
+`require_clean_source` runs before distribution output. The earlier contrary
+audit note was wrong; the corrective EQ Task retains the actual dirty-tree
+exit2 and fixes that description without changing the gate. Neither embeds
 HEAD in the distribution manifest. A checkpoint must not be pushed or called
 completed work until every declared owning browser leg passes. Any resulting
 fix stays in this one unpublished Task commit, with all negative runs retained.

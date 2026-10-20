@@ -129,6 +129,66 @@ test("a rotated/scaled screen matrix maps pointer travel to the intended EQ valu
   }});
 });
 
+const coincidentPlayback: Readonly<PadPlayback> = {...playback, eq: {
+  low: {kind: "shelf", freqHz: 1000, gainMillidb: 6000},
+  mid: {freqHz: 1000, gainMillidb: 6000, qMilli: 1000},
+  high: {kind: "shelf", freqHz: 1000, gainMillidb: 6000},
+}};
+function displayedPole(target: Element) {
+  const parts = target.getAttribute("transform")!.match(/^translate\(([^ ]+) ([^)]+)\)$/)!;
+  return {x: Number(parts[1]), y: Number(parts[2])};
+}
+
+test("a displaced control press leaves the real EQ point, response and Truth unchanged", () => {
+  const {container, onPreview, onCommit} = renderEditor({playback: coincidentPlayback});
+  const start = displayedPole(pole("Mid"));
+  expect(start).not.toEqual({x: freqToX(1000), y: gainToY(6000)});
+  const line = container.querySelector(".eq-handle-guide.eq-pole-mid line")!;
+  expect(Number(line.getAttribute("x2"))).toBe(freqToX(1000));
+  expect(Number(line.getAttribute("y2"))).toBe(gainToY(6000));
+  const curve = container.querySelector(".eq-response-curve")!.getAttribute("d");
+  press(pole("Mid"), 1, start, 1000);
+  fireEvent.pointerUp(pole("Mid"), {pointerId: 1});
+  expect(onPreview).not.toHaveBeenCalled(); expect(onCommit).not.toHaveBeenCalled();
+  expect(container.querySelector(".eq-response-curve")!.getAttribute("d")).toBe(curve);
+});
+
+test("a displaced drag preserves exact data travel while the grabbed dot tracks the pointer", () => {
+  const {onCommit} = renderEditor({playback: coincidentPlayback});
+  const start = displayedPole(pole("Mid"));
+  const dx = freqToX(1300) - freqToX(1000), dy = gainToY(9000) - gainToY(6000);
+  drag(pole("Mid"), [start, {x: start.x + dx, y: start.y + dy}], 1, 1000);
+  const moved = displayedPole(pole("Mid"));
+  expect(moved.x).toBeCloseTo(start.x + dx, 10); expect(moved.y).toBeCloseTo(start.y + dy, 10);
+  fireEvent.pointerUp(pole("Mid"), {pointerId: 1});
+  expect(onCommit).toHaveBeenCalledExactlyOnceWith({...coincidentPlayback, eq: {
+    ...coincidentPlayback.eq, mid: {freqHz: 1300, gainMillidb: 9000, qMilli: 1000},
+  }});
+});
+
+test("a double tap on a displaced Mid control still changes only Q", () => {
+  const {onCommit} = renderEditor({playback: coincidentPlayback});
+  const start = displayedPole(pole("Mid"));
+  press(pole("Mid"), 1, start, 100); fireEvent.pointerUp(pole("Mid"), {pointerId: 1});
+  drag(pole("Mid"), [start, {x: start.x + 30, y: start.y - 40}], 2, 300);
+  fireEvent.pointerUp(pole("Mid"), {pointerId: 2});
+  expect(onCommit).toHaveBeenCalledExactlyOnceWith({...coincidentPlayback, eq: {
+    ...coincidentPlayback.eq, mid: {...coincidentPlayback.eq.mid!, qMilli: 2000},
+  }});
+});
+
+test("Escape restores the displaced preview and response without saving", () => {
+  const {container, onCommit, onCancel} = renderEditor({playback: coincidentPlayback});
+  const curve = container.querySelector(".eq-response-curve")!.getAttribute("d");
+  const start = displayedPole(pole("Mid"));
+  drag(pole("Mid"), [start, {x: start.x, y: start.y + 15}], 1, 1000);
+  expect(container.querySelector(".eq-response-curve")!.getAttribute("d")).not.toBe(curve);
+  fireEvent.keyDown(document.body, {key: "Escape"});
+  expect(onCancel).toHaveBeenCalledOnce(); expect(onCommit).not.toHaveBeenCalled();
+  expect(container.querySelector(".eq-response-curve")!.getAttribute("d")).toBe(curve);
+  expect(displayedPole(pole("Mid"))).toEqual(start);
+});
+
 test("dragging the mid pole previews each move and commits one bell", () => {
   const {onPreview, onCommit} = renderEditor();
   drag(pole("Mid"), [

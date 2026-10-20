@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {eqResponseCurve} from "./eq_response";
+import {EQ_PLOT_MIN_WIDTH, layoutEqHandles, minimumEqPlotHeight, type EqHandlePoints} from "./eq_handle_layout";
 
 import type {
   PadEq,
@@ -40,8 +41,8 @@ const TAP_SLOP = 2;
 // The keys a keyboard step uses; releasing one of them commits the run.
 const STEP_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "Backspace"]);
 
-// Plot geometry in viewBox units. The margins are wider than a pole's
-// 22-unit hit radius, so a pole at any edge keeps its whole hit circle.
+// Data geometry in viewBox units. Control markers use their own contained,
+// non-overlapping CSS-pixel layout without moving the response/data points.
 export const EQ_VIEW = Object.freeze({
   width: 320,
   height: 184,
@@ -146,6 +147,8 @@ interface Gesture {
   startY: number;
   grabX: number;
   grabY: number;
+  displayOffsetX: number;
+  displayOffsetY: number;
   travelled: boolean;
   startQ: number;
   base: PadEq;
@@ -182,7 +185,9 @@ export function EqEditor({
     const svg = svgRef.current;
     if (svg === null || typeof ResizeObserver === "undefined") return;
     const measure = () => {
-      const x = svg.clientWidth / EQ_VIEW.width, y = svg.clientHeight / EQ_VIEW.height;
+      const style = getComputedStyle(svg);
+      const x = (parseFloat(style.width) || svg.clientWidth) / EQ_VIEW.width;
+      const y = (parseFloat(style.height) || svg.clientHeight) / EQ_VIEW.height;
       if (!(x > 0 && y > 0)) return;
       setPixels(previous => previous.x === x && previous.y === y ? previous : {x, y});
     };
@@ -273,6 +278,8 @@ export function EqEditor({
       startY: start.y,
       grabX: freqToX(bandFreq(band)) - start.x,
       grabY: bandY(band) - start.y,
+      displayOffsetX: handleForBand(band).x - freqToX(bandFreq(band)),
+      displayOffsetY: handleForBand(band).y - bandY(band),
       travelled: false,
       startQ: playback.eq.mid?.qMilli ?? remembered.current.mid.qMilli,
       base: playback.eq,
@@ -456,6 +463,23 @@ export function EqEditor({
     if ("kind" in value && value.kind === "cut") return CUT_Y;
     return gainToY(value.gainMillidb);
   };
+  const plotWidth = EQ_VIEW.width * pixels.x;
+  const minimumHeight = minimumEqPlotHeight(plotWidth);
+  const plotHeight = Math.max(EQ_VIEW.height * pixels.y, minimumHeight);
+  const plotPixels = {x: pixels.x, y: plotHeight / EQ_VIEW.height};
+  const anchor = (band: EqBand) => ({x: freqToX(bandFreq(band)) * plotPixels.x, y: bandY(band) * plotPixels.y});
+  const anchors: EqHandlePoints = [anchor("low"), anchor("mid"), anchor("high")];
+  const active = gesture.current;
+  const activeIndex = active?.pointerId != null ? BANDS.indexOf(active.band) : undefined;
+  const preferred = (index: number) => index === activeIndex && active !== null
+    ? {x: anchors[index]!.x + active.displayOffsetX * plotPixels.x,
+      y: anchors[index]!.y + active.displayOffsetY * plotPixels.y}
+    : anchors[index]!;
+  const handles = layoutEqHandles([preferred(0), preferred(1), preferred(2)], plotWidth, plotHeight, activeIndex);
+  const handleForBand = (band: EqBand) => {
+    const point = handles[BANDS.indexOf(band)]!;
+    return {x: point.x / plotPixels.x, y: point.y / plotPixels.y};
+  };
 
   return (
     <section className="eq-editor" aria-label={`${padLabel} EQ`}>
@@ -463,6 +487,7 @@ export function EqEditor({
       <svg
         ref={svgRef}
         className="eq-plot"
+        style={{"--eq-min-width": `${EQ_PLOT_MIN_WIDTH}px`, "--eq-min-height": `${minimumHeight}px`} as React.CSSProperties}
         viewBox={`0 0 ${EQ_VIEW.width} ${EQ_VIEW.height}`}
         preserveAspectRatio="none"
         role="group"
@@ -488,6 +513,14 @@ export function EqEditor({
         ))}
         <path className="eq-response-curve" aria-hidden="true" d={eqResponseCurve(shown).map(({hz, db}, index) =>
           `${index === 0 ? "M" : "L"}${freqToX(hz).toFixed(3)} ${gainToY(clamp(db, -18, 18) * 1000).toFixed(3)}`).join(" ")} />
+        {BANDS.map(band => {
+          const point = handleForBand(band), x = freqToX(bandFreq(band)), y = bandY(band);
+          if (Math.abs(point.x - x) < .01 && Math.abs(point.y - y) < .01) return null;
+          return <g key={band} className={`eq-handle-guide eq-pole-${band}`} aria-hidden="true" pointerEvents="none">
+            <line x1={point.x} y1={point.y} x2={x} y2={y} />
+            <ellipse className="eq-data-point" cx={x} cy={y} rx={2 / plotPixels.x} ry={2 / plotPixels.y} />
+          </g>;
+        })}
         {BANDS.map((band) => {
           const active = shown[band] !== null;
           const gain = shown[band]?.gainMillidb ?? 0;
@@ -503,7 +536,7 @@ export function EqEditor({
               aria-valuenow={isCut(shown, band) ? -18 : gain / 1_000}
               aria-valuetext={describeBand(band, shown)}
               aria-disabled={disabled}
-              transform={`translate(${freqToX(bandFreq(band))} ${bandY(band)})`}
+              transform={`translate(${handleForBand(band).x} ${handleForBand(band).y})`}
               onPointerDown={(event) => pointerDown(event, band)}
               onPointerMove={pointerMove}
               onPointerUp={pointerUp}
@@ -514,9 +547,9 @@ export function EqEditor({
             >
               <title>{describeBand(band, shown)}</title>
               <ellipse className="eq-pole-hit"
-                rx={Math.ceil(22 / pixels.x * 1024) / 1024}
-                ry={Math.ceil(22 / pixels.y * 1024) / 1024} />
-              <ellipse className="eq-pole-dot" rx={6 / pixels.x} ry={6 / pixels.y} />
+                rx={Math.ceil(22 / plotPixels.x * 1024) / 1024}
+                ry={Math.ceil(22 / plotPixels.y * 1024) / 1024} />
+              <ellipse className="eq-pole-dot" rx={6 / plotPixels.x} ry={6 / plotPixels.y} />
               <text className="eq-pole-label" y={4} textAnchor="middle">{BAND_NAMES[band][0]}</text>
             </g>
           );
