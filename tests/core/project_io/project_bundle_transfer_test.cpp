@@ -307,7 +307,7 @@ void append_fixture(
   }
 }
 
-class FaultPlatform final : public ProjectStoragePlatform {
+class FaultPlatform : public ProjectStoragePlatform {
  public:
   explicit FaultPlatform(std::shared_ptr<ProjectStoragePlatform> inner)
       : inner_(std::move(inner)) {}
@@ -754,15 +754,16 @@ lmdj::domain::CommandMeta meta(std::uint32_t command, std::uint64_t revision) {
 // transaction of history beyond its initial checkpoint.
 void create_source(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
-    const std::filesystem::path& workspace) {
+    const std::filesystem::path& workspace,
+    std::string_view recording_bytes = kRecordingAudio) {
   const auto bundle = project_path(workspace, kSourceId);
   std::filesystem::create_directories(bundle / "assets");
   const auto pad = artifact(kPadAudio);
   const auto resampled = artifact(kResampleAudio);
-  const auto recording = artifact(kRecordingAudio);
+  const auto recording = artifact(recording_bytes);
   write_text(bundle / "assets" / (pad.sha256 + ".wav"), kPadAudio);
   write_text(bundle / "assets" / (resampled.sha256 + ".wav"), kResampleAudio);
-  write_text(bundle / "assets" / (recording.sha256 + ".wav"), kRecordingAudio);
+  write_text(bundle / "assets" / (recording.sha256 + ".wav"), recording_bytes);
 
   auto state = lmdj::domain::create_project(
       ProjectId{std::string{kSourceId}}, 126);
@@ -806,7 +807,9 @@ struct Fixture {
   std::shared_ptr<ProjectStoragePlatform> platform =
       lmdj::project_io::make_native_project_storage_platform(leases);
 
-  Fixture() { create_source(platform, workspace); }
+  explicit Fixture(std::string_view recording = kRecordingAudio) {
+    create_source(platform, workspace, recording);
+  }
 
   lmdj::domain::ProjectState load(std::string_view project_id) const {
     ProjectStore store{platform};
@@ -823,6 +826,119 @@ struct Fixture {
     return std::filesystem::exists(staging_path(workspace, project_id));
   }
 };
+
+class InventoryRangePlatform final : public FaultPlatform,
+                                     public lmdj::project_io::ProjectStorageRangeReader {
+ public:
+  InventoryRangePlatform(std::shared_ptr<ProjectStoragePlatform> inner,
+                         std::filesystem::path recording)
+      : FaultPlatform(inner), actual_(std::move(inner)), recording_(std::move(recording)) {}
+  lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& path) const override {
+    if (claim_large && path == recording_) return lmdj::foundation::Result<std::uint64_t>::success(64U*1024U*1024U+1);
+    return actual_->byte_length(path);
+  }
+  lmdj::foundation::Result<std::size_t> read_range(
+      const std::filesystem::path& path, std::uint64_t offset,
+      std::span<std::byte> output) const override {
+    LMDJ_CHECK(output.size() <= 65536);
+    if (path == recording_) {
+      ++recording_reads;
+      if (on_range) on_range();
+      if (fault == 1) return lmdj::foundation::Result<std::size_t>::failure({ErrorCode::io_error,"injected inventory read error"});
+      if (fault == 2) return lmdj::foundation::Result<std::size_t>::success(0);
+      if (fault == 3) return lmdj::foundation::Result<std::size_t>::success(output.size()+1);
+      if (fault == 4 && offset == 131089) { output.front()=std::byte{1};return lmdj::foundation::Result<std::size_t>::success(1); }
+    }
+    const auto* reader = dynamic_cast<const lmdj::project_io::ProjectStorageRangeReader*>(actual_.get());
+    LMDJ_CHECK(reader != nullptr);
+    auto result = reader->read_range(path,offset,output.first(std::min(output.size(),short_limit)));
+    if (path == recording_ && offset == 0 && fault == 5)
+      std::filesystem::resize_file(path,131090);
+    return result;
+  }
+  std::size_t short_limit = 65536;
+  bool claim_large = false;
+  int fault = 0;
+  mutable std::size_t recording_reads = 0;
+  std::function<void()> on_range;
+ private:
+  std::shared_ptr<ProjectStoragePlatform> actual_;
+  std::filesystem::path recording_;
+};
+
+void test_discovery_hashes_bounded_bytes_under_the_project_writer() {
+  const std::string recording(131089,'x');
+  // Literal Python hashlib witness; do not let the fixture and collector's
+  // shared picosha2 implementation be their only correctness oracle.
+  LMDJ_CHECK(artifact(recording).sha256 == "e3c33f1a7c00a23610a13fa6b862df2882931be5b0262aeada7a47e282f1c679");
+  Fixture f(recording);
+  const auto source = project_path(f.workspace,kSourceId);
+  const auto wav = source/"assets"/(artifact(recording).sha256+".wav");
+  const auto expected = build_fixture(source,kSourceId);
+  auto platform = std::make_shared<InventoryRangePlatform>(f.platform,wav);
+  std::size_t complete_recording_reads = 0, contended = 0;
+  platform->on_read = [&](const auto& path) { if (path == wav) ++complete_recording_reads; };
+  auto other = lmdj::project_io::make_native_project_storage_platform(f.leases);
+  platform->on_range = [&] {
+    const auto attempt = other->acquire_writer(source);
+    LMDJ_CHECK(!attempt.has_value());
+    LMDJ_CHECK(attempt.error().details.at("storage_condition") == "project_busy");
+    ++contended;
+  };
+  platform->short_limit = 97;
+  const auto listed = ProjectBundleTransfer{platform}.list_local_projects(f.workspace);
+  LMDJ_CHECK(listed.has_value());
+  LMDJ_CHECK(listed.value().size() == 1);
+  LMDJ_CHECK(listed.value().front().bundle_digest == expected.digest);
+  // The old collector agrees on the digest, but fails this allocation oracle.
+  LMDJ_CHECK(complete_recording_reads == 0);
+  LMDJ_CHECK(platform->recording_reads > 1000);
+  LMDJ_CHECK(contended == platform->recording_reads);
+  LMDJ_CHECK(other->acquire_writer(source).has_value());
+}
+
+void test_discovery_range_failures_never_publish_partial_identity() {
+  const std::string recording(131089,'x');
+  for (int fault : {1,2,3,4,5,6}) {
+    Fixture f(recording);
+    const auto source = project_path(f.workspace,kSourceId);
+    const auto wav = source/"assets"/(artifact(recording).sha256+".wav");
+    auto platform = std::make_shared<InventoryRangePlatform>(f.platform,wav);
+    platform->fault = fault;
+    platform->claim_large = fault == 6;
+    std::size_t complete = 0;
+    platform->on_read = [&](const auto& path) { if (path == wav) ++complete; };
+    const auto result = ProjectBundleTransfer{platform}.list_local_projects(f.workspace);
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(complete == 0);
+    // An oversized local file reaches bounded I/O, without a Bundle-entry
+    // quota check or a whole-read fallback. Here its lying length reaches EOF.
+    LMDJ_CHECK(platform->recording_reads > 0);
+  }
+}
+
+void test_large_legacy_inventory_is_refused_before_complete_allocation() {
+  class LegacyLengthPlatform final : public FaultPlatform {
+   public:
+    LegacyLengthPlatform(std::shared_ptr<ProjectStoragePlatform> inner,std::filesystem::path recording)
+        : FaultPlatform(std::move(inner)),recording_(std::move(recording)) {}
+    lmdj::foundation::Result<std::uint64_t> byte_length(const std::filesystem::path& path) const override {
+      return path == recording_ ? lmdj::foundation::Result<std::uint64_t>::success(64U*1024U*1024U+1)
+                               : FaultPlatform::byte_length(path);
+    }
+   private:
+    std::filesystem::path recording_;
+  };
+  Fixture f;
+  const auto wav=project_path(f.workspace,kSourceId)/"assets"/(artifact(kRecordingAudio).sha256+".wav");
+  auto platform=std::make_shared<LegacyLengthPlatform>(f.platform,wav);
+  unsigned complete=0;
+  platform->on_read=[&](const auto& path) { if (path == wav) ++complete; };
+  const auto listed=ProjectBundleTransfer{platform}.list_local_projects(f.workspace);
+  LMDJ_CHECK(!listed.has_value());
+  LMDJ_CHECK(listed.error().details.at("reason") == "bounded_read_unavailable");
+  LMDJ_CHECK(complete == 0);
+}
 
 lmdj::foundation::Result<lmdj::project_io::LocalProjectSummary> duplicate(
     ProjectBundleTransfer& transfer,
@@ -870,6 +986,38 @@ void test_copy_starts_a_fresh_history() {
       std::filesystem::exists(copy / "history/checkpoints/0.json"));
   LMDJ_CHECK(
       !std::filesystem::exists(copy / "history/checkpoints/1.json"));
+}
+
+void test_busy_project_listing_preserves_committed_read_without_writer_authority() {
+  Fixture f;
+  ProjectBundleTransfer original{f.platform};
+  const auto copied = duplicate(original, f.workspace);
+  LMDJ_CHECK(copied.has_value());
+  const auto source = project_path(f.workspace, kSourceId);
+  const auto expected = build_fixture(source, kSourceId);
+  auto foreign = lmdj::project_io::make_native_project_storage_platform(f.leases);
+  auto held = foreign->acquire_writer(source);
+  LMDJ_CHECK(held.has_value());
+  // The existing Store contract can inspect committed Truth under a foreign
+  // owner, without recovering or acquiring that owner's writer authority.
+  const auto committed = ProjectStore{f.platform}.load(source);
+  LMDJ_CHECK(committed.has_value());
+  auto platform = std::make_shared<InventoryRangePlatform>(f.platform,
+      source / "assets" / (artifact(kRecordingAudio).sha256 + ".wav"));
+  ProjectBundleTransfer transfer{platform};
+  const auto listed = transfer.list_local_projects(f.workspace);
+  LMDJ_CHECK(listed.has_value());
+  LMDJ_CHECK(listed.value().size() == 2);
+  const auto summary = std::find_if(listed.value().begin(), listed.value().end(),
+      [](const auto& value) { return value.project_id.value() == kSourceId; });
+  LMDJ_CHECK(summary != listed.value().end());
+  LMDJ_CHECK(summary->revision == committed.value().revision);
+  LMDJ_CHECK(summary->bundle_digest == expected.digest);
+  LMDJ_CHECK(listed.value().at(1) == copied.value());
+  const auto still_busy = f.platform->acquire_writer(source);
+  LMDJ_CHECK(!still_busy.has_value());
+  LMDJ_CHECK(still_busy.error().details.at("storage_condition") == "project_busy");
+  LMDJ_CHECK(build_fixture(source, kSourceId).digest == expected.digest);
 }
 
 void test_library_lists_both_projects_and_the_copy_summary() {
@@ -1255,6 +1403,10 @@ void test_duplicate_preserves_source_redo_and_does_not_copy_session_history() {
 
 int main() {
   try {
+    test_busy_project_listing_preserves_committed_read_without_writer_authority();
+    test_discovery_hashes_bounded_bytes_under_the_project_writer();
+    test_discovery_range_failures_never_publish_partial_identity();
+    test_large_legacy_inventory_is_refused_before_complete_allocation();
     test_duplicate_preserves_source_redo_and_does_not_copy_session_history();
     test_streamed_import_is_atomic_discoverable_and_idempotent();
     test_validation_abort_cleanup_collision_and_contention();
