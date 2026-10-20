@@ -56,7 +56,16 @@ range companion 时返回 typed I/O unavailable，不退回全量读取。这项
 `WavMetadataInspector`，保留格式错误并继续完整 hash；最终回执成功后才发布元数据
 或 unsupported encoding。摘要/owner 校验失败须丢弃 provisional parser 状态。
 真实 OPFS 测试分别验证有效静音、已校验但不支持的编码和尾部摘要损坏，并在两次
-实际重开后核对完整身份与元数据。Facade/SDK/Host 异步查询和 owner retirement 仍待。
+实际重开后核对完整身份与元数据。Facade/SDK 异步查询与 owner retirement 已实现；实际 Take Host consumer 仍待。
+
+保存草稿／绑定 Performance 录音时，原有 writer lease 与 history guard 内的
+`verify_managed_wav_artifact` 也在 Native／OPFS 上使用64KiB heap 窗口，逐块校验
+完整 SHA-256、前后长度和 EOF，避免 OPFS 整文件分配后再复制成 C++ vector。
+短读继续推进；零进展、错误计数、读取失败、文件增长／截断或摘要不同均保留原有
+`performance_recording_artifact_unverified` 拒绝，不发布录音引用，停止草稿可重试。
+没有 range companion 的旧自定义平台保留既有 complete-read 行为；已提供 companion
+的读取失败不会回退整文件读取。这只验证原始 Artifact 身份，不验证 WAV 编码、
+录音完整性或演出总时长，也不改变 Save／bind 的幂等与 writer 生命周期。
 
 ## 6. 状态、错误与生命周期
 故障矩阵验证验证、取消、超时与发布中断恢复；typed error 区分输入、平台、busy 与提交失败。
