@@ -179,13 +179,19 @@ that scheduled S0. Before Applied/opening completion and during cancellation /
 settlement, Pattern controls remain locked. BPM/structure editing retain their
 current recording restrictions.
 
-Every applicable publication source goes through this retained boundary path:
-Sequence arrows/picker and non-recording Perform Launch; an existing Performance
-recording still owns its Launch event, while the same actual Native publication
-supplies the global recorder's segment proof. Do not publish twice or change
-Performance event/replay shape or clock semantics. If that port cannot retain
-the global proof, refuse before effect/ACK. Keep independent durable consumer
-responsibilities and the existing shared physical-gesture quota.
+Every applicable global-recording publication source goes through this retained
+boundary path: Sequence arrows/picker and ordinary Perform Launch. The current
+single-Project recording rule admits one active Journal kind: Sequence begin
+and Performance draft begin both reject an already active recording kind.
+The approved switch decision keeps Performance-record Launch as its existing
+recorded event; it does not introduce simultaneous Sequence/Performance takes.
+That path therefore keeps its own Native publication, clock and event/replay
+shape, without acquiring a second global recorder. C3 proves both mutual-
+exclusion directions before effect, plus the positive existing Performance
+Launch path. This corrects the initial implementation premise that a live
+Performance-record publication could also feed an admitted global take; it
+preserves the settled one-Journal rule rather than widening concurrency.
+Keep the existing shared physical-gesture quota and publish each request once.
 
 ## Bounded implementation Tasks and acceptance
 

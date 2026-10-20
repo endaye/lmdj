@@ -7899,6 +7899,70 @@ test("Pattern transport switch result is exact and null means already playing", 
   await strict.session.close();
 });
 
+test("recording switch keeps the existing wire and observes Native selection separately", async () => {
+  const target = "00000000-0000-4000-8000-0000000000ee";
+  const sent = [];
+  let applied = false;
+  const {session} = fixture({patternTransport: true, send: async (envelope) => {
+    if (envelope.operation === "pattern.transport.inspect") {
+      return success(envelope, transportStatus({phase: "idle", playing: true, recording: true,
+        current_pattern_id: applied ? target : TRANSPORT_PATTERN_ID,
+        origin_frame: applied ? 24_000 : 128, runtime_frame: applied ? 24_001 : 6_000,
+        pending_switch: applied ? null : {pattern_id: target, activation_frame: 24_000}}));
+    }
+    if (envelope.operation === "pattern.transport.switch") {
+      sent.push(structuredClone(envelope.payload));
+      return success(envelope, {pattern_id: target, activation_frame: 24_000});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const queued = await session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.equal(queued.recording, true);
+  assert.equal(queued.currentPatternId, TRANSPORT_PATTERN_ID);
+  const accepted = await session.requestTransportPatternSwitch({
+    patternId: target, requestId: TRANSPORT_COMMAND_ID, snap: "beat",
+  });
+  assert.deepEqual(sent, [{pattern_id: target, request_id: TRANSPORT_COMMAND_ID, snap: "beat"}]);
+  assert.deepEqual(accepted, {patternId: target, activationFrame: 24_000});
+  applied = true;
+  const observed = await session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.equal(observed.recording, true);
+  assert.equal(observed.currentPatternId, target);
+  assert.equal(observed.originFrame, 24_000);
+  assert.equal(observed.pendingSwitch, null);
+  // This DTO has no per-switch durable receipt. Native current selection must
+  // not be turned into an invented authoring or original input/caller ACK.
+  assert.equal(Object.hasOwn(observed, "durableSettled"), false);
+  await session.close();
+});
+
+test("recording switch busy is retained as a refusal without SDK replay or session failure", async () => {
+  let requests = 0;
+  const {session} = fixture({patternTransport: true, send: async (envelope) => {
+    if (envelope.operation === "pattern.transport.switch") {
+      requests += 1;
+      return {protocol_version: 1, request_id: envelope.request_id, ok: false,
+        error: {code: "HOST_STATE_INVALID", message: "Recording Pattern switch is pending",
+          details: {reason: "recording_switch_overlay_pending", pending: true}}};
+    }
+    if (envelope.operation === "pattern.transport.inspect")
+      return success(envelope, transportStatus({phase: "idle", playing: true, recording: true}));
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.requestTransportPatternSwitch({
+    patternId: TRANSPORT_PATTERN_ID, requestId: TRANSPORT_COMMAND_ID, snap: "beat",
+  }), (error) => error.code === "HOST_STATE_INVALID" &&
+      error.details.reason === "recording_switch_overlay_pending" && error.details.pending === true);
+  assert.equal(requests, 1);
+  const status = await session.inspectPatternTransport(TRANSPORT_SESSION_ID);
+  assert.equal(status.recording, true);
+  assert.equal(status.currentPatternId, TRANSPORT_PATTERN_ID);
+  assert.equal(requests, 1);
+  await session.close();
+});
+
 test("Pattern transport status maps the current Pattern and the pending switch", async () => {
   const queued = "00000000-0000-4000-8000-0000000000ee";
   const {session} = fixture({

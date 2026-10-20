@@ -1626,15 +1626,37 @@ class EnginePatternTransportPort final : public facade::PatternTransportAudioPor
         queued_overlay_->activation_frame != authority.activation_frame) {
       return false;
     }
-    if (!engine_.cancel_pattern_publication(authority)) {
+    const auto cancelled = switch_reservation_
+        ? engine_.cancel_unclaimed_pattern_publication(authority)
+        : engine_.cancel_pattern_publication(authority);
+    if (!cancelled) {
       return false;
     }
     queued_overlay_.reset();
     return true;
   }
 
+  bool owns_overlay(const audio::PatternReplacementAuthority& authority) const {
+    return queued_overlay_ && queued_overlay_->generation == authority.generation &&
+        queued_overlay_->pattern_id == authority.pattern_id &&
+        queued_overlay_->activation_frame == authority.activation_frame;
+  }
+
+  foundation::Result<facade::PatternTransportSwitchTicket> reserve_recording_switch(
+      facade::PatternTransportController& controller,
+      const facade::PatternTransportSwitchRequest& request) {
+    // A claimed overlay retains its audio-local slot through its old boundary.
+    // Canceling it and accepting a Beat successor would delay that successor
+    // behind the canceled Bar. Only atomic unclaimed withdrawal is admissible
+    // here. Stop keeps its separate, receipt-bound claimed cancellation path.
+    struct Reset { bool& value; ~Reset() { value = false; } } reset{switch_reservation_};
+    switch_reservation_ = true;
+    return controller.reserve_pattern_switch(request);
+  }
+
  private:
   audio::RealtimeEngine& engine_;
+  bool switch_reservation_{};
   std::function<foundation::Result<audio::PatternPublication>(
       const foundation::PatternId&, std::span<const domain::PatternEvent>)>
       publish_overlay_;
@@ -1675,6 +1697,11 @@ class EngineScheduledPatternTransportPort final
 // The admission candidate watermark and press/release correlation are
 // Host-side input identities assigned at the existing post-enqueue point,
 // never reused across engagement.
+struct RetainedRecordingSwitch {
+  facade::PatternTransportSwitchTicket ticket;
+  audio::PatternPublicationLease lease;
+};
+
 struct TransportEngagement {
   explicit TransportEngagement(audio::RealtimeEngine& engine)
       : port(engine), scheduled_port(engine) {}
@@ -1682,6 +1709,8 @@ struct TransportEngagement {
   EnginePatternTransportPort port;
   EngineScheduledPatternTransportPort scheduled_port;
   std::unique_ptr<facade::PatternTransportController> controller;
+  std::array<std::optional<RetainedRecordingSwitch>,
+      facade::kPatternTransportSwitchCapacity> recording_switches;
   std::optional<foundation::SequenceSessionId> session;
   // The Pattern identity the Facade controller is bound to; a cross-identity
   // republication outside the coordinator must retire the engagement first.
@@ -2310,7 +2339,8 @@ struct ControlRuntime::Impl {
       audio::PreparedPatternView&& pattern,
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::optional<audio::PatternReplacementAuthority>
-          replacement_authority = std::nullopt) {
+          replacement_authority = std::nullopt,
+      bool immediate = false) {
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     if (fail_next_pattern_publication) {
       fail_next_pattern_publication = false;
@@ -2321,10 +2351,10 @@ struct ControlRuntime::Impl {
     }
 #endif
     static_cast<void>(engine.reclaim_retired_patterns());
-    const auto publication = engine.publish_pattern_view(
-        std::move(pattern),
-        activation_frame,
-        std::move(replacement_authority));
+    const auto publication = immediate
+        ? engine.publish_pattern_view_immediate(std::move(pattern))
+        : engine.publish_pattern_view(std::move(pattern), activation_frame,
+              std::move(replacement_authority));
     if (publication.result != audio::PatternPublishResult::accepted) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument,
@@ -2353,7 +2383,8 @@ struct ControlRuntime::Impl {
 
   foundation::Result<audio::PatternPublication> publish_transport_pattern(
       audio::PreparedPatternView&& pattern, audio::PatternSwitchSnap snap,
-      std::optional<audio::PatternReplacementAuthority> authority) {
+      std::optional<audio::PatternReplacementAuthority> authority,
+      std::optional<facade::PatternTransportSwitchTicket> recording_ticket = {}) {
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     if (std::exchange(fail_next_pattern_publication, false)) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
@@ -2364,6 +2395,36 @@ struct ControlRuntime::Impl {
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     testing::invoke_sequence_switch_publication_hook();
 #endif
+    if (recording_ticket) {
+      if (!transport) return foundation::Result<audio::PatternPublication>::failure(
+          Error{ErrorCode::internal_error, "Recording switch owner is absent"});
+      auto cell = std::find_if(transport->recording_switches.begin(),
+          transport->recording_switches.end(), [](const auto& c) { return !c; });
+      if (cell == transport->recording_switches.end())
+        return foundation::Result<audio::PatternPublication>::failure(Error{
+            ErrorCode::invalid_argument, "Recording switch capacity is retained",
+            {{"reason", "recording_switch_capacity"}}});
+      const auto target = pattern.pattern_id();
+      const auto bpm = pattern.bpm();
+      auto retained = engine.publish_retained_pattern_switch_view(
+          std::move(pattern), snap, std::move(authority));
+      if (retained.publication.result != audio::PatternPublishResult::accepted)
+        return foundation::Result<audio::PatternPublication>::failure(Error{
+            ErrorCode::invalid_argument, "runtime Pattern publication is unavailable"});
+      cell->emplace(RetainedRecordingSwitch{*recording_ticket, std::move(retained.lease)});
+      if (!transport->controller->bind_pattern_switch(*recording_ticket,
+              {retained.publication.generation, target, retained.publication.activation_frame}, bpm)) {
+        // A broken internal binding cannot spend an accepted Native lease or
+        // remove its unbound input barrier. Preserve both for failed disposal.
+        trigger_admission = false;
+        request_terminal_audio_retirement(true);
+        state = State::failed;
+        return foundation::Result<audio::PatternPublication>::failure(Error{
+            ErrorCode::internal_error, "Accepted recording switch binding failed",
+            {{"reason", "recording_switch_binding_failed"}, {"retained", true}}});
+      }
+      return foundation::Result<audio::PatternPublication>::success(retained.publication);
+    }
     const auto publication = engine.publish_pattern_switch_view(
         std::move(pattern), snap, std::move(authority));
     if (publication.result != audio::PatternPublishResult::accepted) {
@@ -2696,7 +2757,7 @@ struct ControlRuntime::Impl {
           owner.acknowledged || engagement.legacy_candidate) return false;
     } else if (state != State::failed) return false;
     service_pattern_inputs();
-    if (!legacy_inputs.empty() || std::any_of(pattern_inputs.begin(), pattern_inputs.end(),
+    if (has_recording_switches() || !legacy_inputs.empty() || std::any_of(pattern_inputs.begin(), pattern_inputs.end(),
         [](const auto& i) { return i.has_value(); })) return false;
     std::size_t physical_holds = 0, facade_holds = 0;
     const auto epoch = engine.telemetry().start_epoch;
@@ -2996,6 +3057,7 @@ struct ControlRuntime::Impl {
   // recording close has just settled durably, arms the separate publication
   // completion. Never waits for an audio receipt or a long IO job.
   foundation::Result<void> transport_continuation_step() {
+    observe_recording_switches();
     service_pattern_inputs();
     auto& engagement = *transport;
     if (engagement.publish_pending) {
@@ -3007,8 +3069,19 @@ struct ControlRuntime::Impl {
         project_revision =
             inspected.at("project_revision").get<std::uint64_t>();
       }
-      auto published =
-          publish_project_pattern(foundation::PatternId{*pattern_id});
+      // A count-in/input inspection can finish close without an ordinary
+      // selection poll. F has settled every switch: use the actual terminal
+      // Native Pattern, never cached selection or original count-in e1/e2.
+      const auto current = engine.current_pattern_id();
+      if (!current) return foundation::Result<void>::failure(
+          Error{ErrorCode::io_error, "Terminal Pattern is not observed"});
+      retarget_transport_selection(*current);
+      auto pattern = prepare_project_pattern(*current);
+      if (!pattern.has_value()) return foundation::Result<void>::failure(pattern.error());
+      // A stopped transport must not retain a Bar-delayed close view that
+      // blocks the next Play. Record-off while playing keeps its old policy.
+      auto published = publish_prepared_pattern(std::move(pattern.value()), {}, {},
+          !engagement.controller->inspect().playing);
       if (!published.has_value()) {
         // Keep the completion outstanding so the next step retries the same
         // publication; the journal settlement it follows is already durable.
@@ -3019,6 +3092,7 @@ struct ControlRuntime::Impl {
     }
     const auto was_recording = engagement.controller->inspect().recording;
     auto stepped = engagement.controller->continue_operation();
+    observe_recording_switches();
     if (engagement.legacy_candidate) static_cast<void>(resume_legacy_transport_pad());
     if (!stepped.has_value()) {
       return stepped;
@@ -3044,6 +3118,41 @@ struct ControlRuntime::Impl {
         a.activation_frame == b.activation_frame;
   }
 
+  bool has_recording_switches() const {
+    return transport && std::any_of(transport->recording_switches.begin(),
+        transport->recording_switches.end(), [](const auto& cell) { return cell.has_value(); });
+  }
+
+  // Every actual S survives the latest-only selection record through the
+  // worker ACK. In particular B is still observable after audio applies C in
+  // the same callback. No Engine or lease crosses the I/O boundary.
+  void observe_recording_switches() {
+    if (!transport) return;
+    auto& engagement = *transport;
+    for (auto& cell : engagement.recording_switches) {
+      if (!cell) continue;
+      auto status = engagement.controller->inspect_pattern_switch(cell->ticket);
+      if (!status) continue; // Unexpected owner loss never frees an accepted pin.
+      if (!status->complete && status->publication) {
+        const auto observed = engine.observe_pattern_publication(cell->lease);
+        if (!observed) continue;
+        if (!engagement.controller->complete_pattern_switch(cell->ticket, *observed)) {
+          trigger_admission = false;
+          request_terminal_audio_retirement(true);
+          state = State::failed;
+          continue;
+        }
+        status = engagement.controller->inspect_pattern_switch(cell->ticket);
+      }
+      if (status && status->complete) {
+        // Resource completion includes actual Native final fate plus durable
+        // ACK or real failed owner disposition; it does not mean take success.
+        cell->lease = {};
+        if (engagement.controller->consume_pattern_switch(cell->ticket)) cell.reset();
+      }
+    }
+  }
+
   static bool authority_pending(const audio::PatternTransportObservation& state,
       const audio::PatternReplacementAuthority& authority) {
     return std::any_of(state.pending_switches.begin(), state.pending_switches.end(),
@@ -3053,6 +3162,11 @@ struct ControlRuntime::Impl {
   }
 
   bool owns_transport_switch(const audio::PatternReplacementAuthority& authority) const {
+    if (transport) for (const auto& cell : transport->recording_switches) if (cell) {
+      const auto status = transport->controller->inspect_pattern_switch(cell->ticket);
+      if (status && status->publication && same_switch_authority(*status->publication, authority))
+        return true;
+    }
     if (!pending_transport_switch) return false;
     const auto& record = *pending_transport_switch;
     if (same_switch_authority(authority, transport_switch_authority(record))) return true;
@@ -3073,12 +3187,13 @@ struct ControlRuntime::Impl {
         {"activation_frame", pending_transport_switch->activation_frame}};
   }
 
-  bool foreign_pattern_publication_pending() const {
+  bool foreign_pattern_publication_pending(bool allow_recording_overlay = false) const {
     if (deferred_pattern_edit) return true;
     const auto state = engine.pattern_transport_observation();
     if (!state || state->outstanding_cancellation) return true;
     return std::any_of(state->pending_switches.begin(), state->pending_switches.end(),
-        [&](const auto& pending) { return pending && !owns_transport_switch(*pending); });
+        [&](const auto& pending) { return pending && !owns_transport_switch(*pending) &&
+            !(allow_recording_overlay && transport && transport->port.owns_overlay(*pending)); });
   }
 
   void retarget_transport_selection(const foundation::PatternId& applied) {
@@ -3090,6 +3205,7 @@ struct ControlRuntime::Impl {
   // C remains queued. Publication and both apply points belong to native
   // audio; observing here never secretly publishes a cadence-dependent C.
   void observe_transport_switch() {
+    observe_recording_switches();
     if (!pending_transport_switch) return;
     const auto state = engine.pattern_transport_observation();
     if (!state) return; // Bounded read raced audio; retain authorities and retry.
@@ -3162,7 +3278,7 @@ struct ControlRuntime::Impl {
     const auto ingress = engagement.controller->inspect_ingress();
     if (status.phase != facade::PatternTransportPhase::idle || status.recording ||
         engagement.publish_pending || engagement.legacy_candidate ||
-        has_pattern_input_owners() ||
+        has_pattern_input_owners() || has_recording_switches() ||
         ingress.ordinary_pending || ingress.held_release_metadata || ingress.retained_tickets ||
         (retire && (!engagement.controller->shutdown_complete() ||
             !engagement.count_in_ticket_consumed))) {
@@ -6495,12 +6611,15 @@ Json ControlRuntime::dispatch(
           !engagement->controller->retains_command_id(request.command_id)) {
         return state_error("a Pattern publication is pending");
       }
-      // A Record opened over a queued switch would carry that switch into
-      // the Journal, which the Facade cannot settle yet (switching while
-      // recording is #1958 S3). Stop stays allowed: it cancels the switch
-      // at its cutoff.
+      // Begin still waits for a queued switch to land before opening a new
+      // admission. An existing recording's Record-off, like Stop, must reach
+      // its real Native cutoff promptly and settle/cancel the retained S.
+      // A retained command instead reaches complete Core replay validation;
+      // this identity lookup grants no authority to a changed payload.
       if (intent == facade::PatternTransportIntent::record &&
+          !engagement->controller->inspect().recording &&
           engagement->controller->inspect().playing &&
+          !engagement->controller->retains_command_id(request.command_id) &&
           impl_->transport_switch_pending()) {
         return host_error(
             "HOST_STATE_INVALID",
@@ -6611,12 +6730,6 @@ Json ControlRuntime::dispatch(
             {{"reason", "pattern_transport_unavailable"}});
       }
       const auto status = impl_->transport->controller->inspect();
-      if (status.recording) {
-        return host_error(
-            "HOST_STATE_INVALID",
-            "Pattern transport cannot switch Patterns while recording",
-            {{"reason", "pattern_transport_recording"}});
-      }
       if (status.phase != facade::PatternTransportPhase::idle ||
           status.error.has_value() || impl_->transport->publish_pending) {
         return host_error(
@@ -6646,7 +6759,7 @@ Json ControlRuntime::dispatch(
       // Another scheduled publication (a tempo republication, a deferred
       // edit) owns the Engine's next publication; refuse as the sibling
       // authoring operations do instead of racing it.
-      if (impl_->foreign_pattern_publication_pending()) {
+      if (impl_->foreign_pattern_publication_pending(status.recording)) {
         return host_error(
             "HOST_STATE_INVALID",
             "a scheduled Pattern publication must land before switching "
@@ -6709,8 +6822,33 @@ Json ControlRuntime::dispatch(
           }
         }
       }
+      std::optional<facade::PatternTransportSwitchTicket> recording_ticket;
+      if (status.recording) {
+        const auto reserved = impl_->transport->port.reserve_recording_switch(
+            *impl_->transport->controller, {impl_->transport->generation, target});
+        if (!reserved.has_value()) {
+          const auto reason = reserved.error().details.find("reason");
+          // These are producer-owned, public busy reasons. Keep the generic
+          // storage sanitizer unchanged and never forward arbitrary details.
+          if (reason != reserved.error().details.end() && reason->is_string() &&
+              (*reason == "recording_switch_preparation_pending" ||
+               *reason == "recording_switch_capacity" ||
+               *reason == "recording_switch_material_pending" ||
+               *reason == "recording_switch_overlay_pending"))
+            return host_error("HOST_STATE_INVALID", "Recording Pattern switch is pending",
+                {{"reason", *reason}, {"pending", true}});
+          return normalized_error(reserved.error());
+        }
+        recording_ticket = reserved.value();
+      }
+      // Reservation, synchronous Facade preparation, Native publication and
+      // bind are one control turn. No service continuation enters between them.
       auto pattern = impl_->prepare_project_pattern(target);
-      if (!pattern.has_value()) return normalized_error(pattern.error());
+      if (!pattern.has_value()) {
+        if (recording_ticket)
+          static_cast<void>(impl_->transport->controller->abandon_pattern_switch(*recording_ticket));
+        return normalized_error(pattern.error());
+      }
       std::optional<audio::PatternReplacementAuthority> authority;
       std::array<std::optional<Impl::RememberedTransportSwitch>, 2> predecessors{};
       if (impl_->pending_transport_switch) {
@@ -6728,8 +6866,17 @@ Json ControlRuntime::dispatch(
         }
       }
       auto published = impl_->publish_transport_pattern(
-          std::move(pattern.value()), snap, authority);
-      if (!published.has_value()) return normalized_error(published.error());
+          std::move(pattern.value()), snap, authority, recording_ticket);
+      if (!published.has_value()) {
+        // A pre-effect refusal abandons the reservation. An unexpected failed
+        // binding already retained a real Native lease and must keep its owner.
+        const auto accepted = recording_ticket && std::any_of(
+            impl_->transport->recording_switches.begin(), impl_->transport->recording_switches.end(),
+            [&](const auto& cell) { return cell && cell->ticket == *recording_ticket; });
+        if (recording_ticket && !accepted)
+          static_cast<void>(impl_->transport->controller->abandon_pattern_switch(*recording_ticket));
+        return normalized_error(published.error());
+      }
       impl_->pending_transport_switch = Impl::PendingTransportSwitch{
           target, published.value().activation_frame, published.value().generation,
           snap, std::move(predecessors)};
@@ -7464,6 +7611,7 @@ void ControlRuntime::service_pattern_transport() noexcept {
     if (status.phase == facade::PatternTransportPhase::idle &&
         !impl_->transport->publish_pending && !status.recording &&
         !impl_->transport->legacy_candidate && !impl_->transport->shutdown_requested &&
+        !impl_->has_recording_switches() &&
         ingress.ordinary_pending == 0 && ingress.retained_tickets == 0) {
       return;
     }
@@ -7483,6 +7631,7 @@ bool ControlRuntime::pattern_transport_pending() const noexcept {
     return false;
   }
   return !impl_->transport->count_in_ticket_consumed ||
+         impl_->has_recording_switches() ||
          impl_->transport->publish_pending ||
          impl_->transport->legacy_candidate.has_value() ||
          (impl_->transport->shutdown_requested && !impl_->transport->controller->shutdown_complete()) ||
@@ -7506,6 +7655,7 @@ bool ControlRuntime::pattern_transport_shutdown_complete() const noexcept {
   const auto ingress = engagement.controller->inspect_ingress();
   const auto owner = engagement.controller->inspect_input_owner();
   return engagement.controller->shutdown_complete() && engagement.count_in_ticket_consumed &&
+      !impl_->has_recording_switches() &&
       !engagement.legacy_candidate &&
       !engagement.publish_pending && !ingress.ordinary_pending &&
       !ingress.held_release_metadata && !ingress.retained_tickets && !owner.held_correlations &&

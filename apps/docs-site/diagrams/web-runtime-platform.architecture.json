@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Web Runtime Platform Module",
-    "summary": "S6 源码草稿：同一 frozen Session、strict companion 与 product/cue 双输出；执行 UNVERIFIED"
+    "summary": "同一 frozen Session、strict companion、两张 S3 切换 lease；S6 原验收债与设备验收独立"
   },
   "boundaries": [
     {
@@ -48,7 +48,7 @@
     {
       "id": "session",
       "label": "Runtime Session",
-      "detail": "frozen owner · tickets · live window",
+      "detail": "frozen owner · 2 switch leases · tickets",
       "kind": "core",
       "x": 650,
       "y": 170,
@@ -210,15 +210,15 @@
     },
     {
       "title": "同一 Session owner",
-      "body": "frozen runtime.session；Pad 同步 reserve，Pad/FX/HOLD 单 tail 顺序 submit。共享64，原1s/Release；短 tickets 释放两条 tails。"
+      "body": "frozen Session；录音切换先 reserve，再同步 prepare/publish/bind。两张真实 lease 逐张观察到耐久 ACK；claimed overlay 忙。"
     },
     {
       "title": "双输出与严格 tap ACK",
       "body": "product→capture；cue→monitor。start binding/ACK 严格匹配；旧/重复/提前 batch 拒绝。PCM 后 ACK；gain 不改 capture。"
     },
     {
-      "title": "验收仍待执行",
-      "body": "1s Pad/5s opening/16 RPC。held I/O、真 release/Truth/reopen、raw PCM 未验收；S7/听感另行交付。"
+      "title": "producer 与验收边界",
+      "body": "Host 分段/Truth/reopen 证明独立；S6 held I/O/raw PCM 原验收债不因本 Task 清除。Creator C4、候选/设备/听感仍待验收。"
     }
   ]
 }

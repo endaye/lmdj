@@ -191,7 +191,7 @@
   "cards": [
     {
       "title": "Facade / I/O owner",
-      "body": "Facade 保留两张切换票据；真 S 和旧段提交后收录目标输入。worker 独占 Store/Journal；Host/UI 待接线。"
+      "body": "Facade 保留两张切换票据；Host 持真实 lease，逐张复制 S；旧段 ACK 后收录目标输入。worker 独占 Store/Journal；Creator 待接线。"
     },
     {
       "title": "独立录音 release",
@@ -203,7 +203,7 @@
     },
     {
       "title": "shutdown 与验收",
-      "body": "先 I/O owner disposition，后 Native pin/voice quiescence。失败保留 error；S3 Host/Creator 与候选/设备待验收。"
+      "body": "先 I/O owner disposition，后 Host reset pin/consume 与 Native quiescence。失败保留 error；Creator 与候选/设备待验收。"
     }
   ]
 }

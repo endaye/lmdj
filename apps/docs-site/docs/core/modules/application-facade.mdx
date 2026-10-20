@@ -170,8 +170,11 @@ consume 票据；取消的 publication 无目标 authoring effect。失败切换
 显式 shutdown 经原 I/O owner 的真实 owner_lost ACK 才置 owner_disposed；这个资源
 事实不冒充成功录音。它不等待会扫描这些 pin 的 Native quiescence，Host 随后
 消费实际 Native 结果、撤销真实物理 hold、释放 pin 并完成最终 quiescence。
-当前 Host/Creator 的录音中切换门禁尚未接入上述 capability，C3/C4 与完整 S3
-packaged/设备验收仍独立待交付。
+Web Runtime Platform Host 已接入两张真实 lease：同一控制 turn 先预留再准备、
+发布和 bind，逐张观察至耐久/实际失败资源处置后 reset pin 并 consume。
+已认领的自身 overlay 在切换前返回忙；未认领的精确 overlay 可原子撤销，Stop
+仍使用独立的 receipt-bound cancellation。Creator 的录音中选择门禁与完整 S3
+packaged/设备验收仍由 C4 单独交付。
 
 cutoff 前已应用 switch 的 close 保持原语义，尚无 terminal transfer。它仍不是 Creator
 opt-in、settings/rebase 或未知 cutoff 恢复。测试用生产
