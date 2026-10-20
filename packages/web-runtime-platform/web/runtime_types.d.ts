@@ -604,6 +604,25 @@ export interface PerformanceArtifact {
   readonly byteLength: number;
 }
 
+/** Verified WAV facts at the requested revision; never capture completeness. */
+export interface PerformanceRecordingMetadata {
+  readonly projectId: string;
+  readonly performanceId: string;
+  readonly projectRevision: number;
+  readonly recordingRevision: number;
+  readonly recordingArtifact: PerformanceArtifact;
+  readonly audioMetadata: Readonly<{
+    sampleRate: 44100 | 48000;
+    channels: 1 | 2;
+    sourceFrames: number;
+  }> | null;
+  readonly audioError: Readonly<{
+    code: "UNSUPPORTED_AUDIO";
+    message: string;
+    details: Readonly<Record<string, unknown>>;
+  }> | null;
+}
+
 export interface PerformanceLifecycleResult {
   readonly performanceId: string;
   readonly committedRevision: number;
@@ -900,6 +919,13 @@ export interface PerformanceRuntimeSession {
     events: readonly Readonly<Record<string, unknown>>[];
     projectRevision: number;
   }>>;
+  /** Independent asynchronous read. Abort does not prove worker/resource exit. */
+  queryPerformanceRecordingMetadata(request: Readonly<{
+    projectId: string;
+    performanceId: string;
+    expectedRevision: number;
+    recordingArtifact: PerformanceArtifact;
+  }>, options?: Readonly<{signal?: AbortSignal}>): Promise<PerformanceRecordingMetadata>;
   beginPerformanceRecording(request: Readonly<{
     sessionId: string;
     performanceId: string;

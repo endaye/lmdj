@@ -1517,3 +1517,101 @@ test("real count-in cue ACK and callback last use independently fence terminal r
     assertValidFence(checkpoints.finalFence);
   }
 });
+
+opfsTest("saved recording metadata RPC verifies real WAVs through two page reopens", async ({context}, testInfo) => {
+  opfsTest.setTimeout(180_000);
+  const validDigest="985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5";
+  const unsupportedDigest="62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19";
+  const mismatchDigest="6517a13adcf9f3e715104fd2d8fa6e738ae1ccad2437c615e2f85a7d7b706adc";
+  const journeys=[];
+  for(const variant of ["valid","unsupported","mismatch"]) {
+    const projectId=crypto.randomUUID(),patternId=crypto.randomUUID(),performanceId=crypto.randomUUID();
+    const artifact={sha256:variant==="unsupported"?unsupportedDigest:validDigest,
+      media_type:"audio/wav",byte_length:192124};
+    const reports=[];
+    for(const phase of ["prepare","reopen","reopen"]) {
+      const page=await context.newPage();
+      await waitForFormalHost(page);
+      if(phase==="prepare") expect((await activateFromClick(page,48000)).ok).toBe(true);
+      const report=await page.evaluate(async ({variant,phase,projectId,patternId,performanceId,artifact}) => {
+        const send=async (operation,payload) => {
+          const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+            request_id:crypto.randomUUID(),operation,payload});
+          if(!response.ok) throw new Error(operation+": "+JSON.stringify(response));
+          return response.result;
+        };
+        const root=await navigator.storage.getDirectory();
+        if(phase==="prepare") {
+          const created=await send("project.create",{project_id:projectId,bpm:120,
+            initial_pattern:{pattern_id:patternId,bars:1,events:[]}});
+          if(created.project_revision!==0) throw new Error("Project creation revision changed");
+          await send("snapshot.reload",{pattern_id:patternId});await send("audio.activate",{});
+          const begun=await send("performance.record.begin",{command_id:crypto.randomUUID(),expected_revision:0,
+            session_id:performanceId,performance_id:performanceId});
+          if(begun.project_revision!==1) throw new Error("Performance begin revision changed");
+          await send("performance.record.stop",{session_id:performanceId,request_id:crypto.randomUUID()});
+          // Independent fixture, not recorded PCM: zero events with an exact
+          // positive WAV frame count and odd non-audio JUNK/padding.
+          const bytes=new Uint8Array(192124),view=new DataView(bytes.buffer);
+          const text=(at,value)=>{for(let i=0;i<value.length;++i) bytes[at+i]=value.charCodeAt(i);};
+          const rate=variant==="unsupported"?32000:48000;
+          text(0,"RIFF");view.setUint32(4,192116,true);text(8,"WAVE");text(12,"fmt ");view.setUint32(16,16,true);
+          view.setUint16(20,1,true);view.setUint16(22,2,true);view.setUint32(24,rate,true);view.setUint32(28,rate*4,true);
+          view.setUint16(32,4,true);view.setUint16(34,16,true);text(36,"JUNK");view.setUint32(40,3,true);
+          bytes.set([1,2,3,171],44);text(48,"data");view.setUint32(52,192068,true);
+          const projects=await root.getDirectoryHandle("projects");
+          const bundle=await projects.getDirectoryHandle(projectId+".lmdj");
+          const assets=await bundle.getDirectoryHandle("assets");
+          const file=await assets.getFileHandle(artifact.sha256+".wav",{create:true});
+          const writable=await file.createWritable();await writable.write(bytes);await writable.close();
+          const saved=await send("performance.save",{command_id:crypto.randomUUID(),expected_revision:1,
+            performance_id:performanceId,name:"silent recording metadata fixture",recording_artifact:artifact});
+          if(saved.project_revision!==2) throw new Error("Performance save revision changed");
+          if(variant==="mismatch") {
+            const corrupt=await file.createWritable({keepExistingData:true});
+            await corrupt.write({type:"write",position:192123,data:new Uint8Array([1])});await corrupt.close();
+          }
+        } else await send("project.open",{project_id:projectId,pattern_id:patternId});
+        const inspected=await send("performance.inspect",{performance_id:performanceId});
+        const response=await window.lmdjWebRuntimeHost.transport.send({protocol_version:1,
+          request_id:crypto.randomUUID(),operation:"performance.recording.metadata",
+          payload:{project_id:projectId,performance_id:performanceId,expected_revision:2,recording_artifact:artifact}});
+        const queryHostState=(await send("host.status",{})).state;
+        if(phase==="prepare") await send("audio.suspend",{});
+        const projects=await root.getDirectoryHandle("projects");
+        const bundle=await projects.getDirectoryHandle(projectId+".lmdj");
+        const assets=await bundle.getDirectoryHandle("assets");
+        const file=await (await assets.getFileHandle(artifact.sha256+".wav")).getFile();
+        const bytes=new Uint8Array(await file.arrayBuffer());
+        const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),
+          value=>value.toString(16).padStart(2,"0")).join("");
+        const closed=await send("host.close",{});
+        return {phase,queryHostState,inspected,response,physical:{sha256,length:file.size,
+          prefix:Array.from(bytes.slice(0,56)),tail:Array.from(bytes.slice(-4))},closed};
+      },{variant,phase,projectId,patternId,performanceId,artifact});
+      expect(report.phase).toBe(phase);
+      expect(report.queryHostState).toBe(phase==="prepare"?"running":"core-ready");
+      expect(report.inspected).toEqual({performance:{id:performanceId,name:"silent recording metadata fixture",
+        created_bpm:120,recording_artifact:artifact,events:[]},project_revision:2});
+      const {request_id,...response}=report.response;
+      expect(request_id).toMatch(/^[0-9a-f-]{36}$/);
+      if(variant==="mismatch") expect(response).toEqual({protocol_version:1,ok:false,
+        error:{code:"COOK_FAILED",message:"runtime snapshot preparation failed",details:{storage_condition:"artifact_mismatch"}}});
+      else expect(response).toEqual({protocol_version:1,ok:true,result:{project_id:projectId,performance_id:performanceId,
+        project_revision:2,recording_revision:0,recording_artifact:artifact,
+        audio_metadata:variant==="valid"?{sample_rate:48000,channels:2,source_frames:48017}:null,
+        audio_error:variant==="unsupported"?{code:"UNSUPPORTED_AUDIO",message:"audio input is unsupported",details:{}}:null}});
+      const prefix=variant==="unsupported"
+        ? "5249464674ee020057415645666d74201000000001000200007d000000f40100040010004a554e4b03000000010203ab6461746144ee0200"
+        : "5249464674ee020057415645666d7420100000000100020080bb000000ee0200040010004a554e4b03000000010203ab6461746144ee0200";
+      expect(report.physical).toEqual({sha256:variant==="mismatch"?mismatchDigest:artifact.sha256,length:192124,
+        prefix:Array.from(Buffer.from(prefix,"hex")),tail:variant==="mismatch"?[0,0,0,1]:[0,0,0,0]});
+      expect(report.closed.state).toBe("closed");
+      reports.push(report);await page.close();expect(page.isClosed()).toBe(true);
+    }
+    journeys.push({variant,projectId,patternId,performanceId,artifact,reports,closedPages:3});
+  }
+  const evidencePath=testInfo.outputPath("recording-metadata-query-reopens.json");
+  await (await import("node:fs/promises")).writeFile(evidencePath,JSON.stringify({journeys},null,2),{flag:"wx"});
+  await testInfo.attach("recording-metadata-query-reopens",{path:evidencePath,contentType:"application/json"});
+});

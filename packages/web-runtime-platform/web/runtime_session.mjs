@@ -1649,6 +1649,10 @@ function createRuntimeSessionController(options = {}) {
   let hostRequestTail = null;
   let hostQueryGeneration = 0;
   let activeHostQueryAbort = null;
+  let recordingMetadataOwner = 0;
+  const recordingMetadataQueries = new Set();
+  const recordingMetadataQueue = [];
+  let activeRecordingMetadataQuery = null;
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
   const triggerResponseReservations = new Map();
@@ -2115,6 +2119,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function beginSafetyCleanup(reason) {
+    retireRecordingMetadataQueries();
     if (safetyReservation !== null) {
       return safetyReservation;
     }
@@ -3967,6 +3972,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function openProject(projectId, patternId, requestOptions = {}) {
+    retireRecordingMetadataQueries();
     return serializeProjectAction(() => boundedRequest("project.open", {
       project_id: projectId,
       pattern_id: patternId,
@@ -3993,6 +3999,7 @@ function createRuntimeSessionController(options = {}) {
     ) {
       throw new TypeError("Project creation request is invalid");
     }
+    retireRecordingMetadataQueries();
     return serializeProjectAction(async () => {
       if (closing || !started) {
         throw typedError("HOST_STATE_INVALID", "Project creation is unavailable");
@@ -6173,6 +6180,118 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function retireRecordingMetadataQueries() {
+    recordingMetadataOwner += 1;
+    for (const controller of recordingMetadataQueries) controller.abort();
+  }
+
+  function pumpRecordingMetadataQueue() {
+    if (activeRecordingMetadataQuery !== null) return;
+    const entry = recordingMetadataQueue.shift();
+    if (entry === undefined) return;
+    entry.waiting = false;
+    entry.clearWait();
+    activeRecordingMetadataQuery = entry;
+    let pending;
+    try {
+      const remaining = entry.deadlineAt - monotonicNow();
+      if (entry.signal.aborted) throw abortError("Recording metadata query was cancelled");
+      if (remaining <= 0) throw typedError("HOST_TIMEOUT", "Recording metadata admission deadline expired");
+      pending = entry.run(remaining);
+    } catch (error) { pending = Promise.reject(error); }
+    void Promise.resolve(pending).then(entry.resolve, entry.reject).finally(() => {
+      activeRecordingMetadataQuery = null;
+      pumpRecordingMetadataQueue();
+    });
+  }
+
+  function enqueueRecordingMetadata(run, signal) {
+    const limit = 16;
+    if (recordingMetadataQueue.length + (activeRecordingMetadataQuery === null ? 0 : 1) >= limit)
+      return Promise.reject(typedError("WEB_RUNTIME_RESOURCE_LIMIT", "Recording metadata queue is full",
+        {resource: "recording_metadata_queries", limit}));
+    if (signal.aborted) return Promise.reject(abortError("Recording metadata query was cancelled"));
+    const deadlineAt = monotonicNow() + deadlineForOperation("performance.recording.metadata");
+    return new Promise((resolve, reject) => {
+      const entry = {run, signal, deadlineAt, resolve, reject, waiting: true, clearWait: null};
+      const remove = (error) => {
+        if (!entry.waiting) return;
+        entry.waiting = false;
+        recordingMetadataQueue.splice(recordingMetadataQueue.indexOf(entry), 1);
+        entry.clearWait();reject(error);
+        pumpRecordingMetadataQueue();
+      };
+      const abort = () => remove(abortError("Recording metadata query was cancelled before admission"));
+      const timeout = timers.setTimeout(() => remove(typedError("HOST_TIMEOUT",
+        "Recording metadata admission deadline expired")), Math.max(0, deadlineAt - monotonicNow()));
+      entry.clearWait = () => {timers.clearTimeout(timeout);signal.removeEventListener("abort", abort);};
+      signal.addEventListener("abort", abort, {once: true});
+      recordingMetadataQueue.push(entry);
+      pumpRecordingMetadataQueue();
+    });
+  }
+
+  async function queryPerformanceRecordingMetadata(request, queryOptions = {}) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["projectId", "performanceId", "expectedRevision", "recordingArtifact"]) ||
+        !isUnsignedInteger(request.expectedRevision) || queryOptions === null ||
+        typeof queryOptions !== "object" ||
+        !(exactKeys(queryOptions, []) || exactKeys(queryOptions, ["signal"])))
+      throw new TypeError("Recording metadata query is invalid");
+    const signal = queryOptions.signal;
+    if (signal !== undefined && (typeof signal?.aborted !== "boolean" ||
+        typeof signal?.addEventListener !== "function" || typeof signal?.removeEventListener !== "function"))
+      throw new TypeError("Recording metadata cancellation signal is invalid");
+    const payload = {project_id: performanceIdentity(request.projectId, "projectId"),
+      performance_id: performanceIdentity(request.performanceId, "performanceId"),
+      expected_revision: request.expectedRevision, recording_artifact: wireArtifact(request.recordingArtifact)};
+    if (!started || closing || safetyReservation !== null ||
+        ["closed", "failed", "restart-required"].includes(machine.state))
+      throw typedError("HOST_STATE_INVALID", "Recording metadata query is unavailable");
+    if (signal?.aborted) throw abortError("Recording metadata query was cancelled");
+    const owner = recordingMetadataOwner;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, {once: true});
+    recordingMetadataQueries.add(controller);
+    const retired = () => controller.signal.aborted || owner !== recordingMetadataOwner || closing;
+    try {
+      let value;
+      try {
+        // This independent read must never occupy either serialized SDK tail.
+        // Bridge retains the original RPC while its Facade worker reads OPFS.
+        value = await enqueueRecordingMetadata((remaining) => {
+          if (retired()) throw abortError("Recording metadata owner was retired before admission");
+          return dispatchBoundedRequest("performance.recording.metadata", payload,
+            {signal: controller.signal, cancelQuery: true, deadlineMs: remaining});
+        }, controller.signal);
+      } catch (error) {
+        if (retired()) throw abortError("Recording metadata owner was retired");
+        throw error;
+      }
+      if (retired()) throw abortError("Recording metadata owner was retired");
+      const artifact = value.recording_artifact;
+      if (value.project_id !== payload.project_id || value.performance_id !== payload.performance_id ||
+          value.project_revision !== payload.expected_revision ||
+          artifact.sha256 !== payload.recording_artifact.sha256 ||
+          artifact.media_type !== payload.recording_artifact.media_type ||
+          artifact.byte_length !== payload.recording_artifact.byte_length)
+        throw protocolMismatch("Recording metadata does not match its requested owner/ref/revision");
+      return Object.freeze({projectId: value.project_id, performanceId: value.performance_id,
+        projectRevision: value.project_revision, recordingRevision: value.recording_revision,
+        recordingArtifact: publicArtifact(artifact),
+        audioMetadata: value.audio_metadata === null ? null : Object.freeze({
+          sampleRate: value.audio_metadata.sample_rate, channels: value.audio_metadata.channels,
+          sourceFrames: value.audio_metadata.source_frames}),
+        audioError: value.audio_error === null ? null : Object.freeze({
+          code: value.audio_error.code, message: value.audio_error.message,
+          details: safeErrorDetails(value.audio_error)})});
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      recordingMetadataQueries.delete(controller);
+    }
+  }
+
   // The begin fence's Core readiness has its own bounded wait budget; the
   // capture start ACK carries a separate one in the controller.
   const CORE_CONTROL_READY_POLL_MS = 25;
@@ -7601,6 +7720,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function close() {
+    retireRecordingMetadataQueries();
     if (terminalCleanupStarted) {
       // A seal is not completed owner/backend cleanup. With no retained
       // Pattern debt, every caller waits the same original cleanup Promise.
@@ -8506,6 +8626,7 @@ function createRuntimeSessionController(options = {}) {
     movePatternSlot,
     listPerformances,
     inspectPerformance,
+    queryPerformanceRecordingMetadata,
     beginPerformanceRecording,
     recordPerformanceEvent,
     preparePerformancePadEvent,
