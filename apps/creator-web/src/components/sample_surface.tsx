@@ -53,6 +53,32 @@ import {
   type CreatorState,
 } from "../state/creator_state";
 import {padAddress, slotAddress} from "../state/view_model";
+import {candidateSources, type CandidateSource} from "../state/candidate_state";
+import type {CreatorPadAssignmentRuntimeSession, PadAssignmentRequest} from "../runtime/runtime_types";
+
+export interface SampleAssignmentControls {
+  readonly session: CreatorPadAssignmentRuntimeSession;
+  readonly busy: boolean;
+  // A retired session's unknown request remains visible and is never replaced
+  // with a new assignment command; it does not fence fresh Project recovery.
+  readonly unresolved?: boolean;
+  readonly reconfirmationRequired?: boolean;
+  onAssign(request: Readonly<PadAssignmentRequest>): Promise<void>;
+}
+
+interface AssignmentDraft {
+  readonly context: object;
+  readonly projectId: string;
+  readonly revision: number;
+  readonly session: CreatorPadAssignmentRuntimeSession;
+  readonly sources: readonly CandidateSource[];
+  readonly assetId: string;
+  readonly slot: number;
+  readonly destinationConfirmed: boolean;
+  readonly occupiedAssetId: string | null;
+  readonly phase: "loading" | "choose" | "checking" | "confirm";
+  readonly error: string | null;
+}
 
 const SAMPLE_PAGES = [
   ["trim", "Trim"], ["playback", "Playback"], ["tone", "Tone / EQ"], ["pad", "Pad"],
@@ -60,6 +86,7 @@ const SAMPLE_PAGES = [
 type SamplePage = typeof SAMPLE_PAGES[number][0];
 
 interface SampleSurfaceProps {
+  assignment?: SampleAssignmentControls;
   padColourControls?: ReactNode;
   state: CreatorState;
   externalCaptureBusy?: boolean;
@@ -203,6 +230,7 @@ function quotaErrorCopy(
 }
 
 export function SampleSurface({
+  assignment,
   padColourControls,
   state,
   session,
@@ -265,6 +293,29 @@ export function SampleSurface({
   const previousAudioSuspended = useRef(audioSuspended);
   const inspect = sample.inspect;
   const selectedSlot = sample.selectedSlot;
+  const assignmentContext = useMemo(() => ({}), [assignment?.session, assignment?.reconfirmationRequired,
+    projectIdentity, state.project.current?.revision, selectedSlot, page, encodersActive]);
+  const assignmentContextRef = useRef(assignmentContext);
+  assignmentContextRef.current = assignmentContext;
+  const assignmentDraftRef = useRef<AssignmentDraft | null>(null);
+  const [assignmentDraft, setAssignmentDraft] = useState<AssignmentDraft | null>(null);
+  const assignmentReturnFocus = useRef<HTMLElement | null>(null);
+  const assignmentView = useRef({assignment, project: state.project.current});
+  assignmentView.current = {assignment, project: state.project.current};
+  const storeAssignmentDraft = (draft: AssignmentDraft | null) => {
+    assignmentDraftRef.current = draft;
+    setAssignmentDraft(draft);
+  };
+  const ownsAssignmentDraft = (draft: AssignmentDraft) =>
+    assignmentDraftRef.current === draft && assignmentContextRef.current === draft.context &&
+    assignmentView.current.assignment?.session === draft.session &&
+    assignmentView.current.project?.projectId === draft.projectId &&
+    assignmentView.current.project?.revision === draft.revision;
+  useEffect(() => {
+    assignmentDraftRef.current = null;
+    setAssignmentDraft(null);
+    return () => {assignmentDraftRef.current = null;};
+  }, [assignmentContext]);
   const [encoderGroup, setEncoderGroup] = useState<"trim" | "sound">("trim");
   const encoderCallbacks = useRef({preview: (_playback: Readonly<PadPlayback>) => {},
     commit: (_playback: Readonly<PadPlayback>) => {}, cancel: () => {}});
@@ -669,6 +720,7 @@ export function SampleSurface({
 
   const performUpdate = async (playback: Readonly<PadPlayback>) => {
     if (session === undefined || inspect === null || projectIdentity === null || sample.pendingAction !== null ||
+        assignmentView.current.assignment?.busy === true ||
       operationPending.current !== null) return;
     previewEpoch.current += 1;
     const pending = Object.freeze({
@@ -789,6 +841,7 @@ export function SampleSurface({
   }, [onNavigationReady, encodersActive, navigation]);
 
   const reset = async () => {
+    if (assignmentView.current.assignment?.busy === true) return;
     if (session === undefined || inspect === null || sample.pendingAction !== null ||
       operationPending.current !== null) return;
     const pending = Object.freeze({
@@ -822,6 +875,7 @@ export function SampleSurface({
   };
 
   const deleteSelectedPad = async () => {
+    if (assignmentView.current.assignment?.busy === true) return;
     if (session === undefined || inspect === null || selectedSlot !== inspect.slot ||
         state.project.phase !== "ready" ||
         inspect.projectRevision !== state.project.current?.revision || captureTarget !== null) return;
@@ -882,6 +936,7 @@ export function SampleSurface({
     ) => Promise<SampleMutationResolution>,
     context?: Readonly<{expectedRevision: number; sequenceSessionId?: string}>,
   ): Promise<ImportOutcome> => {
+    if (assignmentView.current.assignment?.busy === true) return BUSY_OUTCOME;
     if (session === undefined || sample.pendingAction !== null ||
       operationPending.current !== null) return BUSY_OUTCOME;
     const expectedRevision = context?.expectedRevision ??
@@ -1015,15 +1070,89 @@ export function SampleSurface({
   };
 
   const chooseFile = (slot: number) => {
+    if (assignmentView.current.assignment?.busy === true) return;
     replaceReturnFocus.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
     fileSlot.current = slot;
     input.current?.click();
   };
+
+  const readAssignmentCatalog = async (draft: AssignmentDraft) => {
+    const catalog = candidateSources(await draft.session.inspectProject(), draft.projectId);
+    if (!ownsAssignmentDraft(draft)) return null;
+    const project = assignmentView.current.project;
+    if (catalog.revision !== draft.revision || project === null ||
+        project.pads.length !== 64 || project.pads.some((pad, slot) => pad.slot !== slot) ||
+        project.pads[draft.slot]?.assetId !== draft.occupiedAssetId ||
+        (draft.assetId !== "" && !catalog.sources.some(source => source.assetId === draft.assetId))) {
+      throw new Error("Project changed; close ASSIGN and refresh before choosing again.");
+    }
+    return catalog;
+  };
+  const openAssignment = () => {
+    const project = state.project.current;
+    if (assignment === undefined || assignment.busy || assignment.unresolved === true || project === null ||
+        projectUnavailable || selectedSlot === null || sample.pendingAction !== null) return;
+    encoderTurn.current?.cancel();
+    numericEditorCancel.current?.();
+    cancelPreview();
+    assignmentReturnFocus.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement : null;
+    const draft: AssignmentDraft = {context: assignmentContext, projectId: project.projectId,
+      revision: project.revision, session: assignment.session, sources: [], assetId: "",
+      slot: selectedSlot, occupiedAssetId: project.pads[selectedSlot]?.assetId ?? null,
+      destinationConfirmed: assignment.reconfirmationRequired !== true,
+      phase: "loading", error: null};
+    storeAssignmentDraft(draft);
+    void readAssignmentCatalog(draft).then(catalog => {
+      if (catalog !== null && ownsAssignmentDraft(draft)) {
+        storeAssignmentDraft({...draft, sources: catalog.sources, phase: "choose"});
+      }
+    }, () => {
+      if (ownsAssignmentDraft(draft)) storeAssignmentDraft({...draft, phase: "choose",
+        error: "The retained source list could not be read. Close ASSIGN and refresh the Project."});
+    });
+  };
+  const changeAssignment = (expected: AssignmentDraft, change: {assetId?: string; slot?: number}) => {
+    const draft = assignmentDraftRef.current;
+    if (draft === null || draft !== expected || !ownsAssignmentDraft(draft) || draft.phase === "loading") return;
+    const slot = change.slot ?? draft.slot;
+    storeAssignmentDraft({...draft, ...change, slot,
+      destinationConfirmed: change.slot !== undefined || draft.destinationConfirmed,
+      occupiedAssetId: assignmentView.current.project?.pads[slot]?.assetId ?? null,
+      phase: "choose", error: null});
+  };
+  const submitAssignment = async (expected: AssignmentDraft) => {
+    const previous = assignmentDraftRef.current;
+    const controls = assignmentView.current.assignment;
+    if (previous === null || previous !== expected || !ownsAssignmentDraft(previous) || controls === undefined ||
+        controls.busy || controls.unresolved === true || previous.assetId === "" || !previous.destinationConfirmed ||
+        !["choose", "confirm"].includes(previous.phase)) return;
+    const draft: AssignmentDraft = {...previous, phase: "checking", error: null};
+    storeAssignmentDraft(draft);
+    try {
+      const catalog = await readAssignmentCatalog(draft);
+      if (catalog === null || !ownsAssignmentDraft(draft)) return;
+      if (draft.occupiedAssetId !== null && previous.phase !== "confirm") {
+        storeAssignmentDraft({...draft, sources: catalog.sources, phase: "confirm"});
+        return;
+      }
+      const request = Object.freeze({commandId: crypto.randomUUID(), expectedRevision: draft.revision,
+        slot: draft.slot, assetId: draft.assetId});
+      // Only the unsent presentation is retired here. App owns the immutable
+      // request from invocation onward, even if this surface unmounts.
+      storeAssignmentDraft(null);
+      await controls.onAssign(request);
+    } catch {
+      if (ownsAssignmentDraft(draft)) storeAssignmentDraft({...draft, phase: "choose",
+        error: "Project changed or the source is unavailable. Close ASSIGN and refresh before trying again."});
+    }
+  };
   useEffect(() => {
     if (padDropIntent === undefined) return;
     padDropIntent.current = (slot, file, target) => {
+      if (assignmentView.current.assignment?.busy === true) return;
       if (state.project.phase !== "ready" || state.project.current === null ||
           captureTarget !== null) return;
       if (selectedSlot !== slot) {
@@ -1044,7 +1173,7 @@ export function SampleSurface({
   const projectUnavailable = state.project.phase !== "ready" ||
     state.project.current === null;
   const actionsDisabled = session === undefined || projectUnavailable || inspect === null ||
-    !selectedAssigned || sample.pendingAction !== null || pendingUpdate.current !== null;
+    !selectedAssigned || sample.pendingAction !== null || pendingUpdate.current !== null || assignment?.busy === true;
   const encoderDisabled = actionsDisabled || !encodersActive || externalCaptureBusy ||
     captureTarget !== null || state.projectProjectionRefresh !== null ||
     inspect?.slot !== selectedSlot || inspect?.projectRevision !== state.project.current?.revision;
@@ -1112,6 +1241,7 @@ export function SampleSurface({
     : inspect.slot !== selectedSlot || inspect.projectRevision !== state.project.current?.revision
       ? "Refreshing the selected Pad…"
     : captureTarget !== null ? "Finish or cancel Capture before deleting a Pad."
+    : assignment?.busy === true ? "Wait for the current Project change to finish."
     : !pendingDeleteAllowed ? "Wait for the current edit to finish."
     : !selectedAssigned && sample.pendingAction === null &&
       ingestSlot.current !== selectedSlot && longSourceDraft?.slot !== selectedSlot &&
@@ -1172,6 +1302,61 @@ export function SampleSurface({
         </div>
       </header>
 
+      <button type="button" disabled={assignment === undefined || assignment.busy || assignment.unresolved === true ||
+        projectUnavailable || selectedSlot === null || sample.pendingAction !== null ||
+        captureTarget !== null || ingestPending}
+        title={assignment === undefined ? "Retained Asset assignment is unavailable in this audio session." : undefined}
+        onClick={openAssignment}>ASSIGN</button>
+
+      {assignmentDraft === null || assignmentDraft.context !== assignmentContext ? null : (
+        <ConfirmationDialog labelledBy="sample-assign-title" returnFocus={assignmentReturnFocus.current}
+          onCancel={() => storeAssignmentDraft(null)}>
+          <h2 id="sample-assign-title">Assign retained Asset</h2>
+          <p>Choose a source retained by this Project. Its material and source Pad stay unchanged.</p>
+          {assignment?.reconfirmationRequired === true ? <p>
+            The previous assignment is still unresolved. Choose the source and destination for a new assignment.
+          </p> : null}
+          <label>Retained source
+            <select aria-label="Retained source" tabIndex={assignmentDraft.phase === "loading" ? -1 : 0} value={assignmentDraft.assetId}
+              disabled={assignmentDraft.phase === "loading"}
+              onChange={event => changeAssignment(assignmentDraft, {assetId: event.target.value})}>
+              <option value="">Choose a retained Asset</option>
+              {assignmentDraft.sources.map(source => <option key={source.assetId} value={source.assetId}>
+                {source.label}</option>)}
+            </select>
+          </label>
+          <label>Destination Pad
+            <select aria-label="Destination Pad" tabIndex={assignmentDraft.phase === "loading" ? -1 : 0}
+              value={assignmentDraft.destinationConfirmed ? assignmentDraft.slot : ""}
+              disabled={assignmentDraft.phase === "loading"}
+              onChange={event => changeAssignment(assignmentDraft, {slot: Number(event.target.value)})}>
+              {assignment?.reconfirmationRequired === true ? <option value="" disabled>Choose a destination</option> : null}
+              {[0, 1, 2, 3].map(bank => <optgroup key={bank} label={`Bank ${String.fromCharCode(65 + bank)}`}>
+                {state.project.current?.pads.slice(bank * 16, bank * 16 + 16).map(pad => (
+                  <option key={pad.slot} value={pad.slot}>{slotAddress(pad.slot)}</option>
+                ))}
+              </optgroup>)}
+            </select>
+          </label>
+          <p>Asset {assignmentDraft.assetId || "—"} → {assignmentDraft.destinationConfirmed
+            ? slotAddress(assignmentDraft.slot) : "Choose a destination"}</p>
+          {assignmentDraft.phase === "confirm" ? <p>
+            Replace {slotAddress(assignmentDraft.slot)} assignment {assignmentDraft.occupiedAssetId}?
+            The prior material remains retained.
+          </p> : null}
+          {assignmentDraft.error === null ? null : <p role="alert">{assignmentDraft.error}</p>}
+          {assignmentDraft.phase === "loading" ? <p role="status">Reading retained Assets…</p> : null}
+          <div className="sample-confirmation-actions">
+            <button type="button" onClick={() => storeAssignmentDraft(null)}>Cancel assignment</button>
+            <button key={`${assignmentDraft.assetId}:${assignmentDraft.slot}`} type="button" disabled={assignmentDraft.assetId === "" || !assignmentDraft.destinationConfirmed || assignment?.busy ||
+              assignmentDraft.error !== null || !["choose", "confirm"].includes(assignmentDraft.phase)}
+              onClick={() => {void submitAssignment(assignmentDraft);}}>
+              {assignmentDraft.phase === "confirm" ? "Confirm replacement" : "Assign Asset"}
+            </button>
+          </div>
+        </ConfirmationDialog>
+      )}
+
       <nav className="sample-page-nav" aria-label="Sample pages">
         {SAMPLE_PAGES.map(([target, label]) => (
           <button key={target} type="button"
@@ -1196,7 +1381,7 @@ export function SampleSurface({
             <button
               type="button"
               disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null}
+                sample.pendingAction !== null || assignment?.busy === true}
               onClick={() => chooseFile(selectedSlot)}
             >
               {selectedAssigned ? "Replace Sample" : `Add Sample to ${selectedAddress}`}
@@ -1266,7 +1451,7 @@ export function SampleSurface({
             <button
               type="button"
               disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null}
+                sample.pendingAction !== null || assignment?.busy === true}
               onClick={() => chooseFile(selectedSlot)}
             >
               Add Sample to {selectedAddress}
