@@ -1056,6 +1056,28 @@ class GitHubClient:
             raise GitHubApiError("GitHub asset download is unavailable")
         return response.body
 
+    def delete_incomplete_draft_asset(
+        self, repository: str, release_id: int, asset: GitHubAsset,
+    ) -> None:
+        """Remove one asset whose upload never completed (`state != "uploaded"`).
+
+        Only the caller may decide the Release is still a Draft; this method
+        refuses any asset whose own projection says the upload completed, so an
+        uploaded asset is never deleted through this path.
+        """
+        _require_repository(repository)
+        _require_id(release_id, "release")
+        _require_id(asset.id, "asset")
+        if type(asset.release_id) is not int or asset.release_id != release_id:
+            raise GitHubApiError("GitHub asset Release ownership is invalid")
+        if asset.state == "uploaded":
+            raise GitHubApiError("GitHub asset upload completed; it is never deleted as incomplete")
+        if _asset_api_identity(asset.api_url) != (repository, asset.id):
+            raise GitHubApiError("GitHub asset API URL is invalid")
+        response = self._request("DELETE", f"/repos/{repository}/releases/assets/{asset.id}")
+        if response.status != 204:
+            raise GitHubApiError("GitHub incomplete asset deletion is unavailable")
+
     def delete_release(self, repository: str, release_id: int) -> None:
         _require_repository(repository)
         _require_id(release_id, "release")

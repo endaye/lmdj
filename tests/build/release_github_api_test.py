@@ -626,6 +626,27 @@ class ReleaseGitHubApiTest(unittest.TestCase):
         self.assertNotIn("fixture outage", str(captured.exception))
 
 
+    def test_only_an_incomplete_draft_asset_is_deleted(self) -> None:
+        from tools.release.github_api import GitHubAsset
+        def asset(identifier, state):
+            return GitHubAsset(
+                identifier, "host.zip", 10,
+                f"https://api.github.com/repos/{REPOSITORY}/releases/assets/{identifier}",
+                f"https://github.com/{REPOSITORY}/releases/download/v/host.zip",
+                77, None, "application/octet-stream", state)
+        url = f"/repos/{REPOSITORY}/releases/assets/9"
+        self.transport.route(url, HttpResponse(204, {}, b""))
+        self.client.delete_incomplete_draft_asset(REPOSITORY, 77, asset(9, "starter"))
+        self.assertEqual([(m, u) for m, u, _ in self.transport.requests], [("DELETE", url)])
+        # A completed upload, a foreign Release or a failed delete never passes.
+        for candidate, release_id in ((asset(9, "uploaded"), 77), (asset(9, "starter"), 78)):
+            with self.assertRaises(GitHubApiError):
+                self.client.delete_incomplete_draft_asset(REPOSITORY, release_id, candidate)
+        self.assertEqual(len(self.transport.requests), 1)
+        self.transport.route(url, HttpResponse(404, {}, b""))
+        with self.assertRaises(GitHubApiError):
+            self.client.delete_incomplete_draft_asset(REPOSITORY, 77, asset(9, "starter"))
+
 class ReadRetryTest(unittest.TestCase):
     """A read survives a transient failure; a write is never repeated."""
 

@@ -105,19 +105,26 @@ def read_back(release, spec):
 
 
 class DraftCarrier:
-    def __init__(self, *, spec, create_draft, release_by_tag):
+    def __init__(self, *, spec, create_draft, release_by_tag, verify_assets):
         """create_draft: trusted composition calling create_draft(tag, context).
 
         release_by_tag: a zero-argument callable returning the far-side
         Release projection (or None); trusted composition binds the real
         GitHub transport.
+
+        verify_assets: a callable taking the Draft's numeric ID that downloads
+        and checks every asset against the prepared plan (`verify_draft`),
+        raising on any incomplete, missing or divergent asset. A Draft is this
+        step's verified work only once its assets verify: a Release whose
+        upload was interrupted otherwise passes on its metadata alone.
         """
         validate_spec(spec)
-        if not callable(create_draft) or not callable(release_by_tag):
-            _fail("requires the trusted draft controller and release reader")
+        if not callable(create_draft) or not callable(release_by_tag) or not callable(verify_assets):
+            _fail("requires the trusted draft controller, release reader and asset verifier")
         self.spec = deepcopy(spec)
         self.create_draft = create_draft
         self.release_by_tag = release_by_tag
+        self.verify_assets = verify_assets
 
     def observe(self, state, operation):
         observed = self._read_back()
@@ -155,4 +162,14 @@ class DraftCarrier:
         return Observation("unknown")
 
     def _read_back(self):
-        return read_back(self.release_by_tag(), self.spec)
+        release = self.release_by_tag()
+        observed = read_back(release, self.spec)
+        if isinstance(observed, dict) and observed["status"] == "verified":
+            try:
+                self.verify_assets(release.id)
+            except Exception:
+                # Incomplete or unreadable assets are unfinished Draft work:
+                # advance resumes `create_draft`, which repairs an interrupted
+                # upload and refuses a divergent one with a named reason.
+                return "pending"
+        return observed

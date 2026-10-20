@@ -619,7 +619,15 @@ def _resume_assets(
     existing = _asset_map(authority, release)
     if not set(existing).issubset(expected):
         raise TransitionError("GitHub Release asset inventory contains undeclared assets")
-    for name, remote in existing.items():
+    for name, remote in list(existing.items()):
+        if remote.state != "uploaded":
+            # An interrupted upload leaves a declared asset that can never be
+            # downloaded. On an unpublished Draft it is removed and uploaded
+            # again from the prepared bytes; a completed upload is never
+            # replaced, and a published Release is never edited.
+            _remove_incomplete_draft_asset(authority, release, remote)
+            del existing[name]
+            continue
         _compare_download(authority, release.id, remote, expected[name])
     for name, local in expected.items():
         if name in existing:
@@ -635,6 +643,33 @@ def _resume_assets(
             if len(candidates) != 1:
                 raise TransitionError("GitHub asset upload is uncertain and did not reconcile") from None
             _compare_download(authority, release.id, candidates[0], local)
+
+
+def _remove_incomplete_draft_asset(
+    authority: _Authority, release: GitHubRelease, asset: GitHubAsset,
+) -> None:
+    if not release.draft:
+        raise TransitionError(_incomplete_asset_message(asset))
+    try:
+        authority.context.github.delete_incomplete_draft_asset(
+            authority.context.policy.repository, release.id, asset,
+        )
+    except Exception:
+        raise TransitionError(
+            f"GitHub Release asset {asset.name} upload is incomplete and could not be removed; "
+            "remedy: resume `scripts/release.sh create-draft TAG` once the GitHub API is available"
+        ) from None
+    if asset.name in _asset_map(authority, release):
+        raise TransitionError(
+            f"GitHub Release asset {asset.name} is still present after removing an incomplete upload"
+        )
+
+
+def _incomplete_asset_message(asset: GitHubAsset) -> str:
+    return (
+        f"GitHub Release asset {asset.name} upload is incomplete (state={asset.state}); "
+        "remedy: resume `scripts/release.sh create-draft TAG` while the Release is a Draft"
+    )
 
 
 def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHubAsset]:
@@ -657,6 +692,8 @@ def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHu
 def _compare_download(
     authority: _Authority, release_id: int, remote: GitHubAsset, expected: AssetBuild,
 ) -> None:
+    if remote.state != "uploaded":
+        raise TransitionError(_incomplete_asset_message(remote))
     try:
         payload = authority.context.github.download_asset(
             authority.context.policy.repository, release_id, remote,
@@ -682,6 +719,8 @@ def _download_and_verify_assets(
         snapshots: list[tuple[object, ...]] = []
         for name in sorted(assets):
             asset = assets[name]
+            if asset.state != "uploaded":
+                raise TransitionError(_incomplete_asset_message(asset))
             try:
                 payload = authority.context.github.download_asset(
                     authority.context.policy.repository, release.id, asset,

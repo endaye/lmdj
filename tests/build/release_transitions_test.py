@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -167,6 +168,8 @@ class FakeGitHub:
         self.upload_calls: list[str] = []
         self.fail_create_after_write = False
         self.fail_upload_after_write: set[str] = set()
+        self.stall_upload: set[str] = set()
+        self.deleted_assets: list[str] = []
         self.fail_publish_after_write = False
         self.publish_mutation: str | None = None
         self.release_reads = 0
@@ -262,7 +265,28 @@ class FakeGitHub:
         self._touch_release()
         if name in self.fail_upload_after_write:
             raise GitHubApiError("GitHub release request is unavailable")
+        if name in self.stall_upload:
+            # An interrupted upload GitHub keeps as a `starter` asset that can
+            # never be downloaded (seen on 2.0.122.0's Draft).
+            self.stall_upload.discard(name)
+            stalled = GitHubAsset(**{**asset.__dict__, "state": "starter"})
+            self.payloads.pop(asset.id)
+            self.release = GitHubRelease(**{
+                **self.release.__dict__,
+                "assets": tuple(stalled if item.id == asset.id else item for item in self.release.assets),
+            })
+            raise GitHubApiError("GitHub release request is unavailable")
         return asset
+
+    def delete_incomplete_draft_asset(self, repository: str, release_id: int, asset: GitHubAsset) -> None:
+        if self.release is None or self.release.id != release_id or asset.state == "uploaded":
+            raise RuntimeError("refused")
+        self.deleted_assets.append(asset.name)
+        self.release = GitHubRelease(**{
+            **self.release.__dict__,
+            "assets": tuple(item for item in self.release.assets if item.id != asset.id),
+        })
+        self._touch_release()
 
     def download_asset(self, repository: str, release_id: int, asset: GitHubAsset) -> bytes:
         if repository != "endaye/lmdj" or asset.release_id != release_id:
@@ -819,6 +843,39 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(len(self.github.release.assets), 3)
         self.assertEqual(len(set(self.github.upload_calls)), 3)
 
+    def test_a_stalled_upload_is_named_then_replaced_on_the_draft_only(self) -> None:
+        push_tag(self.tag, self.context())
+        stalled_name = self._asset_payloads()[1][0]
+        self.github.stall_upload.add(stalled_name)
+        # The interrupted upload is not reconciled as present: the uncertain
+        # upload's own read-back names the incomplete state.
+        with self.assertRaisesRegex(TransitionError, f"{re.escape(stalled_name)} upload is incomplete \\(state=starter\\)"):
+            create_draft(self.tag, self.context())
+        assert self.github.release is not None
+        release_id = self.github.release.id
+        with self.assertRaisesRegex(TransitionError, "upload is incomplete"):
+            verify_draft(self.tag, release_id, (self.root / "build/release/lmdj-v1.0.21.0/release-plan.sha256").read_text().strip(), self.context())
+        # Resume removes only the incomplete asset and uploads it again.
+        uploaded_before = [a.name for a in self.github.release.assets if a.state == "uploaded"]
+        result = create_draft(self.tag, self.context())
+        self.assertEqual(result.status, "draft-verified")
+        self.assertEqual(self.github.deleted_assets, [stalled_name])
+        self.assertEqual(sorted(a.name for a in self.github.release.assets),
+                         sorted(name for name, _ in self._asset_payloads()))
+        self.assertTrue(all(a.state == "uploaded" for a in self.github.release.assets))
+        self.assertTrue(set(uploaded_before) <= {a.name for a in self.github.release.assets})
+
+    def test_a_published_release_with_an_incomplete_asset_is_never_edited(self) -> None:
+        push_tag(self.tag, self.context())
+        self.github.stall_upload.add(self._asset_payloads()[0][0])
+        with self.assertRaises(TransitionError):
+            create_draft(self.tag, self.context())
+        assert self.github.release is not None
+        self.github.release = GitHubRelease(**{**self.github.release.__dict__, "draft": False})
+        with self.assertRaisesRegex(TransitionError, "upload is incomplete"):
+            create_draft(self.tag, self.context())
+        self.assertEqual(self.github.deleted_assets, [])
+
     def test_extra_or_same_name_different_digest_is_rejected_without_clobber(self) -> None:
         self._push_and_create()
         assert self.github.release is not None
@@ -1141,7 +1198,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
             ("asset-id", "assets"),
             ("asset-label", "assets"),
             ("asset-content-type", "assets"),
-            ("asset-state", "assets"),
+            # A non-uploaded state is now named as an incomplete upload before the
+            # snapshot comparison runs; publication is still refused.
+            ("asset-state", r"upload is incomplete \(state=open\)"),
         )
         for mutation, message in cases:
             with self.subTest(mutation=mutation):
