@@ -125,14 +125,6 @@ mapping 之前。试听和 Stop 仍直接调用 Host，不根据按钮点击伪�
 
 ## 创作边界
 
-S3 的录音期 Pattern 选择复用现有 `requestTransportPatternSwitch`：Sequence 左右键、
-GROOVE 和未录演出的 Perform Launch 共享设备 SEQ SNAP。显示分别读取真正播放的
-Pattern 与 pending target，拒绝不乐观切换，也不自动重放。COUNT-IN 到 Applied 时
-先改变录音灯，只有 openingComplete 且无 pending／error／cancel 才开放选择；原
-caller、e1/e2、S0 和 Native 下拍身份保留。网格、BPM／Swing、长度／结构仍锁定。
-分段持久化由 Facade／Host 负责；本 consumer 接线不结算同候选、故障组合或设备听感债。
-
-
 当前 UI 提供 browser-local Project discovery/open、New Project（经共享 Runtime Session 在本机创建空 Project：120 BPM、1 Bar 初始 Pattern，创建后列入 Local Projects 并进入 Sample）、Duplicate Project（自动保存下取代 Save As：Host 以新身份复制当前 Project 的 Project Truth 与 Asset，原 Project、它的 writer 与 Runtime 不受影响，随后 Creator 打开副本——副本 revision 为 0，并成为本设备记住的 Project；音频运行或其他 Project action 进行中时不可用；复制被拒绝（另一标签页占用、未完成录音、播放或 Sample 导入进行中）时原 Project 保持打开，拒绝原因内联显示在 Project 页；副本已存但打开失败时照常报告打开错误，并把副本列入 Local Projects）、portable Project Bundle import、64 个稳定 Pad Slot、Sample Surface 与 Sequence Surface。长素材在读内容前检查 100 MiB source ceiling，可判定的声道/时长在 decode 前拒绝，decode 后再精确验证最多 2 声道和 43,200,000 帧；取消、替换、提交成功、Project 切换和后台恢复都会释放完整源缓冲。Capture 与导入选区都使用 `sample.quota` 返回的 target-exclusive effective headroom，不再有固定单 Pad 帧数上限；冲突或配额拒绝保留源与选区。Pointer、Keyboard、MIDI 经同一 Input Controller 同时进入 live trigger 和全局 Pattern transport 的 post-enqueue admission：candidate 由 Facade 持有的 coordinator 在 acknowledged admission/cutoff 区间内 durable 保留，Record-off 按 exact fence 结算提交，播放保持；Stop 先停调度再结算。实体 Play/Stop 与 Record 键在任何 mode 下都驱动同一 transport projection 与命令身份——Play/Stop 是 Pattern 播放/停止，Record 是当前 Pattern 的 overdub，绝不表示 Sample capture 或 master recording；普通 mode 导航不再停止 transport。Creator 只提交 intent 并渲染 projection：busy、refused、committed-but-not-published 与 recoverable 均如实显示，重试是 inspect/reconcile 同一命令身份，绝不发出新的反向 toggle。播放中的 engagement 诚实拒绝跨身份 Pattern reload；停止态 reload 注销 engagement，由下一条命令按当前 Pattern 重新 vend。Capture、空 Pad 录音与 Pattern／Performance 录音互斥，Pattern 播放仍可继续。敲击 armed Pad 只停采并进入 trim overlay；裁剪/保存由 Host 独立显示，无需 Pattern recording journal。armed 期间其他 Pad 仍可演奏，但不能改写 Capture 所拥有的 Sample selection。已有 transport journal 时，Core 的 Sample 提交 busy 守卫仍保持有效；take 保留，录音结算后可重试提交。Capture 提交的失败或取消仍由 Core 在 writer lease 下判定 exact receipt/Project Truth，冲突 fail closed。Sequence recovery 只允许 fingerprint 匹配的原 Pattern、用户明确选择的有效新 Pattern或 discard；owner-lost 的 transport admission 在列出时被 reconcile 密封为 owner_lost 候选；Apply 把演奏者听到的 take（按下在 attack tail 后结束）回放进目标 Pattern（#1515），只有输入转换尚未结束的 admission 才以 `sequence_admission_unresolved` 拒绝并保留 journal，Discard 释放它。Host 不解析 Bundle、Project、journal、quantizer 或 fingerprint，Project Truth、revision、receipt 与 Runtime publication 均由 Core 决定。
 
 Boot 直接进入一个 Project：本机没有 Project 时自动新建（与 New Project 相同的默认值）并进入 Sample；否则重开本设备上次打开的 Project。该记录只保存在 Host 本地存储（IndexedDB，打开即提交，浏览器崩溃后重启仍回到最后打开的 Project；Chromium 延迟且限频提交 localStorage，曾使崩溃前约一分钟内的记录丢失，#1726），不是 Project Truth；记录缺失、不可读或指向已不存在的 Project 时，Creator 停在 Local Projects 由用户选择，重开失败照常显示错误。Project 页常驻单列本地列表：卡片、ENC1 与普通 ↑/↓ 共用选择，普通 ←/→ 未分配，只有所选卡片内 Open 打开；SHIFT + ←/→ 保持 Undo/Redo。顶部 New Project／Import 与底部 Duplicate／Sound Sets 仍可达，Duplicate 复制已打开工程。此行为按 [2026-10-13 批准决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-13-creator-interaction-ui-baseline.md)取代旧 Open local／Back to Project 浏览入口；list/create/duplicate/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。ready Session 的 diagnostics 更新只同步 Runtime 呈现，不得重新进入 Project inventory/reopen；inventory 只随 Session、Runtime phase 或明确 list retry 变化。Suspend audio 进入显式 `suspending` 屏障：Runtime 发布 `audio-suspended` 只负责输入清理，Project actions 必须等 `session.suspendAudio()` 的 safety cleanup 与 transport response 全部 settle 后才重新开放；拒绝但 Runtime 仍 running 时恢复 running surface。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次敲击 Pad 或点击录音，以同一次真实手势唤醒音频。
@@ -227,45 +219,16 @@ Playback 的 Attack（0–2000 ms）、Release（0–4000 ms）与 Tone / EQ 页
 - 拖动经 `sample.preview.set` 试听、pointer up 时只提交一次。指针按压不会让极点获得焦点，所以编辑器在 window 上监听 Escape：拖动中按 Escape、pointercancel、音频挂起或切换 Pad（编辑器卸载）都会取消并清除试听。
 - 每个极点是带频段描述的 slider。图的边距大于 22 单位的命中半径，所以极点在任一边缘都保有完整命中圆；图不会窄于 320 单位的 viewBox，所以目标不小于 44 px。
 
-Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。三根主推子与 HOLD 保留在首屏；四槽横排和一处 MASTER 使用横向滑杆，在同一外层滚动区内可达。
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform 触摸屏通过 Live、Slots、Takes、Replay 四页组织现有能力，并使用一处外层纵向滚动。Live 的 16 个 Pattern 启动槽分为四组，组按钮同时标明排队和播放状态；切换分组或管理页保留所选分组，不改变声音 Pad 的映射。Pattern 槽与 Filter/Delay 并排，HOLD 和 More FX 位于推子下方。
 
-- **Live**：四组各四个横排 Pattern 启动槽、PRIMARY／FILTER／MORE、横向 FX 与 MASTER、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
-- **Slots**：分区显示 Assign、Move、Clear，Pattern 使用可区分的序号；目标槽旁只读显示已提交的 Pattern／Empty，操作失败不预填成功。选择、Escape 或返回 Live 不写工程、不 Launch，切页保留草稿选项；只有对应按钮才提交并刷新。演出录制非空闲、全局 Pattern 录制、COUNT-IN 及工程／transport 结算时锁定结构编辑，稳定的普通播放仍可编辑；revision 可在 Project details 查看。
-- **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。停止状态、音频卡、名称与保存动作分组。下方 Saved Takes 可选择已保存演出，查看经验证的 WAV 音频时长；选择本身不触发 Replay。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
+- **Live**：16 个 Pattern 启动槽、Filter/Delay、FX / MORE、HOLD，以及当前阶段可用的 Record/Stop。声音 Pad 和 Bank 选择仍只在左侧；Perform controller 跟随 Host 当前 Bank。
+- **Slots**：Pattern Assign/Clear/Move 和 revision；选项在切页后保留。
+- **Takes**：Flush、录制名称、Save/Discard、可用 WAV 的 Export 和 Retry WAV bind；录制停止后 Live 的 Review recording 可直接进入。只显示该阶段适用的操作，忙碌动作沿用原禁用规则。
 - **Replay**：已保存的 Performance 和 Apply/Discard recovery；发现恢复候选时其他页有 Review recovery 入口。播放中的 Stop Replay 和状态在各页仍可达。
 
+子页切换保留录制 session、回放轮询、HOLD、名称草稿和 FX / MORE 展开状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
 
-
-Live／Takes 的录音卡区分 **Captured audio** 与 **Local WAV**：前者只按同一已确认
-capture 的真实接收帧数和实际采样率显示 `mm:ss.mmm`，静音计入，回调延迟不补时。
-后者使用 WAV writer 自己编码的格式与已完成 checkpoint/seal 的 durableFrames；写入
-仍待关闭时不提前增长。正常 Stop 包含最后 partial batch，失败显示 Local WAV prefix、
-已知 Dropped frames，未量化的 tap loss 另标未知。读取和卡片更新不发 I/O、RPC 或新时钟。
-
-这些是本地录音事实，不表示 Save 或 WAV bind 已成功。Save UNKNOWN／Retry WAV bind
-期间保留同一 take 的计数，确认完成或丢弃才清除；关闭或替换录音 owner 不继承旧时钟。
-缺少真实 capture/rate 时显示 Unavailable。
-
-Saved Takes 只查询当前所选演出，不因进入 Perform 就扫描整份列表。
-列表排除当前未保存／结果未知的录音及恢复候选；恢复候选读取失败时不把部分
-结果冒充已保存列表，可显式重试。列表查询与托管 WAV 安装／绑定互相等待，
-避免列表恢复逻辑回收尚未绑定的文件；绑定失败时先保留原 WAV，完成显式绑定重试
-或确认丢弃后才恢复列表读取。该边界不串行化音频元数据检查或普通工程编辑。
-WAV audio 使用
-公共 SDK 返回并核对过 Project／Performance／revision／ArtifactRef 的实际 WAV
-frames／rate，显示 mm:ss.mmm；静音和稀疏事件不会改变此音频读数。旧工程即使 WAV
-可以验证，仍明确显示 Recording completeness unknown，不据此宣布完整演出时长。
-No WAV attached、不支持格式、WAV integrity check failed 和读取不可用各自呈现；
-读取失败只由 Retry audio check 显式重查，不隐式重放。列表读取失败可单独重试。
-换选择、刷新、Project mutation、离开或关闭退役旧 observer；同一 Project 重开、
-revision／WAV 引用变化时，视图在新查询开始前就隐藏旧回执。取消不证明底层 worker
-已退出，物理释放仍由 SDK／Runtime 原有 owner 负责。Replay selected Take 是独立
-动作；Replay 继续按事件进度，不使用 WAV 时长作分母。U08c 的完整呈现、组合候选
-及设备／听感验收仍单独记录。
-
-子页切换保留录制 session、回放轮询、HOLD、名称草稿和 参数组和 Mute/Solo 面板状态，不触发模式离开。按住 FX 时翻页暂时禁用；原生 pointer capture 保证拖出滑杆后松手仍能释放，释放或取消后才可切页。键盘离焦沿用既有释放语义；离开 Perform 模式或切到后台仍执行原有 leave 规则。
-
-FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。切换参数组、打开 Mute/Solo 或卸载输入时释放该输入拥有的触摸手势；旋钮手势不由触摸组件释放。再次点击 MORE 收起仍回到 PRIMARY 并释放被移除的五根推子。HOLD 是链路级开关，同样随时可切换。
+FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。FX 随时可用（#1674）：滑杆按下即经 `performance.fx.gesture` 实时作用于 master bus，与演奏录音互不构成前置；录音进行中同一手势再经 `performance.record.event` 记入 journal，录音开始时已为开启状态的 FX 与 HOLD 会补记 engage/hold_on，录音停止不释放仍按住的 FX。折叠 FX / MORE 或卸载时强制释放未闭合手势。HOLD 是链路级开关，同样随时可切换。
 C1（2026-10-11 起）把 Perform 的实时控制接到 W1 的 typed producer：八段 FX 与 HOLD 在 Core epoch 可用时改走 `applyPerformanceLiveControl`（fx_parameter/fx_release 意图按 Core receipt 的 runtime generation 配对，过期或伪造的 generation 由 Core 远端拒绝，Host 不自行编造），producer 不可用（headless 或旧 Core）时原样保留上述 legacy 手势路径。Filter 从此成为独立参数组：LP/HP/BP 类型、20 Hz–20 kHz 对数 Cutoff（滑杆为 0..1000 对数位置，端点精确）、0–100% Resonance，初值 OFF/LP/20 kHz/0% 且只从 `queryPerformanceLiveStatus` 的 Core 读回取得，绝不从旧百分比反推 Hz；读回区分 core/pending/unavailable 与 frozen。主组首推子保持 Filter 槽位与可访问名，读数改为 Hz；FILTER 按钮打开 FILTER 面板（type 三段 + Cutoff + Resonance），进入该组是纯 UI 状态、不调用任何 producer；旋钮组相应扩为 main/more/filter 三枚（主组 ENC1 Cutoff，FILTER 组 ENC1 type、ENC2 同一 Cutoff、ENC3 Resonance，ENC4 仍是 #2000 的监听）。旋钮停转与切组不 release（D04 批准语义），触摸的 pointer-up/cancel/blur 保持既有 release 语义，HOLD 下的 release 由 Core 冻结并经读回显示 frozen。录制改用 headered begin：先取 live status 的 epoch，begin 返回 Core 的 gesture mapping 后直接配对后续 move/release，不再补记 synthetic engage 起点（旧 profile 的 seed 分支原样保留）；begin 的 Core fence 与 capture started ACK 两道 ready 门之前首个 Pad 被 gated。录音中的 release 之后同样以 Core 读回显示 frozen。控制 ACK 只证明接收，界面在实际 applied 状态读回前保持 pending，旧 epoch 的回执和晚到查询不能覆盖新操作。Host 共用有界 FIFO（一个执行中、一个普通等待项），begin 期间的控制等待 Core mapping 与 capture started ACK，再按实际绑定执行；溢出在修改本地手势前明确报错，最多 64 个 Pad 保留到 matching release 完成；Stop 取消尚未送达 Core 的普通等待输入并明确拒绝，已接收手势的 release 先完成。
 
 
@@ -791,32 +754,6 @@ share the header row. EDIT is the default, and a mode change returns to it.
     cut or repeated notes. The Host republishes a resized current Pattern, so
     the next Play uses the new length.
 - **QUANTIZE and METRONOME toggles.**
-- **COUNT-IN.** Off, 1 or 2 bars applies only to global Pattern Record from
-  stopped. It defaults to Off and is stored as numeric `0 | 1 | 2` in
-  `lmdj.creator.host` / `settings` / `count-in.v1`, outside Project Truth and
-  Undo history. A late boot read cannot replace an explicit choice.
-  - Off keeps immediate Record; Record during playback keeps ordinary overdub.
-    Sample capture and Performance recording retain their own controls and do
-    not acquire count-in from this preference.
-  - The upper screen shows the real schedule and beats remaining. REC blinks
-    during preparation/counting, then becomes steady only on Native's Applied
-    receipt. Passing the planned start frame alone displays Starting; opening
-    a durable Journal is a separate result.
-  - BPM/Pattern authoring and selection lock while the original caller is
-    pending. Pads remain playable. Pre-start held input and its later release
-    stay live-only; the Core admits new post-start input to the Journal.
-  - REC or Play/Stop cancels the retained request, including a press before
-    admission returns. Buttons stay reachable for cancellation. Locks clear
-    only after matching settlement and the Host's actual consumer ACK, not an
-    optimistic button state or a terminal-looking readout. Unknown replies
-    retain their original identity; replacement delegates retirement to the SDK.
-  - Native forces four/eight cues regardless of METRONOME. The monitoring
-    switch is published synchronously for Native's optional accented S beat;
-    JS excludes that exact native-owned frame and handles later beats. A late
-    On toggle never replays S. Both cue paths stay downstream of product capture
-    and obey device monitoring volume.
-  - An environment without scheduled/cue support keeps the setting and visibly
-    refuses this Record. It never falls back to immediate recording.
 - **SEQ SNAP.** 1 BEAT, 1 BAR or SEQ END chooses when a playing,
   non-recording Pattern switch lands. Default 1 BAR; Sequence arrows/GROOVE
   and non-recording Perform Launch share this device preference. It is saved
@@ -862,7 +799,7 @@ The 2026-10-09 contextual encoder decision also binds the other pages:
 | Perform more FX | Crush | Stutter | Gate | Output Volume |
 | System | Unassigned | Unassigned | Unassigned | Output Volume |
 
-Touch buttons switch Sample groups; PRIMARY / FILTER / MORE and the physical left/right keys switch Perform groups. SHIFT retains Undo/Redo; System suspends the Perform direction bindings.
+Touch buttons switch Sample groups; FX / MORE switches Perform groups.
 SHIFT + ENC1–3 uses fine steps (one source frame, 0.1 semitone, 0.1 dB,
 1 Pan/Tone unit or 1/1000 FX unit); ordinary steps are 10 ms, one semitone,
 one dB, 10 Pan/Tone units or 10/1000 FX units. Navigation and integer BPM
@@ -886,45 +823,14 @@ activation. Other page and authoring controls keep their usual availability.
 Output Volume changes only monitoring:
 captured, resampled and exported PCM and authoring history are unchanged.
 
-Perform 三个效果组共用的一处横向 **MASTER** 推子与 ENC4 的 **Output Volume** 共用
+Perform Live 的右侧第四个 **MASTER** 推子与 ENC4 的 **Output Volume** 共用
 同一设备监听值和 `monitor-volume.v1` 偏好，范围均为 0–100%。移动任一控件
 会同步另一个控件及上屏读数；两者均在当前 Session 完成偏好恢复后才可用。
 Session 拒绝更新时，保留最后已接受的读数和偏好。MASTER 保留 44 个设计单位的
 输入命中宽度，不参与 FX engage/move/release、HOLD 或 Performance 事件录制；
-切参数组或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
+切 FX / MORE 或离开 Perform 不重置监听音量。Stop Replay 将 FX、HOLD 与演出
 Launch 状态复位，监听音量仍保留当前值。监听响度包含节拍器，但录音、
-重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费。
-
-### Perform 参数组与 Live Mute/Solo
-
-紧凑竖屏宽度不足708px时，Project／Sample／Sequence／Perform 及 System 共用独立左侧物理栏、上方 Pad 矩阵和下方单一触摸滚动区，触摸区不再盖住实体键。保留实际至少44px的实体键和 Pad 命中区；主模式切换与 System 返回沿用同一分区，挂载及窗口变化继续由原 stage fit 适配，实时数值更新不反复计算布局。Perform 组按钮、三根主推子保持原44px命中；其390px上屏旋钮读数仍用两行两列保留完整标签和值。公共输入几何验证与完整35屏样式、真实移动设备验收分别记录。
-
-
-PRIMARY、FILTER、MORE 互斥显示对应触摸参数；←／→ 按此顺序切换，到首尾停止，SHIFT 和 System 保留原优先级。组切换不主动创建声音控制，只有被移除输入尚未结束的 touch token 需要配对释放；旋钮接管、HOLD、实时 masks 与录制 session 不重置。Filter 状态为只读的 Off／Engaged／Frozen／Pending／Unavailable，没有旁路开关；Core provenance 保留在状态投影中。
-
-Live Mute / Solo 打开当前 Pad 面板，Mute 与 Solo 沿用同一 Core 状态和既有禁用条件；Muted Pads、Soloed Pads 列出 A01–D16 的真实地址，pending/unavailable 时不把旧列表冒充当前空 masks。Back to Filter 返回独立滤波组。多个 Solo 可以并存，Mute 始终优先。切页、停止、保存、重开和回放沿用既有行为。普通触摸 controls 的实际输入区域至少为 44 CSS px；标题、真实 meter、transport、保留 footer 与旋钮读数使用同一上屏。
-
-### Measured stereo output level
-
-Perform's read-only upper display has separate L/R rails and dBFS readouts.
-They consume the SDK's synchronous `outputMeter()` measurement: actual sample
-peaks after FX, before the shared ENC4/MASTER monitor gain, excluding the separate
-metronome/cue output. Capture does not need to be recording. Changing monitoring
-volume changes neither the measured work level nor its captured PCM.
-
-Nonzero values use amplitude dBFS over -60..0; digital zero reads **−∞**.
-Each channel's thin peak marker holds for one second of the same AudioContext
-clock, from its actual peak frame. Equal/higher peaks refresh to their measured
-frame; repeated getter reads cannot extend the hold. Lower levels draw directly
-from measured windows, without decorative decay or transport-derived animation.
-The existing current/queued Pattern, counter, progress and launch receipt remain.
-
-Missing/stale/failed measurements say **UNAVAILABLE**, with no numeric meter or
-held marker. Session, Project, owner/rate replacement and suspension clear held
-state; a replacement never borrows the old readout. Only the visible, eligible
-Perform meter owns a cancel-safe animation-frame reader. It issues no command,
-adds no audio/gain node, and writes no Project, history or device preference.
-Browser/PCM verification is distinct from physical-device and acoustic acceptance.
+重采样、导出、Project Truth 与 Undo 历史不受 MASTER 影响。LP/HP/BP 与 Cutoff/Resonance 由上述 C1 独立滤波控制提供；live Mute/Solo 由上面的当前 Pad 控件消费；作品电平表另有自己的实施边界。
 
 Ordinary Sequence touch buttons share the common 44 px target, 32 px
 painted face and 6 px face radius. Grid cells, note gestures and continuous

@@ -24,8 +24,6 @@ source_paths:
   - docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md
   - docs/prd/decisions/2026-10-11-creator-keyboard-spatial-mapping.md
   - docs/plans/2026-10-10-pattern-switch-and-count-in.md
-  - apps/creator-web/src/runtime/count_in_controller.ts
-  - apps/creator-web/src/components/count_in_readout.tsx
   - docs/plans/2026-10-10-creator-interaction-map.md
   - docs/plans/2026-10-10-creator-interactions-refresh.md
   - docs/plans/2026-10-09-creator-desktop-final-followup.md
@@ -110,34 +108,24 @@ export const ConsoleDiagram = () => {
 
 左栏 Play/Stop 和 Record 在**每一页**都只控制全局 Pattern，不会变成采样或演出录音。
 
-SETUP 的 COUNT-IN 为本设备的 Off／1／2 小节偏好，默认 Off，不写工程。迟到的
-设置读取不覆盖刚做出的选择。数拍固定由 Native 发出，不受 METRONOME 开关影响；
-METRONOME 决定实际 S 的原生下拍和开录后的 JS 节拍器。JS 不补播或重复 S。
-不支持预定开录或 cue 输出时保留选择并显示拒绝原因，不降级为立即录音。
-
 | 状态 | Play 灯 | Record 灯 | 此时的限制 |
 | --- | --- | --- | --- |
 | 停止 | 灭 | 灭 | 只有此时能改 Pattern 长度和结构、切 Pattern 立即生效。 |
 | 播放 | 亮 | 灭 | 可以打 Pad，可以改 Tempo／Swing，也可以按 SEQ SNAP 的 1 BEAT／1 BAR／SEQ END 边界切 Pattern；默认 1 BAR。不能改长度或结构。 |
-| 录音 | 亮 | 亮 | Pad 事件按实际切换边界分段录入所属 Pattern，支持 A→B→A。箭头、GROOVE 和普通 Perform Launch 共用 SEQ SNAP；网格、Tempo／Swing／Quantize、Pad 改色和结构编辑仍锁定。 |
-| COUNT-IN | 尚未开始播放 | 闪烁 | 上屏显示实际预备拍及剩余拍；锁定 BPM 和 Pattern，Pad 仍可演奏。到达计划 S 不算开录，只有 Native Applied 回执才转为录音常亮。 |
-| 普通命令处理中 | 等结果 | 等结果 | Play/Stop、Record、切 Pattern 和相关设置暂不可用；COUNT-IN 取消遵循上一行，以实际回执为准。 |
+| 录音 | 亮 | 亮 | Pad 事件录入当前 Pattern；Sequence 网格编辑、Tempo／Swing／Quantize、Pad 改色和切 Pattern 不可用；录音中无缝切换已批准、尚未交付，见[第 2 章](#planned)。 |
+| 命令处理中 | 等结果 | 等结果 | Play/Stop、Record、切 Pattern 和相关设置暂不可用；以灯的最终状态为准。 |
 
 | 当前状态 | 按键 | 结果 |
 | --- | --- | --- |
 | 停止 | Play/Stop | 当前 Pattern 开始循环播放；需要时先唤醒音频。不改作者内容。 |
 | 播放 | Play/Stop | 停止 Pattern。不会关闭整个音频引擎；手打 Pad 仍按各自的触发模式发声。 |
 | 录音 | Play/Stop | 停止播放并保存本轮录入的事件；保存后网格显示这些事件。失败时保留提示和恢复入口。 |
-| 停止 | Record | COUNT-IN 为 Off 时立即播放并录音；为 1／2 时先按原生时钟数拍，在实际 S 开始。 |
-| COUNT-IN | Record 或 Play/Stop | 请求取消；实际匹配结算及消费完成前保持锁定。按键仍可达，取消不要求再次激活音频。 |
+| 停止 | Record | 同时开始播放和录音。 |
 | 播放 | Record | 从当前位置开始叠录，不从头重新播放。 |
 | 录音 | Record | 结束录音并保存事件，Pattern 继续播放。 |
 | 没有 Project、音频未就绪、命令处理中或另一种录音进行中 | 任一键 | 按键不可用。Play 与 Record 的条件不完全相同，见[附录 A.2](#conditions)。 |
 
-- 录音切换在实际 S 保存旧段，最后一段在 Record-off／Stop 的实际 F 保存；排队或当前 Pattern 显示不是保存确认。
-- COUNT-IN 只有 Native Applied 且录音开启确认完成后才开放 Pattern 选择；原 A/S0/e1/e2 及原 caller 始终保留。
-- 取得收尾回执后，Record／Play 等原 caller 消费及最终播放状态回读完成再开放，避免把之后的 Stop 误当成已消费的原取消；倒数和取消请求未取得回执时仍可按键。
-- 前次切换仍在结算而拒绝新选择时，保留真实排队／播放显示，稍后由用户重新选择；不自动重放被拒绝的选择，也不要求先停止录音。
+- 录音中屏幕上即时出现的事件还没有保存；结束录音才保存。
 - 按 Play/Stop 或 Record 会清除 SHIFT。
 
 ### 1.4 三种录音 \{#recordings\}
@@ -292,14 +280,14 @@ Bank A／B／C／D 把下边 16 个 Pad 换成该 Bank 的 A01–A16／B01–B16
 
 | 交互 | 当前交付 | 已批准的剩余行为 |
 | --- | --- | --- |
-| Pattern 切换与取消 | 播放中 ←/→、GROOVE、未录 Performance 的 Launch 已使用 1 BEAT／1 BAR／SEQ END，默认 1 BAR。GROOVE 有排队时点当前项也请求取消；结果由 transport 回读确认，见 [5.1](#sequence-edit)。 | 录音期切换 consumer 已接线；完整故障组合、同候选与设备验收另记。OFF 匹配当前音乐位置仍待实现。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)。 |
-| Record count-in | SETUP 提供 Off／1／2，默认 Off；停止时按 ● 消费实际预定开录，数拍/取消跟随真实票据，播放中仍是普通叠录。 | 最终同候选、实机触控和听感交 #1221；不把组件或单次浏览器结果当完整物理验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
+| Pattern 切换与取消 | 播放中 ←/→、GROOVE、未录 Performance 的 Launch 已使用 1 BEAT／1 BAR／SEQ END，默认 1 BAR。GROOVE 有排队时点当前项也请求取消；结果由 transport 回读确认，见 [5.1](#sequence-edit)。 | 全局 Pattern 录音中无缝切换；OFF 匹配当前音乐位置。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-pattern-switch-while-playing.md)。 |
+| Record count-in | ● 始终控制 Pattern 事件录音，当前停止时按下立即开始。 | 停止时按 ● 可选 Off／1／2 小节预备拍，默认 Off；录音过程中不重新 count-in。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-record-key-and-count-in.md)。 |
 | 可听 BPM 旋钮预览 | ENC3 立即改读数，400 ms 后保存；声音仍等提交后发布。 | 每格立即变速并保持当前小节／拍位置，节拍器同步；取消时恢复已提交 BPM 并继续当前位置。400 ms 保存与一次 Undo 保持，录音时仍禁用。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sequence-audible-tempo-preview.md)。 |
 | Sample ASSIGN | 已有当前工程 retained 素材列表、A01–D16 目标、覆盖确认和独立结果保留，见 [ASSIGN](#retained-asset-assign)。 | 同候选与设备验收仍另记；未知结果的新会话操作必须重新明确源和目标，原 UNKNOWN 保留。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-sample-assign-and-numeric-editing.md)。 |
 | 三页普通方向导航 | Project 单列 ↑/↓ 选相邻项、普通 ←/→ 未分配，卡片内 Open 才打开；Sample ↑/↓ 复用当前 Pad 选择、←/→ 切四子页。选择不演奏、不保存；切编辑上下文取消未提交预览。Project／Sample SHIFT＋↑/↓ 未分配，SHIFT＋←/→ 保持 history。Perform ↑/↓ 已接线为共享 current Pad 的静默选择，SHIFT/System 中不可用。 | Perform ←/→ 切 PRIMARY／FILTER／MORE 并保持效果，仍依赖真实滤波 producer/consumer。本次 Pad 轴接线不关闭完整 K2、#1822 或设备／听感验收。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
 | Perform 独立滤波 | C1 已接线主组 Cutoff／Delay／Reverb 与 FILTER 的 LP／HP／BP、Cutoff、Resonance；OFF 与已应用状态来自 Core，录制／保存／重新打开／Replay 的 packaged proof 已通过。 | 物理设备与听感验收仍未完成。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 | Perform live Mute/Solo | C2 当前 Pad 双开关消费 Core 64 槽 mask，多 Solo／Mute 优先，切 Bank／Pattern 保留；离页等待清空确认。初始 mask 与后续事件经录制／保存／重开／Replay 的双 Pad PCM 旅程验证。 | 物理设备与听感验收仍未完成；已进入共享 Delay／Reverb 的尾音自然衰减。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-11-creator-navigation-and-live-mute-tails.md)。 |
-| 作品电平表 | Perform 上屏消费常驻真实 SDK 测量，独立 L/R 读数和峰值保持线；不依赖录音或 Pattern 事件。 | Post-FX、Pre-ENC4，排除节拍器；−60…0 dBFS，静音 −∞，按真实 peak frame 保持 1 秒。不可用明确显示 UNAVAILABLE；自动化、候选和设备/听感验收分别记录。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
+| 作品电平表 | 尚无常驻真实作品电平显示。 | Post-FX、Pre-ENC4，排除节拍器；L/R dBFS 峰值，−60…0，静音 −∞，峰值保持 1 秒，读数缺失显示 unavailable。[决定](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-10-10-mixer-live-controls-and-meter.md)。 |
 
 关闭的产品问答、底层能力和已经合并的代码各自说明不同进度，不代表本表的完整交互已经验收。具体实施和证据层级见[本次复核](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-10-12-creator-interaction-audit.md)。
 
@@ -523,7 +511,7 @@ Stop、Commit 和 Close 不随详细信息滚出面板；权限拒绝、设备�
 | ENC3 | Tempo，每格 1 BPM，40–240。规则见 [1.7](#encoders)。 |
 | ENC4 | 设备监听音量，包括节拍器；不改 Swing、录音或导出电平。规则见 [1.7](#encoders)。 |
 | ↑ ↓ | 当前 Pad 前移或后移，A01–D16，可跨 Bank，到两端不可用。只导航，不演奏、不加删音符。 |
-| ← →（SHIFT 关） | 停止时切到上一个或下一个 Pattern，到两端不可用。播放或已开启的录音中改为预约切换：按 SEQ SNAP 的下一拍／下一小节／Pattern 结束边界生效，排队期间再按改目标，再按正在播的 Pattern 请求取消。COUNT-IN 开启尚未完成、取消／结算或命令处理中不可用。 |
+| ← →（SHIFT 关） | 停止时切到上一个或下一个 Pattern，到两端不可用。播放且未录音时改为预约切换：按 SEQ SNAP 的下一拍／下一小节／Pattern 结束边界生效，排队期间再按改目标，再按正在播的 Pattern 取消。录音或命令处理中不可用。 |
 | SHIFT + ← →、Play/Stop、Record | 见[第 1 章](#global)。 |
 | Bank | 当前 Pad 保持原地址，不随 Bank 改变；上屏窗口跳到所选 Bank 第一行，当前 Pad 若在其他 Bank，其行高亮随之离开可见窗口。网格换成该 Bank 的 16 条轨道，清除音符选区。不发声。 |
 | 16 个 Pad | 演奏并改变全机当前 Pad，Sample 编辑对象同步；非录音时不新增音符。录音中会录入，见 [1.3](#transport)。Record Sample 武装期间保持其目标。 |
@@ -543,7 +531,7 @@ Stop、Commit 和 Close 不随详细信息滚出面板；权限拒绝、设备�
 | 状态 | 操作 | 结果 |
 | --- | --- | --- |
 | 停止 | GROOVE 标题 → Pattern 列表 | 直接选择任一 Pattern，网格换内容，原音符选区清空。 |
-| 播放或已开启的全局录音 | GROOVE 标题 → Pattern 列表 | 按 SEQ SNAP 预约在下一拍／下一小节／Pattern 结束边界切到所选 Pattern；标题显示排队目标（如 `GROOVE / 01 → 02`），上屏继续命名真正在播的 Pattern，生效后选择跟随。COUNT-IN 开启尚未完成、取消／结算和命令处理中不可用。 |
+| 播放且未录音 | GROOVE 标题 → Pattern 列表 | 按 SEQ SNAP 预约在下一拍／下一小节／Pattern 结束边界切到所选 Pattern；标题显示排队目标（如 `GROOVE / 01 → 02`），上屏继续命名真正在播的 Pattern，生效后选择跟随。录音或命令处理中不可用。 |
 | Pattern 列表 | Cancel／Escape | 只关闭列表，焦点回到标题，不切换，也不影响已排队的切换。 |
 | Pattern 列表 | 点当前正在播的 Pattern | 有排队时请求取消，并关闭列表、把焦点还给标题；标题等待 transport 回读再更新。若前一切换已生效，按真实结果显示新的当前 Pattern 和返回原 Pattern 的排队。没有排队或停止时点当前项只关闭列表，不发请求。 |
 | 任意 | EDIT／SETUP | 切换网格和设置卡片。只改视图；离开再回来默认 EDIT。 |
@@ -584,8 +572,8 @@ Double Up／Copy／New 同行；Quantize 与 Metronome 显示当前 On／Off。
 | 停止 | COPY | 复制当前 Pattern 并切到副本。不同于 Project 的 DUPLICATE。 |
 | 停止 | + NEW → 长度 1／2／4／8 → CREATE | 新建空 Pattern 并切过去。选长度不改旧 Pattern；CANCEL 只收起表单。 |
 | 非录音、非命令处理中 | QUANTIZE | 开关录音量化，Perform 上屏显示新设置。不重写已有音符。 |
-| 任意 | SEQ SNAP 1 BEAT／1 BAR／SEQ END | 选择之后播放中切换的边界；默认 1 BAR。Sequence 与未开演出录制的 Perform Launch 共用，重开恢复设备偏好，不改 Project 或 Undo。录音期切换复用本选择；OFF 另有后续 Task。 |
-| 任意，包括录音中 | METRONOME | 开关监听节拍器，不保存到 Project；COUNT-IN 固定数拍不受它影响，S 点及开录后遵循当前开关。 |
+| 任意 | SEQ SNAP 1 BEAT／1 BAR／SEQ END | 选择之后播放中切换的边界；默认 1 BAR。Sequence 与未开演出录制的 Perform Launch 共用，重开恢复设备偏好，不改 Project 或 Undo。OFF 与录音中切换另有后续 Task。 |
+| 任意，包括录音中 | METRONOME | 开关节拍器。这是本设备的设置，不保存到 Project；只在 Pattern 播放时发声。 |
 | 任意 | Playback details → Refresh playback | 重新读取 Sequence、Project 和播放状态，核对未确定的命令，必要时恢复。不会再切一次 Play 或 Record。 |
 
 SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸附，QUANTIZE 决定录音量化，三者独立。修改 SEQ SNAP 影响下一次切换请求，不改已经排队请求的边界。1 BEAT／1 BAR／SEQ END 到边界后，新 Pattern 从开头开始；停止播放清除尚未生效的排队。
@@ -602,24 +590,18 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 
 ## 6. Perform \{#perform\}
 
-紧凑竖屏宽度不足708px时，Project／Sample／Sequence／Perform 及 System 共用独立左侧物理栏、上方 Pad 矩阵和下方单一触摸滚动区，触摸区不再盖住实体键。保留实际至少44px的实体键和 Pad 命中区；主模式切换与 System 返回沿用同一分区，挂载及窗口变化继续由原 stage fit 适配，实时数值更新不反复计算布局。Perform 组按钮、三根主推子保持原44px命中；其390px上屏旋钮读数仍用两行两列保留完整标签和值。公共输入几何验证与完整35屏样式、真实移动设备验收分别记录。
-
-
 **控件速查卡**
 
 | 控件 | 在 Perform 页的作用 |
 | --- | --- |
-| ENC1／ENC2／ENC3 | 主组为 Cutoff（独立 Filter）／Delay／Reverb；FILTER 组为 Type（LP／HP／BP）／同一 Cutoff／Resonance；MORE 组为 Crush／Stutter／Gate；Reverse 与 Cutter 只有触摸推子，没有旋钮。七段单值 FX 每格 10/1000、SHIFT 1/1000；Cutoff 按 20 Hz–20 kHz 对数走，粗调每格 10 个对数位置、SHIFT 细调 1 个；Resonance 0–100%。停转和换组保持值与手势。 |
+| ENC1／ENC2／ENC3 | 主组为 Cutoff（独立 Filter）／Delay／Reverb；FILTER 组为 Type（LP／HP／BP）／同一 Cutoff／Resonance；FX／MORE 组为 Crush／Stutter／Gate；Reverse 与 Cutter 只有触摸推子，没有旋钮。七段单值 FX 每格 10/1000、SHIFT 1/1000；Cutoff 按 20 Hz–20 kHz 对数走，粗调每格 10 个对数位置、SHIFT 细调 1 个；Resonance 0–100%。停转和换组保持值与手势。 |
 | ↑／↓ | 静默选择上一／下一当前 Pad，A01–D16 首尾停止；空 Pad 也可选择，跨界同步 Bank，不触发声音、不写工程或历史。SHIFT 或 System 中不可用。 |
-| 其余左栏 | ENC4 监听音量；不按 SHIFT 的 ←／→ 按 PRIMARY／FILTER／MORE 选择参数组，其余见[第 1 章](#global)。演出录制中或待保存时 Record 不可用。Bank 键直接选择演奏组，不改变当前 Pad；Pad 方向跨界时也会同步 Bank。 |
+| 其余左栏 | ENC4 监听音量；不按 SHIFT 的 ← → 尚不可用，其余见[第 1 章](#global)。演出录制中或待保存时 Record 不可用。Bank 键直接选择演奏组，不改变当前 Pad；Pad 方向跨界时也会同步 Bank。 |
 | 16 个 Pad | 仍是声音 Pad，不是 Pattern Launch 键。演出录制中，按下和松开都会记录。 |
 | 上屏 | PATTERN PLAYING／PATTERN QUEUED／PATTERN POSITION／Bank 与 Quantize 四栏，前三栏都来自全局 Pattern transport。全局播放状态、bar／beat、进度、Performance phase、已分配槽数仍可见。独立 launch cue 保留 Performance pending launch／ACKNOWLEDGED 回执；它不覆盖 PATTERN QUEUED，也不代表 Performance 持续播放或录音时钟。 |
 | 触摸区 | Live、Slots、Takes、Replay 四个子页；缺少能力时显示还在等待音频或录音存储。 |
 
-- 四栏下方的 L/R 横条显示 FX 后、监听音量前的真实作品 dBFS，排除节拍器；ENC4／MASTER 不改变读数。范围 −60…0，真实静音为 −∞。每声道的细峰值线按该次测量的实际音频帧保持 1 秒；重复读取不延长，较低读数不加装饰性衰减。
-- 测量缺失、过期或失败时显示 UNAVAILABLE，不显示数字或旧峰值线。暂停、换工程、换 Session／owner 或 sample rate 会丢弃旧保持；恢复只显示新 owner 的实际测量。切页／System 不保留后台读数循环，不发送测量 RPC、不改工程或偏好。
-- 演出录制 phase 仍只读显示；完整录制、WAV 和 Replay 的状态及操作仍在触摸区。原 Pattern playing／queued、位置、进度与 launch cue 均保留。
-- 录音卡只在真实 batch、存储回执和原有生命周期变化后更新，不增加计时器、I/O 或自动重试。数值按毫秒显示，回调延迟时保持已有事实；缺失显示 Unavailable。Save UNKNOWN／Retry WAV bind 保留同一局部录音，确认完成／丢弃、下一次录音或关闭 owner 后清除；旧 callback 不能改新录音。
+- 上屏没有主输出电平表；演出录制 phase 只读显示，完整录制、WAV 和 Replay 的状态及操作仍在触摸区。
 - 页首提示和录制状态里重复的最近一次 Launch 文字已合并到上屏；Launch 键及分组旁的提示保留。
 - 离开 Perform 会结束演出录制和 Replay，见 [1.2](#pages)。
 
@@ -628,13 +610,12 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | 任意 | Live／Slots／Takes／Replay | 切子页并回到页顶。录制、回放、HOLD、表单和 More 展开都保留。FX 推子按住时暂不能切。 |
 | Live | 1–4／5–8／9–12／13–16 | 选择显示哪四个 Pattern 槽。不触发 Launch。其他组的槽仍显示 Queued／Playing。跨子页保留。 |
 | 演出录制中 | Pattern Launch 01–16 | 预约切到该 Pattern，状态 Queued → Playing。上屏在真正切换前仍显示原 Pattern。Launch 会被记录；空槽是一段静音。 |
-| 全局 Pattern 播放或录音、没有演出录制 | Pattern Launch 01–16 | 按同一设备 SEQ SNAP 预约在下一拍／下一小节／Pattern 结束边界切到该槽的 Pattern，槽位显示 Queued，正在播的 Pattern 显示 Playing；上屏的 QUEUED SLOT 同步显示排队目标。Sequence 排队到未分配槽的 Pattern 时，上屏显示 QUEUED PATTERN NN。bar／beat／进度使用正在播放的 Pattern 长度。空槽不做任何事。 |
+| 播放且未录音 | Pattern Launch 01–16 | 按同一设备 SEQ SNAP 预约在下一拍／下一小节／Pattern 结束边界切到该槽的 Pattern，槽位显示 Queued，正在播的 Pattern 显示 Playing；上屏的 QUEUED SLOT 同步显示排队目标。Sequence 排队到未分配槽的 Pattern 时，上屏显示 QUEUED PATTERN NN。bar／beat／进度使用正在播放的 Pattern 长度。空槽不做任何事。 |
 | 停止 | Pattern Launch 01–16 | 直接选中该槽的 Pattern，之后按 Play 从它开始。空槽不做任何事。 |
-| COUNT-IN 开启尚未完成、取消／结算、transport 命令处理中或状态未知 | Pattern Launch | 不可用；等待实际开启或结算确认。 |
+| 全局 Pattern 录音但没有演出录制、transport 命令处理中或状态未知 | Pattern Launch | 不可用；全局 Pattern 录音中切换已批准、尚未交付，见[第 2 章](#planned)。 |
 | 演出录制正在启动、停止、保存、丢弃或处于失败阶段 | Pattern Launch | 暂不可用；等该操作完成或恢复。稳定的 idle／stopped 才可按全局 transport 选择／预约，recording／flushing 走演出 Launch。 |
 | 可用时 | Filter／Delay／Reverb 推子 | 按下、移动、松开即实时效果；Delay／Reverb 显示百分比，Filter 是独立滤波的 Cutoff，按 Core 读回显示 Hz（OFF／LP／20 kHz／0% 起；producer 不可用时不从百分比反推 Hz，FILTER 面板如实显示 unavailable）。演出录制中同时记录；触摸与旋钮调同一参数时共用拥有的手势。 |
-| 可用时 | PRIMARY／FILTER／MORE、←／→ | 互斥显示主三推子、独立 Filter、其他五个 FX；旋钮同步到 Cutoff／Delay／Reverb、Type／Cutoff／Resonance、Crush／Stutter／Gate。箭头到首尾停止；SHIFT 保留 Undo/Redo，System 不提供组导航。未持有触摸输入时切组不调用 producer，不改变旋钮效果或 HOLD；释放被移除触摸输入的 token。再次点击 MORE／FILTER 返回 PRIMARY，保留原收起释放行为。Filter 只读显示 Off／Engaged／Frozen／Pending／Unavailable，无旁路开关。 |
-| Live | Live Mute / Solo、Back to Filter | 查看当前 Pad 的 Mute/Solo 和全 64 槽实际 muted/solo 地址摘要；Mute 优先，多 Solo 可并存。Pending/Unavailable 不显示猜测的空列表。返回独立 Filter，不重置 masks、HOLD 或录制。 |
+| 可用时 | FX / MORE 与 FILTER | FX / MORE 展开或收起 Stutter、Gate、Reverse、Crush、Cutter 五个触摸推子，同时把旋钮组切到 Crush／Stutter／Gate；FILTER 打开独立滤波面板（LP／HP／BP 类型段、Cutoff、Resonance）并把旋钮组切到 Type／Cutoff／Resonance。进入 FILTER 组不调用任何 producer、不改变声音；旋钮效果保持；收起 MORE 或 FILTER 时释放其触摸推子上未结束的手势。HOLD 下松开由 Core 冻结，面板读回 frozen。 |
 | 可用时 | HOLD | 开关 FX 保持：松开推子后效果按规则保留。与 Sample 的循环 Hold 不同。 |
 | 监听音量已恢复且可用时 | MASTER | 0–100% 的本设备监听音量，与 ENC4 共用，下次打开恢复。不写工程，不改变录音、重采样或导出电平，也不随演出录制／回放变化。 |
 | 可录制，其他录音空闲 | Record Performance | 开始记录演出操作和主输出 WAV；Launch 变为可用。准备失败时显示原因。 |
@@ -646,18 +627,11 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | Takes，已停止 | Discard Performance | 丢弃当前待保存的演出。不删除已保存的演出。 |
 | Takes，有 WAV | Export Performance WAV | 下载这次的 WAV。不产生作者编辑。 |
 | Takes，关联失败 | Retry WAV bind | 只重试关联 WAV，不用再演一次。 |
-| Takes，Saved Takes 有条目 | Take 选择按钮 | 选择要查看的已保存演出，按实际验证 WAV 的帧数／采样率显示音频时长。选择不写工程、不触发 Replay，也不扫描其他 Take。 |
-| Takes，所选演出 | WAV audio（只读） | 时长仅来自完整 owner／revision／Artifact 验证后的 WAV；无 WAV、不支持格式、完整性校验失败和读取不可用分别显示。旧录音完整性仍未知，不用事件数或字节数猜时间。 |
-| Takes，WAV 读取失败 | Retry audio check | 显式重查当前所选 Take。换选择、工程重开或引用变化后不采纳旧结果；取消观察不等于底层读取已退出。 |
-| Takes，列表读取失败 | Retry saved Takes | 重新读取当前工程的列表，不自动 Replay 或重试旧工程的工作。若当前 WAV 绑定失败，先 Retry WAV bind 或 Discard，保留待处理文件后再恢复列表。 |
-| Takes，已选演出 | Replay selected Take | 显式开始原有事件 Replay 并进入 Replay 页；WAV 时长不作为其进度分母。 |
 | Replay 有条目，或任一子页回放中 | Replay／Stop Replay | 回放或停止。回放不会录进 Pattern；上屏仍显示全局 Pattern。Stop Replay 将 FX 归中、关闭 HOLD 并清空演出 Launch 状态，监听音量保持。 |
 | Replay，有演出恢复候选 | Apply recovery／Discard recovery | 恢复演出（自动收尾未松开的 Pad），或丢掉候选。丢候选不删除已保存的演出。 |
 | Live／Slots／Takes，有恢复候选 | Review recovery | 进入 Replay 查看。FX 推子按住时不可用。 |
-| Slots，结构编辑可用 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 在 Assign／Move／Clear 分区选择参数。Pattern 以序号区分；目标槽读数来自实际工程映射。选择、Escape 或返回 Live 都不写工程、不 Launch，切页后保留选项。 |
-| Slots，结构编辑可用 | Assign Pattern／Clear Pattern／Move Pattern | 按对应按钮才提交分配、清空或移动，并刷新工程；失败不把草稿当成已提交读数。源和目标相同时 Move 不可用。演出录制非空闲、全局 Pattern 录制、COUNT-IN 及工程／transport 结算时禁用全部结构编辑；稳定普通播放可编辑，全局录制中的正常 Launch 规则不变。 |
-| Live／Takes，有当前录音 | Captured audio（只读） | 真实接收 PCM 帧数／实际 sampleRate，显示音频时长。静音也计入，没有 batch 不补数，不是完整演出 elapsed。 |
-| Live／Takes，有当前本地 WAV | Local WAV／Local WAV prefix（只读） | 使用文件实际编码格式和已落盘帧数。待 checkpoint 的数据不提前计入；Stop 等最后一批与 seal 回执。失败保留可读前缀、已知掉帧和未量化 loss 的区别。Save／绑定状态仍独立。 |
+| Slots，演出录制空闲 | Pattern assignment／slot、Clear slot、Move from／to 下拉 | 选择要分配、清空或移动的槽。还没生效。 |
+| Slots，演出录制空闲 | Assign Pattern／Clear Pattern／Move Pattern | 把 Pattern 放进槽、清空槽或移动。源和目标相同时 Move 不可用。录制非空闲时这些编辑都不可用。 |
 | 任意 | Recording details 折叠项 | 只读：WAV 录制和关联状态，以及未结束的 Pad／FX 手势数和 HOLD。 |
 | Slots，或有 Replay 的任意子页 | Project details／Replay details 折叠项 | 只读：Project 修订号，或回放状态和 Neutral FX。 |
 
@@ -783,7 +757,7 @@ System 打开时仍可操作。标题、候选数量和阶段标签来自实际�
 
 ## 10. 当前没有的交互 \{#not-available\}
 
-本章只列界面上没有、也没有批准计划的入口。已批准但尚未交付的行为（方向导航、可听 BPM、ASSIGN、独立滤波、live Mute／Solo、作品电平表）统一见[第 2 章](#planned)，不在此重复。
+本章只列界面上没有、也没有批准计划的入口。已批准但尚未交付的行为（方向导航、可听 BPM、ASSIGN、独立滤波、live Mute／Solo、作品电平表、count-in）统一见[第 2 章](#planned)，不在此重复。
 
 - 上屏不能点按或拖拽编辑；Sequence 网格的轨道名称也不是演奏按钮。
 - 下边 16 个声音 Pad 与 Perform 触摸区的 16 个 Pattern Launch 槽是两回事。没有演出录制时，Launch 按全局 transport 的状态工作：播放中预约切换、停止时选中（[#1958](https://github.com/endaye/lmdj/issues/1958)）。

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from .batch_reference import digest, sha
 from .dispatch_evidence import DispatchEvidenceConsumer
 from .durable_dispatch import validate_spec
+from .commands import describe_failure
 from .model import canonical_sha256
 from .orchestration import JournalError, _validate_state
 from .orchestration_driver import Observation
@@ -89,7 +90,7 @@ class PublicationEffect:
             require(expires > self.consumer.now, "correlation expired during final outcome verification")
             return Observation("verified",{"sha256":canonical_sha256(record),
                 "reference":"https://github.com/endaye/lmdj/releases/tag/"+inputs["tag"]})
-        except Exception:
+        except Exception as error:
             # Existing verifiers can wrap remote errors; do not infer absence
             # or a retryable mutation from their human-readable messages.
-            return Observation("unknown")
+            return Observation("unknown", diagnostic=describe_failure(error))

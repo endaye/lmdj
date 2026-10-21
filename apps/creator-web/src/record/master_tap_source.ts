@@ -27,12 +27,10 @@ export interface MasterTapFailure {
 export interface MasterTapListener {
   onFailure(failure: MasterTapFailure): void;
   requestCaptureStop(): void;
-  onProgress?(snapshot: WavWriterSnapshot, settled: boolean): void;
 }
 
 type BatchWriter = Pick<WavStreamWriter,
-  "appendChannels" | "queueBatchLimit" | "seal"> &
-  Partial<Pick<WavStreamWriter, "snapshot">>;
+  "appendChannels" | "queueBatchLimit" | "seal">;
 
 type TerminalReason = Exclude<WavSealReason, "stopped">;
 
@@ -62,18 +60,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
   get sealed(): boolean { return this.#sealed; }
   get settled(): Promise<WavWriterSnapshot> { return this.#settledPromise; }
 
-  #publish(snapshot?: WavWriterSnapshot, settled = false): void {
-    if (this.#listener.onProgress === undefined) return;
-    try {
-      const value = this.#writer.snapshot ?? snapshot;
-      if (value === undefined || !Number.isSafeInteger(value.droppedFrames)) return;
-      this.#listener.onProgress(Object.freeze({...value,
-        droppedFrames: value.droppedFrames + this.#droppedFrames}), settled || this.#resolveSettled === null);
-    } catch {
-      // Optional observation cannot acquire, stop or fail the recording owner.
-    }
-  }
-
   onBatch(channels: readonly [Float32Array, Float32Array]): void {
     this.acceptBatch(channels);
   }
@@ -81,7 +67,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
   onStopped(): void {
     if (this.#workletStopped) return;
     this.#workletStopped = true;
-    this.#publish();
     if (this.#sealed) this.#maybeFinishTerminal();
     else this.#maybeFinishNormalStop();
   }
@@ -93,7 +78,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
   private acceptBatch(channels: readonly Float32Array[]): void {
     if (this.#sealed) {
       this.#droppedFrames += channels[0]?.length ?? 0;
-      this.#publish();
       return;
     }
     const frames = this.#validateBatch(channels);
@@ -132,7 +116,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
       } finally {
         this.#outstanding -= 1;
       }
-      this.#publish(snapshot);
       if (snapshot.state === "sealed") {
         if (snapshot.reason === "stopped") {
           this.#sealed = true;
@@ -148,7 +131,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
       this.#queue.splice(0);
     }
     this.#draining = false;
-    this.#publish();
     if (this.#sealReason !== null) this.#maybeFinishTerminal();
     else this.#maybeFinishNormalStop();
   }
@@ -156,7 +138,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
   #requestTerminal(reason: TerminalReason, additionalDroppedFrames: number): void {
     if (this.#sealed) {
       this.#droppedFrames += additionalDroppedFrames;
-      this.#publish();
       this.#maybeFinishTerminal();
       return;
     }
@@ -167,7 +148,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
     this.#outstanding -= this.#queue.length;
     this.#queue.splice(0);
     this.#requestCaptureStop();
-    this.#publish();
     this.#maybeFinishTerminal();
   }
 
@@ -209,7 +189,6 @@ export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
       reason: reportedReason,
       droppedFrames: this.#droppedFrames + (snapshot.droppedFrames ?? 0),
     });
-    try { this.#listener.onProgress?.(settled, true); } catch {}
     if (reportedReason !== "stopped") {
       try {
         this.#listener.onFailure(Object.freeze({

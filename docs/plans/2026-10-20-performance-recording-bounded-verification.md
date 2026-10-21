@@ -1,3 +1,53 @@
+# Current-main integration of #2409
+
+# #2409 integration premises before edits
+
+Integration main bbdab7e9c1dedd1d3b70734e080151643ff76063. Original source3a62b103c7c79cbfb8c18e4849b3cd477318df4c, original parent26a31132470e3a46dcd24b1ecd0885f970430cb4. New isolated fix/performance-recording-bounded-verification-main starts at that main; clean with10 actual symlinks.
+
+- Outstanding: current verify_managed_wav_artifact calls describe_artifact -> Platform read_complete; both save_performance_draft and bind_performance_recording invoke it under their existing writer/history guards. A345600056-byte OPFS allocation plus C++ copy still exceeds the fixed512MiB heap. Original U08b OOM is retained evidence, not metadata/UI success.
+- Already delivered: range/scan/streaming WAV/Facade/Runtime/SDK producers #2432/#2434/#2435/#2436/#2437. Current raw scan uses bounded ranges (positive control); current Save/bind verifier does not. Do not reimplement those producers, parse Project in Host or absorb held meter/capture-progress/COUNT-IN ancestors.
+- Five non-new inputs all byte-identical to original parent: root CMake, Project I/O CMake/source/Portal and real RPC spec. Re-home only the exact seven-file layer, retaining every original Native/browser leg. Correct the same declared Portal page's now-stale statement that asynchronous Facade/SDK owner retirement is still absent: these producers are on main, actual Take Host consumer remains outstanding.
+- Preserve raw Artifact identity semantics, including valid empty raw files and legacy no-companion complete-read compatibility. Raw identity does not establish WAV grammar: metadata success still requires nonempty WAV frames. A present companion's error must never fall back. Length before/after, full digest, short-read progress, EOF, failures retaining stopped draft/null bind/revision and replay remain strict.
+- Baseline Native lifecycle/scan/storage3 must run before product edits. New observer first runs against unchanged verifier for actual discriminating RED, then exact source fix/rebuild GREEN. Final persistence10 and existing writer lease stress, real pinned Wasm Chromium4/WebKit3 with both30-minuteSave/bind admissions and two fresh reopens each, original metadata/live-Control legs, complete physical digest/length/header/frame readback and unchanged512MiB/30-secondRPC budgets are required. Retain original OOM, harness/root-argument and interrupted advisory negative evidence.
+- Native/Wasm/browser/Portal/Creator production build+package phases run serially. Use only owned build roots and supported pinned WebKit override/protocol wrapper; preserve full journey/assertions. Complete full-candidate/sanitizer/device/hearing remains separate and unverified.
+- One Task/seven declared files, one Conventional Commit. Existing standing push/review/normal squash and safe postmerge cleanup apply. Original published stack remains untouched, root main and both dirty WIPs preserved. Release-owned path freeze and pending #2430 owner exception remain in effect. No agents, auto-merge, tag, Release, deployment or Channel.
+
+Before any Task edits, actual lifecycle/scan/storage Native baseline3/3 passed
+8.468s. The original Native observer must first reject the unchanged whole-file
+verifier; then restore the exact original fix and rerun the complete ownership.
+The baseline alone establishes no result for later verification boundaries.
+
+## Current-main verification progress
+
+Actual unchanged-source observer RED exits8 at the positive Save assertion;
+the recorded baseline source was still byte-identical to main. The exact original
+fix was then applied; actual project_store.cpp recompilation and owning GREEN
+exit0 followed. Final complete persistence selection10/10 passed22.723s;
+writer-lease stress1/1 passed1.445s, with original assertions and timeouts.
+Independent Python struct/hashlib construction reproduces both literal test
+identities, including345600056 bytes/86400000 frames/48kHz/stereo without using
+the product parser. Dependencies, Runtime/Host source boundaries and Core script
+policy17 passed. Pinned formal Wasm configure/build passed. Complete original-plus-new actual
+Chromium4/4 and supported OPFS WebKit3/3 passed, with no skip/flaky/retry.
+Every browser retains nine original metadata reports plus six long WAV reports:
+Save and bind each prepare/close/reopen/close/reopen/close,15 closed pages total.
+Full SHA-256/345600056-byte length/header/tail/86400000 frames at48kHz/stereo,
+Project revision2(Save)/3(bind), recording revision0 and zero events are exact;
+all memory readbacks remain536870912. Original30-second RPC and180-second test
+budgets are unchanged. Both endpoint audio observations show built-in speakers,
+no warnings; these fixture files do not establish captured PCM or device hearing.
+Full Portal passed63.175s:179 tests,53 pages,51 routes/internal links.
+Precommit main bbdab7e9 is unchanged and all seven governing files match the
+read rules. Official production Creator build/package requires this clean
+unpublished checkpoint and runs before push; its result is still pending here.
+No full candidate/device claim.
+
+## Retained original Task record
+
+The following describes the published original source and its then-current
+freeze/base/proof. It is retained historical evidence and does not supersede
+current authorization, main premises or fresh verification above.
+
 # Bounded verification before saving or binding Performance audio
 
 ## Premises and current evidence

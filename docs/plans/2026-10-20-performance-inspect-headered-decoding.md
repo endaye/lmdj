@@ -1,5 +1,29 @@
 # Decode existing headered Performance inspection events
 
+## Current main integration (2026-10-21)
+
+The owner authorizes integration of the 19 open PRs under #2112. This section
+supersedes the historical Draft/freeze wording below. Refreshed integration
+base: `54439f207926841b9411c805d70252c5df66b33f`. Its SDK decoder still
+accepts only legacy exact keys and rejects the existing headered sequence,
+typed Filter and Pad-gate events. Existing Domain producer vocabulary and
+opaque public event records require no change. Live #2228 and #2412 retain
+this distinct prerequisite; no delivering successor is present at this base.
+
+Preserve original published head `5074f0753bb68ed927d37e8a5b7802fe8c90e3df`
+through a normal main merge; resolve the tree as current main plus only the
+original five declared paths below. All five patches apply without changes to
+their executable content. Do not import unrelated old stack ancestors or the
+withdrawn COUNT-IN consumer. U08c's complete browser journey belongs to #2413.
+
+Verify the complete Platform Node suite, Creator types, source/dependency
+boundaries, staged ownership, full Portal and clean official production
+Creator configure/build/package. Retain original-source negative evidence and
+all historical failures. Version impact remains Platform PATCH debt in #2237;
+Documentation impact remains required for /hosts/web-runtime/. No new identity,
+snapshot, release, deployment, Channel or cleanup. Independent exact-head
+review and live conflict/conversation/protection checks precede guarded squash.
+
 ## Premises before edits
 
 Fresh integration main is `1c4462aa8436f81da1db2a9e6420d94f0e84ccb4`.

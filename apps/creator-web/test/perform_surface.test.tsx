@@ -8,10 +8,9 @@ import type {RuntimeDiagnostics, RuntimeHostState} from "../src/runtime/runtime_
 import {PerformanceRecordingStore} from "../src/record/performance_recording_store";
 import {openWavStreamWriter} from "../src/record/wav_stream_writer";
 
-import type {ContextualEncoders, ContextualNavigation} from "../src/components/physical_controls";
+import type {ContextualEncoders} from "../src/components/physical_controls";
 import type {PatternTransportStatus, PerformanceMasterCapture, PerformanceEventResult} from
   "@lmdj/web-runtime-platform/runtime_types";
-import {FxSliderBank} from "../src/components/fx_slider_bank";
 import {PerformSurface} from "../src/components/perform_surface";
 import {PerformOverview} from "../src/components/perform_overview";
 import type {CreatorPerformanceRuntimeSession} from "../src/runtime/runtime_types";
@@ -25,7 +24,6 @@ import {
   cutoffPositionToHz,
   selectLivePadGate,
   type PerformControllerDependencies,
-  type PerformanceSummary,
 } from "../src/state/perform_state";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 
@@ -215,10 +213,6 @@ function sessionFixture(initialStatus = status("ready")) {
     queryPerformanceRecordingStatus: vi.fn(),
     listPerformances: vi.fn(async () => []),
     inspectPerformance: vi.fn(),
-    queryPerformanceRecordingMetadata: vi.fn(async (_request: unknown,
-      _options?: {signal?: AbortSignal}): Promise<unknown> => {
-      throw Object.assign(new Error("Fixture has no saved WAV bytes"), {code: "IO_ERROR"});
-    }),
     savePerformance: vi.fn(async () => ({performanceId: ids.performance,
       committedRevision: 10, replayed: false, projectRevision: 10})),
     discardPerformance: vi.fn(),
@@ -430,7 +424,7 @@ function idlePatternTransport(): PatternTransportState {
   };
 }
 
-test("renders the first-screen FX chain and one HOLD before the four-slot launch strip", () => {
+test("renders Pattern, fixed FX chain, one global HOLD, then the existing Pad surface", () => {
   renderSurface();
   const surface = screen.getByRole("main", {name: "Perform"});
   const pattern = within(surface).getByRole("region", {name: "Pattern Launch"});
@@ -439,7 +433,7 @@ test("renders the first-screen FX chain and one HOLD before the four-slot launch
   // The console's Pad matrix is the one Pad surface; Perform mounts none of
   // its own, so a second identical grid never competes for the same names.
   expect(within(surface).queryByRole("region", {name: "Perform instrument"})).toBeNull();
-  expect(fx.compareDocumentPosition(pattern) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  expect(pattern.compareDocumentPosition(fx) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(fx.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   expect(within(surface).getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
@@ -490,9 +484,9 @@ test("Launch without a Performance recording selects the slot's Pattern; empty s
 });
 
 // #1958: outside a Performance recording the slots follow the transport: a
-// settling transport keeps them closed, and so does a missing projection.
-// Open global Pattern recording delegates through that same path.
-test("Launch during global Pattern recording selects through transport and stays closed while settling", async () => {
+// settling or recording transport keeps them closed, and so does a missing
+// transport projection.
+test("Launch without a Performance recording stays closed while the transport records or settles", async () => {
   const fixture = controllerFixture();
   const status = (overrides: Partial<PatternTransportStatus>): PatternTransportState => ({
     ...initialPatternTransportState,
@@ -505,23 +499,21 @@ test("Launch during global Pattern recording selects through transport and stays
       ...overrides,
     },
   });
-  const onSelectPattern = vi.fn();
   const view = render(
     <PerformSurface controller={fixture.controller} project={project} bank={0}
-      transport={status({playing: true, recording: true})} onSelectPattern={onSelectPattern} />);
-  const launch = screen.getByRole("button", {name: /^Launch Pattern 1$/});
-  expect(launch.hasAttribute("disabled")).toBe(false);
-  await userEvent.click(launch);
-  expect(onSelectPattern).toHaveBeenCalledExactlyOnceWith(ids.pattern1);
-  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
+      transport={status({playing: true, recording: true})} onSelectPattern={vi.fn()} />);
+  for (const name of ["Launch Pattern 1", "Launch Pattern 2", "Launch Pattern 3"]) {
+    expect(screen.getByRole("button", {name: new RegExp(`^${name}$`)})
+      .hasAttribute("disabled")).toBe(true);
+  }
   view.rerender(
     <PerformSurface controller={fixture.controller} project={project} bank={0}
-      transport={status({phase: "preparing"})} onSelectPattern={onSelectPattern} />);
+      transport={status({phase: "preparing"})} onSelectPattern={vi.fn()} />);
   expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
     .hasAttribute("disabled")).toBe(true);
   view.rerender(
     <PerformSurface controller={fixture.controller} project={project} bank={0}
-      onSelectPattern={onSelectPattern} />);
+      onSelectPattern={vi.fn()} />);
   expect(screen.getByRole("button", {name: /^Launch Pattern 1$/})
     .hasAttribute("disabled")).toBe(true);
   expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
@@ -613,17 +605,17 @@ test("slot states follow the transport's queued switch and playing Pattern", () 
   expect(group.textContent).toContain("Playing");
 });
 
-test("keeps the other five confirmed FX behind MORE", async () => {
+test("keeps the other five confirmed FX behind FX / MORE", async () => {
   renderSurface();
   const fx = screen.getByRole("region", {name: "Performance FX"});
-  const more = within(fx).getByRole("button", {name: "MORE"});
+  const more = within(fx).getByRole("button", {name: "FX / MORE"});
   expect(more.getAttribute("aria-expanded")).toBe("false");
   expect(within(fx).queryByRole("slider", {name: "Stutter"})).toBeNull();
 
   await userEvent.click(more);
   expect(more.getAttribute("aria-expanded")).toBe("true");
   expect(within(fx).getAllByRole("slider").map((slider) => slider.getAttribute("aria-label")))
-    .toEqual(["Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
+    .toEqual(["Filter", "Delay", "Reverb", "Stutter", "Gate", "Reverse", "Crush", "Cutter"]);
 
   await userEvent.click(more);
   expect(within(fx).queryByRole("slider", {name: "Cutter"})).toBeNull();
@@ -952,10 +944,10 @@ test("forwards every FX raw value with exact Core keys and no Host clock or sour
   expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
 });
 
-test("releases an open FX gesture when MORE collapses it away", async () => {
+test("releases an open FX gesture when FX / MORE collapses it away", async () => {
   const {fixture} = renderSurface();
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
-  const more = screen.getByRole("button", {name: "MORE"});
+  const more = screen.getByRole("button", {name: "FX / MORE"});
   await userEvent.click(more);
   const stutter = screen.getByRole("slider", {name: "Stutter"});
   fireEvent.pointerDown(stutter, {pointerId: 5});
@@ -1294,117 +1286,6 @@ test("binds with the latest Project revision after a concurrent mutation", async
     performanceId: ids.performance});
 });
 
-test("saved Take header reads wait for the complete managed WAV bind", async () => {
-  const fixture = controllerFixture();
-  const disconnect = fixture.controller.connect();
-  await fixture.controller.refreshRecovery();
-  await fixture.controller.record();
-  await fixture.controller.stop();
-  const binding = deferred<{committedRevision: number}>();
-  fixture.store.bind.mockReturnValueOnce(binding.promise);
-  const saving = fixture.controller.save("Pending WAV");
-  await vi.waitFor(() => expect(fixture.store.bind).toHaveBeenCalledTimes(1));
-  const list = vi.mocked(fixture.runtime.session.listPerformances);
-  list.mockClear();
-  const refreshing = fixture.controller.refreshPerformances();
-  try {
-    for (let n = 0; n < 32; n++) await Promise.resolve();
-    expect(list, "recovery-capable list must not scavenge the unbound managed WAV")
-      .not.toHaveBeenCalled();
-  } finally {
-    binding.resolve({committedRevision: 11});
-    await Promise.all([saving, refreshing]);
-  }
-  expect(list).toHaveBeenCalled();
-  expect(fixture.controller.getState().bindingStatus).toBe("bound");
-  disconnect();
-});
-
-test("managed WAV bind waits for older header reads without blocking unrelated mutations", async () => {
-  const fixture = controllerFixture();
-  const disconnect = fixture.controller.connect();
-  await fixture.controller.refreshRecovery();
-  await fixture.controller.record();
-  await fixture.controller.stop();
-  const older = deferred<readonly PerformanceSummary[]>();
-  const list = vi.mocked(fixture.runtime.session.listPerformances);
-  list.mockReturnValueOnce(older.promise);
-  const refreshing = fixture.controller.refreshPerformances();
-  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
-  const saving = fixture.controller.save("Older observer");
-  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
-  try {
-    for (let n = 0; n < 32; n++) await Promise.resolve();
-    expect(fixture.runtime.session.savePerformance).toHaveBeenCalledOnce();
-    expect(fixture.store.bind, "the older recovery-capable read must retire before installing WAV")
-      .not.toHaveBeenCalled();
-  } finally {
-    older.resolve([]);
-    await Promise.all([saving, refreshing]);
-    disconnect();
-  }
-  expect(fixture.controller.getState().bindingStatus).toBe("bound");
-});
-
-test("a failed WAV bind keeps later list observers away from its retained managed bytes", async () => {
-  const fixture = controllerFixture();
-  const disconnect = fixture.controller.connect();
-  await fixture.controller.refreshRecovery();
-  await fixture.controller.record();
-  await fixture.controller.stop();
-  fixture.store.bind.mockRejectedValueOnce(Object.assign(new Error("bind busy"), {code: "PROJECT_BUSY"}));
-  await fixture.controller.save("Retained WAV");
-  const list = vi.mocked(fixture.runtime.session.listPerformances);
-  list.mockClear();
-  await expect(fixture.controller.refreshPerformances()).rejects.toThrow("Bind or discard");
-  expect(list).not.toHaveBeenCalled();
-  await fixture.controller.retryWavBind();
-  expect(fixture.controller.getState().bindingStatus).toBe("bound");
-  expect(list).toHaveBeenCalled();
-  disconnect();
-});
-
-test("a rejected header peer does not retire the other read before managed WAV installation", async () => {
-  const fixture = controllerFixture();
-  const disconnect = fixture.controller.connect();
-  await fixture.controller.refreshRecovery();
-  await fixture.controller.record();
-  await fixture.controller.stop();
-  const list = vi.mocked(fixture.runtime.session.listPerformances);
-  const recovery = deferred<readonly never[]>();
-  list.mockRejectedValueOnce(new Error("older list failed"));
-  vi.mocked(fixture.runtime.session.listPerformanceRecovery).mockReturnValueOnce(recovery.promise);
-  const observing = fixture.controller.refreshPerformances().catch(() => {});
-  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
-  const saving = fixture.controller.save("Pending recovery read");
-  await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
-  try {
-    for (let n = 0; n < 32; n++) await Promise.resolve();
-    expect(fixture.store.bind, "one rejected peer does not retire the unfinished read")
-      .not.toHaveBeenCalled();
-  } finally {
-    recovery.resolve([]);
-    await Promise.all([observing, saving]);
-    disconnect();
-  }
-  expect(fixture.controller.getState().bindingStatus).toBe("bound");
-});
-
-test("discard after a failed WAV bind releases its saved Take observation restriction", async () => {
-  const fixture = controllerFixture();
-  const disconnect = fixture.controller.connect();
-  await fixture.controller.refreshRecovery();
-  await fixture.controller.record();
-  await fixture.controller.stop();
-  fixture.store.bind.mockRejectedValueOnce(Object.assign(new Error("bind busy"), {code: "PROJECT_BUSY"}));
-  await fixture.controller.save("Discard retained WAV");
-  await fixture.controller.discard();
-  expect(fixture.store.discard).toHaveBeenCalledOnce();
-  expect(fixture.controller.getState().recording.phase).toBe("idle");
-  expect(fixture.controller.getState().performancesStatus).toBe("ready");
-  disconnect();
-});
-
 test("retains a failed WAV binding for an explicit retry without saving twice", async () => {
   const fixture = controllerFixture();
   fixture.store.bind.mockRejectedValueOnce(Object.assign(
@@ -1457,14 +1338,10 @@ test("retries the saved Performance list projection before binding", async () =>
     .toHaveBeenCalledTimes(1));
   await userEvent.click(screen.getByRole("button", {name: "Record Performance"}));
   await userEvent.click(screen.getByRole("button", {name: "Stop Performance"}));
-  selectPerformPage("Takes");
-  // Opening Takes now refreshes its saved list. Arm the failure only after
-  // that far-side read so the original Save->list->retry-bind leg owns it.
-  await waitFor(() => expect(fixture.controller.getState().performancesStatus).toBe("ready"));
-  expect(fixture.runtime.session.listPerformances).toHaveBeenCalledTimes(2);
   (fixture.runtime.session.listPerformances as ReturnType<typeof vi.fn>)
     .mockRejectedValueOnce(new Error("list failed"));
 
+  selectPerformPage("Takes");
   await userEvent.click(screen.getByRole("button", {name: "Save Performance"}));
   await waitFor(() => expect(screen.getByRole("alert").textContent)
     .toBe("The Performance was saved, but Creator could not show the latest Project. Choose Save Performance again."));
@@ -1903,8 +1780,8 @@ test("subpages retain the recording and HOLD until explicit Stop", async () => {
 
 test("page navigation waits for an FX gesture and keeps More FX expansion", async () => {
   const {fixture} = renderSurface();
-  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
-  const filter = screen.getByRole("slider", {name: "Stutter"});
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  const filter = screen.getByRole("slider", {name: "Filter"});
   fireEvent.pointerDown(filter, {pointerId: 41});
   fireEvent.change(filter, {target: {value: "650"}});
   const pages = within(screen.getByRole("navigation", {name: "Perform pages"}));
@@ -1918,8 +1795,8 @@ test("page navigation waits for an FX gesture and keeps More FX expansion", asyn
   expect(pages.getAllByRole("button").every(button => !(button as HTMLButtonElement).disabled)).toBe(true);
   selectPerformPage("Slots");
   selectPerformPage("Live");
-  expect(screen.getByRole("button", {name: "MORE"}).getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByRole("slider", {name: "Stutter"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "FX / MORE"}).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("slider", {name: "Reverb"})).toBeTruthy();
   // Component events fix one release; packaged native pointer capture covers
   // drag-off delivery, which jsdom cannot establish.
 });
@@ -2002,11 +1879,11 @@ test("Perform encoder groups retain their effect values across group switches an
   expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Filter", "Delay", "Reverb"]);
   act(() => current!.bindings[1]!.onTurn(1, true));
   expect(fixture.controller.getState().fx.filter).toBe(501);
-  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
   expect(Object.values(current!.bindings).map((binding) => binding.label)).toEqual(["Crush", "Stutter", "Gate"]);
   act(() => current!.bindings[1]!.onTurn(2));
   expect(fixture.controller.getState().fx.crush).toBe(520);
-  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
   expect(fixture.controller.getState().fx).toMatchObject({filter: 501, crush: 520});
   for (const page of ["Slots", "Takes", "Replay", "Live"] as const) {
     selectPerformPage(page);
@@ -3308,7 +3185,7 @@ test("FILTER group maps Type/Cutoff/Resonance and entering it calls no producer"
   expect(fixture.runtime.calls.liveStatus).not.toHaveBeenCalled();
   expect(fixture.controller.getState().filter.engaged).toBe(false);
   // The MORE group is preserved.
-  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
   expect(Object.values(current!.bindings).map((binding) => binding.label))
     .toEqual(["Crush", "Stutter", "Gate"]);
 });
@@ -3442,8 +3319,8 @@ test("rotary rest and group switches keep the Filter gesture; page exit releases
   const cutoffHz = fixture.controller.getState().filter.cutoffHz;
   // Group switches and page navigation never release the rotary gesture.
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
-  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
-  await userEvent.click(screen.getByRole("button", {name: "MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
+  await userEvent.click(screen.getByRole("button", {name: "FX / MORE"}));
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
   selectPerformPage("Slots");
@@ -3718,16 +3595,12 @@ test("an unavailable typed producer keeps the legacy Filter and says so", async 
   expect(screen.queryByText("20.0 kHz")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "FILTER"}));
   expect(screen.getByRole("status", {name: "Filter status"}).textContent)
-    .toContain("Unavailable");
-  expect(screen.getByRole("status", {name: "Filter status"}).getAttribute("data-provenance")).toBe("unavailable");
+    .toContain("unavailable");
   expect(screen.getByRole("slider", {name: "Cutoff"})
     .hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("button", {name: "HP"}).hasAttribute("disabled"))
     .toBe(true);
-  expect(screen.queryByText("20.0 kHz")).toBeNull();
-  expect(screen.getByRole("button", {name: "LP"}).getAttribute("aria-pressed")).toBe("false");
-  // Legacy gestures still take the legacy route after returning to PRIMARY.
-  await userEvent.click(screen.getByRole("button", {name: "PRIMARY"}));
+  // Legacy gestures still take the legacy route.
   const filter = screen.getByRole("slider", {name: "Filter"});
   fireEvent.pointerDown(filter, {pointerId: 3});
   fireEvent.change(filter, {target: {value: "630"}});
@@ -4131,7 +4004,6 @@ test("current Pad controls expose independent multi-Solo and Mute priority acros
   enableTypedCore(fixture.runtime.calls);
   const view = render(<PerformSurface controller={fixture.controller} project={project}
     bank={0} currentPad={0} />);
-  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"})).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", {name: "Solo A01"}));
   await waitFor(() => expect(screen.getByRole("button", {name: "Solo A01"}).getAttribute("aria-pressed")).toBe("true"));
@@ -4172,7 +4044,6 @@ test("Pad gate admission stays pending until the applied mask is read back", asy
 test("unavailable Pad gates preserve unknown state and send no fabricated neutral command", async () => {
   const fixture = controllerFixture();
   render(<PerformSurface controller={fixture.controller} project={project} bank={0} currentPad={0} />);
-  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
   expect(screen.getByRole("button", {name: "Mute A01"})).toHaveProperty("disabled", true);
   expect(screen.getByRole("status", {name: "Live Pad status"}).textContent).toContain("Unavailable");
   fixture.controller.togglePadGate("mute", 0);
@@ -4524,540 +4395,4 @@ test("P2 a post-publication INVALID_ARGUMENT remains ambiguous and blocks exit",
   expect(calls.liveControl).not.toHaveBeenCalled();
   expect(fixture.controller.getState().error).not.toBeNull();
   expect(fixture.controller.getState().replay).toBeNull();
-});
-
-
-test("exclusive groups share one MASTER and HOLD without producer calls", async () => {
-  const fixture = controllerFixture();
-  const onChange = vi.fn();
-  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
-    monitorVolume={{value: 73, disabled: false, onChange}} />);
-  for (const [group, sliders] of [
-    ["FILTER", ["Cutoff", "Resonance", "MASTER"]],
-    ["MORE", ["Stutter", "Gate", "Reverse", "Crush", "Cutter", "MASTER"]],
-    ["PRIMARY", ["Filter", "Delay", "Reverb", "MASTER"]],
-  ] as const) {
-    fireEvent.click(screen.getByRole("button", {name: group}));
-    expect(screen.getAllByRole("slider").map(node => node.getAttribute("aria-label"))).toEqual(sliders);
-    expect(screen.getAllByRole("button", {name: "HOLD"})).toHaveLength(1);
-    expect(screen.getByRole("slider", {name: "MASTER"})).toHaveProperty("value", "73");
-  }
-  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
-  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
-  expect(onChange).not.toHaveBeenCalled();
-});
-
-test("switching groups closes removed Primary touch while retaining rotary ownership", async () => {
-  const {fixture} = renderSurface();
-  act(() => fixture.controller.turnFx("reverb", 2));
-  const delay = screen.getByRole("slider", {name: "Delay"});
-  fireEvent.pointerDown(delay, {pointerId: 91});
-  fireEvent.change(delay, {target: {value: "700"}});
-  fireEvent.click(screen.getByRole("button", {name: "FILTER"}));
-  await waitFor(() => expect(fixture.runtime.calls.fx.mock.calls
-    .filter(([event]) => event.fx === "delay").map(([event]) => event.kind))
-    .toEqual(["fx_engage", "fx_move", "fx_release"]));
-  expect(fixture.runtime.calls.fx.mock.calls.filter(([event]) => event.fx === "reverb")
-    .map(([event]) => event.kind)).toEqual(["fx_engage"]);
-  expect(fixture.controller.getState().fx.reverb).toBe(520);
-  expect(screen.getByRole("button", {name: "Live"})).toHaveProperty("disabled", false);
-});
-
-test("replacing main Cutoff with FILTER closes the old touch before admitting the new input", async () => {
-  const fixture = controllerFixture();
-  enableTypedCore(fixture.runtime.calls);
-  renderSurface(fixture);
-  await waitFor(() => expect(fixture.controller.getState().filter.provenance).toBe("core"));
-  const old = screen.getByRole("slider", {name: "Filter"});
-  fireEvent.pointerDown(old, {pointerId: 92});
-  fireEvent.change(old, {target: {value: "700"}});
-  await waitFor(() => expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(2));
-  fireEvent.click(screen.getByRole("button", {name: "FILTER"}));
-  await waitFor(() => expect(fixture.runtime.calls.liveControl.mock.calls.at(-1)?.[0].intent.kind)
-    .toBe("filter_release"));
-  const replacement = screen.getByRole("slider", {name: "Cutoff"});
-  expect(replacement).not.toBe(old);
-  fireEvent.pointerDown(replacement, {pointerId: 93});
-  await waitFor(() => expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(4));
-  fireEvent.lostPointerCapture(old, {pointerId: 92});
-  expect(fixture.runtime.calls.liveControl).toHaveBeenCalledTimes(4);
-  fireEvent.pointerUp(replacement, {pointerId: 93});
-  await waitFor(() => expect(fixture.runtime.calls.liveControl.mock.calls
-    .map(([request]) => request.intent.kind))
-    .toEqual(["filter_parameter", "filter_parameter", "filter_release", "filter_parameter", "filter_release"]));
-});
-
-test("physical group navigation is bounded UI state and unregisters on leave", async () => {
-  const fixture = controllerFixture();
-  const bind = vi.fn();
-  let current: ContextualNavigation | null = null;
-  const ready = (value: ContextualNavigation | null) => {current = value; bind(value);};
-  const view = render(<PerformSurface controller={fixture.controller} project={project}
-    bank={0} onNavigationReady={ready} />);
-  expect(current!.directionStep!.backAvailable).toBe(false);
-  act(() => current!.directionStep!.onForward());
-  expect(screen.getByRole("button", {name: "FILTER"}).getAttribute("aria-pressed")).toBe("true");
-  act(() => current!.directionStep!.onForward());
-  expect(screen.getByRole("button", {name: "MORE"}).getAttribute("aria-pressed")).toBe("true");
-  expect(current!.directionStep!.forwardAvailable).toBe(false);
-  act(() => current!.directionStep!.onForward());
-  expect(current!.directionStep!.forwardAvailable).toBe(false);
-  act(() => current!.directionStep!.onBack());
-  act(() => current!.directionStep!.onBack());
-  expect(current!.directionStep!.backAvailable).toBe(false);
-  expect(fixture.runtime.calls.fx).not.toHaveBeenCalled();
-  expect(fixture.runtime.calls.liveControl).not.toHaveBeenCalled();
-  view.unmount();
-  expect(bind).toHaveBeenLastCalledWith(null);
-});
-
-
-test("touch retirement calls its admitting owner when the controller is replaced", () => {
-  const firstRelease = vi.fn();
-  const nextRelease = vi.fn();
-  const props: Parameters<typeof FxSliderBank>[0] = {
-    order: ["filter", "delay", "reverb"], values: {filter: 500, delay: 500, reverb: 500,
-      stutter: 500, gate: 500, reverse: 500, crush: 500, cutter: 500},
-    filter: {type: "lp", cutoffHz: 20000, resonanceMilli: 0,
-      engaged: false, frozen: false, provenance: "unavailable"},
-    group: "main", legacyFilterGesture: false, onGroupChange: vi.fn(),
-    onEngage: () => "old-token", onMove: vi.fn(), onRelease: firstRelease,
-    onFilterType: vi.fn(), onFilterTouchEngage: () => "filter-token",
-    onFilterTouchMove: vi.fn(), onFilterTouchRelease: vi.fn(), gestureOwner: {},
-  };
-  const pointer = (node: HTMLElement, type: string, pointerId: number) => {
-    const event = new Event(type, {bubbles: true});
-    Object.defineProperty(event, "pointerId", {value: pointerId});
-    fireEvent(node, event);
-  };
-  const view = render(<FxSliderBank {...props} />);
-  pointer(screen.getByRole("slider", {name: "Delay"}), "pointerdown", 96);
-  view.rerender(<FxSliderBank {...props} gestureOwner={{}} onRelease={nextRelease}
-    onEngage={() => "new-token"} />);
-  expect(firstRelease).toHaveBeenCalledExactlyOnceWith("old-token", "delay");
-  expect(nextRelease).not.toHaveBeenCalled();
-  const replacement = screen.getByRole("slider", {name: "Delay"});
-  pointer(replacement, "pointerdown", 97);
-  pointer(replacement, "lostpointercapture", 96);
-  expect(nextRelease).not.toHaveBeenCalled();
-  pointer(replacement, "pointerup", 97);
-  expect(nextRelease).toHaveBeenCalledExactlyOnceWith("new-token", "delay");
-});
-
-test("all-64 mask summary distinguishes a pending mask from an applied empty list", async () => {
-  const fixture = controllerFixture();
-  const {calls} = fixture.runtime;
-  enableTypedCore(calls);
-  render(<PerformSurface controller={fixture.controller} project={project} bank={3} currentPad={63} />);
-  fireEvent.click(screen.getByRole("button", {name: "Live Mute / Solo"}));
-  await waitFor(() => expect(screen.getByRole("button", {name: "Solo D16"})).toHaveProperty("disabled", false));
-  fireEvent.click(screen.getByRole("button", {name: "Solo D16"}));
-  const summary = () => document.querySelector(".perform-pad-gate-summary")!;
-  await waitFor(() => expect(summary().textContent).toContain("D16"));
-  const read = calls.liveStatus.getMockImplementation()!;
-  const applied = deferred<unknown>();
-  calls.liveStatus.mockImplementationOnce(() => applied.promise);
-  fireEvent.click(screen.getByRole("button", {name: "Mute D16"}));
-  await waitFor(() => expect(summary().getAttribute("data-provenance")).toBe("pending"));
-  expect([...summary().querySelectorAll("dd")].map(node => node.textContent)).toEqual(["Pending", "Pending"]);
-  applied.resolve(await read());
-  await waitFor(() => expect([...summary().querySelectorAll("dd")].map(node => node.textContent))
-    .toEqual(["D16", "D16"]));
-  expect(summary().getAttribute("data-provenance")).toBe("core");
-});
-
-
-test("Slots draft selectors and Escape/back neither launch nor change committed mapping", async () => {
-  const fixture = controllerFixture();
-  const select = vi.fn();
-  render(<PerformSurface controller={fixture.controller} project={project} bank={0}
-    onSelectPattern={select} />);
-  selectPerformPage("Slots");
-  expect((screen.getByRole("option", {name: "Pattern 01"}) as HTMLOptionElement).value).toBe(ids.pattern1);
-  expect((screen.getByRole("option", {name: "Pattern 02"}) as HTMLOptionElement).value).toBe(ids.pattern2);
-  for (const [name, value] of [["Pattern assignment", ids.pattern2], ["Pattern slot", "15"],
-    ["Move Pattern from", "1"], ["Move Pattern to", "14"], ["Clear Pattern slot", "13"]] as const) {
-    fireEvent.change(screen.getByRole("combobox", {name}), {target: {value}});
-    await userEvent.keyboard("{Escape}");
-  }
-  expect(screen.getByRole("status", {name: "Selected Pattern slot"}).textContent).toBe("Slot 16 · Empty");
-  selectPerformPage("Live");
-  expect(screen.getByRole("button", {name: "Launch Pattern 1"}).getAttribute("data-pattern-id")).toBe(ids.pattern1);
-  selectPerformPage("Slots");
-  expect((screen.getByRole("combobox", {name: "Pattern slot"}) as HTMLSelectElement).value).toBe("15");
-  expect(fixture.runtime.session.assignPatternSlot).not.toHaveBeenCalled();
-  expect(fixture.runtime.session.clearPatternSlot).not.toHaveBeenCalled();
-  expect(fixture.runtime.session.movePatternSlot).not.toHaveBeenCalled();
-  expect(fixture.runtime.calls.launch).not.toHaveBeenCalled();
-  expect(select).not.toHaveBeenCalled();
-  expect(fixture.refreshProject).not.toHaveBeenCalled();
-});
-
-test("Slots target readback changes only with refreshed Project Truth, including rejected Assign", async () => {
-  const fixture = controllerFixture();
-  const rendered = render(<PerformSurface controller={fixture.controller} project={project} bank={0} />);
-  selectPerformPage("Slots");
-  fireEvent.change(screen.getByRole("combobox", {name: "Pattern slot"}), {target: {value: "2"}});
-  await userEvent.selectOptions(screen.getByRole("combobox", {name: "Pattern assignment"}), ids.pattern2);
-  (fixture.runtime.session.assignPatternSlot as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("revision conflict"));
-  await userEvent.click(screen.getByRole("button", {name: "Assign Pattern"}));
-  await waitFor(() => expect(fixture.controller.getState().error).toBe("Something went wrong in Creator. Try again. Details are in Developer diagnostics."));
-  expect(screen.getByRole("status", {name: "Selected Pattern slot"}).textContent).toBe("Slot 03 · Empty");
-  expect(fixture.refreshProject).not.toHaveBeenCalled();
-  rendered.rerender(<PerformSurface controller={fixture.controller} bank={0}
-    project={{...project, revision: 8, patternSlots: project.patternSlots.map((id, index) => index === 2 ? ids.pattern2 : id)}} />);
-  expect(screen.getByRole("status", {name: "Selected Pattern slot"}).textContent).toBe("Slot 03 · Pattern 02");
-});
-
-test("Slots structural lock disables all draft controls and actions without disabling ordinary Launch", async () => {
-  const fixture = controllerFixture();
-  const select = vi.fn();
-  const rendered = render(<PerformSurface controller={fixture.controller} project={project} bank={0}
-    slotEditingLocked transport={idlePatternTransport()} onSelectPattern={select} />);
-  selectPerformPage("Slots");
-  const editor = screen.getByRole("group", {name: "Pattern slot editing"});
-  for (const control of [...within(editor).getAllByRole("combobox"), ...within(editor).getAllByRole("button")]) {
-    expect(control.hasAttribute("disabled")).toBe(true);
-  }
-  selectPerformPage("Live");
-  await userEvent.click(screen.getByRole("button", {name: "Launch Pattern 1"}));
-  expect(select).toHaveBeenCalledExactlyOnceWith(ids.pattern1);
-  rendered.rerender(<PerformSurface controller={fixture.controller} project={project} bank={0}
-    slotEditingLocked={false} transport={idlePatternTransport()} onSelectPattern={select} />);
-  selectPerformPage("Slots");
-  for (const control of screen.getAllByRole("combobox")) expect(control.hasAttribute("disabled")).toBe(false);
-  expect(screen.getByRole("button", {name: "Assign Pattern"}).hasAttribute("disabled")).toBe(false);
-});
-
-
-async function audioReadoutFixture(sampleRate = 48_000) {
-  const fixture = await shutdownRecordingFixture();
-  let generation = 0;
-  let value: import("@lmdj/web-runtime-platform/runtime_types").PerformanceMasterCaptureProgress =
-    Object.freeze({state:"unavailable",reason:"idle"});
-  const originalStart = fixture.runtime.session.startPerformanceMasterCapture;
-  fixture.runtime.session.performanceMasterCaptureProgress = vi.fn(() => value);
-  fixture.runtime.session.startPerformanceMasterCapture = async (sink,binding=null) => {
-    generation++;
-    value=Object.freeze({state:"available",captureId:`60000000-0000-4000-8000-${String(generation).padStart(12,"0")}`,
-      generation,binding,sampleRate,receivedFrames:0,phase:"recording",droppedFrames:0,failure:null});
-    const handle=await originalStart({
-      onBatch(channels){if(value.state==="available")value=Object.freeze({...value,receivedFrames:value.receivedFrames+channels[0].length});sink.onBatch(channels);},
-      onFailure(reason,dropped){if(value.state==="available")value=Object.freeze({...value,phase:"failed",failure:"protocol-error",droppedFrames:null});sink.onFailure(reason,dropped);},
-      onStopped(){if(value.state==="available" && value.phase!=="failed")value=Object.freeze({...value,phase:"stopped"});sink.onStopped();},
-    },binding);
-    return {stop(){if(value.state==="available" && value.phase!=="failed")value=Object.freeze({...value,phase:"stopping"});return handle.stop();}};
-  };
-  return {...fixture,
-    emit(frames=4800){expect(frames).toBeGreaterThan(0);expect(frames).toBeLessThanOrEqual(4800);fixture.getSink()!.onBatch([new Float32Array(frames),new Float32Array(frames)]);},
-    replaceCapture(){if(value.state==="available")value=Object.freeze({...value,captureId:"70000000-0000-4000-8000-000000000001",generation:99,phase:"recording",receivedFrames:777});},
-  };
-}
-
-test("audio readout separates received PCM from a slow durable checkpoint and final partial", async () => {
-  const f=await audioReadoutFixture();render(<PerformSurface controller={f.controller} project={project} bank={0}/>);
-  await userEvent.click(screen.getByRole("button",{name:"Record Performance"}));
-  act(()=>{f.emit();f.emit();f.emit(127);});
-  const captured=screen.getByRole("status",{name:"Captured audio"});
-  const wav=screen.getByRole("status",{name:"Local WAV audio"});
-  await waitFor(()=>expect(captured.textContent).toBe("00:00.202"));
-  expect(captured.getAttribute("data-frames")).toBe("9727");
-  expect(wav.textContent).toBe("00:00.000");
-  const prior=f.controller.getState().recordingAudio!;
-  expect(prior.wav!.snapshot.durableFrames).toBe(0);
-  const gate=deferred<void>();f.holdNextCheckpoint(gate.promise);
-  let stopping!:Promise<void>;act(()=>{stopping=f.controller.stop();});
-  await waitFor(()=>expect(f.checkpointEntered()).toBe(true));
-  expect(wav.getAttribute("data-frames")).toBe("0");expect(wav.getAttribute("data-settled")).toBe("false");
-  await act(async()=>{gate.resolve();await stopping;});
-  expect(wav.textContent).toBe("00:00.202");expect(wav.getAttribute("data-frames")).toBe("9727");
-  expect(wav.getAttribute("data-settled")).toBe("true");
-  expect(new DataView(f.bytes().buffer).getUint32(40,true)/4).toBe(9727);
-  expect(prior.wav!.snapshot.durableFrames).toBe(0);
-  expect(Object.isFrozen(f.controller.getState().recordingAudio!.wav!.snapshot)).toBe(true);
-  selectPerformPage("Takes");expect(screen.getByRole("status",{name:"Local WAV audio"}).textContent).toBe("00:00.202");
-});
-
-test("captured time uses its actual rate while local WAV uses its own header format", async () => {
-  const f=await audioReadoutFixture(44_100);render(<PerformSurface controller={f.controller} project={project} bank={0}/>);
-  await userEvent.click(screen.getByRole("button",{name:"Record Performance"}));
-  act(()=>f.emit(4410));await act(async()=>{await f.controller.stop();});
-  expect(screen.getByRole("status",{name:"Captured audio"}).textContent).toBe("00:00.100");
-  expect(screen.getByRole("status",{name:"Local WAV audio"}).textContent).toBe("00:00.091");
-  expect(new DataView(f.bytes().buffer).getUint32(24,true)).toBe(48_000);
-});
-
-test("a retained WAV prefix shows known storage drops and keeps unknown tap loss distinct", async () => {
-  const f=await audioReadoutFixture();render(<PerformSurface controller={f.controller} project={project} bank={0}/>);
-  await userEvent.click(screen.getByRole("button",{name:"Record Performance"}));
-  act(()=>{for(let i=0;i<32;i++)f.emit();});
-  await waitFor(()=>expect(f.writer.snapshot.durableFrames).toBe(153600));
-  act(()=>f.emit(1000));
-  await waitFor(()=>expect(f.writer.attemptedFrames).toBe(154600));
-  act(()=>f.getSink()!.onFailure("tap-failure",0));
-  await waitFor(()=>expect(f.controller.getState().recording.phase).toBe("stopped"));
-  expect(screen.getByRole("status",{name:"Local WAV audio"}).getAttribute("data-frames")).toBe("153600");
-  expect(screen.getByRole("status",{name:"Local WAV audio"}).getAttribute("data-dropped-frames")).toBe("1000");
-  expect(screen.getByText("Local WAV prefix")).toBeTruthy();
-  expect(screen.getByText("Additional audio loss unknown")).toBeTruthy();
-  expect(f.controller.getState().recordingAudio!.tapLoss).toBeNull();
-  expect(f.controller.getState().recordingAudio!.capture.state).toBe("available");
-});
-
-test("late checkpoint publication never adopts another capture's frames", async () => {
-  const f=await audioReadoutFixture();await f.controller.record();f.emit(127);
-  const original=f.controller.getState().recordingAudio!;
-  const gate=deferred<void>();f.holdNextCheckpoint(gate.promise);
-  const stop=f.controller.stop();await waitFor(()=>expect(f.checkpointEntered()).toBe(true));
-  expect(f.captureOwned()).toBe(false);f.replaceCapture();gate.resolve();await stop;
-  const final=f.controller.getState().recordingAudio!;
-  expect(final.capture).toEqual({state:"unavailable",reason:"owner-lost"});
-  expect(final.wav!.snapshot.durableFrames).toBe(127);
-  expect(original.capture.state==="available" && original.capture.receivedFrames).toBe(127);
-});
-
-test("controller close clears visible audio before delayed original writer callbacks settle", async () => {
-  const f=await audioReadoutFixture();await f.controller.record();f.emit(127);
-  const gate=deferred<void>();f.holdNextCheckpoint(gate.promise);
-  const closing=f.controller.close();
-  await waitFor(()=>expect(f.checkpointEntered()).toBe(true));
-  expect(f.controller.getState().recordingAudio).toBeNull();
-  gate.resolve();await closing;
-  expect(f.controller.getState().recordingAudio).toBeNull();
-  expect(new DataView(f.bytes().buffer).getUint32(40,true)/4).toBe(127);
-});
-
-test("audio facts survive Save UNKNOWN and bind retry until confirmed finalization", async () => {
-  const f=await audioReadoutFixture();await f.controller.record();f.emit(127);await f.controller.stop();
-  const original=f.controller.getState().recordingAudio;
-  const save=f.save.getMockImplementation()! as CreatorPerformanceRuntimeSession["savePerformance"];
-  f.save.mockImplementationOnce(async(request)=>{await save(request);throw new Error("save outcome unknown");});
-  f.inspect.mockRejectedValueOnce(new Error("readback unavailable"));
-  await f.controller.save("Audio Facts");
-  expect(f.controller.getState().recording.phase).toBe("stopped");expect(f.controller.getState().recordingAudio).toBe(original);
-  f.bind.mockRejectedValueOnce(new Error("bind unavailable"));
-  await f.controller.save("Audio Facts");
-  expect(f.controller.getState().bindingStatus).toBe("retry");expect(f.controller.getState().recordingAudio).toBe(original);
-  await f.controller.retryWavBind();
-  expect(f.controller.getState().bindingStatus).toBe("bound");expect(f.controller.getState().recordingAudio).toBeNull();
-  expect(f.save).toHaveBeenCalledTimes(1);
-});
-
-const SAVED_TAKE = Object.freeze({performanceId: ids.performance, name: "Silent Take",
-  createdBpm: 120, eventCount: 0, recordingArtifact: Object.freeze({
-    sha256: "985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5",
-    mediaType: "audio/wav" as const, byteLength: 192124})});
-
-function savedTakeMetadata(performanceId = ids.performance, revision = 7) {
-  return {projectId: ids.project, performanceId, projectRevision: revision, recordingRevision: 17,
-    recordingArtifact: SAVED_TAKE.recordingArtifact,
-    audioMetadata: {sampleRate: 48000 as const, channels: 2 as const, sourceFrames: 48017}, audioError: null};
-}
-
-async function savedTakeFixture() {
-  const f = controllerFixture();
-  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE]);
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValue(savedTakeMetadata());
-  await f.controller.refreshPerformances();
-  return f;
-}
-
-test("saved Take selection uses the exact verified selector and never hashes on list refresh", async () => {
-  const f = await savedTakeFixture();
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
-  await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledExactlyOnceWith({
-    projectId: ids.project, performanceId: ids.performance, expectedRevision: 7,
-    recordingArtifact: SAVED_TAKE.recordingArtifact,
-  }, {signal: expect.any(AbortSignal)});
-  const value = f.controller.getState().takeAudio;
-  expect(value?.state).toBe("verified");expect(value?.owner).toBe(project);
-  expect(value?.metadata).toEqual(savedTakeMetadata());
-  expect(SAVED_TAKE.eventCount).toBe(0);
-});
-
-test("Takes renders a real silent WAV time and keeps Replay a separate explicit action", async () => {
-  const f = await savedTakeFixture();renderSurface(f);
-  await waitFor(() => expect(f.controller.getState().performancesStatus).toBe("ready"));
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
-  selectPerformPage("Takes");
-  const output = await screen.findByRole("status", {name: "Take WAV audio"});
-  await waitFor(() => expect(output.textContent).toBe("00:01.000"));
-  expect(output.getAttribute("data-frames")).toBe("48017");
-  expect(output.getAttribute("data-rate")).toBe("48000");
-  expect(screen.getByText("Recording completeness unknown")).not.toBeNull();
-  expect(f.runtime.session.beginPerformanceReplay).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", {name: "Replay selected Take"})).not.toBeNull();
-});
-
-test("no-WAV Takes never submit a metadata query or invent a zero duration", async () => {
-  const f = await savedTakeFixture();
-  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([{...SAVED_TAKE, recordingArtifact: null}]);
-  await f.controller.refreshPerformances();await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.controller.getState().takeAudio?.state).toBe("no-wav");
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
-});
-
-test("Saved Takes excludes recovery drafts while a real saved Take remains selectable", async () => {
-  const f = await savedTakeFixture(), savedId = ids.pattern2;
-  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE,
-    {...SAVED_TAKE, performanceId: savedId, name: "Earlier saved Take"}]);
-  vi.mocked(f.runtime.session.listPerformanceRecovery).mockResolvedValue([{
-    sessionId: ids.session, performanceId: ids.performance, reason: "owner_lost",
-    durableEventCount: 0, pendingEventCount: 0, fingerprint: "f".repeat(64)}]);
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValue(savedTakeMetadata(savedId));
-  renderSurface(f);selectPerformPage("Takes");
-  await screen.findByRole("button", {name: /^Select Take \d+: Earlier saved Take$/});
-  expect(screen.queryByRole("button", {name: /^Select Take \d+: Silent Take$/})).toBeNull();
-  await waitFor(() => expect(screen.getByRole("status", {name: "Take WAV audio"}).textContent).toBe("00:01.000"));
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(1);
-  expect(vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mock.calls.every(([request]) =>
-    request.performanceId === savedId)).toBe(true);
-  await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.controller.getState().takeAudio).toBeNull();
-});
-
-test("the current unsaved recording is never queried as a saved Take", async () => {
-  const f = await savedTakeFixture(), savedId = ids.pattern2;
-  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE,
-    {...SAVED_TAKE, performanceId: savedId, name: "Earlier saved Take"}]);
-  await f.controller.refreshRecovery();await f.controller.record();
-  expect(f.controller.getState().recording.performanceId).toBe(ids.performance);
-  await f.controller.refreshPerformances();await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValue(savedTakeMetadata(savedId));
-  await f.controller.inspectTakeAudio(savedId);
-  expect(f.controller.getState().takeAudio?.state).toBe("verified");
-  await f.controller.stop();await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.controller.getState().takeAudio).toBeNull();
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(1);
-  await f.controller.discard();
-});
-
-test("an unavailable recovery snapshot refuses the partial saved list until explicit retry", async () => {
-  const f = await savedTakeFixture();
-  vi.mocked(f.runtime.session.listPerformanceRecovery).mockRejectedValueOnce(new Error("recovery read unavailable"));
-  await expect(f.controller.refreshPerformances()).rejects.toThrow("recovery read unavailable");
-  expect(f.controller.getState().performancesStatus).toBe("unavailable");
-  expect(f.controller.getState().performances).toEqual([]);
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).not.toHaveBeenCalled();
-  await f.controller.refreshPerformances();await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.controller.getState().takeAudio?.state).toBe("verified");
-});
-
-test("verified unsupported format and outer integrity or storage refusal remain distinct Take states", async () => {
-  const f = await savedTakeFixture();
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValueOnce({
-    ...savedTakeMetadata(), audioMetadata: null,
-    audioError: {code: "UNSUPPORTED_AUDIO", message: "unsupported audio", details: {}}});
-  await f.controller.inspectTakeAudio(ids.performance);
-  expect(f.controller.getState().takeAudio?.state).toBe("unsupported");
-  expect(f.controller.getState().takeAudio?.metadata?.recordingArtifact).toEqual(SAVED_TAKE.recordingArtifact);
-  for (const [code, details, state] of [
-    ["COOK_FAILED", {storage_condition: "artifact_mismatch"}, "damaged"],
-    ["IO_ERROR", {reason: "bounded_read_unavailable"}, "unavailable"],
-    ["REVISION_CONFLICT", {}, "unavailable"],
-  ] as const) {
-    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockRejectedValueOnce(
-      Object.assign(new Error("private platform details"), {code, details}));
-    await f.controller.inspectTakeAudio(ids.performance);
-    expect(f.controller.getState().takeAudio?.state).toBe(state);
-    expect(f.controller.getState().takeAudio?.metadata).toBeNull();
-  }
-});
-
-test("a failed Take check retries only when explicitly requested", async () => {
-  const f = await savedTakeFixture();
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockRejectedValueOnce(new Error("offline"));
-  renderSurface(f);selectPerformPage("Takes");
-  const retry = await screen.findByRole("button", {name: "Retry audio check"});
-  await waitFor(() => expect(f.controller.getState().takeAudio?.state).toBe("unavailable"));
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(1);
-  await userEvent.click(retry);
-  await waitFor(() => expect(screen.getByRole("status", {name: "Take WAV audio"}).textContent).toBe("00:01.000"));
-  expect(f.runtime.session.queryPerformanceRecordingMetadata).toHaveBeenCalledTimes(2);
-});
-
-test("a changed selection aborts its observer and cannot adopt a valid late predecessor", async () => {
-  const f = await savedTakeFixture(), old = deferred<ReturnType<typeof savedTakeMetadata>>();
-  const secondId = "66666666-6666-4666-8666-666666666666";
-  vi.mocked(f.runtime.session.listPerformances).mockResolvedValue([SAVED_TAKE, {...SAVED_TAKE, performanceId: secondId}]);
-  await f.controller.refreshPerformances();
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => old.promise)
-    .mockResolvedValueOnce(savedTakeMetadata(secondId));
-  const pending = f.controller.inspectTakeAudio(ids.performance);
-  const firstSignal = vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mock.calls[0]![1]!.signal!;
-  await f.controller.inspectTakeAudio(secondId);expect(firstSignal.aborted).toBe(true);
-  old.resolve(savedTakeMetadata());await pending;
-  expect(f.controller.getState().takeAudio?.performanceId).toBe(secondId);
-  expect(f.controller.getState().takeAudio?.state).toBe("verified");
-});
-
-test("same-Project owner replacement and revision changes refuse valid late Take receipts", async () => {
-  for (const revision of [7, 8]) {
-    const f = await savedTakeFixture(), old = deferred<ReturnType<typeof savedTakeMetadata>>();
-    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => old.promise);
-    const pending = f.controller.inspectTakeAudio(ids.performance);
-    const nextProject = {...project, revision};
-    f.setCreatorState(creatorState({project: {phase: "ready", projects: [], current: nextProject}}));
-    old.resolve(savedTakeMetadata());await pending;
-    expect(f.controller.getState().takeAudio?.state).not.toBe("verified");
-    await f.controller.refreshPerformances();
-    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValueOnce(savedTakeMetadata(ids.performance, revision));
-    await f.controller.inspectTakeAudio(ids.performance);
-    expect(f.controller.getState().takeAudio?.owner).toBe(nextProject);
-    expect(f.controller.getState().takeAudio?.metadata?.projectRevision).toBe(revision);
-  }
-});
-
-test("list refresh generations and replaced owners never adopt out-of-order saved Takes", async () => {
-  const f = await savedTakeFixture(), old = deferred<readonly PerformanceSummary[]>(), next = deferred<readonly PerformanceSummary[]>();
-  vi.mocked(f.runtime.session.listPerformances).mockImplementationOnce(() => old.promise).mockImplementationOnce(() => next.promise);
-  const a = f.controller.refreshPerformances(), b = f.controller.refreshPerformances();
-  next.resolve([{...SAVED_TAKE, name: "Latest Take"}]);await b;
-  old.resolve([SAVED_TAKE]);await a;
-  expect(f.controller.getState().performances[0]!.name).toBe("Latest Take");
-  const stale = deferred<readonly PerformanceSummary[]>();
-  vi.mocked(f.runtime.session.listPerformances).mockImplementationOnce(() => stale.promise);
-  const pending = f.controller.refreshPerformances();
-  const newOwner = {...project};f.setCreatorState(creatorState({project: {phase: "ready", projects: [], current: newOwner}}));
-  await f.controller.refreshPerformances();
-  stale.reject(new Error("old owner's read failed"));await pending;
-  expect(f.controller.getState().performancesOwner).toBe(newOwner);
-  expect(f.controller.getState().performancesStatus).toBe("ready");
-});
-
-test("Take metadata rejects every mismatched owner revision or complete Artifact receipt", async () => {
-  const f = await savedTakeFixture();
-  for (const change of [
-    {projectId: ids.pattern1}, {performanceId: ids.pattern2}, {projectRevision: 8},
-    {recordingArtifact: {...SAVED_TAKE.recordingArtifact, sha256: "f".repeat(64)}},
-    {recordingArtifact: {...SAVED_TAKE.recordingArtifact, byteLength: 192125}},
-  ]) {
-    vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockResolvedValueOnce({...savedTakeMetadata(), ...change});
-    await f.controller.inspectTakeAudio(ids.performance);
-    expect(f.controller.getState().takeAudio?.state).toBe("unavailable");
-    expect(f.controller.getState().takeAudio?.metadata).toBeNull();
-  }
-});
-
-test("held Take metadata leaves the Project mutation tail available and retires on mutation or close", async () => {
-  const f = await savedTakeFixture(), gate = deferred<ReturnType<typeof savedTakeMetadata>>();
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => gate.promise);
-  vi.mocked(f.runtime.session.assignPatternSlot).mockResolvedValue({patternSlot: 2, patternId: ids.pattern1,
-    committedRevision: 8, replayed: false, projectRevision: 8});
-  const pending = f.controller.inspectTakeAudio(ids.performance);
-  const signal = vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mock.calls[0]![1]!.signal!;
-  let committed = false;const mutation = f.controller.assignPattern(2, ids.pattern1).then(() => {committed = true;});
-  try {
-    for (let n = 0; n < 32; n++) await Promise.resolve();
-    expect(committed, "far-side Pattern receipt precedes releasing the WAV check").toBe(true);
-    expect(signal.aborted).toBe(true);
-    expect(f.controller.getState().takeAudio).toBeNull();
-  } finally {gate.resolve(savedTakeMetadata());await Promise.all([pending, mutation]);}
-  const closing = deferred<ReturnType<typeof savedTakeMetadata>>();
-  vi.mocked(f.runtime.session.queryPerformanceRecordingMetadata).mockImplementationOnce(() => closing.promise);
-  const late = f.controller.inspectTakeAudio(ids.performance);
-  await f.controller.close();closing.resolve(savedTakeMetadata());await late;
-  expect(f.controller.getState().takeAudio).toBeNull();
 });

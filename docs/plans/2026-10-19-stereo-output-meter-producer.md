@@ -1,3 +1,114 @@
+# Current-main producer integration — 2026-10-20
+
+This current section supersedes historical shipping/freeze text below. One
+producer Task is independently re-homed from original Draft #2383 without
+rewriting its published source or downstream Draft history. Integration base /
+worktree parent: `6ca4c9cf78471c337668ec1642d23610f49f9fb2`; original source:
+`3cdf2ef9350e37d3ac4f0cb0e693e7d27362b083`, parent `83ab14ba`.
+
+## Refreshed premise dispositions
+
+- Still outstanding at this exact main: current worklet/capture controller has
+  no meter owner/measurement chain and public Session/types have no outputMeter.
+  Positive controls monitorDestination/sampleAudioClock/current capture binding
+  exist. No merged meter successor appears in the owning source history.
+- Already delivered: the actual Post-FX product -> capture tap -> monitor graph,
+  separate Native cue/click and current W1 start binding/started ACK/SDK lifecycle.
+  All seven owning product/Node files are byte-identical to the original parent;
+  reuse those prefixes, no native/DSP/graph rewrite or duplicate producer.
+- Already developed but unintegrated: live #2383 remains OPEN Draft at the full
+  original source above; #2231 is OPEN with no comments/new product decisions.
+  Preserve all original fifteen-file feature/test/pitfall deltas and negative
+  receipts below. They do not prove this main integration.
+- Current main intentionally retains COUNT-IN withdrawal and pending C4
+  consumer facts. Preserve its source-diagram/Platform-page notes. Original
+  static diagram outputs conflict because the current producer/consumer boundary
+  note changed; regenerate only declared HTML/SVG with the official renderer.
+- Approved D04 semantics remain Post-FX/Pre-ENC4, excluding click, true L/R sample
+  peaks. This Task supplies SDK measurement only; consumer #2384 remains separate.
+  Capture, meter packet/ACK and activation owners keep their distinct identities.
+- Existing polling-alias recurrence/escalation is the original Task's actual
+  historical failure, not a newly invented incident. Preserve its second
+  recurrence and #2382 escalation; no CI/control/generic cadence gate is added.
+
+## Declared integration and verification
+
+Exactly the same fifteen paths listed below; one Conventional Commit. No new
+budget, deadline, fixture threshold, dependency or public Contract. Current
+unchanged owning three-file baseline: 421 PASS, zero skips/failures (1.604s).
+All ten tracked links are real symlinks; isolated feat branch, no main upstream.
+Governing rules are byte-identical to already-read current main governance.
+
+Run the complete original owning three files and entire SDK Node selection,
+strict SDK and Creator types, syntax/dependencies/pitfall checks, official source
+render and complete Portal. Hash all unrelated eighteen diagram outputs. Repeat
+four actual semantic controls (all-frame peak, pending-start meter demux, foreign
+owner, actual audio-clock freshness), restore exact bytes with fresh mtime and
+rerun owning checks; complete SDK must then pass with zero skips.
+
+After those source checks and staged ownership pass, create only an unpublished
+clean checkpoint for the official Native/fixture/Wasm/UI configure/build/package.
+Repeat BOTH original complete real-audio browser journeys, real downstream-graph
+RED/restored complete GREEN, and the actual read-only polling-alias RED/restored
+complete GREEN. Keep original 300s/240s budgets and 35s/125s transition bounds,
+all real capture/PCM/Stop/seal/click/suspend/recovery/accepted-voice/new-owner legs,
+trusted actual render fault and hash-correct offline-ready candidate. Nothing
+shortens to the successful prefix. The same final source head must finish the
+original complete normal+fault selection before push. All later head-bound
+package/browser receipts belong in the PR/Issue; historical 'pending' paragraphs
+below are dated checkpoint states, not an assertion about final verification.
+
+## Current source checkpoint receipts
+
+- Baseline421 PASS; complete owning446 PASS (1.880s); complete SDK601 PASS,
+  zero skips/failures (1.739s), restored complete SDK601 PASS (1.700s).
+- All four fresh semantic controls RED1 at their named owning assertion (worklet
+  line72, pending-start line192, foreign-owner line206, Session clock line549),
+  restored byte-identical with newer mtime and separate fresh-process GREEN0.
+  Diagnostic targeted selections are not substituted for the complete SDK run.
+- Strict SDK declarations (1.609s) and Creator types (1.996s) passed; four changed
+  JS source/spec syntax checks, dependencies and pitfall15 passed.
+- Official source diagram renderer exit0; all18 unrelated outputs SHA-identical.
+  Complete Portal exit0 (65.842s),179 tests/53 pages/51 routes/internal links.
+- All seven owning product/Node files plus complete730-line production browser
+  spec are byte-identical to original source. Current C4/COUNT-IN boundary notes
+  and all source diagram facts are preserved; only target HTML/SVG regenerated.
+- Independent literal PCM peaks re-derived from current int16 /32767, keyboard
+  velocity100/127 and hard-pan sqrt(2):0.556793985/0.139198496. No successful run
+  calibrates either oracle. Full browser results remain pending at this clean
+  source-checkpoint boundary and will be recorded against the final head.
+- Pinned Playwright1.62.1 JSON reporter source supports body attachments and
+  PLAYWRIGHT_JSON_OUTPUT_FILE. Use an additional owned JSON output alongside
+  line reporting to retain original successful/failing proof attachments; no
+  repository reporter/trace policy, test assertion or production hook changes.
+
+## Version Management
+
+Version impact: compatible additive Web Runtime Platform JS API MINOR debt in
+#2237, deduplicated by actual final delivery; higher Audio Runtime ABI MAJOR and
+other existing debt retained. No Native ABI/persistence/cross-language Contract,
+identity/manifest/Product/Assembly/Build/Channel/snapshot allocation.
+
+## Documentation Impact
+
+Documentation impact: required.
+Affected portal pages: /core/modules/web-runtime-platform/ /platform/web-runtime/
+Measurement/demux/owner/clock/fallback facts and owning source diagram only;
+current C4/COUNT-IN and candidate/device boundary notes remain intact.
+
+## Current shipping authority
+
+Owner partially unfroze ordinary feature/fix/test PRs. After actual Task checks,
+commit/push/main-target PR, independent exact-head review, live findings/threads/
+closing/conflicts/protection and guarded squash merge are authorized. Frozen
+workflow/release tools/release evidence/versioned release-doc paths excluded.
+No auto-merge, manual release/tag/Runtime deploy/Channel or agent Git cleanup.
+Close original Draft as superseded only after actual verified replacement merge;
+retain original branch and all downstream heads. Full platform/candidate/device/
+listening and consumer acceptance remain separately outstanding in #2231/#2112.
+
+## Historical original Task, custody and negative evidence
+
 # Real stereo output meter producer (#2231 / D04)
 
 One implementation Task for #2112, based on Draft #2381 / full head

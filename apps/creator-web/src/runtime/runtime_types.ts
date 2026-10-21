@@ -295,8 +295,6 @@ export interface RuntimeDiagnostics {
 }
 
 export interface CreatorRuntimeSession {
-  /** Current SDK measurement; optional only for older external adapters. */
-  outputMeter?: import("@lmdj/web-runtime-platform/runtime_types").StereoOutputMeterSession["outputMeter"];
   /** Optional for older external Session doubles; the current SDK supplies it. */
   reserveInputGesture?(key: object, slot: number, source: RuntimeTriggerSource):
     import("@lmdj/web-runtime-platform/runtime_types").InputGestureLease | null;
@@ -398,10 +396,7 @@ export interface CreatorPadColourRuntimeSession extends CreatorRuntimeSession {
 export interface CreatorPerformanceRuntimeSession
   extends CreatorSampleRuntimeSession,
     PerformanceRuntimeSession,
-    WebPerformanceCaptureSession {
-  performanceMasterCaptureProgress?: import("@lmdj/web-runtime-platform/runtime_types")
-    .PerformanceMasterCaptureProgressSession["performanceMasterCaptureProgress"];
-}
+    WebPerformanceCaptureSession {}
 
 export type SequenceRecordState = "inactive" | "active" | "switching" | "recoverable";
 

@@ -683,3 +683,13 @@ test("recording metadata keeps verified identity separate from a format refusal"
     {...input, recording_artifact: {...input.recording_artifact, media_type: "audio/mpeg"}}])
     expectProtocolMismatch(() => request(operation, changed));
 });
+
+
+test("recording metadata rejects zero frames in a successful WAV result", () => {
+  const operation = "performance.recording.metadata";
+  const value = validResults().get(operation);
+  const result = {...value, audio_metadata: {...value.audio_metadata, source_frames: 0}};
+  expectProtocolMismatch(() => validateResponseEnvelope({
+    protocol_version: 1, request_id: ids[0], ok: true, result,
+  }, operation));
+});

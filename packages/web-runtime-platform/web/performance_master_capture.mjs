@@ -149,23 +149,6 @@ function createPerformanceMasterCaptureController({
   let pendingStart = null;
   let closed = false;
   let processorFailed = false;
-  // Compact telemetry only: never retain a settled sink/queue through this read.
-  let captureProgressValue = null;
-
-  function captureProgress() {
-    const unavailable = reason => Object.freeze({state: "unavailable", reason});
-    if (closed) return unavailable("closed");
-    const value = captureProgressValue;
-    if (value === null) return unavailable("idle");
-    if (!value.armed) return unavailable(value.phase === "starting" ? "starting" : "start-failed");
-    if (!Number.isSafeInteger(value.sampleRate) || value.sampleRate <= 0) {
-      return unavailable("sample-rate-invalid");
-    }
-    if (!Number.isSafeInteger(value.receivedFrames)) return unavailable("frame-overflow");
-    const {armed: _, ...snapshot} = value;
-    return Object.freeze({state: "available", ...snapshot});
-  }
-
   let meterOwner = null;
   let meterLatest = null;
   let meterLastEndFrame = null;
@@ -218,7 +201,9 @@ function createPerformanceMasterCaptureController({
         node.port.postMessage({type: "meter-ack", owner: data.owner,
           windowEndFrame: data.windowEndFrame});
       } catch {
-        failMeter("protocol-error");
+        // Drain old tokens when possible, but an old owner's failed ACK
+        // cannot revoke the current owner's measurement or failure state.
+        if (data.owner === meterOwner) failMeter("protocol-error");
         return;
       }
     }
@@ -234,6 +219,23 @@ function createPerformanceMasterCaptureController({
     meterLastEndFrame = data.windowEndFrame;
     const {type: _type, ...measurement} = data;
     meterLatest = Object.freeze({state: "available", ...measurement});
+  }
+
+  // Compact telemetry only: never retain a settled sink/queue through this read.
+  let captureProgressValue = null;
+
+  function captureProgress() {
+    const unavailable = reason => Object.freeze({state: "unavailable", reason});
+    if (closed) return unavailable("closed");
+    const value = captureProgressValue;
+    if (value === null) return unavailable("idle");
+    if (!value.armed) return unavailable(value.phase === "starting" ? "starting" : "start-failed");
+    if (!Number.isSafeInteger(value.sampleRate) || value.sampleRate <= 0) {
+      return unavailable("sample-rate-invalid");
+    }
+    if (!Number.isSafeInteger(value.receivedFrames)) return unavailable("frame-overflow");
+    const {armed: _, ...snapshot} = value;
+    return Object.freeze({state: "available", ...snapshot});
   }
 
   function callSink(callback) {
@@ -486,9 +488,9 @@ function createPerformanceMasterCaptureController({
   async function close() {
     if (closed) return;
     closed = true;
-    captureProgressValue = null;
     meterOwner = null;
     meterLatest = null;
+    captureProgressValue = null;
     if (pendingStart !== null) {
       rejectPendingStart(pendingStart, "tap-closed");
     }

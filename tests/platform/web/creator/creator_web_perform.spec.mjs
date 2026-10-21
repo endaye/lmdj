@@ -70,37 +70,6 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function expectLocalAudioFrames(page, frames, sampleRate = 48_000) {
-  const output = page.getByRole("status", {name: "Local WAV audio", exact: true});
-  await expect(output).toHaveAttribute("data-frames", String(frames));
-  await expect(output).toHaveAttribute("data-rate", String(sampleRate));
-  await expect(output).toHaveAttribute("data-settled", "true");
-  await expect(output).not.toHaveText("Unavailable");
-}
-
-async function expectNightSetAudio(page, bytes) {
-  await showPerformPage(page, "Takes");
-  await page.getByRole("button", {name:/^Select Take \d+: Night Set$/}).click();
-  const output=page.getByRole("status", {name:"Take WAV audio",exact:true});
-  const frames=(bytes.byteLength-44)/4, rate=bytes.readUInt32LE(24), digest=sha256(bytes);
-  await expect(output).toHaveAttribute("data-frames",String(frames),{timeout:AUDIO_TRANSITION_TIMEOUT_MS});
-  await expect(output).toHaveAttribute("data-rate",String(rate));
-  await expect(output).toHaveAttribute("data-sha256",digest);
-  await expect(output).toHaveAttribute("data-byte-length",String(bytes.byteLength));
-  // Integer rational arithmetic is independent of the Host's floating-point
-  // formatter, and the frames/rate come from the actual exported WAV.
-  const ms=BigInt(frames)*1000n/BigInt(rate);
-  const time=`${String(ms/60000n).padStart(2,'0')}:${String(ms/1000n%60n).padStart(2,'0')}.${String(ms%1000n).padStart(3,'0')}`;
-  await expect(output).toHaveText(time);
-  const truth=await inspectProjectTruth(page);
-  const [performanceId,performance]=Object.entries(truth.project.performances).find(([,value])=>value.name==="Night Set");
-  expect(performance.recording_artifact).toEqual({sha256:digest,media_type:"audio/wav",byte_length:bytes.byteLength});
-  await expect(output).toHaveAttribute("data-performance-id",performanceId);
-  await expect(output).toHaveAttribute("data-project-revision",String(truth.project_revision));
-  return {frames,rate,sha256:digest,byteLength:bytes.byteLength,time,performanceId,projectRevision:truth.project_revision,
-    ui:await output.evaluate(node=>({...node.dataset,text:node.textContent}))};
-}
-
 async function inspectProjectTruth(page) {
   return page.evaluate(() =>
     window.lmdjWebRuntimeHost.inspection.inspectProject());
@@ -1018,21 +987,18 @@ async function recordShortPerformance(
   await expect(recordingStatus).toContainText(/open Pads\s*[:·]\s*0/i,
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   if (withFx) {
+    const filter = page.getByRole("slider", {name: "Filter", exact: true});
     await page.getByRole("button", {name: "FILTER", exact: true}).click();
-    const filter = page.getByRole("slider", {name: "Cutoff", exact: true});
     const filterStatus = page.getByRole("status", {name: "Filter status"});
     await filter.dispatchEvent("pointerdown", {pointerId: 72});
-    await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+    await expect(filterStatus).toHaveText("engaged · core",
       {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await filter.fill("630");
-    await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+    await expect(filterStatus).toHaveText("engaged · core",
       {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await expect(filter).toHaveValue("630");
     await filter.dispatchEvent("pointerup", {pointerId: 72});
-    await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-    await expect(filterStatus).toHaveText("Filter · Off",
+    await expect(filterStatus).toHaveText("OFF · core",
       {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
     await page.getByRole("button", {name: "FILTER", exact: true}).click();
     await page.getByRole("button", {name: "HOLD"}).click();
@@ -1509,7 +1475,7 @@ test("Perform Launch carries the device SEQ SNAP while playing and the choice pe
 });
 
 
-test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}, info) => {
+test("complete Perform journey persists projection, gestures, WAV, save, replay and empty Pad master capture", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(420_000);
   await observeMasterCaptureBatches(page);
@@ -1630,18 +1596,6 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   expect(await projectRevision(page)).toBe(bankRevision);
 
   await showPerformPage(page, "Takes");
-  const pendingTake = await page.evaluate(async () => {
-    const session = window.lmdjWebRuntimeHost.session;
-    return {status: await session.queryPerformanceRecordingStatus(),
-      performances: await session.listPerformances(), recovery: await session.listPerformanceRecovery()};
-  });
-  expect(pendingTake.status.state).toBe("active");
-  expect(pendingTake.performances.some(value => value.performanceId === pendingTake.status.performanceId)).toBe(true);
-  expect(pendingTake.recovery.some(value => value.performanceId === pendingTake.status.performanceId)).toBe(true);
-  // The authoritative list really contains begin's unsaved draft. Saved Takes
-  // must exclude it while the original recording remains active.
-  await expect(page.getByRole("region", {name:"Saved Takes", exact:true})
-    .getByText("No saved Takes", {exact:true})).toBeVisible();
   await page.getByRole("button", {name: "Flush Performance"}).click();
   revision = await expectRevisionAfter(page, revision);
   await expect(recordingStatus).toContainText(/flushed/i);
@@ -1657,8 +1611,7 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await expect(page.getByRole("button", {name: "Discard Performance", exact: true})).toBeVisible();
   await expect(page.getByRole("status", {name: "WAV recording status"}))
     .toContainText("sealed", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  const encodedWav = await exportPerformanceWav(page);
-  const wav = parsePcm16StereoWav(encodedWav);
+  const wav = parsePcm16StereoWav(await exportPerformanceWav(page));
   expect(wav.frames).toBeGreaterThan(0);
   verifyDeterministicMasterOutput(wav);
 
@@ -1666,7 +1619,6 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   revision = await expectRevisionAfter(page, revision);
   await expect(page.getByRole("status", {name: "WAV binding status"}))
     .toContainText("bound");
-  const savedAudio=await expectNightSetAudio(page,encodedWav);
 
   const beforeReplace = revision;
   await replacePadSample(page);
@@ -1681,9 +1633,6 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await openPerform(page);
   await expect(page.getByRole("button", {name: "Launch Pattern 2"}))
     .toHaveAttribute("data-pattern-id", PATTERN_ID);
-  const reopenedAudio=await expectNightSetAudio(page,encodedWav);
-  expect(reopenedAudio.frames).toBe(savedAudio.frames);
-  expect(reopenedAudio.sha256).toBe(savedAudio.sha256);
   await showPerformPage(page, "Replay");
   await expect(page.getByText("Night Set", {exact: true})).toBeVisible();
 
@@ -1749,9 +1698,6 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   await page.reload(); await openLocalProject(page);
   const reopened = await inspectProjectTruth(page);
   expect(reopened.project.assets[capturedId].artifact).toEqual(captured.project.assets[capturedId].artifact);
-  const audioPath=info.outputPath("recorded-take-saved-reopened-audio.json");
-  await writeFile(audioPath,JSON.stringify({savedAudio,reopenedAudio},null,2));
-  await info.attach("recorded Take audio before and after reopen",{path:audioPath,contentType:"application/json"});
 });
 
 test("a recorded rotary FX survives touch takeover and closes the same Core gesture on leaving Perform", async ({page, browserName}) => {
@@ -1772,10 +1718,10 @@ test("a recorded rotary FX survives touch takeover and closes the same Core gest
   await knob.focus();
   await page.keyboard.press("ArrowUp");
   await expect.poll(async () => (await authority()).open_fx_gestures).toBe(1);
-  await page.getByRole("button", {name: "MORE"}).click();
+  await page.getByRole("button", {name: "FX / MORE"}).click();
   await expect(page.getByRole("button", {name: "Encoder 3 — Gate", exact: true})).toBeEnabled();
   expect((await authority()).open_fx_gestures).toBe(1);
-  await page.getByRole("button", {name: "MORE"}).click();
+  await page.getByRole("button", {name: "FX / MORE"}).click();
   const reverb = page.getByRole("slider", {name: "Reverb", exact: true});
   await expect(reverb).toHaveValue("10");
   await reverb.dispatchEvent("pointerdown", {pointerId: 91});
@@ -1937,10 +1883,7 @@ for (const failure of [
     await expect(page.getByRole("status", {name: "WAV recording status"}))
       .toContainText(`sealed · ${failure.reason}`);
     await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-    const prefix = parsePcm16StereoWav(await exportPerformanceWav(page));
-    await expectLocalAudioFrames(page, prefix.frames);
-    await expect(page.getByRole("status", {name: "Local WAV audio", exact: true}))
-      .toHaveAttribute("data-reason", failure.reason);
+    parsePcm16StereoWav(await exportPerformanceWav(page));
   });
 }
 
@@ -1955,12 +1898,9 @@ test("a retryable WAV bind keeps the real Store receipt path and removes the tem
   expect((await opfsWavFiles(page)).length).toBeGreaterThan(baselineWavs.length);
   const revision = await projectRevision(page);
   await showPerformPage(page, "Takes");
-  const retainedWav = parsePcm16StereoWav(await exportPerformanceWav(page));
-  await expectLocalAudioFrames(page, retainedWav.frames);
   await page.getByRole("button", {name: "Retry WAV bind"}).click();
   await expect(page.getByRole("status", {name: "WAV binding status"}))
     .toContainText("bound", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(page.getByRole("status", {name: "Local WAV audio", exact: true})).toHaveCount(0);
   await expectRevisionAfter(page, revision);
   await expect.poll(async () => (await opfsWavFiles(page)).filter(
     ({path}) => !/[0-9a-f]{64}\.wav$/.test(path),
@@ -2128,8 +2068,7 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
     .toHaveValue("630");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   await expect(page.getByRole("status", {name: "Filter status"}))
-    .toHaveText("Filter · Off");
-  await expect(page.getByRole("status", {name: "Filter status"})).toHaveAttribute("data-provenance", "core");
+    .toHaveText("OFF · core");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   for (const name of ["Delay", "Reverb"]) {
     await expect(page.getByRole("slider", {name, exact: true})).toHaveValue("0");
@@ -2293,7 +2232,7 @@ test("native FX drag-off releases before paging without stopping the recording",
   const box = await fader.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 2 / 3, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 3);
   await expect(fader).toHaveAttribute("data-proof-captured", "true");
   const pages = page.getByRole("navigation", {name: "Perform pages"});
   for (const button of await pages.getByRole("button").all()) await expect(button).toBeDisabled();
@@ -2327,10 +2266,9 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   await assignThenMovePattern(page);
 
   // The main group's first fader is the typed Filter with a Core Hz readback.
-  const primaryCutoff = page.getByRole("slider", {name: "Filter", exact: true});
-  await expect(primaryCutoff).toBeVisible();
-  await expect(primaryCutoff).toHaveValue("1000");
-  const cutoff = page.getByRole("slider", {name: "Cutoff", exact: true});
+  const cutoff = page.getByRole("slider", {name: "Filter", exact: true});
+  await expect(cutoff).toBeVisible();
+  await expect(cutoff).toHaveValue("1000");
   await expect(page.getByTestId("touch-workspace")
     .getByText("20.0 kHz", {exact: true})).toBeVisible();
   await expect(page.getByRole("button",
@@ -2339,8 +2277,8 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   // Entering the FILTER group is pure UI: still OFF, no enable.
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   const filterStatus = page.getByRole("status", {name: "Filter status"});
-  await expect(filterStatus).toContainText("Off");
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toContainText("OFF");
+  await expect(filterStatus).toContainText("core");
   await expect(page.getByRole("button", {name: "LP", exact: true}))
     .toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("slider", {name: "Resonance", exact: true}))
@@ -2352,17 +2290,14 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
     {name: "Encoder 3 — Resonance", exact: true})).toBeEnabled();
   // A type segment change is an actual control: engage + readback.
   await page.getByRole("button", {name: "HP", exact: true}).click();
-  await expect(filterStatus).toContainText("Engaged");
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toContainText("engaged");
+  await expect(filterStatus).toContainText("core");
   await page.getByRole("button", {name: "LP", exact: true}).click();
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+  await expect(filterStatus).toHaveText("engaged · core",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   // Leaving the group must not release the gesture (D04 rest semantics).
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
-  await expect(page.getByRole("group", {name: "Filter", exact: true})).toHaveCount(0);
-  await expect(filterStatus).toHaveText("Filter · Engaged");
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(page.getByRole("status", {name: "Filter status"})).toHaveCount(0);
 
   const recordingStatus = await beginRecording(page);
   const pad = page.getByRole("button", {name: /^Pad A01\b/});
@@ -2387,14 +2322,12 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   // low, and hold it over hit 2.
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   await cutoff.dispatchEvent("pointerdown", {pointerId: 32});
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+  await expect(filterStatus).toHaveText("engaged · core",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await cutoff.fill("100");
   // The next audible Pad witnesses the applied tuple. Core readback also
   // keeps this journey within the bounded ordinary-input admission window.
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+  await expect(filterStatus).toHaveText("engaged · core",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(cutoff).toHaveValue("100");
   await strike(33);
@@ -2411,19 +2344,17 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await cutoff.dispatchEvent("pointerdown", {pointerId: 34});
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+  await expect(filterStatus).toHaveText("engaged · core",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await cutoff.fill("300");
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
-  await expect(filterStatus).toHaveText("Filter · Engaged",
+  await expect(filterStatus).toHaveText("engaged · core",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await expect(cutoff).toHaveValue("300");
   await cutoff.dispatchEvent("pointerup", {pointerId: 34});
   // HOLD is a journaled far-side fact while the recording runs.
   await expect(recordingStatus).toContainText(/hold\s*[:·]\s*on/i,
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(filterStatus).toContainText("Frozen",
+  await expect(filterStatus).toContainText("frozen",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
   // A last hit while frozen keeps the recording span long enough for the
@@ -2480,9 +2411,9 @@ test("typed Filter journey proves Control→PCM, HOLD freeze, page exit, save an
   // returns to OFF from Core, never from a Host default.
   await showPerformPage(page, "Live");
   await page.getByRole("button", {name: "FILTER", exact: true}).click();
-  await expect(filterStatus).toContainText("Off",
+  await expect(filterStatus).toContainText("OFF",
     {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
-  await expect(filterStatus).toHaveAttribute("data-provenance", "core");
+  await expect(filterStatus).toContainText("core");
   await expect(page.getByRole("button", {name: "HOLD"}))
     .toHaveAttribute("aria-pressed", "false");
 });
@@ -2520,8 +2451,6 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
   await openPerform(page);
   await assignThenMovePattern(page);
   const selectPad = async (slot) => {
-    const entry = page.getByRole("button", {name: "Live Mute / Solo", exact: true});
-    if (await entry.count()) await entry.click();
     // A Bank change may hide the current Pad. The explicit control label still
     // names the one current selection and is the navigation starting point.
     const label = await page.getByRole("region", {name: "Current Pad live controls"}).locator("strong").textContent();
@@ -2608,14 +2537,12 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
   await selectPad(63);
   const mute = page.getByRole("button", {name: "Mute D16"});
   if (await mute.getAttribute("aria-pressed") === "false") await gate("Mute", 63, true);
-  await page.getByRole("button", {name: "Back to Filter", exact: true}).click();
   const hold = page.getByRole("button", {name: "HOLD", exact: true});
   if (await hold.getAttribute("aria-pressed") === "false") await hold.click();
   await expect(hold).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", {name: "Sequence", exact: true}).click();
   await expect(page.getByRole("main", {name: "Perform", exact: true})).toHaveCount(0);
   await openPerform(page);
-  await page.getByRole("button", {name: "Live Mute / Solo", exact: true}).click();
   await expect(page.getByRole("button", {name: "Mute D16"})).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("button", {name: "Solo D16"})).toHaveAttribute("aria-pressed", "false");
   await selectPad(0);
@@ -2658,263 +2585,6 @@ test("live Pad masks prove two-Pad PCM, all-64 identity, recording, leave and re
 });
 
 
-test("Perform groups, four slots and horizontal controls fit six viewports with real readbacks", async ({page, browserName}, info) => {
-  test.skip(browserName !== "chromium");
-  test.setTimeout(240_000);
-  await importActivateAndPerform(page);
-  const truth = await inspectProjectTruth(page);
-  const surface = page.getByRole("main", {name: "Perform", exact: true});
-  const measureHeader = () => page.getByTestId("overview-display").evaluate(root => {
-        const rect=node=>{const b=node.getBoundingClientRect(); return {x:b.x,y:b.y,width:b.width,height:b.height};};
-        const context=root.querySelector('.overview-context'), transport=root.querySelector('.overview-transport');
-        const a=rect(context), b=rect(transport), outer=rect(root);
-        return {context:a,transport:b,outer,primary:rect(root.querySelector(".overview-primary")),contextScroll:context.scrollWidth,contextWidth:context.clientWidth,
-          transportScroll:transport.scrollWidth,transportWidth:transport.clientWidth,
-          overlap:Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>0.5 && Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>0.5};
-      });
-  const measureConsole = () => page.getByTestId("hardware-console").evaluate(root => {
-    const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};};
-    const overlaps=(a,b)=>Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)>0.5 && Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y)>0.5;
-    const regions=[...root.children].filter(node=>node.matches('aside,section')).map(node=>({name:node.getAttribute('aria-label'),...rect(node)}));
-    const conflicts=[];
-    for(let i=0;i<regions.length;i++)for(let j=i+1;j<regions.length;j++)if(overlaps(regions[i],regions[j]))conflicts.push([regions[i].name,regions[j].name]);
-    const keys=[...root.querySelectorAll('[data-testid="physical-controls"] button,[data-testid="pad-matrix"] button')].map(node=>({name:node.getAttribute('aria-label'),...rect(node)}));
-    return {regions,conflicts,keys,outer:rect(root),viewport:{width:innerWidth,height:innerHeight},workspaceLocalHeight:root.parentElement.offsetHeight,scale:root.parentElement.style.getPropertyValue('--creator-stage-scale')};
-  });
-  const observations = [];
-  for (const viewport of [{width:1440,height:900}, {width:1280,height:720},
-    {width:1024,height:768}, {width:820,height:1180}, {width:768,height:1024}, {width:390,height:844}]) {
-    await page.setViewportSize(viewport);
-    for (const group of ["PRIMARY", "FILTER", "MORE"]) {
-      const button = surface.getByRole("button", {name:group, exact:true});
-      if (await button.getAttribute("aria-pressed") !== "true") await button.click();
-      await expect(button).toHaveAttribute("aria-pressed", "true");
-      const firstBinding={PRIMARY:"Cutoff",FILTER:"Type",MORE:"Crush"}[group];
-      await expect(page.getByTestId("physical-controls").getByRole("button",{
-        name:`Encoder 1 — ${firstBinding}`,exact:true})).toBeVisible();
-      await expect(page.getByTestId("overview-display").locator('.encoder-readbacks dt').first()).toHaveText(`ENC1 ${firstBinding}`);
-      const controls = await surface.locator("button,input,select,summary").evaluateAll(nodes => nodes.map(node => {
-        const box = node.getBoundingClientRect();
-        return {name:node.getAttribute("aria-label") || node.textContent.trim(),
-          width:box.width, height:box.height, scroll:node.scrollWidth, client:node.clientWidth};
-      }));
-      for (const control of controls) {
-        expect(control.width, JSON.stringify({viewport,group,control})).toBeGreaterThanOrEqual(44);
-        expect(control.height, JSON.stringify({viewport,group,control})).toBeGreaterThanOrEqual(44);
-        expect(control.scroll, JSON.stringify({viewport,group,control})).toBeLessThanOrEqual(control.client + 1);
-      }
-      const rails = await surface.locator('input[type="range"]').evaluateAll(nodes => nodes.map(node => {
-        const box=node.getBoundingClientRect(); return {name:node.getAttribute("aria-label"), width:box.width, height:box.height,localWidth:node.offsetWidth,localHeight:node.offsetHeight,writingMode:getComputedStyle(node).writingMode};
-      }));
-      for (const rail of rails) {
-        expect(rail.writingMode).toBe("horizontal-tb");
-        expect(rail.localWidth, JSON.stringify({viewport,group,rail})).toBeGreaterThan(rail.localHeight);
-      }
-      await expect(surface.getByRole("slider", {name:"MASTER",exact:true})).toHaveCount(1);
-      await expect(surface.getByRole("button", {name:"HOLD",exact:true})).toHaveCount(1);
-      const slots = await surface.getByRole("button", {name:/^Launch Pattern /}).evaluateAll(nodes => nodes.map(node => {
-        const b=node.getBoundingClientRect(); return {x:b.x,y:b.y,width:b.width,height:b.height,localX:node.offsetLeft,localY:node.offsetTop,localWidth:node.offsetWidth,id:node.dataset.patternId,state:node.dataset.launch};
-      }));
-      expect(slots).toHaveLength(4);
-      expect(new Set(slots.map(slot => slot.localY)).size).toBe(1);
-      for (let index=1;index<4;index++) expect(slots[index-1].localX + slots[index-1].localWidth).toBeLessThanOrEqual(slots[index].localX + 0.5);
-      const text = await surface.locator('button,output,.perform-fader-name,.perform-fader-value,.perform-slot-state').evaluateAll(nodes => nodes
-        .filter(node => !node.closest('.visually-hidden') && node.clientWidth > 0)
-        .map(node => ({text:node.textContent.trim(),width:node.clientWidth,scroll:node.scrollWidth})));
-      for (const value of text) expect(value.scroll, JSON.stringify({viewport,group,value})).toBeLessThanOrEqual(value.width+1);
-      const encoderGeometry=await page.getByTestId("overview-display").locator('.encoder-readbacks > div').evaluateAll(nodes=>nodes.map(node=>({
-        text:node.textContent,scroll:node.scrollWidth,width:node.clientWidth,
-        children:[...node.children].map(child=>({text:child.textContent,scroll:child.scrollWidth,width:child.clientWidth}))
-      })));
-      expect(encoderGeometry).toHaveLength(4);
-      for(const cell of encoderGeometry){
-        expect(cell.scroll,JSON.stringify({viewport,group,cell})).toBeLessThanOrEqual(cell.width+1);
-        for(const child of cell.children)expect(child.scroll,JSON.stringify({viewport,group,child})).toBeLessThanOrEqual(child.width+1);
-      }
-      const header = await measureHeader();
-      expect(header.overlap, JSON.stringify({viewport,header})).toBe(false);
-      expect(header.contextScroll, JSON.stringify({viewport,header})).toBeLessThanOrEqual(header.contextWidth+1);
-      expect(header.transportScroll, JSON.stringify({viewport,header})).toBeLessThanOrEqual(header.transportWidth+1);
-      expect(header.transport.y+header.transport.height).toBeLessThanOrEqual(header.primary.y+header.primary.height+1);
-      const touch = page.getByTestId("touch-workspace");
-      await expect.poll(() => touch.evaluate(node=>node.scrollWidth-node.clientWidth)).toBeLessThanOrEqual(1);
-      const consoleGeometry = await measureConsole();
-      expect(consoleGeometry.conflicts,JSON.stringify({viewport,consoleGeometry})).toEqual([]);
-      for (const key of consoleGeometry.keys) {
-        expect(key.width,JSON.stringify({viewport,key})).toBeGreaterThanOrEqual(44);
-        expect(key.height,JSON.stringify({viewport,key})).toBeGreaterThanOrEqual(44);
-      }
-      for (const region of consoleGeometry.regions) {
-        expect(region.x,JSON.stringify({viewport,region})).toBeGreaterThanOrEqual(0);
-        expect(region.y,JSON.stringify({viewport,region})).toBeGreaterThanOrEqual(0);
-        expect(region.x+region.width,JSON.stringify({viewport,region})).toBeLessThanOrEqual(viewport.width+0.5);
-        expect(region.y+region.height,JSON.stringify({viewport,region})).toBeLessThanOrEqual(viewport.height+0.5);
-      }
-      observations.push({viewport,group,controls,rails,slots,text,header,encoderGeometry,consoleGeometry});
-    }
-    await surface.getByRole("button", {name:"PRIMARY",exact:true}).click();
-    await expect(page.getByTestId("physical-controls").getByRole("button",{name:"Encoder 1 — Cutoff",exact:true})).toBeVisible();
-    await expect(page.getByTestId("overview-display").locator('.encoder-readbacks dt').first()).toHaveText('ENC1 Cutoff');
-    await expect(page.getByRole("button",{name:"Previous FX group — ←",exact:true})).toBeDisabled();
-    await page.getByTestId("touch-workspace").evaluate(node=>{node.scrollTop=0;});
-    const screenshot=info.outputPath(`perform-${viewport.width}x${viewport.height}.png`);
-    await page.screenshot({path:screenshot});
-    await info.attach(`perform-${viewport.width}x${viewport.height}`,{path:screenshot,contentType:"image/png"});
-  }
-  // Navigation above does not engage a producer, change masks or author Truth.
-  const before = await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
-  expect(before.available).toBe(true);
-  expect(before.applied.filter.engaged).toBe(false);
-  expect(before.applied.mutedSlots).toEqual([]); expect(before.applied.soloSlots).toEqual([]);
-  await surface.getByRole("button", {name:"FILTER",exact:true}).click();
-  const cutoff=surface.getByRole("slider", {name:"Cutoff",exact:true});
-  await cutoff.dispatchEvent("pointerdown",{pointerId:111});
-  await cutoff.fill("700");
-  await expect(cutoff).toHaveValue("700");
-  await expect.poll(async()=>{
-    const status=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
-    return status.available && status.applied.filter.engaged && status.applied.filter.cutoffHz < 20000;
-  },{timeout:LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
-  await surface.getByRole("button", {name:"MORE",exact:true}).click();
-  await expect.poll(async()=>{
-    const status=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
-    return status.available && !status.applied.filter.engaged && !status.applied.filter.frozen;
-  },{timeout:LAUNCH_TRANSITION_TIMEOUT_MS}).toBe(true);
-  await surface.getByRole("button", {name:"Live Mute / Solo",exact:true}).click();
-  await surface.getByRole("button", {name:"Solo A01",exact:true}).click();
-  await expect(surface.locator('.perform-pad-gate-summary')).toHaveAttribute('data-provenance','core', {timeout:LAUNCH_TRANSITION_TIMEOUT_MS});
-  await expect(surface.locator('.perform-pad-gate-summary dd').nth(1)).toHaveText('A01');
-  const masks=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.queryPerformanceLiveStatus());
-  expect(masks.applied.soloSlots).toEqual([0]);
-  await surface.getByRole("button", {name:"Back to Filter",exact:true}).click();
-  await expect(surface.getByRole("button", {name:"FILTER",exact:true})).toHaveAttribute('aria-pressed','true');
-  expect(await inspectProjectTruth(page)).toEqual(truth);
-  // System retains the mounted Perform composition; returning without a
-  // resize must preserve every region and the one current parameter group.
-  await page.getByTestId("physical-controls").getByRole("button",{name:"System",exact:true}).click();
-  await page.getByRole("button",{name:"Back to music",exact:true}).click();
-  await expect(surface).toBeVisible();
-  const remountedConsole=await measureConsole();
-  expect(remountedConsole.conflicts).toEqual([]);
-  for(const region of remountedConsole.regions) expect(region.y+region.height).toBeLessThanOrEqual(844+0.5);
-  // Every mode now shares the same390px shell. Configure the existing device
-  // preference at1440px; arming, active readout and cancellation below retain
-  // their original real390px UI journey.
-  await page.getByTestId("physical-controls").getByRole("button", {name:"Sequence",exact:true}).click();
-  await expect(surface).toHaveCount(0);
-  const afterModeExit=await measureConsole();
-  expect(afterModeExit.workspaceLocalHeight).toBe(remountedConsole.workspaceLocalHeight);
-  expect(afterModeExit.conflicts).toEqual([]);
-  // Pointer reentry must work from the common Sequence shell. Keep the
-  // original keyboard entry as a separate leg after this added round trip.
-  await page.getByTestId("physical-controls").getByRole("button",{name:"Perform",exact:true}).click();
-  await expect(surface).toBeVisible();
-  const pointerReentryConsole=await measureConsole();
-  expect(pointerReentryConsole.workspaceLocalHeight).toBe(afterModeExit.workspaceLocalHeight);
-  expect(pointerReentryConsole.conflicts).toEqual([]);
-  await page.getByTestId("physical-controls").getByRole("button",{name:"Sequence",exact:true}).click();
-  await expect(surface).toHaveCount(0);
-  await page.getByTestId("physical-controls").getByRole("button",{name:"Perform",exact:true}).focus();
-  await page.keyboard.press("Enter");
-  await expect(surface).toBeVisible();
-  const modeReentryConsole=await measureConsole();
-  expect(modeReentryConsole.workspaceLocalHeight).toBe(afterModeExit.workspaceLocalHeight);
-  expect(modeReentryConsole.conflicts).toEqual([]);
-  for(const region of modeReentryConsole.regions) expect(region.y+region.height).toBeLessThanOrEqual(844+0.5);
-  await page.getByTestId("physical-controls").getByRole("button",{name:"Sequence",exact:true}).click();
-  await expect(surface).toHaveCount(0);
-  await page.setViewportSize({width:1440,height:900});
-  await showSequenceLayer(page,"SETUP");
-  await page.getByRole("button", {name:"Count-in 2 bars",exact:true}).click();
-  await expect(page.getByRole("button", {name:"Count-in 2 bars",exact:true})).toHaveAttribute("aria-pressed","true");
-  await page.getByTestId("physical-controls").getByRole("button", {name:"Perform",exact:true}).click();
-  await page.setViewportSize({width:390,height:844});
-  await page.getByTestId("physical-controls").getByRole("button", {name:"Record",exact:true}).click();
-  await expect(page.getByRole("status",{name:"Count-in status"})).toContainText(/\d+ beats? left/);
-  const countInText=await page.getByRole("status",{name:"Count-in status"}).textContent();
-  const countInHeader=await measureHeader();
-  expect(countInHeader.overlap,JSON.stringify(countInHeader)).toBe(false);
-  expect(countInHeader.contextScroll).toBeLessThanOrEqual(countInHeader.contextWidth+1);
-  expect(countInHeader.transportScroll).toBeLessThanOrEqual(countInHeader.transportWidth+1);
-  expect(countInHeader.transport.y+countInHeader.transport.height).toBeLessThanOrEqual(countInHeader.primary.y+countInHeader.primary.height+1);
-  const countInScreenshot=info.outputPath('perform-count-in-390x844.png');
-  await page.screenshot({path:countInScreenshot});
-  await info.attach('perform-count-in-390x844',{path:countInScreenshot,contentType:'image/png'});
-  await page.getByTestId("physical-controls").getByRole("button", {name:"Record — cancel count-in",exact:true}).click();
-  await expect(page.getByRole("status",{name:"Count-in status"})).toHaveCount(0);
-  expect(await inspectProjectTruth(page)).toEqual(truth);
-  const receipt=info.outputPath('perform-layout-and-native-readback.json');
-  await writeFile(receipt,JSON.stringify({observations,before,masks,countInHeader,countInText,remountedConsole,afterModeExit,pointerReentryConsole,modeReentryConsole},null,2));
-  await info.attach('perform-layout-and-native-readback',{path:receipt,contentType:'application/json'});
-});
-
-
-test("Slots explicit Assign Move Clear and return preserve real Truth across reopen", async ({page, browserName}, info) => {
-  test.skip(browserName !== "chromium");
-  test.setTimeout(180_000);
-  await importActivateAndPerform(page);
-  const before = await inspectProjectTruth(page);
-  let revision = await projectRevision(page);
-  expect(before.project.pattern_slots).toEqual(Array(16).fill(null));
-  const transport = page.getByTestId("overview-display").locator(".overview-transport");
-  const beforeTransport = await transport.textContent();
-  await showPerformPage(page, "Slots");
-  const assignment = page.getByRole("combobox", {name: "Pattern assignment", exact: true});
-  const target = page.getByRole("combobox", {name: "Pattern slot", exact: true});
-  const readback = page.getByRole("status", {name: "Selected Pattern slot", exact: true});
-  await assignment.selectOption(PATTERN_ID);
-  await target.selectOption({value: "15"});
-  await page.getByRole("combobox", {name: "Move Pattern from"}).selectOption({value: "15"});
-  await page.getByRole("combobox", {name: "Move Pattern to"}).selectOption({value: "14"});
-  await page.getByRole("combobox", {name: "Clear Pattern slot"}).selectOption({value: "14"});
-  await target.focus();
-  await page.keyboard.press("Escape");
-  await showPerformPage(page, "Live");
-  expect(await inspectProjectTruth(page)).toEqual(before);
-  expect(await projectRevision(page)).toBe(revision);
-  expect(await transport.textContent()).toBe(beforeTransport);
-  await showPerformPage(page, "Slots");
-  await expect(target).toHaveValue("15");
-  await expect(readback).toHaveText("Slot 16 · Empty");
-  await page.getByRole("button", {name: "Assign Pattern", exact: true}).click();
-  revision = await expectRevisionAfter(page, revision);
-  const assigned = await inspectProjectTruth(page);
-  expect(assigned.project.pattern_slots).toEqual([...Array(15).fill(null), PATTERN_ID]);
-  await expect(readback).toHaveText("Slot 16 · Pattern 01");
-  await page.getByRole("button", {name: "Move Pattern", exact: true}).click();
-  revision = await expectRevisionAfter(page, revision);
-  const moved = await inspectProjectTruth(page);
-  expect(moved.project.pattern_slots).toEqual([...Array(14).fill(null), PATTERN_ID, null]);
-  await expect(readback).toHaveText("Slot 16 · Empty");
-  await page.getByRole("button", {name: "Clear Pattern", exact: true}).click();
-  revision = await expectRevisionAfter(page, revision);
-  const cleared = await inspectProjectTruth(page);
-  expect(cleared.project.pattern_slots).toEqual(Array(16).fill(null));
-  await page.getByRole("button", {name: "Assign Pattern", exact: true}).click();
-  revision = await expectRevisionAfter(page, revision);
-  const committed = await inspectProjectTruth(page);
-  expect(committed.project.pattern_slots).toEqual(assigned.project.pattern_slots);
-  await showPerformPage(page, "Live");
-  await showPatternLaunchGroup(page, 16);
-  await expect(page.getByRole("button", {name: "Launch Pattern 16", exact: true}))
-    .toHaveAttribute("data-pattern-id", PATTERN_ID);
-  await page.reload();
-  await openLocalProject(page);
-  expect(await projectRevision(page)).toBe(revision);
-  const reopened = await inspectProjectTruth(page);
-  expect(reopened).toEqual(committed);
-  await activateAudio(page);
-  await openPerform(page);
-  await showPerformPage(page, "Slots");
-  await page.getByRole("combobox", {name: "Pattern slot", exact: true}).selectOption({value: "15"});
-  await expect(page.getByRole("status", {name: "Selected Pattern slot", exact: true}))
-    .toHaveText("Slot 16 · Pattern 01");
-  const evidence = info.outputPath("slots-truth-reopen.json");
-  await writeFile(evidence, JSON.stringify({before, assigned, moved, cleared, committed, reopened}, null, 2));
-  await info.attach("Slots committed Truth and reopen", {path: evidence, contentType: "application/json"});
-});
-
-
 test("real capture progress counts silent PCM, final WAV frames and only its current Session identity", async ({page,browserName},info) => {
   test.skip(browserName!=="chromium");
   test.setTimeout(180_000);
@@ -2940,9 +2610,7 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
   await importActivateAndPerform(page);
   const read=()=>page.evaluate(()=>{
     const value=window.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress();
-    const ui=document.querySelector('[aria-label="Captured audio"]');
-    const host=ui?{frames:Number(ui.dataset.frames),rate:Number(ui.dataset.rate),captureId:ui.dataset.captureId,text:ui.textContent}:null;
-    return {value,host,sampleRate:window.__captureProgressContext.sampleRate,
+    return {value,sampleRate:window.__captureProgressContext.sampleRate,
       starts:window.__captureProgressStarts.filter(event=>event.generation===value.generation),
       stops:window.__captureProgressStops.filter(event=>event.generation===value.generation),
       batches:window.__performMasterBatchProof.filter(batch=>batch.generation===value.generation)};
@@ -2953,16 +2621,7 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
     await expect.poll(async()=>{
       const r=await read();return r.value.state==="available" && r.batches.filter(batch=>batch.peak===0).length>=2;
     },{timeout:AUDIO_TRANSITION_TIMEOUT_MS,intervals:[20]}).toBe(true);
-    const target=(await read()).value.receivedFrames;
-    const capturedUI=page.getByRole("status",{name:"Captured audio",exact:true});
-    await expect.poll(async()=>Number(await capturedUI.getAttribute("data-frames")),
-      {timeout:AUDIO_TRANSITION_TIMEOUT_MS,intervals:[20]}).toBeGreaterThanOrEqual(target);
     const active=await read();
-    expect(active.host.captureId).toBe(active.value.captureId);
-    expect(active.host.rate).toBe(active.sampleRate);
-    let prefixFrames=0;const deliveredPrefixes=active.batches.map(batch=>(prefixFrames+=batch.frames));
-    expect(deliveredPrefixes).toContain(active.host.frames);
-    expect(active.host.text).not.toBe("Unavailable");
     expect(active.value.phase).toBe("recording");
     expect(active.value.sampleRate).toBe(active.sampleRate);
     expect(active.value.receivedFrames).toBe(active.batches.reduce((sum,batch)=>sum+batch.frames,0));
@@ -2990,75 +2649,10 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
     expect(stopped.value.receivedFrames).toBe(pcm.frames);
     expect(stopped.value.sampleRate).toBe(wav.readUInt32LE(24));
     expect(stopped.batches.filter(batch=>batch.peak===0).reduce((sum,batch)=>sum+batch.frames,0)).toBeGreaterThanOrEqual(9600);
-    await expectLocalAudioFrames(page,pcm.frames,wav.readUInt32LE(24));
-    await expect(capturedUI).toHaveAttribute("data-frames",String(stopped.value.receivedFrames));
-    const geometry=[];
-    const journeyViewport=page.viewportSize();
-    if(index===0)for(const viewport of [{width:1440,height:900},{width:1280,height:720},
-      {width:1024,height:768},{width:820,height:1180},{width:768,height:1024},{width:390,height:844}]) {
-      await page.setViewportSize(viewport);
-      await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,viewport);
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
-      for(const name of ["Live","Takes"]) {
-        await showPerformPage(page,name);
-        const card=page.getByRole("region",{name:"Recording audio readout",exact:true});
-        await card.scrollIntoViewIfNeeded();
-        const measurement=await card.evaluate(root=>{
-          const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,right:b.right,bottom:b.bottom};};
-          const touch=rect(root.closest('[data-testid="touch-workspace"]'));
-          return {outer:rect(root),touch,
-            rows:[...root.querySelectorAll('dl>div')].map(node=>({label:rect(node.firstElementChild),value:rect(node.lastElementChild)})),
-            text:[...root.querySelectorAll('dt,dd')].map(node=>({text:node.textContent,width:node.clientWidth,scroll:node.scrollWidth})),
-            scrollers:[...root.querySelectorAll('*')].filter(node=>['auto','scroll'].includes(getComputedStyle(node).overflowY)&&node.scrollHeight>node.clientHeight+1).length};
-        });
-        expect(measurement.outer.x).toBeGreaterThanOrEqual(measurement.touch.x-1);
-        expect(measurement.outer.right).toBeLessThanOrEqual(measurement.touch.right+1);
-        expect(measurement.outer.y).toBeGreaterThanOrEqual(measurement.touch.y-1);
-        expect(measurement.outer.bottom).toBeLessThanOrEqual(measurement.touch.bottom+1);
-        expect(measurement.scrollers).toBe(0);
-        // Portrait tablet consoles rotate -90deg: separation may be on either
-        // viewport axis. Both projections overlapping is the actual defect.
-        for(const row of measurement.rows)expect(
-          row.label.right<=row.value.x || row.value.right<=row.label.x ||
-          row.label.bottom<=row.value.y || row.value.bottom<=row.label.y,
-          JSON.stringify({viewport,name,row}),
-        ).toBe(true);
-        for(const text of measurement.text)expect(text.scroll,JSON.stringify({viewport,name,text})).toBeLessThanOrEqual(text.width+1);
-        const controls=[];
-        if(name==="Takes") {
-          const panel=page.getByRole("region",{name:"Performance recording",exact:true});
-          const targets=panel.locator('button,input,summary');
-          for(let n=0;n<await targets.count();n++) {
-            const target=targets.nth(n);if(!await target.isVisible())continue;
-            await target.scrollIntoViewIfNeeded();
-            const hit=await target.evaluate(node=>{
-              const b=node.getBoundingClientRect(),touch=node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
-              return {name:node.getAttribute('aria-label')??node.textContent,width:b.width,height:b.height,
-                contained:b.x>=touch.x-1&&b.y>=touch.y-1&&b.right<=touch.right+1&&b.bottom<=touch.bottom+1,
-                hit:node.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};
-            });
-            expect(hit.width).toBeGreaterThanOrEqual(43.5);expect(hit.height).toBeGreaterThanOrEqual(43.5);
-            expect(hit.contained,JSON.stringify({viewport,hit})).toBe(true);expect(hit.hit).toBe(true);controls.push(hit);
-          }
-          await card.scrollIntoViewIfNeeded();
-        }
-        geometry.push({viewport,page:name,...measurement,controls});
-        const path=info.outputPath(`audio-${viewport.width}x${viewport.height}-${name}.png`);
-        await page.screenshot({path});await info.attach(`audio ${viewport.width} ${name}`,{path,contentType:"image/png"});
-      }
-    }
-    if(index===0) {
-      // Geometry probes must restore the original journey's viewport before
-      // continuing its discard/new-capture/Project reopen acceptance legs.
-      await page.setViewportSize(journeyViewport);
-      await page.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,journeyViewport);
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
-    }
-    observations.push({active,stopped,geometry,wav:{frames:pcm.frames,sampleRate:wav.readUInt32LE(24),byteLength:wav.byteLength,sha256:sha256(wav)}});
+    observations.push({active,stopped,wav:{frames:pcm.frames,sampleRate:wav.readUInt32LE(24),byteLength:wav.byteLength,sha256:sha256(wav)}});
     await page.getByRole("button",{name:"Discard Performance",exact:true}).click();
     await expect(page.getByRole("status",{name:"Performance recording status"})).toContainText("idle",{timeout:PROJECT_TRANSITION_TIMEOUT_MS});
     await showPerformPage(page,"Live");
-    await expect(page.getByRole("status",{name:"Captured audio",exact:true})).toHaveCount(0);
   }
   const retired=await page.evaluate(async()=>{
     const session=window.lmdjWebRuntimeHost.session;
@@ -3070,211 +2664,7 @@ test("real capture progress counts silent PCM, final WAV frames and only its cur
   await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
   const reopened=await page.evaluate(()=>window.lmdjWebRuntimeHost.session.performanceMasterCaptureProgress());
   expect(reopened).toEqual({state:"unavailable",reason:"idle"});
-  await expect(page.getByRole("status",{name:"Local WAV audio",exact:true})).toHaveCount(0);
   const path=info.outputPath("capture-progress-frames.json");
   await writeFile(path,JSON.stringify({observations,retired,reopened},null,2));
   await info.attach("real capture frames and Session identity",{path,contentType:"application/json"});
-});
-
-test("Takes verifies saved WAV audio including thirty minutes across two reopens", async ({page, browserName}, info) => {
-  test.skip(browserName !== "chromium");
-  test.setTimeout(420_000);
-  const fixtures = [
-    {kind: "valid", name: "Duration Silent", frames: 48017, rate: 48000},
-    {kind: "unsupported", name: "Duration Unsupported", frames: 48017, rate: 32000},
-    {kind: "damaged", name: "Duration Damaged", frames: 48017, rate: 48000},
-    {kind: "none", name: "Duration No WAV", frames: 0, rate: 48000},
-    {kind: "long", name: "Duration Thirty Minutes", frames: 86400000, rate: 48000},
-  ].map(value => {
-    if (value.kind === "none") return {...value, artifact: null, header: null, physicalSha: null};
-    const dataBytes = value.frames * 4;
-    const header = Buffer.alloc(56);
-    header.write("RIFF", 0);header.writeUInt32LE(dataBytes + 48, 4);header.write("WAVEfmt ", 8);
-    header.writeUInt32LE(16, 16);header.writeUInt16LE(1, 20);header.writeUInt16LE(2, 22);
-    header.writeUInt32LE(value.rate, 24);header.writeUInt32LE(value.rate * 4, 28);
-    header.writeUInt16LE(4, 32);header.writeUInt16LE(16, 34);
-    header.write("JUNK", 36);header.writeUInt32LE(3, 40);header.set([1, 2, value.kind === "damaged" ? 4 : 3, 171], 44);
-    header.write("data", 48);header.writeUInt32LE(dataBytes, 52);
-    const digest = (corrupt = false) => {
-      const hash = createHash("sha256").update(header), zeros = Buffer.alloc(65536);
-      for (let remaining = dataBytes - (corrupt ? 1 : 0); remaining > 0;) {
-        const count = Math.min(remaining, zeros.byteLength);hash.update(zeros.subarray(0, count));remaining -= count;
-      }
-      if (corrupt) hash.update(Buffer.from([1]));
-      return hash.digest("hex");
-    };
-    const sha256 = digest();
-    return {...value, artifact: {sha256, media_type: "audio/wav", byte_length: dataBytes + 56},
-      header: Array.from(header), physicalSha: value.kind === "damaged" ? digest(true) : sha256};
-  });
-  // Absolute witnesses distinguish a shared fixture-encoding mistake from
-  // producer/consumer agreement. Long audio is physically hashed, not decoded.
-  expect(fixtures[0].artifact.sha256).toBe("985ee1bbde8458eeb675cff7bb99b6bd61278b9646a127c7c39b1fb7634cb2d5");
-  expect(fixtures[1].artifact.sha256).toBe("62aedd330eea859b7e3725d842cf089a97177d8a0f2918ad0d151212230c9d19");
-  expect(fixtures[2].artifact.sha256).toBe("1c9584570dd5f2571c47180409b0e222f30667fafa5f6f72ec0eb858b1b1c345");
-  expect(fixtures[2].physicalSha).toBe("f1ca5248d62d3cd2710a15dbfaab7d990bc2471bf58362ee85204a078671f895");
-  // Corrupt one content-addressed file without corrupting the valid control.
-  expect(new Set(fixtures.filter(value => value.artifact !== null).map(value => value.artifact.sha256)).size).toBe(4);
-  expect(fixtures[4].artifact.byte_length).toBe(345600056);
-  await importActivateAndPerform(page);
-  const seeded = await page.evaluate(async fixtures => {
-    const send = async (operation, payload) => {
-      const response = await window.lmdjWebRuntimeHost.transport.send({protocol_version: 1,
-        request_id: crypto.randomUUID(), operation, payload});
-      if (!response.ok) throw new Error(operation + ": " + JSON.stringify(response));
-      return response.result;
-    };
-    const inspected = await window.lmdjWebRuntimeHost.inspection.inspectProject();
-    const projectId = inspected.project.project_id;
-    let revision = inspected.project_revision;
-    const root = await navigator.storage.getDirectory();
-    const projects = await root.getDirectoryHandle("projects");
-    const bundle = await projects.getDirectoryHandle(projectId + ".lmdj");
-    const assets = await bundle.getDirectoryHandle("assets");
-    const takes = [];
-    for (const fixture of fixtures) {
-      const performanceId = crypto.randomUUID(), recordingRevision = revision;
-      const begin = await send("performance.record.begin", {command_id: crypto.randomUUID(),
-        expected_revision: revision, session_id: performanceId, performance_id: performanceId});
-      if (begin.project_revision !== revision + 1) throw new Error("begin revision changed");
-      revision = begin.project_revision;
-      await send("performance.record.stop", {session_id: performanceId, request_id: crypto.randomUUID()});
-      let file;
-      if (fixture.artifact !== null) {
-        file = await assets.getFileHandle(fixture.artifact.sha256 + ".wav", {create: true});
-        const writable = await file.createWritable();
-        await writable.truncate(fixture.artifact.byte_length);
-        await writable.write({type: "write", position: 0, data: new Uint8Array(fixture.header)});
-        await writable.close();
-      }
-      const saved = await send("performance.save", {command_id: crypto.randomUUID(), expected_revision: revision,
-        performance_id: performanceId, name: fixture.name, recording_artifact: fixture.artifact});
-      if (saved.project_revision !== revision + 1) throw new Error("save revision changed");
-      revision = saved.project_revision;
-      if (fixture.kind === "damaged") {
-        const writable = await file.createWritable({keepExistingData: true});
-        await writable.write({type: "write", position: fixture.artifact.byte_length - 1, data: new Uint8Array([1])});
-        await writable.close();
-      }
-      takes.push({...fixture, performanceId, recordingRevision});
-    }
-    await window.lmdjWebRuntimeHost.session.close();
-    return {projectId, revision, takes, cleanup: await window.lmdjWebRuntimeHost.session.waitForTerminalCleanup()};
-  }, fixtures);
-  expect(seeded.cleanup).toBe(true);
-  const reports = [], geometry = [];
-  for (let reopen = 1; reopen <= 2; reopen++) {
-    await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
-    await showPerformPage(page, "Takes");
-    for (const take of seeded.takes) {
-      await page.getByRole("button", {name: new RegExp(`^Select Take \\d+: ${take.name}$`)}).click();
-      const output = page.getByRole("status", {name: "Take WAV audio", exact: true});
-      const expectedState = {valid: "verified", unsupported: "unsupported", damaged: "damaged", none: "no-wav", long: "verified"}[take.kind];
-      await expect(output).toHaveAttribute("data-state", expectedState, {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
-      await expect(output).toHaveText({valid: "00:01.000", unsupported: "WAV format unsupported",
-        damaged: "WAV integrity check failed", none: "No WAV attached", long: "30:00.000"}[take.kind]);
-      const ui = await output.evaluate(node => ({text: node.textContent, data: {...node.dataset}}));
-      const evidence = await page.evaluate(async ({take, projectId, revision}) => {
-        const session = window.lmdjWebRuntimeHost.session;
-        const inspected = await session.inspectPerformance(take.performanceId);
-        let receipt = null, physical = null;
-        if (take.artifact !== null) {
-          const start = performance.now();
-          try {
-            receipt = {ok: true, value: await session.queryPerformanceRecordingMetadata({projectId,
-              performanceId: take.performanceId, expectedRevision: revision, recordingArtifact: {
-                sha256: take.artifact.sha256, mediaType: "audio/wav", byteLength: take.artifact.byte_length}})};
-          } catch (error) {receipt = {ok: false, code: error.code, details: error.details};}
-          receipt.elapsedMs = performance.now() - start;
-          const projects = await (await navigator.storage.getDirectory()).getDirectoryHandle("projects");
-          const assets = await (await projects.getDirectoryHandle(projectId + ".lmdj")).getDirectoryHandle("assets");
-          const file = await (await assets.getFileHandle(take.artifact.sha256 + ".wav")).getFile();
-          const prefix = new Uint8Array(await file.slice(0, 56).arrayBuffer());
-          const tail = Array.from(new Uint8Array(await file.slice(-4).arrayBuffer()));
-          const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())),
-            value => value.toString(16).padStart(2, "0")).join("");
-          const header = new DataView(prefix.buffer);
-          physical = {sha256: hash, byteLength: file.size, prefix: Array.from(prefix), tail,
-            rate: header.getUint32(24, true), channels: header.getUint16(22, true),
-            frames: header.getUint32(52, true) / header.getUint16(32, true)};
-        }
-        return {inspected, receipt, physical};
-      }, {take, projectId: seeded.projectId, revision: seeded.revision});
-      expect(evidence.inspected).toMatchObject({id: take.performanceId, name: take.name,
-        recordingArtifact: take.artifact === null ? null : {
-          sha256: take.artifact.sha256, mediaType: "audio/wav", byteLength: take.artifact.byte_length},
-        events: [], projectRevision: seeded.revision});
-      if (take.artifact !== null) {
-        expect(evidence.physical).toEqual({sha256: take.physicalSha, byteLength: take.artifact.byte_length,
-          prefix: take.header, tail: take.kind === "damaged" ? [0, 0, 0, 1] : [0, 0, 0, 0],
-          rate: take.rate, channels: 2, frames: take.frames});
-        if (take.kind === "damaged") expect(evidence.receipt).toMatchObject({ok: false,
-          code: "COOK_FAILED", details: {storage_condition: "artifact_mismatch"}});
-        else {
-          expect(evidence.receipt).toMatchObject({ok: true, value: {projectId: seeded.projectId,
-            performanceId: take.performanceId, projectRevision: seeded.revision,
-            recordingRevision: take.recordingRevision, recordingArtifact: {
-              sha256: take.artifact.sha256, mediaType: "audio/wav", byteLength: take.artifact.byte_length},
-            audioMetadata: take.kind === "unsupported" ? null : {sampleRate: take.rate, channels: 2, sourceFrames: take.frames},
-            audioError: take.kind === "unsupported" ? {code:"UNSUPPORTED_AUDIO"} : null}});
-          expect(ui.data.sha256).toBe(take.artifact.sha256);
-          expect(ui.data.byteLength).toBe(String(take.artifact.byte_length));
-          expect(ui.data.projectRevision).toBe(String(seeded.revision));
-          expect(ui.data.recordingRevision).toBe(String(take.recordingRevision));
-        }
-      }
-      if (take.kind === "valid" || take.kind === "long") {
-        expect(ui.data.frames).toBe(String(take.frames));expect(ui.data.rate).toBe(String(take.rate));
-        await expect(page.getByText("Recording completeness unknown", {exact: true})).toBeVisible();
-      } else expect(ui.data.frames).toBeUndefined();
-      reports.push({reopen, take, ui, ...evidence});
-    }
-    if (reopen === 1) {
-      await page.getByRole("button", {name: /^Select Take \d+: Duration Silent$/}).click();
-      const output = page.getByRole("status", {name: "Take WAV audio", exact: true});
-      await expect(output).toHaveText("00:01.000", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
-      const originalViewport = page.viewportSize();
-      for (const viewport of [{width:1440,height:900},{width:1280,height:720},{width:1024,height:768},
-        {width:820,height:1180},{width:768,height:1024},{width:390,height:844}]) {
-        await page.setViewportSize(viewport);
-        await page.waitForFunction(({width,height}) => innerWidth === width && innerHeight === height, viewport);
-        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
-        const panel = page.getByRole("region", {name: "Saved Takes", exact: true});
-        const controls = panel.getByRole("button"), hits = [];
-        for (let i = 0; i < await controls.count(); i++) {
-          const button = controls.nth(i);await button.scrollIntoViewIfNeeded();
-          const hit = await button.evaluate(node => {
-            const b = node.getBoundingClientRect(), touch = node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
-            return {name: node.textContent, width: b.width, height: b.height,
-              contained: b.x >= touch.x - 1 && b.y >= touch.y - 1 && b.right <= touch.right + 1 && b.bottom <= touch.bottom + 1,
-              hit: node.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2))};
-          });
-          expect(hit.width).toBeGreaterThanOrEqual(43.5);expect(hit.height).toBeGreaterThanOrEqual(43.5);
-          expect(hit.contained, JSON.stringify({viewport, hit})).toBe(true);expect(hit.hit).toBe(true);hits.push(hit);
-        }
-        const card = page.getByRole("region", {name: "Saved Take audio", exact: true});
-        await card.scrollIntoViewIfNeeded();
-        const measurement = await panel.evaluate(node => ({
-          text: [...node.querySelectorAll('dt,dd,button span')].map(item => ({text:item.textContent, width:item.clientWidth, scroll:item.scrollWidth})),
-          scrollers: [...node.querySelectorAll('*')].filter(item => ['auto','scroll'].includes(getComputedStyle(item).overflowY) && item.scrollHeight > item.clientHeight + 1).length,
-        }));
-        expect(measurement.scrollers).toBe(0);
-        for (const text of measurement.text) expect(text.scroll, JSON.stringify({viewport,text})).toBeLessThanOrEqual(text.width + 1);
-        geometry.push({viewport, hits, ...measurement});
-        const image = info.outputPath(`saved-take-${viewport.width}x${viewport.height}.png`);
-        await page.screenshot({path:image});await info.attach(`saved Take ${viewport.width}`, {path:image,contentType:"image/png"});
-      }
-      await page.setViewportSize(originalViewport);
-      await page.waitForFunction(({width,height}) => innerWidth === width && innerHeight === height, originalViewport);
-      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
-    }
-    const retired = await page.evaluate(async () => {
-      await window.lmdjWebRuntimeHost.session.close();
-      return window.lmdjWebRuntimeHost.session.waitForTerminalCleanup();
-    });
-    expect(retired).toBe(true);
-  }
-  const path = info.outputPath("saved-take-audio-two-reopens.json");
-  await writeFile(path, JSON.stringify({seeded, reports, geometry}, null, 2));
-  await info.attach("saved Take WAV audio and physical readback", {path, contentType: "application/json"});
 });

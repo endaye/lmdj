@@ -48,6 +48,9 @@ recurrences:
   - date: 2026-10-07
     occurrence: https://github.com/endaye/lmdj/issues/1864
     observed_by: Codex
+  - date: 2026-10-20
+    occurrence: https://github.com/endaye/lmdj/issues/2422
+    observed_by: Claude Code (Opus 5.5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -134,6 +137,17 @@ have.
 The invariant is not mechanically decidable — no test can judge whether prose
 is actionable — so it exits to guidance at the point where a gate is authored
 rather than to a gate of its own.
+
+The 2.0.122.0 release (#2422) repeated it inside the release driver. Every
+carrier that swallowed an exception returned a bare `unknown`, so `resume`
+printed only `request status: unknown` for prepare and publication failures.
+Three resume rounds passed before a missing emsdk was found, and two more
+before a creator proof timeout, each round costing 25–30 minutes. The repair
+keeps the failure text out of the request state and the `DriveResult`, writes a
+bounded sanitized cause to a private `<request>.failure` note beside the
+journal, and prints it from `resume` and `status`. Release-tool errors keep
+their authored why/remedy message; foreign exceptions contribute their type
+name only.
 
 ## How to apply
 

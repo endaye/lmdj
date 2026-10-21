@@ -38,6 +38,22 @@ class TransitionError(RuntimeError):
     """An exact release transition could not be safely reconciled."""
 
 
+class IncompleteAssetError(TransitionError):
+    """A declared Draft asset exists but its upload never completed.
+
+    The one Draft defect `create_draft` repairs by itself; every other asset
+    verification failure is a conflict for a person to resolve.
+    """
+
+
+class ReleaseReadUnavailable(TransitionError):
+    """GitHub could not serve a Release read right now; nothing was learned.
+
+    Distinct from a verified incomplete, missing or divergent asset: a caller
+    must not treat it as Draft work to repair, only as an unknown read.
+    """
+
+
 @dataclass(frozen=True)
 class TransitionResult:
     status: str
@@ -619,7 +635,15 @@ def _resume_assets(
     existing = _asset_map(authority, release)
     if not set(existing).issubset(expected):
         raise TransitionError("GitHub Release asset inventory contains undeclared assets")
-    for name, remote in existing.items():
+    for name, remote in list(existing.items()):
+        if remote.state != "uploaded":
+            # An interrupted upload leaves a declared asset that can never be
+            # downloaded. On an unpublished Draft it is removed and uploaded
+            # again from the prepared bytes; a completed upload is never
+            # replaced, and a published Release is never edited.
+            _remove_incomplete_draft_asset(authority, release, remote)
+            del existing[name]
+            continue
         _compare_download(authority, release.id, remote, expected[name])
     for name, local in expected.items():
         if name in existing:
@@ -637,13 +661,62 @@ def _resume_assets(
             _compare_download(authority, release.id, candidates[0], local)
 
 
+def _remove_incomplete_draft_asset(
+    authority: _Authority, release: GitHubRelease, asset: GitHubAsset,
+) -> None:
+    if not release.draft:
+        raise TransitionError(_incomplete_asset_message(asset))
+    # The projection above was read at the start of this run; re-read the
+    # Release by its numeric ID immediately before the delete so a Release
+    # published in between is never edited.
+    try:
+        current = authority.context.github.get_release(
+            authority.context.policy.repository, release.id,
+        )
+    except Exception:
+        raise ReleaseReadUnavailable("GitHub Release projection is unavailable") from None
+    if current is None or current.id != release.id or not current.draft:
+        raise TransitionError(
+            f"GitHub Release {release.id} is no longer an unpublished Draft; "
+            f"incomplete asset {asset.name} was not removed"
+        )
+    try:
+        authority.context.github.delete_incomplete_draft_asset(
+            authority.context.policy.repository, release.id, asset,
+        )
+    except Exception:
+        raise TransitionError(
+            f"GitHub Release asset {asset.name} upload is incomplete and could not be removed; "
+            "remedy: resume `scripts/release.sh create-draft TAG` once the GitHub API is available"
+        ) from None
+    try:
+        remaining = _asset_map(authority, release)
+    except TransitionError:
+        raise TransitionError(
+            f"GitHub Release asset {asset.name} was removed as an incomplete upload but the "
+            "inventory could not be re-read; remedy: resume `scripts/release.sh create-draft TAG`, "
+            "which uploads any declared asset that is missing"
+        ) from None
+    if asset.name in remaining:
+        raise TransitionError(
+            f"GitHub Release asset {asset.name} is still present after removing an incomplete upload"
+        )
+
+
+def _incomplete_asset_message(asset: GitHubAsset) -> str:
+    return (
+        f"GitHub Release asset {asset.name} upload is incomplete (state={asset.state}); "
+        "remedy: resume `scripts/release.sh create-draft TAG` while the Release is a Draft"
+    )
+
+
 def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHubAsset]:
     try:
         assets = authority.context.github.list_release_assets(
             authority.context.policy.repository, release.id,
         )
     except Exception:
-        raise TransitionError("GitHub Release asset inventory is unavailable") from None
+        raise ReleaseReadUnavailable("GitHub Release asset inventory is unavailable") from None
     by_name: dict[str, GitHubAsset] = {}
     identifiers: set[int] = set()
     for asset in assets:
@@ -657,12 +730,14 @@ def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHu
 def _compare_download(
     authority: _Authority, release_id: int, remote: GitHubAsset, expected: AssetBuild,
 ) -> None:
+    if remote.state != "uploaded":
+        raise IncompleteAssetError(_incomplete_asset_message(remote))
     try:
         payload = authority.context.github.download_asset(
             authority.context.policy.repository, release_id, remote,
         )
     except Exception:
-        raise TransitionError("GitHub Release asset download is unavailable") from None
+        raise ReleaseReadUnavailable("GitHub Release asset download is unavailable") from None
     if remote.size != len(payload) or expected.bytes != len(payload) or hashlib.sha256(payload).hexdigest() != expected.sha256:
         raise TransitionError("GitHub Release asset digest conflicts with the release plan")
 
@@ -682,12 +757,14 @@ def _download_and_verify_assets(
         snapshots: list[tuple[object, ...]] = []
         for name in sorted(assets):
             asset = assets[name]
+            if asset.state != "uploaded":
+                raise IncompleteAssetError(_incomplete_asset_message(asset))
             try:
                 payload = authority.context.github.download_asset(
                     authority.context.policy.repository, release.id, asset,
                 )
             except Exception:
-                raise TransitionError("GitHub Release asset download is unavailable") from None
+                raise ReleaseReadUnavailable("GitHub Release asset download is unavailable") from None
             if asset.size != len(payload):
                 raise TransitionError("GitHub Release asset size does not match downloaded bytes")
             sha256 = hashlib.sha256(payload).hexdigest()
