@@ -272,3 +272,18 @@ test("without a takeover channel a busy open offers only Retry", async () => {
   expect(screen.getByRole("button", {name: "Retry project"})).toBeTruthy();
   expect(screen.queryByRole("button", {name: "Continue here"})).toBeNull();
 });
+
+test("a busy open without a takeover action only points to its usable retry", async () => {
+  const fixture = sessionFixture(["busy", "open"]);
+  render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByText(BUSY);
+  expect(screen.queryByRole("button", {name: "Continue here"})).toBeNull();
+  const notice = screen.getAllByRole("alert").find(node => node.textContent?.includes(BUSY));
+  expect(notice).toBeTruthy();
+  expect(notice!.textContent).not.toContain("Continue here");
+  expect(notice!.textContent).toContain("Close the Project where it is already open");
+  await userEvent.click(screen.getByRole("button", {name: "Retry project"}));
+  await waitFor(() => expect(openCalls(fixture.calls)).toHaveLength(2));
+  await waitFor(() => expect(screen.getByTestId("opened-project").textContent).toBe(LISTED.projectId.slice(0, 8)));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
