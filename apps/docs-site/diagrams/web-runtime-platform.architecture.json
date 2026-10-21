@@ -2,7 +2,7 @@
   "schema_version": 1,
   "meta": {
     "title": "Web Runtime Platform Module",
-    "summary": "Native tempo source/turn 与精确 clock；同一 Session 的 typed SDK 后继交付，设备验收独立"
+    "summary": "同一 Session、S3 lease 与 tempo source/turn；精确 Native clock，设备验收独立"
   },
   "boundaries": [
     {
@@ -219,8 +219,8 @@
       "body": "清单投影身份；envelope1/ordinary/单输出保留。完整 startup tuple，恢复不加路由；未分配 Build。"
     },
     {
-      "title": "Native tempo owner",
-      "body": "S3 两 lease/耐久 ACK，claimed 忙。Native tempo 保留 source/clock、原命令与物理回执；typed SDK 后继交付。"
+      "title": "同一 Session owner",
+      "body": "S3 两 lease/耐久 ACK，claimed 忙。tempo 保留同材料 source/实际 clock；未知保存只用原命令，物理回执后退役。"
     },
     {
       "title": "双输出与严格 tap ACK",

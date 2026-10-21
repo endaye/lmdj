@@ -10,6 +10,11 @@ export const DEADLINES_MS = Object.freeze({
 
 export const HOST_OPERATIONS = Object.freeze([
   "host.status",
+  "pattern.tempo.preview.begin",
+  "pattern.tempo.preview.set",
+  "pattern.tempo.preview.cancel",
+  "pattern.tempo.preview.commit",
+  "pattern.tempo.preview.status",
   "project.create",
   "project.duplicate",
   "project.open",
@@ -141,6 +146,9 @@ export const HOST_NOTIFICATIONS = Object.freeze([
 const OPERATION_SET = new Set(HOST_OPERATIONS);
 const NOTIFICATION_SET = new Set(HOST_NOTIFICATIONS);
 const SHORT_OPERATIONS = new Set([
+  "pattern.tempo.preview.set",
+  "pattern.tempo.preview.cancel",
+  "pattern.tempo.preview.status",
   "pattern.transport.input.request",
   "pattern.transport.input.inspect",
   "pattern.transport.count-in.capabilities",
@@ -207,6 +215,14 @@ function isPlainObject(value) {
   }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+function isTempoPreviewTicket(value) {
+  return hasExactKeys(value, ["preview_token", "project_id", "pattern_id", "source_id", "expected_revision"]) &&
+    isCanonicalNonzeroDecimal(value.preview_token) && isCanonicalNonzeroDecimal(value.source_id) &&
+    typeof value.project_id === "string" && UUID_PATTERN.test(value.project_id) &&
+    typeof value.pattern_id === "string" && UUID_PATTERN.test(value.pattern_id) &&
+    isUnsignedInteger(value.expected_revision);
 }
 
 function hasExactKeys(value, expected) {
@@ -1191,6 +1207,23 @@ function requireSampleOperationPayload(operation, payload) {
         (hasExactKeys(payload, ["slot", "kind"]) &&
           isUnsignedInteger(payload.slot, 63) &&
           payload.kind === "release");
+      break;
+    case "pattern.tempo.preview.begin":
+      valid = hasExactKeys(payload, ["project_id", "pattern_id", "expected_revision"]) &&
+        validUuid(payload.project_id) && validUuid(payload.pattern_id) &&
+        isUnsignedInteger(payload.expected_revision);
+      break;
+    case "pattern.tempo.preview.set":
+      valid = hasExactKeys(payload, ["ticket", "bpm"]) && isTempoPreviewTicket(payload.ticket) &&
+        isUnsignedInteger(payload.bpm, 240) && payload.bpm >= 40;
+      break;
+    case "pattern.tempo.preview.cancel":
+    case "pattern.tempo.preview.status":
+      valid = hasExactKeys(payload, ["ticket"]) && isTempoPreviewTicket(payload.ticket);
+      break;
+    case "pattern.tempo.preview.commit":
+      valid = hasExactKeys(payload, ["ticket", "command_id"]) && isTempoPreviewTicket(payload.ticket) &&
+        validUuid(payload.command_id);
       break;
     case "pattern.transport.input.request":
       valid = hasExactKeys(payload, ["command_id", "runtime_generation", "frame_epoch", "input_serial",

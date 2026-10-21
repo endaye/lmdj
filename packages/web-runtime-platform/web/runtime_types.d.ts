@@ -214,7 +214,55 @@ export interface PatternCountInCancel {
   readonly intent: PatternTransportIntent;
 }
 
-export interface PatternTransportRuntimeSession {
+/** Core-issued, Session-owned object; copying it does not transfer its owner. */
+export interface PatternTempoPreviewTicket {
+  readonly previewToken: string;
+  readonly projectId: string;
+  readonly patternId: string;
+  /** Original applied Native publication generation, frozen for this turn. */
+  readonly sourceId: string;
+  readonly expectedRevision: number;
+}
+
+/** All uint64 clock values are exact canonical decimal strings. */
+export interface PatternTempoPreviewClock {
+  readonly startEpoch: string;
+  readonly patternGeneration: string;
+  readonly appliedFrame: string;
+  readonly anchor: Readonly<{frame: string; tickNumerator: string; bpm: number}>;
+  readonly playing: boolean;
+}
+
+export interface PatternTempoPreviewStatus {
+  readonly ticket: PatternTempoPreviewTicket;
+  readonly previewId: string;
+  readonly phase: "ready" | "source_pending" | "preview_pending" | "preview_refused" | "previewing" |
+    "cancelling" | "cancelled" | "commit_unknown" | "committed_pending" | "committed" | "source_lost";
+  readonly committedBpm: number;
+  readonly previewBpm: number;
+  readonly projectRevision: number;
+  readonly sourceRevision: number;
+  readonly publicationGeneration: string;
+  readonly commandId: string | null;
+  readonly committedRevision: number | null;
+  /** Real predecessor can differ from the awaited publication generation. */
+  readonly applied: PatternTempoPreviewClock | null;
+  readonly error: Readonly<{code: string; message: string; details: Readonly<Record<string, unknown>>}> | null;
+}
+
+export interface PatternTempoPreviewRuntimeSession {
+  beginPatternTempoPreview(request: Readonly<{projectId: string; patternId: string; expectedRevision: number}>):
+    Promise<PatternTempoPreviewStatus>;
+  setPatternTempoPreview(request: Readonly<{ticket: PatternTempoPreviewTicket; bpm: number}>):
+    Promise<PatternTempoPreviewStatus>;
+  cancelPatternTempoPreview(ticket: PatternTempoPreviewTicket): Promise<PatternTempoPreviewStatus>;
+  /** Caller retains commandId for exact reconciliation; no automatic new identity. */
+  commitPatternTempoPreview(request: Readonly<{ticket: PatternTempoPreviewTicket; commandId: string}>):
+    Promise<PatternTempoPreviewStatus>;
+  inspectPatternTempoPreview(ticket: PatternTempoPreviewTicket): Promise<PatternTempoPreviewStatus>;
+}
+
+export interface PatternTransportRuntimeSession extends PatternTempoPreviewRuntimeSession {
   requestPatternInput(request: PatternInputRequest): Promise<PatternInputAdmission>;
   inspectPatternInput(ticket: PatternInputTicket, consume?: boolean): Promise<PatternInputStatus>;
   queryPatternCountInCapabilities(): Promise<PatternCountInCapabilities>;
