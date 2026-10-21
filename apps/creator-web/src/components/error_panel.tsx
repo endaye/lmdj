@@ -23,13 +23,18 @@ export function ErrorPanel({
   onDismiss,
 }: ErrorPanelProps) {
   if (code === null) return null;
+  const message = userMessage(code, details);
+  const onlyProjectRetry = code === "PROJECT_BUSY" && onRetryProject && !onContinueHere;
+  const nextStep = onlyProjectRetry
+    ? "Close the Project where it is already open, then choose Retry project."
+    : message.nextStep;
   return (
     <aside className="error-panel" role="alert">
       <strong>{code === "DUPLICATE_ID"
         ? "Project already on this device"
         : "Creator unavailable"}</strong>
-      <span>{userMessage(code, details).message}</span>
-      <span className="error-next-step">{userMessage(code, details).nextStep}</span>
+      <span>{message.message}</span>
+      <span className="error-next-step">{nextStep}</span>
       {note !== null && <span className="takeover-note">{note}</span>}
       {code === "DUPLICATE_ID" && onOpenLocalProject && (
         <button type="button" onClick={onOpenLocalProject}>

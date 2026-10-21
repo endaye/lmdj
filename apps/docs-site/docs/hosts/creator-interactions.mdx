@@ -747,7 +747,7 @@ Slice 入口只在 Pattern 停止时可用，见 [4.5](#pad-page)。
 | 同上 | Open Sequence／Open Perform | 按真实候选数量直接显示一个或两个出口；离开 System 并打开对应页面，收起提示，候选不变。 |
 | 同上 | Decide later／Close | 只收起提示，候选仍保留在对应页面。 |
 | 导入的 .lmdj 身份重复 | Open local Project | 显示本地 Project 列表并刷新。不覆盖，也不自动打开。 |
-| Project 正被占用 | Retry project | 重试原来的读取或打开。不会强行占用。 |
+| Project 正被占用 | Retry project | 重试原来的读取或打开，不强行占用。只有此重试动作而没有接管动作时，提示先关闭仍占有它的 Project，再重试；不指向未提供的 Continue here。 |
 | Project 被另一标签页占用，或本页已让出 | Continue here | 请求另一标签页让出 Project，对方同意后在本页打开。对方正在播放、录音或保存时可以拒绝；没有回应不等于同意。 |
 | 等待对方回应 | Cancel | 取消请求。不会关闭对方。 |
 | Runtime 故障导致需要重启 | Retry runtime | 重新启动 Runtime 并重新打开内容。未保存的草稿不保证保留。普通 Pad 的等待超时且 Runtime 仍正常运行时，不单凭这次超时要求重启。 |
