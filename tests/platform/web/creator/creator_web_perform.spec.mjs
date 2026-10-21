@@ -70,8 +70,8 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function observeReplayTraffic(page) {
-  await page.addInitScript(() => {
+async function observeReplayTraffic(page, {includeSave = false} = {}) {
+  await page.addInitScript(({includeSave}) => {
     let exposed;
     window.__replayWire = [];
     window.__replayCaptureLoss = 0;
@@ -84,7 +84,8 @@ async function observeReplayTraffic(page) {
           async send(...args) {
             const response = await native.send(...args);
             if (args[0]?.operation?.startsWith("performance.replay.") ||
-                args[0]?.operation === "performance.inspect") {
+                args[0]?.operation === "performance.inspect" ||
+                (includeSave && args[0]?.operation === "performance.save")) {
               try {
                 window.__replayWire.push({request: structuredClone(args[0]), response: structuredClone(response)});
               } catch {window.__replayCaptureLoss += 1;}
@@ -100,7 +101,7 @@ async function observeReplayTraffic(page) {
         exposed = host;
       },
     });
-  });
+  }, {includeSave});
 }
 
 async function replayEventWitness(page) {
@@ -3569,4 +3570,109 @@ test("Replay event progress follows real receipts, completion, reopen and Stop a
   await writeFile(path, JSON.stringify({distribution: candidate.candidateManifest, saved, playing, progressing, completed,
     geometry, reopened, reopenedPlaying, stopped, empty, emptyComplete}, null, 2));
   await info.attach("Replay actual receipts and six viewport readback", {path, contentType: "application/json"});
+});
+
+test("Performance name preflight preserves a stopped WAV and saves Unicode64 across reopen", async ({page, browserName}, info) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(240_000);
+  await observeReplayTraffic(page, {includeSave: true});
+  const candidate = await importActivateAndPerform(page);
+  const recording = await beginRecording(page);
+  const pad = page.getByRole("button", {name: /^Pad A01\b/});
+  await pad.dispatchEvent("pointerdown", {button: 0, isPrimary: true, pointerId: 81});
+  await expect(recording).toContainText(/open Pads\s*[:·]\s*1/i, {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await page.waitForTimeout(120);
+  await pad.dispatchEvent("pointerup", {button: 0, isPrimary: true, pointerId: 81});
+  await expect(recording).toContainText(/open Pads\s*[:·]\s*0/i, {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  await showPerformPage(page, "Takes");
+  await page.getByRole("button", {name: "Flush Performance", exact: true}).click();
+  await expect(page.locator('.perform-recording')).toHaveAttribute("data-phase", "recording");
+  const flushed = await page.evaluate(() => window.lmdjWebRuntimeHost.session.queryPerformanceRecordingStatus());
+  expect(flushed.pendingEventCount).toBe(0);
+  await stopRecording(page);await showPerformPage(page, "Takes");
+  // These observations precede any managed installation, while the stopped
+  // Journal still owns the unbound capture. After Save, wait for actual bind.
+  const status = await page.evaluate(() => window.lmdjWebRuntimeHost.session.queryPerformanceRecordingStatus());
+  expect(status.state).toBe("stopped");expect(status.pendingEventCount).toBe(0);
+  expect(status.performanceId).not.toBeNull();
+  const before = await page.evaluate(id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), status.performanceId);
+  expect(before.events.length).toBeGreaterThan(0);
+  const revision = await projectRevision(page), bytes = await exportPerformanceWav(page);
+  expect(parsePcm16StereoWav(bytes).frames).toBeGreaterThan(0);
+  const originalViewport = page.viewportSize(), observations = [];
+  const input = page.getByRole("textbox", {name: "Performance name"});
+  const save = page.getByRole("button", {name: "Save Performance", exact: true});
+  for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
+    await page.setViewportSize(viewport);
+    await page.waitForFunction(({width,height}) => innerWidth === width && innerHeight === height, viewport);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    for (const name of ["x".repeat(65), "🎵".repeat(65), "", "   "]) {
+      await input.fill(name);await input.press("Enter");
+      await expect(input).toHaveValue(name);await expect(input).toBeFocused();
+      await expect(save).toBeDisabled();
+      await expect(input).toHaveAttribute("aria-invalid", "true");
+      await expect(input).toHaveAccessibleDescription("Use 1–64 characters for the Performance name.");
+      await expect(page.getByRole("alert")).toHaveText("Use 1–64 characters for the Performance name.");
+      expect(await projectRevision(page)).toBe(revision);
+      const authority = await page.evaluate(async id => ({
+        status: await window.lmdjWebRuntimeHost.session.queryPerformanceRecordingStatus(),
+        inspected: await window.lmdjWebRuntimeHost.session.inspectPerformance(id),
+        wire: window.__replayWire, captureLoss: window.__replayCaptureLoss,
+      }), status.performanceId);
+      expect(authority.status).toEqual(status);expect(authority.inspected).toEqual(before);
+      expect(authority.captureLoss).toBe(0);
+      expect(authority.wire.filter(({request}) => request.operation === "performance.save")).toEqual([]);
+      observations.push({viewport,codePoints: Array.from(name).length,authority});
+    }
+    const hits = [];
+    for (const control of [input, save, page.getByRole("button", {name: "Discard Performance"}),
+      page.getByRole("button", {name: "Export Performance WAV"})]) {
+      if (control !== input && control !== save) await expect(control).toBeEnabled();
+      await control.scrollIntoViewIfNeeded();
+      const hit = await control.evaluate(node => {
+        const b = node.getBoundingClientRect(), touch = node.closest('[data-testid="touch-workspace"]').getBoundingClientRect();
+        return {width:b.width,height:b.height,
+          contained:b.left >= touch.left-1 && b.top >= touch.top-1 && b.right <= touch.right+1 && b.bottom <= touch.bottom+1,
+          hit:node.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))};
+      });
+      expect(hit.width).toBeGreaterThanOrEqual(43.5);expect(hit.height).toBeGreaterThanOrEqual(43.5);
+      expect(hit.contained).toBe(true);expect(hit.hit).toBe(true);hits.push(hit);
+    }
+    const alert = page.getByRole("alert");await alert.scrollIntoViewIfNeeded();
+    const feedback = await alert.evaluate(node => ({width:node.clientWidth,scroll:node.scrollWidth}));
+    expect(feedback.scroll).toBeLessThanOrEqual(feedback.width+1);
+    const scrollers = await page.locator('.perform-surface').evaluate(node => [...node.querySelectorAll('*')]
+      .filter(item => ['auto','scroll'].includes(getComputedStyle(item).overflowY) && item.scrollHeight > item.clientHeight+1).length);
+    expect(scrollers).toBe(0);
+    const image = info.outputPath(`performance-name-${viewport.width}x${viewport.height}.png`);
+    await page.screenshot({path:image});await info.attach(`Performance name ${viewport.width}`, {path:image,contentType:"image/png"});
+    observations.push({viewport,hits,feedback,scrollers});
+  }
+  await page.setViewportSize(originalViewport);
+  await page.waitForFunction(({width,height}) => innerWidth === width && innerHeight === height, originalViewport);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  const legal = "🎵".repeat(64);expect(legal.length).toBe(128);expect(Array.from(legal)).toHaveLength(64);
+  await input.fill(` ${legal} `);await expect(input).not.toHaveAttribute("aria-invalid", "true");
+  await expect(save).toBeEnabled();await savePerformanceWithBusyRetry(page, legal);
+  await expect(page.getByRole("status", {name: "WAV binding status"})).toHaveText("bound", {timeout: PROJECT_TRANSITION_TIMEOUT_MS});
+  const saved = await page.evaluate(id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), status.performanceId);
+  expect(saved.name).toBe(legal);expect(saved.events).toEqual(before.events);
+  expect(saved.recordingArtifact).toEqual({sha256:sha256(bytes),mediaType:"audio/wav",byteLength:bytes.byteLength});
+  const wire = await page.evaluate(() => ({values:window.__replayWire,captureLoss:window.__replayCaptureLoss}));
+  expect(wire.captureLoss).toBe(0);
+  const saves = wire.values.filter(({request}) => request.operation === "performance.save");
+  expect(saves.filter(({response}) => response.ok)).toHaveLength(1);
+  for (const entry of saves) {
+    expect(entry.request.payload.name).toBe(legal);expect(entry.request.payload.performance_id).toBe(status.performanceId);
+  }
+  await page.reload();await openLocalProject(page);await activateAudio(page);await openPerform(page);
+  await showPerformPage(page, "Replay");
+  await expect(page.getByRole("button", {name:`Replay ${legal}`,exact:true})).toBeVisible();
+  const reopened = await page.evaluate(id => window.lmdjWebRuntimeHost.session.inspectPerformance(id), status.performanceId);
+  expect(reopened.name).toBe(saved.name);expect(reopened.events).toEqual(saved.events);
+  expect(reopened.recordingArtifact).toEqual(saved.recordingArtifact);
+  const path = info.outputPath("performance-name-preflight-receipts.json");
+  await writeFile(path, JSON.stringify({distribution:candidate.candidateManifest,status,before,revision,
+    wav:{sha256:sha256(bytes),byteLength:bytes.byteLength},observations,saved,wire,reopened},null,2));
+  await info.attach("Performance name preflight real receipts", {path,contentType:"application/json"});
 });

@@ -265,6 +265,12 @@ Discard recovery 已确认后，列表读取失败由 Saved Takes unavailable �
 inspected，不把已存在的同名草稿当成 Save 确认。这些观察与 WAV bind 分开，名称
 保持本次提交的身份。UNKNOWN 不显示保存成功，绑定失败继续保留原 WAV 与重试。
 
+保存前会检查去掉首尾空白后的名称：须有1–64个 Unicode 码点，普通文字和单码点
+emoji各计一个，组合字符按其实际码点计数。无效时在名称旁说明并停用 Save，
+保留原输入和待处理 WAV，仍可 Export／Discard；
+修正后再提交，不截短名称。已发出的 Save 若结果未知，名称只读并保留原提交身份，
+Save 仍用于原来的检查／重试；本地无效输入不冒充结果未知或保存成功。
+
 事件进度只显示公共 Replay 回执的 `eventCursor / eventCount`，使用现有轮询，
 不按墙钟补数，也不以 WAV 时长为分母。首事件归零仍由 Core 的事件投影负责。
 零事件回放显示 `0 / 0 events`，不制造百分比或音频时长；无效计数显示不可用。

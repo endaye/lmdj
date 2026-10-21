@@ -629,8 +629,8 @@ SEQ SNAP 决定切 Pattern 的时机，Grid tools 的 Snap 决定网格编辑吸
 | Takes，录制中 | Flush Performance | 立即写出本轮已记录的操作。不停止，也不另存音频。 |
 | 录制中 | Stop Performance | 结束录制，等待保存或丢弃。不停止全局 Pattern。停止尚未完成时 Launch 不可用；完成后按全局 transport 的停止／播放状态选择或预约，不再写入刚停止的演出。 |
 | Live，已停止 | Review recording | 进入 Takes 处理录音。 |
-| Takes，已停止 | Performance name | 修改名称。保存或丢弃进行中、或 Save 已确认后只读。名称为空时不能保存。 |
-| Takes，已停止且有名称 | Save Performance | 保存演出和 WAV，Replay 出现新条目。点 Save 前不算保存。WAV 关联失败时出现 Retry WAV bind。 |
+| Takes，已停止 | Performance name | 修改名称，去掉首尾空白后须有1–64个 Unicode 码点，单码点emoji计一个，组合字符按实际码点计数。无效时旁边说明，保留原输入，仍可 Export／Discard；不截短。保存或丢弃进行中、Save 结果未知或已确认后只读。 |
+| Takes，已停止且名称有效，或原 Save 待确认 | Save Performance | 保存演出和 WAV，Replay 出现新条目。无效新名称不提交，也不显示结果未知；修正后再保存。真实 UNKNOWN 仍检查／重试原提交身份，不能用新名称替换。点 Save 前不算保存。WAV 关联失败时出现 Retry WAV bind。 |
 | Takes，已停止 | Discard Performance | 丢弃当前待保存的演出。不删除已保存的演出。 |
 | Takes，有 WAV | Export Performance WAV | 下载这次的 WAV。不产生作者编辑。 |
 | Takes，关联失败 | Retry WAV bind | 只重试关联 WAV，不用再演一次。 |
