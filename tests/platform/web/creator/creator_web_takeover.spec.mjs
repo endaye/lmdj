@@ -275,3 +275,122 @@ for (const viewport of [
     requesterErrors();
   });
 }
+
+
+for (const viewport of [
+  {width: 648, height: 364},
+  {width: 667, height: 375},
+  {width: 844, height: 390},
+]) {
+  test(`refused recovery notice preserves complete text and usable actions ${viewport.width}x${viewport.height}`, async ({page, context, browserName}, testInfo) => {
+    test.skip(browserName !== "chromium");
+    test.setTimeout(240_000);
+    const holderErrors = recordPageErrors(page);
+    await page.goto("/index.html");
+    await waitForBootProject(page);
+    await wakeAudioWithPad(page);
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+    const original = await projectTruth(page);
+    const originalHistory = await undoDepth(page);
+    const requester = await context.newPage();
+    const requesterErrors = recordPageErrors(requester);
+    await requester.setViewportSize(viewport);
+    await requester.goto("/index.html");
+    const notice = requester.getByRole("alert").filter({hasText: BUSY});
+    await expect(notice).toBeVisible({timeout: PROJECT_OPEN_TIMEOUT_MS});
+    await notice.getByRole("button", {name: "Continue here"}).click();
+    await expect(notice).toContainText("The other tab is playing, recording or saving.", {timeout: 10_000});
+    await requester.evaluate(() => document.fonts.ready);
+    const geometry = await notice.evaluate(panel => {
+      const box = element => element.getBoundingClientRect().toJSON();
+      const textRects = element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return [...range.getClientRects()].map(rect => rect.toJSON());
+      };
+      return {viewport: {width: innerWidth, height: innerHeight}, panel: box(panel),
+        copy: [...panel.querySelectorAll(":scope > strong, :scope > span")]
+          .map(element => ({text: element.textContent, rects: textRects(element)})),
+        actions: [...panel.querySelectorAll("button")].map(button => {
+          const rect = button.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return {text: button.textContent.trim(), ...box(button), textRects: textRects(button),
+            ownsCenter: hit === button || button.contains(hit)};
+        })};
+    });
+    await writeFile(testInfo.outputPath("recovery-notice-geometry.json"), JSON.stringify(geometry, null, 2));
+    await requester.screenshot({path: testInfo.outputPath("recovery-notice.png"), fullPage: true});
+    const insideViewport = rect => {
+      expect(rect.left).toBeGreaterThanOrEqual(0);
+      expect(rect.top).toBeGreaterThanOrEqual(0);
+      expect(rect.right).toBeLessThanOrEqual(geometry.viewport.width);
+      expect(rect.bottom).toBeLessThanOrEqual(geometry.viewport.height);
+    };
+    insideViewport(geometry.panel);
+    expect(geometry.copy.map(copy => copy.text)).toEqual([
+      "Creator unavailable", BUSY,
+      "Choose Continue here to move it to this tab, or close it there and choose Retry project.",
+      "The other tab is playing, recording or saving. Finish there, then choose Continue here again.",
+    ]);
+    for (const copy of geometry.copy) {
+      expect(copy.rects.length).toBeGreaterThan(0);
+      for (const rect of copy.rects) {
+        expect(rect.width).toBeGreaterThan(0);
+        expect(rect.height).toBeGreaterThan(0);
+        insideViewport(rect);
+      }
+    }
+    expect(geometry.actions.map(action => action.text)).toEqual(["Continue here", "Retry project", "Dismiss"]);
+    for (const action of geometry.actions) {
+      insideViewport(action);
+      expect(action.width).toBeGreaterThanOrEqual(44);
+      expect(action.height).toBeGreaterThanOrEqual(44);
+      expect(action.ownsCenter).toBe(true);
+      expect(action.textRects.length).toBeGreaterThan(0);
+      for (const rect of action.textRects) {
+        insideViewport(rect);
+        expect(rect.left).toBeGreaterThanOrEqual(action.left);
+        expect(rect.top).toBeGreaterThanOrEqual(action.top);
+        expect(rect.right).toBeLessThanOrEqual(action.right);
+        expect(rect.bottom).toBeLessThanOrEqual(action.bottom);
+      }
+    }
+    for (let index = 0; index < geometry.actions.length; index += 1) {
+      for (const other of geometry.actions.slice(index + 1)) {
+        const action = geometry.actions[index];
+        expect(action.right <= other.left || other.right <= action.left ||
+          action.bottom <= other.top || other.bottom <= action.top).toBe(true);
+      }
+    }
+    expect(await projectTruth(page)).toEqual(original);
+    expect(await undoDepth(page)).toBe(originalHistory);
+
+    await page.getByRole("button", {name: "System", exact: true}).click();
+    await page.getByRole("button", {name: "Suspend audio", exact: true}).click();
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {timeout: AUDIO_TRANSITION_TIMEOUT_MS});
+    await page.getByRole("button", {name: "Back to music", exact: true}).click();
+    await page.getByRole("button", {name: "Project", exact: true}).click();
+    const create = page.getByRole("button", {name: "New Project", exact: true});
+    await expect(create).toBeEnabled({timeout: PROJECT_OPEN_TIMEOUT_MS});
+    await create.click();
+    await expect(overviewProjectId(page)).toHaveText(new RegExp(`^(?!${original.project_id.slice(0, 8)}$)[0-9a-f]{8}$`), {timeout: PROJECT_OPEN_TIMEOUT_MS});
+    const successor = await projectTruth(page);
+    expect(successor.project_id).not.toBe(original.project_id);
+    const retry = notice.getByRole("button", {name: "Retry project", exact: true});
+    await retry.focus();
+    await expect(retry).toBeFocused();
+    await requester.keyboard.press("Enter");
+    await expect(overviewProjectId(requester)).toHaveText(original.project_id.slice(0, 8), {timeout: PROJECT_OPEN_TIMEOUT_MS});
+    await expect(notice).toHaveCount(0);
+    const reopened = await projectTruth(requester);
+    expect(reopened).toEqual(original);
+    expect(await undoDepth(requester)).toBe(0);
+    expect(await projectTruth(page)).toEqual(successor);
+    await writeFile(testInfo.outputPath("recovery-notice-result.json"), JSON.stringify({
+      viewport, geometry, originalTruth: original, successorTruth: successor,
+      reopenedTruth: reopened, reopenedUndoDepth: 0,
+    }, null, 2));
+    holderErrors();
+    requesterErrors();
+  });
+}

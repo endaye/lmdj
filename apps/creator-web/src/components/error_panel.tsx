@@ -36,23 +36,25 @@ export function ErrorPanel({
       <span>{message.message}</span>
       <span className="error-next-step">{nextStep}</span>
       {note !== null && <span className="takeover-note">{note}</span>}
-      {code === "DUPLICATE_ID" && onOpenLocalProject && (
-        <button type="button" onClick={onOpenLocalProject}>
-          Open local Project
-        </button>
-      )}
-      {onContinueHere && (
-        <button type="button" onClick={onContinueHere}>Continue here</button>
-      )}
-      {onRetryProject && (
-        <button type="button" onClick={onRetryProject}>Retry project</button>
-      )}
-      {onRetryRuntime && (
-        <button type="button" onClick={onRetryRuntime}>Retry runtime</button>
-      )}
-      {onDismiss && (
-        <button type="button" onClick={onDismiss}>Dismiss</button>
-      )}
+      <div className="error-panel-actions">
+        {code === "DUPLICATE_ID" && onOpenLocalProject && (
+          <button type="button" onClick={onOpenLocalProject}>
+            Open local Project
+          </button>
+        )}
+        {onContinueHere && (
+          <button type="button" onClick={onContinueHere}>Continue here</button>
+        )}
+        {onRetryProject && (
+          <button type="button" onClick={onRetryProject}>Retry project</button>
+        )}
+        {onRetryRuntime && (
+          <button type="button" onClick={onRetryRuntime}>Retry runtime</button>
+        )}
+        {onDismiss && (
+          <button type="button" onClick={onDismiss}>Dismiss</button>
+        )}
+      </div>
     </aside>
   );
 }
