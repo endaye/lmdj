@@ -262,6 +262,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_facade_performance_runtime_bridge_tests
     lmdj_facade_performance_engine_adapter_tests
     lmdj_facade_pattern_tempo_gateway_tests
+    lmdj_facade_pattern_tempo_preview_tests
     lmdj_facade_resample_performance_tests
     lmdj_facade_performance_session_tests
     lmdj_facade_performance_gesture_admission_tests

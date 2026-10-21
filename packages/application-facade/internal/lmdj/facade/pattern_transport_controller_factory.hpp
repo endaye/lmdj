@@ -23,13 +23,17 @@ namespace lmdj::facade::detail {
 // journal from owner-loss reconciliation.
 class PatternTransportControllerInternalFactory {
  public:
+  // Observes the stable pimpl, so moving its public wrapper cannot leave the
+  // Application's control-owner registry pointing at a moved-from object.
+  static std::function<bool()> tempo_conflict_observer(const PatternTransportController&);
   static std::unique_ptr<PatternTransportController> make(
       lmdj::facade::PatternTransportAudioPort& audio,
       PatternTransportControllerConfig config,
       std::shared_ptr<project_io::ProjectStoragePlatform> platform,
       std::shared_ptr<project_io::AuthoringHistory> history = {},
       std::function<void()> on_destroy = {},
-      ScheduledPatternTransportAudioPort* scheduled = nullptr);
+      ScheduledPatternTransportAudioPort* scheduled = nullptr,
+      std::function<bool()> can_request = {});
 };
 
 }  // namespace lmdj::facade::detail

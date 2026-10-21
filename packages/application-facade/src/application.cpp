@@ -2,6 +2,8 @@
 #include <lmdj/facade/candidate_store.hpp>
 #include <lmdj/facade/pattern_transport_controller_factory.hpp>
 
+#include "pattern_tempo_preview.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -2553,7 +2555,8 @@ struct Application::Impl {
     }
   }
 
-  ~Impl() { abandon_sequence_sessions();
+  ~Impl() { tempo_source.reset();
+    abandon_sequence_sessions();
     abandon_performance_sessions(); }
 
   foundation::Result<void> cleanup_sample_import_staging() {
@@ -2708,6 +2711,9 @@ struct Application::Impl {
   admit_non_sequence_authoring(
       const std::filesystem::path& path, bool reconcile_owner_loss = true) {
     std::unique_lock lock(sequence_mutex);
+    if (tempo_admission->blocks(path)) {
+      return foundation::Result<SequenceAuthoringAdmission>::failure(tempo_busy());
+    }
     const auto found = sequence_sessions.find(sequence_key(path));
     if (found != sequence_sessions.end()) {
       return foundation::Result<SequenceAuthoringAdmission>::failure(
@@ -2878,6 +2884,8 @@ struct Application::Impl {
               : valid.error());
     }
     std::lock_guard lock(sequence_mutex);
+    if (tempo_admission->blocks(request.project_path))
+      return foundation::Result<SequenceMutationResult>::failure(tempo_busy());
     const auto key = sequence_key(request.project_path);
     const auto existing = sequence_sessions.find(key);
     if (existing != sequence_sessions.end()) {
@@ -4187,6 +4195,15 @@ struct Application::Impl {
         registered->second == requested_kind,
         "operation was sent to the wrong Application method");
 
+    if (operation == "history.open" && tempo_admission->blocks_any())
+      return error_envelope(tempo_busy());
+    if ((operation == "performance.replay.begin" || operation == "performance.record.begin") &&
+        tempo_admission->blocks_any()) return error_envelope(tempo_busy());
+    if (requested_kind == OperationKind::command && request.contains("project_path") &&
+        request.at("project_path").is_string() &&
+        tempo_admission->blocks(std::filesystem::path{request.at("project_path").get<std::string>()}))
+      return error_envelope(tempo_busy());
+
     if (operation.starts_with("history.")) return history_operation(request, operation);
     if (operation == "project.create") {
       return project_create(request);
@@ -4606,6 +4623,81 @@ struct Application::Impl {
         loaded.value(),
         request.pattern_id,
         request.limits);
+  }
+
+  static Error tempo_busy() {
+    return {ErrorCode::invalid_argument, "Pattern tempo preview must settle first",
+        {{"reason", "tempo_preview_active"},
+         {"remedy", "settle the exact preview cancellation or commit before changing its owner"}}};
+  }
+
+  foundation::Result<void> admit_tempo_preview(const std::filesystem::path& path) {
+    const auto key = sequence_key(path);
+    if (sequence_sessions.contains(key) || performance_sessions.contains(key))
+      return foundation::Result<void>::failure({ErrorCode::invalid_argument,
+          "BPM preview is unavailable while recording", {{"reason", "tempo_recording_active"}}});
+    if (!active_replay_id.empty())
+      return foundation::Result<void>::failure({ErrorCode::invalid_argument,
+          "BPM preview is unavailable during replay", {{"reason", "tempo_replay_active"}}});
+    for (const auto& [token, pending] : sample_imports) {
+      (void)token;
+      if (pending.request.project_path == path)
+        return foundation::Result<void>::failure({ErrorCode::invalid_argument,
+            "BPM preview conflicts with pending Sample import", {{"reason", "sample_import_pending"}}});
+    }
+    // These callbacks inspect vended controllers on their serialized Engine
+    // control owner, never on the I/O worker. Registry lock spans no callback.
+    std::vector<std::function<bool()>> conflicts;
+    {
+      std::lock_guard lock(transport_sessions->mutex);
+      const auto found = transport_sessions->tempo_conflicts.find(key);
+      if (found != transport_sessions->tempo_conflicts.end())
+        for (const auto& [session, callback] : found->second) {
+          (void)session;
+          conflicts.push_back(callback);
+        }
+    }
+    for (const auto& conflict : conflicts) if (conflict())
+      return foundation::Result<void>::failure({ErrorCode::invalid_argument,
+          "BPM preview conflicts with unsettled Pattern transport",
+          {{"reason", "tempo_recording_active"}}});
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<PatternTempoPreviewStatus> bind_pattern_tempo_source(
+      const PatternTempoSourceRequest& request, const audio::PreparedPatternView& source,
+      audio::RealtimeEngine& engine) {
+    using Result = foundation::Result<PatternTempoPreviewStatus>;
+    if (tempo_source) return Result::failure(tempo_busy());
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.project_id.value()) ||
+        !domain::is_valid_uuid(request.pattern_id.value()) ||
+        source.project_id() != request.project_id || source.pattern_id() != request.pattern_id ||
+        source.project_revision() != request.expected_revision)
+      return Result::failure({ErrorCode::invalid_argument, "Pattern tempo source identity differs",
+          {{"reason", "tempo_source_stale"}}});
+    const auto observed = make_engine_pattern_tempo_publication_gateway(engine).observe(request.authority);
+    if (!observed || observed->anchor.bpm != source.bpm())
+      return Result::failure({ErrorCode::invalid_argument, "Pattern tempo source is not audio-applied",
+          {{"reason", "tempo_source_stale"}}});
+    auto admitted = admit_tempo_preview(request.project_path);
+    if (!admitted.has_value()) return Result::failure(admitted.error());
+    const auto truth = std::unique_ptr<foundation::Result<domain::ProjectState>>(
+        new foundation::Result<domain::ProjectState>(projects.inspect_committed(request.project_path)));
+    if (!truth->has_value()) return Result::failure(truth->error());
+    if (truth->value().id != request.project_id || truth->value().revision != request.expected_revision ||
+        truth->value().bpm != source.bpm() || !truth->value().patterns.contains(request.pattern_id))
+      return Result::failure({ErrorCode::revision_conflict, "Pattern tempo committed source differs",
+          {{"reason", "tempo_truth_changed"}}});
+    if (next_tempo_source_id == std::numeric_limits<std::uint64_t>::max())
+      return Result::failure({ErrorCode::invalid_argument, "Pattern tempo source IDs exhausted"});
+    auto retained = source.with_tempo(source.bpm());
+    if (!retained.has_value()) return Result::failure(retained.error());
+    tempo_source = std::make_unique<detail::PatternTempoPreviewSession>(next_tempo_source_id++,
+        request, std::move(retained.value()), engine, storage_platform, authoring_history,
+        tempo_admission, [this, path = request.project_path, pattern = request.pattern_id](
+            const domain::ProjectState& committed) { return cook_project(path, committed, pattern); });
+    return Result::success(tempo_source->status());
   }
 
   foundation::Result<cooker::EncodedRuntimeContent> export_runtime_content(
@@ -5179,6 +5271,8 @@ struct Application::Impl {
       }
     }
     std::lock_guard lock(sample_mutex);
+    if (tempo_admission->blocks(request.project_path))
+      return foundation::Result<SampleImportSession>::failure(tempo_busy());
     if (sample_imports.size() >= kMaximumSampleImportSessions) {
       return foundation::Result<SampleImportSession>::failure(Error{
           ErrorCode::invalid_argument,
@@ -5952,6 +6046,7 @@ struct Application::Impl {
   nlohmann::json history_operation(const nlohmann::json& request, const std::string& operation) {
     if (operation == "history.close") {
       require(exact_keys(request, {"operation"}), "history.close request shape is invalid");
+      if (tempo_admission->blocks_any()) return error_envelope(tempo_busy());
       projects.close_authoring_history();
       return success_envelope({{"closed", true}}, std::nullopt);
     }
@@ -5968,6 +6063,7 @@ struct Application::Impl {
                        : projects.inspect_authoring_history(path);
     if (!status.has_value()) return error_envelope(status.error());
     auto& current = status.value();
+    if (tempo_admission->blocks(path)) current.disabled_reason = "tempo_preview_active";
     if (sequence_sessions.contains(sequence_key(path))) current.disabled_reason = "sequence_session_active";
     if (performance_sessions.contains(sequence_key(path))) current.disabled_reason = "performance_session_active";
     for (const auto& [token, pending] : sample_imports) {
@@ -11796,6 +11892,16 @@ struct Application::Impl {
   struct TransportSessionRegistry {
     std::mutex mutex;
     std::map<std::string, std::set<foundation::SequenceSessionId>> sessions;
+    // A controller instance has its own retirement, even when another wrapper
+    // reattaches with the same logical Session ID.
+    std::map<std::string, std::map<std::uint64_t, std::function<bool()>>> tempo_conflicts;
+    std::uint64_t next_tempo_registration{1};
+    std::uint64_t reserve_tempo_registration() {
+      std::lock_guard lock(mutex);
+      if (next_tempo_registration == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("transport tempo registration IDs exhausted");
+      return next_tempo_registration++;
+    }
   };
   std::shared_ptr<TransportSessionRegistry> transport_sessions =
       std::make_shared<TransportSessionRegistry>();
@@ -11814,6 +11920,10 @@ struct Application::Impl {
   std::map<std::string, ReplayIdentity> replay_identities;
   std::map<std::string, ReplayStopReceipt> replay_stop_receipts;
   std::string active_replay_id;
+  std::shared_ptr<detail::PatternTempoPreviewAdmission> tempo_admission =
+      std::make_shared<detail::PatternTempoPreviewAdmission>();
+  std::unique_ptr<detail::PatternTempoPreviewSession> tempo_source;
+  std::uint64_t next_tempo_source_id{1};
   std::map<std::string, SampleImportState> sample_imports;
   std::set<std::string> used_sample_import_tokens;
   std::deque<std::string> remembered_sample_import_tokens;
@@ -11956,6 +12066,92 @@ Application::prepare_runtime_snapshot(
   }
 }
 
+namespace {
+template <typename Call>
+foundation::Result<PatternTempoPreviewStatus> tempo_host_call(Call&& call) {
+  try {
+    testing::invoke_api_entry_hook();
+    return std::forward<Call>(call)();
+  } catch (...) {
+    return foundation::Result<PatternTempoPreviewStatus>::failure({
+        ErrorCode::internal_error, "Pattern tempo Host API failed unexpectedly"});
+  }
+}
+
+foundation::Result<PatternTempoPreviewStatus> stale_tempo_source() {
+  return foundation::Result<PatternTempoPreviewStatus>::failure({
+      ErrorCode::invalid_argument, "Pattern tempo source is stale",
+      {{"reason", "tempo_source_stale"}}});
+}
+}  // namespace
+
+foundation::Result<PatternTempoPreviewStatus> Application::bind_pattern_tempo_source(
+    const PatternTempoSourceRequest& request, const audio::PreparedPatternView& source,
+    audio::RealtimeEngine& engine) {
+  return tempo_host_call([&] {
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    return impl_->bind_pattern_tempo_source(request, source, engine);
+  });
+}
+
+foundation::Result<PatternTempoPreviewStatus> Application::preview_pattern_tempo(
+    const PatternTempoPreviewRequest& request) {
+  return tempo_host_call([&] {
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!impl_->tempo_source || !impl_->tempo_source->matches(request.identity.source_id))
+      return stale_tempo_source();
+    auto admitted = impl_->admit_tempo_preview(impl_->tempo_source->request().project_path);
+    if (!admitted.has_value())
+      return foundation::Result<PatternTempoPreviewStatus>::failure(admitted.error());
+    return impl_->tempo_source->preview(request);
+  });
+}
+
+foundation::Result<PatternTempoPreviewStatus> Application::cancel_pattern_tempo_preview(
+    PatternTempoPreviewIdentity identity) {
+  return tempo_host_call([&] {
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!impl_->tempo_source || !impl_->tempo_source->matches(identity.source_id))
+      return stale_tempo_source();
+    return impl_->tempo_source->cancel(identity);
+  });
+}
+
+foundation::Result<PatternTempoPreviewStatus> Application::commit_pattern_tempo_preview(
+    const PatternTempoPreviewCommit& request) {
+  return tempo_host_call([&] {
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!impl_->tempo_source || !impl_->tempo_source->matches(request.identity.source_id))
+      return stale_tempo_source();
+    return impl_->tempo_source->commit(request);
+  });
+}
+
+foundation::Result<PatternTempoPreviewStatus> Application::service_pattern_tempo_preview(
+    std::uint64_t source_id) {
+  return tempo_host_call([&] {
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!impl_->tempo_source || !impl_->tempo_source->matches(source_id)) return stale_tempo_source();
+    return foundation::Result<PatternTempoPreviewStatus>::success(impl_->tempo_source->service());
+  });
+}
+
+foundation::Result<PatternTempoPreviewStatus> Application::release_pattern_tempo_source(
+    std::uint64_t source_id) {
+  return tempo_host_call([&] {
+    std::scoped_lock lock(impl_->sequence_mutex, impl_->replay_mutex, impl_->sample_mutex);
+    if (!impl_->tempo_source || !impl_->tempo_source->matches(source_id)) return stale_tempo_source();
+    auto status = impl_->tempo_source->service();
+    if (!impl_->tempo_source->releasable() && !status.command_id) {
+      auto cancelled = impl_->tempo_source->cancel(status.identity);
+      if (!cancelled.has_value()) return cancelled;
+      status = std::move(cancelled.value());
+    }
+    if (impl_->tempo_source->releasable()) impl_->tempo_source.reset();
+    return foundation::Result<PatternTempoPreviewStatus>::success(std::move(status));
+  });
+}
+
 foundation::Result<cooker::EncodedRuntimeContent>
 Application::export_runtime_content(const RuntimeContentExportRequest& request) {
   try {
@@ -12003,6 +12199,7 @@ Application::make_pattern_transport_controller(
   const auto key = config.bundle.generic_string();
   const auto session = config.session;
   const auto registry = impl_->transport_sessions;
+  const auto tempo_registration = registry->reserve_tempo_registration();
   // Register only after successful construction: a throwing factory leaves no
   // stale owner registration behind.
   auto controller = detail::PatternTransportControllerInternalFactory::make(
@@ -12014,7 +12211,7 @@ Application::make_pattern_transport_controller(
       // Application observes an expired weak reference and stops cleanly
       // instead of dereferencing a freed Impl.
       [weak = std::weak_ptr<Impl::TransportSessionRegistry>(registry),
-       key, session]() {
+       key, session, tempo_registration]() {
         const auto locked = weak.lock();
         if (!locked) {
           return;
@@ -12025,10 +12222,20 @@ Application::make_pattern_transport_controller(
             found->second.empty()) {
           locked->sessions.erase(found);
         }
+        const auto conflict = locked->tempo_conflicts.find(key);
+        if (conflict != locked->tempo_conflicts.end()) {
+          conflict->second.erase(tempo_registration);
+          if (conflict->second.empty()) locked->tempo_conflicts.erase(conflict);
+        }
+      }, nullptr, [weak = std::weak_ptr<detail::PatternTempoPreviewAdmission>(impl_->tempo_admission)] {
+        const auto admission = weak.lock();
+        return !admission || !admission->blocks_any();
       });
   {
     std::lock_guard lock(registry->mutex);
     registry->sessions[key].insert(session);
+    registry->tempo_conflicts[key][tempo_registration] =
+        detail::PatternTransportControllerInternalFactory::tempo_conflict_observer(*controller);
   }
   return controller;
 }
@@ -12040,6 +12247,7 @@ Application::make_pattern_transport_controller(
   const auto key = config.bundle.generic_string();
   const auto session = config.session;
   const auto registry = impl_->transport_sessions;
+  const auto tempo_registration = registry->reserve_tempo_registration();
   // Register only after successful construction: a throwing factory leaves no
   // stale owner registration behind.
   auto controller = detail::PatternTransportControllerInternalFactory::make(
@@ -12051,7 +12259,7 @@ Application::make_pattern_transport_controller(
       // Application observes an expired weak reference and stops cleanly
       // instead of dereferencing a freed Impl.
       [weak = std::weak_ptr<Impl::TransportSessionRegistry>(registry),
-       key, session]() {
+       key, session, tempo_registration]() {
         const auto locked = weak.lock();
         if (!locked) {
           return;
@@ -12062,10 +12270,20 @@ Application::make_pattern_transport_controller(
             found->second.empty()) {
           locked->sessions.erase(found);
         }
-      }, &scheduled);
+        const auto conflict = locked->tempo_conflicts.find(key);
+        if (conflict != locked->tempo_conflicts.end()) {
+          conflict->second.erase(tempo_registration);
+          if (conflict->second.empty()) locked->tempo_conflicts.erase(conflict);
+        }
+      }, &scheduled, [weak = std::weak_ptr<detail::PatternTempoPreviewAdmission>(impl_->tempo_admission)] {
+        const auto admission = weak.lock();
+        return !admission || !admission->blocks_any();
+      });
   {
     std::lock_guard lock(registry->mutex);
     registry->sessions[key].insert(session);
+    registry->tempo_conflicts[key][tempo_registration] =
+        detail::PatternTransportControllerInternalFactory::tempo_conflict_observer(*controller);
   }
   return controller;
 }

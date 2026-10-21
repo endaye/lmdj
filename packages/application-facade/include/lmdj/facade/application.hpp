@@ -19,6 +19,7 @@
 #include <lmdj/cooker/sample_analysis.hpp>
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/facade/pattern_transport_controller.hpp>
+#include <lmdj/facade/pattern_tempo_preview.hpp>
 #include <lmdj/facade/performance_ports.hpp>
 #include <lmdj/facade/performance_recording_metadata.hpp>
 #include <lmdj/facade/performance_replay.hpp>
@@ -579,6 +580,31 @@ class Application {
   nlohmann::json query(const nlohmann::json& request) const;
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
   prepare_runtime_snapshot(const RuntimeSnapshotRequest& request);
+  // Serialized with the bound Engine and all transport-control calls, never
+  // audio. The Engine must outlive its active binding. An unreleased
+  // binding requires Host-established render quiescence before Application
+  // destruction, just like Native Engine start/stop/clear. Graceful release can
+  // instead settle while render runs, after which destruction needs no Engine
+  // lifecycle call. Core retains the
+  // original prepared source; Hosts do not recook a source for each detent.
+  foundation::Result<PatternTempoPreviewStatus> bind_pattern_tempo_source(
+      const PatternTempoSourceRequest&, const audio::PreparedPatternView&,
+      audio::RealtimeEngine&);
+  foundation::Result<PatternTempoPreviewStatus> preview_pattern_tempo(
+      const PatternTempoPreviewRequest&);
+  foundation::Result<PatternTempoPreviewStatus> cancel_pattern_tempo_preview(
+      PatternTempoPreviewIdentity);
+  foundation::Result<PatternTempoPreviewStatus> commit_pattern_tempo_preview(
+      const PatternTempoPreviewCommit&);
+  foundation::Result<PatternTempoPreviewStatus> service_pattern_tempo_preview(
+      std::uint64_t source_id);
+  // Graceful release retains UNKNOWN and pending cancellation/adoption. Call
+  // again after actual apply; only terminal status retires the binding. During
+  // terminal Application destruction after Host-established render quiescence,
+  // a still-owned unsettled Engine is stopped and its derived Pattern cleared,
+  // so restart cannot resurrect a preview. Engine stop is not a callback gate.
+  foundation::Result<PatternTempoPreviewStatus> release_pattern_tempo_source(
+      std::uint64_t source_id);
   foundation::Result<cooker::EncodedRuntimeContent> export_runtime_content(
       const RuntimeContentExportRequest& request);
   foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(

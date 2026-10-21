@@ -73,8 +73,8 @@ struct PatternTransportController::Impl {
        std::shared_ptr<project_io::ProjectStoragePlatform> platform,
        std::shared_ptr<project_io::AuthoringHistory> history,
        std::function<void()> on_destroy,
-       ScheduledPatternTransportAudioPort* scheduled)
-      : retirement{std::move(on_destroy)}, bridge(audio),
+       ScheduledPatternTransportAudioPort* scheduled, std::function<bool()> can_request)
+      : retirement{std::move(on_destroy)}, can_request(std::move(can_request)), bridge(audio),
         opening(std::make_shared<detail::PatternTransportOpeningPublication>()),
         executor(config.runtime_generation,
             [config, platform = std::move(platform), history = std::move(history), opening = opening] {
@@ -89,6 +89,8 @@ struct PatternTransportController::Impl {
   // bridge and executor, so both outlive it within the Impl.
   // Retire only after the executor has destroyed its owner, including failed startup.
   RegistryRetirement retirement;
+  std::shared_ptr<int> observer_lifetime = std::make_shared<int>(0);
+  std::function<bool()> can_request;
   AudioPortBridge bridge;
   std::shared_ptr<detail::PatternTransportOpeningPublication> opening;
   PatternTransportExecutor executor;
@@ -107,6 +109,7 @@ PatternTransportController& PatternTransportController::operator=(
 
 PatternTransportSubmit PatternTransportController::request(
     const PatternTransportRequest& request) {
+  if (impl_->can_request && !impl_->can_request()) return PatternTransportSubmit::busy;
   return impl_->coordinator.request(request);
 }
 
@@ -169,13 +172,27 @@ detail::PatternTransportControllerInternalFactory::make(
     std::shared_ptr<project_io::ProjectStoragePlatform> platform,
     std::shared_ptr<project_io::AuthoringHistory> history,
     std::function<void()> on_destroy,
-    ScheduledPatternTransportAudioPort* scheduled) {
+    ScheduledPatternTransportAudioPort* scheduled,
+    std::function<bool()> can_request) {
   return std::unique_ptr<PatternTransportController>(
       new PatternTransportController(
           std::unique_ptr<PatternTransportController::Impl>(
               new PatternTransportController::Impl(
                   audio, std::move(config), std::move(platform),
-                  std::move(history), std::move(on_destroy), scheduled))));
+                  std::move(history), std::move(on_destroy), scheduled, std::move(can_request)))));
+}
+
+std::function<bool()> detail::PatternTransportControllerInternalFactory::tempo_conflict_observer(
+    const PatternTransportController& controller) {
+  auto* impl = controller.impl_.get();
+  return [weak = std::weak_ptr<int>(impl->observer_lifetime), impl] {
+    if (!weak.lock()) return false;
+    const auto current = impl->coordinator.inspect();
+    const auto count_in = impl->coordinator.inspect_count_in();
+    return current.recording || current.phase != PatternTransportPhase::idle ||
+        (count_in.request && !count_in.start_receipt && !count_in.cancel_receipt) ||
+        impl->executor.inspect().ticket.has_value();
+  };
 }
 
 std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
@@ -189,7 +206,10 @@ std::unique_ptr<PatternTransportController> make_pattern_transport_controller(
     PatternTransportControllerConfig config) {
   return detail::PatternTransportControllerInternalFactory::make(audio, std::move(config), nullptr, {}, {}, &scheduled);
 }
-PatternTransportSubmit PatternTransportController::request_count_in(const ScheduledPatternTransportRequest& r) { return impl_->coordinator.request_count_in(r); }
+PatternTransportSubmit PatternTransportController::request_count_in(const ScheduledPatternTransportRequest& r) {
+  if (impl_->can_request && !impl_->can_request()) return PatternTransportSubmit::busy;
+  return impl_->coordinator.request_count_in(r);
+}
 ScheduledPatternTransportStatus PatternTransportController::inspect_count_in() const { return impl_->coordinator.inspect_count_in(); }
 PatternTransportSubmit PatternTransportController::cancel_count_in(const ScheduledPatternTransportCancel& r) { return impl_->coordinator.cancel_count_in(r); }
 foundation::Result<PatternTransportInputTicket> PatternTransportController::reserve_input(const PatternTransportInputRequest& r) { return impl_->coordinator.reserve_input(r); }
@@ -205,7 +225,13 @@ bool PatternTransportController::acknowledge_input_owner(std::uint64_t generatio
 void PatternTransportController::request_shutdown() { impl_->coordinator.request_shutdown(); }
 bool PatternTransportController::shutdown_complete() const { return impl_->coordinator.shutdown_complete(); }
 PatternTransportExecutorStatus PatternTransportController::inspect_io() const { return impl_->coordinator.inspect_io(); }
-foundation::Result<PatternTransportSwitchTicket> PatternTransportController::reserve_pattern_switch(const PatternTransportSwitchRequest& r) { return impl_->coordinator.reserve_pattern_switch(r); }
+foundation::Result<PatternTransportSwitchTicket> PatternTransportController::reserve_pattern_switch(const PatternTransportSwitchRequest& r) {
+  if (impl_->can_request && !impl_->can_request())
+    return foundation::Result<PatternTransportSwitchTicket>::failure({
+        foundation::ErrorCode::invalid_argument, "Pattern tempo preview must settle before switching",
+        {{"reason", "tempo_preview_active"}}});
+  return impl_->coordinator.reserve_pattern_switch(r);
+}
 bool PatternTransportController::bind_pattern_switch(const PatternTransportSwitchTicket& t, const audio::PatternReplacementAuthority& a, std::uint16_t bpm) { return impl_->coordinator.bind_pattern_switch(t, a, bpm); }
 bool PatternTransportController::complete_pattern_switch(const PatternTransportSwitchTicket& t, const audio::PatternPublicationObservation& o) { return impl_->coordinator.complete_pattern_switch(t, o); }
 std::optional<PatternTransportSwitchStatus> PatternTransportController::inspect_pattern_switch(const PatternTransportSwitchTicket& t) const { return impl_->coordinator.inspect_pattern_switch(t); }

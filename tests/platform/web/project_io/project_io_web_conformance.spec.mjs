@@ -2193,3 +2193,26 @@ test("authoring history retains original OPFS bytes through Undo, retry, Redo an
   await navigate(reopened, `/project_io/project_io_web_test.html?action=history_reopen&bundle=${bundle}`);
   expect(await waitForResult(reopened)).toEqual({revision: 3, undo: 0, redo: 0});
 });
+
+for (const undo of [false, true]) {
+  test(`Facade tempo preview preserves OPFS Truth through cancel, one save${undo ? ", Undo" : ""} and cold reopen`, async ({context}) => {
+    test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
+    const bundle = `tempo-preview-${undo ? "undo" : "commit"}-${Date.now()}`;
+    const page = await trackedPage(context);
+    await navigate(page, `/project_io/project_io_web_test.html?action=tempo_preview_roundtrip&bundle=${bundle}&undo=${Number(undo)}`);
+    const first = await waitForResult(page);
+    expect(first).toMatchObject({revision: undo ? 4 : 3, bpm: undo ? 120 : 240,
+      undo: undo ? 0 : 1, redo: undo ? 1 : 0,
+      previewWrites: 0, cancelWrites: 0, retryWrites: 0, writersAfterClose: 0,
+      onsets: [18001, 40001, 57001, 69001],
+      artifact: {sha256: "d9116fe7b5537009d51623ec622a866c6a94be1f4a1d6c761078f2b6e16f6eba", byteLength: 24044}});
+    await page.close();
+    expect(page.isClosed()).toBe(true);
+    const reopened = await trackedPage(context);
+    await navigate(reopened, `/project_io/project_io_web_test.html?action=tempo_preview_reopen&bundle=${bundle}&undo=${Number(undo)}`);
+    const after = await waitForResult(reopened);
+    expect(after).toEqual({revision: first.revision, bpm: first.bpm, undo: 0, redo: 0,
+      checkpoint: first.checkpoint, artifact: first.artifact, writersAfterClose: 0});
+    await reopened.close();
+  });
+}
