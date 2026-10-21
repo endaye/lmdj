@@ -19,10 +19,53 @@ PR_TEMPLATE = REPO_ROOT / ".github/pull_request_template.md"
 RELEASE_POLICY = REPO_ROOT / "tools/release/policy.json"
 
 
+ISSUE_LIST_SKILL = REPO_ROOT / ".agents/skills/issue-list/SKILL.md"
+CLEANUP_PITFALL = REPO_ROOT / ".agents/pitfalls/cleanup-removes-live-release-state.md"
+# The release-owned paths a branch/worktree cleanup must never remove or prune
+# (#2351, extended by #2422 item 6 after a cleanup deleted the pinned emsdk).
+RELEASE_OWNED_PATHS = (
+    ".local/release-worktrees/",
+    ".git/worktrees/candidate-*",
+    ".git/lmdj-release-requests/",
+    "build/toolchains/",
+    "build/release/",
+)
+
+
 class ReleaseSkillTest(unittest.TestCase):
     def read(self, path: Path) -> str:
         self.assertTrue(path.is_file(), f"missing release governance file: {path}")
         return path.read_text(encoding="utf-8")
+
+    def test_cleanup_rules_name_every_release_owned_path(self) -> None:
+        """A cleanup that does not know a path is release-owned deletes it.
+
+        Four places tell an agent what never to remove: the standing rule in
+        AGENTS.md / CLAUDE.md (byte-identical), issue-list Mode 2 (the
+        protect-before-classify text and its response table row) and the
+        pitfall whose recurrences are the deletions that already happened.
+        Every release-owned path in RELEASE_OWNED_PATHS, the single source of
+        the protected set, must appear verbatim in each of them.
+        """
+        agents, claude = self.read(AGENTS), self.read(CLAUDE)
+        self.assertEqual(agents, claude, "AGENTS.md and CLAUDE.md must stay byte-identical")
+        rule = next((line for line in agents.splitlines()
+                     if "cleanup never removes or prunes release-owned state" in line), "")
+        self.assertTrue(rule, "AGENTS.md lacks the release-owned cleanup rule")
+        issue_list = self.read(ISSUE_LIST_SKILL)
+        protect = issue_list.split("### 2. Protect before classifying", 1)[1]
+        protect = protect.split("### 3.", 1)[0]
+        table_row = next((line for line in protect.splitlines()
+                          if line.startswith("| Release-owned path")), "")
+        self.assertTrue(table_row, "issue-list Mode 2 lacks the release-owned table row")
+        pitfall = self.read(CLEANUP_PITFALL)
+        how_to_apply = pitfall.split("## How to apply", 1)[1]
+        for path in RELEASE_OWNED_PATHS:
+            with self.subTest(path=path):
+                self.assertIn(path, rule, f"AGENTS.md cleanup rule does not name {path}")
+                self.assertIn(path, protect, f"issue-list Mode 2 does not name {path}")
+                self.assertIn(path, table_row, f"the Mode 2 response table does not name {path}")
+                self.assertIn(path, how_to_apply, f"the cleanup pitfall does not name {path}")
 
     def test_skill_starts_from_fresh_exact_tag_remote_audit(self) -> None:
         source = self.read(SKILL)

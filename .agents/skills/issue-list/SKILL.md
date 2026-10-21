@@ -144,10 +144,20 @@ landed patch; protect post-merge local commits not covered by that evidence.
 
 Release-owned state is never a cleanup target, however merged or stale it looks:
 anything under `.local/release-worktrees/`, any `.git/worktrees/candidate-*`
-registration, and `.git/lmdj-release-requests/`. They hold the release driver's
-live per-request state; only `scripts/release.sh` (its settle path or
-`retire`) removes them. Do not `git worktree remove`, delete or prune them; list
-them as "release-owned, kept". Retiring a request renames its journal file to
+registration, `.git/lmdj-release-requests/`, the pinned Emscripten toolchain
+under `build/toolchains/` and the prepared release outputs under
+`build/release/`. The first three hold the release driver's live per-request
+state; only `scripts/release.sh` (its settle path or `retire`) removes them.
+`build/toolchains/` is the SDK every Web proof and `prepare` activate, pinned to
+`tools/web-runtime/emscripten.lock.json`; deleting it cost the 2.0.122.0
+release hours of `prepare` failures (#2422), and nothing regenerates it but a
+fresh install. `build/release/<tag>/` is the signed plan and asset set a
+Draft, publication and every later `resume` verify against; without it the
+request cannot continue. Do not `git worktree remove`, delete or prune any of
+them, and never sweep `build/` whole (`rm -rf build`, `git clean -x` over it,
+or a script `clean` that removes the build root): remove only the specific
+`build/core`, `build/web` or lane trees you own. List release-owned paths as
+"release-owned, kept". Retiring a request renames its journal file to
 `<id>.retired`, so `ls .git/lmdj-release-requests/*.json` lists only live
 requests; while it lists any, do not run `git worktree prune`.
 Before removing any `.worktrees/*` worktree, check for running processes in it
@@ -161,7 +171,7 @@ worktree is active, not abandoned.
 | Open PR | Report current-head review/findings, conflicts and applicable protection; no automatic merge |
 | Unpushed commits or no PR | Report exact missing transition; offer shipping, do not execute it from an audit |
 | Dirty, divergent, locked, active or uncertain | Keep and name the unresolved safety condition |
-| Release-owned path (`.local/release-worktrees/`, `candidate-*`, release requests) | Keep as "release-owned, kept"; only `scripts/release.sh` removes it |
+| Release-owned path (`.local/release-worktrees/`, `.git/worktrees/candidate-*`, `.git/lmdj-release-requests/`, `build/toolchains/`, `build/release/`) | Keep as "release-owned, kept"; only `scripts/release.sh` removes request state, and the toolchain and outputs are never a cleanup target |
 
 Being behind main without conflict, or having red/in-flight incremental or
 explicit full self-tests, does not make a PR abandoned or unmergeable under
