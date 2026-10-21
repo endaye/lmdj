@@ -1,0 +1,65 @@
+.hardware-workspace .hardware-console > [aria-label="Touch workspace"] .sample-surface .sample-tone-controls {
+  min-width: 0;
+  --creator-apricot: #f2b584;
+  --creator-sky: #95d4df;
+  padding: 0;
+  gap: var(--creator-group-gap);
+  border: 0;
+
+  .tone-control { gap: 0 var(--creator-group-gap); min-width: 0; }
+  .tone-control > label { font: 400 11px/15px var(--creator-font-mono); color: var(--creator-muted); text-transform: uppercase; }
+  .tone-control .sample-parameter-value {
+    min-width: var(--creator-control-hit);
+    min-height: var(--creator-control-hit);
+    border-radius: 0;
+    --control-fill: transparent;
+    font: 400 12px/17px var(--creator-font-mono);
+    text-transform: uppercase;
+  }
+  .tone-control input[type="range"] {
+    height: var(--creator-control-hit);
+    min-height: var(--creator-control-hit);
+    padding: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    appearance: none;
+    --tone-track: linear-gradient(to right, var(--creator-sky) var(--value-position), var(--creator-line) var(--value-position));
+  }
+  .tone-control input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--tone-track); }
+  .tone-control input[type="range"]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--tone-track); }
+  .tone-control input[type="range"]::-webkit-slider-thumb {
+    appearance: none; margin-top: -5px; width: 12px; height: 14px;
+    border: 0; border-radius: 3px; background: var(--creator-text);
+  }
+  .tone-control input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 14px; border: 0; border-radius: 3px; background: var(--creator-text);
+  }
+  .tone-control input[type="range"]:focus-visible { outline: 2px solid var(--creator-lime); outline-offset: 2px; }
+  .eq-editor { min-width: 0; gap: var(--creator-group-gap); }
+  .eq-plot {
+    display: block; width: 100%; min-width: var(--eq-min-width); max-width: none; height: 132px;
+    min-height: var(--eq-min-height);
+    border: 0; border-radius: 0; overflow: visible; background: var(--creator-base);
+  }
+  .eq-zero { stroke: var(--creator-line); stroke-width: .8; }
+  .eq-floor, .eq-grid { stroke: var(--creator-line); stroke-width: .5; opacity: .45; }
+  .eq-cut-zone { fill: var(--creator-screen); }
+  .eq-axis-label { fill: var(--creator-muted); font: 400 9px/13px var(--creator-font-mono); }
+  .eq-response-curve { fill: none; stroke: var(--creator-lime); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .eq-pole-low { --eq-band-colour: var(--creator-apricot); }
+  .eq-pole-mid { --eq-band-colour: var(--creator-lime); }
+  .eq-pole-high { --eq-band-colour: var(--creator-sky); }
+  .eq-handle-guide { pointer-events: none; opacity: .65; }
+  .eq-handle-guide line { stroke: var(--eq-band-colour); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .eq-data-point { fill: var(--eq-band-colour); }
+  .eq-pole .eq-pole-dot { fill: var(--eq-band-colour); stroke: var(--eq-band-colour); stroke-width: 0; }
+  .eq-pole:focus-visible .eq-pole-dot { stroke: var(--creator-text); stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .eq-pole-label { display: none; }
+  .eq-frequency-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px var(--creator-group-gap); min-width: 0; }
+  .eq-frequency-summary > span { color: var(--creator-muted); font: 400 11px/15px var(--creator-font-mono); }
+  .eq-frequency-summary > output { font: 400 12px/17px var(--creator-font-mono); color: var(--creator-text); overflow-wrap: anywhere; }
+  .eq-readout { color: var(--creator-muted); font: 400 9px/13px var(--creator-font-mono); overflow-wrap: anywhere; }
+  .eq-gesture-hint { margin: 0; color: var(--creator-muted); font: 400 10px/14px var(--creator-font-mono); overflow-wrap: anywhere; }
+}

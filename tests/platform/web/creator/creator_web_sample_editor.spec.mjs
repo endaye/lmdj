@@ -2001,6 +2001,262 @@ test("contextual Sample encoders merge one save, cancel old targets and restore 
   await noErrors();
 });
 
+async function recordToneGeometry(page, evidence) {
+  const controls = page.getByRole("region", {name: "Pad A01 Sample controls", exact: true});
+  const targets = controls.locator('.tone-control input, .tone-control button, .eq-pole');
+  await expect(targets).toHaveCount(5);
+  const value = {targets: []};
+  evidence.geometry.push(value);
+  for (let index = 0; index < await targets.count(); ++index) {
+    const target = targets.nth(index);
+    await target.scrollIntoViewIfNeeded();
+    const measured = await target.evaluate(element => {
+      const b = element.getBoundingClientRect();
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+      return {name: element.getAttribute("aria-label"), rect: b.toJSON(),
+        hits: [[cx, cy], [b.x + 1, cy], [b.right - 1, cy], [cx, b.y + 1], [cx, b.bottom - 1]]
+          .map(([x, y]) => {const hit = document.elementFromPoint(x, y); return hit === element || element.contains(hit);})};
+    });
+    value.targets.push(measured);
+    expect(measured.rect.width, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.rect.height, measured.name).toBeGreaterThanOrEqual(44);
+    expect(measured.hits, measured.name).toEqual([true, true, true, true, true]);
+  }
+  expect(value.targets).toHaveLength(5);
+  value.layout = await controls.evaluate(element => {
+    const plot = element.querySelector("svg");
+    const touch = element.closest('[aria-label="Touch workspace"]');
+    const outer = new DOMMatrixReadOnly(getComputedStyle(element.closest(".hardware-workspace")).transform);
+    const scale = Math.hypot(outer.a, outer.b);
+    return {viewport: {width: innerWidth, height: innerHeight}, plotHeight: parseFloat(getComputedStyle(plot).height),
+      plotBounds: plot.getBoundingClientRect().toJSON(),
+      poles: [...plot.querySelectorAll(".eq-pole")].map(pole => pole.getBoundingClientRect().toJSON()),
+      overflow: [element.scrollWidth - element.clientWidth, touch.scrollWidth - touch.clientWidth,
+        document.documentElement.scrollWidth - innerWidth],
+      dots: [...plot.querySelectorAll(".eq-pole-dot")].map(dot => {
+        const b = dot.getBoundingClientRect(); return {width: b.width / scale, height: b.height / scale};
+      })};
+  });
+  expect(value.layout.overflow).toEqual([0, 0, 0]);
+  expect(value.layout.plotHeight).toBe(132);
+  for (const pole of value.layout.poles) {
+    expect(pole.left).toBeGreaterThanOrEqual(value.layout.plotBounds.left);
+    expect(pole.right).toBeLessThanOrEqual(value.layout.plotBounds.right);
+    expect(pole.top).toBeGreaterThanOrEqual(value.layout.plotBounds.top);
+    expect(pole.bottom).toBeLessThanOrEqual(value.layout.plotBounds.bottom);
+  }
+  for (let a = 0; a < 3; ++a) for (let b = a + 1; b < 3; ++b) {
+    const left = value.layout.poles[a], right = value.layout.poles[b];
+    expect(Math.min(left.right, right.right) <= Math.max(left.left, right.left) ||
+      Math.min(left.bottom, right.bottom) <= Math.max(left.top, right.top)).toBe(true);
+  }
+  for (const dot of value.layout.dots) {
+    expect(dot.width).toBeCloseTo(12, 1); expect(dot.height).toBeCloseTo(12, 1);
+  }
+  await expect(controls.locator(".eq-response-curve")).toHaveAttribute("d", /^M/);
+  return controls;
+}
+
+for (const viewport of [{width: 1440, height: 900}, {width: 1280, height: 600},
+  {width: 768, height: 600}, {width: 768, height: 1024},
+  {width: 390, height: 844}, {width: 844, height: 390}]) {
+  test(`Tone EQ preserves real geometry, gestures and history at ${viewport.width}x${viewport.height}`, async ({page, browserName}, info) => {
+    test.skip(browserName !== "chromium"); test.setTimeout(300_000);
+    const evidence = {viewport, geometry: []};
+    try {
+      await installHostProofRecorder(page);
+      await page.setViewportSize(viewport); await page.goto("/index.html");
+      await waitForBootProject(page); await activateAudio(page);
+      await chooseSampleFile(page, "Add Sample to Pad A01", "tone-layout.wav", pcm16Wav({frames: 4800}));
+      await commitLongSourceSelection(page); await expectProjectRevision(page, 1);
+      await showSamplePage(page, "Tone / EQ");
+      const before = (await rawRequest(page, "project.inspect", {})).result;
+      evidence.before = before;
+      const controls = await recordToneGeometry(page, evidence);
+      const tone = page.getByRole("slider", {name: "Pad A01 Tone", exact: true});
+      await tone.focus();
+      for (let step = 0; step < 5; ++step) await page.keyboard.down("ArrowRight");
+      await expect(controls.locator(".tone-control output")).toHaveText("HP 5");
+      await page.keyboard.press("Escape"); await page.keyboard.up("ArrowRight");
+      await expect(controls.locator(".tone-control output")).toHaveText("Off");
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(before);
+
+      const low = page.getByRole("slider", {name: "Pad A01 EQ Low", exact: true});
+      await low.scrollIntoViewIfNeeded();
+      const lowCentre = await low.evaluate(node => {const m = node.getScreenCTM(); return {x: m.e, y: m.f};});
+      await page.mouse.click(lowCentre.x, lowCentre.y);
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(before);
+      const mid = page.getByRole("slider", {name: "Pad A01 EQ Mid", exact: true});
+      await mid.scrollIntoViewIfNeeded();
+      const movement = await mid.evaluate(node => {
+        const m = node.getScreenCTM();
+        return {from: {x: m.e, y: m.f}, to: {x: m.e + m.a * 24 - m.c * 12, y: m.f + m.b * 24 - m.d * 12}};
+      });
+      await page.mouse.move(movement.from.x, movement.from.y); await page.mouse.down();
+      await page.mouse.move(movement.to.x, movement.to.y, {steps: 5}); await page.mouse.up();
+      await expectProjectRevision(page, 2);
+      const moved = await inspectedPlayback(page); evidence.moved = moved;
+      expect(moved.eq.mid.freq_hz).toBeGreaterThan(1000);
+      expect(moved.eq.mid.gain_millidb).toBeGreaterThan(0);
+      expect(moved.eq.mid.q_milli).toBe(707);
+      await mid.focus(); await page.keyboard.down("Shift");
+      await page.keyboard.press("ArrowUp"); await page.keyboard.up("Shift");
+      await expectProjectRevision(page, 3);
+      const withQ = await inspectedPlayback(page); evidence.withQ = withQ;
+      expect(withQ.eq.mid.q_milli).toBeGreaterThan(707);
+      expect(withQ.eq.mid.freq_hz).toBe(moved.eq.mid.freq_hz);
+      expect(withQ.eq.mid.gain_millidb).toBe(moved.eq.mid.gain_millidb);
+      await holdKeySteps(page, low, "ArrowDown", 37); await expectProjectRevision(page, 4);
+      const cut = (await rawRequest(page, "project.inspect", {})).result; evidence.cut = cut;
+      await expect(low).toHaveAttribute("aria-valuetext", "Low cut 100 Hz");
+      await low.press("Delete"); await expectProjectRevision(page, 5);
+      const bypassed = (await rawRequest(page, "project.inspect", {})).result; evidence.bypassed = bypassed;
+      await expect(low).toHaveAttribute("aria-valuetext", "Low off");
+      const high = page.getByRole("slider", {name: "Pad A01 EQ High", exact: true});
+      await high.focus(); await page.keyboard.down("ArrowUp");
+      await expect(high).not.toHaveAttribute("aria-valuetext", "High off");
+      await page.keyboard.press("Escape"); await page.keyboard.up("ArrowUp");
+      await expect(high).toHaveAttribute("aria-valuetext", "High off");
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(bypassed);
+      await pressRailUndo(page); await expectProjectRevision(page, 6);
+      expect((await rawRequest(page, "project.inspect", {})).result)
+        .toEqual({...cut, project_revision: 6, project: {...cut.project, revision: 6}});
+      await pressRailRedo(page); await expectProjectRevision(page, 7);
+      const finalTruth = (await rawRequest(page, "project.inspect", {})).result;
+      expect(finalTruth).toEqual({...bypassed, project_revision: 7, project: {...bypassed.project, revision: 7}});
+      const projectId = finalTruth.project.project_id;
+      const inventory = await countInProjectInventory(page, projectId);
+      evidence.finalTruth = finalTruth; evidence.inventory = inventory;
+      for (const size of [{width: 768, height: 600}, viewport]) {
+        await page.setViewportSize(size);
+        await page.waitForFunction(({width, height}) => innerWidth === width && innerHeight === height, size);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        await recordToneGeometry(page, evidence);
+        expect((await rawRequest(page, "project.inspect", {})).result).toEqual(finalTruth);
+      }
+      await controls.locator(".eq-editor").scrollIntoViewIfNeeded();
+      await page.screenshot({path: info.outputPath("tone-eq.png")});
+      await page.reload(); await waitForProjectReopen(page, projectId.slice(0, 8));
+      await showSamplePage(page, "Tone / EQ");
+      expect((await rawRequest(page, "project.inspect", {})).result).toEqual(finalTruth);
+      expect(await countInProjectInventory(page, projectId)).toEqual(inventory);
+      await recordToneGeometry(page, evidence);
+      await expect(mid).not.toHaveAttribute("aria-valuetext", "Mid off");
+    } finally {
+      const path = info.outputPath("tone-eq-layout.json");
+      await writeFile(path, JSON.stringify(evidence, null, 2));
+      await info.attach("Tone EQ actual geometry and Truth", {path, contentType: "application/json"});
+    }
+  });
+}
+
+for (const viewport of [{width: 390, height: 844}, {width: 768, height: 1024}]) {
+  test(`Tone EQ keeps coincident and edge targets independent at ${viewport.width}x${viewport.height}`, async ({page, browserName}, info) => {
+    test.skip(browserName !== "chromium"); test.setTimeout(300_000);
+    const evidence = {viewport, geometry: [], states: []};
+    const noErrors = recordPageErrors(page);
+    try {
+      await installHostProofRecorder(page);
+      await page.setViewportSize(viewport); await page.goto("/index.html");
+      await waitForBootProject(page); await activateAudio(page);
+      await chooseSampleFile(page, "Add Sample to Pad A01", "eq-collision.wav", pcm16Wav({frames: 4800}));
+      await commitLongSourceSelection(page); await expectProjectRevision(page, 1);
+      const states = [
+        {name: "coincident", eq: {
+          low: {kind: "shelf", freq_hz: 1000, gain_millidb: 6000},
+          mid: {freq_hz: 1000, gain_millidb: 6000, q_milli: 1000},
+          high: {kind: "shelf", freq_hz: 1000, gain_millidb: 6000},
+        }},
+        {name: "edges", eq: {
+          low: {kind: "cut", freq_hz: 20, gain_millidb: -18000},
+          mid: {freq_hz: 100, gain_millidb: 18000, q_milli: 1000},
+          high: {kind: "shelf", freq_hz: 20000, gain_millidb: -18000},
+        }},
+      ];
+      for (const state of states) {
+        const before = (await rawRequest(page, "project.inspect", {})).result;
+        const originalPlayback = await inspectedPlayback(page);
+        const response = await rawRequest(page, "sample.update_pad", {slot: SLOT_A1,
+          command_id: crypto.randomUUID(), expected_revision: before.project_revision,
+          playback: {...originalPlayback, eq: state.eq}});
+        expect(response.ok).toBe(true);
+        let revision = before.project_revision + 1;
+        expect(response.result.committed_revision).toBe(revision);
+        const seeded = (await rawRequest(page, "project.inspect", {})).result;
+        const seedPlayback = await inspectedPlayback(page);
+        expect(seedPlayback).toEqual({...originalPlayback, eq: state.eq});
+        const unchanged = structuredClone(seeded.project);
+        unchanged.revision = before.project.revision;
+        unchanged.banks[0].pads[0].playback = before.project.banks[0].pads[0].playback;
+        expect(unchanged).toEqual(before.project);
+        const receipt = {name: state.name, seeded}; evidence.states.push(receipt);
+        // A direct authoring setup must be re-read by the real App before its
+        // next edit. Do not give a stale UI a manufactured expected revision.
+        const projectId = seeded.project.project_id;
+        await page.reload(); await waitForProjectReopen(page, projectId.slice(0, 8));
+        await showSamplePage(page, "Tone / EQ");
+        await recordToneGeometry(page, evidence);
+        const updates = () => page.evaluate(() => window.__sampleProofOperations
+          .filter(operation => operation === "sample.update_pad").length);
+        const beforeClicks = await updates();
+        for (const band of ["Low", "Mid", "High"]) {
+          const pole = page.getByRole("slider", {name: `Pad A01 EQ ${band}`, exact: true});
+          await pole.scrollIntoViewIfNeeded();
+          const centre = await pole.evaluate(node => {const m = node.getScreenCTM(); return {x: m.e, y: m.f};});
+          await page.mouse.click(centre.x, centre.y);
+          expect((await rawRequest(page, "project.inspect", {})).result).toEqual(seeded);
+        }
+        expect(await updates()).toBe(beforeClicks);
+        const mid = page.getByRole("slider", {name: "Pad A01 EQ Mid", exact: true});
+        await mid.scrollIntoViewIfNeeded();
+        const direction = state.name === "edges" ? 1 : -1;
+        const travel = await mid.evaluate((node, direction) => {
+          const m = node.getScreenCTM();
+          return {x: m.e, y: m.f, toX: m.e + 12 * m.a + direction * 8 * m.c,
+            toY: m.f + 12 * m.b + direction * 8 * m.d};
+        }, direction);
+        await page.mouse.move(travel.x, travel.y); await page.mouse.down();
+        await page.mouse.move(travel.toX, travel.toY, {steps: 5}); await page.mouse.up();
+        await expectProjectRevision(page, ++revision);
+        const editedPlayback = await inspectedPlayback(page);
+        expect(editedPlayback.eq.mid.freq_hz).toBeGreaterThan(state.eq.mid.freq_hz);
+        expect(Math.sign(editedPlayback.eq.mid.gain_millidb - state.eq.mid.gain_millidb)).toBe(-direction);
+        expect(editedPlayback).toEqual({...seedPlayback, eq: {...state.eq, mid: {
+          ...state.eq.mid, freq_hz: editedPlayback.eq.mid.freq_hz,
+          gain_millidb: editedPlayback.eq.mid.gain_millidb,
+        }}});
+        expect(await updates()).toBe(beforeClicks + 1);
+        const edited = (await rawRequest(page, "project.inspect", {})).result;
+        const expected = structuredClone(seeded);
+        expected.project_revision = revision; expected.project.revision = revision;
+        expected.project.banks[0].pads[0].playback = edited.project.banks[0].pads[0].playback;
+        expect(edited).toEqual(expected);
+        await recordToneGeometry(page, evidence);
+        await pressRailUndo(page); await expectProjectRevision(page, ++revision);
+        expect((await rawRequest(page, "project.inspect", {})).result)
+          .toEqual({...seeded, project_revision: revision, project: {...seeded.project, revision}});
+        await pressRailRedo(page); await expectProjectRevision(page, ++revision);
+        const finalTruth = (await rawRequest(page, "project.inspect", {})).result;
+        expect(finalTruth).toEqual({...edited, project_revision: revision, project: {...edited.project, revision}});
+        const inventory = await countInProjectInventory(page, projectId);
+        receipt.finalTruth = finalTruth; receipt.inventory = inventory;
+        await recordToneGeometry(page, evidence);
+        await page.screenshot({path: info.outputPath(`eq-${state.name}.png`)});
+        await page.reload(); await waitForProjectReopen(page, projectId.slice(0, 8));
+        await showSamplePage(page, "Tone / EQ");
+        expect((await rawRequest(page, "project.inspect", {})).result).toEqual(finalTruth);
+        expect(await countInProjectInventory(page, projectId)).toEqual(inventory);
+        await recordToneGeometry(page, evidence);
+      }
+      noErrors();
+    } finally {
+      const path = info.outputPath("eq-collision-truth.json");
+      await writeFile(path, JSON.stringify(evidence, null, 2));
+      await info.attach("EQ coincident and edge targets, complete Truth and files", {path, contentType: "application/json"});
+    }
+  });
+}
+
 async function recordPadLayoutGeometry(page, surface, receipt) {
   receipt.controls = [];
   const actions = surface.locator("button, summary");
