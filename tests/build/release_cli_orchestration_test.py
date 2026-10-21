@@ -705,6 +705,62 @@ class ReleaseEntryPointTest(unittest.TestCase):
                     cli.main(["--repo-root", str(self.root), *arguments])
                 self.assertEqual(seen, [expected])
 
+    def test_reprove_is_recorded_with_the_request_and_kept_on_resume(self):
+        # `run --reprove` records the request's wish beside its operation
+        # journals; a later `resume` without the flag keeps the complete local
+        # proof instead of silently building reproducibly only (#2453 review).
+        from tools.release.profiles import ProfileRuntime
+
+        seen = []
+        real_runtime = ProfileRuntime
+
+        def recording_runtime(**fields):
+            seen.append(fields.get("reprove", "absent"))
+            return real_runtime(**fields)
+
+        git, github = self.context.git, self.context.github
+        self_root = self.root
+        fake_git = type("FetchingGit", (), {
+            "runner": git.runner, "main_revision": git.main_revision,
+            "is_main_ancestor": git.is_main_ancestor,
+            "fetch_authority": lambda self, repository, branch: None,
+            "detached_worktree": lambda self, revision: contextlib.nullcontext(self_root),
+        })()
+        reader = lambda tree: (self.context.policy.selected, type("Ledger", (), {})())
+        carriers = tuple(self.carriers.values())
+
+        def main(*arguments):
+            seen.clear()
+            with patch.object(cli, "ProfileRuntime", recording_runtime), \
+                    patch.object(cli, "GitRepository", return_value=fake_git), \
+                    patch.object(cli, "_authenticated_github_client", return_value=github), \
+                    patch.object(cli, "load_authority_documents", reader), \
+                    patch.object(cli, "release_carriers", return_value=carriers), \
+                    patch.object(cli, "release_recheck", return_value=None), \
+                    patch.object(cli, "compose_candidate", return_value=None), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return cli.main(["--repo-root", str(self.root), *arguments])
+
+        self.carriers["publication"].fail_after_write = True
+        self.assertEqual(main("run", "--authority", "issue:1301", "--reprove"), 2)
+        self.assertEqual(seen, [True])
+        (request_id,) = self.request_ids()
+        marker = self.journal() / "operations" / request_id / "reprove-requested"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+        code, report = self.status()
+        self.assertEqual(code, 0)
+        self.assertIn("complete local Web Host proof requested (--reprove)", report)
+        # The flag is kept on a resume that does not repeat it.
+        self.assertEqual(main("resume", request_id), 0)
+        self.assertEqual(seen, [True])
+        # Another request that never asked for it still builds reproducibly.
+        marker.unlink()
+        self.assertEqual(main("resume", request_id), 0)
+        self.assertEqual(seen, [False])
+        code, report = self.status()
+        self.assertNotIn("--reprove", report)
+
     def test_resume_of_an_unknown_request_fails_closed(self):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)

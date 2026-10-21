@@ -264,6 +264,41 @@ def release_recheck(context: PrepareContext, policy, request):
     return compose_recheck(context, policy, request)
 
 
+_REPROVE_MARKER = "reprove-requested"
+_REQUEST_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,79}\Z")
+
+
+def _reprove_marker(root: Path, git, request_id: str) -> Path:
+    if not isinstance(request_id, str) or _REQUEST_ID.fullmatch(request_id) is None:
+        raise CommandError("release request ID is invalid", detail=str(request_id)[:80])
+    return release_journal_root(root, git) / "operations" / request_id / _REPROVE_MARKER
+
+
+def reprove_requested(root: Path, git, request_id: str) -> bool:
+    """Whether an earlier `run`/`resume` of this request asked for `--reprove`.
+
+    The flag is recorded beside the request's own operation journals so a
+    later `resume` without it keeps the complete local proof the operator
+    asked for; it is never frozen into the request scope, which stays the
+    immutable release identity.
+    """
+    return _reprove_marker(root, git, request_id).is_file()
+
+
+def record_reprove(root: Path, git, request_id: str) -> None:
+    """Durably record `--reprove` for this request (idempotent, private)."""
+    marker = _reprove_marker(root, git, request_id)
+    directory = marker.parent
+    for level in (directory.parent.parent, directory.parent, directory):
+        if not level.is_dir():
+            level.mkdir(mode=0o700)
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return
+    os.close(fd)
+
+
 def _resume_request(root: Path, git, request_id: str):
     """The frozen request for a resume, read-only; None when the journal has none."""
     directory = release_journal_root(root, git)
@@ -550,6 +585,8 @@ def format_request_status(root: Path, git, request_id: str | None = None) -> str
                 f"  step: {outstanding or '-'}\n"
                 f"  outstanding intent: {outstanding if unresolved else '-'}\n"
             )
+            if (directory / "operations" / state["request"]["id"] / _REPROVE_MARKER).is_file():
+                report.append("  prepare: complete local Web Host proof requested (--reprove)\n")
             try:
                 note = journal.read_failure(state["request"]["id"])
             except JournalError as error:
@@ -725,7 +762,11 @@ def main(argv: list[str] | None = None) -> int:
         if options.command == "status":
             print(format_request_status(root, GitRepository(root), options.request_id), end="")
             return 0
-        context = build_context(root, reprove=bool(getattr(options, "reprove", False)))
+        reprove = bool(getattr(options, "reprove", False))
+        if options.command == "resume" and not reprove:
+            # A request once resumed or started with --reprove keeps it.
+            reprove = reprove_requested(root, GitRepository(root), options.request_id)
+        context = build_context(root, reprove=reprove)
         if options.command in ("run", "resume"):
             policy = build_orchestration_policy(root, context)
             request = (
@@ -736,6 +777,8 @@ def main(argv: list[str] | None = None) -> int:
                 if options.command == "run"
                 else _resume_request(root, context.git, options.request_id)
             )
+            if request is not None and getattr(options, "reprove", False):
+                record_reprove(root, context.git, request["id"])
             if request is None:
                 # Let the driver report the missing request from its own
                 # journal evidence rather than composing against nothing.
