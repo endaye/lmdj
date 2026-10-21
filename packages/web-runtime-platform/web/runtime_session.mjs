@@ -5391,9 +5391,15 @@ function createRuntimeSessionController(options = {}) {
         reject(error);
         failProfileProbe(entry?.probe, error);
       };
-      const remaining = deadlineForOperation("trigger") - (monotonicNow() - startedAt);
-      const timeout = remaining > 0 ? timers.setTimeout(() => rejectObservation(expired()), remaining) : null;
-      if (remaining <= 0) rejectObservation(expired());
+      let timeout = null;
+      const observeDeadline = () => {
+        const remaining = deadlineForOperation("trigger") - (monotonicNow() - startedAt);
+        // A fractional browser timer can wake before the monotonic deadline.
+        // Spend only its original remainder; never renew the observer budget.
+        if (remaining > 0) timeout = timers.setTimeout(observeDeadline, remaining);
+        else rejectObservation(expired());
+      };
+      observeDeadline();
       if (entry?.observerError) rejectObservation(entry.observerError);
       completion.then((result) => {
         if (timeout !== null) timers.clearTimeout(timeout);
