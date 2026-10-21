@@ -171,7 +171,7 @@ worktree is active, not abandoned.
 | Open PR | Report current-head review/findings, conflicts and applicable protection; no automatic merge |
 | Unpushed commits or no PR | Report exact missing transition; offer shipping, do not execute it from an audit |
 | Dirty, divergent, locked, active or uncertain | Keep and name the unresolved safety condition |
-| Release-owned path (`.local/release-worktrees/`, `candidate-*`, release requests, `build/toolchains`, `build/release`) | Keep as "release-owned, kept"; only `scripts/release.sh` removes request state, and the toolchain and outputs are never a cleanup target |
+| Release-owned path (`.local/release-worktrees/`, `.git/worktrees/candidate-*`, `.git/lmdj-release-requests/`, `build/toolchains/`, `build/release/`) | Keep as "release-owned, kept"; only `scripts/release.sh` removes request state, and the toolchain and outputs are never a cleanup target |
 
 Being behind main without conflict, or having red/in-flight incremental or
 explicit full self-tests, does not make a PR abandoned or unmergeable under

@@ -42,10 +42,10 @@ class ReleaseSkillTest(unittest.TestCase):
 
         Four places tell an agent what never to remove: the standing rule in
         AGENTS.md / CLAUDE.md (byte-identical), issue-list Mode 2 (the
-        protect-before-classify text and its response table) and the pitfall
-        whose recurrences are the deletions that already happened. Each must
-        name the toolchain and the prepared output trees, not only the
-        worktrees and the journal, in the same sentence that forbids removal.
+        protect-before-classify text and its response table row) and the
+        pitfall whose recurrences are the deletions that already happened.
+        Every release-owned path in RELEASE_OWNED_PATHS, the single source of
+        the protected set, must appear verbatim in each of them.
         """
         agents, claude = self.read(AGENTS), self.read(CLAUDE)
         self.assertEqual(agents, claude, "AGENTS.md and CLAUDE.md must stay byte-identical")
@@ -64,10 +64,8 @@ class ReleaseSkillTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(path, rule, f"AGENTS.md cleanup rule does not name {path}")
                 self.assertIn(path, protect, f"issue-list Mode 2 does not name {path}")
+                self.assertIn(path, table_row, f"the Mode 2 response table does not name {path}")
                 self.assertIn(path, how_to_apply, f"the cleanup pitfall does not name {path}")
-        for short in ("build/toolchains", "build/release"):
-            with self.subTest(table=short):
-                self.assertIn(short, table_row, f"the Mode 2 response table does not name {short}")
 
     def test_skill_starts_from_fresh_exact_tag_remote_audit(self) -> None:
         source = self.read(SKILL)
