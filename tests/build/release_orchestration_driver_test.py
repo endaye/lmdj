@@ -32,6 +32,12 @@ class Crash(BaseException):
     pass
 
 
+# Recheck fixture answers: "not covered, keep the full observation" and
+# "agrees with the record".
+_DECLINED = None
+_AGREES = object()
+
+
 class Backend:
     def __init__(self, root):
         self.root = root
@@ -132,6 +138,95 @@ class ReleaseDriverTest(unittest.TestCase):
         self.assertEqual(self.driver.resume("release-1").status, "complete")
         self.assertEqual(carrier.calls, 2)
         self.assertNotIn("intent", backend.calls)
+
+    def rechecking_backend(self, answer=None):
+        """Enroll a recheck on the fixture backend; `answer(step)` overrides."""
+        backend = self.backend
+        backend.rechecks = []
+
+        def recheck(state, operation):
+            backend.rechecks.append(operation["step"])
+            if answer is not None:
+                override = answer(operation["step"])
+                if override is not _AGREES:
+                    return override
+            return Observation("verified", operation["evidence"])
+        backend.recheck = recheck
+        return backend
+
+    def test_a_verified_transition_is_rechecked_not_reobserved(self):
+        self.assertEqual(self.driver.run(request()).status, "complete")
+        backend = self.rechecking_backend()
+        backend.observations.clear()
+        result = self.driver.resume("release-1")
+        self.assertEqual((result.status, result.verified_steps), ("complete", STEPS))
+        # Every verified record went through the cheap recheck; none was
+        # re-driven through its full far-side observation.
+        self.assertEqual(backend.rechecks, list(STEPS))
+        self.assertEqual(backend.observations, [])
+        self.assertEqual(backend.calls, list(STEPS))
+
+    def test_a_recheck_that_declines_keeps_the_full_observation(self):
+        self.driver.run(request())
+        backend = self.rechecking_backend(
+            lambda step: _DECLINED if step == "tag" else _AGREES)
+        backend.observations.clear()
+        self.assertEqual(self.driver.resume("release-1").status, "complete")
+        self.assertEqual(backend.rechecks, list(STEPS))
+        self.assertEqual(backend.observations, ["tag"])
+
+    def test_a_begun_transition_is_observed_in_full_not_rechecked(self):
+        self.backend.failure = "draft"
+        self.driver.run(request())
+        self.assertEqual(self.state()["transitions"][-1]["status"], "intent")
+        backend = self.rechecking_backend()
+        backend.failure = None
+        backend.observations.clear()
+        result = self.driver.resume("release-1")
+        self.assertEqual((result.status, result.step), ("unknown", "draft"))
+        self.assertEqual(backend.rechecks, list(STEPS[:STEPS.index("draft")]))
+        self.assertEqual(backend.observations, ["draft"])
+
+    def test_recheck_drift_fails_closed_with_its_cause(self):
+        self.driver.run(request())
+        drift = Observation("conflict", diagnostic="JournalError: why: pull request #7 now merges at another commit")
+        backend = self.rechecking_backend(
+            lambda step: drift if step == "intent" else _AGREES)
+        result = self.driver.resume("release-1")
+        self.assertEqual((result.status, result.step), ("evidence-conflict", "intent"))
+        self.assertEqual(result.verified_steps, ("candidate", "verification"))
+        self.assertEqual(backend.rechecks, ["candidate", "verification", "intent"])
+        with RequestJournal(self.journal, writable=False) as journal:
+            note = journal.read_failure("release-1")
+        self.assertEqual((note["step"], note["status"]), ("intent", "evidence-conflict"))
+        self.assertIn("another commit", note["diagnostic"])
+
+    def test_recheck_evidence_that_differs_from_the_record_is_not_adopted(self):
+        self.driver.run(request())
+        other = Observation("verified", {"sha256": "f" * 64, "reference": "other:run"})
+        self.rechecking_backend(lambda step: other if step == "draft" else _AGREES)
+        result = self.driver.resume("release-1")
+        self.assertEqual((result.status, result.step), ("evidence-conflict", "draft"))
+        self.assertEqual(result.verified_steps, STEPS[:STEPS.index("draft")])
+
+    def test_recheck_failures_are_unknown_and_an_invalid_answer_is_refused(self):
+        self.driver.run(request())
+        def failing(step):
+            if step == "verification":
+                raise RuntimeError("secret-provider-token")
+            return _AGREES
+        self.rechecking_backend(failing)
+        result = self.driver.resume("release-1")
+        self.assertEqual((result.status, result.step), ("evidence-unknown", "verification"))
+        self.assertNotIn("secret", repr(result))
+        with RequestJournal(self.journal, writable=False) as journal:
+            self.assertEqual(journal.read_failure("release-1")["diagnostic"], "RuntimeError")
+        for bad in ({"status": "verified"}, Observation("verified"),
+                    Observation("pending", {"sha256": "a" * 64, "reference": "run:1"})):
+            with self.subTest(bad=bad):
+                self.rechecking_backend(lambda step, bad=bad: bad if step == "candidate" else _AGREES)
+                with self.assertRaises(JournalError):
+                    self.driver.resume("release-1")
 
     def admit_requests(self, *requests):
         def authenticate(bound, policy):

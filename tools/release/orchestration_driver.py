@@ -155,6 +155,34 @@ class ReleaseDriver:
         result.validate()
         return result
 
+    def _recheck(self, state, operation):
+        """Re-establish a verified transition's far side as cheaply as honesty allows.
+
+        A verified record is the trusted local proof that the step's far side
+        was once fully verified; what a resume must still prove is that the
+        immutable identity that proof named has not drifted. A backend that
+        enrolls `recheck` answers that from cheap reads (PR merge commits, the
+        executor run, the Release id, the plan digest) and returns None for a
+        step it does not cover, which keeps that step's full observation. The
+        answer is held to the same rule as an observation: `verified` must
+        carry evidence, and the driver still refuses evidence that differs
+        from the record. Re-running the full proof every round cost 25–30
+        minutes per resume (#2422).
+        """
+        recheck = getattr(self.backend, "recheck", None)
+        if not callable(recheck):
+            return self._observe(state, operation)
+        try:
+            result = recheck(deepcopy(state), deepcopy(operation))
+        except Exception as error:
+            return Observation("unknown", diagnostic=describe_failure(error))
+        if result is None:
+            return self._observe(state, operation)
+        if type(result) is not Observation:
+            raise JournalError("why: invalid recheck result; remedy: repair the trusted recheck")
+        result.validate()
+        return result
+
     def _advance_managed(self, journal, state, operation):
         self._authenticate(state["request"])
         journal._active()
@@ -215,16 +243,19 @@ class ReleaseDriver:
                 journal.clear_failure(request_id)
             return DriveResult(request_id, status, step, tuple(verified))
 
-        # Persisted verified bits are not accepted without fresh far-side proof.
+        # Persisted verified bits are not accepted without fresh far-side proof:
+        # a verified record is rechecked against its immutable identity, a
+        # begun one is observed in full.
         for operation in state["transitions"]:
             self._authenticate(state["request"])
-            observed = self._observe(state, operation)
             if operation["status"] == "verified":
+                observed = self._recheck(state, operation)
                 if observed.status != "verified":
                     return result("evidence-" + observed.status, operation["step"], observed)
                 if observed.evidence != operation["evidence"]:
                     return result("evidence-conflict", operation["step"])
             else:
+                observed = self._observe(state, operation)
                 # A begun step whose earlier advance was interrupted resumes
                 # through the same recovery-aware carrier that began it.
                 advanced = self._backend_advance(operation)

@@ -125,6 +125,7 @@ class ReleaseEntryPointTest(unittest.TestCase):
         stream = capture if capture is not None else io.StringIO()
         with patch.object(cli, "build_context", return_value=self.context), \
                 patch.object(cli, "release_carriers", return_value=selected), \
+                patch.object(cli, "release_recheck", return_value=None), \
                 patch.object(cli, "compose_candidate", return_value=None), \
                 contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
             return cli.main(["--repo-root", str(self.root), *arguments])
@@ -632,6 +633,39 @@ class ReleaseEntryPointTest(unittest.TestCase):
         self.assertEqual(len(self.request_ids()), 1)
         self.assertNotEqual(self.request_ids(), [request_id])
 
+    def test_run_and_resume_enroll_the_composed_recheck_on_the_backend(self):
+        # The driver receives the composed verified-transition recheck, so a
+        # resume rechecks verified steps cheaply instead of re-observing them.
+        seen = []
+        real_driver = cli.ReleaseDriver
+
+        class Driver:
+            def __init__(self, root, policy, backend, **kwargs):
+                seen.append(backend)
+                self.inner = real_driver(root, policy, backend, **kwargs)
+
+            def run(self, request):
+                return self.inner.run(request)
+
+            def resume(self, request_id):
+                return self.inner.resume(request_id)
+
+        recheck = type("Recheck", (), {"recheck": lambda self, state, operation: None})()
+        with patch.object(cli, "build_context", return_value=self.context), \
+                patch.object(cli, "release_carriers", return_value=tuple(self.carriers.values())), \
+                patch.object(cli, "release_recheck", return_value=recheck) as composed, \
+                patch.object(cli, "compose_candidate", return_value=None), \
+                patch.object(cli, "ReleaseDriver", Driver), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["--repo-root", str(self.root), "run",
+                                       "--authority", "issue:1301"]), 0)
+            (request_id,) = self.request_ids()
+            self.assertEqual(cli.main(["--repo-root", str(self.root), "resume", request_id]), 0)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(composed.call_count, 2)
+        for backend in seen:
+            self.assertIs(backend._recheck, recheck)
+
     def test_resume_of_an_unknown_request_fails_closed(self):
         output = io.StringIO()
         self.assertEqual(self.run_cli(["resume", "release-" + "0" * 16], capture=output), 2)
@@ -699,6 +733,17 @@ class RealCompositionTest(unittest.TestCase):
                 patch("tools.release.entry_composition.production_review_reader",
                       return_value=reader):
             return cli.release_carriers(self.context, self.policy, request)
+
+    def test_the_entry_composes_the_verified_recheck_for_the_request(self):
+        from tools.release.verified_recheck import VerifiedRecheck
+
+        request = self.request()
+        recheck = cli.release_recheck(self.context, self.policy, request)
+        self.assertIs(type(recheck), VerifiedRecheck)
+        self.assertEqual(recheck.operations,
+                         self.gitdir / "lmdj-release-requests" / "operations" / request["id"])
+        self.assertEqual((recheck.root, recheck.repository), (self.root, "endaye/lmdj"))
+        self.assertIs(recheck.github, self.context.github)
 
     def test_the_entry_exposes_the_fourteen_enrolled_carriers_in_order(self):
         from tools.release.carriers import (
@@ -804,6 +849,9 @@ class CompositionGitHub:
 
     def get_release_by_tag(self, repository, tag):
         raise AssertionError("assembly never reads releases")
+
+    def get_pull_request(self, repository, number):
+        raise AssertionError("assembly never reads pull requests")
 
 
 if __name__ == "__main__":
