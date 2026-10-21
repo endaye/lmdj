@@ -238,6 +238,18 @@ def release_carriers(context: PrepareContext, policy, request) -> tuple:
     return compose_carriers(context, policy, request)
 
 
+def release_recheck(context: PrepareContext, policy, request):
+    """The verified-transition recheck for this scope, from the trusted composition.
+
+    A resume rechecks a journal-verified step through cheap immutability reads
+    instead of re-driving its full far-side observation (#2422); any drift
+    still fails closed.
+    """
+    from tools.release.entry_composition import compose_recheck
+
+    return compose_recheck(context, policy, request)
+
+
 def _resume_request(root: Path, git, request_id: str):
     """The frozen request for a resume, read-only; None when the journal has none."""
     directory = release_journal_root(root, git)
@@ -720,7 +732,8 @@ def main(argv: list[str] | None = None) -> int:
                 _print_drive_result(result, release_journal_root(root, context.git))
                 return 0 if result.status == "complete" else 2
             carriers = release_carriers(context, policy, request)
-            backend = ReleaseBackend(context.git, context.github, carriers=carriers)
+            backend = ReleaseBackend(context.git, context.github, carriers=carriers,
+                                     recheck=release_recheck(context, policy, request))
             unowned = backend.missing(STEPS)
             if unowned:
                 # Refuse before the request is created: an unowned step is never

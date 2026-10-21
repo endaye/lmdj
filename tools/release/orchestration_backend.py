@@ -12,12 +12,22 @@ from .orchestration import JournalError
 class ReleaseBackend:
     """Driver adapter contract over the carriers enrolled for one release scope."""
 
-    def __init__(self, git, github, carriers=()):
+    def __init__(self, git, github, carriers=(), *, recheck=None):
+        """recheck: the enrolled verified-transition recheck, or None.
+
+        When present it must expose `recheck(state, operation)`; the driver
+        consults it for a transition the journal already verified and keeps
+        the full observation for any step it answers None for.
+        """
         self.git, self.github = git, github
         enrolled = tuple(carriers)
         self.carriers = {carrier.step: carrier for carrier in enrolled}
         if len(self.carriers) != len(enrolled):
             raise JournalError("why: duplicate release step carrier; remedy: enroll one carrier per step")
+        if recheck is not None and not callable(getattr(recheck, "recheck", None)):
+            raise JournalError("why: release recheck is not a verified-transition recheck; "
+                               "remedy: enroll the trusted immutability recheck or none")
+        self._recheck = recheck
 
     def missing(self, steps) -> tuple[str, ...]:
         """Steps this backend cannot drive; the caller refuses instead of half-driving."""
@@ -40,6 +50,19 @@ class ReleaseBackend:
 
     def observe(self, state, operation):
         return self._carrier(operation).observe(state, operation)
+
+    def recheck(self, state, operation):
+        """Cheap immutability recheck of a verified transition, or None.
+
+        None means this step keeps its full observation: no recheck is
+        enrolled, or the enrolled one does not cover the step. The step must
+        still have an enrolled carrier, so an unowned step is refused here as
+        it is everywhere else.
+        """
+        self._carrier(operation)
+        if self._recheck is None:
+            return None
+        return self._recheck.recheck(state, operation)
 
     def advance(self, state, operation, before_write) -> None:
         """Drive an unattempted effect under the driver's durable write guard."""

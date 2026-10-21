@@ -47,8 +47,16 @@ The single sequential entry is `scripts/release.sh run --authority REF [--tag TA
 [--base-revision SHA]`, with read-only progress `scripts/release.sh status
 [REQUEST_ID]` and continuation `scripts/release.sh resume REQUEST_ID`. `run`
 freezes one request from the authenticated canonical control and drives it
-through the one ordered driver; `resume` continues that same request ID and
-re-verifies each far side without replaying an unresolved intent. Both refuse
+through the one ordered driver; `resume` continues that same request ID
+without replaying an unresolved intent. A step the journal already verified is
+not re-driven and not re-proven: the driver rechecks only its immutable
+identity — the candidate and reviewed PR merge commits, the executor run, the
+Release's numeric identity and plan digest, the deployment runs — through a
+handful of reads, and any drift (a moved merge, a re-run, a missing Release)
+fails closed as `evidence-conflict` or `evidence-absent`. A begun but unverified
+step is still observed in full. Expect a resume with only publication and
+deployment left to take minutes, not the 25–30 minutes a full re-proof cost
+(#2422). Both refuse
 before creating a request while any step still lacks an enrolled carrier, and
 they list those steps instead of starting a partial run. A journal record is a
 progress record, not external proof.

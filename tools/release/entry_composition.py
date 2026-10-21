@@ -665,6 +665,26 @@ def compose_candidate(context, policy, request):
                                _release_author(git)))
 
 
+def compose_recheck(context, policy, request):
+    """The verified-transition recheck bound to this exact request's records.
+
+    Read-only by construction: it reads the request's own operation journals,
+    the prepared output and a handful of far-side identities (PR merge
+    commits, runs, the Release) through the release GitHub client, and never
+    drives a step. The policy pins nothing it needs beyond the canonical
+    repository; it is accepted so the entry composes every adapter alike.
+    """
+    from .verified_recheck import VerifiedRecheck
+
+    validate_request(request)
+    root = Path(context.repo_root)
+    git = context.git
+    operations = release_journal_root(root, git) / "operations" / request["id"]
+    return VerifiedRecheck(root=root, operations=operations,
+                           repository=context.policy.repository,
+                           git=git, github=context.github)
+
+
 def compose_carriers(context, policy, request):
     """The fourteen enrolled step carriers for this exact request (lazy).
 
